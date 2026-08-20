@@ -263,6 +263,30 @@ pub struct ChartHistoryCursor {
     /// `snap_part`. The 1-day layer comes from backfill and cache.
     cache_rows_5m: Vec<ChartCandle>,
     cache_rows_1d: Vec<ChartCandle>,
+    /// The core's OWN retained 5-minute ring, kept as a coarse fill layer for sub-5m timeframes.
+    ///
+    /// `snap_part` already merges this ring into the series at 5 minutes and coarser, where it can
+    /// be resampled. A 1-minute series cannot resample it — but it can still DRAW it in a hole, and
+    /// this is the only layer that covers a stretch during which the CORE was up and the terminal
+    /// was not. Rows arrive end-stamped and range-only, so they are shifted and oriented on the way
+    /// in and stored ready to use.
+    ring_rows_5m: Vec<ChartCandle>,
+    /// Bumped whenever the coarse layers above are reread, so the composed fill below can tell a
+    /// stale cache from a stale series without comparing the row vectors themselves.
+    cache_generation: u64,
+    /// When the last cache read TIMED OUT, so the retry is not attempted on every frame.
+    ///
+    /// `None` means the last attempt completed, whatever it found.
+    cache_retry_at: Option<Instant>,
+    /// The series plus its coarse gap fillers, each tagged with the timeframe it is drawn at.
+    ///
+    /// Retained rather than rebuilt per block because the two consumers fire INDEPENDENTLY: the
+    /// upload runs only when the series revision moved, while the auto-Y scan runs every frame.
+    /// Deriving the fill twice is how the price scale and the drawn candles came to disagree about
+    /// which coarse rows exist; one vector makes that unrepresentable.
+    coarse_fill: Vec<(ChartCandle, f32)>,
+    /// `(series revision, cache generation)` the retained fill was composed from.
+    coarse_fill_key: Option<(u64, u64)>,
     /// Signature of the last deep rows written to the cache; write back only after a change.
     cache_written_sig: u64,
     /// Throttle for candle-to-now gap diagnostics: at most one warning per panel every 30 seconds.
@@ -299,6 +323,10 @@ impl ChartHistoryCursor {
         self.candle_ticks.clear();
         self.server_candle_rows.clear();
         self.server_candles.clear();
+        // The composed fill is derived from the series, so it cannot outlive an invalidated one.
+        self.ring_rows_5m.clear();
+        self.coarse_fill.clear();
+        self.coarse_fill_key = None;
         // Preserve last_deep_request so request throttling survives a reset. Changing markets
         // recreates PaneRender and therefore starts with a fresh cursor.
     }

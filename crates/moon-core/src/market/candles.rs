@@ -220,6 +220,26 @@ pub fn bucket_open_ms(time_ms: f64, tf_ms: i64) -> f64 {
     (time_ms / tf).floor() * tf
 }
 
+/// Returns the first bucket that a source starting at `oldest_ms` covers in FULL.
+///
+/// A bucket the source only partly covers is not the same fact as an empty one, and the kline
+/// cache cannot tell them apart afterwards: its merge is last-writer-wins per timestamp, so a
+/// half-covered bucket silently REPLACES a complete row an earlier session stored. Callers use
+/// this to drop the leading partial bucket rather than publishing it.
+///
+/// An `oldest_ms` already sitting exactly on a boundary starts a complete bucket and is returned
+/// unchanged; anything inside a bucket rounds up to the next one.
+pub fn first_full_bucket_ms(oldest_ms: f64, tf_ms: i64) -> i64 {
+    let tf = tf_ms.max(1);
+    let oldest = oldest_ms as i64;
+    let floor = oldest.div_euclid(tf) * tf;
+    if floor == oldest {
+        floor
+    } else {
+        floor + tf
+    }
+}
+
 /// Returns the native CoinCard-history timeframe in minutes for a series timeframe.
 ///
 /// Exact history exists for 1/5/30/60/240/1440 minutes. Sub-minute timeframes have no
@@ -382,6 +402,160 @@ impl Default for CandleSeries {
             live_from: f64::INFINITY,
         }
     }
+}
+
+/// One cache-only coarser layer offered to [`compose_with_coarse`], finest first.
+///
+/// `rows` must be sorted by `t_open_ms` and must already be aggregated at `tf_ms`; the layer is
+/// drawn at its own width rather than resampled into the series timeframe, because a coarse bucket
+/// cannot be split into finer ones without inventing the shape inside it.
+pub struct CoarseLayer<'a> {
+    pub rows: &'a [ChartCandle],
+    pub tf_ms: f64,
+}
+
+/// Builds the render list: the series itself plus coarser fillers for the stretches it does not
+/// cover, each entry tagged with the timeframe it is drawn at.
+///
+/// The chart's fine layer is never continuous. A CoinCard reply carries only about 500 bars and
+/// `request_coin_card` takes no time range, so across sessions the local cache accumulates DISJOINT
+/// blocks with unfetchable holes between them. This is the one place those holes are answered, from
+/// coarser rows that are already on disk.
+///
+/// It generalises what used to be a left-edge PREFIX. Filling only left of the series threw away
+/// every coarse row that happened to land inside a hole — measured on a live cache, 44 of the 67
+/// five-minute buckets covering one 331-minute hole.
+///
+/// Rules, in order:
+///
+/// 1. A hole is the open stretch before the first candle plus every stretch between consecutive
+///    candles. There is deliberately NO hole after the last candle: the live edge belongs to the
+///    trade tail, which extends the series itself.
+/// 2. A layer is offered a hole only when the hole is at least one of that layer's timeframes wide,
+///    so a daily candle is never dropped into a five-hour gap it would misrepresent. The bound is
+///    inclusive: a hole exactly one coarse period wide is answered by exactly one aligned row, and
+///    rejecting it would leave the one case the layer fits perfectly.
+/// 3. A row is taken when its bucket overlaps the hole at all, so a filler may hang over each seam
+///    by up to one of its own timeframes. That overlap is intentional and invisible: fillers render
+///    muted and beneath the finer candles. Demanding containment instead left a gap as wide as the
+///    coarse timeframe at every seam.
+/// 4. Each layer's coverage is subtracted before the next, coarser one runs, so the daily layer only
+///    ever reaches what the five-minute layer could not — including the five-minute layer's own
+///    internal holes.
+/// 5. The result is ascending by `t_open_ms`, and a filler sharing a timestamp with a series candle
+///    is emitted just before it rather than dropped — see the merge for why dropping it would leave
+///    a hole this function had already counted as filled. Order is load-bearing: the gap
+///    diagnostic, the volume band's visible-range statistics and hit-testing all walk this array in
+///    sequence.
+pub fn compose_with_coarse(
+    series: &[ChartCandle],
+    series_tf_ms: f64,
+    layers: &[CoarseLayer<'_>],
+    out: &mut Vec<(ChartCandle, f32)>,
+) {
+    out.clear();
+    // Holes are half-open `[start, end)` and always ascending. An empty series is ONE unbounded
+    // hole, which reproduces the old behaviour of taking every coarse row when nothing else exists.
+    let mut holes: Vec<(f64, f64)> = Vec::new();
+    match series.first() {
+        None => holes.push((f64::NEG_INFINITY, f64::INFINITY)),
+        Some(first) => {
+            holes.push((f64::NEG_INFINITY, first.t_open_ms));
+            for w in series.windows(2) {
+                let start = w[0].t_open_ms + series_tf_ms;
+                let end = w[1].t_open_ms;
+                if end > start {
+                    holes.push((start, end));
+                }
+            }
+        }
+    }
+
+    let mut fillers: Vec<(ChartCandle, f32)> = Vec::new();
+    let mut covered: Vec<(f64, f64)> = Vec::new();
+    for layer in layers {
+        if holes.is_empty() || layer.rows.is_empty() || !(layer.tf_ms > 0.0) {
+            continue;
+        }
+        covered.clear();
+        // ROWS outer, holes inner, so a row is taken AT MOST ONCE per layer. Scanning per hole
+        // instead would take a row twice whenever its bucket straddles two holes — which is not an
+        // exotic case but the ordinary one this feature exists for: a single isolated candle
+        // between two large disjoint blocks leaves a gap narrower than the coarse timeframe on
+        // either side of it. The duplicate survived into the render list, where it drew the same
+        // candle twice and made the volume band count that bucket twice.
+        for c in layer.rows.iter() {
+            let fills_a_hole = holes.iter().any(|&(start, end)| {
+                end - start >= layer.tf_ms
+                    && c.t_open_ms + layer.tf_ms > start
+                    && c.t_open_ms < end
+            });
+            if fills_a_hole {
+                fillers.push((*c, layer.tf_ms as f32));
+                covered.push((c.t_open_ms, c.t_open_ms + layer.tf_ms));
+            }
+        }
+        if covered.is_empty() {
+            continue;
+        }
+        // Ascending by construction when the layer is sorted as documented, but sorted anyway: that
+        // precondition is a comment, not something the type system holds anyone to, and
+        // `subtract_covered` walks this in order.
+        covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+        holes = subtract_covered(&holes, &covered);
+    }
+
+    out.reserve(series.len() + fillers.len());
+    fillers.sort_by(|a, b| a.0.t_open_ms.total_cmp(&b.0.t_open_ms));
+    let series_tf = series_tf_ms as f32;
+    let mut si = 0usize;
+    for (filler, tf) in fillers.drain(..) {
+        // Strictly less, so a filler sharing an opening timestamp with a series candle is emitted
+        // BEFORE it and both survive. Dropping the filler on that tie would be wrong twice over:
+        // its interval was already subtracted from the hole set, so the minutes it covers PAST the
+        // series candle would end up drawn by nothing and offered to no later layer — the composer
+        // would preserve a hole it had reported as filled. And the tie is not a real conflict: a
+        // coarse filler spans its whole period rather than claiming that one timestamp, which is
+        // the same seam overlap this design already accepts, drawn muted beneath the finer candle.
+        while si < series.len() && series[si].t_open_ms < filler.t_open_ms {
+            out.push((series[si], series_tf));
+            si += 1;
+        }
+        out.push((filler, tf));
+    }
+    for c in &series[si..] {
+        out.push((*c, series_tf));
+    }
+}
+
+/// Removes `covered` from `holes`, returning what is left of each hole.
+///
+/// `covered` must be ascending by start; overlapping members are fine and are coalesced as the
+/// walk proceeds. Both inputs are half-open `[start, end)`.
+fn subtract_covered(holes: &[(f64, f64)], covered: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(holes.len());
+    for &(start, end) in holes {
+        let mut cursor = start;
+        for &(cs, ce) in covered {
+            if ce <= cursor {
+                continue;
+            }
+            if cs >= end {
+                break;
+            }
+            if cs > cursor {
+                out.push((cursor, cs.min(end)));
+            }
+            cursor = cursor.max(ce);
+            if cursor >= end {
+                break;
+            }
+        }
+        if cursor < end {
+            out.push((cursor, end));
+        }
+    }
+    out
 }
 
 /// Does a candle bucket overlap `[from_ms, to_ms]`?

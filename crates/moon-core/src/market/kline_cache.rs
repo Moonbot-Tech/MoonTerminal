@@ -69,6 +69,9 @@ enum Op {
     },
     MergeBatch {
         items: Vec<MergeItem>,
+        /// Signalled after the transaction settles, so a producer can wait for one chunk before
+        /// queueing the next. `None` leaves the write fully nonblocking.
+        done: Option<mpsc::Sender<()>>,
     },
     Read {
         exchange: String,
@@ -78,6 +81,18 @@ enum Op {
         to_ms: i64,
         reply: mpsc::Sender<Vec<ChartCandle>>,
     },
+}
+
+/// Releases a `merge_batch_blocking` caller when the worker's arm ends, however it ends.
+///
+/// A plain send at the bottom of that arm would leave the producer parked forever on any early
+/// return, which is the one failure this whole handshake must not introduce.
+struct SettledOnDrop(mpsc::Sender<()>);
+
+impl Drop for SettledOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
 }
 
 /// Cheaply cloneable cache handle that sends queued reads and writes to the database worker.
@@ -138,12 +153,47 @@ impl KlineCache {
         if items.is_empty() {
             return;
         }
-        let _ = self.tx.send(Op::MergeBatch { items });
+        let _ = self.tx.send(Op::MergeBatch { items, done: None });
+    }
+
+    /// Same as [`Self::merge_batch`], but returns only once the worker has settled the transaction.
+    ///
+    /// Reads and writes share ONE worker thread and ONE FIFO queue, and a read gives up after
+    /// [`READ_TIMEOUT`]. A producer that queues many chunks back to back therefore parks every
+    /// chart read behind ALL of them — the recorder's first pass after a restart covers thousands
+    /// of markets at once, which is exactly when charts are being opened. Waiting per chunk keeps
+    /// at most one transaction ahead of any read, and gives the unbounded queue the backpressure it
+    /// otherwise has none of.
+    ///
+    /// For BACKGROUND writers only: it blocks the caller until the write lands.
+    pub fn merge_batch_blocking(&self, items: Vec<MergeItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let (done, rx) = mpsc::channel();
+        if self
+            .tx
+            .send(Op::MergeBatch {
+                items,
+                done: Some(done),
+            })
+            .is_err()
+        {
+            return;
+        }
+        // A dropped sender resolves this immediately, so a dead worker cannot park the producer.
+        let _ = rx.recv();
     }
 
     /// Reads rows whose `t_open` lies in the inclusive `[from_ms, to_ms]` range.
     ///
-    /// Blocks for at most `READ_TIMEOUT` and returns an empty vector on timeout or error.
+    /// Blocks for at most [`READ_TIMEOUT`]. `None` means the read did NOT happen — the worker was
+    /// gone, or it was busy enough that the answer did not arrive in time — as opposed to
+    /// `Some(vec![])`, which is an authoritative "the cache holds nothing there".
+    ///
+    /// The distinction is load-bearing for the caller, which CACHES this result and only rereads
+    /// when the timeframe or left edge changes. Folding a timeout into an empty vector let one busy
+    /// moment stick as an empty history prefix for as long as the user did not pan.
     pub fn read_range(
         &self,
         exchange: &str,
@@ -151,7 +201,7 @@ impl KlineCache {
         kind_min: u32,
         from_ms: i64,
         to_ms: i64,
-    ) -> Vec<ChartCandle> {
+    ) -> Option<Vec<ChartCandle>> {
         let (reply, rx) = mpsc::channel();
         if self
             .tx
@@ -165,9 +215,9 @@ impl KlineCache {
             })
             .is_err()
         {
-            return Vec::new();
+            return None;
         }
-        rx.recv_timeout(READ_TIMEOUT).unwrap_or_default()
+        rx.recv_timeout(READ_TIMEOUT).ok()
     }
 }
 
@@ -309,7 +359,10 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                     }
                 }
             }
-            Op::MergeBatch { items } => {
+            Op::MergeBatch { items, done } => {
+                // Released however this arm ends, including the early `continue` below, so a
+                // blocking producer is never parked by a transaction that failed to open.
+                let _settled = done.map(SettledOnDrop);
                 let now = now_unix_ms();
                 let tx = match conn.unchecked_transaction() {
                     Ok(tx) => tx,

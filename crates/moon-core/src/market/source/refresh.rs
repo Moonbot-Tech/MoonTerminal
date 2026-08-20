@@ -83,6 +83,17 @@ impl MarketDataSource {
 
     fn record_sealed_5m(&self, last_written: &mut HashMap<(CoreId, String), i64>) {
         const TF: i64 = 300_000;
+        /// How far back the FIRST pass for a market reaches into the core's trade ring.
+        ///
+        /// A day covers the restart gaps actually observed (2 to 10 hours) without asking for
+        /// depth no ring holds. The ring's own capacity bounds the read regardless, so a larger
+        /// value would mostly buy an emptier copy.
+        const FIRST_PASS_BACKFILL_MS: i64 = 24 * 60 * 60_000;
+        /// Markets per cache transaction.
+        ///
+        /// The whole-pass batch is fine when each market carries three buckets and far too large
+        /// when a first pass carries a day of them.
+        const MERGE_CHUNK_MARKETS: usize = 256;
         // Snapshot providers under a short read lock and perform all work after releasing it.
         let (cache, providers) = {
             let inner = self.inner.read().expect("market source poisoned");
@@ -107,8 +118,10 @@ impl MarketDataSource {
         let cur_bucket = (now_ms / TF) * TF;
         let mut ticks: Vec<crate::feed::Tick> = Vec::new();
         let mut candles: Vec<crate::market::candles::ChartCandle> = Vec::new();
-        // Accumulate items so the entire pass across thousands of markets reaches the cache in one
-        // transaction.
+        // Accumulate items so a run of markets reaches the cache in ONE transaction instead of one
+        // per market. The run is capped at `MERGE_CHUNK_MARKETS` rather than covering the whole
+        // pass: a first pass carries a day of buckets per market, and a chart read shares this
+        // worker's queue.
         let mut batch: Vec<crate::market::kline_cache::MergeItem> = Vec::new();
         for (provider, ex, slot) in providers {
             let Some(client) = slot.get() else { continue };
@@ -125,11 +138,18 @@ impl MarketDataSource {
                     continue;
                 };
                 let key = (provider, name.to_string());
-                // Start at the bucket after the last written one; the first pass covers 15 minutes.
+                // The FIRST pass for a market reaches back over the whole retained trade ring,
+                // bounded by FIRST_PASS_BACKFILL_MS. `last_written` lives in memory only, so every
+                // restart starts a first pass — and the old 15-minute window meant a restart wrote
+                // nothing for the hours the process was down, even though the core hands over a
+                // ring that already covers them. Measured on a live cache: two coins on the same
+                // provider had byte-identical kind-5 holes of 2 to 10 hours, which is exactly the
+                // shape of process downtime rather than of quiet markets.
+                let first_pass = !last_written.contains_key(&key);
                 let from_ms = last_written
                     .get(&key)
                     .map(|t| t + TF)
-                    .unwrap_or(cur_bucket - 3 * TF);
+                    .unwrap_or(cur_bucket - FIRST_PASS_BACKFILL_MS);
                 if from_ms >= cur_bucket {
                     continue;
                 }
@@ -149,6 +169,28 @@ impl MarketDataSource {
                 crate::market::candles::aggregate_trades(&ticks, TF, &mut candles);
                 // Do not write the current unsealed bucket; the next pass will complete it.
                 candles.retain(|c| (c.t_open_ms as i64) < cur_bucket);
+                if first_pass {
+                    // Drop the leading bucket when the ring begins inside it. A merge is
+                    // INSERT OR REPLACE per `(kind, day, t_open)`, so a bucket built from the tail
+                    // half of its trades would OVERWRITE a complete row cached in an earlier
+                    // session — turning a restart into data loss instead of a gap. Only the first
+                    // pass needs this: a later pass starts at a bucket boundary the ring already
+                    // covers, where a thin bucket means a quiet market and is real.
+                    // The MINIMUM timestamp, not the first row: the trade ring is only nearly
+                    // time-sorted, because a late UDP resend enters an old bucket without
+                    // preserving ring order (`candles::aggregate_trades` says so and handles it).
+                    // Reading the front row instead would let one straggler place the boundary too
+                    // early, keeping a sparse leading bucket — and since the cursor advances
+                    // unconditionally below, no later pass would ever revisit and repair it.
+                    let oldest = ticks
+                        .iter()
+                        .map(|t| t.time_ms)
+                        .fold(f64::INFINITY, f64::min);
+                    if oldest.is_finite() {
+                        let sealed_from = crate::market::candles::first_full_bucket_ms(oldest, TF);
+                        candles.retain(|c| (c.t_open_ms as i64) >= sealed_from);
+                    }
+                }
                 if !candles.is_empty() {
                     batch.push(crate::market::kline_cache::MergeItem {
                         exchange: ex.clone(),
@@ -157,9 +199,20 @@ impl MarketDataSource {
                         rows: std::mem::take(&mut candles),
                     });
                 }
+                // Flush in chunks rather than accumulating the whole pass. One transaction over
+                // thousands of markets was affordable at 15 minutes of rows each; a first pass at
+                // a day each is not, and the WAL budget in this module's docstring is sized
+                // against the small case.
+                if batch.len() >= MERGE_CHUNK_MARKETS {
+                    // Blocking, so at most ONE chunk is ever queued ahead of a chart read. The
+                    // cache has a single worker and a chart read gives up after 250 ms, so queueing
+                    // every chunk at once would park the reads behind all of them — during exactly
+                    // the cold start when charts are being opened.
+                    cache.merge_batch_blocking(std::mem::take(&mut batch));
+                }
             }
         }
-        cache.merge_batch(batch);
+        cache.merge_batch_blocking(batch);
     }
 
     /// Set stable provider exchange identities used as kline-cache keys.
