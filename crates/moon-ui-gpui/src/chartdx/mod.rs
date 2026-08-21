@@ -45,6 +45,9 @@ pub mod readout;
 mod render_state;
 pub(crate) use render_state::arrival_flash_enabled;
 mod text;
+/// The caption editor formats its sample line with the chart's OWN formatter, never a second
+/// spelling of it.
+pub(crate) use text::preview_row;
 pub mod types;
 #[cfg(windows)]
 pub mod userdata;
@@ -692,8 +695,8 @@ struct RenderState {
     last_gpu_prepare_generation: u64,
     text_runs: Vec<GpuCanvasTextRun>,
     text_run_cursor: usize,
-    /// Retained runs for the configured captions, addressed by `pane * CHART_LABEL_SLOTS + slot`
-    /// rather than by a running cursor.
+    /// Retained runs for the configured captions, addressed by
+    /// `(pane * CHART_LABEL_ROWS + row) * ROW_RUN_STRIDE + part` rather than by a running cursor.
     ///
     /// A separate pool precisely BECAUSE the cursor above is shared across panes and label kinds:
     /// an index from it moves whenever anything earlier in the frame stops drawing, and a run
@@ -702,7 +705,11 @@ struct RenderState {
     caption_runs: Vec<GpuCanvasTextRun>,
     /// Effective caption configuration, mirrored from `ChartDataState` so the text pass can read it
     /// without borrowing the data state during a frame.
-    chart_labels: moon_core::config::ChartLabelsCfg,
+    ///
+    /// Behind an `Rc` because the draw pass takes a handle to it on every presented frame, per
+    /// pane: the configuration owns a name string per row, and cloning it by value would allocate
+    /// sixteen strings in the frame loop for nothing.
+    chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
     firetest_text_labels: Vec<String>,
     firetest_text_runs: Vec<GpuCanvasTextRun>,
     firetest_text_layer: GpuCanvasRetainedTextLayer,
@@ -1004,7 +1011,8 @@ struct ChartDataState {
     chart_graphics: moon_core::config::ChartGraphicsCfg,
     /// Effective chart caption configuration: which figures print beside the plot, in which corner
     /// and style. A per-tab override or the `layout.chart_labels` fallback, like the two above.
-    chart_labels: moon_core::config::ChartLabelsCfg,
+    /// Shared with the render mirror through an `Rc`; see the field there.
+    chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
     /// Saved X scale in pixels per millisecond from Shift+middle-click sync. NEW panels start with it
     /// instead of the built-in time-window default; `None` uses that default.
     default_x_ppm: Option<f32>,

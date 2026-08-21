@@ -315,12 +315,6 @@ impl super::labels_popup::LabelsPopupHost for ChartTabs {
     fn set_labels_popup_open(&mut self, open: bool) {
         self.labels_popup_open = open;
     }
-    fn labels_style_open(&self) -> Option<usize> {
-        self.labels_style_open
-    }
-    fn set_labels_style_open(&mut self, ix: Option<usize>) {
-        self.labels_style_open = ix;
-    }
     fn labels_override(&self, cx: &App) -> Option<moon_core::config::ChartLabelsCfg> {
         match &self.active {
             Tab::Main => self.main.read(cx).chart_labels(),

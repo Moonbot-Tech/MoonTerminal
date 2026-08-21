@@ -421,7 +421,7 @@ impl AddChartStack {
             panel.update(cx, |panel, pcx| panel.set_chart_graphics(cg, pcx));
         }
         if self.chart_labels.is_some() {
-            let cl = self.chart_labels;
+            let cl = self.chart_labels.clone();
             panel.update(cx, |panel, pcx| panel.set_chart_labels(cl, pcx));
         }
         if self.x_ppm.is_some() {
@@ -645,7 +645,7 @@ impl AddChartStack {
     }
 
     pub(crate) fn chart_labels(&self) -> Option<moon_core::config::ChartLabelsCfg> {
-        self.chart_labels
+        self.chart_labels.clone()
     }
 
     pub(crate) fn x_ppm(&self) -> Option<f32> {
@@ -699,9 +699,13 @@ impl AddChartStack {
         cfg: Option<moon_core::config::ChartLabelsCfg>,
         cx: &mut Context<Self>,
     ) {
-        apply_setting(&mut self.chart_labels, cfg, &self.charts, cx, |c, cx| {
-            set_panels_chart_labels(c, cfg, cx)
-        });
+        apply_setting(
+            &mut self.chart_labels,
+            cfg.clone(),
+            &self.charts,
+            cx,
+            |c, cx| set_panels_chart_labels(c, cfg, cx),
+        );
     }
 
     /// Enable or disable automatic pinning on order for every stack chart (per window).

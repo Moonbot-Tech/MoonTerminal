@@ -369,6 +369,7 @@ pub(super) fn set_panels_chart_labels<S: 'static>(
     cx: &mut Context<S>,
 ) {
     for e in entries {
+        let cfg = cfg.clone();
         e.panel.update(cx, |p, pcx| p.set_chart_labels(cfg, pcx));
     }
 }

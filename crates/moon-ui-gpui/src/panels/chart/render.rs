@@ -159,13 +159,11 @@ impl Render for ChartPanel {
             // Chart graphics follow the same per-tab override as candles: the palette popup writes
             // the tab's own value, and only a tab without one falls back to the global default.
             let chart_graphics = self.chart_graphics.unwrap_or(b.layout.chart_graphics);
-            // Captions follow the same per-tab override, sanitized here so the engine stores the
-            // same value every reader compares against.
-            let chart_labels = {
-                let mut cfg = self.chart_labels.unwrap_or(b.layout.chart_labels);
-                cfg.sanitize();
-                cfg
-            };
+            // Captions come from the settings SIGNATURE rather than being rebuilt here: it already
+            // holds this panel's effective value, sanitized, and is restamped by the same backend
+            // observation and the same setters that can change it. Rebuilding it per render meant
+            // sanitizing sixteen rows and deep-copying their names on every frame.
+            let chart_labels = self.settings_sig.chart_labels.clone();
             (
                 theme,
                 orders,

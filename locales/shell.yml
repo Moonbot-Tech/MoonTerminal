@@ -1193,18 +1193,130 @@ chart_labels.tip:
   ru: "Настройка подписей на чарте"
   en: "Chart label settings"
   es: "Ajustes de etiquetas del chart"
-chart_labels.frame_list:
-  ru: "Подписи"
-  en: "Labels"
-  es: "Etiquetas"
+chart_labels.frame_rows:
+  ru: "Строки"
+  en: "Rows"
+  es: "Filas"
 chart_labels.empty:
+  ru: "Ни одной строки — добавьте ниже"
+  en: "No rows yet — add one below"
+  es: "Sin filas — añada una abajo"
+chart_labels.flow:
+  ru: "Подписи модуля"
+  en: "Module labels"
+  es: "Etiquetas del módulo"
+chart_labels.flow.row:
+  ru: "В строку"
+  en: "In a row"
+  es: "En fila"
+chart_labels.flow.column:
+  ru: "В столбец"
+  en: "In a column"
+  es: "En columna"
+chart_labels.placement_row:
+  ru: "В строку с модулем выше"
+  en: "On the line above"
+  es: "En la línea de arriba"
+chart_labels.placement_column:
+  ru: "С новой строки"
+  en: "On a new line"
+  es: "En una línea nueva"
+chart_labels.legend:
+  ru: "↑↓ порядок · 👁 показ · ↵→ с новой строки / в строку · ⇤≡⇥ край · число — отступ перед модулем · имя открывает модуль"
+  en: "↑↓ order · 👁 shown · ↵→ new line / same line · ⇤≡⇥ edge · the number is the gap before the module · the name opens it"
+  es: "↑↓ orden · 👁 visible · ↵→ nueva línea / misma línea · ⇤≡⇥ borde · el número es el margen antes del módulo · el nombre lo abre"
+chart_labels.row_edit:
+  ru: "Изменить модуль"
+  en: "Edit module"
+  es: "Editar módulo"
+chart_labels.row_name_hint:
+  ru: "Название модуля"
+  en: "Module name"
+  es: "Nombre del módulo"
+chart_labels.hide_row:
+  ru: "Скрыть модуль (настройки сохранятся)"
+  en: "Hide the module (keeps its settings)"
+  es: "Ocultar el módulo (conserva sus ajustes)"
+chart_labels.show_row:
+  ru: "Показать модуль"
+  en: "Show the module"
+  es: "Mostrar el módulo"
+chart_labels.frame_parts:
+  ru: "Подписи модуля"
+  en: "Module labels"
+  es: "Etiquetas del módulo"
+chart_labels.frame_caption:
+  ru: "Настройки подписи"
+  en: "Label settings"
+  es: "Ajustes de la etiqueta"
+chart_labels.field_caption:
+  ru: "Что показывать"
+  en: "What it shows"
+  es: "Qué muestra"
+chart_labels.preview:
+  ru: "Как будет выглядеть"
+  en: "How it will look"
+  es: "Cómo se verá"
+chart_labels.preview_empty:
+  ru: "Добавьте подпись — здесь появится образец"
+  en: "Add a label — the sample appears here"
+  es: "Añada una etiqueta — aquí aparecerá la muestra"
+chart_labels.add_row:
+  ru: "＋ Строка"
+  en: "＋ Row"
+  es: "＋ Fila"
+chart_labels.add_part:
+  ru: "＋ Подпись"
+  en: "＋ Label"
+  es: "＋ Etiqueta"
+chart_labels.row_name:
+  ru: "Имя"
+  en: "Name"
+  es: "Nombre"
+chart_labels.row_empty:
+  ru: "Пустая строка"
+  en: "Empty row"
+  es: "Fila vacía"
+chart_labels.row_empty_hint:
   ru: "Ни одной подписи — добавьте ниже"
   en: "No labels yet — add one below"
   es: "Sin etiquetas — añada una abajo"
-chart_labels.add:
-  ru: "＋ Добавить подпись"
-  en: "＋ Add label"
-  es: "＋ Añadir etiqueta"
+chart_labels.remove_row:
+  ru: "Удалить строку"
+  en: "Remove row"
+  es: "Eliminar fila"
+chart_labels.show_name:
+  ru: "Печатать имя строки на чарте"
+  en: "Print the row name on the chart"
+  es: "Imprimir el nombre de la fila en el chart"
+chart_labels.move_left:
+  ru: "Левее в строке"
+  en: "Move left in the row"
+  es: "Mover a la izquierda en la fila"
+chart_labels.move_right:
+  ru: "Правее в строке"
+  en: "Move right in the row"
+  es: "Mover a la derecha en la fila"
+chart_labels.preset.instrument:
+  ru: "Инструмент"
+  en: "Instrument"
+  es: "Instrumento"
+chart_labels.preset.coin_deltas:
+  ru: "Дельты монеты"
+  en: "Coin deltas"
+  es: "Deltas de la moneda"
+chart_labels.preset.market_backdrop:
+  ru: "Рыночный фон"
+  en: "Market backdrop"
+  es: "Fondo del mercado"
+chart_labels.preset.position:
+  ru: "Позиция"
+  en: "Position"
+  es: "Posición"
+chart_labels.preset.funding:
+  ru: "Фандинг"
+  en: "Funding"
+  es: "Funding"
 chart_labels.reset:
   ru: "Сбросить"
   en: "Reset"
@@ -1229,18 +1341,6 @@ chart_labels.show:
   ru: "Показать"
   en: "Show"
   es: "Mostrar"
-chart_labels.inline_on:
-  ru: "В строку с предыдущей — выключить"
-  en: "Sharing the previous row — turn off"
-  es: "Comparte la fila anterior — desactivar"
-chart_labels.inline_off:
-  ru: "Поставить в строку с предыдущей"
-  en: "Put on the previous label's row"
-  es: "Poner en la fila de la etiqueta anterior"
-chart_labels.style:
-  ru: "Стиль"
-  en: "Style"
-  es: "Estilo"
 chart_labels.style_reset:
   ru: "По умолчанию"
   en: "Defaults"
@@ -1250,9 +1350,9 @@ chart_labels.remove:
   en: "Remove label"
   es: "Eliminar etiqueta"
 chart_labels.size:
-  ru: "Кегль"
-  en: "Size"
-  es: "Tamaño"
+  ru: "Кегль, ×"
+  en: "Size, ×"
+  es: "Tamaño, ×"
 chart_labels.color:
   ru: "Цвет"
   en: "Color"
@@ -1274,9 +1374,9 @@ chart_labels.plate:
   en: "Backing plate"
   es: "Fondo"
 chart_labels.caption:
-  ru: "Заголовок"
-  en: "Caption"
-  es: "Título"
+  ru: "Префикс"
+  en: "Prefix"
+  es: "Prefijo"
 chart_labels.basis:
   ru: "Считать по"
   en: "Count"
@@ -1429,10 +1529,6 @@ chart_labels.align.right:
   ru: "Прижать вправо"
   en: "Align right"
   es: "Alinear der."
-chart_labels.inline_first:
-  ru: "Первая подпись — приклеивать не к чему"
-  en: "First label — nothing to join"
-  es: "Primera etiqueta — nada a lo que unirse"
 chart_labels.short.delta_1h:
   ru: "Δ1ч"
   en: "Δ1h"

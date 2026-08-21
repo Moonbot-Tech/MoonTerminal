@@ -7,6 +7,10 @@ dialogs.cancel:
   ru: "Отмена"
   en: "Cancel"
   es: "Cancelar"
+dialogs.done:
+  ru: "Готово"
+  en: "Done"
+  es: "Listo"
 dialogs.yes:
   ru: "Да"
   en: "Yes"

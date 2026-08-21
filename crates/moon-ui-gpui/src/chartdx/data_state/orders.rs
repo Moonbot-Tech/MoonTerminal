@@ -47,12 +47,18 @@ impl ChartDataState {
         st.panes
             .resize_with(container.pane_count(), PaneRender::new);
 
-        let labels_cfg = st.chart_labels;
+        let labels_cfg = st.chart_labels.clone();
         // A shot needs the venue whether or not the user asked for a venue caption: it is drawn in
         // the CORE NAME's place, so the substitution has nothing to put there without it. Read once
         // here, beside the configuration it overrides, because both answers must hold for the whole
         // sync — a shot arming halfway through would otherwise caption some panes and not others.
         let shot = st.shot_caption_active();
+        // Both caption gates are answered ONCE for the sync, not per pane: they read the
+        // configuration, which cannot change inside a sync, and a walk over sixteen rows of eight
+        // captions per pane per order revision is real work for an answer that never differs.
+        let wants_venue_cfg = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
+        let wants_position_cfg =
+            labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -83,16 +89,15 @@ impl ChartDataState {
             // formatted only if the caption configuration actually asks for any of it.
             // Through the shared label helper, never a local spelling: naming a venue lives in one
             // place so the caption, the Orders picker and the detect card cannot disagree.
-            // Gated on the configuration: a caption nobody asked for must not cost a venue lookup
-            // or a walk over the core's whole order array on every order revision.
-            let wants_venue = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
+            // Gated on the configuration, answered once above: a caption nobody asked for must not
+            // cost a venue lookup or a walk over the core's whole order array.
             // Two spellings on purpose. A shot takes the SECTION label, which is never empty: it
             // answers with the shared "not identified" wording for a core that has not finished
             // `BaseCheck`, and an empty string there would drop the caption altogether and leave a
             // picture with no attribution at all. A configured venue caption keeps `venue_label`,
             // which resolves to nothing when the venue cannot be named, because a caption the user
             // asked for should stay absent rather than print a placeholder on every frame.
-            let venue = wants_venue
+            let venue = wants_venue_cfg
                 .then(|| {
                     let venue = session.core_venues().get(&pane.core);
                     match shot {
@@ -103,9 +108,7 @@ impl ChartDataState {
                 .flatten()
                 .unwrap_or_default();
             pr.venue = venue;
-            let wants_position =
-                labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
-            let (basis, strategy) = wants_position
+            let (basis, strategy) = wants_position_cfg
                 .then(|| {
                     session.store().core(pane.core).map(|core_st| {
                         crate::chartdx::text::collect_open_stats(&core_st.orders, &pane.market)

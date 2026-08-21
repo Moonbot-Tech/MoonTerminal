@@ -301,8 +301,11 @@ mod runs;
 mod tests;
 
 use caption::book_zone_left;
-pub(in crate::chartdx) use captions::{CaptionGeomInput, CAPTION_PLATES};
-pub(in crate::chartdx) use labels::{collect_open_stats, BasisStats, LabelInputs, LabelState};
+pub(in crate::chartdx) use captions::{CAPTION_PLATES, CaptionGeomInput};
+/// The caption editor lives outside the chart and needs exactly one thing from the text pass:
+/// the real formatter, applied to sample values.
+pub(crate) use labels::preview_row;
+pub(in crate::chartdx) use labels::{BasisStats, LabelInputs, LabelState, collect_open_stats};
 
 /// Width of `text` at `size` in the caption font, without touching the retained run list.
 ///

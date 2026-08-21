@@ -93,20 +93,23 @@ impl super::ChartTabs {
     ) {
         // The value of this press that has a global default, if any. It decides both the Main rule
         // and the default write below.
+        // The value travels with the slot: the default write below stores it, so dropping it here
+        // would cost a second search for the same entry.
         let global = apply
             .values
             .iter()
-            .copied()
-            .find_map(|v| v.global_slot().map(|slot| (slot, v)));
+            .find_map(|v| v.global_slot().map(|slot| (slot, v.clone())));
         // Read Main only when the answer can matter: a press FROM Main resolves to Copy regardless.
         let main_has_override = !include_main
-            && global.is_some_and(|(slot, _)| slot.main_has_override(self.main.read(cx)));
+            && global
+                .as_ref()
+                .is_some_and(|(slot, _)| slot.main_has_override(self.main.read(cx)));
         match plan_main(include_main, global.is_some(), main_has_override) {
             MainAction::Copy => self.apply_all_to_main(&apply.values, apply.x_ppm, cx),
             MainAction::Pin => {
                 // The value Main is following right now, read BEFORE the default is overwritten
                 // below. The X scale is deliberately not pinned: it has no global default to lose.
-                if let Some((slot, _)) = global {
+                if let Some((slot, _)) = global.as_ref() {
                     let pinned = slot.read(&self.backend.read(cx).layout);
                     self.apply_all_to_main(&[pinned], None, cx);
                 }
@@ -124,7 +127,7 @@ impl super::ChartTabs {
         for (num, bucket, stack) in targets {
             stack.update(cx, |s, c| {
                 for v in &apply.values {
-                    set_stack_setting!(s, c, *v);
+                    set_stack_setting!(s, c, v.clone());
                 }
                 if x_ppm.is_some() {
                     s.set_x_ppm(x_ppm, true, c);
@@ -132,7 +135,7 @@ impl super::ChartTabs {
             });
             self.upsert_spec(cx, num, &bucket, |s| {
                 for v in &apply.values {
-                    v.write_spec(s);
+                    v.clone().write_spec(s);
                 }
                 if x_ppm.is_some() {
                     s.x_ppm = x_ppm;
@@ -184,7 +187,7 @@ impl super::ChartTabs {
     ) {
         self.main.update(cx, |s, c| {
             for v in values {
-                set_stack_setting!(s, c, *v);
+                set_stack_setting!(s, c, v.clone());
             }
             if x_ppm.is_some() {
                 s.set_x_ppm(x_ppm, true, c);
@@ -192,7 +195,7 @@ impl super::ChartTabs {
         });
         self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| {
             for v in values {
-                v.write_spec(s);
+                v.clone().write_spec(s);
             }
         });
     }

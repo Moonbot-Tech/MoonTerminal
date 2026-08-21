@@ -79,7 +79,7 @@ fn chart_bootstrap_present_rate_hz() -> f32 {
 
 const DEBUG_HISTORY_FILL_SPAN_MS: i64 = 3_600_000;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct ChartSettingsSig {
     theme: ChartTheme,
     orders: OrdersStyleSet,
@@ -96,7 +96,31 @@ struct ChartSettingsSig {
     candle_view: moon_core::market::CandleViewCfg,
     /// The panel's EFFECTIVE caption labels, in the signature for exactly the same reason: a panel
     /// following `layout.chart_labels` learns of a ⧉ press in another window only through here.
-    chart_labels: moon_core::config::ChartLabelsCfg,
+    ///
+    /// Behind an `Rc` because this is ALSO the value `render` hands the engine on every frame: one
+    /// allocation, re-made only when the signature is rebuilt, instead of a deep copy per render.
+    chart_labels: std::rc::Rc<moon_core::config::ChartLabelsCfg>,
+}
+
+impl PartialEq for ChartSettingsSig {
+    /// Hand-written for ONE field: the captions are compared by handle first.
+    ///
+    /// This runs on every backend notification, per chart panel, and the configuration behind that
+    /// handle is sixteen rows of eight captions. `Rc`'s own `PartialEq` compares the VALUES, so the
+    /// pointer shortcut has to be spelled here.
+    ///
+    /// It does NOT fire on the notification path — `chart_settings_sig` mints a fresh handle every
+    /// time, so the deep compare still runs there. It fires where the same signature is compared
+    /// against itself, which is what a re-render that rebuilt nothing does.
+    fn eq(&self, other: &Self) -> bool {
+        self.theme == other.theme
+            && self.orders == other.orders
+            && self.follow == other.follow
+            && self.chart_graphics == other.chart_graphics
+            && self.candle_view == other.candle_view
+            && (std::rc::Rc::ptr_eq(&self.chart_labels, &other.chart_labels)
+                || self.chart_labels == other.chart_labels)
+    }
 }
 
 /// Build the settings signature for a panel whose chart-graphics override is `graphics`.
@@ -126,12 +150,12 @@ fn chart_settings_sig(
         ),
         candle_view: candles.unwrap_or(backend.layout.candle_view),
         // SANITIZED for the same reason graphics is normalized: this value is COMPARED, and a
-        // hand-edited file can state an inline label that opens its zone — repaired on read, it
-        // would differ from the stored one on every notification.
+        // hand-edited file can state a hole between captions or a size outside the drawable range —
+        // repaired on read, it would differ from the stored one on every notification.
         chart_labels: {
-            let mut cfg = labels.unwrap_or(backend.layout.chart_labels);
+            let mut cfg = labels.unwrap_or_else(|| backend.layout.chart_labels.clone());
             cfg.sanitize();
-            cfg
+            std::rc::Rc::new(cfg)
         },
     }
 }
@@ -407,7 +431,7 @@ impl ChartPanel {
                         &b,
                         this.chart_graphics,
                         this.candle_view,
-                        this.chart_labels,
+                        this.chart_labels.clone(),
                     ),
                 )
             };
@@ -584,7 +608,7 @@ impl ChartPanel {
                         &b,
                         this.chart_graphics,
                         this.candle_view,
-                        this.chart_labels,
+                        this.chart_labels.clone(),
                     ),
                 )
             };
@@ -876,7 +900,7 @@ impl ChartPanel {
             // this value, and a stale one turns the next backend notify into a phantom change.
             self.settings_sig = {
                 let b = self.backend.read(cx);
-                chart_settings_sig(&b, self.chart_graphics, cfg, self.chart_labels)
+                chart_settings_sig(&b, self.chart_graphics, cfg, self.chart_labels.clone())
             };
             cx.notify();
         }
@@ -902,7 +926,7 @@ impl ChartPanel {
         // the next backend notification report a settings change that has already been applied.
         self.settings_sig = {
             let b = self.backend.read(cx);
-            chart_settings_sig(&b, cfg, self.candle_view, self.chart_labels)
+            chart_settings_sig(&b, cfg, self.candle_view, self.chart_labels.clone())
         };
         self.requery_trade_history_on_trade_kinds(cx);
         cx.notify();
@@ -918,7 +942,7 @@ impl ChartPanel {
         if self.chart_labels == cfg {
             return;
         }
-        self.chart_labels = cfg;
+        self.chart_labels = cfg.clone();
         self.view_dirty = true;
         // Restamp for the same reason `set_chart_graphics` does: the signature carries this value,
         // and a stale one turns the next backend notify into a phantom settings change.

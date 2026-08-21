@@ -38,7 +38,7 @@ use moon_core::session::CoreId;
 ///
 /// Returns:
 ///     The caption and its segmented control as one column.
-pub(super) fn seg_row(
+pub(crate) fn seg_row(
     id: String,
     caption: String,
     labels: Vec<(String, bool)>,
@@ -80,7 +80,10 @@ pub(super) fn seg_row(
 ///
 /// `pub(crate)` rather than `pub(super)` because a detached window's ⧉ press travels through
 /// Backend as a list of these; see [`super::apply_all`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Not `Copy`: the caption configuration it carries owns a name string per row, and a value that
+/// silently copies a heap-owning payload through a walk that touches every tab is a cost nobody
+/// sees until it is large.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum StackSetting {
     /// Layout mode plus separate Fit and Scroll heights.
     Layout(Option<StackLayoutMode>, Option<u16>, Option<u16>),
@@ -148,7 +151,7 @@ impl GlobalSlot {
                 StackSetting::Graphics(moon_chart::normalize_chart_graphics(layout.chart_graphics))
             }
             GlobalSlot::Labels => {
-                let mut cfg = layout.chart_labels;
+                let mut cfg = layout.chart_labels.clone();
                 cfg.sanitize();
                 StackSetting::Labels(cfg)
             }
@@ -198,7 +201,7 @@ impl GlobalSlot {
 
 impl StackSetting {
     /// The global default this setting inherits from, when it has one.
-    pub(crate) fn global_slot(self) -> Option<GlobalSlot> {
+    pub(crate) fn global_slot(&self) -> Option<GlobalSlot> {
         match self {
             StackSetting::CandleView(_) => Some(GlobalSlot::CandleView),
             StackSetting::Graphics(_) => Some(GlobalSlot::Graphics),
@@ -211,7 +214,7 @@ impl StackSetting {
     ///
     /// One definition for both callers: the single-setting path below and the ⧉ walk, which rebuilds
     /// demand once for a whole press.
-    pub(crate) fn rebuilds_orderbook_demand(self) -> bool {
+    pub(crate) fn rebuilds_orderbook_demand(&self) -> bool {
         matches!(self, StackSetting::Orderbook(_))
     }
 
@@ -362,13 +365,14 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
     /// Apply a setting to the target and persist it to the spec, rebuilding order-book demand for
     /// an Orderbook change.
     fn apply_tab_setting(&mut self, v: StackSetting, cx: &mut Context<Self>) {
-        self.set_on_stacks(v, cx);
+        let rebuild = v.rebuilds_orderbook_demand();
+        self.set_on_stacks(v.clone(), cx);
         let (num, bucket) = self.spec_key();
         let backend = self.backend().clone();
         upsert_spec(&backend, self.spec_group(), num, &bucket, cx, move |s| {
             v.write_spec(s)
         });
-        if v.rebuilds_orderbook_demand() {
+        if rebuild {
             // Rebuild the set of markets requiring an order book because demand may have changed.
             backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
         }

@@ -479,7 +479,7 @@ impl ChartTabs {
                                         s.price_axis_pos,
                                         s.time_axis_visible,
                                         s.chart_graphics,
-                                        s.chart_labels,
+                                        s.chart_labels.clone(),
                                     )
                                 })
                             })

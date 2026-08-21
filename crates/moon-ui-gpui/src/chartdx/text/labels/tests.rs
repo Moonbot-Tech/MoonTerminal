@@ -3,11 +3,15 @@
 //! Explicit imports throughout: the chartdx parent re-exports `gpui::*`, whose own `test` shadows
 //! the built-in attribute and makes `#[test]` expand recursively.
 
-use moon_core::config::{ChartLabelField, ChartLabelSlot, ChartLabelsCfg, LabelZone, PnlBasis};
+use std::rc::Rc;
+
+use moon_core::config::{
+    ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelZone, PnlBasis,
+};
 use moon_core::feed::OrderRow;
 use moon_core::util::fmt::DeltaSign;
 
-use super::{LabelInputs, LabelState, basis_index, collect_open_stats};
+use super::{LabelInputs, LabelState, basis_index, collect_open_stats, preview_row};
 
 /// One open BTC row with a filled one-unit long position.
 fn order(entry: f64, mark: f32) -> OrderRow {
@@ -69,22 +73,25 @@ fn inputs_with(rows: &[OrderRow]) -> LabelInputs {
     }
 }
 
-fn slot(field: ChartLabelField) -> ChartLabelSlot {
-    ChartLabelSlot::new(field, LabelZone::ChartTop)
+/// A configuration holding exactly the given captions, all on ONE row over the plot.
+fn cfg_of(fields: &[ChartLabelField]) -> ChartLabelsCfg {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    for field in fields {
+        row.push_part(*field);
+    }
+    cfg.rows[0] = row;
+    cfg
 }
 
 fn texts_of(cfg: &ChartLabelsCfg, inputs: LabelInputs) -> Vec<String> {
     let mut state = LabelState::default();
-    state.update(cfg, inputs);
+    state.update(&Rc::new(cfg.clone()), inputs);
     state.texts.iter().map(|t| t.text.clone()).collect()
 }
 
 fn one_field(field: ChartLabelField, inputs: LabelInputs) -> Option<String> {
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(field);
-    texts_of(&cfg, inputs).into_iter().next()
+    texts_of(&cfg_of(&[field]), inputs).into_iter().next()
 }
 
 // --- open-order figures -------------------------------------------------------------------------
@@ -199,23 +206,27 @@ fn an_unresolved_field_occupies_no_row() {
     );
 }
 
-/// The slot index travels with the text: it addresses the retained GPU run, and a hidden
+/// The caption's address travels with the text: it addresses the retained GPU run, and a hidden
 /// neighbour must not shift it.
 #[test]
-fn the_slot_index_survives_a_skipped_neighbour() {
+fn the_caption_address_survives_a_skipped_neighbour() {
+    // The shipped roster, with only some of its figures answering: the venue has no name here, the
+    // Y-scale badge is hidden, and the whole position block has nothing open to report.
     let cfg = ChartLabelsCfg::default();
     let inputs = LabelInputs {
         ticker: "BTCUSDT".into(),
         core_name: "Core-1".into(),
+        delta_1h: Some(1.5),
         ..Default::default()
     };
     let mut state = LabelState::default();
-    state.update(&cfg, inputs);
-    let slots: Vec<usize> = state.texts.iter().map(|t| t.slot).collect();
+    let cfg_rc = Rc::new(cfg.clone());
+    state.update(&cfg_rc, inputs);
+    let addresses: Vec<(usize, usize)> = state.texts.iter().map(|t| (t.row, t.part)).collect();
     assert_eq!(
-        slots,
-        vec![0, 2],
-        "the coin keeps slot 0 and the core name slot 2 across the skipped badge"
+        addresses,
+        vec![(0, 0), (0, 1), (2, 0)],
+        "every caption keeps the address its CONFIGURATION gives it, whatever its neighbours          resolved to: the skipped venue does not renumber the deltas, and the skipped badge module          does not renumber the module after it"
     );
 }
 
@@ -228,9 +239,13 @@ fn re_running_with_identical_inputs_reports_no_change() {
         ..Default::default()
     };
     let mut state = LabelState::default();
-    assert!(state.update(&cfg, inputs.clone()), "the first pass formats");
+    let cfg_rc = Rc::new(cfg.clone());
     assert!(
-        !state.update(&cfg, inputs),
+        state.update(&cfg_rc, inputs.clone()),
+        "the first pass formats"
+    );
+    assert!(
+        !state.update(&cfg_rc, inputs),
         "identical inputs must not reshape a single run"
     );
 }
@@ -239,32 +254,28 @@ fn re_running_with_identical_inputs_reports_no_change() {
 /// must not repaint the pane.
 #[test]
 fn a_tick_below_the_printed_precision_does_not_change_the_caption() {
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(ChartLabelField::Delta24h);
+    let cfg = cfg_of(&[ChartLabelField::Delta24h]);
     let mut state = LabelState::default();
     let mut inputs = LabelInputs {
         delta_24h: Some(1.234),
         ..Default::default()
     };
-    assert!(state.update(&cfg, inputs.clone()));
+    let cfg_rc = Rc::new(cfg.clone());
+    assert!(state.update(&cfg_rc, inputs.clone()));
     inputs.delta_24h = Some(1.2341);
     assert!(
-        !state.update(&cfg, inputs),
+        !state.update(&cfg_rc, inputs),
         "the same rounded text must report no change"
     );
 }
 
 #[test]
 fn a_signed_figure_carries_its_sign_for_coloring() {
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(ChartLabelField::Delta1h);
+    let cfg = cfg_of(&[ChartLabelField::Delta1h]);
     let mut state = LabelState::default();
+    let cfg_rc = Rc::new(cfg.clone());
     state.update(
-        &cfg,
+        &cfg_rc,
         LabelInputs {
             delta_1h: Some(-2.5),
             ..Default::default()
@@ -277,13 +288,11 @@ fn a_signed_figure_carries_its_sign_for_coloring() {
 /// The coin is a name, not a quantity: coloring it by sign would be meaningless, so it reports none.
 #[test]
 fn a_plain_name_reports_no_sign() {
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(ChartLabelField::Coin);
+    let cfg = cfg_of(&[ChartLabelField::Coin]);
     let mut state = LabelState::default();
+    let cfg_rc = Rc::new(cfg.clone());
     state.update(
-        &cfg,
+        &cfg_rc,
         LabelInputs {
             ticker: "BTCUSDT".into(),
             ..Default::default()
@@ -329,21 +338,17 @@ fn the_pnl_percentage_is_weighted_by_what_each_order_spent() {
     );
 }
 
-/// The basis is per SLOT, so two captions on one chart can report different sets of orders.
+/// The basis is per CAPTION, so two captions on one chart can report different sets of orders.
 #[test]
-fn two_slots_can_read_different_bases() {
+fn two_captions_can_read_different_bases() {
     let live = order(100.0, 110.0);
     let mut emu = order(100.0, 130.0);
     emu.emulator = true;
     emu.uid = 2;
     let inputs = inputs_with(&[live, emu]);
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(ChartLabelField::OpenPnlPct);
-    cfg.slots[0].pnl_basis = PnlBasis::Real;
-    cfg.slots[1] = slot(ChartLabelField::OpenPnlPct);
-    cfg.slots[1].pnl_basis = PnlBasis::Emulator;
+    let mut cfg = cfg_of(&[ChartLabelField::OpenPnlPct, ChartLabelField::OpenPnlPct]);
+    cfg.rows[0].parts[0].pnl_basis = PnlBasis::Real;
+    cfg.rows[0].parts[1].pnl_basis = PnlBasis::Emulator;
     let texts = texts_of(&cfg, inputs);
     assert_eq!(
         texts,
@@ -354,11 +359,8 @@ fn two_slots_can_read_different_bases() {
 /// The caption flag is what turns a bare number into a labelled one.
 #[test]
 fn the_caption_flag_prefixes_the_field_name() {
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(ChartLabelField::Delta1h);
-    cfg.slots[0].style.caption = Some(false);
+    let mut cfg = cfg_of(&[ChartLabelField::Delta1h]);
+    cfg.rows[0].parts[0].style.caption = Some(false);
     let bare = texts_of(
         &cfg,
         LabelInputs {
@@ -366,7 +368,7 @@ fn the_caption_flag_prefixes_the_field_name() {
             ..Default::default()
         },
     );
-    cfg.slots[0].style.caption = Some(true);
+    cfg.rows[0].parts[0].style.caption = Some(true);
     let named = texts_of(
         &cfg,
         LabelInputs {
@@ -503,12 +505,10 @@ fn the_quote_currency_prints_as_a_plain_name() {
         quote: "USDT".into(),
         ..Default::default()
     };
-    let mut cfg = ChartLabelsCfg {
-        slots: [ChartLabelSlot::default(); 16],
-    };
-    cfg.slots[0] = slot(ChartLabelField::Quote);
+    let cfg = cfg_of(&[ChartLabelField::Quote]);
     let mut state = LabelState::default();
-    state.update(&cfg, inputs);
+    let cfg_rc = Rc::new(cfg.clone());
+    state.update(&cfg_rc, inputs);
     assert_eq!(state.texts[0].text, "USDT");
     assert_eq!(state.texts[0].sign, None);
 }
@@ -518,4 +518,71 @@ fn the_quote_currency_prints_as_a_plain_name() {
 #[test]
 fn a_market_without_a_quote_prints_nothing() {
     assert!(one_field(ChartLabelField::Quote, LabelInputs::default()).is_none());
+}
+
+/// The editor's sample line is built by the CHART's formatter, so a caption that prints nothing on
+/// a real market still shows the reader what it would look like.
+#[test]
+fn the_preview_answers_for_every_field() {
+    for field in ChartLabelField::ALL {
+        let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        row.push_part(field);
+        let captions = preview_row(&row);
+        assert_eq!(
+            captions.len(),
+            1,
+            "{field:?} printed nothing in the preview"
+        );
+        assert!(!captions[0].text.trim().is_empty(), "{field:?} is blank");
+    }
+}
+
+/// A hidden caption is absent from the sample too: the preview answers "what will the chart print",
+/// not "what is configured".
+#[test]
+fn the_preview_skips_a_hidden_caption_and_prints_the_name() {
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::Delta1h);
+    row.push_part(ChartLabelField::Delta24h);
+    row.parts[1].visible = false;
+    row.name = "Дельты".to_string();
+    row.show_name = true;
+    let captions = preview_row(&row);
+    assert_eq!(captions.len(), 2, "the name and the one visible caption");
+    assert_eq!(captions[0].text, "Дельты");
+    assert_eq!(
+        captions[1].sign,
+        Some(DeltaSign::Positive),
+        "and a signed figure carries its sign, which is what colours it"
+    );
+}
+
+/// The popup's eye switches a WHOLE module off, and the chart is where that has to be true: the
+/// gates in the model only decide what the sync paths collect, not what the text pass prints.
+#[test]
+fn a_hidden_module_prints_nothing_at_all() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::Coin);
+    row.name = "Инструмент".to_string();
+    row.show_name = true;
+    row.visible = false;
+    cfg.rows[0] = row;
+    let cfg_rc = Rc::new(cfg);
+    let mut state = LabelState::default();
+    state.update(
+        &cfg_rc,
+        LabelInputs {
+            ticker: "BTCUSDT".into(),
+            ..Default::default()
+        },
+    );
+    assert!(
+        state.texts.is_empty(),
+        "a hidden module prints neither its captions nor its name"
+    );
+    assert!(
+        preview_row(&cfg_rc.rows[0]).is_empty(),
+        "and the editor's sample says the same"
+    );
 }

@@ -132,6 +132,42 @@ pub(crate) fn popup_group_inset_px(cx: &App) -> f32 {
     f32::from(design::ui_px(cx, POPUP_GROUP_INSET))
 }
 
+/// A micro glyph button, matching the detect popup's slot toggles.
+///
+/// One builder for every list line in the caption popup and its editor: a toggle and an action
+/// differ only in the variant they take, and two builders drifted apart on size and width the
+/// moment either was touched.
+pub(crate) fn micro_button(
+    id: String,
+    glyph: &'static str,
+    tip: String,
+    variant: MoonButtonVariant,
+    selected: bool,
+    width: f32,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    // `MoonButton::width` applies a raw `px`, so the caller hands it an already font-scaled value;
+    // see `design::font_w`.
+    MoonButton::new(SharedString::from(id))
+        .label(glyph)
+        .size(MoonButtonSize::Micro)
+        .width(width)
+        .variant(variant)
+        .selected(selected)
+        .tooltip(tip)
+        .on_click(move |_, w: &mut Window, app: &mut App| on_click(w, app))
+        .render()
+}
+
+/// The variant a toggle takes for its current state.
+pub(crate) fn toggle_variant(on: bool) -> MoonButtonVariant {
+    if on {
+        MoonButtonVariant::Blue
+    } else {
+        MoonButtonVariant::Ghost
+    }
+}
+
 /// Builds the shared captioned group box used inside **settings popups**.
 ///
 /// Scope is settings popups only. `panels/order_edit` builds its own `MoonGroupBox` with a heavier

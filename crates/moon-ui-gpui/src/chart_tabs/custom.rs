@@ -484,7 +484,7 @@ impl ChartTabs {
                             s.cursor_labels,
                             s.candle_view,
                             s.chart_graphics,
-                            s.chart_labels,
+                            s.chart_labels.clone(),
                         )
                     })
                 })

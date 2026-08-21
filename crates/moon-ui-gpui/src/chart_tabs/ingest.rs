@@ -163,7 +163,7 @@ impl ChartTabs {
                         spec.and_then(|s| s.cursor_labels),
                         spec.and_then(|s| s.candle_view),
                         spec.and_then(|s| s.chart_graphics),
-                        spec.and_then(|s| s.chart_labels),
+                        spec.and_then(|s| s.chart_labels.clone()),
                         spec.map_or((None, false), |s| {
                             (s.compare_anchor.clone(), s.compare_orderbook_only)
                         }),

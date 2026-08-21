@@ -10,7 +10,9 @@
 //! run reshapes when its string changes, so a caption rebuilt with an identical value on every
 //! revision would reshape a chart's whole corner several times a second for nothing.
 
-use moon_core::config::{ChartLabelField, ChartLabelSlot, ChartLabelsCfg, PnlBasis};
+use std::rc::Rc;
+
+use moon_core::config::{ChartLabelField, ChartLabelPart, ChartLabelsCfg, PnlBasis, ROW_NAME_PART};
 use moon_core::util::fmt::{self, DeltaSign};
 use rust_i18n::t;
 
@@ -104,15 +106,19 @@ pub(in crate::chartdx) fn basis_index(basis: PnlBasis) -> usize {
 /// One caption ready to draw.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::chartdx) struct LabelText {
-    /// Index of the slot this came from, which is ALSO the index of its retained text run.
+    /// Row this caption belongs to. The row decides the band, the alignment and the stacking
+    /// order; the caption itself decides nothing about where it lands.
+    pub row: usize,
+    /// Index inside that row — [`ROW_NAME_PART`] for the row's own name — which with the row
+    /// ADDRESSES this caption's retained text run.
     ///
-    /// Carried rather than implied by position: unresolved slots are skipped, so a position in the
-    /// list is not a slot index, and addressing runs by position would hand a run a different
+    /// Carried rather than implied by position: unresolved captions are skipped, so a position in
+    /// the list is not an index, and addressing runs by position would hand a run a different
     /// string whenever a neighbour appeared or vanished — reshaping both of them.
-    pub slot: usize,
+    pub part: usize,
     pub text: String,
-    /// Sign of the value behind the text, for a slot that colors by it. `None` means the value has
-    /// no meaningful sign and the slot keeps the caption color.
+    /// Sign of the value behind the text, for a caption that colors by it. `None` means the value
+    /// has no meaningful sign and the caption keeps the theme color.
     pub sign: Option<DeltaSign>,
 }
 
@@ -122,14 +128,19 @@ pub(in crate::chartdx) struct LabelState {
     /// Inputs the current [`Self::texts`] were formatted from.
     inputs: LabelInputs,
     /// Configuration the current [`Self::texts`] were formatted under.
-    cfg: Option<ChartLabelsCfg>,
+    ///
+    /// The HANDLE, not a copy: a configuration is replaced wholesale whenever it changes, so
+    /// pointer identity answers "same configuration" exactly — and answering it by value would deep-
+    /// copy sixteen rows per pane on every revision that moved a price.
+    cfg: Option<Rc<ChartLabelsCfg>>,
     /// Locale the current [`Self::texts`] were formatted in.
     ///
     /// Part of the cache key because a caption's short prefix comes from the dictionary and is
     /// BAKED into the stored string: without this a live language switch would leave the previous
     /// language on the chart until some unrelated input happened to move.
     locale: String,
-    /// Formatted captions in slot order, skipping everything that resolved to nothing.
+    /// Formatted captions in draw order — row by row, caption by caption — skipping everything
+    /// that resolved to nothing.
     pub texts: Vec<LabelText>,
     /// Reusable build buffer, so a re-format that changes nothing costs no allocation.
     scratch: Vec<LabelText>,
@@ -144,31 +155,55 @@ impl LabelState {
     ///
     /// Returns:
     ///     Whether the drawn captions actually changed, and the pane therefore has to repaint.
-    pub(in crate::chartdx) fn update(&mut self, cfg: &ChartLabelsCfg, inputs: LabelInputs) -> bool {
+    pub(in crate::chartdx) fn update(
+        &mut self,
+        cfg: &Rc<ChartLabelsCfg>,
+        inputs: LabelInputs,
+    ) -> bool {
         let locale = rust_i18n::locale().to_string();
-        if self.cfg.as_ref() == Some(cfg) && self.inputs == inputs && self.locale == locale {
+        let same_cfg = self.cfg.as_ref().is_some_and(|held| Rc::ptr_eq(held, cfg));
+        if same_cfg && self.inputs == inputs && self.locale == locale {
             return false;
         }
         self.locale = locale;
-        self.cfg = Some(*cfg);
+        self.cfg = Some(cfg.clone());
         self.inputs = inputs;
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
-        for (ix, slot) in cfg.slots.iter().enumerate() {
-            if !slot.is_drawn() {
+        for (row_ix, row) in cfg.rows.iter().enumerate() {
+            // THE gate for a whole module: its own switch, and the question of whether anything on
+            // it would print. Asked here rather than in the layout pass because a row that resolves
+            // to nothing must also cost nothing downstream — no rows collected, no runs addressed.
+            if !row.is_drawn() {
                 continue;
             }
-            // A caption with nothing to say draws nothing and occupies no row. This is what lets
-            // the comparison delta and the scale badge sit in the DEFAULT configuration without
-            // leaving two blank rows on an ordinary chart.
-            let Some((text, sign)) = resolve(slot, &self.inputs) else {
-                continue;
-            };
-            scratch.push(LabelText {
-                slot: ix,
-                text,
-                sign,
-            });
+            // The row's own name leads its captions, which is where a reader looks for what the
+            // row IS before reading the figures on it.
+            if row.prints_name() {
+                scratch.push(LabelText {
+                    row: row_ix,
+                    part: ROW_NAME_PART,
+                    text: row.name.clone(),
+                    sign: None,
+                });
+            }
+            for (part_ix, part) in row.parts.iter().enumerate() {
+                if !part.is_drawn() {
+                    continue;
+                }
+                // A caption with nothing to say draws nothing and takes no place on its row. This
+                // is what lets the comparison delta and the scale badge sit in the DEFAULT
+                // configuration without leaving two blank rows on an ordinary chart.
+                let Some((text, sign)) = resolve(part, &self.inputs) else {
+                    continue;
+                };
+                scratch.push(LabelText {
+                    row: row_ix,
+                    part: part_ix,
+                    text,
+                    sign,
+                });
+            }
         }
         // The inputs moved, but the drawn result often does not: a last price that ticked inside
         // its rounding, an order revision that changed a line nothing prints. Comparing the
@@ -187,11 +222,11 @@ fn stats_for(inputs: &LabelInputs, basis: PnlBasis) -> &BasisStats {
     &inputs.basis[basis_index(basis)]
 }
 
-/// Format one slot, or report that it has nothing to print.
-fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Option<DeltaSign>)> {
-    let caption = slot.resolved_style().caption;
-    let stats = stats_for(inputs, slot.pnl_basis);
-    match slot.field {
+/// Format one caption, or report that it has nothing to print.
+fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Option<DeltaSign>)> {
+    let caption = part.resolved_style().caption;
+    let stats = stats_for(inputs, part.pnl_basis);
+    match part.field {
         ChartLabelField::None => None,
         ChartLabelField::Coin => non_empty(&inputs.ticker).map(|t| (t, None)),
         ChartLabelField::Core => non_empty(&inputs.core_name).map(|t| (t, None)),
@@ -225,54 +260,54 @@ fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Optio
             .map(|p| (fmt::adaptive(f64::from(p)), None)),
         ChartLabelField::Delta1h => inputs
             .delta_1h
-            .and_then(|v| signed_pct_label(slot, caption, v)),
+            .and_then(|v| signed_pct_label(part, caption, v)),
         ChartLabelField::Delta24h => inputs
             .delta_24h
-            .and_then(|v| signed_pct_label(slot, caption, v)),
+            .and_then(|v| signed_pct_label(part, caption, v)),
         ChartLabelField::OpenPnlPct => stats
             .pnl_pct()
-            .and_then(|v| signed_pct_label(slot, caption, v)),
+            .and_then(|v| signed_pct_label(part, caption, v)),
         ChartLabelField::OpenPnlMoney => stats.has_position.then(|| {
             let (text, sign) = fmt::signed_amount(stats.pnl_quote, MONEY_DECIMALS);
-            (with_caption(slot, caption, &text), Some(sign))
+            (with_caption(part, caption, &text), Some(sign))
         }),
         // Zero prints nothing rather than "0": the caption reports a position, and an empty corner
         // already says there is none.
         ChartLabelField::ExchangeDelta1h => inputs
             .context
-            .and_then(|c| signed_pct_label(slot, caption, c.exchange_1h_pct)),
+            .and_then(|c| signed_pct_label(part, caption, c.exchange_1h_pct)),
         ChartLabelField::ExchangeDelta24h => inputs
             .context
-            .and_then(|c| signed_pct_label(slot, caption, c.exchange_24h_pct)),
+            .and_then(|c| signed_pct_label(part, caption, c.exchange_24h_pct)),
         ChartLabelField::BtcDelta1h => inputs
             .context
-            .and_then(|c| signed_pct_label(slot, caption, c.btc_1h_pct)),
+            .and_then(|c| signed_pct_label(part, caption, c.btc_1h_pct)),
         ChartLabelField::BtcDelta24h => inputs
             .context
-            .and_then(|c| signed_pct_label(slot, caption, c.btc_24h_pct)),
+            .and_then(|c| signed_pct_label(part, caption, c.btc_24h_pct)),
         ChartLabelField::BtcDelta72h => inputs
             .context
-            .and_then(|c| signed_pct_label(slot, caption, c.btc_72h_pct)),
+            .and_then(|c| signed_pct_label(part, caption, c.btc_72h_pct)),
         // A market that charges no funding prints nothing: a zero there would read as "free",
         // which is a different claim from "this venue has no funding at all".
         ChartLabelField::Funding => inputs
             .context
             .and_then(|c| c.funding_pct)
-            .and_then(|v| signed_pct_label(slot, caption, v)),
+            .and_then(|v| signed_pct_label(part, caption, v)),
         ChartLabelField::FundingIn => inputs
             .context
             .and_then(|c| c.funding_at_ms)
             .and_then(|at| fmt_countdown(at - inputs.now_ms))
-            .map(|text| (with_caption(slot, caption, text.as_str()), None)),
+            .map(|text| (with_caption(part, caption, text.as_str()), None)),
         ChartLabelField::OpenOrders => (stats.open_orders > 0).then(|| {
             (
-                with_caption(slot, caption, &stats.open_orders.to_string()),
+                with_caption(part, caption, &stats.open_orders.to_string()),
                 None,
             )
         }),
         ChartLabelField::Exposure => stats.has_exposure.then(|| {
             (
-                with_caption(slot, caption, &fmt::compact_si(stats.exposure)),
+                with_caption(part, caption, &fmt::compact_si(stats.exposure)),
                 None,
             )
         }),
@@ -283,7 +318,7 @@ fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Optio
                 DeltaSign::Negative
             };
             (
-                with_caption(slot, caption, &fmt::compact_si(stats.pos_size)),
+                with_caption(part, caption, &fmt::compact_si(stats.pos_size)),
                 Some(sign),
             )
         }),
@@ -292,12 +327,12 @@ fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Optio
 
 /// Format a signed percentage with its optional caption, dropping a non-finite value.
 fn signed_pct_label(
-    slot: &ChartLabelSlot,
+    part: &ChartLabelPart,
     caption: bool,
     v: f64,
 ) -> Option<(String, Option<DeltaSign>)> {
     let (text, sign) = fmt::signed_pct(v, 2)?;
-    Some((with_caption(slot, caption, &text), Some(sign)))
+    Some((with_caption(part, caption, &text), Some(sign)))
 }
 
 /// Format a countdown as `2ч 05м`, `47м` or `<1м`, dropping one that has already elapsed.
@@ -327,13 +362,13 @@ fn non_empty(s: &str) -> Option<String> {
     (!s.trim().is_empty()).then(|| s.to_string())
 }
 
-/// Prefix a value with its field's short caption, when the slot asks for one.
+/// Prefix a value with its field's short caption, when the part asks for one.
 ///
 /// The prefix comes from the dictionary rather than from a literal here: everything else this
 /// feature prints is localized, and a caption drawn over the candles is the most visible text of
 /// the lot.
-fn with_caption(slot: &ChartLabelSlot, on: bool, value: &str) -> String {
-    match slot.field.caption_key().filter(|_| on) {
+fn with_caption(part: &ChartLabelPart, on: bool, value: &str) -> String {
+    match part.field.caption_key().filter(|_| on) {
         Some(key) => format!("{}: {value}", t!(key)),
         None => value.to_string(),
     }
@@ -401,6 +436,93 @@ pub(in crate::chartdx) fn collect_open_stats(
     }
     let strategy = newest.map(|(_, name)| name.to_string()).unwrap_or_default();
     (out, strategy)
+}
+
+/// One caption of a preview line: what it prints and how it is styled.
+///
+/// The editor draws these itself — it is a dialog, not a chart — but it must not FORMAT them
+/// itself: a preview built from its own spelling of "how a percentage looks" stops being a preview
+/// the first time the real formatter changes.
+pub(crate) struct PreviewCaption {
+    pub text: String,
+    pub sign: Option<DeltaSign>,
+    pub style: moon_core::config::ResolvedLabelStyle,
+}
+
+/// Format one row against SAMPLE values, for the editor's "how it will look" line.
+///
+/// Sample rather than live values, deliberately: the editor is where a caption is CHOSEN, and a
+/// figure the current market happens not to have — no position, no funding on a spot market —
+/// would print nothing and read as "this label is broken". Every field answers here.
+pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<PreviewCaption> {
+    // A module switched off prints nothing, and the sample says so rather than showing what it
+    // WOULD print: the editor's line answers "what will the chart show".
+    if !row.is_drawn() {
+        return Vec::new();
+    }
+    let inputs = sample_inputs();
+    let mut out = Vec::new();
+    if row.prints_name() {
+        out.push(PreviewCaption {
+            text: row.name.clone(),
+            sign: None,
+            style: moon_core::config::ChartLabelRow::name_style(),
+        });
+    }
+    for part in &row.parts[..row.used_parts()] {
+        if !part.visible {
+            continue;
+        }
+        if let Some((text, sign)) = resolve(part, &inputs) {
+            out.push(PreviewCaption {
+                text,
+                sign,
+                style: part.resolved_style(),
+            });
+        }
+    }
+    out
+}
+
+/// The market the preview describes: one coin, in profit on the hour and down on the day, with two
+/// orders open at a small loss.
+///
+/// Chosen so every figure has a value AND a sign — a preview where everything is positive hides
+/// what the by-sign colour mode does.
+fn sample_inputs() -> LabelInputs {
+    let stats = BasisStats {
+        open_orders: 2,
+        pos_size: 0.35,
+        spent: 100.0,
+        pnl_quote: -4.11,
+        exposure: 495.96,
+        has_exposure: true,
+        has_position: true,
+    };
+    LabelInputs {
+        ticker: "BTC-USDT".to_string(),
+        core_name: "Core-1".to_string(),
+        venue: "Binance".to_string(),
+        quote: "USDT".to_string(),
+        strategy: "Alpha".to_string(),
+        last_price: Some(51234.5),
+        scale_badge: Some(12),
+        compare_pct: Some(1.2),
+        delta_1h: Some(3.8),
+        delta_24h: Some(-2.1),
+        context: Some(moon_core::market::MarketContextReadout {
+            exchange_1h_pct: 0.4,
+            exchange_24h_pct: -1.1,
+            btc_1h_pct: 0.9,
+            btc_24h_pct: -0.6,
+            btc_72h_pct: 4.75,
+            funding_pct: Some(0.01),
+            funding_at_ms: Some(5 * 3_600_000 + 33 * 60_000),
+        }),
+        // The countdown is measured against this, so the pair prints a fixed `5ч 33м`.
+        now_ms: 0,
+        basis: [stats; 3],
+    }
 }
 
 #[cfg(test)]

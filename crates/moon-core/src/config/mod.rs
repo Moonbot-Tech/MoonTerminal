@@ -50,9 +50,10 @@ mod tests;
 
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use chart_labels::{
-    ChartLabelField, ChartLabelGroup, ChartLabelSlot, ChartLabelsCfg, LabelAlign, LabelColor,
-    LabelStyle, LabelZone, PnlBasis, ResolvedLabelStyle, CHART_LABEL_SLOTS, LABEL_SIZE_MULT_MAX,
-    LABEL_SIZE_MULT_MIN,
+    ChartLabelField, ChartLabelGroup, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign,
+    LabelColor, LabelFlow, LabelPreset, LabelStyle, LabelZone, PnlBasis, ResolvedLabelStyle,
+    CHART_LABEL_PARTS, CHART_LABEL_ROWS, LABEL_GAP_MAX, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
+    ROW_NAME_PART, ROW_RUN_STRIDE,
 };
 pub use core_groups::{
     move_group, sanitize_core_groups, unique_group_name, CoreGroup, CORE_GROUPS_MAX,

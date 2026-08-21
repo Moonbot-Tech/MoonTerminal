@@ -20,7 +20,7 @@ fn spec() -> ChartTabSpec {
 /// Apply a whole value set to a spec, as the walk does for every target.
 fn write_all(values: &[StackSetting], s: &mut ChartTabSpec) {
     for v in values {
-        v.write_spec(s);
+        v.clone().write_spec(s);
     }
 }
 

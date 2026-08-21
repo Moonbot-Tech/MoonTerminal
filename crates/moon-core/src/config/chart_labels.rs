@@ -1,322 +1,82 @@
 //! Chart caption labels: WHAT a chart prints beside its plot, WHERE, and in WHICH style.
 //!
 //! The chart used to print a fixed roster — the coin, the core name that qualifies it, the
-//! comparison delta and the Y-scale badge — hard-coded into the text pass in that order and in that
-//! corner. This module turns that roster into DATA: a fixed-length list of slots, each naming a
-//! field, a zone, whether it shares the previous slot's row, and an optional style override.
-//! [`ChartLabelsCfg::default`] reproduces the old roster exactly, so a profile that never touches
-//! the popup keeps the caption it has always had.
+//! comparison delta and the Y-scale badge — hard-coded into the text pass. That roster became DATA
+//! in PR #281: a flat list of slots, one caption each, joined into rows by an `inline` flag.
 //!
-//! Fixed-length rather than a `Vec`, like [`super::detect_view::DetectSizeCfg`] beside it, for
-//! three reasons that all point the same way: the whole configuration stays `Copy`, which is what
-//! `StackSetting` in the terminal requires to travel through the shared ⧉ walk; the retained GPU
-//! text run of a slot can be addressed by its INDEX, which is what keeps a hidden slot from
-//! reshaping every run below it every frame; and a chart with more than [`CHART_LABEL_SLOTS`]
-//! captions on it is not a chart any more.
+//! This module is that model's second shape. A caption is no longer the unit of configuration; a
+//! ROW is. A row carries its own name, the band it lives in and where in that band it sits, and
+//! holds up to [`CHART_LABEL_PARTS`] captions — each with its own field, colour, size, prefix and
+//! PnL basis. What used to cost four slots (the open-order figures chained with `inline`) is one
+//! row with four parts, and the ceiling that used to be "sixteen captions on the whole chart" is
+//! now "sixteen rows", each of them a family.
+//!
+//! Fixed-length rather than a `Vec`, like [`super::detect_view::DetectSizeCfg`] beside it, for the
+//! reason the retained text pass needs: a part's GPU run is addressed by its INDEX
+//! (`row * ROW_RUN_STRIDE + part`), and an index that shifts when a neighbour appears hands a run a
+//! different string and reshapes it. The FILE, however, is written as a variable-length list —
+//! see `wire` — so neither ceiling is baked into a saved profile and both can be raised without
+//! costing anybody their tabs.
 
 use serde::{Deserialize, Serialize};
 
-/// Number of label slots one chart configuration holds.
-///
-/// Slots past the last used one carry [`ChartLabelField::None`] and are skipped while drawing. The
-/// count is also the size of the terminal's per-pane text-run pool, so raising it costs retained
-/// runs on every pane and must be done deliberately.
-pub const CHART_LABEL_SLOTS: usize = 16;
+mod fields;
+mod presets;
+mod wire;
 
-/// Smallest and largest font multiplier a slot may carry.
+pub use fields::{ChartLabelField, ChartLabelGroup};
+pub use presets::LabelPreset;
+
+/// Number of caption rows one chart configuration holds.
+///
+/// Rows past the last used one are blank and are skipped while drawing. The count also sizes the
+/// terminal's per-pane text-run pool together with [`ROW_RUN_STRIDE`], so raising it costs retained
+/// runs on every pane and must be done deliberately. It costs nothing in a saved file.
+pub const CHART_LABEL_ROWS: usize = 16;
+
+/// Number of captions one row holds.
+///
+/// Eight is what a row can print before the horizontal budget truncates it anyway: the control
+/// strip is only as wide as the order book, and even a full-width row over the plot runs out of
+/// room around there.
+pub const CHART_LABEL_PARTS: usize = 8;
+
+/// Retained text runs reserved per row: one per part, plus one for the row's printed name.
+pub const ROW_RUN_STRIDE: usize = CHART_LABEL_PARTS + 1;
+
+/// Run index — and part index — of a row's printed NAME.
+///
+/// Past every caption, so switching the name on renumbers none of them. Declared here rather than
+/// in the drawing pass because it is the other half of [`ROW_RUN_STRIDE`]: two crates agreeing on
+/// the stride but not on which index it reserves is a silent overlap.
+pub const ROW_NAME_PART: usize = CHART_LABEL_PARTS;
+
+/// Largest gap a module may ask for, in the chart's own logical pixels.
+///
+/// A gap past this is not spacing any more, it is a second band — and a hand-edited file asking for
+/// one would push everything after it off the pane.
+pub const LABEL_GAP_MAX: u8 = 64;
+
+/// Longest row name kept; anything longer is cut on write.
+///
+/// A name is an identifier in a list and, when the row prints it, a caption over candles. Both stop
+/// being readable well before this, and an unbounded string in a per-tab config is a file-size
+/// question nobody wants to answer later.
+pub const LABEL_ROW_NAME_MAX: usize = 48;
+
+/// Smallest and largest font multiplier a part may carry.
 ///
 /// The multiplier scales the chart's own label size, which already follows the Settings font
 /// slider, so these bounds are relative to whatever the user picked there.
 pub const LABEL_SIZE_MULT_MIN: f32 = 0.5;
 pub const LABEL_SIZE_MULT_MAX: f32 = 3.0;
 
-/// What one slot prints.
+/// Which band of the pane a row lives in.
 ///
-/// The wire form is the serde name, so a variant may be REORDERED here freely but never RENAMED
-/// without migrating `charts.json` and `layout.toml`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChartLabelField {
-    /// Empty slot: prints nothing and occupies no row.
-    #[default]
-    None,
-    /// Coin ticker as the pane resolved it (`BEAT-USDT`, `@206`'s classic name).
-    Coin,
-    /// Name of the core the pane's market belongs to.
-    Core,
-    /// Venue the pane's core trades on, through the shared venue directory.
-    Venue,
-    /// Quote currency this market is priced and settled in: `USDT`, `USDC`, `BTC`.
-    ///
-    /// The unit behind every money figure on the chart. A COIN-M contract reports none, and the
-    /// caption then prints nothing rather than guessing one.
-    Quote,
-    /// Current Y-scale badge as a whole percentage of the visible range.
-    ScaleBadge,
-    /// Comparison-mode difference from the locked anchor's price, signed.
-    CompareDelta,
-    /// Last traded price.
-    LastPrice,
-    /// Signed one-hour price change, from the same readout the header ticker uses.
-    Delta1h,
-    /// Signed 24-hour price change, from the same readout the header ticker uses.
-    Delta24h,
-    /// Unrealized result of the orders open RIGHT NOW on this market, as a percentage of what they
-    /// spent. See [`PnlBasis`] for which orders count.
-    OpenPnlPct,
-    /// The same result in the market's quote money.
-    OpenPnlMoney,
-    /// How many orders are open on this market.
-    OpenOrders,
-    /// Open position size in the base coin.
-    PosSize,
-    /// Current notional of what is open, in the market's quote currency: position size times the
-    /// mark price.
-    ///
-    /// Counted over a WIDER set than the PnL figures: an order whose entry price has not arrived
-    /// still has a size and a mark, and withholding it would understate what is actually at risk.
-    Exposure,
-    /// User-assigned name of the strategy that owns the newest open order on this market.
-    OrderStrategy,
-    /// Signed average movement across the whole exchange, over the retained hour and day.
-    ///
-    /// The background the coin's own delta is read against: it answers "is this the coin, or the
-    /// whole market". One figure per core, not per market.
-    ExchangeDelta1h,
-    ExchangeDelta24h,
-    /// Signed BTC movement over the retained windows.
-    BtcDelta1h,
-    BtcDelta24h,
-    BtcDelta72h,
-    /// Funding rate charged on this market, as a percentage.
-    Funding,
-    /// Time remaining until funding is next charged.
-    FundingIn,
-}
-
-impl ChartLabelField {
-    /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 22] = [
-        ChartLabelField::Coin,
-        ChartLabelField::Core,
-        ChartLabelField::Venue,
-        ChartLabelField::Quote,
-        ChartLabelField::LastPrice,
-        ChartLabelField::Delta1h,
-        ChartLabelField::Delta24h,
-        ChartLabelField::ScaleBadge,
-        ChartLabelField::CompareDelta,
-        ChartLabelField::OpenPnlPct,
-        ChartLabelField::OpenPnlMoney,
-        ChartLabelField::OpenOrders,
-        ChartLabelField::PosSize,
-        ChartLabelField::Exposure,
-        ChartLabelField::OrderStrategy,
-        ChartLabelField::ExchangeDelta1h,
-        ChartLabelField::ExchangeDelta24h,
-        ChartLabelField::BtcDelta1h,
-        ChartLabelField::BtcDelta24h,
-        ChartLabelField::BtcDelta72h,
-        ChartLabelField::Funding,
-        ChartLabelField::FundingIn,
-    ];
-
-    /// Menu section this field belongs to.
-    pub fn group(self) -> ChartLabelGroup {
-        match self {
-            ChartLabelField::Coin
-            | ChartLabelField::Core
-            | ChartLabelField::Venue
-            | ChartLabelField::Quote
-            | ChartLabelField::None => ChartLabelGroup::Instrument,
-            ChartLabelField::LastPrice
-            | ChartLabelField::Delta1h
-            | ChartLabelField::Delta24h
-            | ChartLabelField::ScaleBadge
-            | ChartLabelField::CompareDelta
-            | ChartLabelField::ExchangeDelta1h
-            | ChartLabelField::ExchangeDelta24h
-            | ChartLabelField::BtcDelta1h
-            | ChartLabelField::BtcDelta24h
-            | ChartLabelField::BtcDelta72h
-            | ChartLabelField::Funding
-            | ChartLabelField::FundingIn => ChartLabelGroup::Market,
-            ChartLabelField::OpenPnlPct
-            | ChartLabelField::OpenPnlMoney
-            | ChartLabelField::OpenOrders
-            | ChartLabelField::PosSize
-            | ChartLabelField::Exposure => ChartLabelGroup::Position,
-            ChartLabelField::OrderStrategy => ChartLabelGroup::Strategy,
-        }
-    }
-
-    /// Locale key for this field's menu and list label.
-    pub fn locale_key(self) -> &'static str {
-        match self {
-            ChartLabelField::None => "chart_labels.field.none",
-            ChartLabelField::Coin => "chart_labels.field.coin",
-            ChartLabelField::Core => "chart_labels.field.core",
-            ChartLabelField::Venue => "chart_labels.field.venue",
-            ChartLabelField::Quote => "chart_labels.field.quote",
-            ChartLabelField::ScaleBadge => "chart_labels.field.scale_badge",
-            ChartLabelField::CompareDelta => "chart_labels.field.compare_delta",
-            ChartLabelField::LastPrice => "chart_labels.field.last_price",
-            ChartLabelField::Delta1h => "chart_labels.field.delta_1h",
-            ChartLabelField::Delta24h => "chart_labels.field.delta_24h",
-            ChartLabelField::OpenPnlPct => "chart_labels.field.open_pnl_pct",
-            ChartLabelField::OpenPnlMoney => "chart_labels.field.open_pnl_money",
-            ChartLabelField::OpenOrders => "chart_labels.field.open_orders",
-            ChartLabelField::PosSize => "chart_labels.field.pos_size",
-            ChartLabelField::Exposure => "chart_labels.field.exposure",
-            ChartLabelField::OrderStrategy => "chart_labels.field.order_strategy",
-            ChartLabelField::ExchangeDelta1h => "chart_labels.field.exchange_delta_1h",
-            ChartLabelField::ExchangeDelta24h => "chart_labels.field.exchange_delta_24h",
-            ChartLabelField::BtcDelta1h => "chart_labels.field.btc_delta_1h",
-            ChartLabelField::BtcDelta24h => "chart_labels.field.btc_delta_24h",
-            ChartLabelField::BtcDelta72h => "chart_labels.field.btc_delta_72h",
-            ChartLabelField::Funding => "chart_labels.field.funding",
-            ChartLabelField::FundingIn => "chart_labels.field.funding_in",
-        }
-    }
-
-    /// Locale key of the SHORT prefix a caption prints when its style asks for one.
-    ///
-    /// Separate from [`Self::locale_key`]: the menu needs a name a reader can pick from a list
-    /// ("PnL открытых, %"), while a caption drawn over candles needs the shortest thing that still
-    /// identifies the figure ("PnL"). A field with nothing worth prefixing returns `None`.
-    pub fn caption_key(self) -> Option<&'static str> {
-        match self {
-            ChartLabelField::Delta1h => Some("chart_labels.short.delta_1h"),
-            ChartLabelField::Delta24h => Some("chart_labels.short.delta_24h"),
-            ChartLabelField::OpenPnlPct | ChartLabelField::OpenPnlMoney => {
-                Some("chart_labels.short.pnl")
-            }
-            ChartLabelField::OpenOrders => Some("chart_labels.short.orders"),
-            ChartLabelField::PosSize => Some("chart_labels.short.position"),
-            ChartLabelField::Exposure => Some("chart_labels.short.exposure"),
-            ChartLabelField::ExchangeDelta1h => Some("chart_labels.short.exchange_1h"),
-            ChartLabelField::ExchangeDelta24h => Some("chart_labels.short.exchange_24h"),
-            ChartLabelField::BtcDelta1h => Some("chart_labels.short.btc_1h"),
-            ChartLabelField::BtcDelta24h => Some("chart_labels.short.btc_24h"),
-            ChartLabelField::BtcDelta72h => Some("chart_labels.short.btc_72h"),
-            ChartLabelField::Funding => Some("chart_labels.short.funding"),
-            ChartLabelField::FundingIn => Some("chart_labels.short.funding_in"),
-            _ => None,
-        }
-    }
-
-    /// Whether this field takes a [`PnlBasis`], and therefore shows that control in the popup.
-    ///
-    /// Asked of the FIELD rather than stored per slot so a basis cannot linger on a slot whose
-    /// field was changed to something that ignores it.
-    pub fn uses_pnl_basis(self) -> bool {
-        matches!(
-            self,
-            ChartLabelField::OpenPnlPct
-                | ChartLabelField::OpenPnlMoney
-                | ChartLabelField::OpenOrders
-                | ChartLabelField::PosSize
-                | ChartLabelField::Exposure
-        )
-    }
-
-    /// Style this field draws with when its slot overrides nothing.
-    ///
-    /// These are the sizes and colors the hard-coded caption used, so the default configuration
-    /// reproduces it without the popup restating them.
-    pub fn default_style(self) -> ResolvedLabelStyle {
-        match self {
-            // The coin leads, one size up: it is the fact a glance needs.
-            ChartLabelField::Coin => ResolvedLabelStyle {
-                color: LabelColor::Theme,
-                size_mult: 1.25,
-                plate: true,
-                caption: false,
-            },
-            // The comparison delta is the one figure a broom-mode pane exists to show.
-            ChartLabelField::CompareDelta => ResolvedLabelStyle {
-                color: LabelColor::BySign,
-                size_mult: 1.7,
-                plate: true,
-                caption: false,
-            },
-            // Deliberately smaller than the comparison delta beside it: a secondary indicator must
-            // not compete with the figure the pane is being read for.
-            ChartLabelField::ScaleBadge => ResolvedLabelStyle {
-                color: LabelColor::Theme,
-                size_mult: 1.45,
-                plate: true,
-                caption: false,
-            },
-            ChartLabelField::Delta1h
-            | ChartLabelField::Delta24h
-            | ChartLabelField::ExchangeDelta1h
-            | ChartLabelField::ExchangeDelta24h
-            | ChartLabelField::BtcDelta1h
-            | ChartLabelField::BtcDelta24h
-            | ChartLabelField::BtcDelta72h
-            | ChartLabelField::Funding
-            | ChartLabelField::OpenPnlPct
-            | ChartLabelField::OpenPnlMoney => ResolvedLabelStyle {
-                color: LabelColor::BySign,
-                size_mult: 1.0,
-                plate: true,
-                caption: true,
-            },
-            // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
-            ChartLabelField::OpenOrders
-            | ChartLabelField::PosSize
-            | ChartLabelField::Exposure
-            | ChartLabelField::FundingIn => ResolvedLabelStyle {
-                color: LabelColor::Theme,
-                size_mult: 1.0,
-                plate: true,
-                caption: true,
-            },
-            _ => ResolvedLabelStyle {
-                color: LabelColor::Theme,
-                size_mult: 1.0,
-                plate: true,
-                caption: false,
-            },
-        }
-    }
-}
-
-/// Section a field appears under in the "add label" menu.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChartLabelGroup {
-    Instrument,
-    Market,
-    Position,
-    Strategy,
-}
-
-impl ChartLabelGroup {
-    /// Sections in menu order.
-    pub const ALL: [ChartLabelGroup; 4] = [
-        ChartLabelGroup::Instrument,
-        ChartLabelGroup::Market,
-        ChartLabelGroup::Position,
-        ChartLabelGroup::Strategy,
-    ];
-
-    pub fn locale_key(self) -> &'static str {
-        match self {
-            ChartLabelGroup::Instrument => "chart_labels.group.instrument",
-            ChartLabelGroup::Market => "chart_labels.group.market",
-            ChartLabelGroup::Position => "chart_labels.group.position",
-            ChartLabelGroup::Strategy => "chart_labels.group.strategy",
-        }
-    }
-}
-
-/// Which band of the pane a slot's row lives in.
-///
-/// A chart pane is two columns, and a caption belongs to one of them: `Chart*` bands lie over the
+/// A chart pane is two columns, and a row belongs to one of them: `Chart*` bands lie over the
 /// PLOT — the candles — while `Zone*` bands lie in the CONTROL STRIP down the right side. The strip
-/// is reserved whether or not an order book is drawn, which is why a caption keeps its place there
-/// with the book switched off.
+/// is reserved whether or not an order book is drawn, which is why a row keeps its place there with
+/// the book switched off.
 ///
 /// WHERE in the band a row sits is [`LabelAlign`], a separate axis. Folding the two together is
 /// what made "right" mean the plot's edge on one pane and the strip's on another.
@@ -326,7 +86,7 @@ pub enum LabelZone {
     /// Along the plot's top edge.
     ///
     /// The three legacy `top_*` spellings map here: they used to carry the alignment, which is now
-    /// [`ChartLabelSlot::align`]'s job.
+    /// [`ChartLabelRow::align`]'s job.
     #[serde(alias = "top_left", alias = "top_center", alias = "top_right")]
     ChartTop,
     /// Along the plot's bottom edge, filling upward.
@@ -414,7 +174,50 @@ impl LabelAlign {
     }
 }
 
-/// How a slot picks its color.
+/// Which way things run: side by side, or one under another.
+///
+/// The SAME question is asked twice, at two levels, and that is deliberate — it is what lets one
+/// chart print the position figures as one dense line and the deltas as a stacked block, without
+/// either choice being a special case of the other:
+///
+/// - a module's own captions ([`ChartLabelRow::flow`]) run across a line or down a column;
+/// - a module ([`ChartLabelRow::placement`]) either continues the previous module's line or starts
+///   a new one under it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelFlow {
+    /// One under another.
+    #[default]
+    Column,
+    /// Side by side, on one line.
+    Row,
+}
+
+impl LabelFlow {
+    pub const ALL: [LabelFlow; 2] = [LabelFlow::Row, LabelFlow::Column];
+
+    /// Whether this is the side-by-side direction.
+    pub fn is_row(self) -> bool {
+        matches!(self, LabelFlow::Row)
+    }
+
+    pub fn locale_key(self) -> &'static str {
+        match self {
+            LabelFlow::Row => "chart_labels.flow.row",
+            LabelFlow::Column => "chart_labels.flow.column",
+        }
+    }
+
+    /// Glyph for the popup's two-state control.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            LabelFlow::Row => "→",
+            LabelFlow::Column => "↵",
+        }
+    }
+}
+
+/// How a part picks its color.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "mode", content = "rgb")]
 pub enum LabelColor {
@@ -462,7 +265,7 @@ impl PnlBasis {
     }
 }
 
-/// A slot's style override. Every field is optional and absent means "whatever the FIELD defaults
+/// A part's style override. Every field is optional and absent means "whatever the FIELD defaults
 /// to", so a user who only changed the color does not freeze the size against a later default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -484,49 +287,53 @@ pub struct ResolvedLabelStyle {
     pub color: LabelColor,
     /// Multiplier on the chart's label font size, already clamped to the drawable range.
     pub size_mult: f32,
-    /// Whether a translucent plate is drawn under the row this slot belongs to.
+    /// Whether a translucent plate is drawn under the row this part belongs to.
     pub plate: bool,
     /// Whether the printed text carries the field's short caption ("Δ1ч 0.8%" rather than "0.8%").
     pub caption: bool,
 }
 
-/// One configured label.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// One configured caption: a field and how it looks.
+///
+/// Everything about WHERE it goes lives on the row that holds it — a part cannot be in a different
+/// band from the row it is printed on, and giving it its own would be a setting with no effect.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ChartLabelSlot {
+pub struct ChartLabelPart {
     pub field: ChartLabelField,
-    /// Band this slot's row lives in. Ignored while [`Self::inline`] is set: an inline slot joins
-    /// the row of the slot before it and cannot be in a different band from it.
-    pub zone: LabelZone,
-    /// Where in that band the row sits. Like the band, an inline slot inherits it from the row it
-    /// joins — a row has ONE alignment, or it is not a row.
-    pub align: LabelAlign,
-    /// Whether this slot shares the previous VISIBLE slot's row instead of opening a new one.
+    /// Whether the caption is drawn at all. A hidden part keeps its position and style, which is
+    /// the difference between this and deleting it.
     ///
-    /// The first slot of a zone can never be inline — there is no row to join — and
-    /// [`ChartLabelsCfg::sanitize`] clears the flag rather than trusting a hand-edited file.
-    pub inline: bool,
-    /// Whether the slot is drawn at all. A hidden slot keeps its position and style, which is the
-    /// difference between this and deleting it.
-    #[serde(default = "def_true")]
+    /// Not written while it is true, like the row's own switch: a file states what was turned OFF,
+    /// and the default above answers everything it leaves out.
+    #[serde(skip_serializing_if = "is_true")]
     pub visible: bool,
     pub style: LabelStyle,
     /// Which orders a position figure counts; meaningless for other fields.
     pub pnl_basis: PnlBasis,
 }
 
-fn def_true() -> bool {
-    true
+/// Whether a flag is at its default, for the fields a file only states when they are turned off.
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
-impl ChartLabelSlot {
-    /// A slot in its simplest form: a field in a zone, opening its own row, fully default-styled.
-    pub const fn new(field: ChartLabelField, zone: LabelZone) -> Self {
+impl Default for ChartLabelPart {
+    /// An empty, VISIBLE part.
+    ///
+    /// Hand-written because the derive would answer `visible: false`, and this default is what
+    /// `#[serde(default)]` above hands a file that omits the flag — a file written before the flag
+    /// existed, whose captions were all drawn.
+    fn default() -> Self {
+        Self::new(ChartLabelField::None)
+    }
+}
+
+impl ChartLabelPart {
+    /// A part in its simplest form: a field, fully default-styled.
+    pub const fn new(field: ChartLabelField) -> Self {
         Self {
             field,
-            zone,
-            align: LabelAlign::Center,
-            inline: false,
             visible: true,
             style: LabelStyle {
                 color: None,
@@ -538,26 +345,28 @@ impl ChartLabelSlot {
         }
     }
 
-    /// The same, joined to the previous visible slot's row.
-    pub const fn inline(field: ChartLabelField, zone: LabelZone) -> Self {
-        let mut s = Self::new(field, zone);
-        s.inline = true;
-        s
+    /// Whether this part carries a field at all, occupied or not by a hidden flag.
+    pub fn is_used(&self) -> bool {
+        self.field != ChartLabelField::None
     }
 
-    /// Whether this slot contributes anything to the chart.
+    /// Whether this part contributes anything to the chart.
     pub fn is_drawn(&self) -> bool {
-        self.visible && self.field != ChartLabelField::None
+        self.visible && self.is_used()
     }
 
-    /// This slot's style with every question answered.
+    /// This part's style with every question answered.
     pub fn resolved_style(&self) -> ResolvedLabelStyle {
         let base = self.field.default_style();
         ResolvedLabelStyle {
             color: self.style.color.unwrap_or(base.color),
+            // A non-finite multiplier is treated as ABSENT rather than clamped: `f32::clamp`
+            // passes NaN straight through, and a NaN size reaches the shaper as a caption of no
+            // size at all.
             size_mult: self
                 .style
                 .size_mult
+                .filter(|m| m.is_finite())
                 .unwrap_or(base.size_mult)
                 .clamp(LABEL_SIZE_MULT_MIN, LABEL_SIZE_MULT_MAX),
             plate: self.style.plate.unwrap_or(base.plate),
@@ -566,161 +375,418 @@ impl ChartLabelSlot {
     }
 }
 
+/// One row of captions: where it is printed, what it is called, and what it prints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartLabelRow {
+    /// User-assigned name. Empty means the popup shows the row's fields instead, and
+    /// [`Self::show_name`] has nothing to print.
+    pub name: String,
+    /// Band this row's captions are printed in.
+    pub zone: LabelZone,
+    /// Where in that band the row sits.
+    pub align: LabelAlign,
+    /// Whether the name is printed on the chart as the row's leading caption.
+    pub show_name: bool,
+    /// Whether the row is drawn at all.
+    ///
+    /// One switch for the whole family, which is what "hide this for a moment" asks for; a row
+    /// hidden here keeps its captions, its styles and its place in the order.
+    pub visible: bool,
+    /// Which way this module's own captions run.
+    ///
+    /// [`LabelFlow::Row`] is the shape the chart has always drawn — figures side by side — and the
+    /// default. [`LabelFlow::Column`] makes the module a BLOCK: its captions stack, and the block
+    /// takes one column of whatever line it lands on. Where that line is remains
+    /// [`Self::placement`]'s question — a block can stand beside the module above it just as well
+    /// as under it.
+    pub flow: LabelFlow,
+    /// Space before this module, in the chart's own logical pixels.
+    ///
+    /// ONE number for what would otherwise be four settings, because the direction is never the
+    /// user's question — it is whichever way the band already runs, and the gap always goes on the
+    /// side the module CAME FROM:
+    ///
+    /// - a module continuing a line is pushed away from the column before it — leftwards in a
+    ///   right-aligned band, rightwards in a left-aligned one;
+    /// - a module opening a line is pushed away from the line above it, or below it in a band that
+    ///   stacks upward;
+    /// - the FIRST module of a band has no neighbour, so the same number indents its line from the
+    ///   band's own edge. That case has no spelling at all under an "after this module" reading,
+    ///   which is why the gap is stated before rather than after.
+    ///
+    /// Exactly ONE direction is spent per module — the one it was placed in. A module that opens a
+    /// line spends its gap above that line; a module that joins one spends it beside the column
+    /// before it. Spending both would move a line diagonally rather than space it.
+    pub gap: u8,
+    /// Where this module goes relative to the PREVIOUS one in the same band.
+    ///
+    /// [`LabelFlow::Column`] — under it, which is what a list of modules does by default.
+    /// [`LabelFlow::Row`] — on the same line, continuing it: two short modules that belong together
+    /// read as one line without being one module, and a module that stacks its own captions stands
+    /// there as a block.
+    pub placement: LabelFlow,
+    /// The captions, in print order. Used parts are contiguous from the front; `sanitize` closes
+    /// any hole a hand-edited file states.
+    pub parts: [ChartLabelPart; CHART_LABEL_PARTS],
+}
+
+impl Default for ChartLabelRow {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            zone: LabelZone::ZoneTop,
+            align: LabelAlign::Center,
+            show_name: false,
+            visible: true,
+            // The chart's own shape before either axis existed: captions across a line, each module
+            // on a line of its own.
+            flow: LabelFlow::Row,
+            placement: LabelFlow::Column,
+            // No gap: modules sit exactly as tightly as the chart drew them before this existed.
+            gap: 0,
+            parts: [ChartLabelPart::new(ChartLabelField::None); CHART_LABEL_PARTS],
+        }
+    }
+}
+
+impl ChartLabelRow {
+    /// Band a row created from the field catalogue lands in, and where in it.
+    ///
+    /// The control strip, pushed right, where the chart's other captions live: a new row appears
+    /// somewhere the reader is already looking, and the band control moves it from there. Beside
+    /// the model rather than in the popup, because [`LabelPreset`] answers the same question here.
+    pub const DEFAULT_ZONE: LabelZone = LabelZone::ZoneTop;
+    pub const DEFAULT_ALIGN: LabelAlign = LabelAlign::Right;
+
+    /// Style the row's printed NAME draws with.
+    ///
+    /// A name is not a configured caption and carries no style of its own: it draws like a plain
+    /// field, on the row's plate, without a prefix.
+    pub fn name_style() -> ResolvedLabelStyle {
+        ChartLabelField::None.default_style()
+    }
+
+    /// An empty row in a band, with the alignment that band is usually read at.
+    pub fn new(zone: LabelZone, align: LabelAlign) -> Self {
+        Self {
+            zone,
+            align,
+            ..Default::default()
+        }
+    }
+
+    /// Whether the row holds nothing at all: no caption and no name.
+    ///
+    /// A blank row is not a row — `sanitize` drops it, which is what makes removing a row's last
+    /// caption remove the row.
+    pub fn is_blank(&self) -> bool {
+        self.name.is_empty() && !self.parts.iter().any(ChartLabelPart::is_used)
+    }
+
+    /// Whether the row puts anything on the chart.
+    pub fn is_drawn(&self) -> bool {
+        self.visible && (self.parts.iter().any(ChartLabelPart::is_drawn) || self.prints_name())
+    }
+
+    /// Whether the row prints its own name as a caption.
+    pub fn prints_name(&self) -> bool {
+        self.show_name && !self.name.is_empty()
+    }
+
+    /// How many leading parts carry a field.
+    pub fn used_parts(&self) -> usize {
+        self.first_free_part().unwrap_or(CHART_LABEL_PARTS)
+    }
+
+    /// Index of the first part holding no field, or `None` when the row is full.
+    pub fn first_free_part(&self) -> Option<usize> {
+        self.parts.iter().position(|p| !p.is_used())
+    }
+
+    /// Append a caption, returning whether there was room.
+    pub fn push_part(&mut self, field: ChartLabelField) -> bool {
+        let Some(ix) = self.first_free_part() else {
+            return false;
+        };
+        self.parts[ix] = ChartLabelPart::new(field);
+        true
+    }
+
+    /// Remove one caption, closing the gap so the remaining print order is preserved.
+    pub fn remove_part(&mut self, ix: usize) {
+        remove_at(&mut self.parts, ix);
+    }
+
+    /// Swap a caption with its neighbour, moving it earlier (`up`) or later in the print order.
+    ///
+    /// Returns whether anything moved: the ends refuse rather than wrapping around.
+    pub fn move_part(&mut self, ix: usize, up: bool) -> bool {
+        let used = self.used_parts();
+        move_at(&mut self.parts, used, ix, up)
+    }
+}
+
 /// Every label one chart draws.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChartLabelsCfg {
-    pub slots: [ChartLabelSlot; CHART_LABEL_SLOTS],
+    pub rows: [ChartLabelRow; CHART_LABEL_ROWS],
 }
 
 impl Default for ChartLabelsCfg {
-    /// The working set the terminal ships with.
+    /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
-    /// Not a designer's guess: this is the layout the developer arrived at by hand and asked to
-    /// become the default (2026-08-20), transcribed from the Main tab's own `charts.json` entry.
-    /// The corner block sits in the control strip pushed right, the Y-scale badge rides the plot's
-    /// top-right, and the open-order figures run as one row along the plot's top edge on the left —
-    /// where the badge overlay they replaced used to draw them.
+    /// Not a designer's guess: this is the developer's own Main tab, transcribed from its
+    /// `charts.json` entry on 2026-08-21 — five named modules, each placed and spaced by hand.
+    /// The module names are theirs and travel with the layout; nothing prints them (`show_name` is
+    /// off), they only name the rows in the settings popup.
     ///
     /// Every optional figure disappears on its own when it has nothing to report, so a chart with
-    /// no position shows the coin and the core name and nothing else.
+    /// no position shows the instrument and the scale badge and nothing else.
     fn default() -> Self {
-        const EMPTY: ChartLabelSlot =
-            ChartLabelSlot::new(ChartLabelField::None, LabelZone::ZoneTop);
-        let mut slots = [EMPTY; CHART_LABEL_SLOTS];
-        slots[0] = ChartLabelSlot::new(ChartLabelField::Coin, LabelZone::ZoneTop);
-        slots[0].align = LabelAlign::Right;
-        slots[1] = ChartLabelSlot::new(ChartLabelField::ScaleBadge, LabelZone::ChartTop);
-        slots[1].align = LabelAlign::Right;
-        slots[2] = ChartLabelSlot::new(ChartLabelField::Core, LabelZone::ZoneTop);
-        slots[2].align = LabelAlign::Right;
-        // The open-order row. Muted grey on the count so the money beside it leads the eye.
-        slots[3] = ChartLabelSlot::new(ChartLabelField::OpenOrders, LabelZone::ChartTop);
-        slots[3].align = LabelAlign::Left;
-        slots[3].style.color = Some(LabelColor::Fixed(0x8d99ae));
-        slots[4] = ChartLabelSlot::inline(ChartLabelField::Exposure, LabelZone::ChartTop);
-        slots[4].align = LabelAlign::Left;
-        slots[5] = ChartLabelSlot::inline(ChartLabelField::OpenPnlMoney, LabelZone::ChartTop);
-        slots[5].align = LabelAlign::Left;
-        slots[6] = ChartLabelSlot::inline(ChartLabelField::OpenPnlPct, LabelZone::ChartTop);
-        slots[6].align = LabelAlign::Left;
-        Self { slots }
+        let mut cfg = Self::empty();
+
+        // The instrument, in the control strip pushed right: coin, core, venue stacked as a block.
+        let mut instrument = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
+        instrument.name = "Инструмент".to_string();
+        instrument.flow = LabelFlow::Column;
+        instrument.push_part(ChartLabelField::Coin);
+        instrument.push_part(ChartLabelField::Core);
+        instrument.push_part(ChartLabelField::Venue);
+        instrument.parts[2].style.size_mult = Some(1.0);
+        cfg.rows[0] = instrument;
+
+        // The Y-scale badge rides the plot's own top-right corner, one size up.
+        let mut scale = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
+        scale.name = "Масштаб".to_string();
+        scale.push_part(ChartLabelField::ScaleBadge);
+        scale.parts[0].style.size_mult = Some(1.7);
+        cfg.rows[1] = scale;
+
+        // The coin's own movement: a block of two, standing BESIDE the badge rather than under it,
+        // with room between them.
+        let mut deltas = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
+        deltas.name = "Дельты монеты".to_string();
+        deltas.flow = LabelFlow::Column;
+        deltas.placement = LabelFlow::Row;
+        deltas.gap = 24;
+        deltas.push_part(ChartLabelField::Delta1h);
+        deltas.push_part(ChartLabelField::Delta24h);
+        cfg.rows[2] = deltas;
+
+        // What is open, as one line along the plot's top-left edge.
+        let mut orders = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        orders.name = "Открытые ордера".to_string();
+        orders.placement = LabelFlow::Row;
+        orders.push_part(ChartLabelField::OpenOrders);
+        orders.push_part(ChartLabelField::OpenPnlMoney);
+        orders.push_part(ChartLabelField::OpenPnlPct);
+        orders.push_part(ChartLabelField::Exposure);
+        cfg.rows[3] = orders;
+
+        // Funding under it, spaced off that line; the countdown prints bare, with no prefix.
+        let mut funding = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        funding.name = "Фандинг".to_string();
+        funding.gap = 8;
+        funding.push_part(ChartLabelField::Funding);
+        funding.push_part(ChartLabelField::FundingIn);
+        funding.parts[1].style.caption = Some(false);
+        cfg.rows[4] = funding;
+
+        cfg
     }
 }
 
 impl ChartLabelsCfg {
+    /// A configuration with no rows at all.
+    ///
+    /// Public because "print nothing" is a legitimate choice a user can reach by removing every
+    /// row, and the popup's reset needs the same value the loader produces for an empty list.
+    pub fn empty() -> Self {
+        Self {
+            rows: std::array::from_fn(|_| ChartLabelRow::default()),
+        }
+    }
+
     /// Repair anything a hand-edited file — or the popup — could state that the layout cannot
     /// honour.
     ///
-    /// Two invariants, and the second one is load-bearing:
+    /// Three repairs, and the last one is what keeps indices meaningful:
     ///
-    /// 1. The FIRST drawn slot cannot be inline. There is no row before it to join, and the layout
-    ///    pass would have to invent one.
-    /// 2. An inline slot takes the BAND and the ALIGNMENT of the row it joins. A caption cannot be
-    ///    in one band and on another band's row at the same time, and letting it keep a stale band
-    ///    is what made a caption disappear from where the user put it: it drifted to the band its
-    ///    own value named, became the first slot there, and lost the inline flag on arrival.
+    /// 1. A size multiplier outside the drawable range is clamped into it.
+    /// 2. A name longer than [`LABEL_ROW_NAME_MAX`] is cut, on a character boundary.
+    /// 3. Holes are closed — captions inside a row, and blank rows in the list — so that "the
+    ///    leading N are the used ones" holds everywhere, which is what the popup, the draw order
+    ///    and the run pool all read.
     ///
     /// `layout.toml` and `charts.json` are both hand-editable and this configuration is
     /// materialized into specs by ⧉, so an unrepaired value would outlive the file it came from.
     pub fn sanitize(&mut self) {
-        let mut row_style: Option<(LabelZone, LabelAlign)> = None;
-        for slot in &mut self.slots {
-            if let Some(mult) = slot.style.size_mult {
-                slot.style.size_mult = Some(mult.clamp(LABEL_SIZE_MULT_MIN, LABEL_SIZE_MULT_MAX));
+        for row in &mut self.rows {
+            // Trimmed before anything reads it, so "is this row named?" has ONE answer: the
+            // popup's list, `is_blank` and the caption that prints the name all ask it separately.
+            //
+            // Trim, CUT, trim again — in that order and not the other one. Cutting a trimmed name
+            // can land the boundary on a space, and a repair that leaves work for its own next run
+            // is a value that never equals itself: the panel's settings signature would then report
+            // a change on every notification, which is exactly what the `nan` guard below prevents.
+            row.gap = row.gap.min(LABEL_GAP_MAX);
+            let repaired = {
+                let cut: String = row.name.trim().chars().take(LABEL_ROW_NAME_MAX).collect();
+                cut.trim_end().to_string()
+            };
+            if row.name != repaired {
+                row.name = repaired;
             }
-            if !slot.is_drawn() {
-                continue;
+            compact(&mut row.parts, ChartLabelPart::is_used);
+            for part in &mut row.parts {
+                // A hand-edited `nan` is dropped, not clamped: it would survive the clamp, and a
+                // configuration that does not equal ITSELF turns every comparison downstream — the
+                // panel's settings signature, the engine's change check — into a false change on
+                // every notification.
+                part.style.size_mult = part.style.size_mult.and_then(|mult| {
+                    mult.is_finite()
+                        .then(|| mult.clamp(LABEL_SIZE_MULT_MIN, LABEL_SIZE_MULT_MAX))
+                });
             }
-            match row_style {
-                Some((zone, align)) if slot.inline => {
-                    slot.zone = zone;
-                    slot.align = align;
-                }
-                _ => slot.inline = false,
-            }
-            row_style = Some((slot.zone, slot.align));
         }
+        // Close holes between rows, keeping their order. A row that lost its last caption and was
+        // never named is blank, and drops out here.
+        compact(&mut self.rows, |row| !row.is_blank());
     }
 
-    /// Index of the first slot holding no field, or `None` when every slot is taken.
-    pub fn first_free(&self) -> Option<usize> {
-        self.slots
-            .iter()
-            .position(|s| s.field == ChartLabelField::None)
+    /// Index of the first blank row, or `None` when every row is taken.
+    pub fn first_free_row(&self) -> Option<usize> {
+        self.rows.iter().position(ChartLabelRow::is_blank)
     }
 
-    /// Append a field to a zone, returning whether there was room.
-    pub fn push(&mut self, field: ChartLabelField, zone: LabelZone) -> bool {
-        let Some(ix) = self.first_free() else {
-            return false;
-        };
-        self.slots[ix] = ChartLabelSlot::new(field, zone);
-        true
+    /// How many leading rows hold something.
+    pub fn used_rows(&self) -> usize {
+        self.first_free_row().unwrap_or(CHART_LABEL_ROWS)
     }
 
-    /// Remove one slot, closing the gap so the remaining order is preserved.
+    /// Append a row holding one caption, returning its index.
     ///
-    /// The gap has to close: order IS the configuration here — it decides both which row a label
-    /// lands on and where in that row it sits — and a hole would silently separate two slots the
-    /// user put next to each other.
-    pub fn remove(&mut self, ix: usize) {
-        if ix >= CHART_LABEL_SLOTS {
-            return;
-        }
-        for i in ix..CHART_LABEL_SLOTS - 1 {
-            self.slots[i] = self.slots[i + 1];
-        }
-        self.slots[CHART_LABEL_SLOTS - 1] =
-            ChartLabelSlot::new(ChartLabelField::None, LabelZone::ZoneTop);
-        self.sanitize();
+    /// A row is never created empty: an empty row is blank, and a blank row does not survive
+    /// [`Self::sanitize`] — which every write goes through.
+    pub fn push_row(
+        &mut self,
+        field: ChartLabelField,
+        zone: LabelZone,
+        align: LabelAlign,
+    ) -> Option<usize> {
+        let ix = self.first_free_row()?;
+        let mut row = ChartLabelRow::new(zone, align);
+        row.push_part(field);
+        self.rows[ix] = row;
+        Some(ix)
     }
 
-    /// Swap a slot with its neighbour, moving it earlier (`up`) or later in the draw order.
+    /// Append a row built from a preset: its fields, in its band, under its name.
     ///
-    /// Returns whether anything moved: the ends of the list refuse rather than wrapping around.
-    pub fn move_slot(&mut self, ix: usize, up: bool) -> bool {
-        let used = self.used_len();
-        if ix >= used {
-            return false;
+    /// The name is the caller's, already localized — the model holds no dictionary, and a key baked
+    /// into a saved profile would keep speaking the language it was created in.
+    pub fn push_preset(&mut self, preset: LabelPreset, name: String) -> Option<usize> {
+        let ix = self.first_free_row()?;
+        let mut row = ChartLabelRow::new(preset.zone(), preset.align());
+        row.name = name;
+        for field in preset.fields() {
+            if !row.push_part(*field) {
+                break;
+            }
         }
-        let other = if up {
-            if ix == 0 {
-                return false;
-            }
-            ix - 1
-        } else {
-            if ix + 1 >= used {
-                return false;
-            }
-            ix + 1
-        };
-        self.slots.swap(ix, other);
-        self.sanitize();
-        true
+        self.rows[ix] = row;
+        Some(ix)
     }
 
-    /// How many leading slots carry a field.
-    pub fn used_len(&self) -> usize {
-        self.slots
-            .iter()
-            .position(|s| s.field == ChartLabelField::None)
-            .unwrap_or(CHART_LABEL_SLOTS)
+    /// Remove one row, closing the gap so the remaining draw order is preserved.
+    pub fn remove_row(&mut self, ix: usize) {
+        remove_at(&mut self.rows, ix);
     }
 
-    /// Whether any DRAWN slot's field satisfies `pred`.
+    /// Swap a row with its neighbour, moving it earlier (`up`) or later in the draw order.
+    ///
+    /// Rows in the same band stack in this order, so it is the only thing that decides which of two
+    /// rows sits closer to the plot's edge. Returns whether anything moved.
+    pub fn move_row(&mut self, ix: usize, up: bool) -> bool {
+        let used = self.used_rows();
+        move_at(&mut self.rows, used, ix, up)
+    }
+
+    /// Whether any DRAWN caption's field satisfies `pred`.
     ///
     /// The sync paths gate their work on this: collecting open-position figures walks a core's
     /// whole order array, and reading the delta snapshot takes the market-source lock. Neither is
     /// worth doing for a configuration that prints none of it — which is the default.
     pub fn any_drawn(&self, pred: impl Fn(ChartLabelField) -> bool) -> bool {
-        self.slots.iter().any(|s| s.is_drawn() && pred(s.field))
+        self.drawn_parts().any(|p| pred(p.field))
     }
 
-    /// Whether any drawn slot uses this field, for the "already added" mark in the add menu.
-    pub fn contains(&self, field: ChartLabelField) -> bool {
-        self.slots.iter().any(|s| s.field == field)
+    /// Every caption that reaches the chart, in draw order.
+    ///
+    /// Stops at the first blank row rather than walking all sixteen: `sanitize` packs the used rows
+    /// to the front, and the gates below run several times per market revision, per pane.
+    fn drawn_parts(&self) -> impl Iterator<Item = &ChartLabelPart> {
+        self.rows
+            .iter()
+            .take_while(|r| !r.is_blank())
+            // A hidden ROW takes its captions with it: the gates below decide whether the sync
+            // paths do work for them, and a row nobody sees must not order any.
+            .filter(|r| r.visible)
+            .flat_map(|r| r.parts[..r.used_parts()].iter())
+            .filter(|p| p.is_drawn())
     }
+
+    /// Whether any part uses this field, for the "already added" mark in the add menu.
+    pub fn contains(&self, field: ChartLabelField) -> bool {
+        self.rows
+            .iter()
+            .take_while(|r| !r.is_blank())
+            .any(|r| r.parts[..r.used_parts()].iter().any(|p| p.field == field))
+    }
+}
+
+/// Move the used items of a fixed-length list to the front, blanking the tail.
+///
+/// The same repair at both levels — captions inside a row, rows inside a configuration — because
+/// both read "the leading N are the used ones" everywhere: the popup's list, the draw order and the
+/// retained-run pool.
+fn compact<T: Default>(items: &mut [T], is_used: impl Fn(&T) -> bool) {
+    let mut write = 0;
+    for read in 0..items.len() {
+        if is_used(&items[read]) {
+            items.swap(write, read);
+            write += 1;
+        }
+    }
+    for item in &mut items[write..] {
+        *item = T::default();
+    }
+}
+
+/// Remove one item, closing the gap and blanking the freed tail slot.
+fn remove_at<T: Default>(items: &mut [T], ix: usize) {
+    if ix >= items.len() {
+        return;
+    }
+    items[ix..].rotate_left(1);
+    if let Some(last) = items.last_mut() {
+        *last = T::default();
+    }
+}
+
+/// Swap one item with its neighbour, refusing at the ends of the USED run rather than wrapping.
+fn move_at<T>(items: &mut [T], used: usize, ix: usize, up: bool) -> bool {
+    if ix >= used {
+        return false;
+    }
+    // `wrapping_sub` turns "up from the first" into an index past the end, which the same bound
+    // rejects — one check instead of a nested pair.
+    let other = if up { ix.wrapping_sub(1) } else { ix + 1 };
+    if other >= used {
+        return false;
+    }
+    items.swap(ix, other);
+    true
 }
 
 #[cfg(test)]
