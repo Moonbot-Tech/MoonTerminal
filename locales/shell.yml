@@ -1665,10 +1665,6 @@ arb.title:
   ru: "Арбитраж: площадки"
   en: "Arbitrage venues"
   es: "Arbitraje: mercados"
-arb.open:
-  ru: "Площадки…"
-  en: "Venues…"
-  es: "Mercados…"
 arb.hint:
   ru: "Настройки общие для всех чартов"
   en: "These settings are shared by every chart"
@@ -1765,6 +1761,10 @@ chart_labels.margin.isolated:
   ru: "Изолир."
   en: "Isolated"
   es: "Aislado"
+chart_labels.sub_settings:
+  ru: "Перейти в настройки подмодуля"
+  en: "Open the sub-module settings"
+  es: "Ir a los ajustes del submódulo"
 chart_labels.value_only:
   ru: "Красить только значение"
   en: "Colour the value only"

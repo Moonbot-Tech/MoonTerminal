@@ -45,8 +45,8 @@ pub struct LabelEditState {
     ///
     /// The picker is a CONTROLLED popover — see [`crate::controls::field_picker`] — because a pick
     /// has to outlive the close: the library's own close-on-click fires on mouse-down and takes the
-    /// button out of the tree before the click lands on it. One name for the two pickers, since
-    /// only one of them can be open.
+    /// button out of the tree before the click lands on it. Keyed by id rather than a bare flag so
+    /// a second picker can be added without the two fighting over one switch.
     picker_open: Option<SharedString>,
     /// Opens the arbitrage roster window, for a module whose caption prints that column.
     ///

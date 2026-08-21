@@ -360,67 +360,44 @@ fn caption_settings(
     let resolved = part.resolved_style();
     let mut col = v_flex().w_full().gap(design::ui_px(cx, 6.0));
 
-    // WHICH figure this caption prints. Changing it here keeps the caption's place and style, which
-    // is what "I picked the wrong one" needs.
-    col = col.child({
-        // Two closures below outlive this block — the picker's and the gear's — so each takes its
-        // own handle rather than the one the other moved.
-        let gear_state = state.clone();
-        let state = state.clone();
-        let current = part.field;
-        let picker_open = state.read(cx).picker_open.clone();
+    // WHAT this caption prints, stated rather than offered: a caption's figure is chosen when the
+    // caption is ADDED, and changing one's mind is removing it and adding the one meant instead —
+    // which is one click either way and leaves no doubt about where the new caption landed. A
+    // selector here was a second door to the same catalogue, and the only one that could silently
+    // turn a caption into something the module was never arranged for.
+    col = col.child(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 2.0))
             .child(
                 div()
                     .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text))
+                    .text_color(moon(p.text_muted))
                     .child(t!("chart_labels.field_caption").to_string()),
             )
             .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 4.0))
-                    .child(field_picker(
-                "le-f",
-                t!(part.field.locale_key()).to_string(),
-                false,
-                picker_open.as_deref() == Some("le-f"),
-                {
-                    let state = state.clone();
-                    move |open, cx| LabelEditState::set_picker(&state, "le-f", open, cx)
-                },
-                move |f| f == current,
-                move |f, _window, cx| {
-                    write_row(&state, cx, |s| {
-                        s.row.parts[selected].field = f;
-                        s.picker_open = None;
-                    });
-                },
-                cx,
-                    ))
-                    // The settings this FIELD has beyond the catalogue, as the gear that means
-                    // exactly that everywhere else in the terminal — beside the control it belongs
-                    // to, square, iconic. Only the arbitrage column has any: which venues it lists,
-                    // in what order and colour, is a global roster with a window of its own.
-                    .children(part.field.is_column().then(|| {
-                        let state = gear_state;
-                        div()
-                            .id("le-arb")
-                            .cursor_pointer()
-                            .child(crate::panels::popup_gear_trigger(
-                                "le-arb-gear",
-                                t!("arb.open").to_string(),
-                                false,
-                            ))
-                            .on_click(move |_, window: &mut Window, cx: &mut App| {
-                                open_arb_from_editor(&state, window, cx);
-                            })
-                    })),
-            )
-    });
+                div()
+                    .text_color(moon(p.text))
+                    .child(t!(part.field.locale_key()).to_string()),
+            ),
+    );
+
+    // A field that carries settings of its OWN says so in words. There will be more than one of
+    // these — a caption whose subject has a roster, a schedule, a source — and a row of unlabelled
+    // gears would leave the reader guessing which is which.
+    if part.field.is_column() {
+        let state = state.clone();
+        col = col.child(
+            MoonButton::new("le-arb")
+                .label(t!("chart_labels.sub_settings").to_string())
+                .size(MoonButtonSize::Micro)
+                .variant(MoonButtonVariant::Ghost)
+                .on_click(move |_, window: &mut Window, cx: &mut App| {
+                    open_arb_from_editor(&state, window, cx);
+                })
+                .render(),
+        );
+    }
 
     // Which orders a position figure counts. Offered only by the fields that read it, so a stale
     // basis cannot sit visible on a caption that ignores it.
