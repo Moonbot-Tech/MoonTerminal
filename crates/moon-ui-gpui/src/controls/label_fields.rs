@@ -13,12 +13,18 @@
 use gpui::*;
 use moon_core::config::{ChartLabelField, ChartLabelGroup, ChartLabelRow};
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonListItem, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonSeparator, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use crate::design::{self, moon};
+
+/// Width of the check column on a field row, in design pixels.
+///
+/// Held whether or not the field is checked, which is the point: a mark that pushed its own label
+/// sideways would make the checked rows the only ones that do not line up with the rest.
+const CHECK_W: f32 = 14.0;
 
 /// Width of one column, in design pixels.
 ///
@@ -150,32 +156,60 @@ pub(crate) fn field_picker(
             .gap(design::ui_px(cx, 1.0));
         for (n, section_ix) in column_sections.into_iter().enumerate() {
             let (group, fields) = &sections[section_ix];
+            // A RULE above every heading but the column's first, and the heading itself in the
+            // body colour rather than the muted one. Two sections in one column read as one long
+            // list otherwise — a word in the middle of it is not a boundary anybody sees.
+            if n > 0 {
+                column = column.child(
+                    div()
+                        .pt(design::ui_px(cx, 8.0))
+                        .pb(design::ui_px(cx, 4.0))
+                        .child(MoonSeparator::horizontal().color(p.border)),
+                );
+            }
             column = column.child(
                 div()
                     .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    // Space ABOVE a heading that follows another section, so two sections in one
-                    // column read as two rather than as one long list with a word in the middle.
-                    .pt(design::ui_px(cx, if n > 0 { 8.0 } else { 0.0 }))
+                    .text_color(moon(p.text))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .pb(design::ui_px(cx, 2.0))
+                    .pl(design::ui_px(cx, 4.0))
                     .child(t!(group.locale_key()).to_string()),
             );
             for field in fields.iter().copied() {
                 let on_pick = on_pick.clone();
-                let name = match marked(field) {
-                    true => format!("✓ {}", t!(field.locale_key())),
-                    false => t!(field.locale_key()).to_string(),
-                };
+                let checked = marked(field);
+                // A LIST ROW, not a button: the catalogue is a list, and the row has to put its
+                // label at the same left edge whether or not it carries a mark. `MoonListItem`
+                // brings the hover and selected surfaces with it, so nothing here paints its own.
                 column = column.child(
-                    MoonButton::new(SharedString::from(format!("{id}-{field:?}")))
-                        .label(name)
-                        .size(MoonButtonSize::Micro)
-                        .variant(MoonButtonVariant::Ghost)
-                        .width(design::font_w(cx, COLUMN_W))
+                    MoonListItem::new(SharedString::from(format!("{id}-{field:?}")))
+                        .selected(checked)
                         .on_click(move |_, window: &mut Window, app: &mut App| {
                             on_pick(field, window, app)
                         })
-                        .render(),
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap(design::ui_px(cx, 4.0))
+                                .child(
+                                    div()
+                                        .w(px(design::font_w(cx, CHECK_W)))
+                                        .flex_none()
+                                        .text_color(moon(p.text_muted))
+                                        .child(match checked {
+                                            true => "✓",
+                                            false => "",
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(t!(field.locale_key()).to_string()),
+                                ),
+                        ),
                 );
             }
         }
