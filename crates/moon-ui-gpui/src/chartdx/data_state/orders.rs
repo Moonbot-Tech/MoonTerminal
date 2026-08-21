@@ -59,6 +59,19 @@ impl ChartDataState {
         let wants_venue_cfg = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
         let wants_position_cfg =
             labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
+        // Which venues have a core behind them, for the column's dimming. Read ONCE for the sync,
+        // like the caption gates beside it: it is a property of the connected cores, not of a pane,
+        // and a walk per pane would repeat it for every chart in a stack.
+        let arb_reachable: Vec<(u8, String)> = labels_cfg
+            .any_drawn(|f| f == ChartLabelField::ArbColumn)
+            .then(|| {
+                session
+                    .core_venues()
+                    .values()
+                    .map(|venue| (venue.id.code, venue.dex.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let wants_detect_cfg = labels_cfg.any_drawn(|f| {
             matches!(
                 f,
@@ -137,6 +150,7 @@ impl ChartDataState {
                 })
                 .flatten()
                 .unwrap_or_default();
+            pr.label_arb_reachable = arb_reachable.clone();
             pr.label_detect_strategy = detect_strategy;
             pr.label_detect_msg = detect_msg;
             let device_gen = pr.layers.device_gen();

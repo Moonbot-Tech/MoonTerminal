@@ -671,6 +671,15 @@ impl Render for ChartPanel {
             // in `frame()`; see data_state::apply_slot_geometry. The first present therefore uses
             // the real slot, without expanding to a default size or lagging during reflow.
             .child(self.chart.canvas().text_under().absolute().size_full())
+            // Transparent zones over the arbitrage venue NAMES, for one reason: a native cursor can
+            // only be asked for during PAINT, so a hover handler cannot set it — a styled element
+            // over the name can. They carry no click handler; the press is still routed by the
+            // chart's own input, which is where every other chart gesture is decided.
+            //
+            // Rectangles come from what the LAST frame drew, which is a frame behind during a
+            // resize. That is invisible for a cursor and would be wrong for a click, which is the
+            // other reason the click is not handled here.
+            .children(self.arb_cursor_zones())
             // Top-left status row. The container is hoisted out of the trade-history status so the
             // live order figures still appear while that durable read is Idle; it is rendered only
             // when at least one of the two sources produced something.

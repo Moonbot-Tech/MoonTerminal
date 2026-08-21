@@ -684,6 +684,24 @@ impl ChartEngine {
         Some((hit.code, hit.dex.clone()))
     }
 
+    /// Rectangles of the arbitrage venue names a pane drew, in the pane's own logical pixels.
+    ///
+    /// For the cursor overlay: a native cursor can only be set during PAINT, so the panel lays
+    /// transparent zones over these and lets the library ask for the pointer. Only reachable venues
+    /// are handed out — the others are not targets.
+    pub fn arb_hit_rects(&self, pane: usize) -> Vec<(f32, f32, f32, f32)> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let Some(pane) = render.panes.get(pane) else {
+            return Vec::new();
+        };
+        pane.arb_hits
+            .iter()
+            .filter(|hit| hit.reachable)
+            .map(|hit| (hit.x, hit.y, hit.w, hit.h))
+            .collect()
+    }
+
     /// Applies the GLOBAL arbitrage roster — which venues the column lists, in what order, under
     /// what name and colour. Returns true on change.
     ///

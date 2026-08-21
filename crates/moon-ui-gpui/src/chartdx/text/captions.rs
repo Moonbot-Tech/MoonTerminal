@@ -503,8 +503,16 @@ impl RenderState {
                             h: item.line_h(),
                             code,
                             dex,
+                            reachable: entry.reachable,
                         });
                     }
+                    // A venue this terminal cannot open is drawn faded: the column still states
+                    // its price — that is what the column is for — but the name is not a target,
+                    // and a reader should see which ones are.
+                    let prefix_color = match entry.venue.is_some() && !entry.reachable {
+                        true => caption_fg.opacity(0.45),
+                        false => caption_fg,
+                    };
                     self.draw_caption_run(
                         ctx,
                         idx,
@@ -517,7 +525,7 @@ impl RenderState {
                         // The prefix always draws LEFT-anchored from the point computed above:
                         // right-anchoring it would place its right edge where its left edge belongs.
                         0.0,
-                        caption_fg,
+                        prefix_color,
                     )?;
                     crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
                 }
@@ -743,6 +751,7 @@ impl RenderState {
             figures: pr.label_figures.clone(),
             windows: pr.label_windows,
             arb: pr.label_arb.clone(),
+            arb_reachable: pr.label_arb_reachable.clone(),
             now_ms: pr.label_now_ms,
             basis: pr.label_basis,
         };

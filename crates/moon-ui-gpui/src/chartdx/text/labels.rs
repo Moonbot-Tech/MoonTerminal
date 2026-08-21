@@ -73,6 +73,11 @@ pub(in crate::chartdx) struct LabelInputs {
     /// Retained-history movement and volume, per window. `None` on the same terms, and gated
     /// separately because it costs more — it walks the trade buckets and the candle ring.
     pub windows: Option<MarketWindowsReadout>,
+    /// Venues this terminal has a core connected to, as `(platform code, dex name)`.
+    ///
+    /// Collected on the SESSION sync, where the core list is in hand — the caption pass has neither
+    /// the session nor the right to walk it. An ordinary exchange carries an empty dex.
+    pub arb_reachable: Vec<(u8, String)>,
     /// Arbitrage quotes for this market, as the core last reported them.
     ///
     /// Refreshed on a THROTTLE rather than every revision — see the sync — because reading them
@@ -152,6 +157,10 @@ pub(in crate::chartdx) struct LabelText {
     /// Sign of the value behind the text, for a caption that colors by it. `None` means the value
     /// has no meaningful sign and the caption keeps the theme color.
     pub sign: Option<DeltaSign>,
+    /// Whether the venue this line names has a core behind it — a chart the click can actually
+    /// open. A venue with none is DIMMED: the column still states its price, since that is what the
+    /// column is for, but nothing there responds to a click and the eye should know.
+    pub reachable: bool,
     /// The venue this line names, for the click that opens the coin there.
     ///
     /// Only an arbitrage line carries one. The DEX name rides along because a Hyperliquid deployer
@@ -242,6 +251,7 @@ impl LabelState {
                     part: ROW_NAME_PART,
                     text: title,
                     prefix: String::new(),
+                    reachable: false,
                     venue: None,
                     sign: None,
                     color: None,
@@ -283,6 +293,7 @@ impl LabelState {
                     part: part_ix,
                     text,
                     prefix: caption_prefix(part, part.resolved_style().caption),
+                    reachable: false,
                     venue: None,
                     sign,
                     color: None,
@@ -600,6 +611,13 @@ fn push_arb_rows(
             part: ARB_PART_BASE + n,
             text,
             prefix,
+            reachable: inputs.arb_reachable.iter().any(|(code, dex)| match cell.dex.is_empty() {
+                // The same rule the click uses to find a core: an ordinary exchange matches by
+                // platform code and must not match a core that has a dex; a deployer matches by
+                // its dex name alone, since every deployer shares one code.
+                true => *code == cell.code && dex.is_empty(),
+                false => *dex == cell.dex,
+            }),
             venue: Some((cell.code, cell.dex)),
             // The SPREAD is what carries a direction here; the venue's own colour, when it has one,
             // overrides whatever the sign would have picked.
@@ -922,6 +940,9 @@ fn sample_inputs() -> LabelInputs {
         compare_pct: Some(1.2),
         delta_1h: Some(3.8),
         delta_24h: Some(-2.1),
+        // Both sample venues count as connected, so the preview shows the column the way a
+        // configured terminal sees it rather than dimmed throughout.
+        arb_reachable: vec![(4, String::new()), (9, String::new())],
         // The sample column: two venues, one above this market and one below it, so the preview
         // shows both directions the spread can take.
         arb: vec![

@@ -207,6 +207,8 @@ pub(super) struct ArbHit {
     /// Protocol platform code, and the DEX name for a deployer.
     pub code: u8,
     pub dex: String,
+    /// Whether a core is connected to this venue — whether the click has anywhere to go.
+    pub reachable: bool,
 }
 
 impl ArbHit {
@@ -340,6 +342,9 @@ struct PaneRender {
     label_figures: Option<moon_core::market::MarketFiguresReadout>,
     /// Retained-history movement and volume per window, gated separately because it costs more.
     label_windows: Option<moon_core::market::MarketWindowsReadout>,
+    /// Venues this terminal is connected to, refreshed with the session sync that fills the order
+    /// figures beside it. Empty until a caption asks for the column.
+    label_arb_reachable: Vec<(u8, String)>,
     /// Where each arbitrage venue NAME was drawn, in the pane's own logical pixels.
     ///
     /// Rebuilt by the caption pass on every presented frame and reused in place, because a click
@@ -581,6 +586,7 @@ impl PaneRender {
             label_figures: None,
             label_windows: None,
             arb_hits: Vec::new(),
+            label_arb_reachable: Vec::new(),
             label_arb: Vec::new(),
             label_arb_read_ms: 0,
             label_arb_market: String::new(),

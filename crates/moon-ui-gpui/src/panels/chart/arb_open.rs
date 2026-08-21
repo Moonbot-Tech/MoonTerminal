@@ -17,6 +17,38 @@ use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
 use super::ChartPanel;
 use crate::controls::coin_search;
 
+impl ChartPanel {
+    /// Transparent zones over the venue names, so the pointer changes over a clickable one.
+    ///
+    /// The only way to ask for a native cursor is during PAINT — `set_cursor_style` asserts it —
+    /// so a hover handler cannot do this and a styled element must. The zones carry no handlers:
+    /// the click itself is routed by the chart's own input, in the pane's coordinates, where every
+    /// other chart gesture is decided.
+    pub(super) fn arb_cursor_zones(&self) -> Vec<Div> {
+        let mut out = Vec::new();
+        for (pane, rect) in self.chart.pane_rects() {
+            // The engine reports rectangles in the pane's own logical pixels; the overlay is
+            // positioned in the chart's, and `pane_rects` is in DEVICE pixels of the chart.
+            let sf = self.last_ppp.max(0.1);
+            for (x, y, w, h) in self.chart.arb_hit_rects(pane) {
+                if w <= 0.0 || h <= 0.0 {
+                    continue;
+                }
+                out.push(
+                    div()
+                        .absolute()
+                        .left(px(x + rect.x / sf))
+                        .top(px(y + rect.y / sf))
+                        .w(px(w))
+                        .h(px(h))
+                        .cursor(CursorStyle::PointingHand),
+                );
+            }
+        }
+        out
+    }
+}
+
 /// Whether a core is connected to the venue an arbitrage line names.
 ///
 /// An arbitrage platform code IS the core's platform ordinal for an ordinary exchange — the
@@ -62,14 +94,13 @@ impl ChartPanel {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return false;
         };
-        // The point arrives in the CHART's coordinates and the rectangles were recorded in the
-        // pane's, so the pane's origin comes off first — the same conversion the order-line hit
-        // test makes.
-        let Some(rect) = self.pane_rect_for_input(pane) else {
-            return false;
-        };
-        let local = (pos.0 - rect.x, pos.1 - rect.y);
-        let Some((code, dex)) = self.chart.arb_venue_at(pane, local.0, local.1) else {
+        // The point arrives in DEVICE pixels of the chart — `chart_local_from_window_pos` scales it
+        // — while the caption pass places its rectangles in LOGICAL ones, and both are measured
+        // from the same origin: the chart's, not the pane's. So the only conversion is the scale
+        // factor. Getting this wrong opened whichever venue happened to sit under the mis-scaled
+        // point, which on a 1.5x display is several rows down the column.
+        let sf = window.scale_factor().max(0.1);
+        let Some((code, dex)) = self.chart.arb_venue_at(pane, pos.0 / sf, pos.1 / sf) else {
             return false;
         };
         let Some((core, market)) = self
