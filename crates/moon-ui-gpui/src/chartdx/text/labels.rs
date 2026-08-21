@@ -528,29 +528,61 @@ fn push_arb_rows(
     };
     // Every line of the column shares the caption's style, so the threshold is read once.
     let min_pct = style.color_min_pct;
-    for (n, row) in view.arrange(&inputs.arb).into_iter().enumerate() {
-        // Formatted ONCE and read twice: the text carries it, and the sign it rounded to picks the
-        // colour, so the two cannot disagree about a spread that rounds away.
-        let spread = fmt::signed_pct(row.quote.spread_pct, 2);
-        let sign = spread
-            .as_ref()
-            .and_then(|(_, sign)| colored_sign(min_pct, row.quote.spread_pct, *sign));
+    // Formatted for the WHOLE column before anything is padded: a column is aligned against its
+    // own widest cell, which cannot be known one line at a time.
+    let cells: Vec<ArbCell> = view
+        .arrange(&inputs.arb)
+        .into_iter()
+        .map(|row| {
+            // Formatted ONCE and read twice: the text carries it, and the sign it rounded to picks
+            // the colour, so the two cannot disagree about a spread that rounds away.
+            let spread = fmt::signed_pct(row.quote.spread_pct, 2);
+            ArbCell {
+                sign: spread
+                    .as_ref()
+                    .and_then(|(_, sign)| colored_sign(min_pct, row.quote.spread_pct, *sign)),
+                price: match view.show.shows_price() {
+                    true => fmt::adaptive(row.quote.price),
+                    false => String::new(),
+                },
+                pct: match view.show.shows_spread() {
+                    true => spread.map(|(pct, _)| pct).unwrap_or_default(),
+                    false => String::new(),
+                },
+                // A venue that cannot be deposited to or withdrawn from is marked, not hidden: the
+                // spread is real, the settlement is not, and a reader must not take one for the
+                // other.
+                blocked: view.mark_blocked
+                    && (row.quote.deposit_blocked || row.quote.withdraw_blocked),
+                label: row.label,
+                color: row.color,
+            }
+        })
+        .collect();
+    // Column widths, in CHARACTERS. The chart draws its captions in a monospaced face — see
+    // `design::mono` — so padding with spaces aligns them exactly, and it does so inside the two
+    // runs the line already has instead of adding a run per column. That is what makes the prices
+    // line up under each other the way the reference terminal's column does.
+    let name_w = cells.iter().map(|c| c.label.chars().count()).max().unwrap_or(0);
+    let price_w = cells.iter().map(|c| c.price.chars().count()).max().unwrap_or(0);
+    let pct_w = cells.iter().map(|c| c.pct.chars().count()).max().unwrap_or(0);
+    for (n, cell) in cells.into_iter().enumerate() {
         // The venue's NAME is this line's prefix: it is the word, the rest is the figure, and a
         // value-only colour then paints the price and the spread while the venue stays readable.
-        let prefix = format!("{} ", row.label);
+        let prefix = format!("{:<name_w$} ", cell.label);
         let mut text = String::new();
-        if view.show.shows_price() {
-            text.push_str(&fmt::adaptive(row.quote.price));
+        if !cell.price.is_empty() {
+            // Prices right-align, so their decimal points stand in one line; a name left-aligns,
+            // because a word read left to right does.
+            text.push_str(&format!("{:>price_w$}", cell.price));
         }
-        if let (true, Some((pct, _))) = (view.show.shows_spread(), spread.as_ref()) {
+        if !cell.pct.is_empty() {
             if !text.is_empty() {
                 text.push(' ');
             }
-            text.push_str(pct);
+            text.push_str(&format!("{:>pct_w$}", cell.pct));
         }
-        // A venue that cannot be deposited to or withdrawn from is marked, not hidden: the spread
-        // is real, the settlement is not, and a reader must not take one for the other.
-        if view.mark_blocked && (row.quote.deposit_blocked || row.quote.withdraw_blocked) {
+        if cell.blocked {
             text.push_str(" ⛔");
         }
         out.push(LabelText {
@@ -560,10 +592,20 @@ fn push_arb_rows(
             prefix,
             // The SPREAD is what carries a direction here; the venue's own colour, when it has one,
             // overrides whatever the sign would have picked.
-            sign,
-            color: row.color,
+            sign: cell.sign,
+            color: cell.color,
         });
     }
+}
+
+/// One arbitrage line before it is padded into a column.
+struct ArbCell {
+    label: String,
+    price: String,
+    pct: String,
+    blocked: bool,
+    sign: Option<DeltaSign>,
+    color: Option<u32>,
 }
 
 /// A PRICE caption: the shared adaptive formatter, with the field's prefix when it asks for one.

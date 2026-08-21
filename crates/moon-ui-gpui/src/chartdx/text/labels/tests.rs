@@ -318,6 +318,44 @@ fn the_venue_name_is_the_lines_prefix() {
     assert!(!line.text.contains("BinanceF"), "{:?}", line.text);
 }
 
+/// The column is a TABLE: venue names left-aligned in one column, prices and percentages
+/// right-aligned in theirs, so the decimal points stand under each other. The chart draws captions
+/// in a monospaced face, so padding with spaces is exact — and it is what the reference terminal's
+/// own column looks like.
+#[test]
+fn the_column_lines_its_cells_up() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let mut view = ArbViewCfg::default();
+    view.venues = vec![
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(101)),
+    ];
+    // "BinanceF" is eight characters and "UpBit" five; the prices differ in width too.
+    let quotes = vec![arb_quote(4, 9.5), arb_quote(101, 101.25)];
+
+    let (inputs, view) = arb_inputs(quotes, view);
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg), &view, inputs);
+
+    let lines: Vec<_> = state.texts.iter().collect();
+    assert_eq!(lines.len(), 2);
+    let name_widths: Vec<usize> = lines.iter().map(|l| l.prefix.chars().count()).collect();
+    assert_eq!(
+        name_widths[0], name_widths[1],
+        "the name column is one width: {:?}",
+        lines.iter().map(|l| l.prefix.clone()).collect::<Vec<_>>()
+    );
+    assert!(lines[0].prefix.starts_with("BinanceF"), "{:?}", lines[0].prefix);
+    assert!(lines[1].prefix.starts_with("UpBit "), "{:?}", lines[1].prefix);
+
+    let value_widths: Vec<usize> = lines.iter().map(|l| l.text.chars().count()).collect();
+    assert_eq!(
+        value_widths[0], value_widths[1],
+        "price and percent columns are one width each: {:?}",
+        lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+    );
+}
+
 /// The roster's floor shortens the COLUMN: a dozen venues quoting the same price are a dozen lines
 /// of nothing, and the reader asked to see only what moved.
 #[test]
