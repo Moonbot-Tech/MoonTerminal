@@ -1327,13 +1327,13 @@ where
 ///
 /// Two failures are handled here rather than downstream: an unusable table costs the labels only
 /// and not every window position in the document, and a usable one is still sanitized, because the
-/// drawing pass has no way to honour an inline label that opens its zone.
+/// drawing pass has no way to honour what a hand-edited file can state — a hole between the
+/// captions of a row, a size outside the drawable range.
 fn de_lenient_chart_labels<'de, D>(d: D) -> Result<super::chart_labels::ChartLabelsCfg, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let mut cfg =
-        de_lenient::<D, super::chart_labels::ChartLabelsCfg>(d)?.unwrap_or_default();
+    let mut cfg = de_lenient::<D, super::chart_labels::ChartLabelsCfg>(d)?.unwrap_or_default();
     cfg.sanitize();
     Ok(cfg)
 }

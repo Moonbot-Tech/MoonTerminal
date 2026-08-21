@@ -15,10 +15,9 @@ use super::stack::{
     ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
-    set_panels_cursor_labels,
-    set_panels_line_labels, set_panels_liquidations, set_panels_orderbook_enabled,
-    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
-    set_panels_time_axis_visible, sync_compare, tile_gutter,
+    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
+    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
+    set_panels_show_zone, set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -280,7 +279,7 @@ impl MainChartStack {
             panel.update(cx, |panel, pcx| panel.set_chart_graphics(cg, pcx));
         }
         if self.chart_labels.is_some() {
-            let cl = self.chart_labels;
+            let cl = self.chart_labels.clone();
             panel.update(cx, |panel, pcx| panel.set_chart_labels(cl, pcx));
         }
         if self.x_ppm.is_some() {
@@ -861,7 +860,7 @@ impl MainChartStack {
     }
 
     pub(crate) fn chart_labels(&self) -> Option<moon_core::config::ChartLabelsCfg> {
-        self.chart_labels
+        self.chart_labels.clone()
     }
 
     /// Set chart captions for every chart in this stack and window.
@@ -870,9 +869,13 @@ impl MainChartStack {
         cfg: Option<moon_core::config::ChartLabelsCfg>,
         cx: &mut Context<Self>,
     ) {
-        apply_setting(&mut self.chart_labels, cfg, &self.charts, cx, |c, cx| {
-            set_panels_chart_labels(c, cfg, cx)
-        });
+        apply_setting(
+            &mut self.chart_labels,
+            cfg.clone(),
+            &self.charts,
+            cx,
+            |c, cx| set_panels_chart_labels(c, cfg, cx),
+        );
     }
 
     /// Set chart-drawing settings for every chart in this stack and window.

@@ -25,6 +25,7 @@ mod chart;
 pub(crate) mod common;
 mod core_status;
 mod detects;
+mod label_edit;
 pub(crate) mod line_list;
 mod log;
 mod news;
@@ -36,10 +37,11 @@ mod stub;
 pub(crate) mod tab_menu;
 
 pub(crate) use common::{
-    POPUP_GROUP_INSET, RadioMark, RenderGate, data_table_host, detach_button, icon_checkbox, num,
-    popup_apply_all_button, popup_close_button, popup_gear_trigger, popup_group,
-    popup_group_inset_px, popup_title, radio_items, side_label,
+    POPUP_GROUP_INSET, RadioMark, RenderGate, data_table_host, detach_button, icon_checkbox,
+    micro_button, num, popup_apply_all_button, popup_close_button, popup_gear_trigger, popup_group,
+    popup_group_inset_px, popup_title, radio_items, side_label, toggle_variant,
 };
+pub(crate) use label_edit::open_label_edit;
 pub(crate) use order_edit::open_order_edit;
 
 pub use alerts::AlertsPanel;

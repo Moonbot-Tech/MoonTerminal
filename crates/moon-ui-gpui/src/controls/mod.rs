@@ -36,6 +36,7 @@ mod core_host;
 mod core_quick;
 pub(crate) mod date_range;
 mod fmt;
+mod label_fields;
 mod manual_strat;
 mod metric;
 mod scale;
@@ -45,6 +46,7 @@ mod venue_label;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
+pub(crate) use label_fields::field_menu_items;
 pub(crate) use core_combo::{
     core_combo, core_menu_sections, toggle_exchange_cores, CoreAllRowMode,
 };

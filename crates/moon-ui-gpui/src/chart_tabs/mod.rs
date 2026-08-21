@@ -34,6 +34,7 @@ use std::collections::HashMap;
 
 pub(crate) use add_stack::AddChartStack;
 use common::LayoutPopupHost;
+pub(crate) use common::seg_row;
 pub(crate) use main_stack::MainChartStack;
 use sig::chart_tabs_sig;
 
@@ -331,9 +332,9 @@ pub struct ChartTabs {
     candle_popup_open: bool,
     /// Anchored Chart graphics popup for the ACTIVE TAB's chart-drawing settings.
     graphics_popup_open: bool,
-    /// Whether the chart-labels popup is open, and which row has its style panel expanded.
+    /// Whether the chart-labels popup is open. What a module PRINTS is edited in its own
+    /// dialog, which owns its state for as long as it is up.
     labels_popup_open: bool,
-    labels_style_open: Option<usize>,
     /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
     /// Scroll-mode height field.
@@ -453,7 +454,7 @@ impl ChartTabs {
             let main_cursor_labels = main_spec.and_then(|s| s.cursor_labels);
             let main_candle_view = main_spec.and_then(|s| s.candle_view);
             let main_chart_graphics = main_spec.and_then(|s| s.chart_graphics);
-            let main_chart_labels = main_spec.and_then(|s| s.chart_labels);
+            let main_chart_labels = main_spec.and_then(|s| s.chart_labels.clone());
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -728,7 +729,6 @@ impl ChartTabs {
             candle_popup_open: false,
             graphics_popup_open: false,
             labels_popup_open: false,
-            labels_style_open: None,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,

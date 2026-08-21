@@ -110,7 +110,7 @@ impl ChartEngine {
             text_runs: Vec::new(),
             text_run_cursor: 0,
             caption_runs: Vec::new(),
-            chart_labels: moon_core::config::ChartLabelsCfg::default(),
+            chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
             firetest_text_labels: Vec::new(),
             firetest_text_runs: Vec::new(),
             firetest_text_layer: GpuCanvasRetainedTextLayer::default(),
@@ -668,14 +668,28 @@ impl ChartEngine {
     /// Unlike the graphics settings beside it, nothing baked into a GPU layer depends on this: the
     /// captions are drawn by the text pass from resolved strings, so a change only has to make the
     /// panes re-resolve and repaint. `mark_view_dirty` does both.
-    pub fn set_chart_labels(&mut self, cfg: moon_core::config::ChartLabelsCfg) -> bool {
+    pub fn set_chart_labels(
+        &mut self,
+        cfg: std::rc::Rc<moon_core::config::ChartLabelsCfg>,
+    ) -> bool {
         let mut data = self.data.borrow_mut();
-        if data.chart_labels == cfg {
+        // Pointer first: the panel hands the SAME allocation on every render, so the common case
+        // answers without walking sixteen rows of captions.
+        if std::rc::Rc::ptr_eq(&data.chart_labels, &cfg) {
             return false;
         }
-        data.chart_labels = cfg;
+        // A DIFFERENT allocation holding the same configuration: the panel rebuilds its settings
+        // signature on every backend notification. Adopt it anyway — keeping the old handle would
+        // fail the pointer test above on every render from here on, and pay the structural compare
+        // each time.
+        let unchanged = *data.chart_labels == *cfg;
+        data.chart_labels = cfg.clone();
+        if unchanged {
+            data.render.borrow_mut().chart_labels = cfg;
+            return false;
+        }
         // Mirrored into the text pass, which reads it every frame and must not borrow the data
-        // state to do so.
+        // state to do so. The same allocation, not a second copy of it.
         data.render.borrow_mut().chart_labels = cfg;
         // The captions are re-resolved by the SYNC paths, and those short-circuit on an unchanged
         // signature. Invalidating it here is what makes a configuration change reach a chart whose

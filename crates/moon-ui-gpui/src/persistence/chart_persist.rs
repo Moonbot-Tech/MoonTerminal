@@ -223,7 +223,12 @@ pub struct ChartTabSpec {
     /// Per-window/tab chart captions from the labels popup: which figures the chart prints beside
     /// its plot, in which corner and style. None inherits the global `layout.chart_labels` default,
     /// which is what every file written before this field existed does.
-    #[serde(default)]
+    ///
+    /// Read LENIENTLY, like `layout.toml` reads its own copy: this file holds every chart tab and
+    /// [`load_all`] discards ALL of them on a parse error, so one unreadable caption — a field name
+    /// from a newer build, a hand-edited spelling — would cost the user their whole chart layout.
+    /// Dropping the captions of one tab costs that tab its captions and nothing else.
+    #[serde(default, deserialize_with = "de_lenient_labels")]
     pub chart_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Detached-window time-axis X scale in pixels per millisecond, synchronized there with
     /// Shift+middle-click. None inherits the group scale or the built-in chart default.
@@ -365,6 +370,23 @@ pub fn max_core_uid(specs: &[ChartTabSpec]) -> Option<u64> {
                 .chain(coins)
         })
         .max()
+}
+
+/// Read one tab's captions without letting them reject the file, and repair what they state.
+///
+/// The salvaging half is `moon_core`'s shared helper — the same one the `display_uuid` field above
+/// uses, and the same one `layout.toml` reads its own copy of this configuration with. Only the
+/// repair is added here, for the reason that file states: a value read but not sanitized would
+/// differ from the stored one on every comparison downstream.
+fn de_lenient_labels<'de, D>(d: D) -> Result<Option<moon_core::config::ChartLabelsCfg>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut cfg = moon_core::config::layout::de_lenient::<D, moon_core::config::ChartLabelsCfg>(d)?;
+    if let Some(cfg) = cfg.as_mut() {
+        cfg.sanitize();
+    }
+    Ok(cfg)
 }
 
 /// Loads `charts.json`, returning an empty list when the file is absent or invalid.
