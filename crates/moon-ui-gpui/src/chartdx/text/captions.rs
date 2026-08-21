@@ -445,12 +445,15 @@ impl RenderState {
                 false => pr.core_name.clone(),
             },
             venue: pr.venue.clone(),
+            quote: pr.quote.clone(),
             strategy: pr.label_strategy.clone(),
             last_price: pr.cached_last_price,
             scale_badge: pr.scale_badge,
             compare_pct,
             delta_1h: pr.delta_1h,
             delta_24h: pr.delta_24h,
+            context: pr.label_context,
+            now_ms: pr.label_now_ms,
             basis: pr.label_basis,
         };
         let changed = self.panes[idx].labels.update(&cfg, inputs);

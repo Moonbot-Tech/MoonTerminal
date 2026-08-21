@@ -240,14 +240,20 @@ impl ChartDataState {
             if !pr.ticker_resolved || catalog_key.is_some_and(|key| pr.ticker_catalog_key != key) {
                 // No provider yet: read what the NAME supports so the caption is never blank, and
                 // stay unresolved so the catalog still gets its turn.
-                let ticker = match catalog_key {
+                // The quote currency comes out of the SAME label: resolving it separately would
+                // take the source lock a second time for a value already in hand.
+                let label = match catalog_key {
                     Some(key) => {
                         pr.ticker_catalog_key = key;
                         pr.ticker_resolved = true;
-                        source.market_label(pane.core, &pane.market).pair()
+                        source.market_label(pane.core, &pane.market)
                     }
-                    None => MarketLabel::from_name(&pane.market, Exchange::Unknown).pair(),
+                    None => MarketLabel::from_name(&pane.market, Exchange::Unknown),
                 };
+                let ticker = label.pair();
+                if pr.quote != label.quote {
+                    pr.quote = label.quote.clone();
+                }
                 if pr.ticker != ticker {
                     pr.ticker = ticker;
                     // The caption is part of the frame, so a corrected ticker has to reach one:
@@ -1039,13 +1045,31 @@ impl ChartDataState {
         // caption actually asks for it: `market_ticker` takes the source lock and a versioned
         // snapshot, and this sync runs on market revisions — which on a busy coin is several times
         // a second, per pane.
-        let wants_deltas = st.chart_labels.any_drawn(|f| {
+        use moon_core::config::ChartLabelField as LabelField;
+        let wants_deltas = st
+            .chart_labels
+            .any_drawn(|f| matches!(f, LabelField::Delta1h | LabelField::Delta24h));
+        // The market-wide background and funding travel together: one snapshot read answers both,
+        // so the gate is their union rather than a flag each.
+        let wants_context = st.chart_labels.any_drawn(|f| {
             matches!(
                 f,
-                moon_core::config::ChartLabelField::Delta1h
-                    | moon_core::config::ChartLabelField::Delta24h
+                LabelField::ExchangeDelta1h
+                    | LabelField::ExchangeDelta24h
+                    | LabelField::BtcDelta1h
+                    | LabelField::BtcDelta24h
+                    | LabelField::BtcDelta72h
+                    | LabelField::Funding
+                    | LabelField::FundingIn
             )
         });
+        // The clock only advances while something counts down with it. Quantized to the minute so
+        // an idle chart re-formats its captions once a minute, not once per market revision.
+        let countdown_now_ms = st
+            .chart_labels
+            .any_drawn(|f| matches!(f, LabelField::FundingIn))
+            .then(|| now as i64 / 60_000 * 60_000)
+            .unwrap_or(0);
         for (idx, _) in &layout {
             // The market name is cloned only when a caption is actually going to read the snapshot;
             // this loop runs per pane on every market revision.
@@ -1058,9 +1082,20 @@ impl ChartDataState {
                     source.market_ticker(target.0, &target.1)
                 })
                 .flatten();
+            let context = wants_context
+                .then(|| {
+                    let target = st
+                        .panes
+                        .get(*idx)
+                        .and_then(|pr| pr.core.map(|core| (core, pr.market.clone())))?;
+                    source.market_context(target.0, &target.1)
+                })
+                .flatten();
             if let Some(pr) = st.panes.get_mut(*idx) {
                 pr.delta_1h = readout.map(|r| r.delta_1h_pct);
                 pr.delta_24h = readout.map(|r| r.delta_24h_pct);
+                pr.label_context = context;
+                pr.label_now_ms = countdown_now_ms;
             }
             // Captions are formatted HERE, on a revision, and never in the frame path.
             if st.refresh_pane_labels(*idx) {

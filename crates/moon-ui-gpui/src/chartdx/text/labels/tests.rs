@@ -383,3 +383,139 @@ fn the_caption_flag_prefixes_the_field_name() {
         named[0]
     );
 }
+
+// --- market background and funding ---------------------------------------------------------------
+
+/// Funding time far enough out that a countdown can be measured against it.
+const FUNDING_AT_MS: i64 = 10_000_000;
+
+fn ctx() -> moon_core::market::MarketContextReadout {
+    moon_core::market::MarketContextReadout {
+        exchange_1h_pct: -0.8,
+        exchange_24h_pct: 1.5,
+        btc_1h_pct: 0.25,
+        btc_24h_pct: -2.0,
+        btc_72h_pct: 4.75,
+        funding_pct: Some(0.01),
+        funding_at_ms: Some(FUNDING_AT_MS),
+    }
+}
+
+/// Build the caption a field is expected to print, THROUGH the dictionary.
+///
+/// The tests run under whatever locale is active, so a literal Russian or English expectation
+/// would pin the assertion to a language rather than to the behaviour it is about.
+fn expect(key: &str, value: &str) -> String {
+    format!("{}: {value}", rust_i18n::t!(key))
+}
+
+#[test]
+fn the_background_deltas_print_with_their_sign() {
+    let inputs = LabelInputs {
+        context: Some(ctx()),
+        ..Default::default()
+    };
+    assert_eq!(
+        one_field(ChartLabelField::ExchangeDelta1h, inputs.clone()).as_deref(),
+        Some(expect("chart_labels.short.exchange_1h", "-0.80%").as_str())
+    );
+    assert_eq!(
+        one_field(ChartLabelField::BtcDelta72h, inputs).as_deref(),
+        Some(expect("chart_labels.short.btc_72h", "+4.75%").as_str())
+    );
+}
+
+/// A market with no funding — spot — prints nothing. A zero there would read as "funding is free
+/// here", which is a different claim from "this venue does not charge it".
+#[test]
+fn a_market_without_funding_prints_nothing() {
+    let mut c = ctx();
+    c.funding_pct = None;
+    c.funding_at_ms = None;
+    let inputs = LabelInputs {
+        context: Some(c),
+        ..Default::default()
+    };
+    assert!(one_field(ChartLabelField::Funding, inputs.clone()).is_none());
+    assert!(one_field(ChartLabelField::FundingIn, inputs).is_none());
+}
+
+#[test]
+fn the_funding_countdown_states_hours_and_minutes() {
+    let at = |remaining_ms: i64| LabelInputs {
+        context: Some(ctx()),
+        now_ms: FUNDING_AT_MS - remaining_ms,
+        ..Default::default()
+    };
+    let hour_and_five = one_field(ChartLabelField::FundingIn, at(65 * 60_000));
+    let expected = format!(
+        "1{} 05{}",
+        rust_i18n::t!("chart_labels.unit_hour"),
+        rust_i18n::t!("chart_labels.unit_minute")
+    );
+    assert_eq!(
+        hour_and_five.as_deref(),
+        Some(expect("chart_labels.short.funding_in", &expected).as_str())
+    );
+    let forty_seven = one_field(ChartLabelField::FundingIn, at(47 * 60_000));
+    let expected = format!("47{}", rust_i18n::t!("chart_labels.unit_minute"));
+    assert_eq!(
+        forty_seven.as_deref(),
+        Some(expect("chart_labels.short.funding_in", &expected).as_str())
+    );
+}
+
+/// A funding time already past is not printed: the core republishes the next one within seconds,
+/// and a negative countdown reads as a stuck chart rather than as a stale field.
+#[test]
+fn an_elapsed_funding_time_prints_nothing() {
+    let inputs = LabelInputs {
+        context: Some(ctx()),
+        now_ms: FUNDING_AT_MS + 1,
+        ..Default::default()
+    };
+    assert!(one_field(ChartLabelField::FundingIn, inputs).is_none());
+}
+
+/// Without the snapshot read — the gate is off because nothing asks for it — the background fields
+/// resolve to nothing rather than to zero.
+#[test]
+fn no_context_means_no_background_captions() {
+    let inputs = LabelInputs::default();
+    for field in [
+        ChartLabelField::ExchangeDelta1h,
+        ChartLabelField::BtcDelta24h,
+        ChartLabelField::Funding,
+        ChartLabelField::FundingIn,
+    ] {
+        assert!(
+            one_field(field, inputs.clone()).is_none(),
+            "{field:?} must stay silent without a snapshot"
+        );
+    }
+}
+
+/// The quote currency is the unit behind every money figure on the chart, and it is a NAME: it
+/// prints as it comes and colours by nothing.
+#[test]
+fn the_quote_currency_prints_as_a_plain_name() {
+    let inputs = LabelInputs {
+        quote: "USDT".into(),
+        ..Default::default()
+    };
+    let mut cfg = ChartLabelsCfg {
+        slots: [ChartLabelSlot::default(); 16],
+    };
+    cfg.slots[0] = slot(ChartLabelField::Quote);
+    let mut state = LabelState::default();
+    state.update(&cfg, inputs);
+    assert_eq!(state.texts[0].text, "USDT");
+    assert_eq!(state.texts[0].sign, None);
+}
+
+/// A COIN-M contract carries no quote currency. Printing nothing is the honest answer; a guessed
+/// "USD" would label money that is settled in the coin itself.
+#[test]
+fn a_market_without_a_quote_prints_nothing() {
+    assert!(one_field(ChartLabelField::Quote, LabelInputs::default()).is_none());
+}
