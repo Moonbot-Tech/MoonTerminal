@@ -812,15 +812,6 @@ impl ChartLabelsCfg {
                 row.name = repaired;
             }
             compact(&mut row.parts, ChartLabelPart::is_used);
-            // A module printing a COLUMN runs down one. Its lines are venues, and laying them
-            // across a line gives each a cell of its own — the width budget then drops all but the
-            // first few, which reads as an arbitrage list that lost most of its venues.
-            if row.parts[..row.used_parts()]
-                .iter()
-                .any(|p| p.field.is_column())
-            {
-                row.flow = LabelFlow::Column;
-            }
             for part in &mut row.parts {
                 // A window the field cannot be read over is repaired to one it can: switching a
                 // caption's field must not leave it asking for a figure that never arrives, and a

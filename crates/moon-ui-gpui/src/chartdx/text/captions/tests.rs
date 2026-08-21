@@ -110,3 +110,48 @@ fn the_first_module_of_a_band_always_opens_a_line() {
         vec![vec![vec![0]]]
     );
 }
+
+/// An arbitrage column stacks whatever the MODULE's flow says: its lines are venues, one under
+/// another, and the flow switch decides how the module's ordinary captions run instead.
+///
+/// Breakage this pins: letting the flow apply to the column. With "in a row" it would give each
+/// venue a cell of its own across one line — a row of prices with no way to tell whose they are,
+/// and the width budget then drops all but the first few.
+#[test]
+fn an_arbitrage_column_stacks_whatever_the_flow_says() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut module = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    module.push_part(ChartLabelField::ArbColumn);
+    module.push_part(ChartLabelField::Funding);
+    // The flow a user can pick, and the one that used to break the column.
+    module.flow = LabelFlow::Row;
+    cfg.rows[0] = module;
+
+    // Two venue lines from the column's own run range, then the module's ordinary caption.
+    let base = moon_core::config::ARB_PART_BASE;
+    let texts: Vec<LabelText> = [(base, "BinanceF 1"), (base + 1, "GateF 2"), (1, "+0.01%")]
+        .into_iter()
+        .map(|(part, text)| LabelText {
+            row: 0,
+            part,
+            text: text.into(),
+            prefix: String::new(),
+            sign: None,
+            color: None,
+        })
+        .collect();
+
+    let lines = group_lines(&cfg, &texts, LabelZone::ChartTop, LabelAlign::Left);
+
+    assert_eq!(
+        lines,
+        vec![vec![vec![0, 1], vec![2]]],
+        "the venues share one cell; the caption beside them takes its own, as the flow says"
+    );
+
+    // And with the column flow the module's own caption joins the block instead.
+    let mut stacked = cfg.clone();
+    stacked.rows[0].flow = LabelFlow::Column;
+    let lines = group_lines(&stacked, &texts, LabelZone::ChartTop, LabelAlign::Left);
+    assert_eq!(lines, vec![vec![vec![0, 1], vec![2]]]);
+}

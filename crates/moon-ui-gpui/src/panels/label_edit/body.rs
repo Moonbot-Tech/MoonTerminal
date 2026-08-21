@@ -668,6 +668,11 @@ fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> 
                 .child(t!("chart_labels.preview_empty").to_string()),
         );
     }
+    // A COLUMN caption stacks whatever the module's flow says — its lines are venues, one under
+    // another — so its lines are collected into a block of their own and that block takes ONE place
+    // in the module's own run. Anything else the module holds still follows the flow beside it,
+    // which is exactly what the chart draws.
+    let mut column: Option<Div> = None;
     for caption in captions {
         let color = match caption.style.color {
             LabelColor::Theme => p.text,
@@ -699,14 +704,28 @@ fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> 
                     .child(prefix),
             );
         }
-        line = line.child(
-            pair.child(
-                div()
-                    .text_size(size)
-                    .text_color(moon(color))
-                    .child(value),
-            ),
+        let cell = pair.child(
+            div()
+                .text_size(size)
+                .text_color(moon(color))
+                .child(value),
         );
+        match caption.column {
+            true => {
+                column = Some(column.unwrap_or_else(|| v_flex().gap_1()).child(cell));
+            }
+            false => {
+                // The block closes as soon as something that is not part of it appears, so a module
+                // holding a column AND a caption keeps them in the order they print.
+                if let Some(block) = column.take() {
+                    line = line.child(block);
+                }
+                line = line.child(cell);
+            }
+        }
+    }
+    if let Some(block) = column.take() {
+        line = line.child(block);
     }
     popup_group("le-preview", t!("chart_labels.preview"))
         .child(

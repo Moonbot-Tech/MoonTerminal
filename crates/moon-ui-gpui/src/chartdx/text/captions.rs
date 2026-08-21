@@ -785,6 +785,8 @@ fn group_lines(
 ) -> Vec<Vec<Vec<usize>>> {
     let mut lines: Vec<Vec<Vec<usize>>> = Vec::new();
     let mut current: Option<usize> = None;
+    // Whether the caption placed last was an arbitrage line.
+    let mut was_column_line = false;
     for (pos, text) in texts.iter().enumerate() {
         let Some(row_cfg) = cfg.rows.get(text.row) else {
             continue;
@@ -800,13 +802,22 @@ fn group_lines(
             lines.push(Vec::new());
         }
         let line = lines.last_mut().expect("a line was opened above");
-        // Inside a module that runs down a column, every caption after the first joins the column
-        // the module opened. Everything else opens one of its own.
+        // An arbitrage line is part of a COLUMN by its own nature — one venue under another — and
+        // the module's flow does not apply to it: that switch decides how the module's ordinary
+        // captions run, and a module can hold both. So arbitrage lines join each other and nothing
+        // else joins them.
+        let is_column_line = text.part >= ARB_PART_BASE;
+        let joins = match (is_column_line, was_column_line) {
+            (true, true) => same_module,
+            (true, false) | (false, true) => false,
+            (false, false) => same_module && !row_cfg.flow.is_row(),
+        };
         match line.last_mut() {
-            Some(cell) if same_module && !row_cfg.flow.is_row() => cell.push(pos),
+            Some(cell) if joins => cell.push(pos),
             _ => line.push(vec![pos]),
         }
         current = Some(text.row);
+        was_column_line = is_column_line;
     }
     lines
 }

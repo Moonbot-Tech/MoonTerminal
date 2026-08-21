@@ -798,6 +798,10 @@ pub(in crate::chartdx) fn collect_open_stats(
 /// itself: a preview built from its own spelling of "how a percentage looks" stops being a preview
 /// the first time the real formatter changes.
 pub(crate) struct PreviewCaption {
+    /// Whether this line belongs to a COLUMN — an arbitrage venue — which stacks whatever the
+    /// module's flow says. The preview has to know, or it shows a row of venues the chart will
+    /// never draw.
+    pub column: bool,
     /// The caption's prefix, drawn in the theme's colour beside the value — the same split the
     /// chart draws, so a preview cannot claim a caption prints something the chart does not.
     pub prefix: String,
@@ -823,6 +827,7 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
     if row.show_name {
         if let Some(title) = crate::controls::row_title(row) {
             out.push(PreviewCaption {
+                column: false,
                 prefix: String::new(),
                 text: title,
                 sign: None,
@@ -842,6 +847,7 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
             let mut lines = Vec::new();
             push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base);
             out.extend(lines.into_iter().map(|line| PreviewCaption {
+                column: true,
                 prefix: line.prefix,
                 text: line.text,
                 sign: line.sign,
@@ -858,6 +864,7 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
         if let Some((text, sign)) = resolve(part, &inputs) {
             let style = part.resolved_style();
             out.push(PreviewCaption {
+                column: false,
                 prefix: caption_prefix(part, style.caption),
                 text,
                 sign,
