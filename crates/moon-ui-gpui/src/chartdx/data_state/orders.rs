@@ -59,6 +59,12 @@ impl ChartDataState {
         let wants_venue_cfg = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
         let wants_position_cfg =
             labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
+        let wants_detect_cfg = labels_cfg.any_drawn(|f| {
+            matches!(
+                f,
+                ChartLabelField::DetectStrategy | ChartLabelField::DetectMsg
+            )
+        });
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -121,6 +127,26 @@ impl ChartDataState {
             // FORMATTED result and is the one that decides whether anything has to repaint.
             pr.label_basis = basis;
             pr.label_strategy = strategy;
+            // The newest detect THIS core fired on THIS market: the ring is ordered by arrival,
+            // so the first match from the back is the newest one. A market that has never had a
+            // detect walks the whole ring — it is a name comparison per row, on an order revision,
+            // and only while a detect caption is actually drawn, which is what the gate above
+            // decides. The alternative, an index by market, would have to be maintained on the
+            // feed thread for a caption almost nobody prints.
+            let (detect_strategy, detect_msg) = wants_detect_cfg
+                .then(|| {
+                    let core_st = session.store().core(pane.core)?;
+                    let det = core_st
+                        .detects
+                        .iter()
+                        .rev()
+                        .find(|d| d.market == pane.market)?;
+                    Some((det.strat_name.clone(), det.msg.clone()))
+                })
+                .flatten()
+                .unwrap_or_default();
+            pr.label_detect_strategy = detect_strategy;
+            pr.label_detect_msg = detect_msg;
             let device_gen = pr.layers.device_gen();
             let device_lost = pr.last_device_gen != device_gen;
             if device_lost {

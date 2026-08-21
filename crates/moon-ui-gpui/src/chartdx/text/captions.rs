@@ -19,8 +19,8 @@
 
 use gpui::{Hsla, point, px};
 use moon_core::config::{
-    CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelColor, LabelZone,
-    ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
+    ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelColor,
+    LabelZone, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
 };
 use moon_core::util::fmt::DeltaSign;
 
@@ -312,7 +312,8 @@ impl RenderState {
             // makes this possible without drawing the row twice.
             let top = if downward { y } else { y - row_h };
             self.draw_row(
-                ctx, idx, texts, &row.cells, column, top, caption_fg, &mut plate,
+                ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
+                &mut plate,
             )?;
             drawn += 1;
             y += if downward { row_h } else { -row_h };
@@ -333,6 +334,11 @@ impl RenderState {
         cells: &[Cell],
         column: Column,
         top: f32,
+        // Edge of the band this line lives in, and which way the band fills. A CELL can be taller
+        // than the pane on its own — an arbitrage column is one line per venue — and the caller's
+        // per-line guard exempts the first line of a band, so the stack is clipped here too.
+        limit_y: f32,
+        downward: bool,
         caption_fg: Hsla,
         plate: &mut CaptionBox,
     ) -> anyhow::Result<f32> {
@@ -378,6 +384,17 @@ impl RenderState {
             let mut y = top;
             let mut drawn_w = 0.0_f32;
             for item in &cell.items {
+                // Out of pane: the rest of this stack is dropped rather than drawn, exactly as the
+                // horizontal budget drops a caption that does not fit its line. Drawing it would
+                // put venue prices over the time axis, or over the pane below on a shared canvas.
+                let past_edge = if downward {
+                    y + item.line_h() > limit_y
+                } else {
+                    y < limit_y
+                };
+                if past_edge {
+                    break;
+                }
                 let Some(entry) = texts.get(item.pos) else {
                     continue;
                 };
@@ -385,7 +402,12 @@ impl RenderState {
                 if text.is_empty() {
                     continue;
                 }
-                let color = self.caption_color(item.style.color, entry.sign, caption_fg);
+                // A line's own colour wins over the caption's style: an arbitrage row is coloured
+                // by its VENUE, which one style cannot say for a dozen lines.
+                let color = match entry.color {
+                    Some(rgb) => gpui::rgb(rgb).into(),
+                    None => self.caption_color(item.style.color, entry.sign, caption_fg),
+                };
                 let metrics = self.draw_caption_run(
                     ctx, idx, item.row, item.part, &text, item.size, anchor_x, y, ax, color,
                 )?;
@@ -543,12 +565,18 @@ impl RenderState {
             venue: pr.venue.clone(),
             quote: pr.quote.clone(),
             strategy: pr.label_strategy.clone(),
+            detect_strategy: pr.label_detect_strategy.clone(),
+            detect_msg: pr.label_detect_msg.clone(),
             last_price: pr.cached_last_price,
             scale_badge: pr.scale_badge,
             compare_pct,
             delta_1h: pr.delta_1h,
             delta_24h: pr.delta_24h,
             context: pr.label_context,
+            figures: pr.label_figures.clone(),
+            windows: pr.label_windows,
+            arb: pr.label_arb.clone(),
+            arb_view: Some(self.arb_view.clone()),
             now_ms: pr.label_now_ms,
             basis: pr.label_basis,
         };
@@ -572,6 +600,15 @@ impl RenderState {
 fn caption_style(row: &ChartLabelRow, part: usize) -> Option<ResolvedLabelStyle> {
     if part == ROW_NAME_PART {
         return Some(ChartLabelRow::name_style());
+    }
+    // An arbitrage line is drawn in its OWN run range, past every part index, and takes the style
+    // of the caption that produced it — the whole column is one configured caption, so its size and
+    // its plate are set once. Only the colour differs per line, and that rides on the line itself.
+    if part >= ARB_PART_BASE {
+        let column = row.parts[..row.used_parts()]
+            .iter()
+            .find(|p| p.field.is_column() && p.visible)?;
+        return Some(column.resolved_style());
     }
     Some(row.parts.get(part)?.resolved_style())
 }

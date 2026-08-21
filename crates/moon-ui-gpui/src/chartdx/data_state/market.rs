@@ -11,6 +11,14 @@ fn candles_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("MOON_CANDLES_OFF").is_some())
 }
 
+/// How often the arbitrage column re-reads its quotes, in milliseconds.
+///
+/// Not a rendering budget — the captions only repaint when a FORMATTED string changes — but a read
+/// budget: the protocol hands the slots over one venue at a time, each behind the market lock, so a
+/// column of twenty venues is twenty lock round trips. Four times a second is faster than the
+/// reference terminal repaints the same column and far slower than a busy coin's revisions.
+const ARB_READ_PERIOD_MS: i64 = 250;
+
 /// Wall-clock span an opened chart asks back for, before the bar band clamps it.
 const HISTORY_FLOOR_SPAN_MS: f64 = 2.0 * 86_400_000.0;
 /// Fewest base candles the floor may resolve to. Keeps the coarse timeframes honest: two days is
@@ -1063,6 +1071,45 @@ impl ChartDataState {
                     | LabelField::FundingIn
             )
         });
+        // The quote side, the venue's caps, the coin's tags and the EXCHANGE's own position: one
+        // readout, two snapshots, gated as a union like the context above.
+        let wants_figures = st.chart_labels.any_drawn(|f| {
+            matches!(
+                f,
+                LabelField::CoinTags
+                    | LabelField::Bid
+                    | LabelField::Ask
+                    | LabelField::Spread
+                    | LabelField::MarkPrice
+                    | LabelField::MarkDelta
+                    | LabelField::PriceStep
+                    | LabelField::Volume24h
+                    | LabelField::MaxLeverage
+                    | LabelField::MaxOrder
+                    | LabelField::ExchPosSize
+                    | LabelField::ExchPosPrice
+                    | LabelField::LiqPrice
+                    | LabelField::Leverage
+                    | LabelField::MarginMode
+                    | LabelField::SessionPnl
+                    | LabelField::CoinBalance
+            )
+        });
+        // Its own gate rather than a share of the one above: this readout walks the retained trade
+        // buckets and the 5-minute candle ring, so a chart that prints a spread and no window
+        // figure must not pay for that walk on every market revision.
+        let wants_windows = st.chart_labels.any_drawn(|f| {
+            matches!(
+                f,
+                LabelField::WindowDelta | LabelField::WindowVolume | LabelField::WindowBuyShare
+            )
+        });
+        // The arbitrage column, on its own gate AND its own clock. The readout asks the core venue
+        // by venue — each call takes the market lock — so it is read a few times a second rather
+        // than on every revision, which on a busy coin is several times that. A column of prices is
+        // read by eye; the reference terminal repaints it no faster either.
+        let wants_arb = st.chart_labels.any_drawn(|f| f == LabelField::ArbColumn);
+        let arb_now_ms = now as i64;
         // The clock only advances while something counts down with it. Quantized to the minute so
         // an idle chart re-formats its captions once a minute, not once per market revision.
         let countdown_now_ms = st
@@ -1082,19 +1129,62 @@ impl ChartDataState {
                     source.market_ticker(target.0, &target.1)
                 })
                 .flatten();
-            let context = wants_context
+            // Resolved once for the three readouts below rather than per readout: each clones the
+            // market name, and this loop runs per pane on every market revision.
+            let target = (wants_context || wants_figures || wants_windows || wants_arb)
                 .then(|| {
-                    let target = st
-                        .panes
+                    st.panes
                         .get(*idx)
-                        .and_then(|pr| pr.core.map(|core| (core, pr.market.clone())))?;
-                    source.market_context(target.0, &target.1)
+                        .and_then(|pr| pr.core.map(|core| (core, pr.market.clone())))
                 })
                 .flatten();
+            let context = target
+                .as_ref()
+                .filter(|_| wants_context)
+                .and_then(|(core, market)| source.market_context(*core, market));
+            let figures = target
+                .as_ref()
+                .filter(|_| wants_figures)
+                .and_then(|(core, market)| source.market_figures(*core, market));
+            let windows = target
+                .as_ref()
+                .filter(|_| wants_windows)
+                .and_then(|(core, market)| source.market_windows(*core, market));
+            let arb = target
+                .as_ref()
+                .filter(|_| wants_arb)
+                .filter(|(_, market)| {
+                    st.panes.get(*idx).is_none_or(|pr| {
+                        // The throttle applies to the SAME market only: a pane that just switched
+                        // coins reads immediately, or it would show the previous coin's prices for
+                        // as long as the period lasts.
+                        pr.label_arb_market != *market
+                            || arb_now_ms - pr.label_arb_read_ms >= ARB_READ_PERIOD_MS
+                    })
+                })
+                .map(|(core, market)| {
+                    (
+                        market.clone(),
+                        source.market_arb(*core, market).unwrap_or_default(),
+                    )
+                });
             if let Some(pr) = st.panes.get_mut(*idx) {
+                if let Some((market, arb)) = arb {
+                    pr.label_arb = arb;
+                    pr.label_arb_read_ms = arb_now_ms;
+                    pr.label_arb_market = market;
+                } else if !wants_arb && !pr.label_arb.is_empty() {
+                    // The column was switched off: drop what it held, or the quotes would sit in
+                    // the pane forever and come back stale the moment it is switched on again.
+                    pr.label_arb.clear();
+                    pr.label_arb_read_ms = 0;
+                    pr.label_arb_market.clear();
+                }
                 pr.delta_1h = readout.map(|r| r.delta_1h_pct);
                 pr.delta_24h = readout.map(|r| r.delta_24h_pct);
                 pr.label_context = context;
+                pr.label_figures = figures;
+                pr.label_windows = windows;
                 pr.label_now_ms = countdown_now_ms;
             }
             // Captions are formatted HERE, on a revision, and never in the frame path.

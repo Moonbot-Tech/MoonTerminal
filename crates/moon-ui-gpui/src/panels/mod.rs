@@ -25,6 +25,7 @@ mod chart;
 pub(crate) mod common;
 mod core_status;
 mod detects;
+mod arb_edit;
 mod label_edit;
 pub(crate) mod line_list;
 mod log;
@@ -41,6 +42,7 @@ pub(crate) use common::{
     micro_button, num, popup_apply_all_button, popup_close_button, popup_gear_trigger, popup_group,
     popup_group_inset_px, popup_title, radio_items, side_label, toggle_variant,
 };
+pub(crate) use arb_edit::open_arb_edit;
 pub(crate) use label_edit::open_label_edit;
 pub(crate) use order_edit::open_order_edit;
 

@@ -20,7 +20,8 @@ use serde::ser::{Serialize, Serializer};
 
 use super::{
     ChartLabelField, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelFlow,
-    LabelStyle, LabelZone, PnlBasis, CHART_LABEL_PARTS, CHART_LABEL_ROWS,
+    LabelPreset, LabelStyle, LabelWindow, LabelZone, PnlBasis, CHART_LABEL_PARTS,
+    CHART_LABEL_ROWS,
 };
 
 /// One row as it appears in a file.
@@ -33,6 +34,11 @@ use super::{
 struct RowWire {
     #[serde(skip_serializing_if = "String::is_empty")]
     name: String,
+    /// Ready-made module this row came from, which is how its name survives a language switch.
+    /// Absent on a row the user built themselves, and on every file written before presets were
+    /// remembered — those carry the localized name they were created with, in `name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preset: Option<LabelPreset>,
     zone: LabelZone,
     align: LabelAlign,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -58,6 +64,7 @@ impl Default for RowWire {
     fn default() -> Self {
         Self {
             name: String::new(),
+            preset: None,
             zone: LabelZone::default(),
             align: LabelAlign::default(),
             show_name: false,
@@ -137,6 +144,7 @@ impl Serialize for ChartLabelsCfg {
             .iter()
             .map(|row| RowWire {
                 name: row.name.clone(),
+                preset: row.preset,
                 zone: row.zone,
                 align: row.align,
                 show_name: row.show_name,
@@ -185,6 +193,7 @@ fn from_rows(rows: Vec<RowWire>) -> ChartLabelsCfg {
     for (ix, wire) in rows.into_iter().take(CHART_LABEL_ROWS).enumerate() {
         let mut row = ChartLabelRow::new(wire.zone, wire.align);
         row.name = wire.name;
+        row.preset = wire.preset;
         row.show_name = wire.show_name;
         row.visible = wire.visible;
         row.flow = wire.flow;
@@ -230,6 +239,8 @@ fn migrate_slots(slots: Vec<LegacySlot>) -> ChartLabelsCfg {
             visible,
             style: slot.style,
             pnl_basis: slot.pnl_basis,
+            // The old shape had no window: none of the fields it could hold reads one.
+            window: LabelWindow::default(),
         };
         // Joining is only possible while such a row exists AND has room; otherwise the caption
         // opens a row of its own, in the band its chain was drawn in.

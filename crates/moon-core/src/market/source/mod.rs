@@ -311,6 +311,265 @@ pub struct MarketContextReadout {
     pub funding_at_ms: Option<i64>,
 }
 
+/// Exchange tag a coin carries, as the venue itself classifies it.
+///
+/// The names are the EXCHANGE's own labels, not prose, so they are printed verbatim in every locale
+/// — "Seed" and "Alpha" are what the venue calls those listings and what its own interface shows.
+/// Translating them would leave the caption saying something no exchange page repeats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoinTag {
+    Monitoring,
+    Fan,
+    Seed,
+    Launch,
+    Gaming,
+    New,
+    Old,
+    Bnb,
+    Alpha,
+    OiCapped,
+    TradFi,
+}
+
+impl CoinTag {
+    /// Tags in the order a caption prints them, with the bit each one occupies on the wire.
+    ///
+    /// Bit 0 is the venue's "no tag" marker and carries no tag of its own, which is why the table
+    /// starts at bit 1 — a coin with only that bit set prints nothing.
+    const BITS: [(CoinTag, u32); 11] = [
+        (CoinTag::Monitoring, 1 << 1),
+        (CoinTag::Fan, 1 << 2),
+        (CoinTag::Seed, 1 << 3),
+        (CoinTag::Launch, 1 << 4),
+        (CoinTag::Gaming, 1 << 5),
+        (CoinTag::New, 1 << 6),
+        (CoinTag::Old, 1 << 7),
+        (CoinTag::Bnb, 1 << 8),
+        (CoinTag::Alpha, 1 << 9),
+        (CoinTag::OiCapped, 1 << 10),
+        (CoinTag::TradFi, 1 << 11),
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CoinTag::Monitoring => "Monitoring",
+            CoinTag::Fan => "Fan",
+            CoinTag::Seed => "Seed",
+            CoinTag::Launch => "Launch",
+            CoinTag::Gaming => "Gaming",
+            CoinTag::New => "New",
+            CoinTag::Old => "Old",
+            CoinTag::Bnb => "BNB",
+            CoinTag::Alpha => "Alpha",
+            CoinTag::OiCapped => "OI-capped",
+            CoinTag::TradFi => "TradFi",
+        }
+    }
+
+    /// Every tag the given wire bits carry, in print order.
+    pub fn from_bits(bits: u32) -> Vec<CoinTag> {
+        Self::BITS
+            .iter()
+            .filter(|(_, bit)| bits & bit != 0)
+            .map(|(tag, _)| *tag)
+            .collect()
+    }
+}
+
+/// A venue the core watches for arbitrage against the market being charted.
+///
+/// The core reports a numeric PLATFORM CODE, not a name: the codes are Moonbot's own
+/// `TBotPlatform` ordinals plus arbitrage-only ones, and nothing on the wire says how to spell
+/// them. This is that spelling, kept beside the venue directory rather than in the chart, because
+/// the same list names the columns in the arbitrage settings window.
+///
+/// A Hyperliquid DEPLOYER carries only its index — the deployer's own name (`hyna`, `para`) never
+/// reaches the protocol — so it is numbered here and can be renamed by the user, which is the only
+/// way a terminal can put the right word on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ArbVenue(u8);
+
+impl ArbVenue {
+    /// Every venue this build can name, in the order the settings window lists them.
+    ///
+    /// Deployers are deliberately absent: they exist per core, are discovered from the data, and
+    /// are appended after this list wherever one actually reports a price.
+    pub const KNOWN: [ArbVenue; 17] = [
+        ArbVenue(3),
+        ArbVenue(4),
+        ArbVenue(6),
+        ArbVenue(103),
+        ArbVenue(7),
+        ArbVenue(2),
+        ArbVenue(8),
+        ArbVenue(9),
+        ArbVenue(10),
+        ArbVenue(11),
+        ArbVenue(102),
+        ArbVenue(12),
+        ArbVenue(13),
+        ArbVenue(5),
+        ArbVenue(101),
+        ArbVenue(100),
+        ArbVenue(1),
+    ];
+
+    /// First deployer code; everything from here to [`Self::DEPLOYER_END`] is one.
+    const DEPLOYER_BASE: u8 = 50;
+    const DEPLOYER_END: u8 = 100;
+
+    /// How many deployer indices a read actually asks about.
+    ///
+    /// The protocol reserves fifty codes for them; a core watches a handful. Every candidate costs
+    /// a market-lock round trip on a read (see [`super::MarketDataSource::market_arb`]), so the
+    /// scan stops where the reference terminal's own column does rather than paying for forty-two
+    /// venues nobody deploys.
+    pub const DEPLOYERS_SCANNED: u8 = 8;
+
+    /// The deployer at `index`, as a venue.
+    pub const fn deployer(index: u8) -> Self {
+        Self(Self::DEPLOYER_BASE.wrapping_add(index))
+    }
+
+    pub const fn from_code(code: u8) -> Self {
+        Self(code)
+    }
+
+    pub const fn code(self) -> u8 {
+        self.0
+    }
+
+    pub const fn is_deployer(self) -> bool {
+        self.0 >= Self::DEPLOYER_BASE && self.0 < Self::DEPLOYER_END
+    }
+
+    /// What this venue is CALLED by default, in the reference terminal's spelling.
+    ///
+    /// `S` and `F` suffixes are its own convention for the spot and futures halves of one exchange,
+    /// and they are what an arbitrage column is read by. A code this build does not know prints its
+    /// number rather than a guess — the codes come from the core, and a newer core can send one.
+    pub fn default_name(self) -> String {
+        let known = match self.0 {
+            1 => "Bittrex",
+            2 => "BybitF",
+            3 => "BinanceS",
+            4 => "BinanceF",
+            5 => "HtxS",
+            6 => "BinanceQ",
+            7 => "BybitS",
+            8 => "GateS",
+            9 => "GateF",
+            10 => "BitgetS",
+            11 => "BitgetF",
+            12 => "HL_S",
+            13 => "HL_F",
+            100 => "Forex",
+            101 => "UpBit",
+            102 => "Okx",
+            103 => "BinAlpha",
+            _ => "",
+        };
+        if !known.is_empty() {
+            return known.to_string();
+        }
+        if self.is_deployer() {
+            return format!("HL #{}", self.0 - Self::DEPLOYER_BASE);
+        }
+        format!("#{}", self.0)
+    }
+}
+
+/// One venue's price on the charted coin, against the price of the market being charted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArbQuote {
+    pub venue: ArbVenue,
+    /// The other venue's price.
+    pub price: f64,
+    /// The CHARTED market's own price at the moment that one was recorded.
+    ///
+    /// Taken from the same ring entry rather than from the live ticker, so the percentage below
+    /// compares two prices that existed at the same instant. A spread computed against a price that
+    /// has moved since is the classic way to see arbitrage that was never there.
+    pub my_price: f64,
+    /// How far the other venue is from this one, in percent of this one's price.
+    pub spread_pct: f64,
+    /// Whether the venue is not accepting deposits or withdrawals for this coin — an arbitrage that
+    /// cannot be settled. Reported by the core alongside the price.
+    pub deposit_blocked: bool,
+    pub withdraw_blocked: bool,
+}
+
+/// One retained-history window, in the figures a caption can print from it.
+///
+/// Both figures are `Option` for the same reason [`MarketContextReadout`]'s funding is: a coin that
+/// has not traded in the window and a coin whose history has not arrived both produce zero, and a
+/// caption that printed it would claim a quiet market rather than an unknown one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WindowFigures {
+    /// Price movement over the window, in percent. UNSIGNED — this is the range magnitude the
+    /// Screener's `Δ` columns show, not a signed change from an average.
+    pub delta_pct: Option<f64>,
+    /// Traded volume over the window, in the market's quote currency.
+    pub volume_quote: Option<f64>,
+    /// Share of that volume that was BUYING, in percent.
+    ///
+    /// Only the short windows have it: the buy/sell split comes from the retained trade buckets,
+    /// which cover five minutes, while the longer windows are built from candles that carry no
+    /// split at all.
+    pub buy_share_pct: Option<f64>,
+}
+
+/// Retained-history figures for every window a caption may ask for.
+///
+/// Indexed by the window's position in [`crate::config::LabelWindow::ALL`], which is the ONE order
+/// the two crates agree on; the readout carries no window names of its own so the config stays the
+/// single place a window is spelled.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MarketWindowsReadout {
+    pub windows: [WindowFigures; crate::config::LABEL_WINDOW_COUNT],
+}
+
+/// Per-market figures a caption can print beside the price: the quote side, what the venue says
+/// about the market, and what THIS core holds in it.
+///
+/// Two sources in one value, deliberately. The market half comes from the deduplicated PROVIDER —
+/// the ask on `BTCUSDT@Binance` is the same for every core on that exchange — while the position
+/// half comes from the core the pane is actually looking at, because a position is an account fact.
+/// Reading them separately at the call site is what let the Screener's overlay drift from its
+/// market columns; here one readout answers both.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MarketFiguresReadout {
+    /// Best bid and ask; `None` until the book has arrived.
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    /// Exchange mark price, `None` when the venue reports none (spot).
+    pub mark: Option<f64>,
+    /// Absolute chart price step.
+    pub price_step: Option<f64>,
+    /// 24-hour volume from the venue's own market list, in the quote currency.
+    pub vol_24h: Option<f64>,
+    /// Maximum leverage the market allows; `None` on spot or before it arrives.
+    pub max_leverage: Option<i32>,
+    /// Exchange maximum order size in the quote currency, through the shared rule.
+    pub max_order: MaxOrder,
+    /// The venue's own tags for this coin, in print order. Empty when none arrived.
+    pub tags: Vec<CoinTag>,
+    /// Open position on THIS core, in the base coin; negative while short.
+    pub pos_size: Option<f64>,
+    /// Average entry price of that position.
+    pub pos_price: Option<f64>,
+    /// Liquidation price the venue reports for it.
+    pub liq_price: Option<f64>,
+    /// Account leverage in force on this market; `None` when unset.
+    pub leverage_x: Option<i32>,
+    /// Whether margin is isolated; `None` when the venue stated no position type.
+    pub isolated: Option<bool>,
+    /// Session profit this core booked on this coin (`b + l + s`).
+    pub session_pnl: Option<f64>,
+    /// Free balance of the coin itself, for a spot market.
+    pub coin_balance: Option<f64>,
+}
+
 /// Frozen snapshot for a detection card, built exactly once when the detection occurs.
 ///
 /// The mini-chart combines recent 5-minute candles from the provider's retained

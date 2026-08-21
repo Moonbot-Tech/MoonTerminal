@@ -193,6 +193,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         ui_session: UiSessionState::default(),
         detects_view: moon_core::config::DetectViewFile::load(),
         news_tag_settings: moon_core::config::NewsTagSettings::load(),
+        arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::load()),
         tab_badges: moon_core::config::TabBadgeSettings::load(),
         tab_badges_dirty: false,
         header_ticker_default: None,

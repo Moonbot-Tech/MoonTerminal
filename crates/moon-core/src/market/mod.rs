@@ -23,10 +23,10 @@ use crate::session::CoreId;
 pub use candles::{CandleViewCfg, ChartCandle};
 pub use screener::ScreenerRow;
 pub use source::{
-    pick_market_for_coin, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
-    ChartHistoryRead, DetectSnapshot, LatestPriceError, MarketDataSource, MarketLabel,
-    MarketContextReadout, MarketLimits, MarketRevisions, MarketTickerReadout, MaxOrder,
-    MaxOrderSource,
+    pick_market_for_coin, ArbQuote, ArbVenue, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
+    ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError, MarketDataSource,
+    MarketFiguresReadout, MarketLabel, MarketContextReadout, MarketLimits, MarketRevisions,
+    MarketTickerReadout, MarketWindowsReadout, MaxOrder, MaxOrderSource, WindowFigures,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

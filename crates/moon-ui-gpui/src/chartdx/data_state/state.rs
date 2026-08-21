@@ -27,6 +27,7 @@ impl ChartDataState {
             candle_view: moon_core::market::CandleViewCfg::default(),
             chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
+            arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::default()),
             default_x_ppm: None,
             prospective_usd: None,
             order_highlight: None,
@@ -65,9 +66,23 @@ impl ChartDataState {
 
     pub(crate) fn order_signature(&self, session: &SessionManager) -> u64 {
         let mut sig = 0u64;
+        // A detect caption is refreshed on this SAME sync — it is read where the session is in hand
+        // — so the detect ring has to be part of what wakes it. Folded in only while such a caption
+        // is drawn: detects arrive on their own stream, and mixing them unconditionally would run
+        // an order sync on every detect for every chart that prints none.
+        let wants_detect = self.chart_labels.any_drawn(|f| {
+            matches!(
+                f,
+                moon_core::config::ChartLabelField::DetectStrategy
+                    | moon_core::config::ChartLabelField::DetectMsg
+            )
+        });
         if let Some((core, _market)) = self.container.borrow().target_ref(0) {
             if let Some(core_st) = session.store().core(core) {
                 sig = sig.wrapping_add(core_st.order_lines_rev);
+                if wants_detect {
+                    sig = sig.wrapping_mul(31).wrapping_add(core_st.detects_rev);
+                }
             }
         }
         sig

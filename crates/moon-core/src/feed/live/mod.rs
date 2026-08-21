@@ -1151,6 +1151,17 @@ pub(super) fn run(
                                 .map(|st| st.kind().ordinal())
                                 .unwrap_or(if d.is_alert_fire() { 22 } else { 0 }),
                             is_short: strat.map(|st| st.is_short()).unwrap_or(false),
+                            // Core text, and the same redaction the server log gets: a detect line
+                            // can name the machine the core runs on, and this one is drawn on a
+                            // chart that gets screenshotted.
+                            msg: crate::applog::redact::addresses(&d.msg)
+                                .chars()
+                                .take(crate::feed::DETECT_MSG_KEEP)
+                                .collect(),
+                            strat_name: strat
+                                .and_then(|st| st.strategy_name())
+                                .unwrap_or_default()
+                                .to_string(),
                         });
                     }
                     // The core committed a checkbox delta. Published as its own message because the

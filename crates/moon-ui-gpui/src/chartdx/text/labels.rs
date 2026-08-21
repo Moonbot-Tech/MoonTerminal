@@ -12,7 +12,11 @@
 
 use std::rc::Rc;
 
-use moon_core::config::{ChartLabelField, ChartLabelPart, ChartLabelsCfg, PnlBasis, ROW_NAME_PART};
+use moon_core::config::{
+    ChartLabelField, ChartLabelPart, ChartLabelsCfg, PnlBasis, ROW_NAME_PART,
+};
+use moon_core::config::{ARB_PART_BASE, ArbViewCfg};
+use moon_core::market::{ArbQuote, CoinTag, MarketFiguresReadout, MarketWindowsReadout};
 use moon_core::util::fmt::{self, DeltaSign};
 use rust_i18n::t;
 
@@ -34,6 +38,13 @@ pub(in crate::chartdx) struct LabelInputs {
     pub quote: String,
     /// User-assigned strategy name of the newest OPEN order on this market.
     pub strategy: String,
+    /// Strategy and line of the newest detect THIS core fired on this market.
+    ///
+    /// Kept until the NEXT detect on the same market replaces it — there is no expiry: the caption
+    /// answers "what last fired here", and a line that vanished on a timer would leave the reader
+    /// unable to tell "nothing fired" from "it fired a while ago".
+    pub detect_strategy: String,
+    pub detect_msg: String,
     /// Last traded price the chart itself is drawing.
     pub last_price: Option<f32>,
     /// Y-scale badge as a whole percentage; `None` while it is hidden.
@@ -53,6 +64,26 @@ pub(in crate::chartdx) struct LabelInputs {
     /// Carried as an INPUT rather than read at format time so the cache key sees it: a countdown
     /// re-formats when the minute it prints changes, and not on every revision in between.
     pub now_ms: i64,
+    /// Quote side, venue caps, coin tags and the EXCHANGE's own position on this market.
+    ///
+    /// `None` until a caption asks for any of it, like [`Self::context`]: the readout takes the
+    /// source lock and two versioned snapshots, and a pane that prints none of these figures must
+    /// not pay for them on every market revision.
+    pub figures: Option<MarketFiguresReadout>,
+    /// Retained-history movement and volume, per window. `None` on the same terms, and gated
+    /// separately because it costs more — it walks the trade buckets and the candle ring.
+    pub windows: Option<MarketWindowsReadout>,
+    /// Arbitrage quotes for this market, as the core last reported them.
+    ///
+    /// Refreshed on a THROTTLE rather than every revision — see the sync — because reading them
+    /// costs one market-lock round trip per venue, and a column of prices is read by eye.
+    pub arb: Vec<ArbQuote>,
+    /// The roster that arranges them: which venues, in what order, under what name and colour.
+    ///
+    /// The HANDLE, not a copy, and part of the cache key by pointer: the roster is global and is
+    /// replaced wholesale when the settings window writes it, so a pointer compare answers "did the
+    /// arrangement change" without walking twenty venues per revision.
+    pub arb_view: Option<Rc<ArbViewCfg>>,
     /// Open-position figures, one entry per [`PnlBasis`] at [`basis_index`].
     pub basis: [BasisStats; 3],
 }
@@ -120,6 +151,12 @@ pub(in crate::chartdx) struct LabelText {
     /// Sign of the value behind the text, for a caption that colors by it. `None` means the value
     /// has no meaningful sign and the caption keeps the theme color.
     pub sign: Option<DeltaSign>,
+    /// Colour this ONE line is drawn in, overriding the caption's own style.
+    ///
+    /// Only an arbitrage line uses it: its colour belongs to the VENUE, which the caption's style
+    /// cannot express — one caption prints a dozen lines and they are not all Gate. `None`
+    /// everywhere else, where the style answers.
+    pub color: Option<u32>,
 }
 
 /// A pane's caption state: what it read, and what it formatted from it.
@@ -179,16 +216,34 @@ impl LabelState {
             }
             // The row's own name leads its captions, which is where a reader looks for what the
             // row IS before reading the figures on it.
-            if row.prints_name() {
-                scratch.push(LabelText {
-                    row: row_ix,
-                    part: ROW_NAME_PART,
-                    text: row.name.clone(),
-                    sign: None,
-                });
+            if let Some(title) = crate::controls::row_title(row) {
+                if row.show_name {
+                    scratch.push(LabelText {
+                        row: row_ix,
+                        part: ROW_NAME_PART,
+                        text: title,
+                        sign: None,
+                        color: None,
+                    });
+                }
             }
+            let mut column_drawn = false;
             for (part_ix, part) in row.parts.iter().enumerate() {
                 if !part.is_drawn() {
+                    continue;
+                }
+                // A column caption is not one value: it expands into its own run range, one line
+                // per venue, and never occupies its part index. Expanded HERE rather than in the
+                // drawing pass so the cache below still compares finished strings.
+                if part.field.is_column() {
+                    // The FIRST column of a module owns its line range; a second one would emit the
+                    // same `(row, part)` pairs and the two would reshape each other's runs every
+                    // frame. The drawing pass resolves a column's style the same way — first one
+                    // wins — so this is the same rule stated once on each side.
+                    if !column_drawn {
+                        push_arb_rows(&mut scratch, row_ix, &self.inputs);
+                        column_drawn = true;
+                    }
                     continue;
                 }
                 // A caption with nothing to say draws nothing and takes no place on its row. This
@@ -202,6 +257,7 @@ impl LabelState {
                     part: part_ix,
                     text,
                     sign,
+                    color: None,
                 });
             }
         }
@@ -233,6 +289,13 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::Venue => non_empty(&inputs.venue).map(|t| (t, None)),
         ChartLabelField::Quote => non_empty(&inputs.quote).map(|t| (t, None)),
         ChartLabelField::OrderStrategy => non_empty(&inputs.strategy).map(|t| (t, None)),
+        ChartLabelField::DetectStrategy => non_empty(&inputs.detect_strategy)
+            .map(|t| (with_caption(part, caption, &t), None)),
+        // The line is the core's own text and can be a sentence. It is cut to what a caption can be
+        // read as at all; the chart's own width budget truncates whatever still does not fit, but
+        // that budget measures a string it has already been handed, so an unbounded one would be
+        // shaped in full first.
+        ChartLabelField::DetectMsg => non_empty(&inputs.detect_msg).map(|t| (cut(&t), None)),
         ChartLabelField::ScaleBadge => inputs.scale_badge.map(|pct| {
             // A range below a whole percent in a quiet Auto market reads as "<1%", never as zero:
             // zero would claim the chart has no vertical span at all.
@@ -311,6 +374,101 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 None,
             )
         }),
+        // Expanded before this point, into its own run range: one caption, a dozen lines. Reaching
+        // here would mean the expansion was skipped, and a single line saying "arbitrage" is not
+        // what the caption is for.
+        ChartLabelField::ArbColumn => None,
+        ChartLabelField::CoinTags => inputs
+            .figures
+            .as_ref()
+            .filter(|f| !f.tags.is_empty())
+            .map(|f| (tags_text(&f.tags), None)),
+        ChartLabelField::Bid => figure(inputs, |f| f.bid)
+            .map(|v| price_label(part, caption, v)),
+        ChartLabelField::Ask => figure(inputs, |f| f.ask)
+            .map(|v| price_label(part, caption, v)),
+        // The spread needs BOTH sides and a sane pair: a crossed book — which a stale snapshot can
+        // show for a moment — would otherwise print a negative spread as if it were an arbitrage.
+        ChartLabelField::Spread => inputs.figures.as_ref().and_then(|f| {
+            let (bid, ask) = (f.bid?, f.ask?);
+            let pct = (ask > bid).then(|| (ask - bid) / ask * 100.0)?;
+            let (text, _) = fmt::pct(pct, 2)?;
+            Some((with_caption(part, caption, &text), None))
+        }),
+        ChartLabelField::MarkPrice => figure(inputs, |f| f.mark)
+            .map(|v| price_label(part, caption, v)),
+        // The deviation is read against the price the CHART is drawing, so the caption cannot
+        // disagree with the candle beside it.
+        ChartLabelField::MarkDelta => {
+            let mark = figure(inputs, |f| f.mark)?;
+            let last = f64::from(inputs.last_price.filter(|p| p.is_finite() && *p > 0.0)?);
+            signed_pct_label(part, caption, (mark - last) / last * 100.0)
+        }
+        ChartLabelField::PriceStep => figure(inputs, |f| f.price_step)
+            .map(|v| price_label(part, caption, v)),
+        ChartLabelField::Volume24h => figure(inputs, |f| f.vol_24h)
+            .map(|v| (with_caption(part, caption, &fmt::compact_si(v)), None)),
+        ChartLabelField::WindowDelta => window(inputs, part)
+            .and_then(|w| w.delta_pct)
+            .and_then(|v| fmt::pct(v, 2))
+            .map(|(text, _)| (window_caption(part, caption, &text), None)),
+        ChartLabelField::WindowVolume => window(inputs, part)
+            .and_then(|w| w.volume_quote)
+            .map(|v| (window_caption(part, caption, &fmt::compact_si(v)), None)),
+        ChartLabelField::WindowBuyShare => window(inputs, part)
+            .and_then(|w| w.buy_share_pct)
+            .and_then(|v| fmt::pct(v, 1))
+            .map(|(text, _)| (window_caption(part, caption, &text), None)),
+        ChartLabelField::MaxLeverage => inputs
+            .figures
+            .as_ref()
+            .and_then(|f| f.max_leverage)
+            .map(|v| (with_caption(part, caption, &format!("x{v}")), None)),
+        // A cap the venue never stated prints nothing; one it stated but that cannot be converted
+        // yet also prints nothing, rather than "0" — see `MaxOrderSource`.
+        ChartLabelField::MaxOrder => inputs
+            .figures
+            .as_ref()
+            .map(|f| f.max_order)
+            .filter(|m| m.value.is_finite() && m.value > 0.0)
+            .map(|m| (with_caption(part, caption, &fmt::compact_si(m.value)), None)),
+        ChartLabelField::ExchPosSize => inputs
+            .figures
+            .as_ref()
+            .and_then(|f| f.pos_size)
+            .map(|v| {
+                let sign = if v >= 0.0 {
+                    DeltaSign::Positive
+                } else {
+                    DeltaSign::Negative
+                };
+                (with_caption(part, caption, &fmt::compact_si(v)), Some(sign))
+            }),
+        ChartLabelField::ExchPosPrice => figure(inputs, |f| f.pos_price)
+            .map(|v| price_label(part, caption, v)),
+        ChartLabelField::LiqPrice => figure(inputs, |f| f.liq_price)
+            .map(|v| price_label(part, caption, v)),
+        ChartLabelField::Leverage => inputs
+            .figures
+            .as_ref()
+            .and_then(|f| f.leverage_x)
+            .map(|v| (with_caption(part, caption, &format!("x{v}")), None)),
+        ChartLabelField::MarginMode => inputs.figures.as_ref().and_then(|f| f.isolated).map(|iso| {
+            let key = if iso {
+                "chart_labels.margin.isolated"
+            } else {
+                "chart_labels.margin.cross"
+            };
+            (t!(key).to_string(), None)
+        }),
+        // Unlike the open-position figures, a session profit of exactly zero is a RESULT — the coin
+        // was traded to break even — so it prints, with the neutral sign the formatter picks.
+        ChartLabelField::SessionPnl => inputs.figures.as_ref().and_then(|f| f.session_pnl).map(|v| {
+            let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
+            (with_caption(part, caption, &text), Some(sign))
+        }),
+        ChartLabelField::CoinBalance => figure(inputs, |f| f.coin_balance)
+            .map(|v| (with_caption(part, caption, &fmt::compact_si(v)), None)),
         ChartLabelField::PosSize => (stats.pos_size != 0.0).then(|| {
             let sign = if stats.pos_size >= 0.0 {
                 DeltaSign::Positive
@@ -323,6 +481,84 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             )
         }),
     }
+}
+
+/// Build the arbitrage column's lines for one module.
+///
+/// One line per venue the roster shows, in the roster's order, addressed from [`ARB_PART_BASE`] so
+/// a venue that stops reporting cannot hand its retained run to the venue below it — which would
+/// reshape every line under the gap on every frame.
+fn push_arb_rows(out: &mut Vec<LabelText>, row_ix: usize, inputs: &LabelInputs) {
+    let Some(view) = inputs.arb_view.as_ref() else {
+        return;
+    };
+    for (n, row) in view.arrange(&inputs.arb).into_iter().enumerate() {
+        // Formatted ONCE and read twice: the text carries it, and the sign it rounded to picks the
+        // colour, so the two cannot disagree about a spread that rounds away.
+        let spread = fmt::signed_pct(row.quote.spread_pct, 2);
+        let sign = spread.as_ref().map(|(_, sign)| *sign);
+        let mut text = row.label.clone();
+        if view.show.shows_price() {
+            text.push(' ');
+            text.push_str(&fmt::adaptive(row.quote.price));
+        }
+        if let (true, Some((pct, _))) = (view.show.shows_spread(), spread.as_ref()) {
+            text.push(' ');
+            text.push_str(pct);
+        }
+        // A venue that cannot be deposited to or withdrawn from is marked, not hidden: the spread
+        // is real, the settlement is not, and a reader must not take one for the other.
+        if view.mark_blocked && (row.quote.deposit_blocked || row.quote.withdraw_blocked) {
+            text.push_str(" ⛔");
+        }
+        out.push(LabelText {
+            row: row_ix,
+            part: ARB_PART_BASE + n,
+            text,
+            // The SPREAD is what carries a direction here; the venue's own colour, when it has one,
+            // overrides whatever the sign would have picked.
+            sign,
+            color: row.color,
+        });
+    }
+}
+
+/// A PRICE caption: the shared adaptive formatter, with the field's prefix when it asks for one.
+///
+/// Six fields print a price this way — bid, ask, mark, step, entry, liquidation — and spelling the
+/// same pair of calls six times is how one of them ends up on a different formatter later.
+fn price_label(
+    part: &ChartLabelPart,
+    caption: bool,
+    v: f64,
+) -> (String, Option<DeltaSign>) {
+    (with_caption(part, caption, &fmt::adaptive(v)), None)
+}
+
+/// One figure off the market readout, absent when the readout itself is.
+fn figure(inputs: &LabelInputs, pick: impl Fn(&MarketFiguresReadout) -> Option<f64>) -> Option<f64> {
+    inputs.figures.as_ref().and_then(pick)
+}
+
+/// The window figures this caption is configured to read.
+fn window(
+    inputs: &LabelInputs,
+    part: &ChartLabelPart,
+) -> Option<moon_core::market::WindowFigures> {
+    let windows = inputs.windows.as_ref()?;
+    windows.windows.get(part.window.index()).copied()
+}
+
+/// The coin's tags as one caption: `Seed · Alpha`.
+///
+/// One caption rather than one per tag, because the set is what is read — a coin is "a seed listing
+/// that is also alpha" — and because a tag list that grew a column would push every figure beside
+/// it off the pane.
+fn tags_text(tags: &[CoinTag]) -> String {
+    tags.iter()
+        .map(|t| t.name())
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// Format a signed percentage with its optional caption, dropping a non-finite value.
@@ -358,6 +594,22 @@ fn fmt_countdown(remaining_ms: i64) -> Option<String> {
     })
 }
 
+/// Longest detect line kept, in characters.
+///
+/// Not a layout figure — the chart truncates by WIDTH — but a bound on what is shaped at all: a
+/// core is free to send a paragraph, and the text pass would measure every glyph of it before
+/// deciding it does not fit.
+const DETECT_MSG_MAX: usize = 96;
+
+/// Cut a core-supplied line to something a caption can carry.
+fn cut(s: &str) -> String {
+    if s.chars().count() <= DETECT_MSG_MAX {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(DETECT_MSG_MAX).collect();
+    format!("{}…", kept.trim_end())
+}
+
 fn non_empty(s: &str) -> Option<String> {
     (!s.trim().is_empty()).then(|| s.to_string())
 }
@@ -368,8 +620,22 @@ fn non_empty(s: &str) -> Option<String> {
 /// feature prints is localized, and a caption drawn over the candles is the most visible text of
 /// the lot.
 fn with_caption(part: &ChartLabelPart, on: bool, value: &str) -> String {
+    prefixed(part, on, "", value)
+}
+
+/// Prefix a WINDOW figure, whose caption is its field plus the window it was read over.
+///
+/// The window is part of the identity here: two "Δ" captions on one line are unreadable unless each
+/// says whether it is the minute or the day. Without a prefix the value stands alone, which is what
+/// the caption switch means everywhere else.
+fn window_caption(part: &ChartLabelPart, on: bool, value: &str) -> String {
+    prefixed(part, on, &t!(part.window.locale_key()), value)
+}
+
+/// The prefix rule itself, with an optional tail between the field's short name and the value.
+fn prefixed(part: &ChartLabelPart, on: bool, tail: &str, value: &str) -> String {
     match part.field.caption_key().filter(|_| on) {
-        Some(key) => format!("{}: {value}", t!(key)),
+        Some(key) => format!("{}{tail}: {value}", t!(key)),
         None => value.to_string(),
     }
 }
@@ -462,15 +728,37 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
     }
     let inputs = sample_inputs();
     let mut out = Vec::new();
-    if row.prints_name() {
-        out.push(PreviewCaption {
-            text: row.name.clone(),
-            sign: None,
-            style: moon_core::config::ChartLabelRow::name_style(),
-        });
+    if row.show_name {
+        if let Some(title) = crate::controls::row_title(row) {
+            out.push(PreviewCaption {
+                text: title,
+                sign: None,
+                style: moon_core::config::ChartLabelRow::name_style(),
+            });
+        }
     }
     for part in &row.parts[..row.used_parts()] {
         if !part.visible {
+            continue;
+        }
+        // A column caption previews as the COLUMN it prints — same expansion the chart uses, same
+        // sample data — because "what will this print" is a list of venues, not one line saying
+        // "arbitrage".
+        if part.field.is_column() {
+            let mut lines = Vec::new();
+            push_arb_rows(&mut lines, 0, &inputs);
+            let base = part.resolved_style();
+            out.extend(lines.into_iter().map(|line| PreviewCaption {
+                text: line.text,
+                sign: line.sign,
+                style: moon_core::config::ResolvedLabelStyle {
+                    color: match line.color {
+                        Some(rgb) => moon_core::config::LabelColor::Fixed(rgb),
+                        None => base.color,
+                    },
+                    ..base
+                },
+            }));
             continue;
         }
         if let Some((text, sign)) = resolve(part, &inputs) {
@@ -505,11 +793,66 @@ fn sample_inputs() -> LabelInputs {
         venue: "Binance".to_string(),
         quote: "USDT".to_string(),
         strategy: "Alpha".to_string(),
+        detect_strategy: "BTC Sniper".to_string(),
+        detect_msg: "Delta 5m 3.4% · vol x7".to_string(),
         last_price: Some(51234.5),
         scale_badge: Some(12),
         compare_pct: Some(1.2),
         delta_1h: Some(3.8),
         delta_24h: Some(-2.1),
+        // The sample column: two venues, one above this market and one below it, so the preview
+        // shows both directions the spread can take.
+        arb: vec![
+            moon_core::market::ArbQuote {
+                venue: moon_core::market::ArbVenue::from_code(4),
+                price: 51_290.0,
+                my_price: 51_234.5,
+                spread_pct: 0.11,
+                deposit_blocked: false,
+                withdraw_blocked: false,
+            },
+            moon_core::market::ArbQuote {
+                venue: moon_core::market::ArbVenue::from_code(9),
+                price: 51_180.0,
+                my_price: 51_234.5,
+                spread_pct: -0.11,
+                deposit_blocked: true,
+                withdraw_blocked: false,
+            },
+        ],
+        arb_view: Some(Rc::new(ArbViewCfg::default())),
+        // Every new figure answers here too: a preview that printed nothing for a field the user
+        // just picked reads as a broken label rather than as an empty market.
+        figures: Some(moon_core::market::MarketFiguresReadout {
+            bid: Some(51_230.0),
+            ask: Some(51_239.0),
+            mark: Some(51_236.0),
+            price_step: Some(0.5),
+            vol_24h: Some(184_000_000.0),
+            max_leverage: Some(50),
+            max_order: moon_core::market::MaxOrder {
+                value: 2_000_000.0,
+                source: moon_core::market::MaxOrderSource::Stated,
+            },
+            tags: vec![
+                moon_core::market::CoinTag::Seed,
+                moon_core::market::CoinTag::Alpha,
+            ],
+            pos_size: Some(0.35),
+            pos_price: Some(50_980.0),
+            liq_price: Some(41_120.0),
+            leverage_x: Some(10),
+            isolated: Some(true),
+            session_pnl: Some(-12.40),
+            coin_balance: Some(0.42),
+        }),
+        windows: Some(moon_core::market::MarketWindowsReadout {
+            windows: [moon_core::market::WindowFigures {
+                delta_pct: Some(0.58),
+                volume_quote: Some(1_240_000.0),
+                buy_share_pct: Some(56.0),
+            }; moon_core::config::LABEL_WINDOW_COUNT],
+        }),
         context: Some(moon_core::market::MarketContextReadout {
             exchange_1h_pct: 0.4,
             exchange_24h_pct: -1.1,

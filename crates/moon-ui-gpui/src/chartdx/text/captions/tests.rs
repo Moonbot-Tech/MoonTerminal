@@ -36,6 +36,7 @@ fn texts() -> Vec<LabelText> {
             part: n.saturating_sub(1),
             text: text.into(),
             sign: None,
+            color: None,
         })
         .collect()
 }
@@ -100,6 +101,7 @@ fn the_first_module_of_a_band_always_opens_a_line() {
         part: 0,
         text: "Δ1ч".into(),
         sign: None,
+        color: None,
     }];
     assert_eq!(
         group_lines(&cfg, &texts, LabelZone::ChartTop, LabelAlign::Right),

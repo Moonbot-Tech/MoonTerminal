@@ -141,6 +141,7 @@ impl Render for ChartPanel {
             candle_view,
             chart_graphics,
             chart_labels,
+            arb_view,
         ) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
@@ -164,6 +165,9 @@ impl Render for ChartPanel {
             // observation and the same setters that can change it. Rebuilding it per render meant
             // sanitizing sixteen rows and deep-copying their names on every frame.
             let chart_labels = self.settings_sig.chart_labels.clone();
+            // The roster is GLOBAL: the same handle for every chart, taken straight off the
+            // backend rather than through the per-tab settings signature beside it.
+            let arb_view = b.arb_view.clone();
             (
                 theme,
                 orders,
@@ -172,6 +176,7 @@ impl Render for ChartPanel {
                 candle_view,
                 chart_graphics,
                 chart_labels,
+                arb_view,
             )
         };
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
@@ -190,6 +195,7 @@ impl Render for ChartPanel {
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
             | self.chart.set_chart_labels(chart_labels)
+            | self.chart.set_arb_view(arb_view)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
             | self.chart.set_line_labels(self.line_labels)

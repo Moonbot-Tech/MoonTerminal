@@ -175,3 +175,68 @@ fn max_order_notional_distinguishes_absent_from_pending_conversion() {
         }
     );
 }
+
+/// A hedged core keeps its legs SEPARATELY: the net size is zero while a short is open, and reading
+/// the net alone would caption that market as flat. This is the same rule the Assets panel needed.
+#[test]
+fn a_leg_only_short_is_a_position() {
+    let pos = moonproto::state::MarketBalancePosition {
+        short_pos_size: 2.0,
+        short_pos_price: 100.0,
+        short_liq_price: 130.0,
+        ..Default::default()
+    };
+
+    let (size, price, liq) = super::read::position_of(&pos);
+
+    assert_eq!(size, Some(-2.0), "a short reads as a negative size");
+    assert_eq!(price, 100.0);
+    assert_eq!(liq, 130.0);
+}
+
+/// Direction is not always carried by the sign: a core can report a POSITIVE size with
+/// `pos_dir == Sell`, and a caption that trusted the sign would paint that short as a long.
+#[test]
+fn a_positive_size_marked_sell_reads_as_a_short() {
+    let pos = moonproto::state::MarketBalancePosition {
+        pos_size: 3.0,
+        pos_price: 50.0,
+        liq_price: 70.0,
+        pos_dir: moonproto::OrderType::Sell,
+        ..Default::default()
+    };
+
+    let (size, ..) = super::read::position_of(&pos);
+
+    assert_eq!(size, Some(-3.0));
+}
+
+/// A flat market has no position, and withholding the size withholds the entry and liquidation
+/// prices with it — printing them beside no position would state prices nothing is held at.
+#[test]
+fn a_flat_market_reports_no_position() {
+    let (size, price, liq) = super::read::position_of(&Default::default());
+    assert_eq!((size, price, liq), (None, 0.0, 0.0));
+}
+
+/// `OrderType::Sell` is byte 0 — which is also `OrderType::default()`, what a core writes when it
+/// states no direction at all. A hedge leg already knows its direction from the leg it was read
+/// from, so the flag must not be consulted there: doing so printed every long-only hedge position
+/// as a short.
+#[test]
+fn a_long_leg_stays_long_when_the_direction_flag_is_absent() {
+    let pos = moonproto::state::MarketBalancePosition {
+        long_pos_size: 2.0,
+        long_pos_price: 100.0,
+        long_liq_price: 70.0,
+        // The default, i.e. "the core said nothing".
+        pos_dir: moonproto::OrderType::default(),
+        ..Default::default()
+    };
+
+    let (size, price, liq) = super::read::position_of(&pos);
+
+    assert_eq!(size, Some(2.0), "a long leg is not a short");
+    assert_eq!(price, 100.0);
+    assert_eq!(liq, 70.0);
+}

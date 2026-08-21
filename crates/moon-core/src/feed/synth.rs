@@ -128,6 +128,10 @@ pub fn run(
                 is_alert: false,
                 kind: 0,
                 is_short: false,
+                // The synthetic feed drives AddToChart, not the detect captions: a fabricated line
+                // on a fixture chart would be indistinguishable from a real one in a bench shot.
+                msg: String::new(),
+                strat_name: String::new(),
             });
             seq += 1;
         }

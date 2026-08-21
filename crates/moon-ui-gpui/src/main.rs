@@ -180,6 +180,13 @@ struct Backend {
     /// Global News-panel tag settings: per-tag colours + the tag-visibility filter. Stored in the
     /// small portable `news_tags.json` and saved immediately on change.
     news_tag_settings: moon_core::config::NewsTagSettings,
+    /// Global arbitrage roster for the chart's arbitrage column: which venues, in what order, under
+    /// what name and colour. Stored in the portable `arb_view.toml` and saved immediately, like the
+    /// two above — it is a small file and the window that edits it has no Apply button.
+    ///
+    /// Behind an `Rc` because every chart panel hands the SAME handle to its engine on render, and
+    /// the pointer test there is what keeps a roster of twenty venues from being compared per frame.
+    arb_view: std::rc::Rc<moon_core::config::ArbViewCfg>,
     /// Dock-tab unread counters: per-panel display switches and per-panel/group read watermarks.
     /// Stored in the small portable `tab_badges.json`.
     tab_badges: moon_core::config::TabBadgeSettings,

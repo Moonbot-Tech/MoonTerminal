@@ -9,10 +9,11 @@
 use gpui::*;
 use moon_core::config::{
     CHART_LABEL_PARTS, ChartLabelField, ChartLabelPart, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    LabelColor, LabelFlow, LabelStyle, PnlBasis,
+    LabelColor, LabelFlow, LabelStyle, LabelWindow, PnlBasis,
 };
 use moon_core::util::fmt::DeltaSign;
-use moon_ui::{
+use moon_ui::{MoonWindowExt as _,
+
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
     MoonInput, MoonMenuSize, MoonPalette, h_flex, v_flex,
 };
@@ -55,7 +56,8 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
         let s = state.read(cx);
         (s.row.clone(), s.selected, s.name_input.clone())
     };
-    let named = !name_input.read(cx).value().trim().is_empty();
+    // Whether the module has a name to print at all: the user's own, or the preset's.
+    let named = !name_input.read(cx).value().trim().is_empty() || row.preset.is_some();
 
     // What the module is called, and whether the chart prints that name above its figures.
     let name_row = h_flex()
@@ -314,17 +316,11 @@ fn caption_settings(
     // is what "I picked the wrong one" needs.
     col = col.child({
         let state = state.clone();
-        let items = crate::panels::radio_items(
-            ChartLabelField::ALL.iter().map(|f| {
-                (
-                    *f,
-                    SharedString::from(format!("le-f-{f:?}")),
-                    SharedString::from(t!(f.locale_key()).to_string()),
-                )
-            }),
-            part.field,
-            crate::panels::RadioMark::Check,
-            move |cx, f: ChartLabelField| {
+        let current = part.field;
+        let items = field_menu_items(
+            "le-f",
+            move |f| f == current,
+            move |f, _window, cx| {
                 write_row(&state, cx, |s| s.row.parts[selected].field = f);
             },
         );
@@ -371,6 +367,81 @@ fn caption_settings(
                 }
             },
         ));
+    }
+
+    // A column caption has no style questions of its own worth asking here — which venues it
+    // prints, in what order and colour, is a GLOBAL roster — so the pane offers the way there
+    // instead. Applying the module first is deliberate: the two windows cannot stand on top of each
+    // other, so this button is an OK that opens the other one.
+    if part.field.is_column() {
+        let state = state.clone();
+        col = col.child(
+            MoonButton::new("le-arb")
+                .label(t!("arb.open").to_string())
+                .size(MoonButtonSize::Micro)
+                .variant(MoonButtonVariant::Soft)
+                .on_click(move |_, window: &mut Window, cx: &mut App| {
+                    let (row, on_done, on_dismiss, on_open_arb) = {
+                        let s = state.read(cx);
+                        (
+                            s.accepted_row(cx),
+                            s.on_done.clone(),
+                            s.on_dismiss.clone(),
+                            s.on_open_arb.clone(),
+                        )
+                    };
+                    on_done(row, cx);
+                    on_dismiss(cx);
+                    window.close_dialog(cx);
+                    on_open_arb(window, cx);
+                })
+                .render(),
+        );
+    }
+
+    // Which retained-history window a movement or volume figure is read over. A dropdown rather
+    // than a segmented row like the basis above: eight windows do not fit the narrower pane, and
+    // this control is picked once and then read as a number in the caption itself.
+    if part.field.uses_window() {
+        let state = state.clone();
+        let current = part.window;
+        let items = crate::panels::radio_items(
+            LabelWindow::ALL.iter().map(|w| {
+                (
+                    *w,
+                    SharedString::from(format!("le-w-{w:?}")),
+                    SharedString::from(t!(w.locale_key()).to_string()),
+                )
+            }),
+            current,
+            crate::panels::RadioMark::Check,
+            move |cx, w: LabelWindow| {
+                write_row(&state, cx, |s| s.row.parts[selected].window = w);
+            },
+        );
+        col = col.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text))
+                        .child(t!("chart_labels.window").to_string()),
+                )
+                .child(
+                    MoonDropdown::new("le-window")
+                        .label(t!(current.locale_key()).to_string())
+                        .trigger_caret(true)
+                        .trigger_variant(MoonButtonVariant::Soft)
+                        .trigger_size(MoonButtonSize::Micro)
+                        .trigger_width_scaled(70.0)
+                        .menu_width_scaled(90.0)
+                        .menu_size(MoonMenuSize::Compact)
+                        .items(items),
+                ),
+        );
     }
 
     // Size, as a multiplier on the chart's own label size — which already follows the Settings font

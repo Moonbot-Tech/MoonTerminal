@@ -16,6 +16,7 @@
 //! - `backup` creates daily snapshots in `backups/settings/` and protects schema migrations;
 //! - `uid_counter` requires every counter construction path to name the optional store floor.
 
+pub mod arb_view;
 pub mod badges;
 pub mod chart_labels;
 pub mod core_groups;
@@ -48,12 +49,13 @@ mod uid_counter;
 #[cfg(test)]
 mod tests;
 
+pub use arb_view::{ArbRow, ArbShow, ArbViewCfg, ArbVenueCfg, ARB_MAX_ROWS, ARB_NAME_MAX};
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use chart_labels::{
     ChartLabelField, ChartLabelGroup, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign,
-    LabelColor, LabelFlow, LabelPreset, LabelStyle, LabelZone, PnlBasis, ResolvedLabelStyle,
-    CHART_LABEL_PARTS, CHART_LABEL_ROWS, LABEL_GAP_MAX, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    ROW_NAME_PART, ROW_RUN_STRIDE,
+    LabelColor, LabelFlow, LabelPreset, LabelStyle, LabelWindow, LabelZone, PnlBasis,
+    ResolvedLabelStyle, ARB_PART_BASE, CHART_LABEL_PARTS, CHART_LABEL_ROWS, LABEL_GAP_MAX,
+    LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN, LABEL_WINDOW_COUNT, ROW_NAME_PART, ROW_RUN_STRIDE,
 };
 pub use core_groups::{
     move_group, sanitize_core_groups, unique_group_name, CoreGroup, CORE_GROUPS_MAX,

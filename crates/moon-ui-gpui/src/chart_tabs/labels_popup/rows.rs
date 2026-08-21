@@ -18,34 +18,9 @@ use rust_i18n::t;
 use super::{
     FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_W, ROW_GAP, ZONE_W, write_cfg,
 };
-use crate::controls::field_menu_items;
+use crate::controls::row_display_name;
 use crate::design;
 use crate::panels::{micro_button, open_label_edit, toggle_variant};
-
-/// What the line calls this module: its name, or the captions it prints.
-///
-/// A module is not required to have a name — most never get one — so the list falls back to naming
-/// it by what it does. An empty module with no name says so rather than showing a blank line.
-pub(super) fn display_name(row: &ChartLabelRow) -> String {
-    if !row.name.trim().is_empty() {
-        return row.name.clone();
-    }
-    let used = row.used_parts();
-    if used == 0 {
-        return t!("chart_labels.row_empty").to_string();
-    }
-    let mut out = String::new();
-    for part in &row.parts[..used.min(2)] {
-        if !out.is_empty() {
-            out.push_str(" · ");
-        }
-        out.push_str(&t!(part.field.locale_key()));
-    }
-    if used > 2 {
-        out.push_str(" · …");
-    }
-    out
-}
 
 /// One module: order, visibility, name (which opens the editor), band, edge, removal.
 fn row_line<T: LabelsPopupHost>(
@@ -121,7 +96,7 @@ fn row_line<T: LabelsPopupHost>(
     let name_btn = {
         let entity = entity.clone();
         MoonButton::new(SharedString::from(format!("cl-open-{ix}")))
-            .label(format!("{}  ·{}", display_name(row), row.used_parts()))
+            .label(format!("{}  ·{}", row_display_name(row), row.used_parts()))
             .size(MoonButtonSize::Micro)
             .width(design::font_w(cx, NAME_W))
             .variant(MoonButtonVariant::Ghost)
@@ -249,10 +224,12 @@ pub(super) fn row_list<T: LabelsPopupHost>(
     list.into_any_element()
 }
 
-/// The "add a module" control: ready-made modules first, then the whole catalogue.
+/// The "add a module" control: the ready-made modules, and an empty one.
 ///
-/// Either way the editor opens on what was just created — a new module is exactly the thing the
-/// user then wants to fill in, which is the "add" half of what this button does.
+/// The FIELD catalogue is deliberately not repeated here. It lives in the editor, which opens on
+/// whatever this creates — so picking a field from this menu would be the same catalogue, one level
+/// earlier, answering a question ("which single caption") that no module is finished at. What this
+/// menu answers is "start from something" or "start from nothing".
 pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
     id: &str,
     entity: &Entity<T>,
@@ -261,38 +238,39 @@ pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
     let mut items = Vec::new();
     for preset in LabelPreset::ALL {
         let entity = entity.clone();
-        let name = t!(preset.locale_key()).to_string();
         items.push(
             MoonMenuItem::with_key(
                 SharedString::from(format!("cl-preset-{preset:?}")),
-                SharedString::from(name.clone()),
+                SharedString::from(t!(preset.locale_key()).to_string()),
             )
             .on_click(move |_, window: &mut Window, app: &mut App| {
-                let name = name.clone();
-                add_and_edit(&entity, window, app, move |cfg| {
-                    cfg.push_preset(preset, name)
-                });
+                // The NAME is not passed: the module remembers the preset and is named from the
+                // dictionary every time it is drawn, so it follows a language switch.
+                let created = add_row(&entity, app, move |cfg| cfg.push_preset(preset));
+                let Some(ix) = created else {
+                    return;
+                };
+                // The arbitrage module is finished the moment it is created — its captions are the
+                // venues the core reports — so it opens the ROSTER instead of the caption editor,
+                // which is the question the user actually has next.
+                match preset {
+                    LabelPreset::Arbitrage => open_arb_settings(&entity, window, app),
+                    _ => edit_row(&entity, window, app, ix),
+                }
             }),
         );
     }
     items.push(MoonMenuItem::separator());
-    items.extend({
-        let entity = entity.clone();
-        let configured = cfg.clone();
-        field_menu_items(
-            "cl-addrow",
-            move |f| configured.contains(f),
-            move |field, window, app| {
-                add_and_edit(&entity, window, app, move |cfg| {
-                    cfg.push_row(
-                        field,
-                        ChartLabelRow::DEFAULT_ZONE,
-                        ChartLabelRow::DEFAULT_ALIGN,
-                    )
-                });
-            },
+    items.push(
+        MoonMenuItem::with_key(
+            SharedString::from("cl-new-row"),
+            SharedString::from(t!("chart_labels.new_row").to_string()),
         )
-    });
+        .on_click({
+            let entity = entity.clone();
+            move |_, window: &mut Window, app: &mut App| new_row(&entity, window, app)
+        }),
+    );
     MoonDropdown::new(SharedString::from(format!("{id}-add-row")))
         .label(t!("chart_labels.add_row").to_string())
         .trigger_caret(true)
@@ -367,20 +345,50 @@ fn order_buttons(
 }
 
 /// Open the editor on the module at `ix` and write back what it accepts.
-///
-/// The dialog edits a COPY, and the write is stamped with the TAB it came from. The overlay blocks
-/// this window's own input, but not a ⧉ press from a detached window, a hotkey that switches tabs,
-/// or Main's idle-close — and an index alone would then name a different module, or a blank slot
-/// that `sanitize` would resurrect as a module the user had removed.
 fn edit_row<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &mut App, ix: usize) {
-    let (row, key) = {
-        let host = entity.read(app);
-        let Some(row) = host.labels_cfg(app).rows.get(ix).cloned() else {
-            return;
-        };
-        (row, host.spec_key())
+    let Some(row) = entity.read(app).labels_cfg(app).rows.get(ix).cloned() else {
+        return;
     };
-    let title = format!("{}: {}", t!("chart_labels.row_edit"), display_name(&row));
+    let title = format!("{}: {}", t!("chart_labels.row_edit"), row_display_name(&row));
+    open_module_editor(entity, window, app, row, title, move |cfg, edited| {
+        // Past the used run the slot is blank, and writing there would bring back a module
+        // somebody else removed while the editor was up.
+        if ix < cfg.used_rows() {
+            cfg.rows[ix] = edited;
+        }
+    });
+}
+
+/// Open the editor on a module that does not exist yet, and add it only if it is accepted.
+///
+/// Nothing is written before the editor opens, deliberately: an empty module is blank, `sanitize`
+/// drops a blank module on the next write, and a slot reserved for one would either vanish under
+/// the open editor or survive a Cancel as a module the user never made.
+fn new_row<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &mut App) {
+    let row = ChartLabelRow::new(ChartLabelRow::DEFAULT_ZONE, ChartLabelRow::DEFAULT_ALIGN);
+    let title = t!("chart_labels.new_row").to_string();
+    open_module_editor(entity, window, app, row, title, |cfg, edited| {
+        if cfg.push_prepared(edited).is_none() {
+            log::warn!("подписи чарта: новый модуль не добавлен — нет свободного слота или он пуст");
+        }
+    });
+}
+
+/// Put the editor up on `row` and hand what it accepts to `apply`, on the tab it came from.
+///
+/// The dialog edits a COPY, and the write is stamped with the TAB it was opened from. The overlay
+/// blocks this window's own input, but not a ⧉ press from a detached window, a hotkey that switches
+/// tabs, or Main's idle-close — and a write that ignored the tab would then land on a different
+/// chart's configuration.
+fn open_module_editor<T: LabelsPopupHost>(
+    entity: &Entity<T>,
+    window: &mut Window,
+    app: &mut App,
+    row: ChartLabelRow,
+    title: String,
+    apply: impl Fn(&mut ChartLabelsCfg, ChartLabelRow) + 'static,
+) {
+    let key = entity.read(app).spec_key();
     // The popup is a POPOVER: it paints in a deferred layer above the dialog's overlay, so leaving
     // it open would put the list on top of the editor. It closes here and comes back when the
     // editor does, which is also where the user expects to land after editing a module.
@@ -400,13 +408,7 @@ fn edit_row<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &m
                 log::warn!("подписи чарта: вкладка сменилась, правка модуля не применена");
                 return;
             }
-            write_cfg(&apply_entity, app, |c| {
-                // Past the used run the slot is blank, and writing there would bring back a module
-                // somebody else removed while the editor was up.
-                if ix < c.used_rows() {
-                    c.rows[ix] = edited.clone();
-                }
-            });
+            write_cfg(&apply_entity, app, |cfg| apply(cfg, edited.clone()));
         },
         move |app| {
             reopen_entity.update(app, |this, cx| {
@@ -414,24 +416,62 @@ fn edit_row<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &m
                 cx.notify();
             });
         },
+        {
+            let entity = entity.clone();
+            move |window: &mut Window, app: &mut App| open_arb_settings(&entity, window, app)
+        },
     );
 }
 
-/// Create a module through `add`, store it, and open the editor on it.
-fn add_and_edit<T: LabelsPopupHost>(
+/// Create a module through `add` and store it, returning where it landed.
+fn add_row<T: LabelsPopupHost>(
     entity: &Entity<T>,
-    window: &mut Window,
     app: &mut App,
     add: impl FnOnce(&mut ChartLabelsCfg) -> Option<usize>,
-) {
-    let created = entity.update(app, |this, cx| {
+) -> Option<usize> {
+    entity.update(app, |this, cx| {
         let mut cfg = this.labels_cfg(cx);
         let ix = add(&mut cfg)?;
         cfg.sanitize();
         this.apply_labels(cfg, cx);
         Some(ix)
+    })
+}
+
+/// Put up the GLOBAL arbitrage roster and publish every edit it makes.
+///
+/// Global, so it does not go through `write_cfg` — nothing here belongs to a tab. It writes the
+/// backend's own handle and saves the file, which is what makes the change reach every open chart:
+/// each panel hands that handle to its engine on the next render.
+fn open_arb_settings<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &mut App) {
+    let backend = entity.read(app).backend().clone();
+    let cfg = backend.read(app).arb_view.as_ref().clone();
+    // The popup is a popover and paints above this window's overlay; it closes here like it does
+    // for the module editor, and comes back with it.
+    entity.update(app, |this, cx| {
+        this.set_labels_popup_open(false);
+        cx.notify();
     });
-    if let Some(ix) = created {
-        edit_row(entity, window, app, ix);
-    }
+    let reopen = entity.clone();
+    crate::panels::open_arb_edit(
+        cfg,
+        window,
+        app,
+        move |cfg, app| {
+            cfg.save();
+            backend.update(app, |b, cx| {
+                b.arb_view = std::rc::Rc::new(cfg);
+                cx.notify();
+            });
+        },
+        // The popup comes back when the WINDOW closes, not on every edit: it is a popover and
+        // paints above this window's overlay, so reopening it per click would cover the roster
+        // being edited.
+        move |app| {
+            reopen.update(app, |this, cx| {
+                this.set_labels_popup_open(true);
+                cx.notify();
+            });
+        },
+    );
 }
