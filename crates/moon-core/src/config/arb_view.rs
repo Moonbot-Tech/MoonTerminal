@@ -9,21 +9,15 @@
 //! machine on its own.
 //!
 //! The core reports a numeric platform code and a price; the colour, the order and the visibility
-//! are this file's alone. NAMES are shared: this build spells the exchanges it knows, a Hyperliquid
-//! deployer is named by the core's own `known_dexes` list when it has one, and the user's own name
-//! overrides both — which is what a deployer whose core sent no list still needs.
+//! are this file's alone. NAMES are not: they come from the protocol — `ArbPlatformCode::name` for
+//! an exchange, the core's own `known_dexes` for a Hyperliquid deployer — and the roster neither
+//! stores nor overrides them. A venue the protocol cannot name prints its code, which says what
+//! happened rather than inventing a word for it.
 
 use serde::{Deserialize, Serialize};
 
 use super::{paths, toml_io};
 use crate::market::ArbVenue;
-
-/// Longest venue name kept; anything longer is cut on write.
-///
-/// A venue name is a column head drawn over candles, in a column sized by its widest row. Twelve
-/// characters is already wider than every default name, and an unbounded string would push the
-/// prices themselves off the pane.
-pub const ARB_NAME_MAX: usize = 12;
 
 /// Most rows one arbitrage column prints.
 ///
@@ -79,25 +73,17 @@ pub struct ArbVenueCfg {
     pub code: u8,
     /// Whether the row is printed at all.
     pub visible: bool,
-    /// User's own name for the venue, overriding every other spelling.
-    ///
-    /// Empty means "whatever names it best": the core's own deployer name when there is one, and
-    /// this build's spelling otherwise. Left empty by default, so a core that starts reporting a
-    /// deployer's real name shows it without anyone editing the roster.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub name: String,
     /// Fixed `0xRRGGBB` for the row, or `None` for the chart's caption colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<u32>,
 }
 
 impl ArbVenueCfg {
-    /// A venue at its defaults: shown, unnamed, in the theme's colour.
+    /// A venue at its defaults: shown, in the theme's colour.
     pub fn new(venue: ArbVenue) -> Self {
         Self {
             code: venue.code(),
             visible: true,
-            name: String::new(),
             color: None,
         }
     }
@@ -106,15 +92,12 @@ impl ArbVenueCfg {
         ArbVenue::from_code(self.code)
     }
 
-    /// What this row is CALLED, in the order the names win: the user's own, then whatever the
-    /// live quote carries, then this build's spelling.
+    /// What this row is CALLED: the deployer name the live quote carries, or the protocol's own
+    /// spelling.
     ///
-    /// The middle one is the deployer case — `known_dexes` names it, and only a live read has that
-    /// — which is why the label takes the quote rather than reading it off the roster alone.
+    /// Only a live read has the deployer name — it comes off `known_dexes` — which is why the label
+    /// takes the quote rather than reading it off the roster.
     pub fn label_for(&self, quote: Option<&crate::market::ArbQuote>) -> String {
-        if !self.name.is_empty() {
-            return self.name.clone();
-        }
         match quote.map(|q| q.dex_name.as_str()).filter(|n| !n.is_empty()) {
             Some(name) => name.to_string(),
             None => self.venue().default_name(),
@@ -127,9 +110,6 @@ impl ArbVenueCfg {
     /// quote — but the list the quote's name comes FROM is readable on its own, and the window has
     /// to agree with the chart about what a venue is called.
     pub fn label_with(&self, dex_names: &[String]) -> String {
-        if !self.name.is_empty() {
-            return self.name.clone();
-        }
         let named = self
             .venue()
             .deployer_index()
@@ -215,7 +195,7 @@ impl ArbViewCfg {
         }
     }
 
-    /// Repair a hand-edited file: cut over-long names, drop duplicate venues.
+    /// Repair a hand-edited file: drop duplicate venues, and a floor that is not a magnitude.
     ///
     /// Duplicates matter more than they look: two rows for one code would print the venue twice and
     /// give the second row's settings to whichever one the lookup found first.
@@ -227,13 +207,6 @@ impl ArbViewCfg {
         }
         let mut seen = std::collections::HashSet::new();
         self.venues.retain(|v| seen.insert(v.code));
-        for venue in &mut self.venues {
-            let cut: String = venue.name.trim().chars().take(ARB_NAME_MAX).collect();
-            let cut = cut.trim_end().to_string();
-            if venue.name != cut {
-                venue.name = cut;
-            }
-        }
     }
 
     /// The row for one venue, or `None` when the file does not mention it.
@@ -277,8 +250,8 @@ impl ArbViewCfg {
         {
             out.push(ArbRow {
                 quote,
-                // Unlisted, so there is no user name to prefer — but the core may still have named
-                // it, and a deployer arriving as "hyna" should not print as "HL #3".
+                // The core may have named it — a deployer arriving as "hyna" should not print as
+                // "HL #3".
                 label: match quote.dex_name.is_empty() {
                     true => quote.venue.default_name(),
                     false => quote.dex_name.clone(),

@@ -193,8 +193,8 @@ impl ChartLabelField {
             | ChartLabelField::Quote
             | ChartLabelField::CoinTags
             | ChartLabelField::None => ChartLabelGroup::Instrument,
-            ChartLabelField::LastPrice
-            | ChartLabelField::Delta1h
+            ChartLabelField::LastPrice => ChartLabelGroup::Price,
+            ChartLabelField::Delta1h
             | ChartLabelField::Delta24h
             | ChartLabelField::ScaleBadge
             | ChartLabelField::CompareDelta
@@ -202,22 +202,22 @@ impl ChartLabelField {
             | ChartLabelField::ExchangeDelta24h
             | ChartLabelField::BtcDelta1h
             | ChartLabelField::BtcDelta24h
-            | ChartLabelField::BtcDelta72h
-            | ChartLabelField::Funding
-            | ChartLabelField::FundingIn
+            | ChartLabelField::BtcDelta72h => ChartLabelGroup::Move,
             | ChartLabelField::Bid
             | ChartLabelField::Ask
             | ChartLabelField::Spread
             | ChartLabelField::MarkPrice
             | ChartLabelField::MarkDelta
-            | ChartLabelField::PriceStep
-            | ChartLabelField::Volume24h
-            | ChartLabelField::WindowDelta
+            | ChartLabelField::PriceStep => ChartLabelGroup::Price,
+            ChartLabelField::WindowDelta => ChartLabelGroup::Move,
+            ChartLabelField::Volume24h
             | ChartLabelField::WindowVolume
-            | ChartLabelField::WindowBuyShare
+            | ChartLabelField::WindowBuyShare => ChartLabelGroup::Volume,
+            ChartLabelField::Funding
+            | ChartLabelField::FundingIn
             | ChartLabelField::MaxLeverage
-            | ChartLabelField::MaxOrder
-            | ChartLabelField::ArbColumn => ChartLabelGroup::Market,
+            | ChartLabelField::MaxOrder => ChartLabelGroup::Contract,
+            ChartLabelField::ArbColumn => ChartLabelGroup::Arbitrage,
             ChartLabelField::OpenPnlPct
             | ChartLabelField::OpenPnlMoney
             | ChartLabelField::OpenOrders
@@ -516,29 +516,48 @@ impl ChartLabelField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartLabelGroup {
     Instrument,
-    Market,
+    /// What the coin COSTS: the quote side and the venue's own marks.
+    Price,
+    /// How far it moved — this coin's own change, the exchange's, BTC's.
+    Move,
+    /// How much traded.
+    Volume,
+    /// What the contract itself charges and allows: funding, caps.
+    Contract,
     Position,
     /// What the EXCHANGE reports on this market for this core's account, as opposed to what this
     /// core's own orders add up to. Its own section because the two answer different questions, and
     /// a reader picking "position size" has to be told which one they are picking.
     Exchange,
     Strategy,
+    /// The column of other venues' prices, which is one field and its own subject.
+    Arbitrage,
 }
 
 impl ChartLabelGroup {
     /// Sections in menu order.
-    pub const ALL: [ChartLabelGroup; 5] = [
+    /// Sections in picker order: what it IS, what it costs, how it moves, how much traded, what
+    /// the contract charges, what is open — ours then the venue's — who acted, and the column.
+    pub const ALL: [ChartLabelGroup; 9] = [
         ChartLabelGroup::Instrument,
-        ChartLabelGroup::Market,
+        ChartLabelGroup::Price,
+        ChartLabelGroup::Move,
+        ChartLabelGroup::Volume,
+        ChartLabelGroup::Contract,
         ChartLabelGroup::Position,
         ChartLabelGroup::Exchange,
         ChartLabelGroup::Strategy,
+        ChartLabelGroup::Arbitrage,
     ];
 
     pub fn locale_key(self) -> &'static str {
         match self {
             ChartLabelGroup::Instrument => "chart_labels.group.instrument",
-            ChartLabelGroup::Market => "chart_labels.group.market",
+            ChartLabelGroup::Price => "chart_labels.group.price",
+            ChartLabelGroup::Move => "chart_labels.group.move",
+            ChartLabelGroup::Volume => "chart_labels.group.volume",
+            ChartLabelGroup::Contract => "chart_labels.group.contract",
+            ChartLabelGroup::Arbitrage => "chart_labels.group.arbitrage",
             ChartLabelGroup::Position => "chart_labels.group.position",
             ChartLabelGroup::Exchange => "chart_labels.group.exchange",
             ChartLabelGroup::Strategy => "chart_labels.group.strategy",

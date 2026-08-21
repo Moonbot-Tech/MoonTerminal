@@ -5,9 +5,7 @@
 
 use gpui::*;
 use moon_core::config::{ArbShow, ArbVenueCfg};
-use moon_ui::{
-    MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput, MoonPalette, h_flex, v_flex,
-};
+use moon_ui::{MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::ArbEditState;
@@ -43,9 +41,9 @@ const MIN_ABS_STEPS: [f32; 6] = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0];
 
 pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    let (cfg, editing, dex_names) = {
+    let (cfg, dex_names) = {
         let s = state.read(cx);
-        (s.cfg.clone(), s.editing, s.dex_names.clone())
+        (s.cfg.clone(), s.dex_names.clone())
     };
 
     // What every row prints. One choice for the whole column: a roster where one venue showed a
@@ -129,15 +127,7 @@ pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElem
         }
         let mut lines = v_flex().flex_1().min_w_0().gap(design::ui_px(cx, 3.0));
         for ix in first..last {
-            lines = lines.child(venue_line(
-                state,
-                &cfg.venues[ix],
-                ix,
-                editing,
-                &dex_names,
-                p,
-                cx,
-            ));
+            lines = lines.child(venue_line(state, &cfg.venues[ix], ix, &dex_names, p, cx));
         }
         list = list.child(lines);
     }
@@ -157,12 +147,10 @@ pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElem
 }
 
 /// One venue: order, visibility, name, colour.
-#[allow(clippy::too_many_arguments)]
 fn venue_line(
     state: &Entity<ArbEditState>,
     venue: &ArbVenueCfg,
     ix: usize,
-    editing: Option<usize>,
     dex_names: &[String],
     p: MoonPalette,
     cx: &App,
@@ -178,10 +166,6 @@ fn venue_line(
             false,
             micro_w,
             move |_w, cx| {
-                // A name being typed belongs to the venue it was opened on, and `editing` is that
-                // venue's INDEX — which the swap below would hand to its neighbour. Committing
-                // first is what keeps the name with its venue.
-                ArbEditState::commit_name(&state, cx);
                 ArbEditState::write(&state, cx, |cfg| {
                     if ix > 0 {
                         cfg.venues.swap(ix, ix - 1);
@@ -200,7 +184,6 @@ fn venue_line(
             false,
             micro_w,
             move |_w, cx| {
-                ArbEditState::commit_name(&state, cx);
                 ArbEditState::write(&state, cx, |cfg| {
                     if ix + 1 < cfg.venues.len() {
                         cfg.venues.swap(ix, ix + 1);
@@ -229,81 +212,20 @@ fn venue_line(
         )
     };
 
-    // The name is a BUTTON until it is being edited, and an input while it is. One input exists in
-    // the window, so a second line cannot be typed into at the same time — which is also what makes
-    // "commit on leaving" unambiguous.
-    let name: AnyElement = if editing == Some(ix) {
-        let input = state.read(cx).name_input.clone();
-        div()
-            .w(px(design::font_w(cx, NAME_W)))
-            .child(MoonInput::new(SharedString::from(format!("arb-name-{ix}"))).state(&input).small())
-            .into_any_element()
-    } else {
-        let state = state.clone();
-        let label = venue.label_with(dex_names);
-        div()
-            .id(SharedString::from(format!("arb-name-btn-{ix}")))
-            .w(px(design::font_w(cx, NAME_W)))
-            .px(design::ui_px(cx, 4.0))
-            .cursor_pointer()
-            .text_color(moon(match venue.color {
-                Some(rgb) => gpui::rgb(rgb).into(),
-                None => p.text,
-            }))
-            .child(label.clone())
-            .on_click(move |_, window: &mut Window, cx: &mut App| {
-                // Whatever was open commits first: clicking straight from one name to another must
-                // not drop the first edit.
-                ArbEditState::commit_name(&state, cx);
-                // The user's OWN name, which is usually empty — the field then shows the venue's
-                // default spelling as a placeholder. Pre-filling with that default would write it
-                // back as an explicit override the moment the field was left, and the venue could
-                // never follow its default name again.
-                let value = state
-                    .read(cx)
-                    .cfg
-                    .venues
-                    .get(ix)
-                    .map(|v| v.name.clone())
-                    .unwrap_or_default();
-                let input = state.read(cx).name_input.clone();
-                input.update(cx, |st, c| st.set_value(value, window, c));
-                state.update(cx, |s, cx| {
-                    s.editing = Some(ix);
-                    cx.notify();
-                });
-            })
-            .into_any_element()
-    };
-
-    let done = {
-        let state = state.clone();
-        let editing_this = editing == Some(ix);
-        let name = venue.name.clone();
-        micro_button(
-            format!("arb-name-ok-{ix}"),
-            if editing_this { "✔" } else { "✎" },
-            t!("arb.rename").to_string(),
-            MoonButtonVariant::Ghost,
-            false,
-            micro_w,
-            move |window, cx| {
-                // The button does what its glyph says in BOTH states: ✔ commits the open rename,
-                // ✎ opens one. Acting only in the first state left the pencil doing nothing at all.
-                if editing_this {
-                    ArbEditState::commit_name(&state, cx);
-                    return;
-                }
-                ArbEditState::commit_name(&state, cx);
-                let input = state.read(cx).name_input.clone();
-                input.update(cx, |st, c| st.set_value(name.clone(), window, c));
-                state.update(cx, |s, cx| {
-                    s.editing = Some(ix);
-                    cx.notify();
-                });
-            },
-        )
-    };
+    // Just the name. It is the PROTOCOL's — `ArbPlatformCode::name` for an exchange, the core's
+    // own `known_dexes` entry for a deployer — and nothing here edits it: a renamed venue would
+    // print a word no core ever sent, and the next person to read that chart would have no way to
+    // tell which venue it is. A code the protocol cannot name shows its number, which is the honest
+    // answer and is also what identifies it.
+    let name = div()
+        .w(px(design::font_w(cx, NAME_W)))
+        .px(design::ui_px(cx, 4.0))
+        .text_color(moon(match venue.color {
+            Some(rgb) => gpui::rgb(rgb).into(),
+            None => p.text,
+        }))
+        .child(venue.label_with(dex_names))
+        .into_any_element();
 
     let mut swatches = h_flex().gap(design::ui_px(cx, 3.0));
     // The first swatch is "no colour of its own": a venue that follows the chart's caption colour,
@@ -345,7 +267,6 @@ fn venue_line(
         .child(down)
         .child(eye)
         .child(name)
-        .child(done)
         .child(swatches)
         .into_any_element()
 }

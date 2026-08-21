@@ -25,7 +25,6 @@ fn the_default_roster_holds_every_venue_a_read_can_produce() {
         ArbVenue::KNOWN.len() + ArbVenue::DEPLOYERS_SCANNED as usize
     );
     assert!(cfg.venues.iter().all(|v| v.visible));
-    assert!(cfg.venues.iter().all(|v| v.name.is_empty()));
     for index in 0..ArbVenue::DEPLOYERS_SCANNED {
         let deployer = ArbVenue::deployer(index);
         assert!(
@@ -75,9 +74,10 @@ fn an_unconfigured_venue_is_appended_rather_than_dropped() {
     assert_eq!(rows[1].label, deployer.default_name());
 }
 
-/// A venue is identified by its CODE, so renaming it keeps its colour and its place.
+/// A venue is identified by its CODE, so recolouring it keeps its place — and its NAME is the
+/// protocol's, which nothing here can change.
 #[test]
-fn a_renamed_venue_keeps_its_row() {
+fn a_venue_is_identified_by_its_code() {
     let mut cfg = ArbViewCfg::default();
     let venue = ArbVenue::from_code(9);
     let row = cfg
@@ -85,21 +85,31 @@ fn a_renamed_venue_keeps_its_row() {
         .iter_mut()
         .find(|v| v.code == venue.code())
         .expect("known venue");
-    row.name = "Гейт фьючи".to_string();
     row.color = Some(0x00FF00);
 
     let quotes = [quote(9, 101.0)];
     let rows = cfg.arrange(&quotes);
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].label, "Гейт фьючи");
+    assert_eq!(rows[0].label, venue.default_name());
     assert_eq!(rows[0].color, Some(0x00FF00));
 }
 
-/// A hand-edited file cannot smuggle in a second row for one venue, or a name wide enough to push
-/// the prices off the pane.
+/// The name comes from the PROTOCOL, not from a table of ours — and a code the protocol cannot name
+/// prints its number rather than a word this build invented.
 #[test]
-fn sanitize_drops_duplicates_and_cuts_names() {
+fn a_venue_is_named_by_the_protocol() {
+    assert_eq!(ArbVenue::from_code(4).default_name(), "FBinance");
+    assert_eq!(ArbVenue::from_code(102).default_name(), "OKX");
+    // A code no constant covers: the reference terminal shows one, and this is how it reads here.
+    assert_eq!(ArbVenue::from_code(14).default_name(), "#14");
+    assert_eq!(ArbVenue::deployer(3).default_name(), "HL #3");
+}
+
+/// A hand-edited file cannot smuggle in a second row for one venue: the two would print the same
+/// venue twice, and the lookup would hand one of them the other's settings.
+#[test]
+fn sanitize_drops_duplicate_venues() {
     let mut cfg = ArbViewCfg {
         venues: vec![
             ArbVenueCfg::new(ArbVenue::from_code(4)),
@@ -109,12 +119,10 @@ fn sanitize_drops_duplicates_and_cuts_names() {
         mark_blocked: false,
         min_abs_pct: 0.0,
     };
-    cfg.venues[0].name = "Ы".repeat(ARB_NAME_MAX + 10);
 
     cfg.sanitize();
 
     assert_eq!(cfg.venues.len(), 1);
-    assert_eq!(cfg.venues[0].name.chars().count(), ARB_NAME_MAX);
 }
 
 /// The file states what was changed and reads back identically — it travels between machines like
@@ -123,9 +131,9 @@ fn sanitize_drops_duplicates_and_cuts_names() {
 fn the_roster_round_trips_through_toml() {
     let mut cfg = ArbViewCfg {
         show: ArbShow::Spread,
+        min_abs_pct: 0.5,
         ..ArbViewCfg::default()
     };
-    cfg.venues[0].name = "Мой Binance".to_string();
     cfg.venues[1].color = Some(0x112233);
     cfg.venues[2].visible = false;
 
@@ -168,7 +176,7 @@ fn the_floor_applies_to_listed_and_unlisted_venues_alike() {
 
 /// A deployer is named by the CORE when the core knows it: `AuthCheck` carries `known_dexes`, the
 /// live quote carries the name out of it, and only a core that sent no list leaves the numbered
-/// spelling standing. The user's own name still wins over both.
+/// spelling standing.
 #[test]
 fn a_deployer_takes_the_name_its_core_supplied() {
     let cfg = ArbViewCfg::default();
@@ -183,12 +191,8 @@ fn a_deployer_takes_the_name_its_core_supplied() {
     let rows = cfg.arrange(&unnamed);
     assert_eq!(rows[0].label, deployer.default_name(), "no list, numbered");
 
-    let mut own = ArbViewCfg::default();
-    own.venues
-        .iter_mut()
-        .find(|v| v.code == deployer.code())
-        .expect("the roster lists the scanned deployers")
-        .name = "Мой декс".to_string();
-    let rows = own.arrange(std::slice::from_ref(&named));
-    assert_eq!(rows[0].label, "Мой декс", "the user's name wins");
+    // The settings window has no quote to read a name off, but it does have the list itself.
+    let names = vec![String::new(), "xyz".into(), "flx".into(), "hyna".into()];
+    let row = cfg.row(deployer).expect("the roster lists it");
+    assert_eq!(row.label_with(&names), "hyna");
 }

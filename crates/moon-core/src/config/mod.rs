@@ -49,7 +49,7 @@ mod uid_counter;
 #[cfg(test)]
 mod tests;
 
-pub use arb_view::{ArbRow, ArbShow, ArbViewCfg, ArbVenueCfg, ARB_MAX_ROWS, ARB_NAME_MAX};
+pub use arb_view::{ArbRow, ArbShow, ArbViewCfg, ArbVenueCfg, ARB_MAX_ROWS};
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use chart_labels::{
     ChartLabelField, ChartLabelGroup, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign,

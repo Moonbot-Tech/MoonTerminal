@@ -464,34 +464,20 @@ impl ArbVenue {
         self.0 >= Self::DEPLOYER_BASE && self.0 < Self::DEPLOYER_END
     }
 
-    /// What this venue is CALLED by default, in the reference terminal's spelling.
+    /// What this venue is CALLED, as the PROTOCOL spells it.
     ///
-    /// `S` and `F` suffixes are its own convention for the spot and futures halves of one exchange,
-    /// and they are what an arbitrage column is read by. A code this build does not know prints its
-    /// number rather than a guess — the codes come from the core, and a newer core can send one.
+    /// The protocol's own name, never a table of ours: a second spelling of the same list is the
+    /// thing that goes stale when a core learns a new venue, and the terminal has no business
+    /// renaming what the core reports. A deployer is named by `known_dexes` — see
+    /// [`ArbQuote::dex_name`] — and this is the fallback when no list has arrived.
+    ///
+    /// A code the protocol cannot name prints its NUMBER. That is deliberate too: it says "the core
+    /// sent something this build has never seen" plainly, and the number is what identifies it.
     pub fn default_name(self) -> String {
-        let known = match self.0 {
-            1 => "Bittrex",
-            2 => "BybitF",
-            3 => "BinanceS",
-            4 => "BinanceF",
-            5 => "HtxS",
-            6 => "BinanceQ",
-            7 => "BybitS",
-            8 => "GateS",
-            9 => "GateF",
-            10 => "BitgetS",
-            11 => "BitgetF",
-            12 => "HL_S",
-            13 => "HL_F",
-            100 => "Forex",
-            101 => "UpBit",
-            102 => "Okx",
-            103 => "BinAlpha",
-            _ => "",
-        };
-        if !known.is_empty() {
-            return known.to_string();
+        let code = moonproto::ArbPlatformCode::hyper_deployer(self.0.wrapping_sub(Self::DEPLOYER_BASE));
+        let named = code.name();
+        if named != "Unknown" {
+            return named.to_string();
         }
         if self.is_deployer() {
             return format!("HL #{}", self.0 - Self::DEPLOYER_BASE);

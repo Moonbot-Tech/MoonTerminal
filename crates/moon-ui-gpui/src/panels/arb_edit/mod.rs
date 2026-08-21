@@ -18,8 +18,7 @@ use std::rc::Rc;
 use gpui::*;
 use moon_core::config::ArbViewCfg;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputState, MoonPalette, MoonWindowExt as _,
-    h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex,
 };
 use rust_i18n::t;
 
@@ -40,13 +39,11 @@ pub struct ArbEditState {
     ///
     /// Read once when the window opens: it is a start-up fact of the core, not something that moves
     /// while a roster is being edited, and the window must name a venue exactly as the chart does.
-    dex_names: Vec<String>,
-    /// Which venue's name is being typed, if any.
     ///
-    /// ONE input for the whole list: a dozen live `MoonInputState` entities would be a dozen focus
-    /// targets for one column of names, and only one of them can be typed into anyway.
-    editing: Option<usize>,
-    name_input: Entity<MoonInputState>,
+    /// A NAME is never edited here. The protocol spells the exchanges and the core spells its own
+    /// deployers; a terminal that let the user rename either would be showing a word no core ever
+    /// sent, and the next person to read the chart would have no way to tell.
+    dex_names: Vec<String>,
     /// Hands the edited roster back: the backend saves it and every chart redraws.
     on_change: Rc<dyn Fn(ArbViewCfg, &mut App)>,
     /// Run when the window goes away, whichever way: the ✕, the overlay, Escape.
@@ -71,29 +68,6 @@ impl ArbEditState {
         on_change(cfg, cx);
     }
 
-    /// Commit whatever is in the name field to the venue it was opened on.
-    ///
-    /// Read at the END of the edit rather than on every keystroke: a name is sanitized on write —
-    /// trimmed and cut — and doing that under the cursor would fight the person typing.
-    fn commit_name(state: &Entity<Self>, cx: &mut App) {
-        let Some((ix, text)) = state.read(cx).editing.map(|ix| {
-            (
-                ix,
-                state.read(cx).name_input.read(cx).value().trim().to_string(),
-            )
-        }) else {
-            return;
-        };
-        Self::write(state, cx, |cfg| {
-            if let Some(venue) = cfg.venues.get_mut(ix) {
-                venue.name = text;
-            }
-        });
-        state.update(cx, |s, cx| {
-            s.editing = None;
-            cx.notify();
-        });
-    }
 }
 
 /// Open the arbitrage roster window.
@@ -106,33 +80,28 @@ impl ArbEditState {
 pub(crate) fn open_arb_edit(
     cfg: ArbViewCfg,
     dex_names: Vec<String>,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut App,
     on_change: impl Fn(ArbViewCfg, &mut App) + 'static,
     on_dismiss: impl Fn(&mut App) + 'static,
 ) {
-    let name_input =
-        cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("arb.name_hint").to_string()));
     let state = cx.new(|_| ArbEditState {
         cfg,
         dex_names,
-        editing: None,
-        name_input,
         on_change: Rc::new(on_change),
         on_dismiss: Rc::new(on_dismiss),
     });
 
-    window.open_unique_moon_dialog("chart-arb-edit", cx, move |dialog, _window, cx| {
+    _window.open_unique_moon_dialog("chart-arb-edit", cx, move |dialog, _window, cx| {
         let p = MoonPalette::active(cx);
         let content_state = state.clone();
         let footer_state = state.clone();
-        let dismiss_state = state.clone();
         let dismiss = state.read(cx).on_dismiss.clone();
         dialog
-            // Two venue columns, each holding two order buttons, an eye, a name, the rename
-            // control and nine swatches. Sized on that line, not guessed: the roster is two dozen
-            // venues and one column of them is a window taller than a screen.
-            .w(px(780.0))
+            // Two venue columns, each holding two order buttons, an eye, a name and nine
+            // swatches. Sized on that line, not guessed: the roster is two dozen venues and one
+            // column of them is a window taller than a screen.
+            .w(px(700.0))
             .close_button(true)
             .overlay(true)
             .overlay_closable(true)
@@ -149,11 +118,9 @@ pub(crate) fn open_arb_edit(
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("arb.title").to_string()),
             )
-            // Closing is not a cancel — every edit is already live — but a name still being TYPED
-            // has not been written yet, and dropping it on the ✕ would lose exactly the edit the
-            // user was in the middle of. Committed here, then the caller gets its popup back.
+            // Closing is not a cancel — every edit is already live — so this only hands the
+            // caller its popup back.
             .on_cancel(move |_, _, cx: &mut App| {
-                ArbEditState::commit_name(&dismiss_state, cx);
                 dismiss(cx);
                 true
             })

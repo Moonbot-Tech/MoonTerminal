@@ -20,11 +20,51 @@ use rust_i18n::t;
 
 use crate::design::{self, moon};
 
-/// Width of one section column, in design pixels.
+/// Width of one column, in design pixels.
 ///
 /// Sized on the longest localized field name rather than guessed: the names are the only thing in
 /// the column, and a column narrower than its widest name truncates every row under it.
 const COLUMN_W: f32 = 178.0;
+
+/// Tallest a column may get, counted in ROWS — a section heading counts as one.
+///
+/// The picker is a popover over a chart, and a column taller than this turns it into a half-screen
+/// wall: the first version put one section per column, and the section holding twenty-one figures
+/// set the height of all five. Sections are packed into columns instead, several to a column, each
+/// keeping its own heading — which is the only thing that makes a long list readable at all.
+///
+/// Sixteen is where the nine sections settle into four columns of at most fifteen rows; twelve
+/// splits them into seven columns, and twenty puts twenty rows in one. Worth re-checking whenever
+/// a section is added — the number is a result, not a preference.
+const MAX_COLUMN_ROWS: usize = 16;
+
+/// Lay the sections out into columns, keeping each section whole and its heading with it.
+///
+/// Greedy and deliberately simple: sections are placed in catalogue order, and a section that does
+/// not fit the current column opens the next one. Order is worth more than perfect balance here —
+/// a reader looks for "the price ones" where the catalogue says they are, not where a packing
+/// algorithm decided to move them.
+///
+/// A section taller than the limit takes a column of its own rather than being split: a heading
+/// repeated over half a list names something the reader cannot see the rest of.
+fn pack_columns(sections: &[(ChartLabelGroup, Vec<ChartLabelField>)]) -> Vec<Vec<usize>> {
+    let mut columns: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let mut rows = 0usize;
+    for (ix, (_, fields)) in sections.iter().enumerate() {
+        let needed = fields.len() + 1;
+        if !current.is_empty() && rows + needed > MAX_COLUMN_ROWS {
+            columns.push(std::mem::take(&mut current));
+            rows = 0;
+        }
+        current.push(ix);
+        rows += needed;
+    }
+    if !current.is_empty() {
+        columns.push(current);
+    }
+    columns
+}
 
 /// What a module is CALLED, in the reader's language.
 ///
@@ -93,38 +133,51 @@ pub(crate) fn field_picker(
     cx: &App,
 ) -> impl IntoElement {
     let p = MoonPalette::active(cx);
-    let mut grid = h_flex().gap(design::ui_px(cx, 10.0)).items_start();
-    for group in ChartLabelGroup::ALL {
+    let sections: Vec<(ChartLabelGroup, Vec<ChartLabelField>)> = ChartLabelGroup::ALL
+        .into_iter()
+        .map(|group| {
+            let fields = ChartLabelField::ALL
+                .into_iter()
+                .filter(|f| f.group() == group)
+                .collect();
+            (group, fields)
+        })
+        .collect();
+    let mut grid = h_flex().gap(design::ui_px(cx, 12.0)).items_start();
+    for column_sections in pack_columns(&sections) {
         let mut column = v_flex()
             .w(px(design::font_w(cx, COLUMN_W)))
-            .gap(design::ui_px(cx, 1.0))
-            .child(
+            .gap(design::ui_px(cx, 1.0));
+        for (n, section_ix) in column_sections.into_iter().enumerate() {
+            let (group, fields) = &sections[section_ix];
+            column = column.child(
                 div()
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
+                    // Space ABOVE a heading that follows another section, so two sections in one
+                    // column read as two rather than as one long list with a word in the middle.
+                    .pt(design::ui_px(cx, if n > 0 { 8.0 } else { 0.0 }))
                     .pb(design::ui_px(cx, 2.0))
                     .child(t!(group.locale_key()).to_string()),
             );
-        for field in ChartLabelField::ALL
-            .into_iter()
-            .filter(|f| f.group() == group)
-        {
-            let on_pick = on_pick.clone();
-            let name = match marked(field) {
-                true => format!("✓ {}", t!(field.locale_key())),
-                false => t!(field.locale_key()).to_string(),
-            };
-            column = column.child(
-                MoonButton::new(SharedString::from(format!("{id}-{field:?}")))
-                    .label(name)
-                    .size(MoonButtonSize::Micro)
-                    .variant(MoonButtonVariant::Ghost)
-                    .width(design::font_w(cx, COLUMN_W))
-                    .on_click(move |_, window: &mut Window, app: &mut App| {
-                        on_pick(field, window, app)
-                    })
-                    .render(),
-            );
+            for field in fields.iter().copied() {
+                let on_pick = on_pick.clone();
+                let name = match marked(field) {
+                    true => format!("✓ {}", t!(field.locale_key())),
+                    false => t!(field.locale_key()).to_string(),
+                };
+                column = column.child(
+                    MoonButton::new(SharedString::from(format!("{id}-{field:?}")))
+                        .label(name)
+                        .size(MoonButtonSize::Micro)
+                        .variant(MoonButtonVariant::Ghost)
+                        .width(design::font_w(cx, COLUMN_W))
+                        .on_click(move |_, window: &mut Window, app: &mut App| {
+                            on_pick(field, window, app)
+                        })
+                        .render(),
+                );
+            }
         }
         grid = grid.child(column);
     }
