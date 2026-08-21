@@ -803,9 +803,59 @@ impl MarketDataSource {
     ///     The quotes, or `None` when the provider, its client, its snapshot or the market is
     ///     unavailable. An empty vector means the market has no arbitrage venues at all.
     pub fn market_arb(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
-        let provider = self.provider_of(core)?;
-        let snapshot = self.core_client(provider)?.snapshot_versioned()?;
+        // The pane's OWN core first, its market-data provider second — the opposite of every other
+        // readout here, and the reason is that arbitrage is not market data.
+        //
+        // A slot exists only where `apply_arb_payload` wrote it, and that path is gated on the
+        // core's own `client_settings`: it stores nothing at all without them, and only for the
+        // platforms that core's mask asks for. So the slots live on whichever core has arbitrage
+        // configured, which under deduplication is usually NOT the core elected to serve prices for
+        // that exchange. Reading the provider found a market object with an empty slot map and
+        // reported "no arbitrage" for a coin the reference terminal shows a full column for.
+        // Beyond those two: any core on the SAME exchange. The prices themselves belong to the
+        // coin, not to an account — every core quoting `ENAUSDT@Bybit` sees the same Binance price
+        // — but only a core with arbitrage configured stores them, and that may be neither the pane
+        // nor the provider. Restricted to one exchange on purpose: the spread's base is the market's
+        // OWN last price, so a core trading this coin somewhere else would state a spread against
+        // the wrong venue.
+        let exchange = self.exchange_of(core);
+        let same_exchange: Vec<CoreId> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let mut cores: Vec<CoreId> = inner
+                .clients
+                .keys()
+                .copied()
+                .filter(|id| inner.exchange_of_provider(*id) == exchange)
+                .collect();
+            // Ascending, so which core answers does not depend on hash order.
+            cores.sort_unstable();
+            cores
+        };
+        let candidates = [Some(core), self.provider_of(core)]
+            .into_iter()
+            .flatten()
+            .chain(same_exchange);
+        let mut seen = Vec::new();
+        for candidate in candidates {
+            if seen.contains(&candidate) {
+                continue;
+            }
+            seen.push(candidate);
+            if let Some(quotes) = self.market_arb_on(candidate, market) {
+                if !quotes.is_empty() {
+                    return Some(quotes);
+                }
+            }
+        }
+        Some(Vec::new())
+    }
+
+    /// The arbitrage quotes ONE core holds for a market.
+    fn market_arb_on(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
+        let snapshot = self.core_client(core)?.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
+        // This market's own price, for the spread's base when the point carries none.
+        let own_price = handle.with(|m| positive(m.price.p_last).or_else(|| positive(m.price.ask)));
         let mut out = Vec::new();
         // WHICH venues to ask about is the UNION of two answers, and it has to be a union.
         //
@@ -837,7 +887,7 @@ impl MarketDataSource {
         // `HyperDexIndex` uses into this very list. NOT VERIFIED against a live core: if the two
         // turn out to be off by one — `known_dexes[0]` is the unnamed default validator — this is
         // the one line to shift.
-        let dex_names = self.arb_dex_names(provider);
+        let dex_names = self.arb_dex_names(core);
         for byte in 0u8..=255 {
             let code = platform_code(byte);
             // No settings yet — the core has not sent them, or this is a build that does not — so
@@ -854,10 +904,23 @@ impl MarketDataSource {
             };
             let venue = venue_of_byte;
             let point = slot.latest_point();
-            let (price, my_price) = (f64::from(point.price), f64::from(point.my_price));
-            if !(price.is_finite() && price > 0.0 && my_price.is_finite() && my_price > 0.0) {
+            // The ring's newest point, or the "now" entry when the ring has not been written yet:
+            // the core stamps both, and dropping the venue because only one of them has arrived
+            // hides a price the reference terminal is already showing.
+            let price = match positive(f64::from(point.price)) {
+                Some(price) => price,
+                None => match positive(f64::from(slot.now.price)) {
+                    Some(price) => price,
+                    None => continue,
+                },
+            };
+            // `my_price` is stamped INTO the point when the arbitrage price arrives, from this
+            // market's own last price at that moment. A market that had no price then leaves it at
+            // zero, and the spread has no base — so fall back to what the market costs now. Zero on
+            // both means this market has never been priced, and there is no spread to state.
+            let Some(my_price) = positive(f64::from(point.my_price)).or(own_price) else {
                 continue;
-            }
+            };
             out.push(ArbQuote {
                 venue,
                 dex_name: venue
@@ -885,7 +948,11 @@ impl MarketDataSource {
             };
             log::log!(
                 super::SOURCE_TRACE_LEVEL,
-                "арбитраж {market}: маска ядра {watched:?} · отдали {} площадок {:?} · дексы {:?}",
+                "арбитраж {market} ядро {core:?}: настройки {} · маска {watched:?} · слотов отдали {} {:?} · дексы {:?}",
+                match wanted.is_some() {
+                    true => "есть",
+                    false => "НЕТ (ядро не сохраняет арб вообще)",
+                },
                 out.len(),
                 out.iter().map(|q| q.venue.code()).collect::<Vec<_>>(),
                 dex_names,
