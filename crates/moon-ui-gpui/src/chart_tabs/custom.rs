@@ -225,13 +225,26 @@ impl ChartTabs {
         cx: &mut Context<Self>,
     ) {
         if self.compare_tab_holds(&anchor, cx) {
-            self.open_coin_on_active(target.0, target.1, cx);
+            self.open_coin_on_active(target.0, target.1.clone(), cx);
+            // Pinned, like every other chart on the tab: `create_compare_tab` pins the pair it
+            // opens with and restoring the tab pins everything it loads, so a chart arriving
+            // through the coin path — which adds on the TTL the detect feed needs — would be the
+            // one chart on a comparison showing an unpinned marker and sorting below its neighbors.
+            if let Some(panel) = self.active_stack() {
+                panel.update(cx, |s, c| s.pin_coin(target.0, &target.1, c));
+            }
             return;
         }
         self.open_compare_pair(anchor, target, cx);
     }
 
     /// Whether the ACTIVE tab is a custom one already showing this chart.
+    ///
+    /// KNOWN LIMIT: a comparison DETACHED into its own window is not this tab, so a venue clicked
+    /// there opens a new comparison in the strip instead of joining the window the click came from.
+    /// Routing it back would need the press to name the window it happened in — the request carries
+    /// only the anchor chart, and a detached window holding the same market is not proof the click
+    /// was made there.
     fn compare_tab_holds(&self, anchor: &(CoreId, String), cx: &App) -> bool {
         if !self.active_is_custom() {
             return false;

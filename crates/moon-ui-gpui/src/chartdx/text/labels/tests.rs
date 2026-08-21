@@ -138,6 +138,61 @@ fn the_detect_strategy_names_itself() {
     assert_eq!(plain, "BTC Sniper");
 }
 
+/// The core ends every detect line with the strategy that fired it. That is the ONE thing this
+/// caption does not need — the strategy has a caption of its own — and it is the widest part of the
+/// line, so it goes.
+#[test]
+fn a_detect_line_drops_the_strategy_tail() {
+    let text = one_field(
+        ChartLabelField::DetectMsg,
+        LabelInputs {
+            detect_msg: "[SpreadDetection: TD: 43%  dP: 1.1%] (strategy <SP_L_D3h20>)".into(),
+            ..Default::default()
+        },
+    )
+    .expect("prints");
+    assert!(!text.contains("strategy <"), "{text:?}");
+    assert!(text.ends_with("dP: 1.1%]"), "{text:?}");
+
+    // A line that was ONLY the tail keeps its kind and loses the colon that introduced nothing.
+    let bare = one_field(
+        ChartLabelField::DetectMsg,
+        LabelInputs {
+            detect_msg: "MoonStrike: (strategy <STRIKE_13_L>)".into(),
+            ..Default::default()
+        },
+    )
+    .expect("prints");
+    assert!(bare.ends_with("MoonStrike"), "{bare:?}");
+
+    // Mid-sentence, it is part of what the detect said and stays — including when the line happens
+    // to end in the same two characters the tail does.
+    for line in ["(strategy <A>) fired twice", "see (strategy <A>) below (x>)"] {
+        let inline = one_field(
+            ChartLabelField::DetectMsg,
+            LabelInputs {
+                detect_msg: line.into(),
+                ..Default::default()
+            },
+        )
+        .expect("prints");
+        assert!(inline.ends_with(line), "{inline:?}");
+    }
+
+    // A line that was NOTHING but the tail prints nothing at all. An empty caption is not an empty
+    // string: it would still open its module's line and reserve its plate.
+    assert_eq!(
+        one_field(
+            ChartLabelField::DetectMsg,
+            LabelInputs {
+                detect_msg: "(strategy <A>)".into(),
+                ..Default::default()
+            },
+        ),
+        None
+    );
+}
+
 /// A core-supplied line can be a paragraph; the caption carries a readable head of it and says so.
 #[test]
 fn a_long_detect_line_is_cut() {

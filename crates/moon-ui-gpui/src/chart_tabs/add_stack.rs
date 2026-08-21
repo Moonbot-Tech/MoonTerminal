@@ -784,6 +784,22 @@ impl AddChartStack {
             .collect()
     }
 
+    /// Pin ONE stack chart, addressed by the market it shows.
+    ///
+    /// For a chart joining a tab whose charts are all pinned — a comparison gaining another venue.
+    /// [`Self::pin_all`] would do it too, and would also re-pin every OTHER chart on the tab,
+    /// including any the reader had deliberately unpinned. This one touches the chart the click
+    /// named and nothing else.
+    pub(crate) fn pin_coin(&self, core: CoreId, market: &str, cx: &mut Context<Self>) {
+        if let Some(e) = self
+            .charts
+            .iter()
+            .find(|e| e.core == core && e.market == market)
+        {
+            e.panel.update(cx, |p, pcx| p.ensure_pinned(pcx));
+        }
+    }
+
     /// Pin every stack chart so charts on a custom tab start pinned.
     pub(crate) fn pin_all(&mut self, cx: &mut Context<Self>) {
         for e in &self.charts {

@@ -338,7 +338,12 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         // read as at all; the chart's own width budget truncates whatever still does not fit, but
         // that budget measures a string it has already been handed, so an unbounded one would be
         // shaped in full first.
-        ChartLabelField::DetectMsg => non_empty(&inputs.detect_msg).map(|t| (cut(&t), None)),
+        // Stripping the strategy tail can leave a line with nothing in it — a detect whose text
+        // was ONLY that tail — and an empty caption is NOT an empty string: it still opens its
+        // module's line and reserves its plate. So the RESULT is checked, not just the input.
+        ChartLabelField::DetectMsg => non_empty(&inputs.detect_msg)
+            .and_then(|t| non_empty(&detect_line(&t)))
+            .map(|t| (cut(&t), None)),
         ChartLabelField::ScaleBadge => inputs.scale_badge.map(|pct| {
             // A range below a whole percent in a quiet Auto market reads as "<1%", never as zero:
             // zero would claim the chart has no vertical span at all.
@@ -727,6 +732,42 @@ fn fmt_countdown(remaining_ms: i64) -> Option<String> {
 /// core is free to send a paragraph, and the text pass would measure every glyph of it before
 /// deciding it does not fit.
 const DETECT_MSG_MAX: usize = 96;
+
+/// A detect line without the `(strategy <NAME>)` the core ends every one of them with.
+///
+/// The core writes that tail for its own log, where nothing else says which strategy fired. On a
+/// chart it is the widest part of the line and says the least: the strategy has its own caption
+/// beside this one, and what a reader wants from THIS caption is the numbers the detect fired on.
+///
+/// The tail is recognised only where it actually sits, so a line that MENTIONS a strategy
+/// mid-sentence keeps every word of it. The format arrives on `moon_core::feed::DetectRow::msg`.
+fn detect_line(s: &str) -> String {
+    let body = s.trim_end();
+    let Some(at) = strategy_tail_start(body) else {
+        return body.to_string();
+    };
+    // What is left of a line that carried nothing else is its own opening — "MoonStrike:" — and
+    // that colon introduced a value which never existed on the wire. Only here: a line that keeps
+    // its whole text keeps its own punctuation with it.
+    body[..at]
+        .trim_end()
+        .trim_end_matches(':')
+        .trim_end()
+        .to_string()
+}
+
+/// Where a trailing `(strategy <NAME>)` begins, or `None` when the line does not end with one.
+///
+/// Anchored at BOTH ends: the group has to close the line, and what stands between the angle
+/// brackets has to be a name and only a name. Matching the opening alone would cut a line off at
+/// the first place it happened to say the word. Round brackets are NOT excluded — a user is free to
+/// call a strategy `SP (long)`, and rejecting that would leave the tail on exactly those lines.
+fn strategy_tail_start(body: &str) -> Option<usize> {
+    const OPEN: &str = "(strategy <";
+    let at = body.rfind(OPEN)?;
+    let inner = body.get(at + OPEN.len()..)?.strip_suffix(">)")?;
+    (!inner.contains(['<', '>'])).then_some(at)
+}
 
 /// Cut a core-supplied line to something a caption can carry.
 fn cut(s: &str) -> String {
