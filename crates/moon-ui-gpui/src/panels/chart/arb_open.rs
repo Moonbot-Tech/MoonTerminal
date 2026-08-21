@@ -18,6 +18,17 @@ use super::ChartPanel;
 use crate::controls::coin_search;
 
 impl ChartPanel {
+    /// Where the chart slot sits in the window, in LOGICAL pixels, and the scale it draws at.
+    ///
+    /// THE one place the two coordinate systems meet: the caption pass works in window logical
+    /// pixels, the panel's own input and layout in slot ones. Both the press and the cursor zones
+    /// go through this, so they cannot drift apart again.
+    fn chart_origin_logical(&self) -> Option<((f32, f32), f32)> {
+        let (bounds, sf, _) = self.chart.slot_geometry()?;
+        let sf = sf.max(0.1);
+        Some(((f32::from(bounds.origin.x), f32::from(bounds.origin.y)), sf))
+    }
+
     /// Transparent zones over the venue names, so the pointer changes over a clickable one.
     ///
     /// The only way to ask for a native cursor is during PAINT — `set_cursor_style` asserts it —
@@ -26,19 +37,22 @@ impl ChartPanel {
     /// other chart gesture is decided.
     pub(super) fn arb_cursor_zones(&self) -> Vec<Div> {
         let mut out = Vec::new();
-        for (pane, rect) in self.chart.pane_rects() {
-            // The engine reports rectangles in the pane's own logical pixels; the overlay is
-            // positioned in the chart's, and `pane_rects` is in DEVICE pixels of the chart.
-            let sf = self.last_ppp.max(0.1);
+        let Some((origin, _)) = self.chart_origin_logical() else {
+            return out;
+        };
+        for (pane, _) in self.chart.pane_rects() {
             for (x, y, w, h) in self.chart.arb_hit_rects(pane) {
                 if w <= 0.0 || h <= 0.0 {
                     continue;
                 }
+                // The rectangles are in the WINDOW's logical pixels and this overlay is laid out
+                // inside the chart slot, so the slot's own position comes off — the exact inverse
+                // of what the press does above, and the reason both are computed from one helper.
                 out.push(
                     div()
                         .absolute()
-                        .left(px(x + rect.x / sf))
-                        .top(px(y + rect.y / sf))
+                        .left(px(x - origin.0))
+                        .top(px(y - origin.1))
                         .w(px(w))
                         .h(px(h))
                         .cursor(CursorStyle::PointingHand),
@@ -99,8 +113,25 @@ impl ChartPanel {
         // from the same origin: the chart's, not the pane's. So the only conversion is the scale
         // factor. Getting this wrong opened whichever venue happened to sit under the mis-scaled
         // point, which on a 1.5x display is several rows down the column.
-        let sf = window.scale_factor().max(0.1);
-        let Some((code, dex)) = self.chart.arb_venue_at(pane, pos.0 / sf, pos.1 / sf) else {
+        // The caption pass places its names in the WINDOW's logical pixels — `pane_bounds` is built
+        // as `slot_origin + rect`, and the cursor readout beside it adds the same origin — while
+        // this point is in the SLOT's device pixels. So the conversion is both: scale down, then
+        // add where the slot sits in the window. Missing the origin put every hit off by exactly
+        // the panel's position, which on a chart under a header and a toolbar is a long way down.
+        let Some((origin, sf)) = self.chart_origin_logical() else {
+            return false;
+        };
+        let (lx, ly) = (pos.0 / sf + origin.0, pos.1 / sf + origin.1);
+        // Measured rather than assumed, behind `log.chart_input`: the chart draws in its own pass,
+        // and a hit test that disagrees with the drawing cannot be seen by reading either.
+        log::debug!(
+            "arb hit: press ({:.1},{:.1}) -> logical ({lx:.1},{ly:.1}) ppp {sf:.2} window sf {:.2} · rects {:?}",
+            pos.0,
+            pos.1,
+            window.scale_factor(),
+            self.chart.arb_hit_rects(pane),
+        );
+        let Some((code, dex)) = self.chart.arb_venue_at(pane, lx, ly) else {
             return false;
         };
         let Some((core, market)) = self

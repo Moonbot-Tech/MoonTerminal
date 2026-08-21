@@ -144,6 +144,17 @@ ENV: MOON_DIAG_MARKET_SOURCES=1",
     },
     KeyDoc {
         section: "log",
+        key: "chart_input",
+        default: "false",
+        doc: "\
+Chart hit-testing: where a press landed and which rectangles it was tested against.
+Answers \"why did clicking this label do something else\" — the chart draws in its own pass, in
+its own units, and a hit test that disagrees with the drawing cannot be seen by reading either.
+COST: one line per tested press; nothing while the pointer only moves.
+ENV: MOON_DIAG_CHART_INPUT=1",
+    },
+    KeyDoc {
+        section: "log",
         key: "filter",
         default: "\"\"",
         doc: "\

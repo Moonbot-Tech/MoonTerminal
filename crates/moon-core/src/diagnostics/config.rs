@@ -33,6 +33,10 @@ pub struct LogAreas {
     pub kline_cache: bool,
     /// Market data sources (`moon_core::market::source`).
     pub market_sources: bool,
+    /// Chart hit-testing (`moon_ui_gpui::panels::chart`): where a press landed, and against which
+    /// rectangles. The one question the code cannot answer by reading — the chart draws in its own
+    /// pass, and its coordinates pass through the presenter's scale.
+    pub chart_input: bool,
     /// Extra directives in `RUST_LOG` syntax, appended after the area directives.
     pub filter: String,
 }
@@ -91,6 +95,7 @@ impl DiagCfg {
         l.balances
             || l.kline_cache
             || l.market_sources
+            || l.chart_input
             || !l.filter.trim().is_empty()
             || c.render
             || c.detect
@@ -116,6 +121,7 @@ impl DiagCfg {
         flag("log.balances", self.log.balances);
         flag("log.kline_cache", self.log.kline_cache);
         flag("log.market_sources", self.log.market_sources);
+        flag("log.chart_input", self.log.chart_input);
         flag("channels.render", self.channels.render);
         flag("channels.detect", self.channels.detect);
         flag("channels.assets", self.channels.assets);
@@ -162,6 +168,7 @@ pub fn apply_env(cfg: &mut DiagCfg, get: impl Fn(&str) -> Option<String>) {
     on("MOON_DIAG_BALANCES", &mut cfg.log.balances);
     on("MOON_DIAG_KLINE_CACHE", &mut cfg.log.kline_cache);
     on("MOON_DIAG_MARKET_SOURCES", &mut cfg.log.market_sources);
+    on("MOON_DIAG_CHART_INPUT", &mut cfg.log.chart_input);
     on("MOON_RENDER_DIAG", &mut cfg.channels.render);
     on("MOON_DETECT_DIAG", &mut cfg.channels.detect);
     on("MOON_ASSETS_DIAG", &mut cfg.channels.assets);
