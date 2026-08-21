@@ -371,14 +371,33 @@ fn caption_settings(
     if part.field.is_column() {
         let state = state.clone();
         col = col.child(
-            MoonButton::new("le-arb")
-                .label(t!("chart_labels.sub_settings").to_string())
-                .size(MoonButtonSize::Micro)
-                .variant(MoonButtonVariant::Ghost)
-                .on_click(move |_, window: &mut Window, cx: &mut App| {
-                    open_arb_from_editor(&state, window, cx);
-                })
-                .render(),
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(moon(p.text))
+                        .child(t!("chart_labels.sub_settings").to_string()),
+                )
+                // The gear every settings popup in this terminal is reached by, and the words that
+                // say which settings these are: there will be more than one such field, and a
+                // column of unlabelled gears would leave the reader guessing.
+                .child(
+                    div()
+                        .id("le-arb")
+                        .cursor_pointer()
+                        .child(crate::panels::popup_gear_trigger(
+                            "le-arb-gear",
+                            t!("chart_labels.sub_settings").to_string(),
+                            false,
+                        ))
+                        .on_click(move |_, window: &mut Window, cx: &mut App| {
+                            open_arb_from_editor(&state, window, cx);
+                        }),
+                ),
         );
     }
 
