@@ -324,6 +324,26 @@ fn caption_list(
         .into_any_element()
 }
 
+/// Hand the edited module back and put the arbitrage roster up in this dialog's place.
+///
+/// Applying first is deliberate: the two windows cannot stand on top of each other, so the gear is
+/// an OK that opens the other one. Anything typed into the module is therefore kept, not dropped.
+fn open_arb_from_editor(state: &Entity<LabelEditState>, window: &mut Window, cx: &mut App) {
+    let (row, on_done, on_dismiss, on_open_arb) = {
+        let s = state.read(cx);
+        (
+            s.accepted_row(cx),
+            s.on_done.clone(),
+            s.on_dismiss.clone(),
+            s.on_open_arb.clone(),
+        )
+    };
+    on_done(row, cx);
+    on_dismiss(cx);
+    window.close_dialog(cx);
+    on_open_arb(window, cx);
+}
+
 /// Everything about the ONE selected caption.
 fn caption_settings(
     state: &Entity<LabelEditState>,
@@ -343,6 +363,9 @@ fn caption_settings(
     // WHICH figure this caption prints. Changing it here keeps the caption's place and style, which
     // is what "I picked the wrong one" needs.
     col = col.child({
+        // Two closures below outlive this block — the picker's and the gear's — so each takes its
+        // own handle rather than the one the other moved.
+        let gear_state = state.clone();
         let state = state.clone();
         let current = part.field;
         let picker_open = state.read(cx).picker_open.clone();
@@ -355,7 +378,12 @@ fn caption_settings(
                     .text_color(moon(p.text))
                     .child(t!("chart_labels.field_caption").to_string()),
             )
-            .child(field_picker(
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 4.0))
+                    .child(field_picker(
                 "le-f",
                 t!(part.field.locale_key()).to_string(),
                 false,
@@ -372,7 +400,26 @@ fn caption_settings(
                     });
                 },
                 cx,
-            ))
+                    ))
+                    // The settings this FIELD has beyond the catalogue, as the gear that means
+                    // exactly that everywhere else in the terminal — beside the control it belongs
+                    // to, square, iconic. Only the arbitrage column has any: which venues it lists,
+                    // in what order and colour, is a global roster with a window of its own.
+                    .children(part.field.is_column().then(|| {
+                        let state = gear_state;
+                        div()
+                            .id("le-arb")
+                            .cursor_pointer()
+                            .child(crate::panels::popup_gear_trigger(
+                                "le-arb-gear",
+                                t!("arb.open").to_string(),
+                                false,
+                            ))
+                            .on_click(move |_, window: &mut Window, cx: &mut App| {
+                                open_arb_from_editor(&state, window, cx);
+                            })
+                    })),
+            )
     });
 
     // Which orders a position figure counts. Offered only by the fields that read it, so a stale
@@ -396,36 +443,6 @@ fn caption_settings(
                 }
             },
         ));
-    }
-
-    // A column caption has no style questions of its own worth asking here — which venues it
-    // prints, in what order and colour, is a GLOBAL roster — so the pane offers the way there
-    // instead. Applying the module first is deliberate: the two windows cannot stand on top of each
-    // other, so this button is an OK that opens the other one.
-    if part.field.is_column() {
-        let state = state.clone();
-        col = col.child(
-            MoonButton::new("le-arb")
-                .label(t!("arb.open").to_string())
-                .size(MoonButtonSize::Micro)
-                .variant(MoonButtonVariant::Soft)
-                .on_click(move |_, window: &mut Window, cx: &mut App| {
-                    let (row, on_done, on_dismiss, on_open_arb) = {
-                        let s = state.read(cx);
-                        (
-                            s.accepted_row(cx),
-                            s.on_done.clone(),
-                            s.on_dismiss.clone(),
-                            s.on_open_arb.clone(),
-                        )
-                    };
-                    on_done(row, cx);
-                    on_dismiss(cx);
-                    window.close_dialog(cx);
-                    on_open_arb(window, cx);
-                })
-                .render(),
-        );
     }
 
     // Which retained-history window a movement or volume figure is read over. A dropdown rather
