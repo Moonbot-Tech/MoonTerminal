@@ -384,8 +384,6 @@ pub struct LabelStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_mult: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plate: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<bool>,
 }
 
@@ -400,8 +398,6 @@ pub struct ResolvedLabelStyle {
     pub color_min_pct: f32,
     /// Multiplier on the chart's label font size, already clamped to the drawable range.
     pub size_mult: f32,
-    /// Whether a translucent plate is drawn under the row this part belongs to.
-    pub plate: bool,
     /// Whether the printed text carries the field's short caption ("Δ1ч 0.8%" rather than "0.8%").
     pub caption: bool,
 }
@@ -460,7 +456,6 @@ impl ChartLabelPart {
                 value_only: None,
                 color_min_pct: None,
                 size_mult: None,
-                plate: None,
                 caption: None,
             },
             pnl_basis: PnlBasis::All,
@@ -500,7 +495,6 @@ impl ChartLabelPart {
                 .filter(|m| m.is_finite())
                 .unwrap_or(base.size_mult)
                 .clamp(LABEL_SIZE_MULT_MIN, LABEL_SIZE_MULT_MAX),
-            plate: self.style.plate.unwrap_or(base.plate),
             caption: self.style.caption.unwrap_or(base.caption),
         }
     }
@@ -533,6 +527,16 @@ pub struct ChartLabelRow {
     pub align: LabelAlign,
     /// Whether the name is printed on the chart as the row's leading caption.
     pub show_name: bool,
+    /// Whether a translucent plate is drawn under this module.
+    ///
+    /// The MODULE's, not a caption's, and that is what the switch means to a reader: the plate is
+    /// one rectangle behind a block of figures, so "put a backing under this" is a question about
+    /// the block. Held per caption it could not be answered at all — half a plate under half a
+    /// line is not a thing the chart can draw — and the switch appeared to do nothing, because a
+    /// caption's neighbours kept growing the same rectangle.
+    ///
+    /// On by default: every caption drew a plate before this moved.
+    pub plate: bool,
     /// Whether the row is drawn at all.
     ///
     /// One switch for the whole family, which is what "hide this for a moment" asks for; a row
@@ -581,6 +585,7 @@ impl Default for ChartLabelRow {
         Self {
             name: String::new(),
             preset: None,
+            plate: true,
             zone: LabelZone::ZoneTop,
             align: LabelAlign::Center,
             show_name: false,

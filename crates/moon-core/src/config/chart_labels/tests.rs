@@ -931,3 +931,34 @@ fn a_caption_colours_its_value_alone_by_default() {
     part.style.value_only = Some(false);
     assert!(!part.resolved_style().value_only);
 }
+
+/// The backing plate belongs to the MODULE, and a file states it there. A file written before it
+/// moved says nothing, and every module then draws one — which is what those files looked like,
+/// since every caption carried its own plate and they all defaulted to on.
+#[test]
+fn the_plate_is_a_module_setting_and_defaults_to_drawn() {
+    let row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    assert!(row.plate, "a module draws its backing unless told otherwise");
+
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut named = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    named.push_part(ChartLabelField::Funding);
+    named.plate = false;
+    cfg.rows[0] = named;
+
+    let text = toml::to_string_pretty(&cfg).expect("serializes");
+    assert!(text.contains("plate"), "a module that turned it OFF states so: {text}");
+    let back: ChartLabelsCfg = toml::from_str(&text).expect("parses");
+    assert!(!back.rows[0].plate);
+
+    // The other direction: a file that never heard of the setting.
+    let old = r#"
+        [[rows]]
+        zone = "chart_top"
+        align = "left"
+        [[rows.parts]]
+        field = "funding"
+    "#;
+    let read: ChartLabelsCfg = toml::from_str(old).expect("parses");
+    assert!(read.rows[0].plate, "absent means drawn");
+}

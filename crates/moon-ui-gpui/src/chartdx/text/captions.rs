@@ -35,16 +35,15 @@ const CAPTION_GAP: f32 = 8.0;
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
-/// Number of backing plates a pane publishes: one per printed LINE.
+/// Number of backing plates a pane publishes: one per MODULE.
 ///
-/// Per line, not per band, and that is what the caption's own plate switch means. One plate for a
-/// whole band spanned every line in it, so switching the backing off on ONE caption changed nothing
-/// visible — the plate was still being grown by its neighbours — while switching it off on the
-/// arbitrage column, the tallest thing in the band, appeared to switch off the backing entirely.
+/// Per module, because that is whose switch it is — see `ChartLabelRow::plate`. One plate for a
+/// whole band used to span every line in it, so switching the backing off on one thing changed
+/// nothing visible while switching it off on the tallest thing in the band looked like switching it
+/// off everywhere.
 ///
-/// Sized on the module ceiling: a band cannot print more lines than there are modules, and the
-/// bands do not share this budget because every line of every band is drawn in one pass. Lines past
-/// it are drawn WITHOUT a plate rather than borrowing another line's.
+/// Indexed BY the module, not by draw order: a module's plate then keeps its slot whatever its
+/// neighbours do, which is the same reason its captions address their runs by index.
 pub(in crate::chartdx) const CAPTION_PLATES: usize = moon_core::config::CHART_LABEL_ROWS;
 
 /// The pane rectangles a caption pass needs, in LOGICAL pixels.
@@ -71,6 +70,9 @@ struct Item {
     row: usize,
     part: usize,
     style: ResolvedLabelStyle,
+    /// Whether the MODULE this caption belongs to draws a backing plate. Copied onto the item
+    /// because the drawing pass has the items and not the configuration.
+    plate: bool,
     /// Font size in logical pixels, already resolved and clamped.
     size: f32,
 }
@@ -161,7 +163,6 @@ impl RenderState {
         // the pane and the runs live on `self`, and this pass runs on every presented frame.
         // `label_placed` beside it uses the same take-and-return.
         let texts = std::mem::take(&mut self.panes[idx].labels.texts);
-        let mut next_plate = 0usize;
         let result = self.draw_all_zones(
             ctx,
             idx,
@@ -171,7 +172,6 @@ impl RenderState {
             corner,
             caption_fg,
             &mut plates,
-            &mut next_plate,
         );
         self.panes[idx].labels.texts = texts;
         result?;
@@ -194,7 +194,6 @@ impl RenderState {
         corner: Option<CaptionGeom>,
         caption_fg: Hsla,
         plates: &mut [[f32; 4]; CAPTION_PLATES],
-        next_plate: &mut usize,
     ) -> anyhow::Result<()> {
         let Some(corner) = corner else {
             return Ok(());
@@ -214,18 +213,16 @@ impl RenderState {
                 } else {
                     geom.plot_top
                 };
-                let line_plates = self.draw_stack(
+                let module_plates = self.draw_stack(
                     ctx, idx, texts, &rows, column, start_y, limit_y, downward, caption_fg,
                 )?;
-                // Published in DRAW order, across every band: the plates are a flat list of
-                // rectangles to the renderer, and which band a line came from is not something it
-                // has to know.
-                for box_ in line_plates {
-                    let Some(slot) = plates.get_mut(*next_plate) else {
-                        break;
+                // A module lives in exactly one band, so a band writes only its own slots and
+                // cannot overwrite another's.
+                for (module_ix, box_) in module_plates {
+                    let Some(slot) = plates.get_mut(module_ix) else {
+                        continue;
                     };
                     *slot = box_.plate(geom.scale_factor);
-                    *next_plate += 1;
                 }
             }
         }
@@ -254,6 +251,7 @@ impl RenderState {
                 row: text.row,
                 part: text.part,
                 style,
+                plate: row_cfg.plate,
                 size: (base * style.size_mult).clamp(6.0, 60.0),
             })
         };
@@ -296,8 +294,8 @@ impl RenderState {
         limit_y: f32,
         downward: bool,
         caption_fg: Hsla,
-    ) -> anyhow::Result<Vec<CaptionBox>> {
-        let mut plates: Vec<CaptionBox> = Vec::new();
+    ) -> anyhow::Result<Vec<(usize, CaptionBox)>> {
+        let mut plates: Vec<(usize, CaptionBox)> = Vec::new();
         let mut y = start_y;
         // Whether anything has actually been PUT on the pane. Not the loop index: the first line
         // of a band is exempt from the clamp below, and "first" means first DRAWN.
@@ -330,15 +328,13 @@ impl RenderState {
             // drawing it. Taking that height from the styles rather than from a measurement is what
             // makes this possible without drawing the row twice.
             let top = if downward { y } else { y - row_h };
-            // A plate PER LINE: the switch belongs to a caption, and a caption sits on one line.
-            let mut plate = CaptionBox::default();
+            // One box PER MODULE on this line: two modules can share a line — that is what the
+            // placement axis is for — and one rectangle behind both would put a backing under the
+            // module that switched it off.
             self.draw_row(
                 ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
-                &mut plate,
+                &mut plates,
             )?;
-            if plate.any() {
-                plates.push(plate);
-            }
             any_drawn = true;
             y += if downward { row_h } else { -row_h };
         }
@@ -364,7 +360,7 @@ impl RenderState {
         limit_y: f32,
         downward: bool,
         caption_fg: Hsla,
-        plate: &mut CaptionBox,
+        plates: &mut Vec<(usize, CaptionBox)>,
     ) -> anyhow::Result<f32> {
         if cells.is_empty() {
             return Ok(column.x);
@@ -515,8 +511,19 @@ impl RenderState {
                 drawn_w = drawn_w.max(w);
                 let box_left = if rightwards { anchor_x } else { anchor_x - w };
                 left_edge = left_edge.min(box_left);
-                if item.style.plate {
-                    plate.add(box_left, w, y, metrics.line_height.as_f32());
+                // Grown into the box of the MODULE this caption belongs to. A module whose
+                // plate is switched off never opens one, so its captions grow nothing.
+                if item.plate {
+                    match plates.iter_mut().find(|(row, _)| *row == item.row) {
+                        Some((_, box_)) => {
+                            box_.add(box_left, w, y, metrics.line_height.as_f32())
+                        }
+                        None => {
+                            let mut box_ = CaptionBox::default();
+                            box_.add(box_left, w, y, metrics.line_height.as_f32());
+                            plates.push((item.row, box_));
+                        }
+                    }
                 }
                 y += item.line_h();
             }

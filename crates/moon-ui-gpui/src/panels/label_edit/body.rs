@@ -83,6 +83,21 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
                 .child(MoonInput::new("le-name").state(&name_input).small()),
         )
         .child({
+            // The MODULE's backing plate: one rectangle behind the whole block, which is why the
+            // switch sits here and not on a caption — half a plate under half a line is not a thing
+            // the chart can draw.
+            let state = state.clone();
+            let on = row.plate;
+            MoonCheckbox::new("le-plate")
+                .label(t!("chart_labels.plate").to_string())
+                .checked(on)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |v: &bool, _w, cx| {
+                    let v = *v;
+                    write_row(&state, cx, |s| s.row.plate = v);
+                })
+        })
+        .child({
             let state = state.clone();
             let on = row.show_name;
             MoonCheckbox::new("le-show-name")
@@ -609,18 +624,6 @@ fn caption_settings(
         ));
     }
 
-    let plate_cb = {
-        let state = state.clone();
-        let on = resolved.plate;
-        MoonCheckbox::new("le-plate")
-            .label(t!("chart_labels.plate").to_string())
-            .checked(on)
-            .size(MoonCheckboxSize::Compact)
-            .on_change(move |v: &bool, _w, cx| {
-                let v = *v;
-                write_row(&state, cx, |s| s.row.parts[selected].style.plate = Some(v));
-            })
-    };
     let caption_cb = {
         let state = state.clone();
         let on = resolved.caption;
@@ -653,7 +656,6 @@ fn caption_settings(
             .w_full()
             .items_center()
             .gap(design::ui_px(cx, 8.0))
-            .child(plate_cb)
             .child(caption_cb)
             .child(reset),
     );

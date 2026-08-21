@@ -425,7 +425,6 @@ impl ChartLabelField {
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.25,
-                plate: true,
                 caption: false,
             },
             // The comparison delta is the one figure a broom-mode pane exists to show.
@@ -434,7 +433,6 @@ impl ChartLabelField {
                 color_min_pct: 0.0,
                 color: LabelColor::BySign,
                 size_mult: 1.7,
-                plate: true,
                 caption: false,
             },
             // Deliberately smaller than the comparison delta beside it: a secondary indicator must
@@ -444,7 +442,6 @@ impl ChartLabelField {
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.45,
-                plate: true,
                 caption: false,
             },
             ChartLabelField::Delta1h
@@ -466,7 +463,6 @@ impl ChartLabelField {
                 color_min_pct: 0.0,
                 color: LabelColor::BySign,
                 size_mult: 1.0,
-                plate: true,
                 caption: true,
             },
             // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
@@ -497,7 +493,6 @@ impl ChartLabelField {
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.0,
-                plate: true,
                 caption: true,
             },
             _ => ResolvedLabelStyle {
@@ -505,7 +500,6 @@ impl ChartLabelField {
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.0,
-                plate: true,
                 caption: false,
             },
         }

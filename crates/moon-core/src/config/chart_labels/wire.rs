@@ -43,6 +43,10 @@ struct RowWire {
     align: LabelAlign,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     show_name: bool,
+    /// Absent means DRAWN: every file written before the plate moved from the captions to the
+    /// module had a plate under each of them, which is what a module-wide one now reproduces.
+    #[serde(skip_serializing_if = "is_true")]
+    plate: bool,
     /// Absent means DRAWN: every file written before this switch existed drew its rows.
     #[serde(skip_serializing_if = "is_true")]
     visible: bool,
@@ -68,6 +72,7 @@ impl Default for RowWire {
             zone: LabelZone::default(),
             align: LabelAlign::default(),
             show_name: false,
+            plate: true,
             visible: true,
             flow: LabelFlow::Row,
             placement: LabelFlow::Column,
@@ -148,6 +153,7 @@ impl Serialize for ChartLabelsCfg {
                 zone: row.zone,
                 align: row.align,
                 show_name: row.show_name,
+                plate: row.plate,
                 visible: row.visible,
                 flow: row.flow,
                 placement: row.placement,
@@ -195,6 +201,7 @@ fn from_rows(rows: Vec<RowWire>) -> ChartLabelsCfg {
         row.name = wire.name;
         row.preset = wire.preset;
         row.show_name = wire.show_name;
+        row.plate = wire.plate;
         row.visible = wire.visible;
         row.flow = wire.flow;
         row.placement = wire.placement;

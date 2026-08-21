@@ -93,26 +93,6 @@ fn a_stale_book_rectangle_is_clamped_into_the_pane() {
     assert!(g.max_w <= 1000.0);
 }
 
-/// A box knows whether anything grew it, and that is what decides whether a LINE publishes a plate
-/// at all.
-///
-/// Breakage this pins: publishing an empty rectangle for a line whose captions all switched their
-/// backing off. Plates are a fixed-size list, and an empty one in the middle of it takes the slot a
-/// later line needed — which is how "one caption without a plate" became "the lines after it lost
-/// theirs".
-#[test]
-fn an_untouched_box_publishes_nothing() {
-    let mut box_ = CaptionBox::default();
-    assert!(!box_.any());
-
-    // A run with neither width nor height is not a run: it must not make the box publishable.
-    box_.add(10.0, 0.0, 10.0, 0.0);
-    assert!(!box_.any());
-
-    box_.add(10.0, 40.0, 10.0, 16.0);
-    assert!(box_.any());
-}
-
 /// `caption.rs:CaptionBox` must measure the plate from the runs actually drawn.
 ///
 /// Breakage this pins: replacing it with a formula over an assumed set of rows. The scale badge,
