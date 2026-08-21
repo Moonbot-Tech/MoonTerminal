@@ -75,11 +75,19 @@ pub(crate) fn row_display_name(row: &ChartLabelRow) -> String {
 ///         "did I already add this?", not "you may not".
 ///     disabled: Whether the trigger refuses to open — a module with no room left, where the
 ///         catalogue would take a pick and silently drop it.
-///     on_pick: Receives the chosen field.
+///     open: Whether the grid is up. CONTROLLED by the caller, because the pick has to survive the
+///         close: `close_on_content_click` shuts the popover on mouse-DOWN through a deferred
+///         update, and the button underneath is gone by the time the click would have fired — which
+///         is why picking a field only closed the list.
+///     on_open: Told when the trigger asks to open or the overlay asks to close.
+///     on_pick: Receives the chosen field. The caller closes the picker from here.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn field_picker(
     id: &str,
     label: String,
     disabled: bool,
+    open: bool,
+    on_open: impl Fn(bool, &mut App) + 'static,
     marked: impl Fn(ChartLabelField) -> bool + 'static,
     on_pick: impl Fn(ChartLabelField, &mut Window, &mut App) + Clone + 'static,
     cx: &App,
@@ -134,9 +142,11 @@ pub(crate) fn field_picker(
         )
         .disabled(disabled)
         .placement(MoonPopoverPlacement::BottomStart)
-        // A pick closes the picker: it is a choice, not a set of them, and the caption behind the
-        // popover changes the moment it lands.
-        .close_on_content_click(true)
+        .open(open)
+        .on_open_change(move |open, _window, cx| on_open(open, cx))
+        // Deliberately NOT `close_on_content_click`: that closes on mouse-down, before the click
+        // reaches the field under the cursor. The pick itself closes the picker, from the caller.
+        .close_on_content_click(false)
         .fit_content()
         .content(grid)
 }

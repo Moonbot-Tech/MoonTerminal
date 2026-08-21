@@ -41,6 +41,13 @@ pub struct LabelEditState {
     /// Where an accepted module goes. `Rc` because the dialog's content closure is rebuilt on every
     /// render and each rebuild needs its own handle.
     on_done: Rc<dyn Fn(ChartLabelRow, &mut App)>,
+    /// Which field picker is open, by its element id.
+    ///
+    /// The picker is a CONTROLLED popover — see [`crate::controls::field_picker`] — because a pick
+    /// has to outlive the close: the library's own close-on-click fires on mouse-down and takes the
+    /// button out of the tree before the click lands on it. One name for the two pickers, since
+    /// only one of them can be open.
+    picker_open: Option<SharedString>,
     /// Opens the arbitrage roster window, for a module whose caption prints that column.
     ///
     /// Handed in rather than opened here, for the reason this dialog takes `on_done` rather than
@@ -71,6 +78,15 @@ impl LabelEditState {
         // with the field empty, and keeps its switch.
         row.show_name = row.show_name && (!row.name.is_empty() || row.preset.is_some());
         row
+    }
+
+    /// Open or close one field picker, by id.
+    fn set_picker(state: &Entity<Self>, id: &str, open: bool, cx: &mut App) {
+        let id = SharedString::from(id.to_string());
+        state.update(cx, |s, cx| {
+            s.picker_open = open.then_some(id);
+            cx.notify();
+        });
     }
 
     /// Keep the selection on a caption that exists.
@@ -118,6 +134,7 @@ pub(crate) fn open_label_edit(
         row,
         selected: 0,
         name_input,
+        picker_open: None,
         on_done: Rc::new(on_done),
         on_dismiss: Rc::new(on_dismiss),
         on_open_arb: Rc::new(on_open_arb),

@@ -807,15 +807,23 @@ impl MarketDataSource {
         let snapshot = self.core_client(provider)?.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
         let mut out = Vec::new();
-        // WHICH venues to ask about comes from the core itself: `client_settings.arb_config` is the
-        // very checkbox list the reference terminal shows, so a venue this build has never heard of
-        // — a newer exchange, a deployer nobody hard-coded — is read as soon as the core watches
-        // it. A table of our own could only ever list what was known when it was written.
+        // WHICH venues to ask about is the UNION of two answers, and it has to be a union.
+        //
+        // The core's own `client_settings.arb_config` is the checkbox list the reference terminal
+        // shows, and it is the only thing that knows a venue this build has never heard of — the
+        // reference terminal's `OkxF` column, whose code appears in no protocol constant. But it is
+        // ALSO a setting that arrives late, can be absent on a build that does not send it, and can
+        // legitimately be all-false while the core still fills arbitrage slots. Trusting it alone
+        // emptied the column on a core that had been printing one: the first run had no settings
+        // and used the fallback, the second had settings and asked about nothing.
+        //
+        // So: everything this build can name is always asked about, and the mask only ADDS to that.
         //
         // Asked venue by venue because that is the only door the protocol opens: the slot map is
         // private and `arb_slot` copies one entry at a time (see docs-internal/FORK_BUGS.md). The
         // mask test itself is an array read, so scanning the whole byte range costs nothing; only a
-        // WATCHED venue pays for a lock, and the whole walk is behind the caller's throttle.
+        // venue that is actually asked about pays for a lock, and the walk is behind the caller's
+        // throttle.
         let wanted = snapshot
             .settings()
             .client_settings
@@ -835,17 +843,16 @@ impl MarketDataSource {
             // No settings yet — the core has not sent them, or this is a build that does not — so
             // fall back to what this build can name. Without this an arbitrage column would stay
             // empty until the settings arrive, which looks like the feature is broken.
-            let asked = match wanted {
-                Some(cfg) => cfg.is_wanted(code),
-                None => ArbVenue::from_code(byte).is_known_or_scanned_deployer(),
-            };
+            let venue_of_byte = ArbVenue::from_code(byte);
+            let asked = venue_of_byte.is_known_or_scanned_deployer()
+                || wanted.is_some_and(|cfg| cfg.is_wanted(code));
             if !asked {
                 continue;
             }
             let Some(slot) = handle.arb_slot(code).filter(|s| s.enabled) else {
                 continue;
             };
-            let venue = ArbVenue::from_code(byte);
+            let venue = venue_of_byte;
             let point = slot.latest_point();
             let (price, my_price) = (f64::from(point.price), f64::from(point.my_price));
             if !(price.is_finite() && price > 0.0 && my_price.is_finite() && my_price > 0.0) {
@@ -864,6 +871,25 @@ impl MarketDataSource {
                 deposit_blocked: slot.isolated_flags.deposit_blocked(),
                 withdraw_blocked: slot.isolated_flags.withdraw_blocked(),
             });
+        }
+        // What the core watches, what actually reported, and what the deployer indices are called.
+        // Behind `log.market_sources` in cfg/diagnostics.toml, because this is the one question the
+        // sources cannot answer: the codes are the core's, and a venue this build cannot name shows
+        // up here as its raw byte.
+        if log::log_enabled!(super::SOURCE_TRACE_LEVEL) {
+            let watched: Vec<u8> = match wanted {
+                Some(cfg) => (0u8..=255)
+                    .filter(|byte| cfg.is_wanted(platform_code(*byte)))
+                    .collect(),
+                None => Vec::new(),
+            };
+            log::log!(
+                super::SOURCE_TRACE_LEVEL,
+                "арбитраж {market}: маска ядра {watched:?} · отдали {} площадок {:?} · дексы {:?}",
+                out.len(),
+                out.iter().map(|q| q.venue.code()).collect::<Vec<_>>(),
+                dex_names,
+            );
         }
         Some(out)
     }

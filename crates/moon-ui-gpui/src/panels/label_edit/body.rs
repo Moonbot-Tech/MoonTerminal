@@ -259,6 +259,10 @@ fn caption_list(
         let state = state.clone();
         let row_fields: Vec<ChartLabelField> = row.parts[..used].iter().map(|p| p.field).collect();
         let full = row.first_free_part().is_none();
+        let open_state = state.clone();
+        // Which picker is up is the DIALOG's state, read where the control is built: a picker whose
+        // openness lived in the popover itself would close on mouse-down and eat the pick.
+        let picker_open = state.read(cx).picker_open.clone();
         field_picker(
             "le-add",
             match full {
@@ -268,6 +272,8 @@ fn caption_list(
                 false => format!("{}  {used}/{CHART_LABEL_PARTS}", t!("chart_labels.add_part")),
             },
             full,
+            picker_open.as_deref() == Some("le-add"),
+            move |open, cx| LabelEditState::set_picker(&open_state, "le-add", open, cx),
             move |f| row_fields.contains(&f),
             move |field, _window, cx| {
                 write_row(&state, cx, |s| {
@@ -276,6 +282,9 @@ fn caption_list(
                         // list is where the user is going next.
                         s.selected = s.row.used_parts().saturating_sub(1);
                     }
+                    // The pick closes the picker — it is one choice, and the module behind it has
+                    // already changed.
+                    s.picker_open = None;
                 });
             },
             cx,
@@ -321,6 +330,7 @@ fn caption_settings(
     col = col.child({
         let state = state.clone();
         let current = part.field;
+        let picker_open = state.read(cx).picker_open.clone();
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 2.0))
@@ -334,9 +344,17 @@ fn caption_settings(
                 "le-f",
                 t!(part.field.locale_key()).to_string(),
                 false,
+                picker_open.as_deref() == Some("le-f"),
+                {
+                    let state = state.clone();
+                    move |open, cx| LabelEditState::set_picker(&state, "le-f", open, cx)
+                },
                 move |f| f == current,
                 move |f, _window, cx| {
-                    write_row(&state, cx, |s| s.row.parts[selected].field = f);
+                    write_row(&state, cx, |s| {
+                        s.row.parts[selected].field = f;
+                        s.picker_open = None;
+                    });
                 },
                 cx,
             ))
