@@ -35,6 +35,7 @@ fn texts() -> Vec<LabelText> {
             row: usize::from(n > 0),
             part: n.saturating_sub(1),
             text: text.into(),
+            prefix: String::new(),
             sign: None,
             color: None,
         })
@@ -100,6 +101,7 @@ fn the_first_module_of_a_band_always_opens_a_line() {
         row: 0,
         part: 0,
         text: "Δ1ч".into(),
+        prefix: String::new(),
         sign: None,
         color: None,
     }];

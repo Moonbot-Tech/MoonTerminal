@@ -36,6 +36,11 @@ use body::dialog_body;
 pub struct ArbEditState {
     /// The roster as it stands. Edited in place and published on every change.
     cfg: ArbViewCfg,
+    /// Hyperliquid deployer names this core knows, indexed by deployer index.
+    ///
+    /// Read once when the window opens: it is a start-up fact of the core, not something that moves
+    /// while a roster is being edited, and the window must name a venue exactly as the chart does.
+    dex_names: Vec<String>,
     /// Which venue's name is being typed, if any.
     ///
     /// ONE input for the whole list: a dozen live `MoonInputState` entities would be a dozen focus
@@ -95,9 +100,12 @@ impl ArbEditState {
 ///
 /// Args:
 ///     cfg: The roster as it stands now.
+///     dex_names: Deployer names the target core knows, so the window names a venue as the chart
+///         does. Empty is fine — the venues then keep their numbered spelling.
 ///     on_change: Applied with the edited roster on every change; saves and republishes it.
 pub(crate) fn open_arb_edit(
     cfg: ArbViewCfg,
+    dex_names: Vec<String>,
     window: &mut Window,
     cx: &mut App,
     on_change: impl Fn(ArbViewCfg, &mut App) + 'static,
@@ -107,6 +115,7 @@ pub(crate) fn open_arb_edit(
         cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("arb.name_hint").to_string()));
     let state = cx.new(|_| ArbEditState {
         cfg,
+        dex_names,
         editing: None,
         name_input,
         on_change: Rc::new(on_change),
@@ -120,8 +129,10 @@ pub(crate) fn open_arb_edit(
         let dismiss_state = state.clone();
         let dismiss = state.read(cx).on_dismiss.clone();
         dialog
-            // Wide enough for a venue line: two order buttons, an eye, a name, a swatch row.
-            .w(px(520.0))
+            // Two venue columns, each holding two order buttons, an eye, a name, the rename
+            // control and nine swatches. Sized on that line, not guessed: the roster is two dozen
+            // venues and one column of them is a window taller than a screen.
+            .w(px(780.0))
             .close_button(true)
             .overlay(true)
             .overlay_closable(true)

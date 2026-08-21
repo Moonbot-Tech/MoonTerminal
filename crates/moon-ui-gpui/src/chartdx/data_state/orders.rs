@@ -127,20 +127,12 @@ impl ChartDataState {
             // FORMATTED result and is the one that decides whether anything has to repaint.
             pr.label_basis = basis;
             pr.label_strategy = strategy;
-            // The newest detect THIS core fired on THIS market: the ring is ordered by arrival,
-            // so the first match from the back is the newest one. A market that has never had a
-            // detect walks the whole ring — it is a name comparison per row, on an order revision,
-            // and only while a detect caption is actually drawn, which is what the gate above
-            // decides. The alternative, an index by market, would have to be maintained on the
-            // feed thread for a caption almost nobody prints.
+            // The newest detect THIS core fired on THIS market, straight off the store's index —
+            // the ring itself is two thousand rows and this runs per pane on every order revision.
             let (detect_strategy, detect_msg) = wants_detect_cfg
                 .then(|| {
                     let core_st = session.store().core(pane.core)?;
-                    let det = core_st
-                        .detects
-                        .iter()
-                        .rev()
-                        .find(|d| d.market == pane.market)?;
+                    let det = core_st.latest_detect.get(&pane.market)?;
                     Some((det.strat_name.clone(), det.msg.clone()))
                 })
                 .flatten()

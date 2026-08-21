@@ -1,13 +1,30 @@
-//! The chart-caption catalogue as a menu: every field a caption can print, in sections.
+//! The chart-caption catalogue as a PICKER: every field a caption can print, in columns.
 //!
-//! Shared because two places offer the same list and must not drift: the labels popup, where a pick
-//! creates a whole module, and the module editor, where a pick adds one caption to the module being
-//! edited. What differs is what happens to the pick, which is the callback — never the list.
+//! Shared because two surfaces ask the same question and must not drift — "which figure does this
+//! caption print" and "which figure does the caption I am adding print". What differs is what
+//! happens to the pick, which is the callback; never the list.
+//!
+//! A grid rather than a menu, and that is a decision the list forced: the catalogue is forty-five
+//! figures in five sections, and `MoonDropdown` draws ONE column with no hover-opened submenus —
+//! its nested level opens only when the parent row is explicitly `selected`, which needs state the
+//! menu does not keep. A column per section shows the whole catalogue at once, which is also how a
+//! reader picks from it: they know the subject before they know the figure.
 
-use gpui::{App, SharedString, Window};
+use gpui::*;
 use moon_core::config::{ChartLabelField, ChartLabelGroup, ChartLabelRow};
-use moon_ui::MoonMenuItem;
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    h_flex, v_flex,
+};
 use rust_i18n::t;
+
+use crate::design::{self, moon};
+
+/// Width of one section column, in design pixels.
+///
+/// Sized on the longest localized field name rather than guessed: the names are the only thing in
+/// the column, and a column narrower than its widest name truncates every row under it.
+const COLUMN_W: f32 = 178.0;
 
 /// What a module is CALLED, in the reader's language.
 ///
@@ -48,39 +65,78 @@ pub(crate) fn row_display_name(row: &ChartLabelRow) -> String {
     out
 }
 
-/// Build the catalogue, sectioned by where a field's value comes from.
+/// The catalogue as a popover: a trigger showing `label`, and the whole grid under it.
 ///
 /// Args:
-///     id_prefix: Element-id prefix, so two menus alive at once keep distinct identities.
-///     is_added: Whether a field is already configured somewhere, for its check mark.
+///     id: Element-id prefix, so two pickers alive at once keep distinct identities.
+///     label: What the trigger shows — the current field, or the "add a caption" wording.
+///     marked: Whether a field is already configured, for its mark. The picker MARKS rather than
+///         disables: the same figure on two modules is a legitimate layout, and the mark answers
+///         "did I already add this?", not "you may not".
+///     disabled: Whether the trigger refuses to open — a module with no room left, where the
+///         catalogue would take a pick and silently drop it.
 ///     on_pick: Receives the chosen field.
-pub(crate) fn field_menu_items(
-    id_prefix: &str,
-    is_added: impl Fn(ChartLabelField) -> bool,
+pub(crate) fn field_picker(
+    id: &str,
+    label: String,
+    disabled: bool,
+    marked: impl Fn(ChartLabelField) -> bool + 'static,
     on_pick: impl Fn(ChartLabelField, &mut Window, &mut App) + Clone + 'static,
-) -> Vec<MoonMenuItem> {
-    let mut items = Vec::new();
-    for (n, group) in ChartLabelGroup::ALL.into_iter().enumerate() {
-        if n > 0 {
-            items.push(MoonMenuItem::separator());
-        }
+    cx: &App,
+) -> impl IntoElement {
+    let p = MoonPalette::active(cx);
+    let mut grid = h_flex().gap(design::ui_px(cx, 10.0)).items_start();
+    for group in ChartLabelGroup::ALL {
+        let mut column = v_flex()
+            .w(px(design::font_w(cx, COLUMN_W)))
+            .gap(design::ui_px(cx, 1.0))
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .pb(design::ui_px(cx, 2.0))
+                    .child(t!(group.locale_key()).to_string()),
+            );
         for field in ChartLabelField::ALL
             .into_iter()
             .filter(|f| f.group() == group)
         {
             let on_pick = on_pick.clone();
-            // Checked rather than disabled: the same figure on two modules is a legitimate layout —
-            // the coin over the strip and the coin over the plot — and the mark is there to answer
-            // "did I already add this?", not to forbid it.
-            items.push(
-                MoonMenuItem::with_key(
-                    SharedString::from(format!("{id_prefix}-{field:?}")),
-                    SharedString::from(t!(field.locale_key()).to_string()),
-                )
-                .checked(is_added(field))
-                .on_click(move |_, window: &mut Window, app: &mut App| on_pick(field, window, app)),
+            let name = match marked(field) {
+                true => format!("✓ {}", t!(field.locale_key())),
+                false => t!(field.locale_key()).to_string(),
+            };
+            column = column.child(
+                MoonButton::new(SharedString::from(format!("{id}-{field:?}")))
+                    .label(name)
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Ghost)
+                    .width(design::font_w(cx, COLUMN_W))
+                    .on_click(move |_, window: &mut Window, app: &mut App| {
+                        on_pick(field, window, app)
+                    })
+                    .render(),
             );
         }
+        grid = grid.child(column);
     }
-    items
+
+    MoonPopover::new(SharedString::from(format!("{id}-picker")))
+        .trigger(
+            MoonButton::new(SharedString::from(format!("{id}-trigger")))
+                // The caret is part of the LABEL: `MoonButton` has no disclosure of its own, and a
+                // trigger with no hint that something opens under it reads as a dead button.
+                .label(format!("{label}  ▾"))
+                .size(MoonButtonSize::Micro)
+                .variant(MoonButtonVariant::Soft)
+                .disabled(disabled)
+                .render(),
+        )
+        .disabled(disabled)
+        .placement(MoonPopoverPlacement::BottomStart)
+        // A pick closes the picker: it is a choice, not a set of them, and the caption behind the
+        // popover changes the moment it lands.
+        .close_on_content_click(true)
+        .fit_content()
+        .content(grid)
 }

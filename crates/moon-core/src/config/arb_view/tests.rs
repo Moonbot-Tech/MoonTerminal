@@ -4,6 +4,7 @@ use crate::market::{ArbQuote, ArbVenue};
 fn quote(code: u8, price: f64) -> ArbQuote {
     ArbQuote {
         venue: ArbVenue::from_code(code),
+        dex_name: String::new(),
         price,
         my_price: 100.0,
         spread_pct: (price - 100.0),
@@ -106,6 +107,7 @@ fn sanitize_drops_duplicates_and_cuts_names() {
         ],
         show: ArbShow::Price,
         mark_blocked: false,
+        min_abs_pct: 0.0,
     };
     cfg.venues[0].name = "Ы".repeat(ARB_NAME_MAX + 10);
 
@@ -131,4 +133,62 @@ fn the_roster_round_trips_through_toml() {
     let back: ArbViewCfg = toml::from_str(&text).expect("parses");
 
     assert_eq!(back, cfg);
+}
+
+/// A hand-edited floor that is negative or not a number would hide every venue or none of them
+/// unpredictably; both read as "the column broke".
+#[test]
+fn a_broken_floor_shows_everything() {
+    let mut cfg = ArbViewCfg {
+        min_abs_pct: f32::NAN,
+        ..ArbViewCfg::default()
+    };
+    cfg.sanitize();
+    assert_eq!(cfg.min_abs_pct, 0.0);
+
+    cfg.min_abs_pct = -3.0;
+    cfg.sanitize();
+    assert_eq!(cfg.min_abs_pct, 0.0);
+}
+
+/// The floor drops a venue from the column entirely — including one the roster has never heard of,
+/// which is appended rather than listed.
+#[test]
+fn the_floor_applies_to_listed_and_unlisted_venues_alike() {
+    let cfg = ArbViewCfg {
+        min_abs_pct: 1.0,
+        ..ArbViewCfg::default()
+    };
+    let quotes = [quote(4, 100.2), quote(ArbVenue::deployer(9).code(), 100.1)];
+
+    let rows = cfg.arrange(&quotes);
+
+    assert!(rows.is_empty(), "neither moved enough to be worth a line");
+}
+
+/// A deployer is named by the CORE when the core knows it: `AuthCheck` carries `known_dexes`, the
+/// live quote carries the name out of it, and only a core that sent no list leaves the numbered
+/// spelling standing. The user's own name still wins over both.
+#[test]
+fn a_deployer_takes_the_name_its_core_supplied() {
+    let cfg = ArbViewCfg::default();
+    let deployer = ArbVenue::deployer(3);
+    let mut named = quote(deployer.code(), 101.0);
+    named.dex_name = "hyna".to_string();
+
+    let rows = cfg.arrange(std::slice::from_ref(&named));
+    assert_eq!(rows[0].label, "hyna");
+
+    let unnamed = [quote(deployer.code(), 101.0)];
+    let rows = cfg.arrange(&unnamed);
+    assert_eq!(rows[0].label, deployer.default_name(), "no list, numbered");
+
+    let mut own = ArbViewCfg::default();
+    own.venues
+        .iter_mut()
+        .find(|v| v.code == deployer.code())
+        .expect("the roster lists the scanned deployers")
+        .name = "Мой декс".to_string();
+    let rows = own.arrange(std::slice::from_ref(&named));
+    assert_eq!(rows[0].label, "Мой декс", "the user's name wins");
 }

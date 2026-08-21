@@ -446,6 +446,9 @@ fn add_row<T: LabelsPopupHost>(
 fn open_arb_settings<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &mut App) {
     let backend = entity.read(app).backend().clone();
     let cfg = backend.read(app).arb_view.as_ref().clone();
+    // The deployer names THIS chart's core knows, so the window spells a venue exactly as the
+    // column behind it does. A target that has not resolved a core yet simply has none.
+    let dex_names = backend.read(app).session.market_source().any_dex_names();
     // The popup is a popover and paints above this window's overlay; it closes here like it does
     // for the module editor, and comes back with it.
     entity.update(app, |this, cx| {
@@ -455,6 +458,7 @@ fn open_arb_settings<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window
     let reopen = entity.clone();
     crate::panels::open_arb_edit(
         cfg,
+        dex_names,
         window,
         app,
         move |cfg, app| {

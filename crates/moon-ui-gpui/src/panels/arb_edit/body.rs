@@ -24,13 +24,28 @@ const VENUE_COLORS: [u32; 8] = [
 /// Width of one micro glyph button.
 const MICRO_W: f32 = 20.0;
 /// Width of the venue name column.
-const NAME_W: f32 = 150.0;
+const NAME_W: f32 = 110.0;
+
+/// Venue columns the window is sized for.
+///
+/// The roster is twenty-five venues — every named exchange plus the deployer indices — and one
+/// column of them is a window taller than most screens. TWO is what the dialog's width fits, so the
+/// lines-per-column follows from the roster rather than the other way round: a fixed twelve turned
+/// twenty-five venues into three columns inside a two-column window, and every line overflowed.
+const COLUMNS: usize = 2;
+
+/// Spread floors offered, in percent. `0` shows every venue and is the default.
+///
+/// Steps rather than a free field, like the caption editor's own thresholds: the window holds one
+/// text input already — the venue name — and a second one for a number is a focus target nobody
+/// asked for.
+const MIN_ABS_STEPS: [f32; 6] = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0];
 
 pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    let (cfg, editing) = {
+    let (cfg, editing, dex_names) = {
         let s = state.read(cx);
-        (s.cfg.clone(), s.editing)
+        (s.cfg.clone(), s.editing, s.dex_names.clone())
     };
 
     // What every row prints. One choice for the whole column: a roster where one venue showed a
@@ -68,9 +83,63 @@ pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElem
             })
     };
 
-    let mut list = v_flex().w_full().gap(design::ui_px(cx, 3.0));
-    for ix in 0..cfg.venues.len() {
-        list = list.child(venue_line(state, &cfg.venues[ix], ix, editing, p, cx));
+    // Which spreads are worth a LINE at all. A different question from the caption's colour
+    // threshold — that one keeps the line and takes the paint off it — and the two are set in
+    // different places for that reason.
+    let min_row = {
+        let state = state.clone();
+        let current = MIN_ABS_STEPS
+            .iter()
+            .position(|v| (v - cfg.min_abs_pct).abs() < 0.001);
+        seg_row(
+            "arb-min".to_string(),
+            t!("arb.min_abs").to_string(),
+            MIN_ABS_STEPS
+                .iter()
+                .enumerate()
+                .map(|(n, v)| {
+                    let label = match *v == 0.0 {
+                        true => t!("arb.min_abs_off").to_string(),
+                        false => format!("{v}%"),
+                    };
+                    (label, Some(n) == current)
+                })
+                .collect(),
+            48.0,
+            p,
+            cx,
+            move |pick, cx| {
+                if let Some(v) = MIN_ABS_STEPS.get(pick).copied() {
+                    ArbEditState::write(&state, cx, |cfg| cfg.min_abs_pct = v);
+                }
+            },
+        )
+    };
+
+    // The roster in COLUMNS. Filled column-first, so reading down a column follows the print order
+    // the chart uses — a list that wrapped row-first would put the second venue beside the first
+    // and read as a different order from the one it sets.
+    let per_column = cfg.venues.len().div_ceil(COLUMNS).max(1);
+    let mut list = h_flex().w_full().gap(design::ui_px(cx, 10.0));
+    for column in 0..COLUMNS {
+        let first = column * per_column;
+        let last = ((column + 1) * per_column).min(cfg.venues.len());
+        if first >= last {
+            continue;
+        }
+        let mut lines = v_flex().flex_1().min_w_0().gap(design::ui_px(cx, 3.0));
+        for ix in first..last {
+            lines = lines.child(venue_line(
+                state,
+                &cfg.venues[ix],
+                ix,
+                editing,
+                &dex_names,
+                p,
+                cx,
+            ));
+        }
+        list = list.child(lines);
     }
 
     v_flex()
@@ -80,6 +149,7 @@ pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElem
         .child(
             popup_group("arb-modes", t!("arb.printing").to_string())
                 .child(show_row)
+                .child(min_row)
                 .child(blocked_cb),
         )
         .child(popup_group("arb-venues", t!("arb.venues").to_string()).child(list))
@@ -87,11 +157,13 @@ pub(super) fn dialog_body(state: &Entity<ArbEditState>, cx: &mut App) -> AnyElem
 }
 
 /// One venue: order, visibility, name, colour.
+#[allow(clippy::too_many_arguments)]
 fn venue_line(
     state: &Entity<ArbEditState>,
     venue: &ArbVenueCfg,
     ix: usize,
     editing: Option<usize>,
+    dex_names: &[String],
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -168,7 +240,7 @@ fn venue_line(
             .into_any_element()
     } else {
         let state = state.clone();
-        let label = venue.label();
+        let label = venue.label_with(dex_names);
         div()
             .id(SharedString::from(format!("arb-name-btn-{ix}")))
             .w(px(design::font_w(cx, NAME_W)))
@@ -183,12 +255,16 @@ fn venue_line(
                 // Whatever was open commits first: clicking straight from one name to another must
                 // not drop the first edit.
                 ArbEditState::commit_name(&state, cx);
+                // The user's OWN name, which is usually empty — the field then shows the venue's
+                // default spelling as a placeholder. Pre-filling with that default would write it
+                // back as an explicit override the moment the field was left, and the venue could
+                // never follow its default name again.
                 let value = state
                     .read(cx)
                     .cfg
                     .venues
                     .get(ix)
-                    .map(ArbVenueCfg::label)
+                    .map(|v| v.name.clone())
                     .unwrap_or_default();
                 let input = state.read(cx).name_input.clone();
                 input.update(cx, |st, c| st.set_value(value, window, c));
@@ -203,6 +279,7 @@ fn venue_line(
     let done = {
         let state = state.clone();
         let editing_this = editing == Some(ix);
+        let name = venue.name.clone();
         micro_button(
             format!("arb-name-ok-{ix}"),
             if editing_this { "✔" } else { "✎" },
@@ -210,10 +287,20 @@ fn venue_line(
             MoonButtonVariant::Ghost,
             false,
             micro_w,
-            move |_w, cx| {
+            move |window, cx| {
+                // The button does what its glyph says in BOTH states: ✔ commits the open rename,
+                // ✎ opens one. Acting only in the first state left the pencil doing nothing at all.
                 if editing_this {
                     ArbEditState::commit_name(&state, cx);
+                    return;
                 }
+                ArbEditState::commit_name(&state, cx);
+                let input = state.read(cx).name_input.clone();
+                input.update(cx, |st, c| st.set_value(name.clone(), window, c));
+                state.update(cx, |s, cx| {
+                    s.editing = Some(ix);
+                    cx.notify();
+                });
             },
         )
     };

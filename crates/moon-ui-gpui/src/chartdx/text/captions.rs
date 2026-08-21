@@ -20,7 +20,7 @@
 use gpui::{Hsla, point, px};
 use moon_core::config::{
     ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelColor,
-    LabelZone, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
+    LabelZone, PREFIX_PART_BASE, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
 };
 use moon_core::util::fmt::DeltaSign;
 
@@ -282,7 +282,9 @@ impl RenderState {
     ) -> anyhow::Result<CaptionBox> {
         let mut plate = CaptionBox::default();
         let mut y = start_y;
-        let mut drawn = 0usize;
+        // Whether anything has actually been PUT on the pane. Not the loop index: the first line
+        // of a band is exempt from the clamp below, and "first" means first DRAWN.
+        let mut any_drawn = false;
         for row in rows {
             let row_h = row.height();
             // The module's own spacing, in the direction the band runs: below the previous line in
@@ -303,7 +305,7 @@ impl RenderState {
             } else {
                 y - gap - row_h < limit_y
             };
-            if overflows && drawn > 0 {
+            if overflows && any_drawn {
                 break;
             }
             y += if downward { gap } else { -gap };
@@ -315,7 +317,7 @@ impl RenderState {
                 ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
                 &mut plate,
             )?;
-            drawn += 1;
+            any_drawn = true;
             y += if downward { row_h } else { -row_h };
         }
         Ok(plate)
@@ -383,36 +385,111 @@ impl RenderState {
             };
             let mut y = top;
             let mut drawn_w = 0.0_f32;
-            for item in &cell.items {
-                // Out of pane: the rest of this stack is dropped rather than drawn, exactly as the
-                // horizontal budget drops a caption that does not fit its line. Drawing it would
-                // put venue prices over the time axis, or over the pane below on a shared canvas.
+            for (n_item, item) in cell.items.iter().enumerate() {
+                // Out of pane. Which END of the stack is lost depends on which way the band fills,
+                // and getting that backwards is how an over-tall arbitrage column printed one venue
+                // outside the plot and dropped the two dozen that would have fitted:
+                //
+                // - a band filling DOWNWARD keeps its top lines and drops the tail;
+                // - a band filling UPWARD is anchored at its BOTTOM edge, so the lines that fall
+                //   off are the ones at the top — skipped, not a reason to stop.
+                //
+                // One line always survives, mirroring the first LINE of a band above: a pane can be
+                // shorter than one line of text, and a stack that printed nothing there would take
+                // the chart's only identification with it.
                 let past_edge = if downward {
                     y + item.line_h() > limit_y
                 } else {
                     y < limit_y
                 };
+                let last = n_item + 1 == cell.items.len();
                 if past_edge {
-                    break;
+                    if downward {
+                        if n_item > 0 {
+                            break;
+                        }
+                    } else if !last {
+                        y += item.line_h();
+                        continue;
+                    }
                 }
                 let Some(entry) = texts.get(item.pos) else {
                     continue;
                 };
-                let (text, _) = fit_caption(ctx, &entry.text, item, budget);
-                if text.is_empty() {
-                    continue;
-                }
                 // A line's own colour wins over the caption's style: an arbitrage row is coloured
                 // by its VENUE, which one style cannot say for a dozen lines.
-                let color = match entry.color {
+                let value_color = match entry.color {
                     Some(rgb) => gpui::rgb(rgb).into(),
                     None => self.caption_color(item.style.color, entry.sign, caption_fg),
                 };
+                // A prefix that takes the same colour as its value is not a second run: gluing them
+                // makes ONE string, which shapes once and cannot drift apart. Only "colour the
+                // value alone" needs the split, and then the prefix keeps the theme's colour.
+                // The prefix is measured FIRST, through its OWN retained run: it is drawn with
+                // the value and spends the same budget, and measuring it through a throwaway run
+                // would re-shape it on every measure and every frame — the cost `caption_runs`
+                // exists to avoid.
+                let prefix_w = match item.style.value_only && !entry.prefix.is_empty() {
+                    true => self.measure_caption_run(
+                        ctx,
+                        idx,
+                        item.row,
+                        PREFIX_PART_BASE + item.part,
+                        &entry.prefix,
+                        item.size,
+                    ),
+                    false => 0.0,
+                };
+                // Too little room for the pair: the caption falls back to ONE run holding both,
+                // truncated as a whole. A split that kept the full-width prefix would paint it past
+                // the band's edge, and truncating the prefix instead would leave a caption naming
+                // nothing.
+                let split = prefix_w > 0.0 && budget - prefix_w >= MIN_LEGIBLE_W;
+                let prefix_w = if split { prefix_w } else { 0.0 };
+                let glued = match split {
+                    true => entry.text.clone(),
+                    false => format!("{}{}", entry.prefix, entry.text),
+                };
+                let (text, value_w) = fit_caption(ctx, &glued, item, budget - prefix_w);
+                if text.is_empty() {
+                    continue;
+                }
+                if split {
+                    // A right-anchored caption ends at `anchor_x`, so BOTH runs are placed from
+                    // that edge backwards: the value takes the last `value_w`, and the prefix the
+                    // `prefix_w` before it. Placing the prefix at the value's own left edge — one
+                    // subtraction short — draws the two on top of each other.
+                    let prefix_x = if rightwards {
+                        anchor_x
+                    } else {
+                        anchor_x - value_w - prefix_w
+                    };
+                    self.draw_caption_run(
+                        ctx,
+                        idx,
+                        item.row,
+                        PREFIX_PART_BASE + item.part,
+                        &entry.prefix,
+                        item.size,
+                        prefix_x,
+                        y,
+                        // The prefix always draws LEFT-anchored from the point computed above:
+                        // right-anchoring it would place its right edge where its left edge belongs.
+                        0.0,
+                        caption_fg,
+                    )?;
+                    crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
+                }
+                let value_x = match (split, rightwards) {
+                    (true, true) => anchor_x + prefix_w,
+                    _ => anchor_x,
+                };
+                let _ = value_w;
                 let metrics = self.draw_caption_run(
-                    ctx, idx, item.row, item.part, &text, item.size, anchor_x, y, ax, color,
+                    ctx, idx, item.row, item.part, &text, item.size, value_x, y, ax, value_color,
                 )?;
                 crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
-                let w = metrics.width.as_f32();
+                let w = metrics.width.as_f32() + prefix_w;
                 drawn_w = drawn_w.max(w);
                 let box_left = if rightwards { anchor_x } else { anchor_x - w };
                 left_edge = left_edge.min(box_left);
@@ -467,7 +544,14 @@ impl RenderState {
             .iter()
             .filter_map(|item| {
                 let entry = texts.get(item.pos)?;
-                Some(fit_caption(ctx, &entry.text, item, budget).1)
+                // Same rule as the drawing pass: a split caption is a prefix plus a value, and its
+                // width is the sum. Measuring only the glued form would misplace every centred line
+                // holding one.
+                // The whole caption, prefix and value as one string. Deliberately NOT measured
+                // as two: the column's width is the same either way in a monospaced face, and a
+                // second measurement here would shape the prefix again on every frame.
+                let glued = format!("{}{}", entry.prefix, entry.text);
+                Some(fit_caption(ctx, &glued, item, budget).1)
             })
             .fold(0.0_f32, f32::max)
     }
@@ -485,6 +569,37 @@ impl RenderState {
                 _ => caption_fg,
             },
         }
+    }
+
+    /// Measure a caption's text through the retained run it will be DRAWN with.
+    ///
+    /// The run keeps its shaping, so measuring and then drawing the same string costs one shaping
+    /// rather than two — which is the whole reason these runs are addressed by index instead of
+    /// taken from a cursor.
+    fn measure_caption_run(
+        &mut self,
+        ctx: &gpui::GpuCanvasTextContext<'_>,
+        pane_ix: usize,
+        row_ix: usize,
+        part_ix: usize,
+        text: &str,
+        size: f32,
+    ) -> f32 {
+        let run_ix = (pane_ix * CHART_LABEL_ROWS + row_ix) * ROW_RUN_STRIDE + part_ix;
+        if self.caption_runs.len() <= run_ix {
+            self.caption_runs
+                .resize_with(run_ix + 1, gpui::GpuCanvasTextRun::default);
+        }
+        self.caption_runs[run_ix]
+            .measure(
+                ctx,
+                text,
+                gpui::font(crate::design::mono()),
+                px(size),
+                px(size + 4.0),
+            )
+            .width
+            .as_f32()
     }
 
     /// Draw one caption through its OWN retained run.
@@ -576,11 +691,11 @@ impl RenderState {
             figures: pr.label_figures.clone(),
             windows: pr.label_windows,
             arb: pr.label_arb.clone(),
-            arb_view: Some(self.arb_view.clone()),
             now_ms: pr.label_now_ms,
             basis: pr.label_basis,
         };
-        let changed = self.panes[idx].labels.update(&cfg, inputs);
+        let arb_view = self.arb_view.clone();
+        let changed = self.panes[idx].labels.update(&cfg, &arb_view, inputs);
         // Recorded whether or not the texts changed: `update` is a cache and answers "nothing
         // moved" when the substitution happens to produce the same string, but the shot's proof
         // asks what the CURRENT labels were built from, not whether they differ from last time.

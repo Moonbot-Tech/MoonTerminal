@@ -383,9 +383,10 @@ impl CoinTag {
 /// them. This is that spelling, kept beside the venue directory rather than in the chart, because
 /// the same list names the columns in the arbitrage settings window.
 ///
-/// A Hyperliquid DEPLOYER carries only its index — the deployer's own name (`hyna`, `para`) never
-/// reaches the protocol — so it is numbered here and can be renamed by the user, which is the only
-/// way a terminal can put the right word on it.
+/// A Hyperliquid DEPLOYER carries only an index in its arbitrage slot, so THIS spelling numbers it.
+/// The real name usually exists elsewhere — `AuthCheck` hands over `known_dexes`, and the same
+/// index reads into that list — and a live quote carries it (see [`ArbQuote::dex_name`]); the
+/// numbered form is what remains when a core sent no list at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ArbVenue(u8);
 
@@ -415,7 +416,7 @@ impl ArbVenue {
     ];
 
     /// First deployer code; everything from here to [`Self::DEPLOYER_END`] is one.
-    const DEPLOYER_BASE: u8 = 50;
+    pub const DEPLOYER_BASE: u8 = 50;
     const DEPLOYER_END: u8 = 100;
 
     /// How many deployer indices a read actually asks about.
@@ -429,6 +430,26 @@ impl ArbVenue {
     /// The deployer at `index`, as a venue.
     pub const fn deployer(index: u8) -> Self {
         Self(Self::DEPLOYER_BASE.wrapping_add(index))
+    }
+
+    /// This deployer's index, or `None` for anything else.
+    pub const fn deployer_index(self) -> Option<u8> {
+        match self.is_deployer() {
+            true => Some(self.0 - Self::DEPLOYER_BASE),
+            false => None,
+        }
+    }
+
+    /// Whether this build would ask about the venue with no core settings to go by.
+    ///
+    /// The FALLBACK roster, used only until `client_settings` arrives: everything this build can
+    /// name, plus the deployer indices it scans. With settings in hand the core's own mask decides
+    /// instead, and it can name venues this list cannot.
+    pub fn is_known_or_scanned_deployer(self) -> bool {
+        Self::KNOWN.contains(&self)
+            || self
+                .deployer_index()
+                .is_some_and(|index| index < Self::DEPLOYERS_SCANNED)
     }
 
     pub const fn from_code(code: u8) -> Self {
@@ -480,9 +501,16 @@ impl ArbVenue {
 }
 
 /// One venue's price on the charted coin, against the price of the market being charted.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ArbQuote {
     pub venue: ArbVenue,
+    /// The venue's own name, when the CORE supplies one.
+    ///
+    /// Hyperliquid deployers are the case this exists for: the arbitrage slot carries an index and
+    /// the index alone, but `AuthCheck` hands over `known_dexes` — the deployer names the reference
+    /// terminal shows as `HL_hyna`, `HL_para`. Empty for every other venue, whose name this build
+    /// spells itself, and empty for a deployer whose core sent no list.
+    pub dex_name: String,
     /// The other venue's price.
     pub price: f64,
     /// The CHARTED market's own price at the moment that one was recorded.

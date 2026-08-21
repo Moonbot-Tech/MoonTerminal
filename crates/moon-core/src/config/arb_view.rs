@@ -8,9 +8,10 @@
 //! for the same reason `theme.toml` and `detects_view.toml` do: it is worth copying to another
 //! machine on its own.
 //!
-//! Nothing here comes from the protocol. The core reports a numeric platform code and a price; the
-//! name, the colour, the order and the visibility are all this file's, which is why a venue can be
-//! renamed at all — a Hyperliquid deployer reaches us as an index and nothing else.
+//! The core reports a numeric platform code and a price; the colour, the order and the visibility
+//! are this file's alone. NAMES are shared: this build spells the exchanges it knows, a Hyperliquid
+//! deployer is named by the core's own `known_dexes` list when it has one, and the user's own name
+//! overrides both — which is what a deployer whose core sent no list still needs.
 
 use serde::{Deserialize, Serialize};
 
@@ -71,19 +72,18 @@ impl ArbShow {
 }
 
 /// One venue's row in the column.
-///
-/// `Eq` deliberately, like the two types around it: the caption cache holds the roster behind an
-/// `Rc` and compares it per revision, and `Rc`'s pointer shortcut only applies when the payload is
-/// `Eq`. Without it every pane deep-compares twenty venues, names and all, several times a second.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ArbVenueCfg {
     /// Protocol platform code. THE identity of the row — the name is a label the user may change,
     /// so keying anything on it would lose the row's settings the moment it was renamed.
     pub code: u8,
     /// Whether the row is printed at all.
     pub visible: bool,
-    /// User's own name for the venue. Empty means the default spelling, which is also what a
-    /// Hyperliquid deployer starts from before anybody names it.
+    /// User's own name for the venue, overriding every other spelling.
+    ///
+    /// Empty means "whatever names it best": the core's own deployer name when there is one, and
+    /// this build's spelling otherwise. Left empty by default, so a core that starts reporting a
+    /// deployer's real name shows it without anyone editing the roster.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     /// Fixed `0xRRGGBB` for the row, or `None` for the chart's caption colour.
@@ -106,17 +106,54 @@ impl ArbVenueCfg {
         ArbVenue::from_code(self.code)
     }
 
-    /// What this row is CALLED: the user's name, or the venue's default spelling.
-    pub fn label(&self) -> String {
-        if self.name.is_empty() {
-            return self.venue().default_name();
+    /// What this row is CALLED, in the order the names win: the user's own, then whatever the
+    /// live quote carries, then this build's spelling.
+    ///
+    /// The middle one is the deployer case — `known_dexes` names it, and only a live read has that
+    /// — which is why the label takes the quote rather than reading it off the roster alone.
+    pub fn label_for(&self, quote: Option<&crate::market::ArbQuote>) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
         }
-        self.name.clone()
+        match quote.map(|q| q.dex_name.as_str()).filter(|n| !n.is_empty()) {
+            Some(name) => name.to_string(),
+            None => self.venue().default_name(),
+        }
+    }
+
+    /// What this row is called with no live quote in hand, but with the core's deployer list.
+    ///
+    /// The settings window's case: it has a roster and no coin, so it cannot take a name off a
+    /// quote — but the list the quote's name comes FROM is readable on its own, and the window has
+    /// to agree with the chart about what a venue is called.
+    pub fn label_with(&self, dex_names: &[String]) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+        let named = self
+            .venue()
+            .deployer_index()
+            .and_then(|index| dex_names.get(usize::from(index)))
+            .filter(|name| !name.is_empty());
+        match named {
+            Some(name) => name.clone(),
+            None => self.venue().default_name(),
+        }
+    }
+
+    /// What this row is called with nothing else to go by.
+    pub fn label(&self) -> String {
+        self.label_for(None)
     }
 }
 
 /// The whole arbitrage column: its roster, and what each row prints.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// NOT `Eq` — it carries a percentage — so the caption cache compares it by POINTER rather than by
+/// value, exactly as it already does for the caption configuration itself. A roster is replaced
+/// wholesale when the settings window writes it, so pointer identity answers "did it change"
+/// exactly, and answering it by value would walk two dozen venues per pane per revision.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ArbViewCfg {
     /// Venues in PRINT order. A venue absent from this list is still drawn — appended after it, at
@@ -130,6 +167,15 @@ pub struct ArbViewCfg {
     /// On by default: a spread on a coin that cannot be moved off the venue is not an opportunity,
     /// and that is exactly the row a reader must not mistake for one.
     pub mark_blocked: bool,
+    /// Smallest spread, in percent, a venue is printed at all for. `0` prints every venue.
+    ///
+    /// A different question from the colour threshold beside it in the caption's style, and both
+    /// are worth having: this one shortens the COLUMN — twelve venues quoting the same price are
+    /// twelve lines of nothing — while the colour threshold keeps the line and takes the paint off
+    /// it. Off by default, because a venue that has vanished from the column cannot be told from a
+    /// venue that stopped reporting.
+    #[serde(default)]
+    pub min_abs_pct: f32,
 }
 
 impl Default for ArbViewCfg {
@@ -150,6 +196,7 @@ impl Default for ArbViewCfg {
             venues,
             show: ArbShow::default(),
             mark_blocked: true,
+            min_abs_pct: 0.0,
         }
     }
 }
@@ -173,6 +220,11 @@ impl ArbViewCfg {
     /// Duplicates matter more than they look: two rows for one code would print the venue twice and
     /// give the second row's settings to whichever one the lookup found first.
     pub fn sanitize(&mut self) {
+        // A hand-edited negative or non-finite floor would hide every venue or none unpredictably;
+        // both read as "the column broke".
+        if !(self.min_abs_pct.is_finite() && self.min_abs_pct >= 0.0) {
+            self.min_abs_pct = 0.0;
+        }
         let mut seen = std::collections::HashSet::new();
         self.venues.retain(|v| seen.insert(v.code));
         for venue in &mut self.venues {
@@ -203,29 +255,42 @@ impl ArbViewCfg {
     ///     Rows to print, each paired with the venue's configured label and colour.
     pub fn arrange<'a>(&'a self, quotes: &'a [crate::market::ArbQuote]) -> Vec<ArbRow<'a>> {
         let mut out: Vec<ArbRow<'a>> = Vec::new();
+        // The floor, asked once per quote wherever a quote is considered.
+        let floor = f64::from(self.min_abs_pct);
+        let shows = move |q: &crate::market::ArbQuote| q.spread_pct.abs() >= floor;
         for cfg in self.venues.iter().filter(|v| v.visible) {
-            if let Some(quote) = quotes.iter().find(|q| q.venue.code() == cfg.code) {
+            if let Some(quote) = quotes
+                .iter()
+                .find(|q| q.venue.code() == cfg.code)
+                .filter(|q| shows(q))
+            {
                 out.push(ArbRow {
                     quote,
-                    label: cfg.label(),
+                    label: cfg.label_for(Some(quote)),
                     color: cfg.color,
                 });
             }
         }
-        for quote in quotes.iter().filter(|q| self.row(q.venue).is_none()) {
+        for quote in quotes
+            .iter()
+            .filter(|q| self.row(q.venue).is_none() && shows(q))
+        {
             out.push(ArbRow {
                 quote,
-                label: quote.venue.default_name(),
+                // Unlisted, so there is no user name to prefer — but the core may still have named
+                // it, and a deployer arriving as "hyna" should not print as "HL #3".
+                label: match quote.dex_name.is_empty() {
+                    true => quote.venue.default_name(),
+                    false => quote.dex_name.clone(),
+                },
                 color: None,
             });
         }
-        if out.len() > ARB_MAX_ROWS {
-            log::warn!(
-                "арбитраж: площадок {}, печатаем первые {ARB_MAX_ROWS}",
-                out.len()
-            );
-            out.truncate(ARB_MAX_ROWS);
-        }
+        // Silently, and that is deliberate: this runs on every caption rebuild, and the venue
+        // count comes from the CORE's watch mask — a deployer-heavy core would otherwise write the
+        // same warning to the log several times a second. The ceiling is a guard against a column
+        // taller than a pane, not a condition worth reporting.
+        out.truncate(ARB_MAX_ROWS);
         out
     }
 }

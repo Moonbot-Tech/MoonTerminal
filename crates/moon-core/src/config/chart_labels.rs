@@ -50,9 +50,18 @@ pub const CHART_LABEL_PARTS: usize = 8;
 /// run and costs nothing while no chart prints one (the pool grows by index, on demand).
 pub const ARB_PART_BASE: usize = ROW_NAME_PART + 1;
 
-/// Retained text runs reserved per row: one per part, one for the row's printed name, and the
-/// arbitrage column's own range.
-pub const ROW_RUN_STRIDE: usize = ARB_PART_BASE + super::arb_view::ARB_MAX_ROWS;
+/// First run index reserved for a caption's PREFIX.
+///
+/// A caption whose colour applies to the value alone is two runs, not one: the prefix in the
+/// theme's colour and the figure in the sign's. They cannot share an index — a run holds one string
+/// — and the prefix cannot borrow a neighbour's, so the whole prefix range mirrors the value range
+/// above it. The pool grows by index on demand, so a chart that colours whole captions never
+/// allocates any of this.
+pub const PREFIX_PART_BASE: usize = ARB_PART_BASE + super::arb_view::ARB_MAX_ROWS;
+
+/// Retained text runs reserved per row: one per part, one for the row's printed name, the
+/// arbitrage column's own range, and a prefix run mirroring each of them.
+pub const ROW_RUN_STRIDE: usize = PREFIX_PART_BASE * 2;
 
 /// Run index — and part index — of a row's printed NAME.
 ///
@@ -355,6 +364,23 @@ impl PnlBasis {
 pub struct LabelStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<LabelColor>,
+    /// Whether only the VALUE takes the colour, leaving the caption's prefix in the theme's.
+    ///
+    /// "Фандинг: +3.90%" reads as a label and a figure, and only the figure is positive — colouring
+    /// the word with it makes the row a block of green that the eye has to re-parse to find the
+    /// number. On by default for exactly that reason; a caption with no prefix is unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_only: Option<bool>,
+    /// Smallest magnitude, in percent, that is worth colouring at all.
+    ///
+    /// A by-sign caption paints every hundredth of a percent as a gain or a loss, and a column of
+    /// arbitrage spreads then reads as noise where only one row matters. Below this the caption
+    /// keeps the theme colour and still prints its value. `0` — the default — colours everything,
+    /// which is what every caption did before this existed.
+    ///
+    /// Percent, so it applies to the fields that print one; see [`ChartLabelField::is_percent`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_min_pct: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_mult: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -368,6 +394,10 @@ pub struct LabelStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResolvedLabelStyle {
     pub color: LabelColor,
+    /// Whether the colour applies to the value alone, leaving the prefix in the theme's colour.
+    pub value_only: bool,
+    /// Magnitude below which a by-sign caption stays in the theme colour, in percent.
+    pub color_min_pct: f32,
     /// Multiplier on the chart's label font size, already clamped to the drawable range.
     pub size_mult: f32,
     /// Whether a translucent plate is drawn under the row this part belongs to.
@@ -427,6 +457,8 @@ impl ChartLabelPart {
             visible: true,
             style: LabelStyle {
                 color: None,
+                value_only: None,
+                color_min_pct: None,
                 size_mult: None,
                 plate: None,
                 caption: None,
@@ -451,6 +483,14 @@ impl ChartLabelPart {
         let base = self.field.default_style();
         ResolvedLabelStyle {
             color: self.style.color.unwrap_or(base.color),
+            value_only: self.style.value_only.unwrap_or(base.value_only),
+            // A hand-edited negative or non-finite threshold is treated as ABSENT rather than
+            // clamped: it means "colour everything", which is the default.
+            color_min_pct: self
+                .style
+                .color_min_pct
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .unwrap_or(base.color_min_pct),
             // A non-finite multiplier is treated as ABSENT rather than clamped: `f32::clamp`
             // passes NaN straight through, and a NaN size reaches the shaper as a caption of no
             // size at all.
@@ -767,6 +807,15 @@ impl ChartLabelsCfg {
                 row.name = repaired;
             }
             compact(&mut row.parts, ChartLabelPart::is_used);
+            // A module printing a COLUMN runs down one. Its lines are venues, and laying them
+            // across a line gives each a cell of its own — the width budget then drops all but the
+            // first few, which reads as an arbitrage list that lost most of its venues.
+            if row.parts[..row.used_parts()]
+                .iter()
+                .any(|p| p.field.is_column())
+            {
+                row.flow = LabelFlow::Column;
+            }
             for part in &mut row.parts {
                 // A window the field cannot be read over is repaired to one it can: switching a
                 // caption's field must not leave it asking for a figure that never arrives, and a

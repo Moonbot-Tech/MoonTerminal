@@ -906,3 +906,28 @@ fn a_window_the_field_cannot_read_is_repaired() {
         "a field that reads every window keeps the one it was given"
     );
 }
+
+/// The colour threshold is a magnitude, so a negative or non-finite one is treated as ABSENT — the
+/// default, "colour everything" — rather than clamped into something the user never asked for.
+#[test]
+fn a_broken_colour_threshold_falls_back_to_colouring_everything() {
+    let mut part = ChartLabelPart::new(ChartLabelField::Delta1h);
+    part.style.color_min_pct = Some(f32::NAN);
+    assert_eq!(part.resolved_style().color_min_pct, 0.0);
+
+    part.style.color_min_pct = Some(-1.0);
+    assert_eq!(part.resolved_style().color_min_pct, 0.0);
+
+    part.style.color_min_pct = Some(0.5);
+    assert_eq!(part.resolved_style().color_min_pct, 0.5);
+}
+
+/// Colouring the value alone is the DEFAULT: "Фандинг: +3.90%" is a label and a figure, and only
+/// the figure has a sign.
+#[test]
+fn a_caption_colours_its_value_alone_by_default() {
+    assert!(ChartLabelPart::new(ChartLabelField::Funding).resolved_style().value_only);
+    let mut part = ChartLabelPart::new(ChartLabelField::Funding);
+    part.style.value_only = Some(false);
+    assert!(!part.resolved_style().value_only);
+}

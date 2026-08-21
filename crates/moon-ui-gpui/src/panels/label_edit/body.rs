@@ -21,7 +21,7 @@ use rust_i18n::t;
 
 use super::LabelEditState;
 use crate::chart_tabs::seg_row;
-use crate::controls::field_menu_items;
+use crate::controls::field_picker;
 use crate::design::{self, moon};
 use crate::panels::{micro_button, popup_group, popup_group_inset_px, toggle_variant};
 
@@ -35,6 +35,13 @@ const SIZE_STEPS: [f32; 7] = [0.75, 1.0, 1.25, 1.45, 1.5, 1.7, 2.0];
 const FIXED_COLORS: [u32; 8] = [
     0xffffff, 0xffd166, 0xef476f, 0x06d6a0, 0x4cc9f0, 0xb388ff, 0xff9f1c, 0x8d99ae,
 ];
+
+/// Colour thresholds offered, in percent. `0` colours everything, which is the default and the
+/// way back.
+///
+/// Steps rather than a free field, like the size control beside it: this dialog holds no numeric
+/// input state, and a handful of values covers "stop painting the noise" without one.
+const COLOR_MIN_STEPS: [f32; 6] = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0];
 
 /// Width of one micro glyph button.
 const MICRO_W: f32 = 20.0;
@@ -251,31 +258,28 @@ fn caption_list(
     let add = {
         let state = state.clone();
         let row_fields: Vec<ChartLabelField> = row.parts[..used].iter().map(|p| p.field).collect();
-        MoonDropdown::new("le-add-part")
-            .label(format!(
-                "{}  {used}/{CHART_LABEL_PARTS}",
-                t!("chart_labels.add_part")
-            ))
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
-            .trigger_width_scaled(LIST_W)
-            .menu_width_scaled(180.0)
-            .menu_size(MoonMenuSize::Compact)
-            .disabled(row.first_free_part().is_none())
-            .items(field_menu_items(
-                "le-add",
-                move |f| row_fields.contains(&f),
-                move |field, _window, cx| {
-                    write_row(&state, cx, |s| {
-                        if s.row.push_part(field) {
-                            // Selection follows the caption just added: the settings pane beside
-                            // the list is where the user is going next.
-                            s.selected = s.row.used_parts().saturating_sub(1);
-                        }
-                    });
-                },
-            ))
+        let full = row.first_free_part().is_none();
+        field_picker(
+            "le-add",
+            match full {
+                // A full module says so on the trigger rather than offering a catalogue that cannot
+                // be picked from: the count IS the reason, so it is what the label shows.
+                true => format!("{}  {used}/{CHART_LABEL_PARTS}", t!("chart_labels.row_full")),
+                false => format!("{}  {used}/{CHART_LABEL_PARTS}", t!("chart_labels.add_part")),
+            },
+            full,
+            move |f| row_fields.contains(&f),
+            move |field, _window, cx| {
+                write_row(&state, cx, |s| {
+                    if s.row.push_part(field) {
+                        // Selection follows the caption just added: the settings pane beside the
+                        // list is where the user is going next.
+                        s.selected = s.row.used_parts().saturating_sub(1);
+                    }
+                });
+            },
+            cx,
+        )
     };
     // Font-scaled, plus the group's own inset: the line inside is built from `design::font_w`
     // widths, and a column measured with the UI scaler instead drifts from its content the moment
@@ -317,13 +321,6 @@ fn caption_settings(
     col = col.child({
         let state = state.clone();
         let current = part.field;
-        let items = field_menu_items(
-            "le-f",
-            move |f| f == current,
-            move |f, _window, cx| {
-                write_row(&state, cx, |s| s.row.parts[selected].field = f);
-            },
-        );
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 2.0))
@@ -333,17 +330,16 @@ fn caption_settings(
                     .text_color(moon(p.text))
                     .child(t!("chart_labels.field_caption").to_string()),
             )
-            .child(
-                MoonDropdown::new("le-field")
-                    .label(t!(part.field.locale_key()).to_string())
-                    .trigger_caret(true)
-                    .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Micro)
-                    .trigger_width_scaled(220.0)
-                    .menu_width_scaled(200.0)
-                    .menu_size(MoonMenuSize::Compact)
-                    .items(items),
-            )
+            .child(field_picker(
+                "le-f",
+                t!(part.field.locale_key()).to_string(),
+                false,
+                move |f| f == current,
+                move |f, _window, cx| {
+                    write_row(&state, cx, |s| s.row.parts[selected].field = f);
+                },
+                cx,
+            ))
     });
 
     // Which orders a position figure counts. Offered only by the fields that read it, so a stale
@@ -405,8 +401,10 @@ fn caption_settings(
     if part.field.uses_window() {
         let state = state.clone();
         let current = part.window;
+        // The FIELD's windows, not every window: the buy/sell split lives only where the retained
+        // trades do, and offering the day there offers a pick `sanitize` would take back.
         let items = crate::panels::radio_items(
-            LabelWindow::ALL.iter().map(|w| {
+            part.field.window_choices().iter().map(|w| {
                 (
                     *w,
                     SharedString::from(format!("le-w-{w:?}")),
@@ -539,6 +537,60 @@ fn caption_settings(
         col = col.child(swatches);
     }
 
+    // Whether the colour applies to the figure alone. Offered only when the caption HAS a prefix
+    // to leave uncoloured — a bare value has nothing for this switch to spare.
+    if part.field.caption_key().is_some() && resolved.caption {
+        let state = state.clone();
+        let on = resolved.value_only;
+        col = col.child(
+            MoonCheckbox::new("le-value-only")
+                .label(t!("chart_labels.value_only").to_string())
+                .checked(on)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |v: &bool, _w, cx| {
+                    let v = *v;
+                    write_row(&state, cx, |s| {
+                        s.row.parts[selected].style.value_only = Some(v)
+                    });
+                }),
+        );
+    }
+
+    // From which magnitude a by-sign caption is worth colouring. Percent, so it is offered only by
+    // the fields that print one, and only in the mode it applies to: a fixed colour is the user's
+    // own choice and a theme colour has nothing to threshold.
+    if part.field.is_percent() && resolved.color == LabelColor::BySign {
+        let state = state.clone();
+        let current = COLOR_MIN_STEPS
+            .iter()
+            .position(|v| (v - resolved.color_min_pct).abs() < 0.001);
+        col = col.child(seg_row(
+            "le-color-min".to_string(),
+            t!("chart_labels.color_min").to_string(),
+            COLOR_MIN_STEPS
+                .iter()
+                .enumerate()
+                .map(|(n, v)| {
+                    let label = match *v == 0.0 {
+                        true => t!("chart_labels.color_min_off").to_string(),
+                        false => format!("{v}%"),
+                    };
+                    (label, Some(n) == current)
+                })
+                .collect(),
+            48.0,
+            p,
+            cx,
+            move |pick, cx| {
+                if let Some(v) = COLOR_MIN_STEPS.get(pick).copied() {
+                    write_row(&state, cx, |s| {
+                        s.row.parts[selected].style.color_min_pct = Some(v)
+                    });
+                }
+            },
+        ));
+    }
+
     let plate_cb = {
         let state = state.clone();
         let on = resolved.plate;
@@ -629,11 +681,34 @@ fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> 
                 _ => p.text,
             },
         };
+        let size = px(f32::from(base) * caption.style.size_mult);
+        // Prefix and value are drawn APART here for the same reason the chart draws them apart:
+        // with "colour the value only" on, the word keeps the theme colour and only the figure
+        // takes the sign's. Gluing them in the preview would show a colour the chart never paints.
+        let split = caption.style.value_only && !caption.prefix.is_empty();
+        let (prefix, value) = match split {
+            true => (caption.prefix.clone(), caption.text.clone()),
+            false => (
+                String::new(),
+                format!("{}{}", caption.prefix, caption.text),
+            ),
+        };
+        let mut pair = h_flex().items_baseline();
+        if !prefix.is_empty() {
+            pair = pair.child(
+                div()
+                    .text_size(size)
+                    .text_color(moon(p.text))
+                    .child(prefix),
+            );
+        }
         line = line.child(
-            div()
-                .text_size(px(f32::from(base) * caption.style.size_mult))
-                .text_color(moon(color))
-                .child(caption.text),
+            pair.child(
+                div()
+                    .text_size(size)
+                    .text_color(moon(color))
+                    .child(value),
+            ),
         );
     }
     popup_group("le-preview", t!("chart_labels.preview"))

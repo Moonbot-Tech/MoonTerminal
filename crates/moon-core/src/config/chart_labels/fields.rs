@@ -350,6 +350,35 @@ impl ChartLabelField {
         )
     }
 
+    /// Whether what this field prints is a PERCENTAGE.
+    ///
+    /// The colour threshold is stated in percent, so it can only be applied to a caption whose
+    /// value is one: "colour from 1%" means nothing to a price, a size, or a countdown, and
+    /// applying it there would silently drop the colour from figures the user never set a
+    /// threshold for.
+    pub fn is_percent(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::ScaleBadge
+                | ChartLabelField::CompareDelta
+                | ChartLabelField::Delta1h
+                | ChartLabelField::Delta24h
+                | ChartLabelField::OpenPnlPct
+                | ChartLabelField::ExchangeDelta1h
+                | ChartLabelField::ExchangeDelta24h
+                | ChartLabelField::BtcDelta1h
+                | ChartLabelField::BtcDelta24h
+                | ChartLabelField::BtcDelta72h
+                | ChartLabelField::Funding
+                | ChartLabelField::Spread
+                | ChartLabelField::MarkDelta
+                | ChartLabelField::WindowDelta
+                | ChartLabelField::WindowBuyShare
+                // Every line of the column is a spread, so the whole column is.
+                | ChartLabelField::ArbColumn
+        )
+    }
+
     /// Whether this field prints a COLUMN of its own rather than one value.
     ///
     /// Asked by the drawing pass, which addresses such a caption's lines in their own run range,
@@ -392,6 +421,8 @@ impl ChartLabelField {
         match self {
             // The coin leads, one size up: it is the fact a glance needs.
             ChartLabelField::Coin => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.25,
                 plate: true,
@@ -399,6 +430,8 @@ impl ChartLabelField {
             },
             // The comparison delta is the one figure a broom-mode pane exists to show.
             ChartLabelField::CompareDelta => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::BySign,
                 size_mult: 1.7,
                 plate: true,
@@ -407,6 +440,8 @@ impl ChartLabelField {
             // Deliberately smaller than the comparison delta beside it: a secondary indicator must
             // not compete with the figure the pane is being read for.
             ChartLabelField::ScaleBadge => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.45,
                 plate: true,
@@ -423,7 +458,12 @@ impl ChartLabelField {
             | ChartLabelField::OpenPnlPct
             | ChartLabelField::MarkDelta
             | ChartLabelField::SessionPnl
+            // Every line of the column is a spread against this market, and which SIDE it is on is
+            // the whole reading. The venue's name is the line's prefix and keeps the theme colour.
+            | ChartLabelField::ArbColumn
             | ChartLabelField::OpenPnlMoney => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::BySign,
                 size_mult: 1.0,
                 plate: true,
@@ -453,12 +493,16 @@ impl ChartLabelField {
             // Two strategy captions can sit on one chart — the one holding an order and the one
             // that last fired — and a bare name says nothing about which is which.
             | ChartLabelField::DetectStrategy => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.0,
                 plate: true,
                 caption: true,
             },
             _ => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.0,
                 plate: true,

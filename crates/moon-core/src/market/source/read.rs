@@ -82,37 +82,26 @@ pub(super) fn position_of(pos: &moonproto::state::MarketBalancePosition) -> (Opt
     (Some(signed), price, liq)
 }
 
-/// The protocol's platform code for one of our venues.
+/// Deployer names out of one snapshot's `AuthCheck` response.
+fn dex_names_of(snapshot: &moonproto::MoonClientSnapshot) -> Vec<String> {
+    snapshot
+        .auth_info()
+        .map(|info| info.known_dexes.iter().map(|d| d.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// The protocol's platform code for a raw wire byte.
 ///
-/// A second spelling of the same table, and it exists because the protocol's own `from_byte` is not
-/// public outside its diagnostics build: the constants are, so the mapping goes through them. THE
-/// only place the two numberings meet — see docs-internal/FORK_BUGS.md, where a public byte
-/// constructor is asked for.
-fn platform_code(venue: ArbVenue) -> Option<moonproto::ArbPlatformCode> {
-    use moonproto::ArbPlatformCode as C;
-    if venue.is_deployer() {
-        return Some(C::hyper_deployer(venue.code() - ArbVenue::deployer(0).code()));
-    }
-    Some(match venue.code() {
-        1 => C::WasBittrex,
-        2 => C::FBybit,
-        3 => C::Binance,
-        4 => C::FBinance,
-        5 => C::Huobi,
-        6 => C::QBinance,
-        7 => C::ByBit,
-        8 => C::Gate,
-        9 => C::FGate,
-        10 => C::BitGet,
-        11 => C::FBitGet,
-        12 => C::HyperSpot,
-        13 => C::HyperFutures,
-        100 => C::Forex,
-        101 => C::UpBit,
-        102 => C::Okx,
-        103 => C::BinAlpha,
-        _ => return None,
-    })
+/// `ArbPlatformCode::from_byte` is not public outside the protocol's diagnostics build, and the
+/// named constants cover only what THAT build knew about — which is exactly the venue this terminal
+/// then cannot read (the reference terminal shows an `OkxF` column whose code appears in no
+/// constant). `hyper_deployer` is public and is a plain `50 + index` with wrapping arithmetic, so
+/// it reaches every byte.
+///
+/// Ugly on purpose, and deliberately the ONLY place the numbering is bridged: see
+/// docs-internal/FORK_BUGS.md, where a public byte constructor is asked for.
+fn platform_code(byte: u8) -> moonproto::ArbPlatformCode {
+    moonproto::ArbPlatformCode::hyper_deployer(byte.wrapping_sub(ArbVenue::DEPLOYER_BASE))
 }
 
 /// A figure the venue states, or nothing.
@@ -745,6 +734,57 @@ impl MarketDataSource {
         any.then_some(out)
     }
 
+    /// Return the Hyperliquid deployer names one core knows, indexed by deployer index.
+    ///
+    /// The same list the arbitrage quotes are named from, read WITHOUT a market — the settings
+    /// window has a roster but no coin, and a window that numbered the deployers while the chart
+    /// beside it named them would be two answers to one question.
+    ///
+    /// Args:
+    ///     core: Core whose `AuthCheck` response is read. Its OWN, not its market provider's: the
+    ///         deployer list is part of a core's identity, and a Binance provider knows none.
+    ///
+    /// Returns:
+    ///     Names by index, empty when the core sent no list.
+    pub fn arb_dex_names(&self, core: CoreId) -> Vec<String> {
+        let own = self
+            .core_client(core)
+            .and_then(|c| c.snapshot_versioned())
+            .map(|snapshot| dex_names_of(&snapshot))
+            .unwrap_or_default();
+        if !own.is_empty() {
+            return own;
+        }
+        // The list is Hyperliquid's, and a core connected elsewhere sends none — but the arbitrage
+        // slots it reports still carry deployer codes, and a terminal watching several cores
+        // usually has a Hyperliquid one among them. Any core's list names the same deployers,
+        // because the index comes from the same protocol.
+        self.any_dex_names()
+    }
+
+    /// The first non-empty deployer list any connected core knows, by ASCENDING core id.
+    ///
+    /// The order is the point: cores live in a `HashMap`, and taking whichever one iteration
+    /// happened to reach first would let the settings window and the chart behind it spell the same
+    /// deployer differently — and differently again on the next open.
+    pub fn any_dex_names(&self) -> Vec<String> {
+        let clients: Vec<_> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let mut cores: Vec<CoreId> = inner.clients.keys().copied().collect();
+            cores.sort_unstable();
+            cores
+                .into_iter()
+                .filter_map(|core| inner.clients.get(&core).and_then(SharedMoonClient::get))
+                .collect()
+        };
+        clients
+            .into_iter()
+            .filter_map(|client| client.snapshot_versioned())
+            .map(|snapshot| dex_names_of(&snapshot))
+            .find(|names| !names.is_empty())
+            .unwrap_or_default()
+    }
+
     /// Return every arbitrage price the core holds for one market, newest first by venue order.
     ///
     /// The core keeps a ring of ten points per venue plus a "now" entry, and both carry the OTHER
@@ -767,22 +807,45 @@ impl MarketDataSource {
         let snapshot = self.core_client(provider)?.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
         let mut out = Vec::new();
-        // ASKED venue by venue, because that is the only door the protocol opens: the slot map
-        // itself is private and `arb_slot` copies one entry at a time. The candidate list is
-        // therefore bounded by hand — every venue this build can name, plus the first few
-        // Hyperliquid deployer indices — and the whole walk is behind the caller's throttle, since
-        // each call takes the market lock. See docs-internal/FORK_BUGS.md: an iterator over the
-        // enabled slots would replace this with one lock.
-        let candidates = ArbVenue::KNOWN
-            .into_iter()
-            .chain((0..ArbVenue::DEPLOYERS_SCANNED).map(ArbVenue::deployer));
-        for venue in candidates {
-            let Some(code) = platform_code(venue) else {
-                continue;
+        // WHICH venues to ask about comes from the core itself: `client_settings.arb_config` is the
+        // very checkbox list the reference terminal shows, so a venue this build has never heard of
+        // — a newer exchange, a deployer nobody hard-coded — is read as soon as the core watches
+        // it. A table of our own could only ever list what was known when it was written.
+        //
+        // Asked venue by venue because that is the only door the protocol opens: the slot map is
+        // private and `arb_slot` copies one entry at a time (see docs-internal/FORK_BUGS.md). The
+        // mask test itself is an array read, so scanning the whole byte range costs nothing; only a
+        // WATCHED venue pays for a lock, and the whole walk is behind the caller's throttle.
+        let wanted = snapshot
+            .settings()
+            .client_settings
+            .as_ref()
+            .map(|s| &s.arb_config);
+        // Deployer NAMES. `AuthCheck` is a mandatory start-up step, so a Hyperliquid core carries
+        // this list; a core connected elsewhere sends none and borrows one from a core that does —
+        // the index is the protocol's, not the core's.
+        //
+        // The index is the arbitrage code minus the deployer base, which is the same shape
+        // `HyperDexIndex` uses into this very list. NOT VERIFIED against a live core: if the two
+        // turn out to be off by one — `known_dexes[0]` is the unnamed default validator — this is
+        // the one line to shift.
+        let dex_names = self.arb_dex_names(provider);
+        for byte in 0u8..=255 {
+            let code = platform_code(byte);
+            // No settings yet — the core has not sent them, or this is a build that does not — so
+            // fall back to what this build can name. Without this an arbitrage column would stay
+            // empty until the settings arrive, which looks like the feature is broken.
+            let asked = match wanted {
+                Some(cfg) => cfg.is_wanted(code),
+                None => ArbVenue::from_code(byte).is_known_or_scanned_deployer(),
             };
+            if !asked {
+                continue;
+            }
             let Some(slot) = handle.arb_slot(code).filter(|s| s.enabled) else {
                 continue;
             };
+            let venue = ArbVenue::from_code(byte);
             let point = slot.latest_point();
             let (price, my_price) = (f64::from(point.price), f64::from(point.my_price));
             if !(price.is_finite() && price > 0.0 && my_price.is_finite() && my_price > 0.0) {
@@ -790,6 +853,11 @@ impl MarketDataSource {
             }
             out.push(ArbQuote {
                 venue,
+                dex_name: venue
+                    .deployer_index()
+                    .and_then(|index| dex_names.get(usize::from(index)))
+                    .cloned()
+                    .unwrap_or_default(),
                 price,
                 my_price,
                 spread_pct: (price - my_price) / my_price * 100.0,

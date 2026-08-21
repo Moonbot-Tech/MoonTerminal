@@ -1269,6 +1269,10 @@ chart_labels.new_row:
   ru: "Новый модуль"
   en: "New module"
   es: "Módulo nuevo"
+chart_labels.row_full:
+  ru: "Модуль заполнен"
+  en: "Module is full"
+  es: "Módulo lleno"
 chart_labels.add_part:
   ru: "＋ Подпись"
   en: "＋ Label"
@@ -1366,9 +1370,9 @@ chart_labels.color_theme:
   en: "Theme"
   es: "Tema"
 chart_labels.color_sign:
-  ru: "По профиту"
-  en: "By profit"
-  es: "Por beneficio"
+  ru: "По знаку"
+  en: "By sign"
+  es: "Por signo"
 chart_labels.color_fixed:
   ru: "Свой"
   en: "Custom"
@@ -1753,6 +1757,26 @@ chart_labels.margin.isolated:
   ru: "Изолир."
   en: "Isolated"
   es: "Aislado"
+chart_labels.value_only:
+  ru: "Красить только значение"
+  en: "Colour the value only"
+  es: "Colorear solo el valor"
+chart_labels.color_min:
+  ru: "Красить от"
+  en: "Colour from"
+  es: "Colorear desde"
+chart_labels.color_min_off:
+  ru: "всегда"
+  en: "always"
+  es: "siempre"
+arb.min_abs:
+  ru: "Показывать от"
+  en: "Show from"
+  es: "Mostrar desde"
+arb.min_abs_off:
+  ru: "всё"
+  en: "all"
+  es: "todo"
 chart_labels.window:
   ru: "Период"
   en: "Window"

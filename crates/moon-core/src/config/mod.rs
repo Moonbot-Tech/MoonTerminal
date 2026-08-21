@@ -55,7 +55,8 @@ pub use chart_labels::{
     ChartLabelField, ChartLabelGroup, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign,
     LabelColor, LabelFlow, LabelPreset, LabelStyle, LabelWindow, LabelZone, PnlBasis,
     ResolvedLabelStyle, ARB_PART_BASE, CHART_LABEL_PARTS, CHART_LABEL_ROWS, LABEL_GAP_MAX,
-    LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN, LABEL_WINDOW_COUNT, ROW_NAME_PART, ROW_RUN_STRIDE,
+    LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN, LABEL_WINDOW_COUNT, PREFIX_PART_BASE, ROW_NAME_PART,
+    ROW_RUN_STRIDE,
 };
 pub use core_groups::{
     move_group, sanitize_core_groups, unique_group_name, CoreGroup, CORE_GROUPS_MAX,

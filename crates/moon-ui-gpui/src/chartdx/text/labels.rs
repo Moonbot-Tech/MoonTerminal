@@ -78,12 +78,6 @@ pub(in crate::chartdx) struct LabelInputs {
     /// Refreshed on a THROTTLE rather than every revision — see the sync — because reading them
     /// costs one market-lock round trip per venue, and a column of prices is read by eye.
     pub arb: Vec<ArbQuote>,
-    /// The roster that arranges them: which venues, in what order, under what name and colour.
-    ///
-    /// The HANDLE, not a copy, and part of the cache key by pointer: the roster is global and is
-    /// replaced wholesale when the settings window writes it, so a pointer compare answers "did the
-    /// arrangement change" without walking twenty venues per revision.
-    pub arb_view: Option<Rc<ArbViewCfg>>,
     /// Open-position figures, one entry per [`PnlBasis`] at [`basis_index`].
     pub basis: [BasisStats; 3],
 }
@@ -148,6 +142,13 @@ pub(in crate::chartdx) struct LabelText {
     /// string whenever a neighbour appeared or vanished — reshaping both of them.
     pub part: usize,
     pub text: String,
+    /// The caption's own prefix — "PnL", "Фандинг1ч" — kept APART from the value rather than glued
+    /// to the front of it.
+    ///
+    /// Separate because the two are coloured separately: a by-sign caption paints the figure, and
+    /// painting the word with it turns the row into a block of green the eye has to re-parse. Empty
+    /// when the caption prints no prefix, which is the common case and costs nothing.
+    pub prefix: String,
     /// Sign of the value behind the text, for a caption that colors by it. `None` means the value
     /// has no meaningful sign and the caption keeps the theme color.
     pub sign: Option<DeltaSign>,
@@ -164,6 +165,13 @@ pub(in crate::chartdx) struct LabelText {
 pub(in crate::chartdx) struct LabelState {
     /// Inputs the current [`Self::texts`] were formatted from.
     inputs: LabelInputs,
+    /// Arbitrage roster the current [`Self::texts`] were arranged by.
+    ///
+    /// Held beside the configuration and compared the same way — by POINTER — because it is the
+    /// same kind of value: global, replaced wholesale when the settings window writes it, and two
+    /// dozen venues wide. Comparing it by value would walk those venues, names and all, on every
+    /// revision of every pane, which is exactly what keeping it out of the by-value inputs avoids.
+    arb_view: Option<Rc<ArbViewCfg>>,
     /// Configuration the current [`Self::texts`] were formatted under.
     ///
     /// The HANDLE, not a copy: a configuration is replaced wholesale whenever it changes, so
@@ -195,15 +203,21 @@ impl LabelState {
     pub(in crate::chartdx) fn update(
         &mut self,
         cfg: &Rc<ChartLabelsCfg>,
+        arb_view: &Rc<ArbViewCfg>,
         inputs: LabelInputs,
     ) -> bool {
         let locale = rust_i18n::locale().to_string();
         let same_cfg = self.cfg.as_ref().is_some_and(|held| Rc::ptr_eq(held, cfg));
-        if same_cfg && self.inputs == inputs && self.locale == locale {
+        let same_view = self
+            .arb_view
+            .as_ref()
+            .is_some_and(|held| Rc::ptr_eq(held, arb_view));
+        if same_cfg && same_view && self.inputs == inputs && self.locale == locale {
             return false;
         }
         self.locale = locale;
         self.cfg = Some(cfg.clone());
+        self.arb_view = Some(arb_view.clone());
         self.inputs = inputs;
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
@@ -216,16 +230,15 @@ impl LabelState {
             }
             // The row's own name leads its captions, which is where a reader looks for what the
             // row IS before reading the figures on it.
-            if let Some(title) = crate::controls::row_title(row) {
-                if row.show_name {
-                    scratch.push(LabelText {
-                        row: row_ix,
-                        part: ROW_NAME_PART,
-                        text: title,
-                        sign: None,
-                        color: None,
-                    });
-                }
+            if let (true, Some(title)) = (row.show_name, crate::controls::row_title(row)) {
+                scratch.push(LabelText {
+                    row: row_ix,
+                    part: ROW_NAME_PART,
+                    text: title,
+                    prefix: String::new(),
+                    sign: None,
+                    color: None,
+                });
             }
             let mut column_drawn = false;
             for (part_ix, part) in row.parts.iter().enumerate() {
@@ -241,7 +254,13 @@ impl LabelState {
                     // frame. The drawing pass resolves a column's style the same way — first one
                     // wins — so this is the same rule stated once on each side.
                     if !column_drawn {
-                        push_arb_rows(&mut scratch, row_ix, &self.inputs);
+                        push_arb_rows(
+                            &mut scratch,
+                            row_ix,
+                            &self.inputs,
+                            self.arb_view.as_deref(),
+                            part.resolved_style(),
+                        );
                         column_drawn = true;
                     }
                     continue;
@@ -256,6 +275,7 @@ impl LabelState {
                     row: row_ix,
                     part: part_ix,
                     text,
+                    prefix: caption_prefix(part, part.resolved_style().caption),
                     sign,
                     color: None,
                 });
@@ -278,9 +298,12 @@ fn stats_for(inputs: &LabelInputs, basis: PnlBasis) -> &BasisStats {
     &inputs.basis[basis_index(basis)]
 }
 
-/// Format one caption, or report that it has nothing to print.
+/// Format one caption's VALUE, or report that it has nothing to print.
+///
+/// The value alone: the prefix that names it is built by [`caption_prefix`] and kept apart, so the
+/// two can be coloured separately. Every arm here therefore answers with the figure and nothing
+/// else, which is also why they read as a table.
 fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Option<DeltaSign>)> {
-    let caption = part.resolved_style().caption;
     let stats = stats_for(inputs, part.pnl_basis);
     match part.field {
         ChartLabelField::None => None,
@@ -289,8 +312,9 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::Venue => non_empty(&inputs.venue).map(|t| (t, None)),
         ChartLabelField::Quote => non_empty(&inputs.quote).map(|t| (t, None)),
         ChartLabelField::OrderStrategy => non_empty(&inputs.strategy).map(|t| (t, None)),
-        ChartLabelField::DetectStrategy => non_empty(&inputs.detect_strategy)
-            .map(|t| (with_caption(part, caption, &t), None)),
+        ChartLabelField::DetectStrategy => {
+            non_empty(&inputs.detect_strategy).map(|t| (t, None))
+        }
         // The line is the core's own text and can be a sentence. It is cut to what a caption can be
         // read as at all; the chart's own width budget truncates whatever still does not fit, but
         // that budget measures a string it has already been handed, so an unbounded one would be
@@ -315,7 +339,11 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             } else {
                 DeltaSign::Negative
             };
-            (super::fmt_pct(pct), Some(sign))
+            let min = part.resolved_style().color_min_pct;
+            (
+                super::fmt_pct(pct),
+                colored_sign(min, f64::from(pct), sign),
+            )
         }),
         ChartLabelField::LastPrice => inputs
             .last_price
@@ -323,54 +351,54 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .map(|p| (fmt::adaptive(f64::from(p)), None)),
         ChartLabelField::Delta1h => inputs
             .delta_1h
-            .and_then(|v| signed_pct_label(part, caption, v)),
+            .and_then(|v| signed_pct_label(part, v)),
         ChartLabelField::Delta24h => inputs
             .delta_24h
-            .and_then(|v| signed_pct_label(part, caption, v)),
+            .and_then(|v| signed_pct_label(part, v)),
         ChartLabelField::OpenPnlPct => stats
             .pnl_pct()
-            .and_then(|v| signed_pct_label(part, caption, v)),
+            .and_then(|v| signed_pct_label(part, v)),
         ChartLabelField::OpenPnlMoney => stats.has_position.then(|| {
             let (text, sign) = fmt::signed_amount(stats.pnl_quote, MONEY_DECIMALS);
-            (with_caption(part, caption, &text), Some(sign))
+            (text, Some(sign))
         }),
         // Zero prints nothing rather than "0": the caption reports a position, and an empty corner
         // already says there is none.
         ChartLabelField::ExchangeDelta1h => inputs
             .context
-            .and_then(|c| signed_pct_label(part, caption, c.exchange_1h_pct)),
+            .and_then(|c| signed_pct_label(part, c.exchange_1h_pct)),
         ChartLabelField::ExchangeDelta24h => inputs
             .context
-            .and_then(|c| signed_pct_label(part, caption, c.exchange_24h_pct)),
+            .and_then(|c| signed_pct_label(part, c.exchange_24h_pct)),
         ChartLabelField::BtcDelta1h => inputs
             .context
-            .and_then(|c| signed_pct_label(part, caption, c.btc_1h_pct)),
+            .and_then(|c| signed_pct_label(part, c.btc_1h_pct)),
         ChartLabelField::BtcDelta24h => inputs
             .context
-            .and_then(|c| signed_pct_label(part, caption, c.btc_24h_pct)),
+            .and_then(|c| signed_pct_label(part, c.btc_24h_pct)),
         ChartLabelField::BtcDelta72h => inputs
             .context
-            .and_then(|c| signed_pct_label(part, caption, c.btc_72h_pct)),
+            .and_then(|c| signed_pct_label(part, c.btc_72h_pct)),
         // A market that charges no funding prints nothing: a zero there would read as "free",
         // which is a different claim from "this venue has no funding at all".
         ChartLabelField::Funding => inputs
             .context
             .and_then(|c| c.funding_pct)
-            .and_then(|v| signed_pct_label(part, caption, v)),
+            .and_then(|v| signed_pct_label(part, v)),
         ChartLabelField::FundingIn => inputs
             .context
             .and_then(|c| c.funding_at_ms)
             .and_then(|at| fmt_countdown(at - inputs.now_ms))
-            .map(|text| (with_caption(part, caption, text.as_str()), None)),
+            .map(|text| (text, None)),
         ChartLabelField::OpenOrders => (stats.open_orders > 0).then(|| {
             (
-                with_caption(part, caption, &stats.open_orders.to_string()),
+                stats.open_orders.to_string(),
                 None,
             )
         }),
         ChartLabelField::Exposure => stats.has_exposure.then(|| {
             (
-                with_caption(part, caption, &fmt::compact_si(stats.exposure)),
+                plain(&fmt::compact_si(stats.exposure)),
                 None,
             )
         }),
@@ -384,46 +412,46 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .filter(|f| !f.tags.is_empty())
             .map(|f| (tags_text(&f.tags), None)),
         ChartLabelField::Bid => figure(inputs, |f| f.bid)
-            .map(|v| price_label(part, caption, v)),
+            .map(price_label),
         ChartLabelField::Ask => figure(inputs, |f| f.ask)
-            .map(|v| price_label(part, caption, v)),
+            .map(price_label),
         // The spread needs BOTH sides and a sane pair: a crossed book — which a stale snapshot can
         // show for a moment — would otherwise print a negative spread as if it were an arbitrage.
         ChartLabelField::Spread => inputs.figures.as_ref().and_then(|f| {
             let (bid, ask) = (f.bid?, f.ask?);
             let pct = (ask > bid).then(|| (ask - bid) / ask * 100.0)?;
             let (text, _) = fmt::pct(pct, 2)?;
-            Some((with_caption(part, caption, &text), None))
+            Some((text, None))
         }),
         ChartLabelField::MarkPrice => figure(inputs, |f| f.mark)
-            .map(|v| price_label(part, caption, v)),
+            .map(price_label),
         // The deviation is read against the price the CHART is drawing, so the caption cannot
         // disagree with the candle beside it.
         ChartLabelField::MarkDelta => {
             let mark = figure(inputs, |f| f.mark)?;
             let last = f64::from(inputs.last_price.filter(|p| p.is_finite() && *p > 0.0)?);
-            signed_pct_label(part, caption, (mark - last) / last * 100.0)
+            signed_pct_label(part, (mark - last) / last * 100.0)
         }
         ChartLabelField::PriceStep => figure(inputs, |f| f.price_step)
-            .map(|v| price_label(part, caption, v)),
+            .map(price_label),
         ChartLabelField::Volume24h => figure(inputs, |f| f.vol_24h)
-            .map(|v| (with_caption(part, caption, &fmt::compact_si(v)), None)),
+            .map(|v| (plain(&fmt::compact_si(v)), None)),
         ChartLabelField::WindowDelta => window(inputs, part)
             .and_then(|w| w.delta_pct)
             .and_then(|v| fmt::pct(v, 2))
-            .map(|(text, _)| (window_caption(part, caption, &text), None)),
+            .map(|(text, _)| (text, None)),
         ChartLabelField::WindowVolume => window(inputs, part)
             .and_then(|w| w.volume_quote)
-            .map(|v| (window_caption(part, caption, &fmt::compact_si(v)), None)),
+            .map(|v| (fmt::compact_si(v), None)),
         ChartLabelField::WindowBuyShare => window(inputs, part)
             .and_then(|w| w.buy_share_pct)
             .and_then(|v| fmt::pct(v, 1))
-            .map(|(text, _)| (window_caption(part, caption, &text), None)),
+            .map(|(text, _)| (text, None)),
         ChartLabelField::MaxLeverage => inputs
             .figures
             .as_ref()
             .and_then(|f| f.max_leverage)
-            .map(|v| (with_caption(part, caption, &format!("x{v}")), None)),
+            .map(|v| (format!("x{v}"), None)),
         // A cap the venue never stated prints nothing; one it stated but that cannot be converted
         // yet also prints nothing, rather than "0" — see `MaxOrderSource`.
         ChartLabelField::MaxOrder => inputs
@@ -431,7 +459,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .as_ref()
             .map(|f| f.max_order)
             .filter(|m| m.value.is_finite() && m.value > 0.0)
-            .map(|m| (with_caption(part, caption, &fmt::compact_si(m.value)), None)),
+            .map(|m| (plain(&fmt::compact_si(m.value)), None)),
         ChartLabelField::ExchPosSize => inputs
             .figures
             .as_ref()
@@ -442,17 +470,17 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 } else {
                     DeltaSign::Negative
                 };
-                (with_caption(part, caption, &fmt::compact_si(v)), Some(sign))
+                (plain(&fmt::compact_si(v)), Some(sign))
             }),
         ChartLabelField::ExchPosPrice => figure(inputs, |f| f.pos_price)
-            .map(|v| price_label(part, caption, v)),
+            .map(price_label),
         ChartLabelField::LiqPrice => figure(inputs, |f| f.liq_price)
-            .map(|v| price_label(part, caption, v)),
+            .map(price_label),
         ChartLabelField::Leverage => inputs
             .figures
             .as_ref()
             .and_then(|f| f.leverage_x)
-            .map(|v| (with_caption(part, caption, &format!("x{v}")), None)),
+            .map(|v| (format!("x{v}"), None)),
         ChartLabelField::MarginMode => inputs.figures.as_ref().and_then(|f| f.isolated).map(|iso| {
             let key = if iso {
                 "chart_labels.margin.isolated"
@@ -465,10 +493,10 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         // was traded to break even — so it prints, with the neutral sign the formatter picks.
         ChartLabelField::SessionPnl => inputs.figures.as_ref().and_then(|f| f.session_pnl).map(|v| {
             let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
-            (with_caption(part, caption, &text), Some(sign))
+            (text, Some(sign))
         }),
         ChartLabelField::CoinBalance => figure(inputs, |f| f.coin_balance)
-            .map(|v| (with_caption(part, caption, &fmt::compact_si(v)), None)),
+            .map(|v| (plain(&fmt::compact_si(v)), None)),
         ChartLabelField::PosSize => (stats.pos_size != 0.0).then(|| {
             let sign = if stats.pos_size >= 0.0 {
                 DeltaSign::Positive
@@ -476,7 +504,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 DeltaSign::Negative
             };
             (
-                with_caption(part, caption, &fmt::compact_si(stats.pos_size)),
+                plain(&fmt::compact_si(stats.pos_size)),
                 Some(sign),
             )
         }),
@@ -488,22 +516,36 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
 /// One line per venue the roster shows, in the roster's order, addressed from [`ARB_PART_BASE`] so
 /// a venue that stops reporting cannot hand its retained run to the venue below it — which would
 /// reshape every line under the gap on every frame.
-fn push_arb_rows(out: &mut Vec<LabelText>, row_ix: usize, inputs: &LabelInputs) {
-    let Some(view) = inputs.arb_view.as_ref() else {
+fn push_arb_rows(
+    out: &mut Vec<LabelText>,
+    row_ix: usize,
+    inputs: &LabelInputs,
+    view: Option<&ArbViewCfg>,
+    style: moon_core::config::ResolvedLabelStyle,
+) {
+    let Some(view) = view else {
         return;
     };
+    // Every line of the column shares the caption's style, so the threshold is read once.
+    let min_pct = style.color_min_pct;
     for (n, row) in view.arrange(&inputs.arb).into_iter().enumerate() {
         // Formatted ONCE and read twice: the text carries it, and the sign it rounded to picks the
         // colour, so the two cannot disagree about a spread that rounds away.
         let spread = fmt::signed_pct(row.quote.spread_pct, 2);
-        let sign = spread.as_ref().map(|(_, sign)| *sign);
-        let mut text = row.label.clone();
+        let sign = spread
+            .as_ref()
+            .and_then(|(_, sign)| colored_sign(min_pct, row.quote.spread_pct, *sign));
+        // The venue's NAME is this line's prefix: it is the word, the rest is the figure, and a
+        // value-only colour then paints the price and the spread while the venue stays readable.
+        let prefix = format!("{} ", row.label);
+        let mut text = String::new();
         if view.show.shows_price() {
-            text.push(' ');
             text.push_str(&fmt::adaptive(row.quote.price));
         }
         if let (true, Some((pct, _))) = (view.show.shows_spread(), spread.as_ref()) {
-            text.push(' ');
+            if !text.is_empty() {
+                text.push(' ');
+            }
             text.push_str(pct);
         }
         // A venue that cannot be deposited to or withdrawn from is marked, not hidden: the spread
@@ -515,6 +557,7 @@ fn push_arb_rows(out: &mut Vec<LabelText>, row_ix: usize, inputs: &LabelInputs) 
             row: row_ix,
             part: ARB_PART_BASE + n,
             text,
+            prefix,
             // The SPREAD is what carries a direction here; the venue's own colour, when it has one,
             // overrides whatever the sign would have picked.
             sign,
@@ -527,12 +570,13 @@ fn push_arb_rows(out: &mut Vec<LabelText>, row_ix: usize, inputs: &LabelInputs) 
 ///
 /// Six fields print a price this way — bid, ask, mark, step, entry, liquidation — and spelling the
 /// same pair of calls six times is how one of them ends up on a different formatter later.
-fn price_label(
-    part: &ChartLabelPart,
-    caption: bool,
-    v: f64,
-) -> (String, Option<DeltaSign>) {
-    (with_caption(part, caption, &fmt::adaptive(v)), None)
+fn price_label(v: f64) -> (String, Option<DeltaSign>) {
+    (fmt::adaptive(v), None)
+}
+
+/// A value with no sign to state.
+fn plain(text: &str) -> String {
+    text.to_string()
 }
 
 /// One figure off the market readout, absent when the readout itself is.
@@ -561,14 +605,23 @@ fn tags_text(tags: &[CoinTag]) -> String {
         .join(" · ")
 }
 
-/// Format a signed percentage with its optional caption, dropping a non-finite value.
-fn signed_pct_label(
-    part: &ChartLabelPart,
-    caption: bool,
-    v: f64,
-) -> Option<(String, Option<DeltaSign>)> {
+/// Format a signed percentage, dropping a non-finite value.
+///
+/// The caption's colour THRESHOLD is applied here, where the sign is born: below it the caption
+/// keeps the theme colour and still prints its figure. Doing it here rather than at draw time is
+/// what keeps one rule for every by-sign percentage — the deltas, funding, the arbitrage spreads —
+/// instead of a check per drawing site.
+fn signed_pct_label(part: &ChartLabelPart, v: f64) -> Option<(String, Option<DeltaSign>)> {
     let (text, sign) = fmt::signed_pct(v, 2)?;
-    Some((with_caption(part, caption, &text), Some(sign)))
+    Some((text, colored_sign(part.resolved_style().color_min_pct, v, sign)))
+}
+
+/// The sign a percentage is coloured by, or `None` when it is too small to be worth painting.
+///
+/// `None` is not "no sign": it is what [`super::RenderState::caption_color`] already reads as "keep
+/// the theme colour", which is exactly what a figure below the threshold should do.
+fn colored_sign(min_pct: f32, v: f64, sign: DeltaSign) -> Option<DeltaSign> {
+    (v.abs() >= f64::from(min_pct)).then_some(sign)
 }
 
 /// Format a countdown as `2ч 05м`, `47м` or `<1м`, dropping one that has already elapsed.
@@ -614,30 +667,23 @@ fn non_empty(s: &str) -> Option<String> {
     (!s.trim().is_empty()).then(|| s.to_string())
 }
 
-/// Prefix a value with its field's short caption, when the part asks for one.
+/// The caption's own prefix — `"PnL: "`, `"Δ24ч: "` — or nothing when it prints none.
 ///
-/// The prefix comes from the dictionary rather than from a literal here: everything else this
-/// feature prints is localized, and a caption drawn over the candles is the most visible text of
-/// the lot.
-fn with_caption(part: &ChartLabelPart, on: bool, value: &str) -> String {
-    prefixed(part, on, "", value)
-}
-
-/// Prefix a WINDOW figure, whose caption is its field plus the window it was read over.
+/// Built beside the value rather than glued onto it, because the two are COLOURED separately: a
+/// by-sign caption paints the figure and leaves the word in the theme's colour. The words come from
+/// the dictionary, like everything else this feature prints.
 ///
-/// The window is part of the identity here: two "Δ" captions on one line are unreadable unless each
-/// says whether it is the minute or the day. Without a prefix the value stands alone, which is what
-/// the caption switch means everywhere else.
-fn window_caption(part: &ChartLabelPart, on: bool, value: &str) -> String {
-    prefixed(part, on, &t!(part.window.locale_key()), value)
-}
-
-/// The prefix rule itself, with an optional tail between the field's short name and the value.
-fn prefixed(part: &ChartLabelPart, on: bool, tail: &str, value: &str) -> String {
-    match part.field.caption_key().filter(|_| on) {
-        Some(key) => format!("{}{tail}: {value}", t!(key)),
-        None => value.to_string(),
-    }
+/// A window figure names itself with its window — two "Δ" captions on one line are unreadable
+/// unless each says whether it is the minute or the day — which is the only variation in the rule.
+fn caption_prefix(part: &ChartLabelPart, on: bool) -> String {
+    let Some(key) = part.field.caption_key().filter(|_| on) else {
+        return String::new();
+    };
+    let tail = match part.field.uses_window() {
+        true => t!(part.window.locale_key()).to_string(),
+        false => String::new(),
+    };
+    format!("{}{tail}: ", t!(key))
 }
 
 /// Collect the open-position figures for every basis in ONE pass over a market's orders.
@@ -710,6 +756,9 @@ pub(in crate::chartdx) fn collect_open_stats(
 /// itself: a preview built from its own spelling of "how a percentage looks" stops being a preview
 /// the first time the real formatter changes.
 pub(crate) struct PreviewCaption {
+    /// The caption's prefix, drawn in the theme's colour beside the value — the same split the
+    /// chart draws, so a preview cannot claim a caption prints something the chart does not.
+    pub prefix: String,
     pub text: String,
     pub sign: Option<DeltaSign>,
     pub style: moon_core::config::ResolvedLabelStyle,
@@ -727,10 +776,12 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
         return Vec::new();
     }
     let inputs = sample_inputs();
+    let preview_roster = preview_roster();
     let mut out = Vec::new();
     if row.show_name {
         if let Some(title) = crate::controls::row_title(row) {
             out.push(PreviewCaption {
+                prefix: String::new(),
                 text: title,
                 sign: None,
                 style: moon_core::config::ChartLabelRow::name_style(),
@@ -745,10 +796,11 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
         // sample data — because "what will this print" is a list of venues, not one line saying
         // "arbitrage".
         if part.field.is_column() {
-            let mut lines = Vec::new();
-            push_arb_rows(&mut lines, 0, &inputs);
             let base = part.resolved_style();
+            let mut lines = Vec::new();
+            push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base);
             out.extend(lines.into_iter().map(|line| PreviewCaption {
+                prefix: line.prefix,
                 text: line.text,
                 sign: line.sign,
                 style: moon_core::config::ResolvedLabelStyle {
@@ -762,10 +814,12 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
             continue;
         }
         if let Some((text, sign)) = resolve(part, &inputs) {
+            let style = part.resolved_style();
             out.push(PreviewCaption {
+                prefix: caption_prefix(part, style.caption),
                 text,
                 sign,
-                style: part.resolved_style(),
+                style,
             });
         }
     }
@@ -777,6 +831,11 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
 ///
 /// Chosen so every figure has a value AND a sign — a preview where everything is positive hides
 /// what the by-sign colour mode does.
+/// The roster the preview arranges its sample column by: the shipped one.
+fn preview_roster() -> ArbViewCfg {
+    ArbViewCfg::default()
+}
+
 fn sample_inputs() -> LabelInputs {
     let stats = BasisStats {
         open_orders: 2,
@@ -805,6 +864,7 @@ fn sample_inputs() -> LabelInputs {
         arb: vec![
             moon_core::market::ArbQuote {
                 venue: moon_core::market::ArbVenue::from_code(4),
+                dex_name: String::new(),
                 price: 51_290.0,
                 my_price: 51_234.5,
                 spread_pct: 0.11,
@@ -813,6 +873,7 @@ fn sample_inputs() -> LabelInputs {
             },
             moon_core::market::ArbQuote {
                 venue: moon_core::market::ArbVenue::from_code(9),
+                dex_name: String::new(),
                 price: 51_180.0,
                 my_price: 51_234.5,
                 spread_pct: -0.11,
@@ -820,7 +881,6 @@ fn sample_inputs() -> LabelInputs {
                 withdraw_blocked: false,
             },
         ],
-        arb_view: Some(Rc::new(ArbViewCfg::default())),
         // Every new figure answers here too: a preview that printed nothing for a field the user
         // just picked reads as a broken label rather than as an empty market.
         figures: Some(moon_core::market::MarketFiguresReadout {

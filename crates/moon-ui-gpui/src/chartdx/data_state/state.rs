@@ -77,10 +77,22 @@ impl ChartDataState {
                     | moon_core::config::ChartLabelField::DetectMsg
             )
         });
-        if let Some((core, _market)) = self.container.borrow().target_ref(0) {
+        let container = self.container.borrow();
+        if let Some((core, _market)) = container.target_ref(0) {
             if let Some(core_st) = session.store().core(core) {
                 sig = sig.wrapping_add(core_st.order_lines_rev);
-                if wants_detect {
+            }
+        }
+        // A detect caption is resolved PER PANE, from that pane's own core — so every pane's core
+        // has to be able to wake this sync, not just the first one's. A stack of four coins on four
+        // cores would otherwise refresh only the first pane's detect line, and only when its orders
+        // happened to move.
+        if wants_detect {
+            for ix in 0..container.pane_count() {
+                let Some((core, _)) = container.target_ref(ix) else {
+                    continue;
+                };
+                if let Some(core_st) = session.store().core(core) {
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.detects_rev);
                 }
             }
