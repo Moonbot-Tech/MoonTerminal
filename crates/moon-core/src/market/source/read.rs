@@ -26,9 +26,10 @@ fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCan
 }
 
 use super::{
+    CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, DetectSnapshot,
+    LatestPriceError, MarketContextReadout, MarketDataSource, MarketRevisions, MarketTickerReadout,
     drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
-    trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
-    DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
+    trade_price_range,
 };
 use crate::market::candles::ChartCandle;
 
@@ -523,6 +524,53 @@ impl MarketDataSource {
             last,
             delta_1h_pct: delta.coin_1h_delta,
             delta_24h_pct: delta.coin_24h_delta,
+        })
+    }
+
+    /// Return the market-wide context for a chart caption: background deltas and funding.
+    ///
+    /// The background deltas are the CORE's own, not a per-market figure: `global_deltas` is one
+    /// record per provider, so every pane on that core reads the same exchange and BTC movement.
+    /// Funding is per market and is reported only where the venue charges it — a spot market
+    /// returns `None` for both halves rather than a confident zero, which would read as "funding
+    /// is free here".
+    ///
+    /// Args:
+    ///     core: Consumer core whose provider is asked.
+    ///     market: Data-key market name.
+    ///
+    /// Returns:
+    ///     The context, or `None` when the provider, snapshot, or market is unavailable.
+    pub fn market_context(&self, core: CoreId, market: &str) -> Option<MarketContextReadout> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let markets = snapshot.markets();
+        let globals = markets.global_deltas();
+        let price = markets.price(market);
+        // A rate of exactly zero is a real answer on a futures market between fundings, so the
+        // absence test is the TIME the core reports, not the rate.
+        let funding_at_ms = price
+            .map(|p| p.funding_time())
+            .map(|t| t.unix_millis())
+            .filter(|ms| *ms > 0);
+        Some(MarketContextReadout {
+            exchange_1h_pct: globals.exchange_1h_delta,
+            exchange_24h_pct: globals.exchange_24h_delta,
+            btc_1h_pct: globals.btc_1h_delta,
+            btc_24h_pct: globals.btc_24h_delta,
+            btc_72h_pct: globals.btc_72h_delta,
+            funding_pct: funding_at_ms
+                .and(price)
+                .map(|p| p.funding_rate * 100.0)
+                .filter(|v| v.is_finite()),
+            funding_at_ms,
         })
     }
 

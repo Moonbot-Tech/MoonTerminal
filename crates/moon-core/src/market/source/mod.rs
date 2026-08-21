@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
+use moonproto::MoonTime;
 use moonproto::state::{
     LastPricePoint, MarkPricePoint, OrderBookKind, SeqRingCursor, SeqRingPriceRow, SeqRingReader,
     SeqRingTimedRow, TradeHistoryRow,
 };
-use moonproto::MoonTime;
 
 use super::candles::{CandleSeries, ChartCandle};
 use crate::feed::{MarketDirtyFlags, PricePoint, SharedMoonClient, Side, Tick};
@@ -287,6 +287,28 @@ pub(crate) fn max_order_notional(
         value,
         source: MaxOrderSource::Derived,
     }
+}
+
+/// Market-wide context a chart caption can state beside the coin's own numbers.
+///
+/// Two different subjects on purpose. The BACKGROUND deltas — the exchange's own average and BTC's
+/// — answer "is this the coin or the whole market"; the funding pair answers "what does holding
+/// cost, and when is it charged". Both come from one snapshot read, because a caption asking for
+/// either has already paid for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MarketContextReadout {
+    /// Signed average movement across the exchange's markets, in percent.
+    pub exchange_1h_pct: f64,
+    pub exchange_24h_pct: f64,
+    /// Signed BTC movement over the retained windows, in percent.
+    pub btc_1h_pct: f64,
+    pub btc_24h_pct: f64,
+    pub btc_72h_pct: f64,
+    /// Funding rate as a percentage, or `None` on a market that has none (spot).
+    pub funding_pct: Option<f64>,
+    /// When funding is next charged, in Unix milliseconds. `None` when the core reports no time —
+    /// spot markets, and futures before the first funding message arrives.
+    pub funding_at_ms: Option<i64>,
 }
 
 /// Frozen snapshot for a detection card, built exactly once when the detection occurs.

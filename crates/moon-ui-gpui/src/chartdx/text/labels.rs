@@ -28,6 +28,8 @@ pub(in crate::chartdx) struct LabelInputs {
     pub core_name: String,
     /// Venue label for that core; empty when this build cannot name it.
     pub venue: String,
+    /// Quote currency of the pane's market, uppercase; empty when the catalog carries none.
+    pub quote: String,
     /// User-assigned strategy name of the newest OPEN order on this market.
     pub strategy: String,
     /// Last traded price the chart itself is drawing.
@@ -39,6 +41,16 @@ pub(in crate::chartdx) struct LabelInputs {
     /// Signed one-hour and 24-hour changes, from the readout the header ticker uses.
     pub delta_1h: Option<f64>,
     pub delta_24h: Option<f64>,
+    /// Market-wide background: the exchange's own average movement and BTC's, plus funding.
+    ///
+    /// `None` until a caption asks for any of it — the sync path does not read the snapshot for a
+    /// figure nobody prints.
+    pub context: Option<moon_core::market::MarketContextReadout>,
+    /// Wall clock the funding countdown is measured against, in Unix milliseconds.
+    ///
+    /// Carried as an INPUT rather than read at format time so the cache key sees it: a countdown
+    /// re-formats when the minute it prints changes, and not on every revision in between.
+    pub now_ms: i64,
     /// Open-position figures, one entry per [`PnlBasis`] at [`basis_index`].
     pub basis: [BasisStats; 3],
 }
@@ -184,6 +196,7 @@ fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::Coin => non_empty(&inputs.ticker).map(|t| (t, None)),
         ChartLabelField::Core => non_empty(&inputs.core_name).map(|t| (t, None)),
         ChartLabelField::Venue => non_empty(&inputs.venue).map(|t| (t, None)),
+        ChartLabelField::Quote => non_empty(&inputs.quote).map(|t| (t, None)),
         ChartLabelField::OrderStrategy => non_empty(&inputs.strategy).map(|t| (t, None)),
         ChartLabelField::ScaleBadge => inputs.scale_badge.map(|pct| {
             // A range below a whole percent in a quiet Auto market reads as "<1%", never as zero:
@@ -225,6 +238,32 @@ fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Optio
         }),
         // Zero prints nothing rather than "0": the caption reports a position, and an empty corner
         // already says there is none.
+        ChartLabelField::ExchangeDelta1h => inputs
+            .context
+            .and_then(|c| signed_pct_label(slot, caption, c.exchange_1h_pct)),
+        ChartLabelField::ExchangeDelta24h => inputs
+            .context
+            .and_then(|c| signed_pct_label(slot, caption, c.exchange_24h_pct)),
+        ChartLabelField::BtcDelta1h => inputs
+            .context
+            .and_then(|c| signed_pct_label(slot, caption, c.btc_1h_pct)),
+        ChartLabelField::BtcDelta24h => inputs
+            .context
+            .and_then(|c| signed_pct_label(slot, caption, c.btc_24h_pct)),
+        ChartLabelField::BtcDelta72h => inputs
+            .context
+            .and_then(|c| signed_pct_label(slot, caption, c.btc_72h_pct)),
+        // A market that charges no funding prints nothing: a zero there would read as "free",
+        // which is a different claim from "this venue has no funding at all".
+        ChartLabelField::Funding => inputs
+            .context
+            .and_then(|c| c.funding_pct)
+            .and_then(|v| signed_pct_label(slot, caption, v)),
+        ChartLabelField::FundingIn => inputs
+            .context
+            .and_then(|c| c.funding_at_ms)
+            .and_then(|at| fmt_countdown(at - inputs.now_ms))
+            .map(|text| (with_caption(slot, caption, text.as_str()), None)),
         ChartLabelField::OpenOrders => (stats.open_orders > 0).then(|| {
             (
                 with_caption(slot, caption, &stats.open_orders.to_string()),
@@ -259,6 +298,29 @@ fn signed_pct_label(
 ) -> Option<(String, Option<DeltaSign>)> {
     let (text, sign) = fmt::signed_pct(v, 2)?;
     Some((with_caption(slot, caption, &text), Some(sign)))
+}
+
+/// Format a countdown as `2ч 05м`, `47м` or `<1м`, dropping one that has already elapsed.
+///
+/// A funding time in the past is not printed: the core republishes the next one within seconds, and
+/// a negative countdown on screen reads as a stuck chart rather than as a stale field. Hours are
+/// not carried past a day — funding intervals are hours, so a day-long remainder means the field is
+/// wrong, and printing `27ч` says that more honestly than `1д 3ч`.
+fn fmt_countdown(remaining_ms: i64) -> Option<String> {
+    if remaining_ms < 0 {
+        return None;
+    }
+    let total_min = remaining_ms / 60_000;
+    let (hours, minutes) = (total_min / 60, total_min % 60);
+    Some(match (hours, minutes) {
+        (0, 0) => t!("chart_labels.funding_soon").to_string(),
+        (0, m) => format!("{m}{}", t!("chart_labels.unit_minute")),
+        (h, m) => format!(
+            "{h}{} {m:02}{}",
+            t!("chart_labels.unit_hour"),
+            t!("chart_labels.unit_minute")
+        ),
+    })
 }
 
 fn non_empty(s: &str) -> Option<String> {

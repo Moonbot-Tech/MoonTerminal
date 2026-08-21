@@ -1325,6 +1325,10 @@ chart_labels.field.venue:
   ru: "Биржа"
   en: "Exchange"
   es: "Exchange"
+chart_labels.field.quote:
+  ru: "Валюта котировки"
+  en: "Quote currency"
+  es: "Moneda de cotización"
 chart_labels.field.scale_badge:
   ru: "Масштаб Y"
   en: "Y scale"
@@ -1365,6 +1369,34 @@ chart_labels.field.exposure:
   ru: "Экспозиция"
   en: "Exposure"
   es: "Exposición"
+chart_labels.field.exchange_delta_1h:
+  ru: "Биржа Δ 1ч"
+  en: "Exchange Δ 1h"
+  es: "Exchange Δ 1h"
+chart_labels.field.exchange_delta_24h:
+  ru: "Биржа Δ 24ч"
+  en: "Exchange Δ 24h"
+  es: "Exchange Δ 24h"
+chart_labels.field.btc_delta_1h:
+  ru: "BTC Δ 1ч"
+  en: "BTC Δ 1h"
+  es: "BTC Δ 1h"
+chart_labels.field.btc_delta_24h:
+  ru: "BTC Δ 24ч"
+  en: "BTC Δ 24h"
+  es: "BTC Δ 24h"
+chart_labels.field.btc_delta_72h:
+  ru: "BTC Δ 72ч"
+  en: "BTC Δ 72h"
+  es: "BTC Δ 72h"
+chart_labels.field.funding:
+  ru: "Фандинг"
+  en: "Funding"
+  es: "Funding"
+chart_labels.field.funding_in:
+  ru: "До фандинга"
+  en: "Funding in"
+  es: "Funding en"
 chart_labels.field.order_strategy:
   ru: "Стратегия ордера"
   en: "Order strategy"
@@ -1421,6 +1453,46 @@ chart_labels.short.position:
   ru: "Позиция"
   en: "Position"
   es: "Posición"
+chart_labels.short.exchange_1h:
+  ru: "Биржа 1ч"
+  en: "Exch 1h"
+  es: "Exch 1h"
+chart_labels.short.exchange_24h:
+  ru: "Биржа 24ч"
+  en: "Exch 24h"
+  es: "Exch 24h"
+chart_labels.short.btc_1h:
+  ru: "BTC 1ч"
+  en: "BTC 1h"
+  es: "BTC 1h"
+chart_labels.short.btc_24h:
+  ru: "BTC 24ч"
+  en: "BTC 24h"
+  es: "BTC 24h"
+chart_labels.short.btc_72h:
+  ru: "BTC 72ч"
+  en: "BTC 72h"
+  es: "BTC 72h"
+chart_labels.short.funding:
+  ru: "Фандинг"
+  en: "Funding"
+  es: "Funding"
+chart_labels.short.funding_in:
+  ru: "Фандинг через"
+  en: "Funding in"
+  es: "Funding en"
+chart_labels.funding_soon:
+  ru: "вот-вот"
+  en: "any moment"
+  es: "ya mismo"
+chart_labels.unit_hour:
+  ru: "ч"
+  en: "h"
+  es: "h"
+chart_labels.unit_minute:
+  ru: "м"
+  en: "m"
+  es: "m"
 chart_labels.short.exposure:
   ru: "Сумма"
   en: "Size"

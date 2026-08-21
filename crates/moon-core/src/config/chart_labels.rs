@@ -46,6 +46,11 @@ pub enum ChartLabelField {
     Core,
     /// Venue the pane's core trades on, through the shared venue directory.
     Venue,
+    /// Quote currency this market is priced and settled in: `USDT`, `USDC`, `BTC`.
+    ///
+    /// The unit behind every money figure on the chart. A COIN-M contract reports none, and the
+    /// caption then prints nothing rather than guessing one.
+    Quote,
     /// Current Y-scale badge as a whole percentage of the visible range.
     ScaleBadge,
     /// Comparison-mode difference from the locked anchor's price, signed.
@@ -73,14 +78,29 @@ pub enum ChartLabelField {
     Exposure,
     /// User-assigned name of the strategy that owns the newest open order on this market.
     OrderStrategy,
+    /// Signed average movement across the whole exchange, over the retained hour and day.
+    ///
+    /// The background the coin's own delta is read against: it answers "is this the coin, or the
+    /// whole market". One figure per core, not per market.
+    ExchangeDelta1h,
+    ExchangeDelta24h,
+    /// Signed BTC movement over the retained windows.
+    BtcDelta1h,
+    BtcDelta24h,
+    BtcDelta72h,
+    /// Funding rate charged on this market, as a percentage.
+    Funding,
+    /// Time remaining until funding is next charged.
+    FundingIn,
 }
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 14] = [
+    pub const ALL: [ChartLabelField; 22] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
+        ChartLabelField::Quote,
         ChartLabelField::LastPrice,
         ChartLabelField::Delta1h,
         ChartLabelField::Delta24h,
@@ -92,6 +112,13 @@ impl ChartLabelField {
         ChartLabelField::PosSize,
         ChartLabelField::Exposure,
         ChartLabelField::OrderStrategy,
+        ChartLabelField::ExchangeDelta1h,
+        ChartLabelField::ExchangeDelta24h,
+        ChartLabelField::BtcDelta1h,
+        ChartLabelField::BtcDelta24h,
+        ChartLabelField::BtcDelta72h,
+        ChartLabelField::Funding,
+        ChartLabelField::FundingIn,
     ];
 
     /// Menu section this field belongs to.
@@ -100,12 +127,20 @@ impl ChartLabelField {
             ChartLabelField::Coin
             | ChartLabelField::Core
             | ChartLabelField::Venue
+            | ChartLabelField::Quote
             | ChartLabelField::None => ChartLabelGroup::Instrument,
             ChartLabelField::LastPrice
             | ChartLabelField::Delta1h
             | ChartLabelField::Delta24h
             | ChartLabelField::ScaleBadge
-            | ChartLabelField::CompareDelta => ChartLabelGroup::Market,
+            | ChartLabelField::CompareDelta
+            | ChartLabelField::ExchangeDelta1h
+            | ChartLabelField::ExchangeDelta24h
+            | ChartLabelField::BtcDelta1h
+            | ChartLabelField::BtcDelta24h
+            | ChartLabelField::BtcDelta72h
+            | ChartLabelField::Funding
+            | ChartLabelField::FundingIn => ChartLabelGroup::Market,
             ChartLabelField::OpenPnlPct
             | ChartLabelField::OpenPnlMoney
             | ChartLabelField::OpenOrders
@@ -122,6 +157,7 @@ impl ChartLabelField {
             ChartLabelField::Coin => "chart_labels.field.coin",
             ChartLabelField::Core => "chart_labels.field.core",
             ChartLabelField::Venue => "chart_labels.field.venue",
+            ChartLabelField::Quote => "chart_labels.field.quote",
             ChartLabelField::ScaleBadge => "chart_labels.field.scale_badge",
             ChartLabelField::CompareDelta => "chart_labels.field.compare_delta",
             ChartLabelField::LastPrice => "chart_labels.field.last_price",
@@ -133,6 +169,13 @@ impl ChartLabelField {
             ChartLabelField::PosSize => "chart_labels.field.pos_size",
             ChartLabelField::Exposure => "chart_labels.field.exposure",
             ChartLabelField::OrderStrategy => "chart_labels.field.order_strategy",
+            ChartLabelField::ExchangeDelta1h => "chart_labels.field.exchange_delta_1h",
+            ChartLabelField::ExchangeDelta24h => "chart_labels.field.exchange_delta_24h",
+            ChartLabelField::BtcDelta1h => "chart_labels.field.btc_delta_1h",
+            ChartLabelField::BtcDelta24h => "chart_labels.field.btc_delta_24h",
+            ChartLabelField::BtcDelta72h => "chart_labels.field.btc_delta_72h",
+            ChartLabelField::Funding => "chart_labels.field.funding",
+            ChartLabelField::FundingIn => "chart_labels.field.funding_in",
         }
     }
 
@@ -151,6 +194,13 @@ impl ChartLabelField {
             ChartLabelField::OpenOrders => Some("chart_labels.short.orders"),
             ChartLabelField::PosSize => Some("chart_labels.short.position"),
             ChartLabelField::Exposure => Some("chart_labels.short.exposure"),
+            ChartLabelField::ExchangeDelta1h => Some("chart_labels.short.exchange_1h"),
+            ChartLabelField::ExchangeDelta24h => Some("chart_labels.short.exchange_24h"),
+            ChartLabelField::BtcDelta1h => Some("chart_labels.short.btc_1h"),
+            ChartLabelField::BtcDelta24h => Some("chart_labels.short.btc_24h"),
+            ChartLabelField::BtcDelta72h => Some("chart_labels.short.btc_72h"),
+            ChartLabelField::Funding => Some("chart_labels.short.funding"),
+            ChartLabelField::FundingIn => Some("chart_labels.short.funding_in"),
             _ => None,
         }
     }
@@ -200,6 +250,12 @@ impl ChartLabelField {
             },
             ChartLabelField::Delta1h
             | ChartLabelField::Delta24h
+            | ChartLabelField::ExchangeDelta1h
+            | ChartLabelField::ExchangeDelta24h
+            | ChartLabelField::BtcDelta1h
+            | ChartLabelField::BtcDelta24h
+            | ChartLabelField::BtcDelta72h
+            | ChartLabelField::Funding
             | ChartLabelField::OpenPnlPct
             | ChartLabelField::OpenPnlMoney => ResolvedLabelStyle {
                 color: LabelColor::BySign,
@@ -208,14 +264,15 @@ impl ChartLabelField {
                 caption: true,
             },
             // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
-            ChartLabelField::OpenOrders | ChartLabelField::PosSize | ChartLabelField::Exposure => {
-                ResolvedLabelStyle {
-                    color: LabelColor::Theme,
-                    size_mult: 1.0,
-                    plate: true,
-                    caption: true,
-                }
-            }
+            ChartLabelField::OpenOrders
+            | ChartLabelField::PosSize
+            | ChartLabelField::Exposure
+            | ChartLabelField::FundingIn => ResolvedLabelStyle {
+                color: LabelColor::Theme,
+                size_mult: 1.0,
+                plate: true,
+                caption: true,
+            },
             _ => ResolvedLabelStyle {
                 color: LabelColor::Theme,
                 size_mult: 1.0,

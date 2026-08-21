@@ -290,6 +290,8 @@ struct PaneRender {
     labels: text::LabelState,
     /// Venue label for the pane's core, resolved during order sync beside `core_name`.
     venue: String,
+    /// Quote currency of this pane's market, resolved with the ticker from the same label.
+    quote: String,
     /// Whether [`Self::labels`] was last built with a shot's caption substitution in force.
     ///
     /// The shot's proof is about what a FRAME drew, and `refresh_pane_labels` runs on the sync
@@ -304,6 +306,15 @@ struct PaneRender {
     /// Signed one-hour and 24-hour changes, refreshed with the market snapshot.
     delta_1h: Option<f64>,
     delta_24h: Option<f64>,
+    /// Exchange and BTC background movement plus funding, refreshed with the same snapshot and
+    /// only while a caption asks for any of it.
+    label_context: Option<moon_core::market::MarketContextReadout>,
+    /// Wall clock the funding countdown is measured against, QUANTIZED TO THE MINUTE.
+    ///
+    /// Quantized because it is part of the caption cache key: the raw clock would differ on every
+    /// revision and re-format a countdown that prints the same minute either way. Zero while no
+    /// countdown is configured, so an unused clock cannot wake anything.
+    label_now_ms: i64,
     view: ChartViewGpu,
     layers: PlatformLayers,
     background_params: BackgroundParams,
@@ -510,11 +521,14 @@ impl PaneRender {
             caption_plates: [[0.0; 4]; text::CAPTION_PLATES],
             labels: text::LabelState::default(),
             venue: String::new(),
+            quote: String::new(),
             labels_shot_substituted: false,
             label_strategy: String::new(),
             label_basis: [text::BasisStats::default(); 3],
             delta_1h: None,
             delta_24h: None,
+            label_context: None,
+            label_now_ms: 0,
             view: ChartViewGpu::default(),
             layers: PlatformLayers::new(),
             background_params: BackgroundParams::default(),
