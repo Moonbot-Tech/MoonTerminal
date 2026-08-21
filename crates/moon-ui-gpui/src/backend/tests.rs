@@ -268,6 +268,29 @@ fn scoped_compare_request_refuses_moved_or_hidden_targets() {
     assert!(!request.allows_group("alpha", Some("alpha"), false));
 }
 
+/// A comparison started from a chart carries BOTH sides, and the authority rule applies to the
+/// request as a whole.
+///
+/// Plausible breakage: keeping only the target. The tab would then open holding the destination
+/// alone — a comparison of one chart, which is not a comparison, and not what an arbitrage click
+/// asked for.
+#[test]
+fn a_paired_compare_request_keeps_the_chart_it_started_from() {
+    let request = OpenCompareRequest::pair(
+        (7, "ENAUSDT".to_string()),
+        (22, "ENAUSDT".to_string()),
+        Some("alpha".to_string()),
+    );
+
+    assert_eq!(request.anchor_for_test(), Some(&(7, "ENAUSDT".to_string())));
+    assert!(request.allows_group("alpha", Some("alpha"), true));
+    assert!(!request.allows_group("beta", Some("beta"), true));
+
+    // The other producers state one coin and let the tab gather the rest.
+    let plain = OpenCompareRequest::new((22, "ENAUSDT".to_string()), None);
+    assert_eq!(plain.anchor_for_test(), None);
+}
+
 /// Protects pending chart-open cancellation when settings remove its target core.
 ///
 /// Plausible breakage: retaining the prior route after session reconciliation lets a stale group

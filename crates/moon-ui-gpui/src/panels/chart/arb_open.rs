@@ -141,13 +141,15 @@ impl ChartPanel {
             return true;
         };
         let rows = self.cores_trading_here(core, &market, code, &dex, cx);
+        // The chart the click came FROM, so a comparison can hold both sides of it.
+        let anchor = (core, market);
         match rows.len() {
             0 => {}
             1 => {
                 let (target_core, target_market) = rows.into_iter().next().expect("one row");
-                self.open_arb_target(target_core, target_market, mode, cx);
+                self.open_arb_target(anchor, target_core, target_market, mode, cx);
             }
-            _ => self.pick_arb_core(rows, screen, mode, window, cx),
+            _ => self.pick_arb_core(anchor, rows, screen, mode, window, cx),
         }
         true
     }
@@ -196,6 +198,7 @@ impl ChartPanel {
     /// Open one target the way the pressed button asked.
     fn open_arb_target(
         &mut self,
+        anchor: (CoreId, String),
         core: CoreId,
         market: String,
         mode: ArbOpen,
@@ -208,8 +211,11 @@ impl ChartPanel {
                     // `false`: opened without stealing focus, like every other coin-navigation site.
                     b.open_on_main_if_authorized(group.as_deref(), (core, market), false)
                 }
+                // BOTH sides: a comparison of one chart is not a comparison, and the chart the
+                // click came from is half the question. Clicking a second venue from inside that
+                // tab adds to it rather than opening another — see `open_compare_with`.
                 ArbOpen::Compare => {
-                    b.open_compare_if_authorized(group.as_deref(), (core, market))
+                    b.open_compare_pair_if_authorized(group.as_deref(), anchor, (core, market))
                 }
             };
             if done {
@@ -221,6 +227,7 @@ impl ChartPanel {
     /// Ask which core, when the exchange has more than one connected.
     fn pick_arb_core(
         &mut self,
+        anchor: (CoreId, String),
         rows: Vec<(CoreId, String)>,
         screen: Point<Pixels>,
         mode: ArbOpen,
@@ -247,12 +254,14 @@ impl ChartPanel {
             .into_iter()
             .map(|(core, market, name)| {
                 let view = view.clone();
+                let anchor = anchor.clone();
                 MoonMenuItem::with_key(format!("arb-core-{core}"), name).on_click(
                     move |_, window: &mut Window, app: &mut App| {
                         window.close_context_menu(app);
                         let market = market.clone();
+                        let anchor = anchor.clone();
                         view.update(app, |this, cx| {
-                            this.open_arb_target(core, market, mode, cx);
+                            this.open_arb_target(anchor, core, market, mode, cx);
                         })
                         .ok();
                     },

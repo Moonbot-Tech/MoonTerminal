@@ -205,6 +205,68 @@ impl ChartTabs {
     /// name, horizontal orientation (the only orientation supporting comparison), an anchor lock,
     /// and broom mode, so neighbors show only their order books. Right-clicking the same coin again
     /// focuses the existing tab by name instead of creating a duplicate.
+    /// Compare two charts: the one a click came FROM, and the one it asked for.
+    ///
+    /// Two shapes, and which one applies is the difference between "start comparing" and "keep
+    /// comparing":
+    ///
+    /// - already on a custom tab holding the anchor — the case of clicking a second venue in a
+    ///   comparison just opened — the target joins THAT tab. A second tab for the same coin would
+    ///   split the comparison in half, which is the opposite of what the click asked for.
+    /// - otherwise a tab is created holding exactly the two: the anchor first, since it is the
+    ///   chart the reader was looking at, and the target beside it.
+    ///
+    /// Deliberately NOT `open_compare_tab`'s "every core on every exchange": an arbitrage click
+    /// names ONE venue, and answering it with a dozen charts is answering a question nobody asked.
+    pub(super) fn open_compare_with(
+        &mut self,
+        anchor: (CoreId, String),
+        target: (CoreId, String),
+        cx: &mut Context<Self>,
+    ) {
+        if self.compare_tab_holds(&anchor, cx) {
+            self.open_coin_on_active(target.0, target.1, cx);
+            return;
+        }
+        self.open_compare_pair(anchor, target, cx);
+    }
+
+    /// Whether the ACTIVE tab is a custom one already showing this chart.
+    fn compare_tab_holds(&self, anchor: &(CoreId, String), cx: &App) -> bool {
+        if !self.active_is_custom() {
+            return false;
+        }
+        let Some(panel) = self.active_stack() else {
+            return false;
+        };
+        panel
+            .read(cx)
+            .coins(cx)
+            .iter()
+            .any(|(core, market)| *core == anchor.0 && market == &anchor.1)
+    }
+
+    /// Create a comparison tab holding exactly two charts.
+    fn open_compare_pair(
+        &mut self,
+        anchor: (CoreId, String),
+        target: (CoreId, String),
+        cx: &mut Context<Self>,
+    ) {
+        let label = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .market_label(anchor.0, &anchor.1)
+            .display_coin()
+            .to_string();
+        // The anchor first: it is the chart the reader was already looking at, so it keeps the
+        // left-hand place and the lock.
+        let coins = vec![anchor.clone(), target];
+        self.create_compare_tab(label, coins, anchor, cx);
+    }
+
     pub(super) fn open_compare_tab(
         &mut self,
         core: CoreId,
@@ -273,6 +335,20 @@ impl ChartTabs {
             }
             out
         };
+        self.create_compare_tab(label, coins, (core, market), cx);
+    }
+
+    /// Build the tab itself: a horizontal stack of `coins`, locked onto `anchor` in broom mode.
+    ///
+    /// Shared by both ways in — "compare this coin everywhere" and "compare these two" — because
+    /// the tab they produce is the same thing, and the difference is only which charts it holds.
+    fn create_compare_tab(
+        &mut self,
+        label: String,
+        coins: Vec<(CoreId, String)>,
+        anchor: (CoreId, String),
+        cx: &mut Context<Self>,
+    ) {
         let num = self.next_custom_num;
         self.next_custom_num += 1;
         let bucket = ChartBucket::Shared;
@@ -286,7 +362,6 @@ impl ChartTabs {
                 self.theme.clone(),
             )
         });
-        let anchor = (core, market);
         stack.update(cx, |s, c| {
             s.set_hold_vacated(false);
             s.set_orientation(Some(StackOrientation::Horizontal), c);

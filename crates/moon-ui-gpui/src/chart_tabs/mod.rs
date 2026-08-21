@@ -919,8 +919,14 @@ impl ChartTabs {
         let req = self.backend.update(cx, |b, _| {
             b.take_open_compare_request_for_group(self.group.as_str())
         });
-        if let Some((core, market)) = req {
-            self.open_compare_tab(core, market, cx);
+        if let Some(((core, market), anchor)) = req {
+            match anchor {
+                // A comparison BETWEEN two charts: the one it was started from and the one asked
+                // for. Anything else — a detect card, a coin menu — names one coin and lets the tab
+                // gather the rest.
+                Some(anchor) => self.open_compare_with(anchor, (core, market), cx),
+                None => self.open_compare_tab(core, market, cx),
+            }
             self.last_sig = chart_tabs_sig(self.backend.read(cx), self.group.as_str());
         }
     }

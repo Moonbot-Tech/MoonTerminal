@@ -293,6 +293,13 @@ impl OpenMainRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OpenCompareRequest {
     target: (CoreId, String),
+    /// The chart the comparison was started FROM, when the producer had one.
+    ///
+    /// A comparison of one chart is not a comparison: an arbitrage click means "this coin here
+    /// versus this coin there", and without the anchor the tab would open holding only the
+    /// destination. Absent for producers that have no chart of their own — a detect card names a
+    /// coin, not a comparison.
+    anchor: Option<(CoreId, String)>,
     authority_group: Option<String>,
 }
 
@@ -308,6 +315,26 @@ impl OpenCompareRequest {
     fn new(target: (CoreId, String), authority_group: Option<String>) -> Self {
         Self {
             target,
+            anchor: None,
+            authority_group,
+        }
+    }
+
+    /// The chart this comparison started from, for the test that pins it.
+    #[cfg(test)]
+    fn anchor_for_test(&self) -> Option<&(CoreId, String)> {
+        self.anchor.as_ref()
+    }
+
+    /// The same request, stated as a comparison BETWEEN two charts.
+    fn pair(
+        anchor: (CoreId, String),
+        target: (CoreId, String),
+        authority_group: Option<String>,
+    ) -> Self {
+        Self {
+            target,
+            anchor: Some(anchor),
             authority_group,
         }
     }
@@ -1620,6 +1647,31 @@ impl Backend {
         true
     }
 
+    /// Ask for a comparison BETWEEN two charts: the one it was started from, and the target.
+    ///
+    /// Both cores are checked against the workspace rail, not just the target: the anchor is put on
+    /// the same tab, and a comparison that quietly dropped it would answer a different question
+    /// from the one asked.
+    pub(crate) fn open_compare_pair_if_authorized(
+        &mut self,
+        group: Option<&str>,
+        anchor: (CoreId, String),
+        target: (CoreId, String),
+    ) -> bool {
+        if !self.workspace_action_allows_core(group, target.0)
+            || !self.workspace_action_allows_core(group, anchor.0)
+        {
+            return false;
+        }
+        self.open_compare_request = Some(OpenCompareRequest::pair(
+            anchor,
+            target,
+            group.map(str::to_string),
+        ));
+        self.open_compare_request_rev = self.open_compare_request_rev.wrapping_add(1);
+        true
+    }
+
     /// Revalidate and drain one comparison request only for its live authorized group.
     ///
     /// Args:
@@ -1631,7 +1683,7 @@ impl Backend {
     pub(crate) fn take_open_compare_request_for_group(
         &mut self,
         group: &str,
-    ) -> Option<(CoreId, String)> {
+    ) -> Option<((CoreId, String), Option<(CoreId, String)>)> {
         let request = self.open_compare_request.as_ref()?;
         let (core, _) = &request.target;
         let live_group = self
@@ -1652,7 +1704,7 @@ impl Backend {
         }
         self.open_compare_request
             .take()
-            .map(|request| request.target)
+            .map(|request| (request.target, request.anchor))
     }
 
     /// Return the comparison revision only to the request's current authorized group.
