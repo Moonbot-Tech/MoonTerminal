@@ -168,6 +168,15 @@ impl CaptionBox {
         self.bottom = self.bottom.max(top + height);
     }
 
+    /// Whether any run grew this box.
+    ///
+    /// Asked per LINE now: a line whose captions all switched their backing off publishes no
+    /// rectangle at all, rather than an empty one that would take a plate slot from a line that
+    /// wanted one.
+    pub(super) fn any(&self) -> bool {
+        self.any
+    }
+
     /// The padded plate rectangle in DEVICE pixels, or an empty one for a column with no runs.
     ///
     /// The padding is asymmetric on purpose: a left inset large enough to clear the glyphs'

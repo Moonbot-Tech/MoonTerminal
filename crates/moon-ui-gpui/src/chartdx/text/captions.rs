@@ -35,12 +35,17 @@ const CAPTION_GAP: f32 = 8.0;
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
-/// Number of backing plates a pane publishes: one per band and alignment.
+/// Number of backing plates a pane publishes: one per printed LINE.
 ///
-/// Rows that share a band but not an alignment are independent stacks — left, centre and right do
-/// not overlap horizontally, so each starts at the band's own edge — and each needs its own plate,
-/// or one plate would span the gap between two of them and darken the candles in between.
-pub(in crate::chartdx) const CAPTION_PLATES: usize = LabelZone::ALL.len() * LabelAlign::ALL.len();
+/// Per line, not per band, and that is what the caption's own plate switch means. One plate for a
+/// whole band spanned every line in it, so switching the backing off on ONE caption changed nothing
+/// visible — the plate was still being grown by its neighbours — while switching it off on the
+/// arbitrage column, the tallest thing in the band, appeared to switch off the backing entirely.
+///
+/// Sized on the module ceiling: a band cannot print more lines than there are modules, and the
+/// bands do not share this budget because every line of every band is drawn in one pass. Lines past
+/// it are drawn WITHOUT a plate rather than borrowing another line's.
+pub(in crate::chartdx) const CAPTION_PLATES: usize = moon_core::config::CHART_LABEL_ROWS;
 
 /// The pane rectangles a caption pass needs, in LOGICAL pixels.
 #[derive(Clone, Copy)]
@@ -156,6 +161,7 @@ impl RenderState {
         // the pane and the runs live on `self`, and this pass runs on every presented frame.
         // `label_placed` beside it uses the same take-and-return.
         let texts = std::mem::take(&mut self.panes[idx].labels.texts);
+        let mut next_plate = 0usize;
         let result = self.draw_all_zones(
             ctx,
             idx,
@@ -165,6 +171,7 @@ impl RenderState {
             corner,
             caption_fg,
             &mut plates,
+            &mut next_plate,
         );
         self.panes[idx].labels.texts = texts;
         result?;
@@ -187,12 +194,13 @@ impl RenderState {
         corner: Option<CaptionGeom>,
         caption_fg: Hsla,
         plates: &mut [[f32; 4]; CAPTION_PLATES],
+        next_plate: &mut usize,
     ) -> anyhow::Result<()> {
         let Some(corner) = corner else {
             return Ok(());
         };
-        for (zone_ix, zone) in LabelZone::ALL.into_iter().enumerate() {
-            for (align_ix, align) in LabelAlign::ALL.into_iter().enumerate() {
+        for zone in LabelZone::ALL {
+            for align in LabelAlign::ALL {
                 let rows = self.collect_rows(cfg, texts, zone, align);
                 if rows.is_empty() {
                     continue;
@@ -206,10 +214,19 @@ impl RenderState {
                 } else {
                     geom.plot_top
                 };
-                let plate = self.draw_stack(
+                let line_plates = self.draw_stack(
                     ctx, idx, texts, &rows, column, start_y, limit_y, downward, caption_fg,
                 )?;
-                plates[zone_ix * LabelAlign::ALL.len() + align_ix] = plate.plate(geom.scale_factor);
+                // Published in DRAW order, across every band: the plates are a flat list of
+                // rectangles to the renderer, and which band a line came from is not something it
+                // has to know.
+                for box_ in line_plates {
+                    let Some(slot) = plates.get_mut(*next_plate) else {
+                        break;
+                    };
+                    *slot = box_.plate(geom.scale_factor);
+                    *next_plate += 1;
+                }
             }
         }
         Ok(())
@@ -279,8 +296,8 @@ impl RenderState {
         limit_y: f32,
         downward: bool,
         caption_fg: Hsla,
-    ) -> anyhow::Result<CaptionBox> {
-        let mut plate = CaptionBox::default();
+    ) -> anyhow::Result<Vec<CaptionBox>> {
+        let mut plates: Vec<CaptionBox> = Vec::new();
         let mut y = start_y;
         // Whether anything has actually been PUT on the pane. Not the loop index: the first line
         // of a band is exempt from the clamp below, and "first" means first DRAWN.
@@ -313,14 +330,19 @@ impl RenderState {
             // drawing it. Taking that height from the styles rather than from a measurement is what
             // makes this possible without drawing the row twice.
             let top = if downward { y } else { y - row_h };
+            // A plate PER LINE: the switch belongs to a caption, and a caption sits on one line.
+            let mut plate = CaptionBox::default();
             self.draw_row(
                 ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
                 &mut plate,
             )?;
+            if plate.any() {
+                plates.push(plate);
+            }
             any_drawn = true;
             y += if downward { row_h } else { -row_h };
         }
-        Ok(plate)
+        Ok(plates)
     }
 
     /// Draw one row of captions, returning the row's LEFT edge.
