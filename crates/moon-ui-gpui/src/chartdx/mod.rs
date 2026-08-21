@@ -197,6 +197,25 @@ pub(super) struct PlacedLabel {
     pub solid: bool,
 }
 
+/// One arbitrage venue name as it was drawn, and which venue it names.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ArbHit {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Protocol platform code, and the DEX name for a deployer.
+    pub code: u8,
+    pub dex: String,
+}
+
+impl ArbHit {
+    /// Whether a point in the pane's own logical pixels lands on this name.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.w && y >= self.y && y <= self.y + self.h
+    }
+}
+
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
 // STATIC grid density uses fixed width and height divisions. Like Moonbot, the grid stays still and
@@ -321,6 +340,12 @@ struct PaneRender {
     label_figures: Option<moon_core::market::MarketFiguresReadout>,
     /// Retained-history movement and volume per window, gated separately because it costs more.
     label_windows: Option<moon_core::market::MarketWindowsReadout>,
+    /// Where each arbitrage venue NAME was drawn, in the pane's own logical pixels.
+    ///
+    /// Rebuilt by the caption pass on every presented frame and reused in place, because a click
+    /// has to hit what the LAST frame actually drew: the column moves with the pane, and a stale
+    /// rectangle would open the wrong exchange.
+    pub(super) arb_hits: Vec<ArbHit>,
     /// Arbitrage quotes for this pane's market, refreshed on a throttle rather than per revision:
     /// the protocol only hands them over one venue at a time, each behind the market lock.
     label_arb: Vec<moon_core::market::ArbQuote>,
@@ -555,6 +580,7 @@ impl PaneRender {
             label_context: None,
             label_figures: None,
             label_windows: None,
+            arb_hits: Vec::new(),
             label_arb: Vec::new(),
             label_arb_read_ms: 0,
             label_arb_market: String::new(),

@@ -25,6 +25,7 @@ use moon_core::config::{
 use moon_core::util::fmt::DeltaSign;
 
 use super::caption::{CaptionBox, CaptionGeom, caption_geom};
+use crate::chartdx::ArbHit;
 use super::labels::LabelText;
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
 use crate::chartdx::RenderState;
@@ -163,6 +164,10 @@ impl RenderState {
         // the pane and the runs live on `self`, and this pass runs on every presented frame.
         // `label_placed` beside it uses the same take-and-return.
         let texts = std::mem::take(&mut self.panes[idx].labels.texts);
+        // Taken and returned like the texts above: the hit rectangles are rebuilt every frame and
+        // the buffer is reused, so a chart with an arbitrage column allocates nothing per frame.
+        let mut hits = std::mem::take(&mut self.panes[idx].arb_hits);
+        hits.clear();
         let result = self.draw_all_zones(
             ctx,
             idx,
@@ -172,8 +177,10 @@ impl RenderState {
             corner,
             caption_fg,
             &mut plates,
+            &mut hits,
         );
         self.panes[idx].labels.texts = texts;
+        self.panes[idx].arb_hits = hits;
         result?;
         let changed = self.panes[idx].caption_plates != plates;
         if changed {
@@ -194,6 +201,7 @@ impl RenderState {
         corner: Option<CaptionGeom>,
         caption_fg: Hsla,
         plates: &mut [[f32; 4]; CAPTION_PLATES],
+        hits: &mut Vec<ArbHit>,
     ) -> anyhow::Result<()> {
         let Some(corner) = corner else {
             return Ok(());
@@ -214,7 +222,7 @@ impl RenderState {
                     geom.plot_top
                 };
                 let module_plates = self.draw_stack(
-                    ctx, idx, texts, &rows, column, start_y, limit_y, downward, caption_fg,
+                    ctx, idx, texts, &rows, column, start_y, limit_y, downward, caption_fg, hits,
                 )?;
                 // A module lives in exactly one band, so a band writes only its own slots and
                 // cannot overwrite another's.
@@ -294,6 +302,7 @@ impl RenderState {
         limit_y: f32,
         downward: bool,
         caption_fg: Hsla,
+        hits: &mut Vec<ArbHit>,
     ) -> anyhow::Result<Vec<(usize, CaptionBox)>> {
         let mut plates: Vec<(usize, CaptionBox)> = Vec::new();
         let mut y = start_y;
@@ -333,7 +342,7 @@ impl RenderState {
             // module that switched it off.
             self.draw_row(
                 ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
-                &mut plates,
+                &mut plates, hits,
             )?;
             any_drawn = true;
             y += if downward { row_h } else { -row_h };
@@ -361,6 +370,7 @@ impl RenderState {
         downward: bool,
         caption_fg: Hsla,
         plates: &mut Vec<(usize, CaptionBox)>,
+        hits: &mut Vec<ArbHit>,
     ) -> anyhow::Result<f32> {
         if cells.is_empty() {
             return Ok(column.x);
@@ -482,6 +492,19 @@ impl RenderState {
                     } else {
                         anchor_x - value_w - prefix_w
                     };
+                    // An arbitrage line's prefix is the VENUE's name, and clicking it opens this
+                    // coin there. The rectangle is recorded from the placement above rather than
+                    // recomputed later: a click has to hit what was actually drawn.
+                    if let Some((code, dex)) = entry.venue.clone() {
+                        hits.push(ArbHit {
+                            x: prefix_x,
+                            y,
+                            w: prefix_w,
+                            h: item.line_h(),
+                            code,
+                            dex,
+                        });
+                    }
                     self.draw_caption_run(
                         ctx,
                         idx,

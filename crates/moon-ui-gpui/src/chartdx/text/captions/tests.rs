@@ -36,6 +36,7 @@ fn texts() -> Vec<LabelText> {
             part: n.saturating_sub(1),
             text: text.into(),
             prefix: String::new(),
+            venue: None,
             sign: None,
             color: None,
         })
@@ -102,6 +103,7 @@ fn the_first_module_of_a_band_always_opens_a_line() {
         part: 0,
         text: "Δ1ч".into(),
         prefix: String::new(),
+        venue: None,
         sign: None,
         color: None,
     }];
@@ -136,6 +138,7 @@ fn an_arbitrage_column_stacks_whatever_the_flow_says() {
             part,
             text: text.into(),
             prefix: String::new(),
+            venue: None,
             sign: None,
             color: None,
         })

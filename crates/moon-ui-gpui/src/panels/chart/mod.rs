@@ -13,6 +13,7 @@
 //! order dragging in [`trade`]; rendering in [`render`]; and slot wheel, mouse, and hover handling in
 //! [`render_input`].
 
+mod arb_open;
 mod click_series;
 mod figures;
 mod geom;

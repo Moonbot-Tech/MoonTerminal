@@ -223,6 +223,16 @@ pub(super) fn mouse_down_left(
     // system's double-click box, which would otherwise send that press to the trading gestures
     // below instead of to the figure layer. It does NOT lift for the press that FINISHES one — that
     // press sends a live bulk move, and an accidental Ctrl+double-click must not be what sends it.
+    // A click on an arbitrage venue's NAME opens this coin there, and it is checked first: the name
+    // is a small, unambiguous target drawn over the plot, and falling through would place an order
+    // under it. Nothing else on the chart claims that rectangle.
+    if within
+        && this.try_open_arb_venue(pos, e.position, super::arb_open::ArbOpen::Chart, window, cx)
+    {
+        cx.notify();
+        cx.stop_propagation();
+        return;
+    }
     let sells_zone_mode = this.sells_zone_armed(cx);
     let starting_band = sells_zone_mode && this.fig_draft.is_none();
     if within
@@ -430,6 +440,16 @@ pub(super) fn mouse_down_right(
         None
     };
     this.sync_native_cursor();
+    // The same rectangle as the left button, opening the coin in a COMPARISON tab instead. Checked
+    // before the menus for the same reason: the name is not part of the plot they act on.
+    if within
+        && this.try_open_arb_venue(pos, e.position, super::arb_open::ArbOpen::Compare, window, cx)
+    {
+        this.suppress_rmb_up = true;
+        cx.notify();
+        cx.stop_propagation();
+        return;
+    }
     // Right-clicking a drawn figure in drawing mode opens its Alert/Delete menu. This has highest
     // priority; suppress_rmb_up consumes the paired release so fullscreen remains intact.
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {

@@ -660,6 +660,30 @@ impl ChartEngine {
         true
     }
 
+    /// The arbitrage venue whose NAME is under a point, in the pane's own logical pixels.
+    ///
+    /// Read off what the last frame DREW — the caption pass records each name's rectangle as it
+    /// places it — because the column moves with the pane and with the roster, and a rectangle
+    /// recomputed at click time would have to repeat the whole placement to be right.
+    ///
+    /// Args:
+    ///     pane: Pane index the point belongs to.
+    ///     x, y: Point in the pane's own logical pixels.
+    ///
+    /// Returns:
+    ///     The venue's platform code and its DEX name (empty for an ordinary exchange).
+    pub fn arb_venue_at(&self, pane: usize, x: f32, y: f32) -> Option<(u8, String)> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let hit = render
+            .panes
+            .get(pane)?
+            .arb_hits
+            .iter()
+            .find(|hit| hit.contains(x, y))?;
+        Some((hit.code, hit.dex.clone()))
+    }
+
     /// Applies the GLOBAL arbitrage roster — which venues the column lists, in what order, under
     /// what name and colour. Returns true on change.
     ///

@@ -152,6 +152,12 @@ pub(in crate::chartdx) struct LabelText {
     /// Sign of the value behind the text, for a caption that colors by it. `None` means the value
     /// has no meaningful sign and the caption keeps the theme color.
     pub sign: Option<DeltaSign>,
+    /// The venue this line names, for the click that opens the coin there.
+    ///
+    /// Only an arbitrage line carries one. The DEX name rides along because a Hyperliquid deployer
+    /// is not identified by its code — every deployer shares the futures platform ordinal — and the
+    /// core that trades it is found by that name.
+    pub venue: Option<(u8, String)>,
     /// Colour this ONE line is drawn in, overriding the caption's own style.
     ///
     /// Only an arbitrage line uses it: its colour belongs to the VENUE, which the caption's style
@@ -236,6 +242,7 @@ impl LabelState {
                     part: ROW_NAME_PART,
                     text: title,
                     prefix: String::new(),
+                    venue: None,
                     sign: None,
                     color: None,
                 });
@@ -276,6 +283,7 @@ impl LabelState {
                     part: part_ix,
                     text,
                     prefix: caption_prefix(part, part.resolved_style().caption),
+                    venue: None,
                     sign,
                     color: None,
                 });
@@ -538,6 +546,8 @@ fn push_arb_rows(
             // the colour, so the two cannot disagree about a spread that rounds away.
             let spread = fmt::signed_pct(row.quote.spread_pct, 2);
             ArbCell {
+                code: row.quote.venue.code(),
+                dex: row.quote.dex_name.clone(),
                 sign: spread
                     .as_ref()
                     .and_then(|(_, sign)| colored_sign(min_pct, row.quote.spread_pct, *sign)),
@@ -590,6 +600,7 @@ fn push_arb_rows(
             part: ARB_PART_BASE + n,
             text,
             prefix,
+            venue: Some((cell.code, cell.dex)),
             // The SPREAD is what carries a direction here; the venue's own colour, when it has one,
             // overrides whatever the sign would have picked.
             sign: cell.sign,
@@ -600,6 +611,9 @@ fn push_arb_rows(
 
 /// One arbitrage line before it is padded into a column.
 struct ArbCell {
+    /// Protocol platform code, and the DEX name when the venue is a deployer.
+    code: u8,
+    dex: String,
     label: String,
     price: String,
     pct: String,

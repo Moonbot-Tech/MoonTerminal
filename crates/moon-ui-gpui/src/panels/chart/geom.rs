@@ -150,6 +150,14 @@ impl ChartPanel {
         self.input.rmb_moved()
     }
 
+    /// A pane's rectangle in the chart's own logical pixels, for input that works in them.
+    ///
+    /// The caption pass records its rectangles in the PANE's coordinates, and a click arrives in
+    /// the chart's; this is the one origin between them.
+    pub(super) fn pane_rect_for_input(&self, pane: usize) -> Option<moon_chart::view::Rect> {
+        self.local_pane_rect(pane)
+    }
+
     fn local_pane_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
         self.input
             .pane_rects
