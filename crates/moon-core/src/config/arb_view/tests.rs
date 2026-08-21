@@ -95,14 +95,19 @@ fn a_venue_is_identified_by_its_code() {
     assert_eq!(rows[0].color, Some(0x00FF00));
 }
 
-/// The name comes from the PROTOCOL, not from a table of ours — and a code the protocol cannot name
-/// prints its number rather than a word this build invented.
+/// Venues are spelled as the REFERENCE TERMINAL spells them — the wire carries no display name —
+/// and a code nothing covers prints its number rather than a word this build invented.
 #[test]
-fn a_venue_is_named_by_the_protocol() {
-    assert_eq!(ArbVenue::from_code(4).default_name(), "FBinance");
-    assert_eq!(ArbVenue::from_code(102).default_name(), "OKX");
-    // A code no constant covers: the reference terminal shows one, and this is how it reads here.
-    assert_eq!(ArbVenue::from_code(14).default_name(), "#14");
+fn a_venue_is_named_the_way_the_reference_terminal_names_it() {
+    assert_eq!(ArbVenue::from_code(3).default_name(), "BinanceS");
+    assert_eq!(ArbVenue::from_code(4).default_name(), "BinanceF");
+    assert_eq!(ArbVenue::from_code(9).default_name(), "GateF");
+    // The OKX pair arrives on codes no protocol constant covers; the reference terminal's own list
+    // is what identifies them. See `default_name` for how to confirm the order in one move.
+    assert_eq!(ArbVenue::from_code(14).default_name(), "OkxS");
+    assert_eq!(ArbVenue::from_code(15).default_name(), "OkxF");
+    // A code nothing covers still prints its number rather than a guessed exchange.
+    assert_eq!(ArbVenue::from_code(200).default_name(), "#200");
     assert_eq!(ArbVenue::deployer(3).default_name(), "HL #3");
 }
 
@@ -185,7 +190,7 @@ fn a_deployer_takes_the_name_its_core_supplied() {
     named.dex_name = "hyna".to_string();
 
     let rows = cfg.arrange(std::slice::from_ref(&named));
-    assert_eq!(rows[0].label, "hyna");
+    assert_eq!(rows[0].label, "HL_hyna", "the terminal's prefix, the core's word");
 
     let unnamed = [quote(deployer.code(), 101.0)];
     let rows = cfg.arrange(&unnamed);
@@ -194,5 +199,5 @@ fn a_deployer_takes_the_name_its_core_supplied() {
     // The settings window has no quote to read a name off, but it does have the list itself.
     let names = vec![String::new(), "xyz".into(), "flx".into(), "hyna".into()];
     let row = cfg.row(deployer).expect("the roster lists it");
-    assert_eq!(row.label_with(&names), "hyna");
+    assert_eq!(row.label_with(&names), "HL_hyna");
 }

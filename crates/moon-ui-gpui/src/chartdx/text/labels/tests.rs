@@ -248,7 +248,7 @@ fn the_column_prints_one_line_per_venue() {
     let texts = texts_with(&cfg, arb_inputs(vec![arb_quote(4, 101.0), arb_quote(9, 99.0)], view));
 
     assert_eq!(texts.len(), 2, "one line per venue, from one caption");
-    assert!(texts[0].starts_with("FBinance"), "{:?}", texts[0]);
+    assert!(texts[0].starts_with("BinanceF"), "{:?}", texts[0]);
     assert!(texts[0].contains("+1.00%"), "{:?}", texts[0]);
     assert!(texts[1].contains("-1.00%"), "{:?}", texts[1]);
 }
@@ -313,9 +313,9 @@ fn the_venue_name_is_the_lines_prefix() {
     };
 
     let line = texts.first().expect("one venue prints");
-    assert_eq!(line.prefix, "FBinance ", "the protocol's own spelling");
+    assert_eq!(line.prefix, "BinanceF ", "the reference terminal's spelling");
     assert!(line.text.contains("+1.00%"), "{:?}", line.text);
-    assert!(!line.text.contains("FBinance"), "{:?}", line.text);
+    assert!(!line.text.contains("BinanceF"), "{:?}", line.text);
 }
 
 /// The roster's floor shortens the COLUMN: a dozen venues quoting the same price are a dozen lines
@@ -338,7 +338,7 @@ fn the_roster_floor_drops_quiet_venues() {
     );
 
     assert_eq!(texts.len(), 1, "only the venue past the floor prints");
-    assert!(texts[0].starts_with("FGate"), "{:?}", texts[0]);
+    assert!(texts[0].starts_with("GateF"), "{:?}", texts[0]);
 }
 
 /// A venue that cannot be deposited to or withdrawn from is MARKED, not hidden: the spread is real

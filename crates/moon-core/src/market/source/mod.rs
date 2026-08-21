@@ -395,7 +395,7 @@ impl ArbVenue {
     ///
     /// Deployers are deliberately absent: they exist per core, are discovered from the data, and
     /// are appended after this list wherever one actually reports a price.
-    pub const KNOWN: [ArbVenue; 17] = [
+    pub const KNOWN: [ArbVenue; 19] = [
         ArbVenue(3),
         ArbVenue(4),
         ArbVenue(6),
@@ -406,6 +406,11 @@ impl ArbVenue {
         ArbVenue(9),
         ArbVenue(10),
         ArbVenue(11),
+        // The OKX pair a live core actually sends, and the library constant that names the
+        // exchange without a side. All three are listed: a venue absent from this list still
+        // PRINTS, but only a listed one can be hidden, recoloured or moved.
+        ArbVenue(14),
+        ArbVenue(15),
         ArbVenue(102),
         ArbVenue(12),
         ArbVenue(13),
@@ -464,25 +469,73 @@ impl ArbVenue {
         self.0 >= Self::DEPLOYER_BASE && self.0 < Self::DEPLOYER_END
     }
 
-    /// What this venue is CALLED, as the PROTOCOL spells it.
+    /// What this venue is CALLED, in the REFERENCE TERMINAL's spelling.
     ///
-    /// The protocol's own name, never a table of ours: a second spelling of the same list is the
-    /// thing that goes stale when a core learns a new venue, and the terminal has no business
-    /// renaming what the core reports. A deployer is named by `known_dexes` — see
-    /// [`ArbQuote::dex_name`] — and this is the fallback when no list has arrived.
+    /// The wire carries no display name for a venue: `ArbPlatformCode::name` exists, but it is the
+    /// protocol library's own debug spelling (`FBinance`, `WasBittrex`, `Unknown`) and is not what
+    /// Moonbot's arbitrage panel shows. Moonbot builds its column heads itself, with `S`/`F`
+    /// suffixes for the spot and futures halves of one exchange — `BinanceS`, `BinanceF`, `GateF`,
+    /// `OkxS` — and those are the words a trader reads a spread by.
     ///
-    /// A code the protocol cannot name prints its NUMBER. That is deliberate too: it says "the core
-    /// sent something this build has never seen" plainly, and the number is what identifies it.
+    /// So this table exists, transcribed from that panel (screenshot, 2026-08-21) rather than
+    /// invented, and it is deliberately the ONLY place the terminal spells a venue.
+    ///
+    /// The one name that does come over the wire is a Hyperliquid deployer's: `AuthCheck` carries
+    /// `known_dexes`, and Moonbot prints those with an `HL_` prefix (`HL_hyna`, `HL_para`). That is
+    /// handled where the live quote is — see `ArbVenueCfg::label_for` — and this is the fallback
+    /// when no list has arrived.
+    ///
+    /// A code no spelling covers prints its NUMBER: it says "the core sent a platform this build
+    /// has never seen" plainly, and the number is what identifies it.
     pub fn default_name(self) -> String {
-        let code = moonproto::ArbPlatformCode::hyper_deployer(self.0.wrapping_sub(Self::DEPLOYER_BASE));
-        let named = code.name();
-        if named != "Unknown" {
-            return named.to_string();
+        let known = match self.0 {
+            1 => "Bittrex",
+            2 => "BybitF",
+            3 => "BinanceS",
+            4 => "BinanceF",
+            5 => "HtxS",
+            6 => "BinanceQ",
+            7 => "BybitS",
+            8 => "GateS",
+            9 => "GateF",
+            10 => "BitgetS",
+            11 => "BitgetF",
+            12 => "HL_S",
+            13 => "HL_F",
+            // Not in any protocol constant, and read off a live core instead. The reference
+            // terminal lists twenty-one venues; every one of them maps to a code above except the
+            // OKX pair, and a core reporting that panel sends 14 and 15 while never sending 102 —
+            // the constant the library calls `Okx`. The ORDER inside the pair follows every other
+            // pair in the range (`8/9` Gate, `10/11` Bitget, `12/13` Hyperliquid): spot first.
+            //
+            // Verify it in one move rather than trusting the inference: clear the `OkxF` checkbox
+            // in Moonbot and watch which of the two codes leaves the mask in the arbitrage trace
+            // (`log.market_sources`).
+            14 => "OkxS",
+            15 => "OkxF",
+            100 => "Forex",
+            101 => "UpBit",
+            // The library's own `Okx` constant. No live core has been seen sending it — the pair
+            // above is what arrives — so it keeps the unsuffixed name rather than claiming a side.
+            102 => "Okx",
+            103 => "BinAlpha",
+            _ => "",
+        };
+        if !known.is_empty() {
+            return known.to_string();
         }
         if self.is_deployer() {
             return format!("HL #{}", self.0 - Self::DEPLOYER_BASE);
         }
         format!("#{}", self.0)
+    }
+
+    /// A deployer's name as the reference terminal prints it: its DEX name behind an `HL_` prefix.
+    ///
+    /// The prefix is the terminal's, the word after it is the core's — which is why this is one
+    /// function and not a format string repeated at every call site.
+    pub fn hl_name(dex_name: &str) -> String {
+        format!("HL_{dex_name}")
     }
 }
 

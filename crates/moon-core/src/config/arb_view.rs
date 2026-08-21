@@ -9,10 +9,11 @@
 //! machine on its own.
 //!
 //! The core reports a numeric platform code and a price; the colour, the order and the visibility
-//! are this file's alone. NAMES are not: they come from the protocol — `ArbPlatformCode::name` for
-//! an exchange, the core's own `known_dexes` for a Hyperliquid deployer — and the roster neither
-//! stores nor overrides them. A venue the protocol cannot name prints its code, which says what
-//! happened rather than inventing a word for it.
+//! are this file's alone. NAMES are neither stored nor editable here: an exchange is spelled by
+//! [`crate::market::ArbVenue::default_name`], in the reference terminal's own wording, and a
+//! Hyperliquid deployer by the core's `known_dexes` entry behind that terminal's `HL_` prefix. A
+//! code nothing can name prints its number, which says what happened rather than inventing a word
+//! for it.
 
 use serde::{Deserialize, Serialize};
 
@@ -99,7 +100,7 @@ impl ArbVenueCfg {
     /// takes the quote rather than reading it off the roster.
     pub fn label_for(&self, quote: Option<&crate::market::ArbQuote>) -> String {
         match quote.map(|q| q.dex_name.as_str()).filter(|n| !n.is_empty()) {
-            Some(name) => name.to_string(),
+            Some(name) => ArbVenue::hl_name(name),
             None => self.venue().default_name(),
         }
     }
@@ -116,7 +117,7 @@ impl ArbVenueCfg {
             .and_then(|index| dex_names.get(usize::from(index)))
             .filter(|name| !name.is_empty());
         match named {
-            Some(name) => name.clone(),
+            Some(name) => ArbVenue::hl_name(name),
             None => self.venue().default_name(),
         }
     }
@@ -254,7 +255,7 @@ impl ArbViewCfg {
                 // "HL #3".
                 label: match quote.dex_name.is_empty() {
                     true => quote.venue.default_name(),
-                    false => quote.dex_name.clone(),
+                    false => ArbVenue::hl_name(&quote.dex_name),
                 },
                 color: None,
             });
