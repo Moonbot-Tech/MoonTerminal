@@ -1249,10 +1249,6 @@ chart_labels.frame_caption:
   ru: "Настройки подписи"
   en: "Label settings"
   es: "Ajustes de la etiqueta"
-chart_labels.field_caption:
-  ru: "Что показывать"
-  en: "What it shows"
-  es: "Qué muestra"
 chart_labels.preview:
   ru: "Как будет выглядеть"
   en: "How it will look"

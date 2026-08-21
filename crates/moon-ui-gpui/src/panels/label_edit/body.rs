@@ -360,28 +360,11 @@ fn caption_settings(
     let resolved = part.resolved_style();
     let mut col = v_flex().w_full().gap(design::ui_px(cx, 6.0));
 
-    // WHAT this caption prints, stated rather than offered: a caption's figure is chosen when the
-    // caption is ADDED, and changing one's mind is removing it and adding the one meant instead —
-    // which is one click either way and leaves no doubt about where the new caption landed. A
-    // selector here was a second door to the same catalogue, and the only one that could silently
-    // turn a caption into something the module was never arranged for.
-    col = col.child(
-        v_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 2.0))
-            .child(
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("chart_labels.field_caption").to_string()),
-            )
-            .child(
-                div()
-                    .text_color(moon(p.text))
-                    .child(t!(part.field.locale_key()).to_string()),
-            ),
-    );
-
+    // The caption's figure is NAMED where it is chosen — the list beside this pane, where the row
+    // for it is already selected — so this pane does not repeat it. It answers "what does this one
+    // look like", and a heading plus a word restating the selected row was two lines of that answer
+    // spent on nothing.
+    //
     // A field that carries settings of its OWN says so in words. There will be more than one of
     // these — a caption whose subject has a roster, a schedule, a source — and a row of unlabelled
     // gears would leave the reader guessing which is which.
