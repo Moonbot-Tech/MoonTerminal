@@ -203,7 +203,7 @@ impl ChartLabelField {
             | ChartLabelField::BtcDelta1h
             | ChartLabelField::BtcDelta24h
             | ChartLabelField::BtcDelta72h => ChartLabelGroup::Move,
-            | ChartLabelField::Bid
+            ChartLabelField::Bid
             | ChartLabelField::Ask
             | ChartLabelField::Spread
             | ChartLabelField::MarkPrice
@@ -348,6 +348,16 @@ impl ChartLabelField {
                 | ChartLabelField::PosSize
                 | ChartLabelField::Exposure
         )
+    }
+
+    /// Whether this caption is PROSE, and so may be wrapped onto another line instead of cut.
+    ///
+    /// One field so far, and it is the only one shaped like a sentence: the core's own detect line,
+    /// which routinely states half a dozen figures and does not fit the plot's width. Everything
+    /// else the chart prints is a number or a name — wrapping those would move a figure onto a line
+    /// of its own, where it reads as a caption of its own.
+    pub fn wraps(self) -> bool {
+        matches!(self, ChartLabelField::DetectMsg)
     }
 
     /// Whether what this field prints is a PERCENTAGE.

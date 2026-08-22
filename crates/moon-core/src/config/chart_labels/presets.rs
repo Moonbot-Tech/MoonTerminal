@@ -32,17 +32,20 @@ pub enum LabelPreset {
     Funding,
     /// What the same coin costs on every other venue the core watches.
     Arbitrage,
+    /// The last detect this core fired on this coin, and the strategy behind what is open.
+    Detect,
 }
 
 impl LabelPreset {
     /// Every preset, in menu order: what the chart is, then how it moves, then what is at risk.
-    pub const ALL: [LabelPreset; 6] = [
+    pub const ALL: [LabelPreset; 7] = [
         LabelPreset::Instrument,
         LabelPreset::CoinDeltas,
         LabelPreset::MarketBackdrop,
         LabelPreset::Position,
         LabelPreset::Funding,
         LabelPreset::Arbitrage,
+        LabelPreset::Detect,
     ];
 
     /// Locale key of the preset's name, which is also the name the created row takes.
@@ -54,6 +57,7 @@ impl LabelPreset {
             LabelPreset::Position => "chart_labels.preset.position",
             LabelPreset::Funding => "chart_labels.preset.funding",
             LabelPreset::Arbitrage => "chart_labels.preset.arbitrage",
+            LabelPreset::Detect => "chart_labels.preset.detect",
         }
     }
 
@@ -77,9 +81,15 @@ impl LabelPreset {
                 ChartLabelField::Exposure,
                 ChartLabelField::OpenPnlMoney,
                 ChartLabelField::OpenPnlPct,
+                ChartLabelField::SessionPnl,
             ],
             LabelPreset::Funding => &[ChartLabelField::Funding, ChartLabelField::FundingIn],
             LabelPreset::Arbitrage => &[ChartLabelField::ArbColumn],
+            LabelPreset::Detect => &[
+                ChartLabelField::DetectStrategy,
+                ChartLabelField::DetectMsg,
+                ChartLabelField::OrderStrategy,
+            ],
         }
     }
 
@@ -93,9 +103,10 @@ impl LabelPreset {
             // Over the PLOT, on the left, which is where the reference terminal prints it and the
             // only band tall enough for a column of a dozen venues.
             LabelPreset::Arbitrage => LabelZone::ChartTop,
-            LabelPreset::CoinDeltas | LabelPreset::MarketBackdrop | LabelPreset::Position => {
-                LabelZone::ChartTop
-            }
+            LabelPreset::CoinDeltas
+            | LabelPreset::MarketBackdrop
+            | LabelPreset::Position
+            | LabelPreset::Detect => LabelZone::ChartTop,
         }
     }
 
@@ -106,7 +117,10 @@ impl LabelPreset {
     /// which venue each belongs to.
     pub fn flow(self) -> LabelFlow {
         match self {
-            LabelPreset::Arbitrage => LabelFlow::Column,
+            // A column for the roster, and for the detect module: its three captions are a line of
+            // prose, a strategy name and another strategy name, and side by side they read as one
+            // run-on sentence.
+            LabelPreset::Arbitrage | LabelPreset::Detect => LabelFlow::Column,
             _ => LabelFlow::Row,
         }
     }
@@ -119,6 +133,9 @@ impl LabelPreset {
             LabelPreset::CoinDeltas | LabelPreset::MarketBackdrop | LabelPreset::Position => {
                 LabelAlign::Left
             }
+            // Centred: a detect line is the widest thing the chart prints, and either edge would
+            // put it under a module that is already there.
+            LabelPreset::Detect => LabelAlign::Center,
         }
     }
 }

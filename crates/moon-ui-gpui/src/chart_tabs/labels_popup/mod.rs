@@ -113,7 +113,10 @@ fn render_labels_popup<T: LabelsPopupHost>(
             .tooltip(t!("chart_labels.reset_tip").to_string())
             .on_click(move |_, _w, app: &mut App| {
                 entity.update(app, |this, cx| {
-                    this.apply_labels(ChartLabelsCfg::default(), cx);
+                    // "Back to default" means the default THIS KIND of tab follows, not the set
+                    // the terminal ships: on an untouched profile the two are the same value, and
+                    // on one where the windows were given their own default they are not.
+                    this.reset_labels(cx);
                 });
             })
             .render()
@@ -194,6 +197,22 @@ pub(crate) trait LabelsPopupHost: LayoutPopupHost {
         });
         cfg.sanitize();
         cfg
+    }
+
+    /// Put this tab back on the default its KIND follows.
+    ///
+    /// Not `ChartLabelsCfg::default()`: that is the set the terminal SHIPS, and writing it here
+    /// would overwrite a default the reader has since set for windows or comparisons with the one
+    /// they replaced. On an untouched profile the two are the same value.
+    fn reset_labels(&mut self, cx: &mut Context<Self>) {
+        let kind = self.source_kind(cx);
+        let cfg = self
+            .backend()
+            .read(cx)
+            .layout
+            .chart_labels_for(kind)
+            .clone();
+        self.apply_labels(cfg, cx);
     }
 
     /// Apply the configuration to the target stacks and persist it in the tab spec.

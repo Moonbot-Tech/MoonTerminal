@@ -1677,6 +1677,10 @@ chart_labels.preset.arbitrage:
   ru: "Арбитраж"
   en: "Arbitrage"
   es: "Arbitraje"
+chart_labels.preset.detect:
+  ru: "Детект"
+  en: "Detect"
+  es: "Detección"
 arb.title:
   ru: "Арбитраж: площадки"
   en: "Arbitrage venues"

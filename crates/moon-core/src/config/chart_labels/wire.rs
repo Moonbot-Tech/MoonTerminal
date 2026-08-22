@@ -29,6 +29,25 @@ use super::{
 /// Field ORDER matters: TOML requires plain values before tables, and `parts` is an array of
 /// tables. Keeping it last is what lets the same type serialize into both `layout.toml` and
 /// `charts.json`.
+/// Read a row's preset, discarding one this build does not know. See [`RowWire::preset`].
+fn de_lenient_preset<'de, D>(d: D) -> Result<Option<LabelPreset>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// A preset this build knows, or anything else at all — accepted and discarded.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        Known(LabelPreset),
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Option::<Shape>::deserialize(d)? {
+        Some(Shape::Known(preset)) => Some(preset),
+        Some(Shape::Other(_)) | None => None,
+    })
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct RowWire {
@@ -37,7 +56,13 @@ struct RowWire {
     /// Ready-made module this row came from, which is how its name survives a language switch.
     /// Absent on a row the user built themselves, and on every file written before presets were
     /// remembered — those carry the localized name they were created with, in `name`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// Read leniently: the list of presets GROWS, and a profile written by a newer build gets
+    /// opened by an older one every time a user steps back a version. This whole configuration is
+    /// deserialized as ONE value — inside `layout.toml`, part of a document that also holds every
+    /// window position — so an unknown name here would take the reader's entire caption set down
+    /// with it. It costs the row its NAME instead: captions, order, band and styling all survive.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_lenient_preset")]
     preset: Option<LabelPreset>,
     zone: LabelZone,
     align: LabelAlign,
