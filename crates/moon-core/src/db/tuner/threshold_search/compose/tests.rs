@@ -318,7 +318,7 @@ fn balanced_quality_decides_only_inside_the_profit_band() {
 /// reverse that pair merely because it contributes a different number of robust metric losses to
 /// each side.
 ///
-/// Breakage this pins: restoring a pool-wide profit bucket in `compose.rs:ranking_keys`, removing
+/// Breakage this pins: restoring a pool-wide profit bucket in `compose/ranking.rs:ranking_keys`, removing
 /// the head-to-head quality comparison from its topological selection, summing pool-wide
 /// secondary losses, or omitting material-profit dependency edges. Those edits either rank the
 /// noisier close path first or let secondary metrics hide a material loss.
@@ -401,7 +401,7 @@ fn a_field_that_costs_nothing_is_given_back() {
 /// loses money while fields 0+1 together score 30 on every fold. Width two is
 /// enough to retain those two best losing branches and discover their synergy.
 ///
-/// Breakage this pins: `compose.rs:beam_candidates` filtering a layer through `accepts` before
+/// Breakage this pins: `compose/ranking.rs:beam_candidates` filtering a layer through `accepts` before
 /// retaining its frontier. That one-line shortcut would discard every singleton here, so the
 /// profitable pair could never be generated and the user-visible composition would stay empty.
 #[test]
@@ -450,7 +450,7 @@ fn a_weak_singleton_can_survive_to_form_a_strong_pair() {
 /// ambiguous fixtures are exact ties. These hand-authored ranked layers independently define the
 /// expected widths, including the hard ceiling and the short-layer boundary.
 ///
-/// Breakage this pins: making `compose.rs:adaptive_width` always return eight or always return
+/// Breakage this pins: making `compose/ranking.rs:adaptive_width` always return eight or always return
 /// sixteen. The former loses interacting branches at noisy depths; the latter doubles work even
 /// after a later depth has separated the candidates and should contract.
 #[test]
@@ -495,7 +495,7 @@ fn adaptive_beam_expands_caps_and_contracts_at_each_depth() {
 /// the configured maximum of four. This drives the production wiring around `adaptive_width`.
 ///
 /// Breakage this pins: replacing `scored.truncate(retained_width)` in
-/// `compose.rs:beam_candidates` with `scored.truncate(min_width)`. The pure policy test above
+/// `compose/ranking.rs:beam_candidates` with `scored.truncate(min_width)`. The pure policy test above
 /// would remain green while the actual beam never widened.
 #[test]
 fn beam_candidates_applies_the_adaptive_width() {
@@ -762,7 +762,7 @@ fn lift_orders_a_worse_per_trade_filter_below_the_empty_mask() {
 /// so every finalist independently fails `accepts`. Their score table still makes the +90 mask
 /// the best actual subset for the reserved gate folds to judge.
 ///
-/// Breakage this pins: replacing `compose.rs:inner_winner`'s fallback pool with only `cleared`.
+/// Breakage this pins: replacing `compose/ranking.rs:inner_winner`'s fallback pool with only `cleared`.
 /// The empty pool would return `None`, composition would substitute the empty mask, and the tuner
 /// would report "no additional filters" without a reduced-set gate comparison.
 #[test]
@@ -799,7 +799,7 @@ fn inner_winner_keeps_a_ranked_finalist_when_none_clear_the_control() {
 /// while candidate B earns +40 in all three. Both independently clear the control; A's mean is
 /// higher, but B's +40 weakest fold is the hand-authored stronger unseen-stretch evidence.
 ///
-/// Breakage this pins: replacing `compose.rs:inner_winner`'s `worst_fold` sort closure with
+/// Breakage this pins: replacing `compose/ranking.rs:inner_winner`'s `worst_fold` sort closure with
 /// `ranked_order`. The higher-mean collapsed candidate would reach the reserved gate folds, where
 /// it can turn a robust reduced set into an apparent "no additional filters" result.
 #[test]
@@ -889,7 +889,7 @@ fn cycling_finalists() -> Vec<ScoredMask> {
 /// legitimately follows the documented input-order tie-break, which is why the rotated pool is
 /// checked for the same PROPERTY rather than for the same mask.
 ///
-/// Breakage this pins: restoring `compose.rs:inner_winner`'s `reduce` over `aggregate_order`. A
+/// Breakage this pins: restoring `compose/ranking.rs:inner_winner`'s `reduce` over `aggregate_order`. A
 /// fold returns a maximum only when a maximal element exists; on this pool it walks
 /// `strong -> mid -> weak` and answers `weak`, which `strong` beats by 9.7 of lift — measured on a
 /// real 1289-trade scope, that is exactly the scan-order artifact this selection removes. Handing
@@ -949,7 +949,7 @@ fn inner_winner_answers_a_pool_with_no_maximal_element() {
 ///
 /// Both candidates have a BYTE-IDENTICAL weakest fold, so the weakest-fold ranking cannot separate
 /// them and the answer is decided entirely by the input order the pool was left in. That order is
-/// set by `pool.sort_by(ranked_order)` at `compose.rs:inner_winner`, whose deletion — the obvious
+/// set by `pool.sort_by(ranked_order)` at `compose/ranking.rs:inner_winner`, whose deletion — the obvious
 /// "this sort is unused now" cleanup — flips this answer to the worse-mean candidate while every
 /// other test stays green.
 ///
@@ -1006,8 +1006,8 @@ fn inner_winner_breaks_an_identical_weakest_fold_by_the_better_mean() {
 /// own seed vote. Every number is hand-authored; nothing is derived from the code under test.
 ///
 /// Breakage this pins: ranking single measurements without the retention floor — passing `false`
-/// for `single_measurements` at `compose.rs:inner_winner`, or dropping the measurable-fold filter
-/// in `compose.rs:worst_fold`. B's weakest fold becomes the four-trade one at -30, `lift_order`
+/// for `single_measurements` at `compose/ranking.rs:inner_winner`, or dropping the measurable-fold filter
+/// in `compose/ranking.rs:worst_fold`. B's weakest fold becomes the four-trade one at -30, `lift_order`
 /// draws an edge A -> B, and a candidate leading by +80 of lift on every fold that MEASURED
 /// anything is eliminated from the reserved gate by four trades. The mirror of the same flaw
 /// promotes a candidate whose best-looking evidence is a 2%-retention fold.
@@ -1066,7 +1066,7 @@ fn inner_winner_ignores_an_unmeasurably_thin_weakest_fold() {
 /// is not a hypothetical: a mean of ten folds under the bar is exactly the case `aggregate_order`
 /// documents rejecting a +37-lift set over.
 ///
-/// Breakage this pins: passing `true` for `single_measurements` at `compose.rs:ranking_keys`, or
+/// Breakage this pins: passing `true` for `single_measurements` at `compose/ranking.rs:ranking_keys`, or
 /// applying `lift_is_measurable` unconditionally inside `ranking_keys_from_qualities`. The beam
 /// and the outer gate would then rank on a floor that was only ever meant for one measurement.
 #[test]
