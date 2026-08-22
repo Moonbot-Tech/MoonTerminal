@@ -1470,13 +1470,13 @@ chart_labels.field.delta_24h:
   en: "Δ 24h"
   es: "Δ 24h"
 chart_labels.field.open_pnl_pct:
-  ru: "PnL открытых, %"
-  en: "Open PnL, %"
-  es: "PnL abierto, %"
+  ru: "Open, %"
+  en: "Open, %"
+  es: "Open, %"
 chart_labels.field.open_pnl_money:
-  ru: "PnL открытых, деньги"
-  en: "Open PnL, money"
-  es: "PnL abierto, dinero"
+  ru: "Open, деньги"
+  en: "Open, money"
+  es: "Open, dinero"
 chart_labels.field.open_orders:
   ru: "Ордеров"
   en: "Orders"
@@ -1573,10 +1573,6 @@ chart_labels.field.exch_pos_size:
   ru: "Позиция на бирже"
   en: "Exchange position"
   es: "Posición en el exchange"
-chart_labels.field.exch_pos_price:
-  ru: "Цена входа позиции"
-  en: "Position entry price"
-  es: "Precio de entrada"
 chart_labels.field.liq_price:
   ru: "Цена ликвидации"
   en: "Liquidation price"
@@ -1590,9 +1586,9 @@ chart_labels.field.margin_mode:
   en: "Margin mode"
   es: "Tipo de margen"
 chart_labels.field.session_pnl:
-  ru: "Профит за сессию"
-  en: "Session profit"
-  es: "Beneficio de la sesión"
+  ru: "PnL монеты (ядро)"
+  en: "Coin PnL (core)"
+  es: "PnL de la moneda (núcleo)"
 chart_labels.field.coin_balance:
   ru: "Баланс монеты"
   en: "Coin balance"
@@ -1649,10 +1645,6 @@ chart_labels.short.exch_pos_size:
   ru: "Поз. биржи"
   en: "Exch pos"
   es: "Pos. exch"
-chart_labels.short.exch_pos_price:
-  ru: "Вход"
-  en: "Entry"
-  es: "Entrada"
 chart_labels.short.liq_price:
   ru: "Ликв"
   en: "Liq"
@@ -1662,9 +1654,9 @@ chart_labels.short.leverage:
   en: "Lev"
   es: "Apal"
 chart_labels.short.session_pnl:
-  ru: "Сессия"
-  en: "Session"
-  es: "Sesión"
+  ru: "PnL"
+  en: "PnL"
+  es: "PnL"
 chart_labels.short.coin_balance:
   ru: "Баланс"
   en: "Balance"
@@ -1882,9 +1874,9 @@ chart_labels.short.delta_24h:
   en: "Δ24h"
   es: "Δ24h"
 chart_labels.short.pnl:
-  ru: "PnL"
-  en: "PnL"
-  es: "PnL"
+  ru: "Open"
+  en: "Open"
+  es: "Open"
 chart_labels.short.orders:
   ru: "Ордеров"
   en: "Orders"

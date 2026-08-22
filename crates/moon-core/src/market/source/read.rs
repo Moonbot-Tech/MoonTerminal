@@ -714,19 +714,24 @@ impl MarketDataSource {
                 any = true;
                 let pos = handle.balance_position();
                 // A flat market reports a zero size, and that is NOT the same as "no position
-                // arrived": the entry and liquidation prices are only meaningful while something is
-                // open, so they are withheld together with it rather than printed as zeros.
-                let (size, price, liq) = position_of(&pos);
+                // arrived": the liquidation price is only meaningful while something is open, so it
+                // is withheld together with it rather than printed as a zero.
+                //
+                // The entry price this helper also resolves has no reader: the core sets it only
+                // behind a flag of its own and left it at zero in every one of 56 060 diagnostic
+                // samples across 21 cores, so the caption that stated it was retired. The helper
+                // keeps returning it — it is what makes the withholding rule testable in one place.
+                let (size, _entry, liq) = position_of(&pos);
                 out.pos_size = size;
-                out.pos_price = size.and(positive(price));
                 out.liq_price = size.and(positive(liq));
                 out.leverage_x = (pos.leverage_x > 0).then_some(pos.leverage_x);
                 out.isolated = pos
                     .position_type
                     .is_known()
                     .then(|| pos.position_type.is_isolated());
-                // Session profit is a SUM and is legitimately zero on a coin traded to break even,
-                // so it is reported whenever it is a number at all.
+                // Reported whenever it is a number at all; whether a ZERO is worth printing is the
+                // caption's call, not this readout's. It is not the "traded to break even" it looks
+                // like: the core leaves this counter at zero on part of its venues.
                 out.session_pnl = pos.total_profit().is_finite().then(|| pos.total_profit());
                 out.coin_balance = pos.asset_balance.is_finite().then_some(pos.asset_balance);
             }

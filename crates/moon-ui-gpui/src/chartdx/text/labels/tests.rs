@@ -708,8 +708,8 @@ fn the_pnl_percentage_is_weighted_by_what_each_order_spent() {
     );
     assert_eq!(
         text.as_deref(),
-        Some("PnL: +10.00%"),
-        "the PnL default carries its caption"
+        Some("Open: +10.00%"),
+        "the open-order default carries its caption"
     );
 }
 
@@ -727,7 +727,7 @@ fn two_captions_can_read_different_bases() {
     let texts = texts_of(&cfg, inputs);
     assert_eq!(
         texts,
-        vec!["PnL: +10.00%".to_string(), "PnL: +30.00%".to_string()]
+        vec!["Open: +10.00%".to_string(), "Open: +30.00%".to_string()]
     );
 }
 
@@ -969,4 +969,34 @@ fn a_hidden_module_prints_nothing_at_all() {
         preview_row(&cfg_rc.rows[0]).is_empty(),
         "and the editor's sample says the same"
     );
+}
+
+/// The core's own per-coin counter is left at zero on part of its venues while MoonBot shows a
+/// figure there, so a zero is "the core said nothing", not "traded to break even". Judged on the
+/// ROUNDED value: a coin-margined core reports fractions of a BTC, which two decimals cannot show.
+#[test]
+fn a_zero_core_pnl_prints_nothing() {
+    let figures_with = |session_pnl: Option<f64>| LabelInputs {
+        figures: Some(moon_core::market::MarketFiguresReadout {
+            session_pnl,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    assert!(
+        one_field(ChartLabelField::SessionPnl, figures_with(Some(0.0))).is_none(),
+        "an exact zero prints nothing"
+    );
+    assert!(
+        one_field(ChartLabelField::SessionPnl, figures_with(Some(0.0004))).is_none(),
+        "and so does an amount that rounds away"
+    );
+    assert!(
+        one_field(ChartLabelField::SessionPnl, figures_with(None)).is_none(),
+        "an absent counter prints nothing either"
+    );
+    let text = one_field(ChartLabelField::SessionPnl, figures_with(Some(-12.4)))
+        .expect("a real amount prints");
+    assert!(text.ends_with("-12.4"), "{text:?}");
 }

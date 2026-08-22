@@ -430,6 +430,9 @@ pub struct ResolvedLabelStyle {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartLabelPart {
+    /// Read leniently: a field this build does not know empties this ONE part instead of failing
+    /// the whole configuration. See [`wire::de_lenient_field`].
+    #[serde(deserialize_with = "wire::de_lenient_field")]
     pub field: ChartLabelField,
     /// Whether the caption is drawn at all. A hidden part keeps its position and style, which is
     /// the difference between this and deleting it.

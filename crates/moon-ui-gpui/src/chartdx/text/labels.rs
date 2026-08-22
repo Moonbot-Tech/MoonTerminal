@@ -496,8 +496,6 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 };
                 (plain(&fmt::compact_si(v)), Some(sign))
             }),
-        ChartLabelField::ExchPosPrice => figure(inputs, |f| f.pos_price)
-            .map(price_label),
         ChartLabelField::LiqPrice => figure(inputs, |f| f.liq_price)
             .map(price_label),
         ChartLabelField::Leverage => inputs
@@ -513,12 +511,19 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             };
             (t!(key).to_string(), None)
         }),
-        // Unlike the open-position figures, a session profit of exactly zero is a RESULT — the coin
-        // was traded to break even — so it prints, with the neutral sign the formatter picks.
-        ChartLabelField::SessionPnl => inputs.figures.as_ref().and_then(|f| f.session_pnl).map(|v| {
-            let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
-            (text, Some(sign))
-        }),
+        // A zero prints NOTHING. The core leaves this counter at zero on part of its venues while
+        // MoonBot itself shows a figure there, so a printed `+0` would state "traded to break even"
+        // about a coin that was nothing of the sort. Judged on the ROUNDED value, which is also
+        // what hides a counter arriving in a unit two decimals cannot show — a coin-margined core
+        // reports fractions of a BTC.
+        ChartLabelField::SessionPnl => inputs
+            .figures
+            .as_ref()
+            .and_then(|f| f.session_pnl)
+            .and_then(|v| {
+                let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
+                (sign != DeltaSign::Zero).then_some((text, Some(sign)))
+            }),
         ChartLabelField::CoinBalance => figure(inputs, |f| f.coin_balance)
             .map(|v| (plain(&fmt::compact_si(v)), None)),
         ChartLabelField::PosSize => (stats.pos_size != 0.0).then(|| {
@@ -647,8 +652,8 @@ struct ArbCell {
 
 /// A PRICE caption: the shared adaptive formatter, with the field's prefix when it asks for one.
 ///
-/// Six fields print a price this way — bid, ask, mark, step, entry, liquidation — and spelling the
-/// same pair of calls six times is how one of them ends up on a different formatter later.
+/// Five fields print a price this way — bid, ask, mark, step, liquidation — and spelling the same
+/// pair of calls five times is how one of them ends up on a different formatter later.
 fn price_label(v: f64) -> (String, Option<DeltaSign>) {
     (fmt::adaptive(v), None)
 }
@@ -1028,7 +1033,6 @@ fn sample_inputs() -> LabelInputs {
                 moon_core::market::CoinTag::Alpha,
             ],
             pos_size: Some(0.35),
-            pos_price: Some(50_980.0),
             liq_price: Some(41_120.0),
             leverage_x: Some(10),
             isolated: Some(true),

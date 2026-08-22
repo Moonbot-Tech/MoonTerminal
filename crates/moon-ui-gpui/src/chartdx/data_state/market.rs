@@ -1087,7 +1087,6 @@ impl ChartDataState {
                     | LabelField::MaxLeverage
                     | LabelField::MaxOrder
                     | LabelField::ExchPosSize
-                    | LabelField::ExchPosPrice
                     | LabelField::LiqPrice
                     | LabelField::Leverage
                     | LabelField::MarginMode
