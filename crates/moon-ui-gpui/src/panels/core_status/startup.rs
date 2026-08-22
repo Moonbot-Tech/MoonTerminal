@@ -291,3 +291,14 @@ pub(super) fn startup_tooltip(facts: &[StartupFact]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// Return the complete localized startup diagnostic for reuse outside Core Status.
+///
+/// Args:
+///     status: Latest polled startup snapshot for one core.
+///
+/// Returns:
+///     The same labelled diagnostic lines rendered by the Core Status startup hover.
+pub(crate) fn startup_diagnostic_text(status: &CoreStartupStatus) -> String {
+    startup_tooltip(&startup_facts(status))
+}

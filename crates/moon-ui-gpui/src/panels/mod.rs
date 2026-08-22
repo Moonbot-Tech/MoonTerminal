@@ -53,6 +53,7 @@ pub use chart::ChartPanel;
 /// `chart_tabs` rather than from inside this module tree.
 pub(crate) use chart::shot;
 pub use core_status::CoreStatusView;
+pub(crate) use core_status::{connection_status_text, startup_diagnostic_text};
 pub use detects::DetectsPanel;
 pub use log::LogPanel;
 pub use news::NewsView;

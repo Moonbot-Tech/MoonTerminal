@@ -25,6 +25,9 @@ mod table;
 mod tests;
 mod warnings;
 
+pub(crate) use presentation::connection_status_text;
+pub(crate) use startup::startup_diagnostic_text;
+
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::rc::Rc;

@@ -9,7 +9,7 @@ use gpui::*;
 use moon_core::config::{
     AUTO_WORKSPACE_RAIL_WIDTH_MAX, AUTO_WORKSPACE_RAIL_WIDTH_MIN, WorkspaceMode,
 };
-use moon_core::feed::ConnStatus;
+use moon_core::feed::{ConnStatus, CoreStartupStatus};
 use moon_core::venue::CoreVenue;
 use moon_ui::{
     DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonPalette,
@@ -826,17 +826,20 @@ impl Shell {
             let venues = backend.session.core_venues();
             let inputs = servers
                 .into_iter()
-                .map(|server| WorkspaceRosterInput {
-                    core: server.id,
-                    name: server.name,
-                    group: server.group.clone(),
-                    venue: venues.get(&server.id).cloned(),
-                    availability: backend.workspace_core_availability(&server.group, server.id),
-                    ready: backend
-                        .session
-                        .store()
-                        .core(server.id)
-                        .is_some_and(|core| core.status == ConnStatus::Ready),
+                .map(|server| {
+                    let core = backend.session.store().core(server.id);
+                    WorkspaceRosterInput {
+                        core: server.id,
+                        name: server.name,
+                        group: server.group.clone(),
+                        venue: venues.get(&server.id).cloned(),
+                        availability: backend.workspace_core_availability(&server.group, server.id),
+                        ready: core.is_some_and(|core| core.status == ConnStatus::Ready),
+                        connection: core.map(|core| core.status.clone()),
+                        startup: core
+                            .map(|core| core.startup)
+                            .unwrap_or_else(CoreStartupStatus::default),
+                    }
                 })
                 .collect::<Vec<_>>();
             crate::workspace::derive_workspace_roster(
@@ -1095,13 +1098,7 @@ fn render_rail_item(
             is_last_in_section,
         } => {
             let status = workspace_status_text(row.status);
-            let tooltip = t!(
-                "workspace.core_tip",
-                name = row.name.clone(),
-                group = row.group.clone(),
-                status = status.clone()
-            )
-            .to_string();
+            let tooltip = workspace_core_tooltip(&row);
             let dot = workspace_status_color(row.status, p);
             let name = match density {
                 WorkspaceRailDensity::Icon => row.name.chars().next().unwrap_or('?').to_string(),
@@ -1161,7 +1158,10 @@ fn render_rail_item(
                 cx,
             )
             .child(content)
-            .tooltip(move |_window, cx| cx.new(|_| MoonTooltipView::new(tooltip.clone())).into());
+            .tooltip(move |_window, cx| {
+                cx.new(|_| MoonTooltipView::new(tooltip.clone()).max_width(440.0))
+                    .into()
+            });
             if let Some(action) = action {
                 root = root.on_click(move |_, _, cx| {
                     execute_workspace_navigation(&backend, action.clone(), cx);
@@ -1170,6 +1170,42 @@ fn render_rail_item(
             root.into_any_element()
         }
     }
+}
+
+/// Build one Auto core row's hover text, expanding a problem into its live diagnostics.
+///
+/// Args:
+///     row: Derived roster row with typed connection and startup state.
+///
+/// Returns:
+///     The standard core identity line, followed for problem rows by the exact connection detail
+///     and every startup fact also exposed by the Core Status panel.
+fn workspace_core_tooltip(row: &WorkspaceRosterRow) -> String {
+    let status = workspace_status_text(row.status);
+    let mut lines = vec![
+        t!(
+            "workspace.core_tip",
+            name = row.name.as_str(),
+            group = row.group.as_str(),
+            status = status
+        )
+        .to_string(),
+    ];
+    if row.status == WorkspaceCoreStatus::Problem
+        && let Some(connection) = row.connection.as_ref()
+    {
+        lines.push(format!(
+            "{}: {}",
+            t!("core_status.col.status"),
+            crate::panels::connection_status_text(connection)
+        ));
+        lines.push(format!(
+            "{}:\n{}",
+            t!("core_status.col.startup"),
+            crate::panels::startup_diagnostic_text(&row.startup)
+        ));
+    }
+    lines.join("\n")
 }
 
 /// Build shared selection, hover, and disabled chrome for one interactive rail row.
