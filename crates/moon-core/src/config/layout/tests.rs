@@ -344,7 +344,7 @@ fn table_sort_preferences_survive_toml_round_trip() {
     assert_eq!(decoded.table_sorts, layout.table_sorts);
 }
 
-/// `layout.rs:de_table_sort_map` must discard one malformed entry without losing valid siblings.
+/// `layout/serde_compat.rs:de_table_sort_map` must discard one malformed entry without losing valid siblings.
 ///
 /// Mutation: deserialize the `HashMap<String, TableSortPreference>` as one all-or-nothing value.
 /// The malformed Assets entry would then empty the map, and Orders would also forget its saved
@@ -376,7 +376,7 @@ ascending = "up"
     assert!(!decoded.table_sorts.contains_key("assets-table:win"));
 }
 
-/// `layout.rs:de_table_sort_map` must tolerate a wrong outer value like every hand-edited map.
+/// `layout/serde_compat.rs:de_table_sort_map` must tolerate a wrong outer value like every hand-edited map.
 ///
 /// Mutation: remove the lenient outer `Stored::Other` arm. A typo on `table_sorts` would reject
 /// all window geometry and the neighbouring period instead of merely resetting table sorts.

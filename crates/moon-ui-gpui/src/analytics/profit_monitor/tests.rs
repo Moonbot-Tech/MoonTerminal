@@ -165,7 +165,7 @@ fn exchange_rows_group_by_venue_identity_not_by_caption() {
     );
 }
 
-/// `profit_monitor/mod.rs:context_change` must keep exchange-name changes out of the database
+/// `profit_monitor/model.rs:context_change` must keep exchange-name changes out of the database
 /// reload path; returning `Reload` here makes a reconnect run another full-period SQLite scan even
 /// though cached per-core values can be regrouped immediately.
 #[test]
@@ -187,7 +187,7 @@ fn exchange_only_context_change_regroups_without_database_read() {
     );
 }
 
-/// `profit_monitor/mod.rs:context_change` must carry a zone change as one inseparable reload and
+/// `profit_monitor/model.rs:context_change` must carry a zone change as one inseparable reload and
 /// clock-restart plan; treating it as a plain valuation reload leaves the old midnight timer armed
 /// after the user changes the header city.
 #[test]
@@ -201,7 +201,7 @@ fn zone_change_reloads_and_restarts_the_calendar_timer() {
     );
 }
 
-/// `profit_monitor/mod.rs:retain_last_known_venues` must preserve an exchange when its live
+/// `profit_monitor/model.rs:retain_last_known_venues` must preserve an exchange when its live
 /// client temporarily disappears; removing that carry-forward moves the core into Unknown exchange
 /// during every reconnect.
 #[test]
@@ -342,7 +342,7 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
     assert!(MonitorLayout::for_width(950.0, 1.25).average_order);
 }
 
-/// `profit_monitor/mod.rs:{next_sort,sort_rows}` must map every visible heading to its own metric,
+/// `profit_monitor/model.rs:{next_sort,sort_rows}` must map every visible heading to its own metric,
 /// start names ascending and numbers descending, then reverse a repeated click. Changing the first
 /// numeric direction or wiring Win rate/Average order to another field makes the independently
 /// derived row orders below red and presents a misleading table after a header click.
@@ -424,7 +424,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
     );
 }
 
-/// `profit_monitor/mod.rs:MonitorPeriod::range_at` must derive Today from the selected header-clock
+/// `profit_monitor/model.rs:MonitorPeriod::range_at` must derive Today from the selected header-clock
 /// zone; replacing `display_time::day_start` with UTC excludes a HyperLiquid close at 01:01
 /// Warsaw from the user's Today report.
 #[test]
@@ -442,7 +442,7 @@ fn today_includes_the_early_warsaw_hour() {
     );
 }
 
-/// `profit_monitor/mod.rs:monitor_zone` must share the header clock's exact-IANA policy; restricting
+/// `profit_monitor/model.rs:monitor_zone` must share the header clock's exact-IANA policy; restricting
 /// it to the curated city table makes this assertion red and sends a Detroit system profile back
 /// to UTC calendar bounds after restart.
 #[test]
@@ -475,7 +475,7 @@ fn yesterday_uses_the_previous_existing_day_across_a_dateline_skip() {
     );
 }
 
-/// `profit_monitor/mod.rs:MonitorPeriod::range_at` must resolve both local midnights through the
+/// `profit_monitor/model.rs:MonitorPeriod::range_at` must resolve both local midnights through the
 /// IANA zone; adding a fixed 86,400-second day makes these independent transition lengths red and
 /// shifts one edge of Profit Monitor Today around Warsaw daylight-saving changes.
 #[test]
@@ -489,7 +489,7 @@ fn warsaw_calendar_days_follow_both_dst_transitions() {
     assert_eq!(autumn_to - autumn_from, 25 * 60 * 60);
 }
 
-/// `profit_monitor/mod.rs:duration_until_period_refresh` must arm calendar presets at the next
+/// `profit_monitor/model.rs:duration_until_period_refresh` must arm calendar presets at the next
 /// selected-city midnight; restoring the UTC-day timer makes the Warsaw wait red and leaves Today
 /// stale for two hours after its query boundary moves in summer.
 #[test]
