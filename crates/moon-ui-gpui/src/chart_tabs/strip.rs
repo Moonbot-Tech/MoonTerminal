@@ -13,8 +13,10 @@ use rust_i18n::t;
 
 use super::candle_popup;
 use super::common;
+use super::common::LayoutPopupHost as _;
 use super::graphics_popup;
 use super::labels_popup;
+use super::popup_slot::ChartPopup;
 use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
@@ -191,7 +193,7 @@ impl Render for ChartTabs {
         });
 
         // The active tab's layout control and adjacent scale dropdown are both per-tab.
-        let popup_open = self.layout_popup_open;
+        let popup_open = self.popup_shows(ChartPopup::Layout);
         let p_strip = MoonPalette::active(cx);
         let scale_dropdown = crate::controls::scale_dropdown_for_tabs(
             cx,
@@ -223,7 +225,7 @@ impl Render for ChartTabs {
             cx,
         );
         // The candle/trade display control beside layout edits the global setting set.
-        let candle_popup_open = self.candle_popup_open;
+        let candle_popup_open = self.popup_shows(ChartPopup::Candle);
         let candle_btn = candle_popup::candle_popup_host(
             self,
             "chart-candles",
@@ -245,7 +247,7 @@ impl Render for ChartTabs {
             cx,
         );
         // The palette button beside the candles one edits the ACTIVE TAB's chart-drawing settings.
-        let graphics_popup_open = self.graphics_popup_open;
+        let graphics_popup_open = self.popup_shows(ChartPopup::Graphics);
         let graphics_btn = graphics_popup::graphics_popup_host(
             self,
             "chart-graphics",
@@ -263,7 +265,7 @@ impl Render for ChartTabs {
             cx,
         );
         // The labels button beside the palette one edits the ACTIVE TAB's chart captions.
-        let labels_popup_open = self.labels_popup_open;
+        let labels_popup_open = self.popup_shows(ChartPopup::Labels);
         let labels_btn = labels_popup::labels_popup_host(
             self,
             "chart-labels",
@@ -283,7 +285,7 @@ impl Render for ChartTabs {
         // The per-window market search sits left of scale and queries the active tab's cores.
         // Absolutely position matches below its wrapper and place the cluster outside the strip's
         // clipping layer so `overflow_hidden` cannot cut off the dropdown.
-        let coin_popup = self.coin_popup_open.then(|| {
+        let coin_popup = self.popup_shows(ChartPopup::Coin).then(|| {
             let server_context = {
                 let b = self.backend.read(cx);
                 let auto_core = super::auto_workspace_chart_core(b, &self.group);
@@ -348,21 +350,18 @@ impl Render for ChartTabs {
         // The tool-settings panel closes the same way the market list does: a layer below the
         // cluster catches every click that missed it. Without one the panel stays parked over the
         // chart until its own button is pressed again.
-        let fig_dismiss = self.fig_style_popup_open.then(|| {
+        let fig_dismiss = self.popup_shows(ChartPopup::FigStyle).then(|| {
             div()
                 .id("tabs-fig-dismiss")
                 .absolute()
                 .inset_0()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _, _w, cx| {
-                        this.fig_style_popup_open = false;
-                        cx.notify();
-                    }),
+                    cx.listener(|this, _, _w, cx| this.close_chart_popup(ChartPopup::FigStyle, cx)),
                 )
         });
         // Catch clicks outside the market list on a layer below the cluster to dismiss it.
-        let coin_dismiss = self.coin_popup_open.then(|| {
+        let coin_dismiss = self.popup_shows(ChartPopup::Coin).then(|| {
             div()
                 .id("tabs-coin-dismiss")
                 .absolute()

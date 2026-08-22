@@ -392,10 +392,7 @@ fn open_module_editor<T: LabelsPopupHost>(
     // The popup is a POPOVER: it paints in a deferred layer above the dialog's overlay, so leaving
     // it open would put the list on top of the editor. It closes here and comes back when the
     // editor does, which is also where the user expects to land after editing a module.
-    entity.update(app, |this, cx| {
-        this.set_labels_popup_open(false);
-        cx.notify();
-    });
+    entity.update(app, |this, cx| this.suspend_labels_popup(cx));
     let apply_entity = entity.clone();
     let reopen_entity = entity.clone();
     open_label_edit(
@@ -411,10 +408,7 @@ fn open_module_editor<T: LabelsPopupHost>(
             write_cfg(&apply_entity, app, |cfg| apply(cfg, edited.clone()));
         },
         move |app| {
-            reopen_entity.update(app, |this, cx| {
-                this.set_labels_popup_open(true);
-                cx.notify();
-            });
+            reopen_entity.update(app, |this, cx| this.resume_labels_popup(cx));
         },
         {
             let entity = entity.clone();
@@ -451,10 +445,7 @@ fn open_arb_settings<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window
     let dex_names = backend.read(app).session.market_source().any_dex_names();
     // The popup is a popover and paints above this window's overlay; it closes here like it does
     // for the module editor, and comes back with it.
-    entity.update(app, |this, cx| {
-        this.set_labels_popup_open(false);
-        cx.notify();
-    });
+    entity.update(app, |this, cx| this.suspend_labels_popup(cx));
     let reopen = entity.clone();
     crate::panels::open_arb_edit(
         cfg,
@@ -472,10 +463,7 @@ fn open_arb_settings<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window
         // paints above this window's overlay, so reopening it per click would cover the roster
         // being edited.
         move |app| {
-            reopen.update(app, |this, cx| {
-                this.set_labels_popup_open(true);
-                cx.notify();
-            });
+            reopen.update(app, |this, cx| this.resume_labels_popup(cx));
         },
     );
 }

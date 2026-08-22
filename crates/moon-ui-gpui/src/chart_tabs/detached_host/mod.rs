@@ -13,6 +13,7 @@ use super::apply_all::{self, ApplyAll, ApplyAllRequest};
 use super::common::{
     CoinPopupHost, LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting,
 };
+use super::popup_slot::ChartPopup;
 use super::{AddChartStack, chart_pane_label, coin_search};
 use crate::Backend;
 use crate::persistence::chart_persist::{self, StackLayoutMode, StackOrientation};
@@ -57,17 +58,14 @@ pub(super) struct DetachedChartHost {
     /// moving to a display with another DPI even though position is already correct. Force the saved
     /// logical size once. Newly detached windows use `None`.
     restore_size: Option<Size<Pixels>>,
-    /// Anchored layout settings popup for this tab, opened by ⚙.
+    /// The ONE overlay this window is showing: ⚙ layout, candles, graphics, labels, or the
+    /// market-match list.
     ///
-    /// It is not a separate OS window because chart text now lies below the normal GPUI scene.
-    layout_popup_open: bool,
-    /// Anchored "Candles and Trades" popup opened by the candlestick button for this window tab.
-    candle_popup_open: bool,
-    /// Anchored "Chart graphics" popup opened by the palette button, for THIS window's charts.
-    graphics_popup_open: bool,
-    /// Whether the chart-labels popup is open. What a module PRINTS is edited in its own
-    /// dialog, which owns its state for as long as it is up.
-    labels_popup_open: bool,
+    /// One slot rather than a flag each, so opening any of them closes the rest — the same rule the
+    /// tab strip follows. None is a separate OS window, because chart text lies below the normal
+    /// GPUI scene. What a labels module PRINTS is edited in its own dialog, which owns its state
+    /// for as long as it is up.
+    popup: super::popup_slot::PopupSlot,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
     /// and persists it in the tab spec exactly once.
     last_x_sync_rev: u64,
@@ -81,8 +79,6 @@ pub(super) struct DetachedChartHost {
     coin_input: Entity<MoonInputState>,
     /// Current market-search text mirroring `coin_input`.
     coin_query: String,
-    /// Whether the market-match list is open.
-    coin_popup_open: bool,
     /// Window-root focus handle for receiving `on_key_down` hotkeys when nothing else is focused.
     ///
     /// The root receives focus on creation. Clicking market input moves focus there, but key events
@@ -298,7 +294,7 @@ impl DetachedChartHost {
         cx.subscribe(
             &layout_fit_input,
             |this, _input, ev: &MoonInputEvent, cx| {
-                if this.layout_popup_open
+                if this.popup_shows(ChartPopup::Layout)
                     && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
                 {
                     this.commit_layout_popup(cx);
@@ -309,7 +305,7 @@ impl DetachedChartHost {
         cx.subscribe(
             &layout_scroll_input,
             |this, _input, ev: &MoonInputEvent, cx| {
-                if this.layout_popup_open
+                if this.popup_shows(ChartPopup::Layout)
                     && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
                 {
                     this.commit_layout_popup(cx);
@@ -322,7 +318,7 @@ impl DetachedChartHost {
         cx.subscribe(
             &custom_name_input,
             |this, input, ev: &MoonInputEvent, cx| {
-                if this.layout_popup_open
+                if this.popup_shows(ChartPopup::Layout)
                     && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
                 {
                     let name = input.read(cx).value().to_string();
@@ -354,9 +350,8 @@ impl DetachedChartHost {
                     }
                     if this.coin_query != value {
                         // Clearing the text falls back to suggestions rather than closing.
-                        this.coin_popup_open = true;
                         this.coin_query = value;
-                        cx.notify();
+                        this.open_chart_popup(ChartPopup::Coin, cx);
                     }
                 }
             },
@@ -375,17 +370,13 @@ impl DetachedChartHost {
             persist_armed: !restored,
             apply_press: super::apply_row::ApplyPress::default(),
             restore_size,
-            layout_popup_open: false,
-            candle_popup_open: false,
-            graphics_popup_open: false,
-            labels_popup_open: false,
+            popup: super::popup_slot::PopupSlot::default(),
             last_x_sync_rev: initial_x_sync_rev,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),
-            coin_popup_open: false,
             focus,
             modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
             taskbar_hide,
@@ -617,8 +608,7 @@ impl DetachedChartHost {
         let (group, bucket) = (self.group.clone(), self.bucket.clone());
         self.backend
             .update(cx, |b, _| b.refresh_coin_suggest(&group, Some(&bucket)));
-        self.coin_popup_open = true;
-        cx.notify();
+        self.open_chart_popup(ChartPopup::Coin, cx);
     }
 
     /// Rewrite a Custom tab spec's tickers from the current panel composition only when changed.
@@ -718,12 +708,6 @@ impl DetachedChartHost {
 /// "Apply to all" sends a group request through Backend, drained by the tab strip, exactly like the
 /// candle popup's below.
 impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
-    fn graphics_popup_open(&self) -> bool {
-        self.graphics_popup_open
-    }
-    fn set_graphics_popup_open(&mut self, open: bool) {
-        self.graphics_popup_open = open;
-    }
     fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
         self.panel.read(cx).chart_graphics()
     }
@@ -734,12 +718,6 @@ impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
 /// "Apply to all" sends a group request through Backend, drained by the tab strip, exactly like the
 /// graphics popup's above.
 impl super::labels_popup::LabelsPopupHost for DetachedChartHost {
-    fn labels_popup_open(&self) -> bool {
-        self.labels_popup_open
-    }
-    fn set_labels_popup_open(&mut self, open: bool) {
-        self.labels_popup_open = open;
-    }
     fn labels_override(&self, cx: &App) -> Option<moon_core::config::ChartLabelsCfg> {
         self.panel.read(cx).chart_labels()
     }
@@ -749,12 +727,6 @@ impl super::labels_popup::LabelsPopupHost for DetachedChartHost {
 ///
 /// "Apply to all" sends a group request through Backend, drained by the tab strip.
 impl super::candle_popup::CandlePopupHost for DetachedChartHost {
-    fn candle_popup_open(&self) -> bool {
-        self.candle_popup_open
-    }
-    fn set_candle_popup_open(&mut self, open: bool) {
-        self.candle_popup_open = open;
-    }
     fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
         self.panel.read(cx).candle_view()
     }
@@ -765,11 +737,11 @@ impl super::candle_popup::CandlePopupHost for DetachedChartHost {
 /// The window's fixed `(num, bucket)` is the persistence key. Trait default methods provide shared
 /// popup and application logic.
 impl LayoutPopupHost for DetachedChartHost {
-    fn popup_open(&self) -> bool {
-        self.layout_popup_open
+    fn popup_slot(&self) -> super::popup_slot::PopupSlot {
+        self.popup
     }
-    fn set_popup_open(&mut self, open: bool) {
-        self.layout_popup_open = open;
+    fn popup_slot_mut(&mut self) -> &mut super::popup_slot::PopupSlot {
+        &mut self.popup
     }
     fn fit_input(&self) -> &Entity<MoonInputState> {
         &self.layout_fit_input
@@ -896,7 +868,7 @@ impl CoinPopupHost for DetachedChartHost {
 
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
-        self.coin_popup_open = false;
+        self.close_chart_popup(ChartPopup::Coin, cx);
         cx.notify();
     }
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {

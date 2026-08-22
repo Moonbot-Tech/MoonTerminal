@@ -21,6 +21,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting};
+use super::popup_slot::ChartPopup;
 use crate::design;
 use crate::panels::{
     popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
@@ -174,8 +175,6 @@ fn render_labels_popup<T: LabelsPopupHost>(
 
 /// Host for the labels popup in either the tab strip or a detached-window header.
 pub(crate) trait LabelsPopupHost: LayoutPopupHost {
-    fn labels_popup_open(&self) -> bool;
-    fn set_labels_popup_open(&mut self, open: bool);
     /// The target's per-tab override, or `None` to follow the global default.
     fn labels_override(&self, cx: &App) -> Option<ChartLabelsCfg>;
 
@@ -222,14 +221,32 @@ pub(crate) trait LabelsPopupHost: LayoutPopupHost {
 
     /// Close the popup.
     ///
-    /// The already-closed guard is load-bearing for the reason the graphics popup documents:
+    /// Ownership is checked by the slot, load-bearing for the reason the graphics popup documents:
     /// `Popover` fires `on_open_change(false)` twice when the trigger is clicked while open.
     fn close_labels_popup(&mut self, cx: &mut Context<Self>) {
-        if !self.labels_popup_open() {
-            return;
-        }
-        self.set_labels_popup_open(false);
-        cx.notify();
+        self.close_chart_popup(ChartPopup::Labels, cx);
+    }
+
+    /// Take the popup off screen while a modal window of its own is up.
+    ///
+    /// The module editor and the arbitrage roster are both windows this popup opens, and it is a
+    /// popover: it paints in a deferred layer ABOVE their overlay, so it has to step aside and come
+    /// back with [`Self::resume_labels_popup`].
+    ///
+    /// An armed ⧉ row survives the round trip, which is why this is not plain
+    /// [`LayoutPopupHost::close_chart_popup`]: the reader armed that row against THIS popup and is
+    /// coming straight back to it, whereas the general close means the popup is done with.
+    fn suspend_labels_popup(&mut self, cx: &mut Context<Self>) {
+        let press = self.apply_press().clone();
+        self.close_chart_popup(ChartPopup::Labels, cx);
+        *self.apply_press_mut() = press;
+    }
+
+    /// Put the popup back after its modal window closes, keeping an armed ⧉ row.
+    fn resume_labels_popup(&mut self, cx: &mut Context<Self>) {
+        let press = self.apply_press().clone();
+        self.open_chart_popup(ChartPopup::Labels, cx);
+        *self.apply_press_mut() = press;
     }
 }
 
@@ -254,20 +271,17 @@ pub(super) fn labels_popup_host<T: LabelsPopupHost>(
         // before the pick lands. Until MoonUI suppresses that (the Popover entry in
         // docs-internal/FORK_BUGS.md), outside-click dismissal has to be off — the same trade the
         // detects, core-status and tuner popups already make. The ✕ and the toolbar button are the
-        // dismissal paths.
+        // dismissal paths — and, because every popup on a host shares one slot, a press on any
+        // neighbouring settings button, which is what keeps this one from staying up under it.
         .overlay_closable(false)
-        .open(this.labels_popup_open())
+        .open(this.popup_shows(ChartPopup::Labels))
         .on_open_change(move |open, _window, app| {
             open_entity.update(app, |this, cx| {
-                this.set_labels_popup_open(open);
-                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
-                // four, so leaving it up would show it over a popup that never armed it.
-                this.apply_press_mut().open = false;
-                cx.notify();
+                this.report_chart_popup(ChartPopup::Labels, open, cx)
             });
         })
         .trigger(trigger);
-    if !this.labels_popup_open() {
+    if !this.popup_shows(ChartPopup::Labels) {
         return popover;
     }
     let p = MoonPalette::active(cx);

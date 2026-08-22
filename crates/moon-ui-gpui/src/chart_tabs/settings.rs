@@ -289,12 +289,6 @@ impl super::apply_row::ApplyRowHost for ChartTabs {
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::Graphics)`.
 impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
-    fn graphics_popup_open(&self) -> bool {
-        self.graphics_popup_open
-    }
-    fn set_graphics_popup_open(&mut self, open: bool) {
-        self.graphics_popup_open = open;
-    }
     fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
         match &self.active {
             Tab::Main => self.main.read(cx).chart_graphics(),
@@ -309,12 +303,6 @@ impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::Labels)`.
 impl super::labels_popup::LabelsPopupHost for ChartTabs {
-    fn labels_popup_open(&self) -> bool {
-        self.labels_popup_open
-    }
-    fn set_labels_popup_open(&mut self, open: bool) {
-        self.labels_popup_open = open;
-    }
     fn labels_override(&self, cx: &App) -> Option<moon_core::config::ChartLabelsCfg> {
         match &self.active {
             Tab::Main => self.main.read(cx).chart_labels(),
@@ -329,12 +317,6 @@ impl super::labels_popup::LabelsPopupHost for ChartTabs {
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::CandleView)`.
 impl super::candle_popup::CandlePopupHost for ChartTabs {
-    fn candle_popup_open(&self) -> bool {
-        self.candle_popup_open
-    }
-    fn set_candle_popup_open(&mut self, open: bool) {
-        self.candle_popup_open = open;
-    }
     fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
         match &self.active {
             Tab::Main => self.main.read(cx).candle_view(),
@@ -350,11 +332,11 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
 /// `active_stack_key` supplies the persistence key; trait default methods provide shared popup and
 /// application logic.
 impl LayoutPopupHost for ChartTabs {
-    fn popup_open(&self) -> bool {
-        self.layout_popup_open
+    fn popup_slot(&self) -> super::popup_slot::PopupSlot {
+        self.popup
     }
-    fn set_popup_open(&mut self, open: bool) {
-        self.layout_popup_open = open;
+    fn popup_slot_mut(&mut self) -> &mut super::popup_slot::PopupSlot {
+        &mut self.popup
     }
     fn fit_input(&self) -> &Entity<MoonInputState> {
         &self.layout_fit_input

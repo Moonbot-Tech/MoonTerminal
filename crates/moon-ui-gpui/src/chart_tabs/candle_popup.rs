@@ -17,6 +17,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting, seg_row};
+use super::popup_slot::ChartPopup;
 use crate::design;
 use crate::panels::{
     popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
@@ -373,8 +374,6 @@ fn render_candle_popup<T: CandlePopupHost>(
 /// The target is the strip's active tab or the window panel. Applying and persisting use
 /// [`LayoutPopupHost`] through `apply_tab_setting`; each host implements its own "apply to all".
 pub(super) trait CandlePopupHost: LayoutPopupHost {
-    fn candle_popup_open(&self) -> bool;
-    fn set_candle_popup_open(&mut self, open: bool);
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn candle_view_override(&self, cx: &App) -> Option<CandleViewCfg>;
 
@@ -395,14 +394,11 @@ pub(super) trait CandlePopupHost: LayoutPopupHost {
 
     /// Close the popup.
     ///
-    /// The already-closed guard is load-bearing: clicking the button while the popup is open makes `Popover`
-    /// fire `on_open_change(false)` twice (outside-click handler, then the trigger re-arming).
+    /// Ownership is checked by the slot, which is load-bearing: clicking the button while the popup
+    /// is open makes `Popover` fire `on_open_change(false)` twice (outside-click handler, then the
+    /// trigger re-arming).
     fn close_candle_popup(&mut self, cx: &mut Context<Self>) {
-        if !self.candle_popup_open() {
-            return;
-        }
-        self.set_candle_popup_open(false);
-        cx.notify();
+        self.close_chart_popup(ChartPopup::Candle, cx);
     }
 }
 
@@ -432,18 +428,14 @@ pub(super) fn candle_popup_host<T: CandlePopupHost>(
         .placement(MoonPopoverPlacement::BottomEnd)
         .content_width(f32::from(content_width(cx)))
         .close_on_content_click(false)
-        .open(this.candle_popup_open())
+        .open(this.popup_shows(ChartPopup::Candle))
         .on_open_change(move |open, _window, app| {
             open_entity.update(app, |this, cx| {
-                this.set_candle_popup_open(open);
-                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
-                // four, so leaving it up would show it over a popup that never armed it.
-                this.apply_press_mut().open = false;
-                cx.notify();
+                this.report_chart_popup(ChartPopup::Candle, open, cx)
             });
         })
         .trigger(trigger);
-    if !this.candle_popup_open() {
+    if !this.popup_shows(ChartPopup::Candle) {
         return popover;
     }
     let p = MoonPalette::active(cx);

@@ -13,8 +13,10 @@ use rust_i18n::t;
 
 use super::super::candle_popup;
 use super::super::common;
+use super::super::common::LayoutPopupHost as _;
 use super::super::graphics_popup;
 use super::super::labels_popup;
+use super::super::popup_slot::ChartPopup;
 use super::super::{chart_pane_label, coin_search};
 use super::DetachedChartHost;
 use crate::design;
@@ -66,10 +68,10 @@ impl Render for DetachedChartHost {
             .header_height(34.0)
             .controls(MoonWindowFrameControls::Close)
             .show_controls(design::show_custom_window_controls());
-        let popup_open = self.layout_popup_open;
-        let candle_popup_open = self.candle_popup_open;
-        let graphics_popup_open = self.graphics_popup_open;
-        let labels_popup_open = self.labels_popup_open;
+        let popup_open = self.popup_shows(ChartPopup::Layout);
+        let candle_popup_open = self.popup_shows(ChartPopup::Candle);
+        let graphics_popup_open = self.popup_shows(ChartPopup::Graphics);
+        let labels_popup_open = self.popup_shows(ChartPopup::Labels);
         // Header market-search input and matches. Render the list at the `v_flex` level after the
         // body; otherwise the later-painted window body covers the header dropdown.
         let coin_search_el = div()
@@ -92,7 +94,7 @@ impl Render for DetachedChartHost {
         // height is scaled, so raw constants drift under a non-default UI or font scale and leave
         // the popup overlapping the header or the dismiss layer covering the input.
         let header_h = design::fit_h_px(cx, 34.0, 13.0, 10.5);
-        let coin_popup = self.coin_popup_open.then(|| {
+        let coin_popup = self.popup_shows(ChartPopup::Coin).then(|| {
             let results = self.coin_results(cx);
             coin_search::render_popup(
                 "detached-coin",
@@ -111,7 +113,7 @@ impl Render for DetachedChartHost {
             .top(header_h + design::ui_px(cx, 4.0))
         });
         // Catch outside clicks only below the header so the search field remains interactive.
-        let coin_dismiss = self.coin_popup_open.then(|| {
+        let coin_dismiss = self.popup_shows(ChartPopup::Coin).then(|| {
             div()
                 .id("detached-coin-dismiss")
                 .absolute()
