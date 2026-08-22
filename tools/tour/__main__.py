@@ -1,9 +1,10 @@
 """Command line for the tour generator.
 
-    python tools/tour                 regenerate docs/tour/index.html
-    python tools/tour --check         verify the committed file is up to date
-    python tools/tour --out FILE      render somewhere else (for diffing)
-    python tools/tour --upstream      read MoonUI's live theme instead of the snapshot
+    python -m tools.tour                 regenerate docs/tour/index.html
+    python -m tools.tour --check         verify the committed file is up to date
+    python -m tools.tour --out FILE      render only the interactive page elsewhere
+    python -m tools.tour --site-out DIR  render the complete publishable site
+    python -m tools.tour --upstream      read MoonUI's live theme instead of the snapshot
 
 Exit codes: ``0`` fine, ``1`` the committed page is stale (``--check`` only),
 ``2`` the inputs are wrong.
@@ -48,7 +49,7 @@ def _bootstrap() -> None:
 
 _bootstrap()
 
-from . import paths, render as render_mod  # noqa: E402
+from . import knowledge, paths, render as render_mod  # noqa: E402
 from .content import load as load_content  # noqa: E402
 from .errors import TourError  # noqa: E402
 from .emit import write as write_page  # noqa: E402
@@ -56,8 +57,8 @@ from .locales import load as load_locales  # noqa: E402
 from .theme import load as load_theme, resolve as resolve_theme  # noqa: E402
 
 
-def build(theme_path: Path | None, upstream: bool) -> tuple[str, str]:
-    """Render the page. Returns the page and a one-line description of the theme."""
+def build(theme_path: Path | None, upstream: bool) -> tuple[str, knowledge.KnowledgeBundle, str]:
+    """Render the interactive page, knowledge bundle and theme description."""
     source = resolve_theme(theme_path, upstream=upstream)
     themes = load_theme(source)
     locales = load_locales(paths.LOCALES_DIR)
@@ -66,7 +67,28 @@ def build(theme_path: Path | None, upstream: bool) -> tuple[str, str]:
 
     template = paths.TEMPLATE.read_text(encoding="utf-8")
     result = render_mod.render(template, content, themes)
-    return result.page, source.describe()
+    knowledge_template = paths.KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")
+    bundle = knowledge.build(content, themes, knowledge_template)
+    return result.page, bundle, source.describe()
+
+
+def _write_site(root: Path, page: str, bundle: knowledge.KnowledgeBundle) -> None:
+    """Write the site only when an existing root contains no orphan files."""
+    expected = {Path("index.html"), *bundle.files}
+    if root.exists() and not root.is_dir():
+        raise TourError(f"site output exists and is not a directory: {root}")
+    if root.is_dir():
+        existing = {
+            path.relative_to(root)
+            for path in root.rglob("*")
+            if path.is_file() or path.is_symlink()
+        }
+        unexpected = sorted(existing - expected)
+        if unexpected:
+            names = ", ".join(path.as_posix() for path in unexpected)
+            raise TourError(f"site output contains unexpected files: {names}")
+    write_page(root / "index.html", page)
+    knowledge.write(root, bundle)
 
 
 def _diff(committed: str, fresh: str, path: Path) -> str:
@@ -91,6 +113,11 @@ def main(argv: list[str] | None = None) -> int:
         help="do not write; fail if the committed page differs from a fresh render",
     )
     parser.add_argument("--out", type=Path, help="write somewhere other than docs/tour/")
+    parser.add_argument(
+        "--site-out",
+        type=Path,
+        help="write a complete deployable site to this directory",
+    )
     parser.add_argument("--theme", type=Path, help="read this moon-terminal.toml")
     parser.add_argument(
         "--upstream",
@@ -99,11 +126,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.out and args.site_out:
+        parser.error("--out and --site-out cannot be used together")
+    if args.check and args.site_out:
+        parser.error("--check applies to one committed page; it cannot be combined with --site-out")
+
     try:
-        page, theme_desc = build(args.theme, args.upstream)
+        page, bundle, theme_desc = build(args.theme, args.upstream)
     except TourError as exc:
         print(f"tour: {exc}", file=sys.stderr)
         return 2
+
+    if args.site_out:
+        try:
+            _write_site(args.site_out, page, bundle)
+        except TourError as exc:
+            print(f"tour: {exc}", file=sys.stderr)
+            return 2
+        print(f"tour: wrote complete site to {args.site_out}  ({len(bundle.files) + 1} files)")
+        print(f"      theme: {theme_desc}")
+        return 0
 
     target = args.out or paths.OUTPUT
 

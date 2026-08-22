@@ -1,1 +1,1 @@
-"""Generator for the MoonTerminal user tour page (docs/tour/index.html)."""
+"""Generator for the MoonTerminal tour and machine-readable knowledge site."""

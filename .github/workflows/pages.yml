@@ -1,11 +1,11 @@
-# Publishes the interactive tour (docs/tour) to GitHub Pages.
+# Builds and publishes the interactive tour plus its AI knowledge bundle.
 #
-# `docs/tour` is uploaded as the SITE ROOT, so the page is served at the
+# A temporary generated directory is uploaded as the SITE ROOT, so the page is served at the
 # repository Pages root: https://moonbot-tech.github.io/MoonTerminal/
-# Nothing else under docs/ is published — those files are developer prose and
-# would be served raw, unrendered.
+# Nothing else under docs/ is published. The allowlisted generator is the only
+# source for the artifact, so local state and developer prose cannot leak.
 #
-# This job compiles nothing, so it deliberately uses no cache: the repository
+# These jobs compile no application code, so they deliberately use no cache: the repository
 # Actions cache is a shared 10 GB budget, and an extra cached job evicts the
 # build gates' caches by least-recent-use.
 #
@@ -18,14 +18,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docs/tour/**'
+      - 'locales/*.yml'
+      - 'tools/tour/**'
+      - 'tools/requirements.txt'
+      - 'Makefile'
+      - 'docs/tour/index.html'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
 
 # One deployment at a time; never cancel one in flight, a half-applied
 # deployment would leave the live site on a partial upload.
@@ -34,20 +33,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy tour
+  build:
+    name: Build site
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+
+      - run: pip install -r tools/requirements.txt
+
+      - name: Verify committed interactive page
+        run: make tour-check
+
+      - name: Verify generator
+        run: make tour-test
+
+      - name: Build site from repository sources
+        run: make tour-site TOUR_SITE_OUT="${{ runner.temp }}/moonterminal-site"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: ${{ runner.temp }}/moonterminal-site
+
+  deploy:
+    name: Deploy site
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/configure-pages@v6
-
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: docs/tour
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
 
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

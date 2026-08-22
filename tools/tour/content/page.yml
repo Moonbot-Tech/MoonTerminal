@@ -15,12 +15,12 @@ strings:
     ru: Терминал за один экран
     en: The terminal in one screen
   hero.lead:
-    ru: 'Ниже — настоящее главное окно MoonTerminal, собранное из палитры, метрик и локалей самого приложения.
-      Нажмите любую зону: объяснение придёт той же строкой подсказки, которую вы увидите, наведя мышь
-      в терминале.'
-    en: 'Below is the real MoonTerminal main window, assembled from the application''s own palette, metrics
-      and locale files. Click any zone: the explanation is the very tooltip you get by hovering it in
-      the terminal.'
+    ru: 'Ниже — интерактивная схема главного окна MoonTerminal, собранная из модели тура, палитры, метрик
+      и выбранных строк локализации приложения. Нажмите любую зону, чтобы увидеть документированное
+      пояснение и его источник.'
+    en: 'Below is an interactive schematic of the MoonTerminal main window, assembled from the tour model,
+      palette, metrics, and selected application locale strings. Click any zone to see its documented
+      explanation and source.'
   map.h:
     ru: Карта окна
     en: Window map
@@ -73,10 +73,10 @@ strings:
     ru: MoonTerminal — десктопный торговый терминал для ядра Moonbot. Windows · macOS · Linux.
     en: MoonTerminal — desktop trading terminal for the Moonbot core. Windows · macOS · Linux.
   ft.built:
-    ru: 'Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи
-      и пояснения — locales/*.yml.'
-    en: 'This page is assembled from repository data: palette and metrics from themes/moon-terminal.toml,
-      every label and explanation from locales/*.yml.'
+    ru: 'Страница собрана из данных репозитория: палитра и метрики — из зафиксированного снимка темы MoonUI;
+      подписи и пояснения — из проверенной модели тура и выбранных locales/*.yml. Это схема, а не запись живой сессии.'
+    en: 'This page is assembled from repository data: palette and metrics come from a committed MoonUI theme
+      snapshot; labels and explanations come from the validated tour model and selected locales/*.yml. It is a schematic, not a live-session capture.'
   ui.ws:
     locale: workspace.mode.auto
   ui.balance:

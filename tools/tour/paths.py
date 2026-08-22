@@ -21,6 +21,7 @@ REPO_ROOT: Path = TOOLS_DIR.parent
 LOCALES_DIR: Path = REPO_ROOT / "locales"
 CONTENT_DIR: Path = PKG_DIR / "content"
 TEMPLATE: Path = PKG_DIR / "template.html"
+KNOWLEDGE_TEMPLATE: Path = PKG_DIR / "knowledge_template.html"
 
 #: Committed copy of MoonUI's theme, used when no sibling checkout is available.
 #: Refreshed only by ``make tour-theme`` — never as a side effect of ``make tour``.
