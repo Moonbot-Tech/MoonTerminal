@@ -1020,3 +1020,30 @@ fn an_unknown_preset_costs_only_the_row_its_name() {
     assert_eq!(read.rows[0].preset, None, "it just loses the name it cannot resolve");
     assert_eq!(read.rows[0].parts[0].field, ChartLabelField::DetectMsg);
 }
+
+/// A field name this build cannot resolve empties that ONE caption and leaves the rest standing.
+///
+/// The catalogue shrinks as well as grows — `exch_pos_price` was retired once the core turned out
+/// to leave the entry price at zero — and a profile written before that still names it. A strict
+/// read would fail the whole value: `layout.toml` would fall back to its default and `charts.json`
+/// would not parse at all, costing the user every chart tab.
+#[test]
+fn an_unknown_field_costs_only_its_own_caption() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::Coin);
+    row.push_part(ChartLabelField::LiqPrice);
+    cfg.rows[0] = row;
+    let toml = toml::to_string(&cfg).expect("the set serializes");
+    let forged = toml.replace("field = \"liq_price\"", "field = \"exch_pos_price\"");
+    assert!(forged.contains("exch_pos_price"), "{forged}");
+
+    let read: ChartLabelsCfg = toml::from_str(&forged).expect("a retired field still loads");
+    assert_eq!(read.used_rows(), 1, "the module survives");
+    assert_eq!(
+        read.rows[0].used_parts(),
+        1,
+        "the retired caption is dropped rather than failing the whole read"
+    );
+    assert_eq!(read.rows[0].parts[0].field, ChartLabelField::Coin, "the sibling survives");
+}

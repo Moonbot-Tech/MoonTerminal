@@ -48,6 +48,38 @@ where
     })
 }
 
+/// Read a caption's field, dropping one this build does not know.
+///
+/// The same lenience [`de_lenient_preset`] applies to a row's name, and for a heavier reason: the
+/// catalogue of fields both grows AND shrinks — a figure the wire never carried gets retired — and
+/// the whole configuration is deserialized as ONE value. A field name this build cannot resolve
+/// would take down every caption in the file with it: `layout.toml` falls back to its default
+/// through `de_lenient_chart_labels`, and `charts.json` fails outright, which costs the user every
+/// chart tab. Losing the ONE caption instead keeps the row, its siblings and all their styling.
+///
+/// Losing, not blanking: the emptied part reads as unused, so `ChartLabelsCfg::sanitize` — which
+/// every read runs — compacts it away and its neighbours close the gap. That is the intended end
+/// for a RETIRED field, and the price of it is that an older build opening a newer profile drops a
+/// caption it cannot name as soon as that profile is written back. A file that stays readable and
+/// one caption shorter beats a file that does not open.
+pub(super) fn de_lenient_field<'de, D>(d: D) -> Result<ChartLabelField, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// A field this build knows, or anything else at all — accepted and emptied.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        Known(ChartLabelField),
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Shape::deserialize(d)? {
+        Shape::Known(field) => field,
+        Shape::Other(_) => ChartLabelField::None,
+    })
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct RowWire {
@@ -128,6 +160,7 @@ fn is_zero(v: &u8) -> bool {
 #[derive(serde::Deserialize)]
 #[serde(default)]
 struct LegacySlot {
+    #[serde(deserialize_with = "de_lenient_field")]
     field: ChartLabelField,
     zone: LabelZone,
     align: LabelAlign,

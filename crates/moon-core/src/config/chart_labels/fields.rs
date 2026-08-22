@@ -105,15 +105,18 @@ pub enum ChartLabelField {
     /// including anything traded by hand or by another terminal, while the open-order figures count
     /// only what this core's strategies opened.
     ExchPosSize,
-    /// Average entry price of that exchange position.
-    ExchPosPrice,
     /// Liquidation price the venue reports for it.
     LiqPrice,
     /// Account leverage in force on this market.
     Leverage,
     /// Whether margin here is cross or isolated.
     MarginMode,
-    /// Profit this core booked on this coin during the session.
+    /// Per-coin profit counter the core keeps, which MoonBot prints as `PnL` in its chart header.
+    ///
+    /// NOT the `Session` figure beside it there: that one is MoonBot's own accumulator, reset from
+    /// the markets table, and it is not carried on the wire at all. This is the sum of the balance
+    /// row's buy/long/short profit, and the core leaves it at zero on part of its venues — which is
+    /// why a zero here prints NOTHING rather than a confident `+0`.
     SessionPnl,
     /// Free balance of the coin itself.
     CoinBalance,
@@ -136,7 +139,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 45] = [
+    pub const ALL: [ChartLabelField; 44] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -173,7 +176,6 @@ impl ChartLabelField {
         ChartLabelField::MaxLeverage,
         ChartLabelField::MaxOrder,
         ChartLabelField::ExchPosSize,
-        ChartLabelField::ExchPosPrice,
         ChartLabelField::LiqPrice,
         ChartLabelField::Leverage,
         ChartLabelField::MarginMode,
@@ -224,7 +226,6 @@ impl ChartLabelField {
             | ChartLabelField::PosSize
             | ChartLabelField::Exposure => ChartLabelGroup::Position,
             ChartLabelField::ExchPosSize
-            | ChartLabelField::ExchPosPrice
             | ChartLabelField::LiqPrice
             | ChartLabelField::Leverage
             | ChartLabelField::MarginMode
@@ -276,7 +277,6 @@ impl ChartLabelField {
             ChartLabelField::MaxLeverage => "chart_labels.field.max_leverage",
             ChartLabelField::MaxOrder => "chart_labels.field.max_order",
             ChartLabelField::ExchPosSize => "chart_labels.field.exch_pos_size",
-            ChartLabelField::ExchPosPrice => "chart_labels.field.exch_pos_price",
             ChartLabelField::LiqPrice => "chart_labels.field.liq_price",
             ChartLabelField::Leverage => "chart_labels.field.leverage",
             ChartLabelField::MarginMode => "chart_labels.field.margin_mode",
@@ -291,8 +291,8 @@ impl ChartLabelField {
     /// Locale key of the SHORT prefix a caption prints when its style asks for one.
     ///
     /// Separate from [`Self::locale_key`]: the menu needs a name a reader can pick from a list
-    /// ("PnL открытых, %"), while a caption drawn over candles needs the shortest thing that still
-    /// identifies the figure ("PnL"). A field with nothing worth prefixing returns `None`.
+    /// ("Open, %"), while a caption drawn over candles needs the shortest thing that still
+    /// identifies the figure ("Open"). A field with nothing worth prefixing returns `None`.
     pub fn caption_key(self) -> Option<&'static str> {
         match self {
             ChartLabelField::Delta1h => Some("chart_labels.short.delta_1h"),
@@ -325,7 +325,6 @@ impl ChartLabelField {
             ChartLabelField::MaxLeverage => Some("chart_labels.short.max_leverage"),
             ChartLabelField::MaxOrder => Some("chart_labels.short.max_order"),
             ChartLabelField::ExchPosSize => Some("chart_labels.short.exch_pos_size"),
-            ChartLabelField::ExchPosPrice => Some("chart_labels.short.exch_pos_price"),
             ChartLabelField::LiqPrice => Some("chart_labels.short.liq_price"),
             ChartLabelField::Leverage => Some("chart_labels.short.leverage"),
             ChartLabelField::SessionPnl => Some("chart_labels.short.session_pnl"),
@@ -492,7 +491,6 @@ impl ChartLabelField {
             | ChartLabelField::MaxLeverage
             | ChartLabelField::MaxOrder
             | ChartLabelField::ExchPosSize
-            | ChartLabelField::ExchPosPrice
             | ChartLabelField::LiqPrice
             | ChartLabelField::Leverage
             | ChartLabelField::CoinBalance

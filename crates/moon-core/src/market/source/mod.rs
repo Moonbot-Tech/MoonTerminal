@@ -579,15 +579,17 @@ pub struct MarketFiguresReadout {
     pub tags: Vec<CoinTag>,
     /// Open position on THIS core, in the base coin; negative while short.
     pub pos_size: Option<f64>,
-    /// Average entry price of that position.
-    pub pos_price: Option<f64>,
     /// Liquidation price the venue reports for it.
     pub liq_price: Option<f64>,
     /// Account leverage in force on this market; `None` when unset.
     pub leverage_x: Option<i32>,
     /// Whether margin is isolated; `None` when the venue stated no position type.
     pub isolated: Option<bool>,
-    /// Session profit this core booked on this coin (`b + l + s`).
+    /// The core's own per-coin profit counter (`b + l + s`), which MoonBot prints as `PnL`.
+    ///
+    /// NOT the `Session` figure beside it in MoonBot's chart header: that one is an accumulator the
+    /// bot keeps for itself and never puts on the wire. Zero on part of the venues even where
+    /// MoonBot shows an amount, so a reader must not take a zero here for "traded to break even".
     pub session_pnl: Option<f64>,
     /// Free balance of the coin itself, for a spot market.
     pub coin_balance: Option<f64>,
