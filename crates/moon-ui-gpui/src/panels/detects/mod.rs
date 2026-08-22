@@ -1,6 +1,8 @@
 //! Detachable detection-feed panel, ported from egui's `DetectRibbon`. It ingests group-core rows
-//! for which `sound_alert || is_alert` and `add_to_chart == 0`; AddToChart detections go to chart
-//! tabs instead. Each `(core, market)` card remains for `max(keep_alert_secs, 1)` seconds.
+//! for which `sound_alert || is_alert`. A row routed to a chart tab (`add_to_chart > 0`) is an
+//! ordinary detect in every respect and joins the feed as well once `show_add_to_chart` is on;
+//! while it is off, chart tabs show such rows alone, as they always did. Each `(core, market)` card
+//! remains for `max(keep_alert_secs, 1)` seconds.
 //! Left-click requests the market on Main without raising its window, while right-click requests a
 //! custom comparison tab.
 //!
@@ -14,7 +16,7 @@ mod popup;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::Backend;
@@ -44,6 +46,10 @@ pub(crate) struct DetectItem {
     kind: u8,
     /// Source-strategy direction from `DetectRow.is_short`, used for the badge outline.
     is_short: bool,
+    /// `DetectRow.add_to_chart`: the chart tab this detect also opens, `0` for none. Retained so
+    /// that turning `show_add_to_chart` off hides these cards at once instead of leaving them for
+    /// the rest of their `KeepAlert`.
+    add_to_chart: u32,
     born_ms: f64,
     ttl_ms: f64,
     /// Five-minute `(open, high, low, close)` snapshot frozen when the detection is ingested.
@@ -68,7 +74,7 @@ pub struct DetectsPanel {
     group: String,
     items: VecDeque<DetectItem>,
     last_seq: HashMap<CoreId, u64>,
-    last_sig: u64,
+    last_sig: (u64, bool),
     prune_timer_armed: bool,
     focus: FocusHandle,
     /// Whether the gear configuration popup is open and which card-size tab it edits. Opening the
@@ -81,13 +87,18 @@ pub struct DetectsPanel {
     h_slider: Entity<MoonSliderState>,
     rail_slider: Entity<MoonSliderState>,
     grad_slider: Entity<MoonSliderState>,
+    /// Value of `show_add_to_chart` at the previous ingest, so that the pass which sees it turn on
+    /// can replay each core's ring instead of waiting for the next unrelated detect.
+    showed_add_to_chart: bool,
 }
 
 const MAX_DETECT_BTNS: usize = 48;
 const DEFAULT_SERVER_COLOR: [u8; 3] = [0xff, 0xb3, 0x47];
 
 impl DetectsPanel {
-    /// Build a group collector whose retained cards are filtered only at presentation time.
+    /// Build a group collector whose retained cards are scoped only at presentation time. The one
+    /// thing ingestion itself decides is whether chart-routed detects are wanted at all, and it
+    /// replays the ring when that answer changes, so no card is lost to the cursor.
     ///
     /// Args:
     ///     backend: Shared terminal state and workspace authority.
@@ -104,7 +115,7 @@ impl DetectsPanel {
             let mut changed = false;
             if sig != this.last_sig {
                 this.last_sig = sig;
-                changed |= this.ingest(backend.read(cx));
+                changed |= this.ingest(backend.read(cx), now);
             }
             changed |= this.prune(now);
             this.arm_prune_timer(cx);
@@ -167,9 +178,14 @@ impl DetectsPanel {
             h_slider,
             rail_slider,
             grad_slider,
+            // Seeded from the signature's own copy of the setting, so the field means what it says
+            // from the first pass on. That pass needs no replay either way: its cursors are empty,
+            // so it walks the rings regardless.
+            showed_add_to_chart: initial_sig.1,
         };
-        this.ingest(initial_backend.read(cx));
-        this.prune(now_unix_ms());
+        let now = now_unix_ms();
+        this.ingest(initial_backend.read(cx), now);
+        this.prune(now);
         this.arm_prune_timer(cx);
         this
     }
@@ -197,15 +213,38 @@ impl DetectsPanel {
     }
 
     /// Ingests group-core detections newer than each core's sequence cursor. Rows are eligible when
-    /// they request a sound or represent an alert firing and are not routed to AddToChart. Returns
-    /// whether the visible card collection or a retained card changed.
-    fn ingest(&mut self, b: &Backend) -> bool {
+    /// they request a sound or represent an alert firing. A row routed to AddToChart joins them
+    /// only while this group enables `show_add_to_chart`; the setting is read here so that a
+    /// disabled feed pays for no snapshot at all. Returns whether the visible card collection or a
+    /// retained card changed.
+    fn ingest(&mut self, b: &Backend, now_ms: f64) -> bool {
         let mut changed = false;
+        let show_add_to_chart = b.detects_view.shows_add_to_chart(&self.group);
+        let replayed = show_add_to_chart && !self.showed_add_to_chart;
+        if show_add_to_chart != self.showed_add_to_chart {
+            self.showed_add_to_chart = show_add_to_chart;
+            changed = true;
+            if show_add_to_chart {
+                // Cursors have walked past the rows dropped while the setting was off, so replay
+                // each ring — otherwise the feed would stay empty until some unrelated detect
+                // fired. Expired rows and rows this panel already holds are both skipped below, so
+                // the replay costs only the cards it actually adds. It does re-add ordinary cards
+                // dismissed by a click while they are still within their KeepAlert, exactly as
+                // rebuilding this panel has always done. Retained cards are NOT dropped first: a
+                // long-lived card whose row has since left the 2000-row ring could not be rebuilt.
+                self.last_seq.clear();
+            } else {
+                // Drop what just became invisible instead of letting it hold a slot in the 48-card
+                // queue and keep the prune timer awake for the rest of its KeepAlert.
+                self.items.retain(|it| it.add_to_chart == 0);
+            }
+        }
         // Read each core's server color from configuration. The coin label comes from the core's
         // catalog when the card is built, not from the market name.
         // Canonical order: fresh events are appended core by core and rendered back in
-        // reverse insertion order, with no chronological re-sort anywhere — so this order is
-        // what decides how detects of the same instant read on screen.
+        // reverse insertion order — so this order is what decides how detects of the same instant
+        // read on screen. The one exception is a replay (below), which re-fills the queue out of
+        // order and re-sorts it stably to put that right; nothing on the normal path re-sorts.
         let order = crate::core_order::CoreOrder::new(&b.config);
         let mut cores: Vec<(CoreId, String, [u8; 3])> = b
             .session
@@ -230,11 +269,17 @@ impl DetectsPanel {
             };
             let last = self.last_seq.get(&id).copied().unwrap_or(0);
             let mut fresh: Vec<&moon_core::feed::DetectRow> = Vec::new();
+            let mut newest_of_market: HashSet<&str> = HashSet::new();
             for det in d.detects.iter().rev() {
                 if det.seq <= last {
                     break;
                 }
-                fresh.push(det);
+                // Newest first, so the first row of a market is the one that decides its card —
+                // an older row would only be overwritten in place. Keeping the rest would buy each
+                // of them a market snapshot for nothing, which is what a replay is full of.
+                if newest_of_market.insert(det.market.as_str()) {
+                    fresh.push(det);
+                }
             }
             if fresh.is_empty() {
                 continue;
@@ -242,11 +287,33 @@ impl DetectsPanel {
             self.last_seq.insert(id, fresh[0].seq);
             for det in fresh.iter().rev() {
                 // Show sound-enabled detections and alert firings, including alerts without a
-                // strategy. AddToChart detections are consumed by chart tabs instead.
-                if (!det.sound_alert && !det.is_alert) || det.add_to_chart > 0 {
+                // strategy. An AddToChart row passes the same gate as any other detect, but only
+                // when the group asked for those cards; otherwise chart tabs consume it alone.
+                if !det.sound_alert && !det.is_alert {
+                    continue;
+                }
+                if det.add_to_chart > 0 && !show_add_to_chart {
                     continue;
                 }
                 let ttl = (det.keep_alert_secs.max(1) as f64) * 1000.0;
+                // Drop a row whose card would be pruned on this very pass. A core's ring holds
+                // thousands of rows and is walked whole whenever cursors are empty — a panel just
+                // built, or the setting above just turned on — and each row accepted below pays
+                // for a market snapshot.
+                if detect_expired(now_ms, det.time_ms, ttl) {
+                    continue;
+                }
+                // A row this panel already holds at the same instant is the same row seen twice —
+                // a replay. Leave that card untouched: its chart is frozen at detection time, and
+                // re-taking the snapshot would both cost a market read and hand the card a picture
+                // newer than the countdown printed on it.
+                if self
+                    .items
+                    .iter()
+                    .any(|it| it.core == id && it.market == det.market && it.born_ms == det.time_ms)
+                {
+                    continue;
+                }
                 // Freeze five-minute chart history, 24-hour line data, deltas, and exchange
                 // metadata. The market source assembles retained snapshots, local cache, and trade
                 // ring data without making an exchange API request here.
@@ -272,6 +339,7 @@ impl DetectsPanel {
                         .to_string();
                     it.kind = det.kind;
                     it.is_short = det.is_short;
+                    it.add_to_chart = det.add_to_chart;
                     // Refresh the snapshot and TTL in place when the same core and market fire again.
                     it.bars = snap.bars;
                     it.line = snap.line;
@@ -297,6 +365,7 @@ impl DetectsPanel {
                         color,
                         kind: det.kind,
                         is_short: det.is_short,
+                        add_to_chart: det.add_to_chart,
                         born_ms: det.time_ms,
                         ttl_ms: ttl,
                         bars: snap.bars,
@@ -310,6 +379,15 @@ impl DetectsPanel {
                 }
             }
         }
+        if replayed {
+            // A replay appends rows the feed skipped earlier, and those can be older than cards it
+            // already holds — which would draw them ahead of fresher ones and make the trim below
+            // evict the wrong end. Sorting is STABLE, so detects of the same instant keep the
+            // ingest order this feed reads by; only the replayed rows move.
+            self.items
+                .make_contiguous()
+                .sort_by(|a, b| a.born_ms.total_cmp(&b.born_ms));
+        }
         while self.items.len() > MAX_DETECT_BTNS {
             self.items.pop_front();
             changed = true;
@@ -319,7 +397,8 @@ impl DetectsPanel {
 
     fn prune(&mut self, now_ms: f64) -> bool {
         let before = self.items.len();
-        self.items.retain(|it| now_ms - it.born_ms < it.ttl_ms);
+        self.items
+            .retain(|it| !detect_expired(now_ms, it.born_ms, it.ttl_ms));
         self.items.len() != before
     }
 
@@ -418,14 +497,24 @@ impl DetectsPanel {
     }
 }
 
-fn detects_sig(b: &Backend, group: &str) -> u64 {
+/// Signature that makes the panel re-ingest: a hash of every group core's detect revision, PLUS the
+/// AddToChart setting as its own value. The setting belongs here because flipping it changes which
+/// rows the feed accepts, and this is what wakes EVERY panel of the group — the one whose checkbox
+/// was clicked notifies itself, but a second, detached panel learns of it only through this.
+///
+/// The setting is a separate field rather than a seed folded into the hash: at `31 * flag + rev`,
+/// a core whose revision advanced by exactly 31 in the same flush would cancel the flip out, and
+/// the panel would never see it.
+fn detects_sig(b: &Backend, group: &str) -> (u64, bool) {
     let store = b.session.store();
-    b.session
+    let revs = b
+        .session
         .sessions()
         .iter()
         .filter(|s| s.group == group)
         .filter_map(|s| store.core(s.id))
-        .fold(0u64, |a, c| a.wrapping_mul(31).wrapping_add(c.detects_rev))
+        .fold(0u64, |a, c| a.wrapping_mul(31).wrapping_add(c.detects_rev));
+    (revs, b.detects_view.shows_add_to_chart(group))
 }
 
 impl EventEmitter<PanelEvent> for DetectsPanel {}
@@ -484,13 +573,10 @@ impl Render for DetectsPanel {
         // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
         // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
-        for (i, it) in self
-            .items
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, item)| detection_core_visible(item.core, &visible_cores))
-        {
+        for (i, it) in self.items.iter().enumerate().rev().filter(|(_, item)| {
+            detection_core_visible(item.core, &visible_cores)
+                && detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)
+        }) {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
             let (core, market) = (it.core, it.market.clone());
             let market_rmb = it.market.clone();
@@ -543,4 +629,36 @@ impl Render for DetectsPanel {
 ///     `true` only when presentation may render the retained card.
 fn detection_core_visible(core: CoreId, visible: &[CoreId]) -> bool {
     visible.contains(&core)
+}
+
+/// Return whether a detection has outlived its `KeepAlert` window.
+///
+/// One rule for both readers: `prune` drops the cards that reach it, and ingestion refuses to build
+/// a card — or pay for its market snapshot — for a row that would be dropped on the same pass.
+///
+/// Args:
+///     now_ms: Wall-clock time of this pass, in Unix milliseconds.
+///     born_ms: When the core reported the detection.
+///     ttl_ms: `KeepAlert` for that detection, in milliseconds.
+///
+/// Returns:
+///     `true` when the detection may no longer occupy the feed.
+fn detect_expired(now_ms: f64, born_ms: f64, ttl_ms: f64) -> bool {
+    now_ms - born_ms >= ttl_ms
+}
+
+/// Return whether a retained card survives the AddToChart setting.
+///
+/// Ingestion already applies the same rule, so this only matters for cards taken in while the
+/// setting was on: turning it off must clear them immediately rather than leave them for the rest
+/// of their `KeepAlert`.
+///
+/// Args:
+///     add_to_chart: The card's `AddToChart` tab number, `0` when the detect opens no tab.
+///     show_add_to_chart: Whether this group displays chart-routed detects in the feed.
+///
+/// Returns:
+///     `true` only when presentation may render the retained card.
+fn detection_route_visible(add_to_chart: u32, show_add_to_chart: bool) -> bool {
+    add_to_chart == 0 || show_add_to_chart
 }

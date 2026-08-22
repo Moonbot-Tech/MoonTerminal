@@ -9,9 +9,9 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize,
-    MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
-    MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
+    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonDropdown, MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonSegmentItem, MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -418,6 +418,24 @@ fn content(
         )
         .child(dec_seg);
 
+    // Whether chart-routed detects join the feed. Like the decimals above it, this is one setting
+    // for every size: it selects which rows the feed accepts, not how a card looks.
+    let entity_atc = entity.clone();
+    // The row is what keeps the checkbox at its own width: a checkbox placed straight into the
+    // popup's column would be stretched across all 560 px, and every pixel of that is a click.
+    let atc_row = h_flex().w_full().child(
+        MoonCheckbox::new("det-view-add-to-chart")
+            .label(t!("detects.cfg.show_add_to_chart").to_string())
+            .checked(cfg.show_add_to_chart)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |checked: &bool, _w, app| {
+                let checked = *checked;
+                entity_atc.update(app, |this, cx| {
+                    this.write_view(cx, |c| c.show_add_to_chart = checked);
+                });
+            }),
+    );
+
     // Card dimensions and chart type.
     let w_row = slider_row(
         t!("detects.cfg.width").to_string(),
@@ -556,6 +574,7 @@ fn content(
         .gap(design::ui_px(cx, 8.0))
         .child(head)
         .child(tabs_row)
+        .child(atc_row)
         .child(
             popup_group(
                 "detects-frame-size",
