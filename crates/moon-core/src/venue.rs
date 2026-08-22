@@ -341,6 +341,83 @@ pub const fn venue(code: u8) -> Option<Venue> {
     }
 }
 
+/// Every venue the arbitrage column can list, in print order, with the spelling it is listed under.
+///
+/// THE arbitrage roster, and deliberately here rather than beside the chart: a venue is a venue,
+/// and keeping a second list of codes elsewhere is how one of them acquires an exchange the other
+/// never hears about. [`venue`] above answers what a code IS — brand, market kind, logo, naming
+/// rules — for the codes a core can be CONNECTED to; this table answers what a code is CALLED in an
+/// arbitrage column, over the wider set of codes a core can merely QUOTE. The overlap is checked by
+/// a unit test rather than by eye.
+///
+/// Two things the spellings are not. They are not [`Brand::display`]: Moonbot's arbitrage panel
+/// writes `Bitget`, `Okx` and `Htx` where the brand is `BitGet`, `OKX` and `HTX`, and a trader
+/// reads a spread by the panel's word. And they are not `ArbPlatformCode::name`, which is the
+/// protocol library's debug spelling (`FBinance`, `WasBittrex`, `Unknown`). They are transcribed
+/// from that panel (screenshot, 2026-08-21).
+///
+/// The ORDER is the order the arbitrage settings window lists its rows in, grouped by brand rather
+/// than by code, so the window reads as a list of exchanges instead of a list of numbers.
+///
+/// Codes outside this table are not an error: an arbitrage quote from a platform this build has
+/// never heard of still prints, under the number that identifies it. See
+/// `ArbVenue::default_name`, which is the one place that fallback is spelled.
+pub const ARB_VENUES: [(u8, &str); 19] = [
+    (3, "BinanceS"),
+    (4, "BinanceF"),
+    (6, "BinanceQ"),
+    // Binance Alpha. Arbitrage-only: no core connects to it, so [`venue`] does not name it.
+    (103, "BinAlpha"),
+    (7, "BybitS"),
+    (2, "BybitF"),
+    (8, "GateS"),
+    (9, "GateF"),
+    (10, "BitgetS"),
+    (11, "BitgetF"),
+    // The OKX pair a live core actually sends, and the library constant that names the exchange
+    // without a side. All three are listed: a venue absent from this table still PRINTS, but only a
+    // listed one can be hidden, recoloured or moved.
+    //
+    // 14 and 15 are in no `ArbPlatformCode` constant — they are `ExchangeCode::OKX`/`FOKX`, read
+    // off a live core. The ORDER inside the pair follows every other pair in the range (`8/9` Gate,
+    // `10/11` Bitget, `12/13` Hyperliquid): spot first. Verify it in one move rather than trusting
+    // the inference: clear the `OkxF` checkbox in Moonbot and watch which of the two codes leaves
+    // the mask in the arbitrage trace (`log.market_sources`).
+    (14, "OkxS"),
+    (15, "OkxF"),
+    // The library's own `Okx` constant. No live core has been seen sending it — the pair above is
+    // what arrives — so it keeps the unsuffixed name rather than claiming a side.
+    (102, "Okx"),
+    // Hyperliquid is the one brand the panel abbreviates. A DEPLOYER on it carries an index instead
+    // of a code and is named from the core's own `known_dexes`; see `ArbVenue::hl_name`.
+    (12, "HL_S"),
+    (13, "HL_F"),
+    (5, "HtxS"),
+    // Arbitrage-only, like `BinAlpha` and `Forex`: price sources rather than venues a core trades.
+    (101, "UpBit"),
+    (100, "Forex"),
+    // Delisted, and `ExchangeCode::WasBittrex` for that reason, but an old core can still quote it.
+    (1, "Bittrex"),
+];
+
+/// What one platform code is CALLED in an arbitrage column.
+///
+/// Args:
+///     code: Platform ordinal from an arbitrage slot.
+///
+/// Returns:
+///     The spelling [`ARB_VENUES`] gives it, or `None` for a code this build cannot name.
+pub const fn arb_alias(code: u8) -> Option<&'static str> {
+    let mut i = 0;
+    while i < ARB_VENUES.len() {
+        if ARB_VENUES[i].0 == code {
+            return Some(ARB_VENUES[i].1);
+        }
+        i += 1;
+    }
+    None
+}
+
 impl Venue {
     /// Return the market-name spelling rules this venue's names follow.
     ///

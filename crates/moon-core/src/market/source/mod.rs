@@ -380,10 +380,14 @@ impl CoinTag {
 ///
 /// The core reports a numeric PLATFORM CODE, not a name: the codes are Moonbot's own
 /// `TBotPlatform` ordinals plus arbitrage-only ones, and nothing on the wire says how to spell
-/// them. This is that spelling, kept beside the venue directory rather than in the chart, because
-/// the same list names the columns in the arbitrage settings window.
+/// them. Which codes exist and how each is spelled is the venue directory's answer —
+/// [`crate::venue::ARB_VENUES`] — so an exchange is described in ONE place whether it is asked
+/// about as a connection or as a price to compare against. This type is the code itself: the
+/// deployer arithmetic the directory has no opinion on, and the fallbacks for a code it cannot
+/// name.
 ///
-/// A Hyperliquid DEPLOYER carries only an index in its arbitrage slot, so THIS spelling numbers it.
+/// A Hyperliquid DEPLOYER carries only an index in its arbitrage slot, and the directory has no
+/// entry to give it, so [`Self::default_name`] numbers it here instead.
 /// The real name usually exists elsewhere — `AuthCheck` hands over `known_dexes`, and the same
 /// index reads into that list — and a live quote carries it (see [`ArbQuote::dex_name`]); the
 /// numbered form is what remains when a core sent no list at all.
@@ -393,32 +397,22 @@ pub struct ArbVenue(u8);
 impl ArbVenue {
     /// Every venue this build can name, in the order the settings window lists them.
     ///
+    /// The codes and the order are [`crate::venue::ARB_VENUES`]'s, not a second list beside it:
+    /// this used to be one array of codes and [`Self::default_name`] a second one of the same
+    /// codes, which nothing checked against each other — a venue added to one and forgotten in the
+    /// other printed as a bare number in the column while the settings window offered it a colour.
+    ///
     /// Deployers are deliberately absent: they exist per core, are discovered from the data, and
     /// are appended after this list wherever one actually reports a price.
-    pub const KNOWN: [ArbVenue; 19] = [
-        ArbVenue(3),
-        ArbVenue(4),
-        ArbVenue(6),
-        ArbVenue(103),
-        ArbVenue(7),
-        ArbVenue(2),
-        ArbVenue(8),
-        ArbVenue(9),
-        ArbVenue(10),
-        ArbVenue(11),
-        // The OKX pair a live core actually sends, and the library constant that names the
-        // exchange without a side. All three are listed: a venue absent from this list still
-        // PRINTS, but only a listed one can be hidden, recoloured or moved.
-        ArbVenue(14),
-        ArbVenue(15),
-        ArbVenue(102),
-        ArbVenue(12),
-        ArbVenue(13),
-        ArbVenue(5),
-        ArbVenue(101),
-        ArbVenue(100),
-        ArbVenue(1),
-    ];
+    pub const KNOWN: [ArbVenue; crate::venue::ARB_VENUES.len()] = {
+        let mut out = [ArbVenue(0); crate::venue::ARB_VENUES.len()];
+        let mut i = 0;
+        while i < out.len() {
+            out[i] = ArbVenue(crate::venue::ARB_VENUES[i].0);
+            i += 1;
+        }
+        out
+    };
 
     /// First deployer code; everything from here to [`Self::DEPLOYER_END`] is one.
     pub const DEPLOYER_BASE: u8 = 50;
@@ -471,14 +465,9 @@ impl ArbVenue {
 
     /// What this venue is CALLED, in the REFERENCE TERMINAL's spelling.
     ///
-    /// The wire carries no display name for a venue: `ArbPlatformCode::name` exists, but it is the
-    /// protocol library's own debug spelling (`FBinance`, `WasBittrex`, `Unknown`) and is not what
-    /// Moonbot's arbitrage panel shows. Moonbot builds its column heads itself, with `S`/`F`
-    /// suffixes for the spot and futures halves of one exchange — `BinanceS`, `BinanceF`, `GateF`,
-    /// `OkxS` — and those are the words a trader reads a spread by.
-    ///
-    /// So this table exists, transcribed from that panel (screenshot, 2026-08-21) rather than
-    /// invented, and it is deliberately the ONLY place the terminal spells a venue.
+    /// The spelling itself lives in the venue directory — [`crate::venue::arb_alias`] — beside the
+    /// brand, market kind and logo the same code already answers for. Here is only what to do when
+    /// the directory has no word for it.
     ///
     /// The one name that does come over the wire is a Hyperliquid deployer's: `AuthCheck` carries
     /// `known_dexes`, and Moonbot prints those with an `HL_` prefix (`HL_hyna`, `HL_para`). That is
@@ -488,41 +477,8 @@ impl ArbVenue {
     /// A code no spelling covers prints its NUMBER: it says "the core sent a platform this build
     /// has never seen" plainly, and the number is what identifies it.
     pub fn default_name(self) -> String {
-        let known = match self.0 {
-            1 => "Bittrex",
-            2 => "BybitF",
-            3 => "BinanceS",
-            4 => "BinanceF",
-            5 => "HtxS",
-            6 => "BinanceQ",
-            7 => "BybitS",
-            8 => "GateS",
-            9 => "GateF",
-            10 => "BitgetS",
-            11 => "BitgetF",
-            12 => "HL_S",
-            13 => "HL_F",
-            // Not in any protocol constant, and read off a live core instead. The reference
-            // terminal lists twenty-one venues; every one of them maps to a code above except the
-            // OKX pair, and a core reporting that panel sends 14 and 15 while never sending 102 —
-            // the constant the library calls `Okx`. The ORDER inside the pair follows every other
-            // pair in the range (`8/9` Gate, `10/11` Bitget, `12/13` Hyperliquid): spot first.
-            //
-            // Verify it in one move rather than trusting the inference: clear the `OkxF` checkbox
-            // in Moonbot and watch which of the two codes leaves the mask in the arbitrage trace
-            // (`log.market_sources`).
-            14 => "OkxS",
-            15 => "OkxF",
-            100 => "Forex",
-            101 => "UpBit",
-            // The library's own `Okx` constant. No live core has been seen sending it — the pair
-            // above is what arrives — so it keeps the unsuffixed name rather than claiming a side.
-            102 => "Okx",
-            103 => "BinAlpha",
-            _ => "",
-        };
-        if !known.is_empty() {
-            return known.to_string();
+        if let Some(name) = crate::venue::arb_alias(self.0) {
+            return name.to_string();
         }
         if self.is_deployer() {
             return format!("HL #{}", self.0 - Self::DEPLOYER_BASE);

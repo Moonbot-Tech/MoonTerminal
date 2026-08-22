@@ -10,7 +10,8 @@
 //!
 //! The core reports a numeric platform code and a price; the colour, the order and the visibility
 //! are this file's alone. NAMES are neither stored nor editable here: an exchange is spelled by
-//! [`crate::market::ArbVenue::default_name`], in the reference terminal's own wording, and a
+//! the venue directory ([`crate::venue::ARB_VENUES`], read through
+//! [`crate::market::ArbVenue::default_name`]), in the reference terminal's own wording, and a
 //! Hyperliquid deployer by the core's `known_dexes` entry behind that terminal's `HL_` prefix. A
 //! code nothing can name prints its number, which says what happened rather than inventing a word
 //! for it.
