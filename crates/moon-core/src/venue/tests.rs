@@ -1,6 +1,6 @@
 use moonproto::ExchangeCode;
 
-use super::{venue, Brand, CoreVenue, MarketKind, Venue};
+use super::{arb_alias, venue, Brand, CoreVenue, MarketKind, Venue, ARB_VENUES};
 use crate::symbol::Exchange;
 
 /// The ordinals are wire values, so the oracle is moonproto's own constants rather than the
@@ -164,6 +164,108 @@ fn only_a_printable_caption_makes_an_unknown_ordinal_nameable() {
         known.reported, "",
         "a known ordinal must not carry the core's own spelling"
     );
+}
+
+/// An arbitrage spelling must agree with the venue the same code resolves to.
+///
+/// The arbitrage panel's word for a venue is its brand plus the market kind's letter — `BinanceQ`
+/// is Binance COIN-M, `GateF` is Gate futures — so the two halves of this module cannot be allowed
+/// to describe one code differently. The spellings are the PANEL's, which is why the brand's word
+/// here is not always `Brand::display`: the panel writes `Bitget`, `Okx` and `Htx`, and abbreviates
+/// Hyperliquid to `HL_`.
+///
+/// Breakage: mistyping a suffix (`BinanceF` on the spot code) or moving a code to another brand in
+/// `venue` without moving its spelling. Either paints one exchange's spread under another's name,
+/// which is the one mistake an arbitrage column must never make.
+#[test]
+fn arbitrage_spellings_agree_with_the_venue_each_code_resolves_to() {
+    let panel_word = |brand: Brand| match brand {
+        Brand::Binance => "Binance",
+        Brand::Bybit => "Bybit",
+        Brand::Htx => "Htx",
+        Brand::Gate => "Gate",
+        Brand::BitGet => "Bitget",
+        Brand::Hyperliquid => "HL_",
+        Brand::Okx => "Okx",
+    };
+    let letter = |kind: MarketKind| match kind {
+        MarketKind::Spot => "S",
+        MarketKind::Futures => "F",
+        MarketKind::Quarterly => "Q",
+    };
+    let mut checked = 0;
+    for (code, alias) in ARB_VENUES {
+        // Arbitrage-only codes — Forex, UpBit, BinAlpha, the delisted Bittrex, the sideless OKX
+        // constant — are price sources rather than venues a core connects to, so the directory
+        // deliberately does not resolve them and there is nothing to agree with.
+        let Some(venue) = venue(code) else { continue };
+        assert_eq!(
+            alias,
+            format!("{}{}", panel_word(venue.brand), letter(venue.kind)),
+            "ordinal {code} is spelled against the venue it resolves to"
+        );
+        checked += 1;
+    }
+    // Counted rather than pinned to a literal: a new exchange added correctly to BOTH halves must
+    // pass, and only a directory entry the roster never names may fail. The count still has to be
+    // asserted — without it a `venue` that resolved nothing would let this test compare nothing and
+    // pass in silence.
+    let directory_size = (0..=u8::MAX).filter(|code| venue(*code).is_some()).count();
+    assert_eq!(
+        checked, directory_size,
+        "every ordinal the directory knows must be covered by the roster"
+    );
+}
+
+/// Every venue a core can CONNECT to must also be nameable as an arbitrage source.
+///
+/// The two are one exchange asked about twice: a core on Bitget futures is also a venue somebody
+/// else compares a price against. A code the directory learned about is therefore a code the
+/// arbitrage roster owes a word for.
+///
+/// Breakage: an exchange added upstream and wired into `venue` while `ARB_VENUES` is forgotten. The
+/// column then prints it as a bare `#16` and the settings window cannot offer it a colour — the
+/// exact split this table was merged to end.
+#[test]
+fn every_directory_venue_has_an_arbitrage_spelling() {
+    for code in 0..=u8::MAX {
+        if venue(code).is_some() {
+            assert!(
+                arb_alias(code).is_some(),
+                "ordinal {code} is a venue but has no arbitrage spelling"
+            );
+        }
+    }
+}
+
+/// One code, one row; one row, one word.
+///
+/// Breakage: a duplicated code gives the settings window two rows for one venue, whose colour and
+/// visibility then depend on which the lookup finds first. A duplicated word puts two venues under
+/// one heading in the column, where a reader cannot tell whose spread they are looking at.
+#[test]
+fn arbitrage_venues_are_listed_once_each() {
+    let mut codes: Vec<u8> = ARB_VENUES.iter().map(|(code, _)| *code).collect();
+    codes.sort_unstable();
+    let total = codes.len();
+    codes.dedup();
+    assert_eq!(codes.len(), total, "a platform code appears twice");
+
+    let mut names: Vec<&str> = ARB_VENUES.iter().map(|(_, name)| *name).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), total, "two venues share a spelling");
+
+    // An empty spelling reads as a name and prints as a blank heading over somebody's spread. The
+    // table used to guard itself — an empty string was how the old match said "no name" and fell
+    // through to the number — so the guard moves here rather than disappearing.
+    for (code, name) in ARB_VENUES {
+        assert!(!name.is_empty(), "ordinal {code} has a blank spelling");
+    }
+
+    // The number fallback must stay reachable: it is what says "this build has never seen this
+    // platform" instead of inventing a word for it.
+    assert!(arb_alias(200).is_none());
 }
 
 /// The three market kinds must caption from three distinct dictionary keys.
