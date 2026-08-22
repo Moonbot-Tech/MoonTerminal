@@ -19,15 +19,16 @@
 
 use gpui::{Hsla, point, px};
 use moon_core::config::{
-    ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelColor,
-    LabelZone, PREFIX_PART_BASE, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
+    ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LABEL_WRAP_LINES, LabelAlign,
+    LabelColor, LabelZone, PREFIX_PART_BASE, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
+    WRAP_PART_BASE,
 };
 use moon_core::util::fmt::DeltaSign;
 
 use super::caption::{CaptionBox, CaptionGeom, caption_geom};
-use crate::chartdx::ArbHit;
 use super::labels::LabelText;
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
+use crate::chartdx::ArbHit;
 use crate::chartdx::RenderState;
 
 /// Horizontal gap between two captions on the same row.
@@ -76,12 +77,26 @@ struct Item {
     plate: bool,
     /// Font size in logical pixels, already resolved and clamped.
     size: f32,
+    /// Whether this caption is prose and may be WRAPPED rather than cut. See
+    /// [`ChartLabelField::wraps`].
+    wraps: bool,
+    /// How many lines it actually takes at the width it was given, filled by `plan_wraps` before
+    /// anything is stacked. Always at least one.
+    lines: u8,
+    /// Index of this caption's wrapped lines in `RenderState::caption_wraps`, or `usize::MAX` when
+    /// it is not prose and takes the single-line path.
+    wrap_ix: usize,
 }
 
 impl Item {
     /// Height of one line at this caption's size, matching what `draw_aligned` is given.
     fn line_h(self) -> f32 {
         self.size + 4.0
+    }
+
+    /// Height of the whole caption: one line, or the lines a wrapped one took.
+    fn block_h(self) -> f32 {
+        self.line_h() * f32::from(self.lines.max(1))
     }
 }
 
@@ -97,9 +112,10 @@ struct Cell {
 }
 
 impl Cell {
-    /// How tall the cell is: its captions stack, so their heights add up.
+    /// How tall the cell is: its captions stack, so their heights add up — and a wrapped caption
+    /// counts every line it took, or the module below it would be drawn over its tail.
     fn height(&self) -> f32 {
-        self.items.iter().map(|it| it.line_h()).sum()
+        self.items.iter().map(|it| it.block_h()).sum()
     }
 }
 
@@ -116,8 +132,9 @@ struct Row {
 impl Row {
     /// Height of the line: the tallest cell on it.
     ///
-    /// Known from the STYLES, before anything is measured or drawn — which is what lets a
-    /// bottom-anchored band place its first line without having to draw it first.
+    /// Known before anything is DRAWN — which is what lets a bottom-anchored band place its first
+    /// line without drawing it first. From the styles alone for every caption but one: a prose
+    /// caption's line count comes from `plan_wraps`, which measures it beforehand for this reason.
     fn height(&self) -> f32 {
         self.cells.iter().map(Cell::height).fold(0.0_f32, f32::max)
     }
@@ -168,6 +185,11 @@ impl RenderState {
         // the buffer is reused, so a chart with an arbitrage column allocates nothing per frame.
         let mut hits = std::mem::take(&mut self.panes[idx].arb_hits);
         hits.clear();
+        // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
+        // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
+        // during the pass: carrying entries across panes would leak a Vec per frame and let a
+        // stale index draw the previous pane's sentence.
+        self.caption_wraps.clear();
         let result = self.draw_all_zones(
             ctx,
             idx,
@@ -208,11 +230,14 @@ impl RenderState {
         };
         for zone in LabelZone::ALL {
             for align in LabelAlign::ALL {
-                let rows = self.collect_rows(cfg, texts, zone, align);
+                let mut rows = self.collect_rows(cfg, texts, zone, align);
                 if rows.is_empty() {
                     continue;
                 }
                 let column = zone_column(zone, align, &geom, &corner);
+                // A prose caption's height is not known from its style, so it is measured here —
+                // before `draw_stack` places anything from those heights.
+                self.plan_wraps(ctx, texts, &mut rows, column);
                 let start_y = zone_start_y(zone, &geom, &corner);
                 // Rows fill toward the far edge of the band and stop there.
                 let downward = zone.is_top();
@@ -261,6 +286,12 @@ impl RenderState {
                 style,
                 plate: row_cfg.plate,
                 size: (base * style.size_mult).clamp(6.0, 60.0),
+                wraps: row_cfg
+                    .parts
+                    .get(text.part)
+                    .is_some_and(|part| part.field.wraps()),
+                lines: 1,
+                wrap_ix: usize::MAX,
             })
         };
         // A module's gap in the chart's own logical pixels, as the configuration states it.
@@ -287,6 +318,74 @@ impl RenderState {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Work out how many lines each PROSE caption takes at the width it will be drawn at.
+    ///
+    /// Before anything is stacked, because a band places its lines from their HEIGHTS — and a
+    /// bottom-anchored one subtracts a line's height before drawing it. A wrapped caption that
+    /// still reported one line would have its tail drawn over whatever the band placed next.
+    ///
+    /// The budget walk follows `draw_row`'s, on the MEASURED width of each column. The drawn width
+    /// can exceed it — a caption split into a prefix run and a value run shapes as two strings — so
+    /// a later column can be drawn at a slightly narrower budget than it was planned at. The line
+    /// COUNT cannot drift with it: the lines planned here are the lines drawn, read back from
+    /// `caption_wraps` rather than wrapped again.
+    fn plan_wraps(
+        &mut self,
+        ctx: &gpui::GpuCanvasTextContext<'_>,
+        texts: &[LabelText],
+        rows: &mut [Row],
+        column: Column,
+    ) {
+        // Nothing on this pane is prose: the whole walk — a measurement per cell of every band —
+        // is skipped, which is the case on every chart that prints no detect line.
+        if !rows
+            .iter()
+            .any(|row| row.cells.iter().any(|c| c.items.iter().any(|i| i.wraps)))
+        {
+            return;
+        }
+        // Modules that already have a wrapped caption: the continuation runs are per module, so
+        // the second prose caption in one module is cut instead. Nothing ships two.
+        let mut wrapped_modules: Vec<usize> = Vec::new();
+        for row in rows.iter_mut() {
+            // The budget walk exists to reach the prose captions; the cells after the last one on
+            // this line cost a measurement each and change nothing.
+            let Some(last_prose) = row
+                .cells
+                .iter()
+                .rposition(|c| c.items.iter().any(|i| i.wraps))
+            else {
+                continue;
+            };
+            let mut budget = column.max_w;
+            for (n, cell) in row.cells.iter_mut().enumerate().take(last_prose + 1) {
+                let gap = if n == 0 { 0.0 } else { CAPTION_GAP + cell.gap };
+                budget -= gap;
+                if budget < MIN_LEGIBLE_W {
+                    break;
+                }
+                for item in cell.items.iter_mut() {
+                    if !item.wraps || wrapped_modules.contains(&item.row) {
+                        continue;
+                    }
+                    wrapped_modules.push(item.row);
+                    let Some(entry) = texts.get(item.pos) else {
+                        continue;
+                    };
+                    let glued = format!("{}{}", entry.prefix, entry.text);
+                    let lines = wrap_caption(ctx, &glued, item, budget);
+                    item.lines = lines.len().clamp(1, LABEL_WRAP_LINES) as u8;
+                    item.wrap_ix = self.caption_wraps.len();
+                    self.caption_wraps.push(lines);
+                }
+                // AFTER the wrap, never before: `measure_cell` reads a prose caption's width off
+                // the wrap, and asking it first would send the whole sentence through the
+                // truncation walk — which measures one character at a time — every frame.
+                budget -= self.measure_cell(ctx, texts, cell, budget);
+            }
+        }
     }
 
     /// Draw rows stacked in one column, downward for a top zone and upward for a bottom one.
@@ -341,8 +440,17 @@ impl RenderState {
             // placement axis is for — and one rectangle behind both would put a backing under the
             // module that switched it off.
             self.draw_row(
-                ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
-                &mut plates, hits,
+                ctx,
+                idx,
+                texts,
+                &row.cells,
+                column,
+                top,
+                limit_y,
+                downward,
+                caption_fg,
+                &mut plates,
+                hits,
             )?;
             any_drawn = true;
             y += if downward { row_h } else { -row_h };
@@ -404,13 +512,18 @@ impl RenderState {
                 break;
             }
             // The column is as wide as its widest caption, and every caption in it is anchored to
-            // the same edge — which is what makes a block read as a block.
+            // the same edge — which is what makes a block read as a block. A CENTRED band is the
+            // exception: there each caption is centred inside that width.
             let cell_w = self.measure_cell(ctx, texts, cell, budget);
             let anchor_x = if rightwards {
                 cursor + gap
             } else {
                 cursor - gap
             };
+            // A CENTRED band centres its captions against each other too, not just the line as a
+            // whole: a module whose captions stack — a detect line under its strategy — reads as a
+            // ragged left edge otherwise, which is the one thing centring was asked for.
+            let centred = column.align > 0.0 && column.align < 1.0;
             let mut y = top;
             let mut drawn_w = 0.0_f32;
             for (n_item, item) in cell.items.iter().enumerate() {
@@ -437,7 +550,10 @@ impl RenderState {
                             break;
                         }
                     } else if !last {
-                        y += item.line_h();
+                        // Its whole block, not one line: an upward band reserved `block_h` for it,
+                        // and stepping over a wrapped caption by a single line would put every
+                        // caption below it two lines out of place.
+                        y += item.block_h();
                         continue;
                     }
                 }
@@ -457,40 +573,118 @@ impl RenderState {
                 // the value and spends the same budget, and measuring it through a throwaway run
                 // would re-shape it on every measure and every frame — the cost `caption_runs`
                 // exists to avoid.
-                let prefix_w = match item.style.value_only && !entry.prefix.is_empty() {
-                    true => self.measure_caption_run(
-                        ctx,
-                        idx,
-                        item.row,
-                        PREFIX_PART_BASE + item.part,
-                        &entry.prefix,
-                        item.size,
-                    ),
-                    false => 0.0,
-                };
+                let prefix_w =
+                    match !item.wraps && item.style.value_only && !entry.prefix.is_empty() {
+                        true => self.measure_caption_run(
+                            ctx,
+                            idx,
+                            item.row,
+                            PREFIX_PART_BASE + item.part,
+                            &entry.prefix,
+                            item.size,
+                        ),
+                        false => 0.0,
+                    };
                 // Too little room for the pair: the caption falls back to ONE run holding both,
                 // truncated as a whole. A split that kept the full-width prefix would paint it past
                 // the band's edge, and truncating the prefix instead would leave a caption naming
                 // nothing.
-                let split = prefix_w > 0.0 && budget - prefix_w >= MIN_LEGIBLE_W;
+                let split = !item.wraps && prefix_w > 0.0 && budget - prefix_w >= MIN_LEGIBLE_W;
                 let prefix_w = if split { prefix_w } else { 0.0 };
                 let glued = match split {
                     true => entry.text.clone(),
                     false => format!("{}{}", entry.prefix, entry.text),
                 };
+                // Prose is broken across lines instead of being cut, and every line but the
+                // first draws through a run slot of its own: a retained run is addressed by its
+                // part, so a second line drawn through the first line's run would replace it.
+                // Taken out for the duration of the draw and put back after, like the texts and
+                // the hit rectangles above: the runs live on `self`, so a borrow cannot span the
+                // draw — and cloning a sentence per caption per frame is what the cache exists to
+                // avoid.
+                if item.wrap_ix < self.caption_wraps.len() {
+                    let lines = std::mem::take(&mut self.caption_wraps[item.wrap_ix]);
+                    for (k, (line, line_w)) in lines.iter().enumerate() {
+                        // Re-asked for every line, at the y that line will be drawn at: the guard
+                        // above was answered for the caption's FIRST line, and a block that passed
+                        // it there would otherwise paint its tail over the time axis.
+                        //
+                        // Which lines are lost depends on the direction, exactly as it does for
+                        // whole captions: a band filling DOWNWARD keeps its head and drops the
+                        // tail, while one filling UPWARD is anchored at its bottom, so the lines
+                        // that fall off are at the TOP and the ones after them come back on-pane.
+                        if k > 0 {
+                            match downward {
+                                true if y + item.line_h() > limit_y => break,
+                                false if y < limit_y => {
+                                    y += item.line_h();
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let line_x = match centred {
+                            true => anchor_x + (cell_w - line_w).max(0.0) * 0.5,
+                            false => anchor_x,
+                        };
+                        let part = match k {
+                            0 => item.part,
+                            k => WRAP_PART_BASE + k - 1,
+                        };
+                        let metrics = self.draw_caption_run(
+                            ctx,
+                            idx,
+                            item.row,
+                            part,
+                            line,
+                            item.size,
+                            line_x,
+                            y,
+                            ax,
+                            value_color,
+                        )?;
+                        crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
+                        let w = metrics.width.as_f32();
+                        drawn_w = drawn_w.max(w);
+                        let box_left = if rightwards { line_x } else { line_x - w };
+                        left_edge = left_edge.min(box_left);
+                        if item.plate {
+                            match plates.iter_mut().find(|(row, _)| *row == item.row) {
+                                Some((_, box_)) => {
+                                    box_.add(box_left, w, y, metrics.line_height.as_f32())
+                                }
+                                None => {
+                                    let mut box_ = CaptionBox::default();
+                                    box_.add(box_left, w, y, metrics.line_height.as_f32());
+                                    plates.push((item.row, box_));
+                                }
+                            }
+                        }
+                        y += item.line_h();
+                    }
+                    self.caption_wraps[item.wrap_ix] = lines;
+                    continue;
+                }
                 let (text, value_w) = fit_caption(ctx, &glued, item, budget - prefix_w);
                 if text.is_empty() {
                     continue;
                 }
+                // Where this caption sits inside its column. Only a centred band moves it: the
+                // other two anchor every caption to the same edge, which is what makes a block
+                // read as a block there.
+                let item_x = match centred {
+                    true => anchor_x + (cell_w - (prefix_w + value_w)).max(0.0) * 0.5,
+                    false => anchor_x,
+                };
                 if split {
                     // A right-anchored caption ends at `anchor_x`, so BOTH runs are placed from
                     // that edge backwards: the value takes the last `value_w`, and the prefix the
                     // `prefix_w` before it. Placing the prefix at the value's own left edge — one
                     // subtraction short — draws the two on top of each other.
                     let prefix_x = if rightwards {
-                        anchor_x
+                        item_x
                     } else {
-                        anchor_x - value_w - prefix_w
+                        item_x - value_w - prefix_w
                     };
                     // An arbitrage line's prefix is the VENUE's name, and clicking it opens this
                     // coin there. The rectangle is recorded from the placement above rather than
@@ -530,25 +724,32 @@ impl RenderState {
                     crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
                 }
                 let value_x = match (split, rightwards) {
-                    (true, true) => anchor_x + prefix_w,
-                    _ => anchor_x,
+                    (true, true) => item_x + prefix_w,
+                    _ => item_x,
                 };
                 let _ = value_w;
                 let metrics = self.draw_caption_run(
-                    ctx, idx, item.row, item.part, &text, item.size, value_x, y, ax, value_color,
+                    ctx,
+                    idx,
+                    item.row,
+                    item.part,
+                    &text,
+                    item.size,
+                    value_x,
+                    y,
+                    ax,
+                    value_color,
                 )?;
                 crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
                 let w = metrics.width.as_f32() + prefix_w;
                 drawn_w = drawn_w.max(w);
-                let box_left = if rightwards { anchor_x } else { anchor_x - w };
+                let box_left = if rightwards { item_x } else { item_x - w };
                 left_edge = left_edge.min(box_left);
                 // Grown into the box of the MODULE this caption belongs to. A module whose
                 // plate is switched off never opens one, so its captions grow nothing.
                 if item.plate {
                     match plates.iter_mut().find(|(row, _)| *row == item.row) {
-                        Some((_, box_)) => {
-                            box_.add(box_left, w, y, metrics.line_height.as_f32())
-                        }
+                        Some((_, box_)) => box_.add(box_left, w, y, metrics.line_height.as_f32()),
                         None => {
                             let mut box_ = CaptionBox::default();
                             box_.add(box_left, w, y, metrics.line_height.as_f32());
@@ -558,6 +759,8 @@ impl RenderState {
                 }
                 y += item.line_h();
             }
+            // The cursor moves by whichever is wider: what the column was measured at, or what it
+            // actually drew. A centred caption sits INSIDE that width and never adds to it.
             let advance = drawn_w.max(cell_w);
             cursor = if rightwards {
                 anchor_x + advance
@@ -611,9 +814,20 @@ impl RenderState {
                 // as two: the column's width is the same either way in a monospaced face, and a
                 // second measurement here would shape the prefix again on every frame.
                 let glued = format!("{}{}", entry.prefix, entry.text);
-                Some(fit_caption(ctx, &glued, item, budget).1)
+                // A wrapped caption is as wide as its WIDEST line, not as wide as its first: the
+                // column it sits in is what centres the captions above and below it. Read from the
+                // plan rather than wrapped again — measuring is what the plan exists to do once.
+                match self.wrapped(item) {
+                    Some(lines) => Some(lines.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)),
+                    None => Some(fit_caption(ctx, &glued, item, budget).1),
+                }
             })
             .fold(0.0_f32, f32::max)
+    }
+
+    /// The lines `plan_wraps` broke this caption into, or `None` when it is not prose.
+    fn wrapped(&self, item: &Item) -> Option<&Vec<(String, f32)>> {
+        self.caption_wraps.get(item.wrap_ix)
     }
 
     /// Resolve one caption's color.
@@ -852,6 +1066,28 @@ fn group_lines(
         was_column_line = is_column_line;
     }
     lines
+}
+
+/// Split a caption into the lines it is actually drawn on.
+///
+/// A caption that is not prose answers with the one line it always had, cut to its budget. A prose
+/// one is broken on WORD boundaries into at most [`LABEL_WRAP_LINES`] lines, and whatever is still
+/// left over is cut into the last one — so the ellipsis lands at the end of the block rather than
+/// in the middle of the first line, which is the whole point of wrapping it.
+///
+/// The rule itself is [`crate::design::wrap_text`], which is pure and tested there; what is here is
+/// only the measurement this pass draws with.
+fn wrap_caption(
+    ctx: &gpui::GpuCanvasTextContext<'_>,
+    text: &str,
+    item: &Item,
+    budget: f32,
+) -> Vec<(String, f32)> {
+    let measure = |s: &str| super::measure_run_width(ctx, s, item.size);
+    match item.wraps {
+        true => crate::design::wrap_text(text, budget, LABEL_WRAP_LINES, measure),
+        false => vec![crate::design::fit_text(text, budget, measure)],
+    }
 }
 
 /// Truncate one caption to the width it is allowed, returning the text and its measured width.

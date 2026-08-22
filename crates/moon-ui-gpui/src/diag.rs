@@ -136,7 +136,8 @@ diag_counters!(
     // those had to be re-formatted because their inputs moved.
     //
     // Read them against each other. `chart_caption_draw` divided by `chart_present` is how many
-    // captions each frame paints — near zero means the corner is empty, which the drawn picture
+    // caption LINES each frame paints — a wrapped detect line counts once per line — where near
+    // zero means the corner is empty, which the drawn picture
     // cannot tell apart from "the pane has nothing to say". `chart_caption_rebuild` is the
     // expensive half: it counts REVISIONS that changed a string, so it must stay orders of
     // magnitude below the draw count. The two moving together means a caption is being rebuilt on

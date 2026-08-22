@@ -110,6 +110,7 @@ impl ChartEngine {
             text_runs: Vec::new(),
             text_run_cursor: 0,
             caption_runs: Vec::new(),
+            caption_wraps: Vec::new(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
             arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::default()),
             firetest_text_labels: Vec::new(),

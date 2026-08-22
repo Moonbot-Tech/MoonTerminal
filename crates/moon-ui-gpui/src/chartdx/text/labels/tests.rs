@@ -205,7 +205,7 @@ fn a_long_detect_line_is_cut() {
         },
     )
     .expect("prints");
-    assert!(text.chars().count() < 120, "{}", text.chars().count());
+    assert!(text.chars().count() <= 201, "{}", text.chars().count());
     assert!(text.ends_with('…'));
 }
 

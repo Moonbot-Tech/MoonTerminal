@@ -1,7 +1,7 @@
 use super::*;
 
 /// The shipped default is the developer's own Main tab, transcribed from `charts.json` on
-/// 2026-08-21. Pinned because it is a DECISION, not a guess: it is what every fresh profile opens
+/// 2026-08-22. Pinned because it is a DECISION, not a guess: it is what every fresh profile opens
 /// on AND what the popup's Reset returns to, so a silent edit here changes both.
 #[test]
 fn the_default_is_the_shipped_working_layout() {
@@ -68,7 +68,13 @@ fn the_default_is_the_shipped_working_layout() {
                 Fl::Row,
                 Fl::Row,
                 0,
-                vec![F::OpenOrders, F::OpenPnlMoney, F::OpenPnlPct, F::Exposure]
+                vec![
+                    F::OpenOrders,
+                    F::OpenPnlMoney,
+                    F::OpenPnlPct,
+                    F::Exposure,
+                    F::SessionPnl
+                ]
             ),
             (
                 Some(P::Funding),
@@ -78,6 +84,25 @@ fn the_default_is_the_shipped_working_layout() {
                 Fl::Column,
                 8,
                 vec![F::Funding, F::FundingIn]
+            ),
+            // The venue roster down the plot's left edge, and the detect line centred over it.
+            (
+                Some(P::Arbitrage),
+                Z::ChartTop,
+                A::Left,
+                Fl::Column,
+                Fl::Column,
+                8,
+                vec![F::ArbColumn]
+            ),
+            (
+                Some(P::Detect),
+                Z::ChartTop,
+                A::Center,
+                Fl::Column,
+                Fl::Column,
+                0,
+                vec![F::DetectStrategy, F::DetectMsg, F::OrderStrategy]
             ),
         ]
     );
@@ -90,6 +115,14 @@ fn the_default_is_the_shipped_working_layout() {
         cfg.rows[4].parts[1].style.caption,
         Some(false),
         "the funding countdown prints bare, beside the rate that names itself"
+    );
+    assert_eq!(
+        (
+            cfg.rows[5].parts[0].style.color,
+            cfg.rows[5].parts[0].style.color_min_pct
+        ),
+        (Some(LabelColor::BySign), Some(0.5)),
+        "the roster colours the spread by its sign, and only where the spread is worth acting on"
     );
 }
 
@@ -193,7 +226,9 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
             ChartLabelField::Coin,
             ChartLabelField::Delta1h,
             ChartLabelField::OpenOrders,
-            ChartLabelField::Funding
+            ChartLabelField::Funding,
+            ChartLabelField::ArbColumn,
+            ChartLabelField::DetectStrategy
         ],
         "the survivors keep their relative order with no hole between them"
     );
@@ -261,7 +296,8 @@ fn removing_a_caption_closes_the_gap() {
         vec![
             ChartLabelField::OpenPnlMoney,
             ChartLabelField::OpenPnlPct,
-            ChartLabelField::Exposure
+            ChartLabelField::Exposure,
+            ChartLabelField::SessionPnl
         ]
     );
 }
@@ -771,7 +807,7 @@ fn a_hidden_row_draws_nothing_but_keeps_everything() {
     cfg.rows[3].visible = false;
     cfg.sanitize();
     assert!(!cfg.rows[3].is_drawn());
-    assert_eq!(cfg.used_rows(), 5, "it is still a row");
+    assert_eq!(cfg.used_rows(), 7, "it is still a row");
     assert!(
         !cfg.any_drawn(|f| f == ChartLabelField::OpenPnlPct),
         "and its captions stop costing the order walk"
@@ -961,4 +997,26 @@ fn the_plate_is_a_module_setting_and_defaults_to_drawn() {
     "#;
     let read: ChartLabelsCfg = toml::from_str(old).expect("parses");
     assert!(read.rows[0].plate, "absent means drawn");
+}
+
+/// A preset name this build does not know costs the row its NAME and nothing else.
+///
+/// The list grows, and a profile written by a newer build gets opened by an older one every time a
+/// user steps back a version. This configuration is deserialized as ONE value inside `layout.toml`,
+/// so a strict read would take every caption — and every window position in that file — with it.
+#[test]
+fn an_unknown_preset_costs_only_the_row_its_name() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.preset = Some(LabelPreset::Detect);
+    row.push_part(ChartLabelField::DetectMsg);
+    cfg.rows[0] = row;
+    let toml = toml::to_string(&cfg).expect("the set serializes");
+    let forged = toml.replace("preset = \"detect\"", "preset = \"from_the_future\"");
+    assert!(forged.contains("from_the_future"), "{forged}");
+
+    let read: ChartLabelsCfg = toml::from_str(&forged).expect("an unknown preset still loads");
+    assert_eq!(read.used_rows(), 1, "the row survives");
+    assert_eq!(read.rows[0].preset, None, "it just loses the name it cannot resolve");
+    assert_eq!(read.rows[0].parts[0].field, ChartLabelField::DetectMsg);
 }

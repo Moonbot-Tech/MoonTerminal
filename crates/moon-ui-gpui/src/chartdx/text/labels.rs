@@ -728,10 +728,14 @@ fn fmt_countdown(remaining_ms: i64) -> Option<String> {
 
 /// Longest detect line kept, in characters.
 ///
-/// Not a layout figure — the chart truncates by WIDTH — but a bound on what is shaped at all: a
-/// core is free to send a paragraph, and the text pass would measure every glyph of it before
-/// deciding it does not fit.
-const DETECT_MSG_MAX: usize = 96;
+/// Not a layout figure — the chart lays this caption out by WIDTH, and wraps it — but a bound on
+/// what is shaped at all: a core is free to send a paragraph, and the text pass would measure every
+/// glyph of it before deciding what fits.
+///
+/// The feed's own bound rather than a second literal: this caption WRAPS, so cutting it at one
+/// line's worth would throw away exactly what the second and third lines exist to show, and there
+/// is nothing left to cut below what the ring already keeps.
+const DETECT_MSG_MAX: usize = moon_core::feed::DETECT_MSG_KEEP;
 
 /// A detect line without the `(strategy <NAME>)` the core ends every one of them with.
 ///

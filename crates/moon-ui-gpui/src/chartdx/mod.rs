@@ -762,6 +762,13 @@ struct RenderState {
     /// handed a different string reshapes it. A caption that appears and disappears — the scale
     /// badge, the comparison delta — would otherwise reshape its neighbours for free.
     caption_runs: Vec<GpuCanvasTextRun>,
+    /// Lines of the PROSE captions on the pane being drawn, wrapped once and then measured and
+    /// drawn from here.
+    ///
+    /// The caption pass measures a line, then measures it again to centre it, then again to draw
+    /// it — which is free for a figure and is not free for a sentence that has to be broken on
+    /// word boundaries first. Cleared per pane; an `Item` holds its index.
+    caption_wraps: Vec<Vec<(String, f32)>>,
     /// Effective caption configuration, mirrored from `ChartDataState` so the text pass can read it
     /// without borrowing the data state during a frame.
     ///

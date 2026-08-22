@@ -60,8 +60,29 @@ pub const ARB_PART_BASE: usize = ROW_NAME_PART + 1;
 pub const PREFIX_PART_BASE: usize = ARB_PART_BASE + super::arb_view::ARB_MAX_ROWS;
 
 /// Retained text runs reserved per row: one per part, one for the row's printed name, the
-/// arbitrage column's own range, and a prefix run mirroring each of them.
-pub const ROW_RUN_STRIDE: usize = PREFIX_PART_BASE * 2;
+/// arbitrage column's own range, a prefix run mirroring each of them, and the continuation lines
+/// of the one caption in the row that may wrap.
+pub const ROW_RUN_STRIDE: usize = WRAP_PART_BASE + (LABEL_WRAP_LINES - 1);
+
+/// How many lines a caption that WRAPS may take, its first line included.
+///
+/// Only prose wraps — see [`ChartLabelField::wraps`] — and only this far: a detect line is worth
+/// two or three lines of the plot's width, and a caption that could take ten would push whatever
+/// the module prints under it off the pane.
+pub const LABEL_WRAP_LINES: usize = 3;
+
+/// First run slot of the continuation lines a wrapped caption draws.
+///
+/// A retained text run is addressed by `row * ROW_RUN_STRIDE + part`, so a second line of the same
+/// caption needs a part of its own or it would overwrite the first. Continuation `k` (counted from
+/// one) takes `WRAP_PART_BASE + k - 1`.
+///
+/// Per ROW rather than per caption, because a retained run is some three kilobytes and the pool is
+/// kept dense to its highest index: a slot per caption would reserve sixteen of them per row, on
+/// every pane, to serve the one caption that is prose. The cost of that choice is the rule the
+/// drawing pass enforces — only the FIRST prose caption of a module wraps, and a second one is cut
+/// as it was before.
+pub const WRAP_PART_BASE: usize = PREFIX_PART_BASE * 2;
 
 /// Run index — and part index — of a row's printed NAME.
 ///
@@ -707,7 +728,7 @@ impl Default for ChartLabelsCfg {
     /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
     /// Not a designer's guess: this is the developer's own Main tab, transcribed from its
-    /// `charts.json` entry on 2026-08-21 — five modules, each placed and spaced by hand. Nothing
+    /// `charts.json` entry on 2026-08-22 — seven modules, each placed and spaced by hand. Nothing
     /// prints their names (`show_name` is off); they only name the rows in the settings popup.
     ///
     /// Named through [`ChartLabelRow::preset`] rather than by a literal, so the popup speaks the
@@ -755,6 +776,7 @@ impl Default for ChartLabelsCfg {
         orders.push_part(ChartLabelField::OpenPnlMoney);
         orders.push_part(ChartLabelField::OpenPnlPct);
         orders.push_part(ChartLabelField::Exposure);
+        orders.push_part(ChartLabelField::SessionPnl);
         cfg.rows[3] = orders;
 
         // Funding under it, spaced off that line; the countdown prints bare, with no prefix.
@@ -765,6 +787,28 @@ impl Default for ChartLabelsCfg {
         funding.push_part(ChartLabelField::FundingIn);
         funding.parts[1].style.caption = Some(false);
         cfg.rows[4] = funding;
+
+        // The venue roster down the plot's left edge, spaced off the funding line above it. Only a
+        // spread worth acting on is coloured; below half a percent the column would be a wall of
+        // green and red with nothing to find in it.
+        let mut arbitrage = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        arbitrage.preset = Some(LabelPreset::Arbitrage);
+        arbitrage.flow = LabelFlow::Column;
+        arbitrage.gap = 8;
+        arbitrage.push_part(ChartLabelField::ArbColumn);
+        arbitrage.parts[0].style.color = Some(LabelColor::BySign);
+        arbitrage.parts[0].style.color_min_pct = Some(0.5);
+        cfg.rows[5] = arbitrage;
+
+        // What fired, and what is trading: centred over the plot, where a line of the core's own
+        // prose has the width to be read.
+        let mut detect = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Center);
+        detect.preset = Some(LabelPreset::Detect);
+        detect.flow = LabelFlow::Column;
+        detect.push_part(ChartLabelField::DetectStrategy);
+        detect.push_part(ChartLabelField::DetectMsg);
+        detect.push_part(ChartLabelField::OrderStrategy);
+        cfg.rows[6] = detect;
 
         cfg
     }
