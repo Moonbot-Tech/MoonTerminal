@@ -46,6 +46,15 @@ pub(crate) struct DetectItem {
     kind: u8,
     /// Source-strategy direction from `DetectRow.is_short`, used for the badge outline.
     is_short: bool,
+    /// `DetectRow.strat_name`: the strategy that fired this detect, empty when none did. Frozen
+    /// with the card rather than resolved while rendering, like every other field here: the
+    /// strategy can be renamed or deleted during the card's KeepAlert, and the card states what
+    /// fired it, not what that strategy is called now.
+    strat_name: String,
+    /// `DetectRow.is_alert`: whether a drawn chart object fired this, not a strategy. The only
+    /// case that legitimately has no [`Self::strat_name`], so the strategy field names it instead
+    /// of leaving a hole.
+    is_alert: bool,
     /// `DetectRow.add_to_chart`: the chart tab this detect also opens, `0` for none. Retained so
     /// that turning `show_add_to_chart` off hides these cards at once instead of leaving them for
     /// the rest of their `KeepAlert`.
@@ -339,6 +348,8 @@ impl DetectsPanel {
                         .to_string();
                     it.kind = det.kind;
                     it.is_short = det.is_short;
+                    it.strat_name = det.strat_name.clone();
+                    it.is_alert = det.is_alert;
                     it.add_to_chart = det.add_to_chart;
                     // Refresh the snapshot and TTL in place when the same core and market fire again.
                     it.bars = snap.bars;
@@ -365,6 +376,8 @@ impl DetectsPanel {
                         color,
                         kind: det.kind,
                         is_short: det.is_short,
+                        strat_name: det.strat_name.clone(),
+                        is_alert: det.is_alert,
                         add_to_chart: det.add_to_chart,
                         born_ms: det.time_ms,
                         ttl_ms: ttl,
@@ -573,7 +586,7 @@ impl Render for DetectsPanel {
         // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
         // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
-        for (i, it) in self.items.iter().enumerate().rev().filter(|(_, item)| {
+        for it in self.items.iter().rev().filter(|item| {
             detection_core_visible(item.core, &visible_cores)
                 && detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)
         }) {
@@ -581,7 +594,11 @@ impl Render for DetectsPanel {
             let (core, market) = (it.core, it.market.clone());
             let market_rmb = it.market.clone();
             let card = cards::card(it, secs, &cfg, &theme, &badges, p, is_light, cx)
-                .id(SharedString::from(format!("det-{i}")))
+                // Keyed by what the card IS, not by where it currently sits: ingest keeps one card
+                // per core and market, while the position shifts under it whenever the queue drops
+                // its oldest card or a replay re-sorts it. A positional id hands the element state
+                // — a card's open tooltip among it — to whichever detect inherits that slot.
+                .id(SharedString::from(format!("det-{}-{}", it.core, it.market)))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open(core, market.clone(), cx);

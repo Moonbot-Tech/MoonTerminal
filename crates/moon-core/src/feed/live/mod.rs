@@ -31,8 +31,8 @@ use moonproto::{
 
 use super::assets::{build_assets, build_transfer_assets};
 use super::strategies::{
-    alert_params, build_schema_model, fmt_field, schema_default_fields, strat_db_dump,
-    strat_kind_name,
+    alert_params, build_schema_model, detect_strat_name, fmt_field, schema_default_fields,
+    strat_db_dump, strat_display_name, strat_kind_name,
 };
 use super::{
     ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, CoreStartupStatus, DetectRow, ExchangeId,
@@ -1125,15 +1125,21 @@ pub(super) fn run(
                         let params = strat
                             .map(|st| alert_params(st, detect_schema))
                             .unwrap_or_default();
-                        crate::detect_diag::line(&format!(
-                            "[feed] detect market={} strat_id={} strat_found={} sound_alert={} sound={:?} is_alert={}",
-                            d.market_name,
-                            d.strategy_id,
-                            strat.is_some(),
-                            params.sound_alert,
-                            params.sound_name,
-                            d.is_alert_fire(),
-                        ));
+                        // Empty ONLY when no strategy produced this — an alert firing. An unnamed
+                        // strategy still names itself by id, so neither the card nor the chart
+                        // caption has to guess which of the two it is looking at.
+                        let strat_name = detect_strat_name(strat);
+                        if crate::detect_diag::enabled() {
+                            crate::detect_diag::line(&format!(
+                                "[feed] detect market={} strat_id={} strat_found={} strat_name={strat_name:?} sound_alert={} sound={:?} is_alert={}",
+                                d.market_name,
+                                d.strategy_id,
+                                strat.is_some(),
+                                params.sound_alert,
+                                params.sound_name,
+                                d.is_alert_fire(),
+                            ));
+                        }
                         detect_seq += 1;
                         detects.push(DetectRow {
                             seq: detect_seq,
@@ -1158,10 +1164,7 @@ pub(super) fn run(
                                 .chars()
                                 .take(crate::feed::DETECT_MSG_KEEP)
                                 .collect(),
-                            strat_name: strat
-                                .and_then(|st| st.strategy_name())
-                                .unwrap_or_default()
-                                .to_string(),
+                            strat_name,
                         });
                     }
                     // The core committed a checkbox delta. Published as its own message because the
@@ -1450,11 +1453,7 @@ pub(super) fn run(
                     let strategies: Vec<StrategyRow> = strats
                         .snapshots()
                         .map(|s| {
-                            let name = s
-                                .strategy_name()
-                                .filter(|n| !n.is_empty())
-                                .map(str::to_string)
-                                .unwrap_or_else(|| format!("strat {}", s.strategy_id));
+                            let name = strat_display_name(s);
                             let fields = s
                                 .fields
                                 .iter()

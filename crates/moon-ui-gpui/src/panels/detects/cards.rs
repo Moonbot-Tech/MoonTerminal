@@ -12,6 +12,8 @@ use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex,
 };
 
+use rust_i18n::t;
+
 use moon_core::config::{
     BadgesConfig, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
     DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, detect_slot_count,
@@ -164,12 +166,98 @@ pub(super) fn rail_layers(color: u32, rail_w: f32, grad_w: f32, card_w: f32, cx:
 
 /// Return the nominal width of a medium card's chart zone.
 fn medium_zone_w(scfg: &DetectSizeCfg, cx: &App) -> f32 {
-    design::ui_value(cx, (f32::from(scfg.w) * MEDIUM_CHART_FRAC).max(30.0)).round()
+    design::ui_value(cx, medium_zone_base(scfg)).round()
 }
+
+/// Return the unscaled width of a medium card's chart zone, which [`medium_zone_w`] scales.
+///
+/// Field budgets are computed in unscaled pixels because they are handed to `design::ui_px` later,
+/// so the zone they subtract has to be unscaled too.
+fn medium_zone_base(scfg: &DetectSizeCfg) -> f32 {
+    (f32::from(scfg.w) * MEDIUM_CHART_FRAC).max(30.0)
+}
+
+/// Narrowest a free-text field is ever squeezed to, in unscaled pixels.
+///
+/// Below this a name is all ellipsis and says nothing; overflowing the card by a few pixels on the
+/// smallest configurable size is the better of the two failures.
+const NAME_MIN_W: f32 = 24.0;
+
+/// Return whether a field's width follows its content instead of being a few characters wide.
+///
+/// Only the strategy name does: everything else on a card is a coin token, a countdown, a signed
+/// percentage, or a short badge. Width budgets are split between these and nothing else.
+fn grows(field: DetectField) -> bool {
+    matches!(field, DetectField::Strategy)
+}
+
+/// Return how wide free text may be in an area that holds TWO clusters side by side.
+///
+/// A row, a band, and a chart overlay each carry a left and a right cluster, so growable text takes
+/// half and leaves the rest to its opposite number instead of pushing it past the card's clipped
+/// edge.
+fn split_name_w(area_w: f32) -> f32 {
+    (area_w * 0.5).max(NAME_MIN_W)
+}
+
+/// Return that budget for one side of an area, given whether the opposite side draws anything.
+///
+/// A row with nothing configured on its right has no opposite number to leave room for, and the
+/// name may run the whole width — the case where a card looks half empty while its one long field
+/// is cut.
+pub(super) fn side_name_w(area_w: f32, opposite_draws: bool) -> f32 {
+    if opposite_draws {
+        split_name_w(area_w)
+    } else {
+        area_w.max(NAME_MIN_W)
+    }
+}
+
+/// Return the growable-text budget for ONE side column of a medium card.
+///
+/// What the two columns share is the card minus its rail, the paddings and gaps the layout applies,
+/// and — only when one is drawn — the chart zone between them: a card with its chart turned off has
+/// that width free, and text is what there is to spend it on.
+pub(super) fn medium_col_name_w(scfg: &DetectSizeCfg) -> f32 {
+    let zone_base = if scfg.chart == DetectChart::None {
+        0.0
+    } else {
+        medium_zone_base(scfg)
+    };
+    ((inner_w(scfg, MEDIUM_PAD_L, MEDIUM_PAD_R) - 2.0 * MEDIUM_GAP - zone_base)
+        * COLUMN_NAME_SHARE)
+        .max(NAME_MIN_W)
+}
+
+/// Share of a medium card's side-column area that growable text may take.
+///
+/// Not a half, unlike the rows above: the opposite column holds a delta, a badge, or a core name —
+/// seven characters at the very most — so splitting this area down the middle spends most of a card
+/// on white space and cuts the one field that had something to say. The remaining quarter covers
+/// what the other column actually needs.
+const COLUMN_NAME_SHARE: f32 = 0.75;
 
 /// Return the left content padding required to clear the rail plus a small gap.
 fn pad_l(scfg: &DetectSizeCfg, base: f32, cx: &App) -> Pixels {
     design::ui_px(cx, base + f32::from(scfg.rail_w_clamped()))
+}
+
+// Content insets each layout applies, named because the text budgets below subtract exactly these:
+// a padding changed in one of the two places and not the other would size a name against space the
+// card no longer has.
+const MINI_PAD_L: f32 = 7.0;
+const MINI_PAD_R: f32 = 6.0;
+const MEDIUM_PAD_L: f32 = 8.0;
+const MEDIUM_PAD_R: f32 = 6.0;
+/// Gap between a medium card's left column, chart zone, and right column.
+const MEDIUM_GAP: f32 = 6.0;
+const LARGE_PAD: f32 = 8.0;
+/// Gap between the left and right cluster of a large card's band.
+const LARGE_GAP: f32 = 6.0;
+
+/// Return the unscaled width a card leaves for content once its rail and paddings are taken.
+fn inner_w(scfg: &DetectSizeCfg, pad_left: f32, pad_right: f32) -> f32 {
+    f32::from(scfg.w) - pad_left - pad_right - f32::from(scfg.rail_w_clamped())
 }
 
 // --- Field chips use the shared MoonText, MoonBadge, and delta styles. ---
@@ -263,6 +351,83 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
     chip
 }
 
+/// Return the text the strategy field prints, or `None` when the card has nothing to name.
+///
+/// Split from the renderer because it is the only decision here and it is testable without a
+/// window. An alert firing has no strategy BY DESIGN — a drawn chart object triggered it — so it
+/// says so rather than leaving a hole where the user configured a field. Nothing else reaches a
+/// card empty: `DetectRow.strat_name` names an unnamed strategy by id, and a detect whose snapshot
+/// has not arrived carries no `sound_alert` either, so the feed drops it before it becomes a card.
+pub(super) fn strategy_chip_text<'a>(
+    strat_name: &'a str,
+    is_alert: bool,
+    alert_label: &'a str,
+) -> Option<&'a str> {
+    match strat_name.trim() {
+        "" if is_alert => Some(alert_label),
+        "" => None,
+        name => Some(name),
+    }
+}
+
+/// Build the strategy-name chip, bounded to `name_w` with the full name left on a tooltip.
+///
+/// The layout engine does the cutting: `max_w` plus `truncate` ellipsises against the real glyphs,
+/// which is both exact and free, where measuring here would shape the string per character on
+/// every frame. The tooltip is attached only to a name long enough to be at risk, because it adds
+/// a hitbox and three window mouse listeners that every mouse move then walks — with up to 48
+/// cards on screen, a tooltip on every short name would be new work on the input hot path for
+/// nothing.
+///
+/// The element id is fixed within a card, whose own id is unique per core and market. Two slots
+/// configured to the SAME field would share one hover state and mostly cancel each other's
+/// tooltip; that is the degenerate case of naming one thing twice on one card, and it costs only
+/// the tooltip.
+fn strategy_chip(it: &DetectItem, name_w: f32, p: MoonPalette, cx: &App) -> Option<AnyElement> {
+    // The alert label is only ever the answer for a card no strategy named, so it is looked up only
+    // then: this runs for every card on every repaint.
+    let alert = it
+        .strat_name
+        .trim()
+        .is_empty()
+        .then(|| t!("detects.field.strategy_alert"));
+    let full = strategy_chip_text(
+        &it.strat_name,
+        it.is_alert,
+        alert.as_deref().unwrap_or_default(),
+    )?;
+    let max_w = design::ui_px(cx, name_w);
+    // One glyph measured, multiplied by the count — the rows are monospace, so the product is exact
+    // for ASCII and close enough elsewhere for what it decides. Both sides are final screen pixels,
+    // which is the point of comparing them: the budget is card geometry and follows the UI scale
+    // while the text follows the Font slider, so a name outgrows its area exactly where the two
+    // scales diverge.
+    let at_risk = design::mono_caption_text_width(cx, "0", 400.0) * full.chars().count() as f32
+        > f32::from(max_w);
+    // The text is a direct child rather than a `MoonText`: an ellipsis needs the string in the
+    // element that bounds it — a nested widget keeps its own automatic minimum width and is cut off
+    // square instead. Tone, size, and face still come from the theme sources `soft` reads.
+    let chip = div()
+        .max_w(max_w)
+        .min_w_0()
+        .truncate()
+        .font_family(design::mono())
+        .text_size(design::t_caption(cx))
+        .line_height(design::line_px(cx, 11.0))
+        .text_color(rgb(p.text_soft))
+        .child(full.to_string());
+    // Only a name at risk of being cut carries a tooltip, and only then does the chip need an id:
+    // a tooltip adds a hitbox plus window mouse listeners that every mouse move walks, and there
+    // can be 48 cards on screen.
+    Some(if at_risk {
+        chip.id("det-strat")
+            .tooltip(crate::panels::common::text_tooltip(full.to_string()))
+            .into_any_element()
+    } else {
+        chip.into_any_element()
+    })
+}
+
 /// Build one configured slot field.
 ///
 /// Args:
@@ -271,6 +436,7 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
 ///     it: Detection snapshot supplying field values.
 ///     secs: Rounded detection age in seconds.
 ///     coin_px: Available coin-label width.
+///     name_w: Unscaled width a free-text field may take in the area this chip is laid out in.
 ///     decimals: Percentage precision selected for the card.
 ///     badges: Detection-type badge configuration.
 ///     p: Active Moon palette.
@@ -278,7 +444,8 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
 ///     cx: Application context used for scaled dimensions.
 ///
 /// Returns:
-///     Rendered field, or `None` for an empty field, blank exchange, or disabled type badge.
+///     Rendered field, or `None` for an empty field, blank exchange, unnamed strategy, or disabled
+///     type badge.
 #[allow(clippy::too_many_arguments)]
 fn chip(
     field: DetectField,
@@ -286,6 +453,7 @@ fn chip(
     it: &DetectItem,
     secs: u32,
     coin_px: f32,
+    name_w: f32,
     decimals: usize,
     badges: &BadgesConfig,
     p: MoonPalette,
@@ -320,6 +488,7 @@ fn chip(
                 .render()
                 .into_any_element()
         }
+        DetectField::Strategy => strategy_chip(it, name_w, p, cx)?,
     };
     // Give non-delta chart overlays the same design backing used for readable overlay chips.
     if over && !matches!(field, DetectField::Delta24h | DetectField::Delta1h) {
@@ -340,21 +509,29 @@ fn chip(
 /// Return `None` when every slot is empty or filtered out.
 #[allow(clippy::too_many_arguments)]
 fn cluster<'a>(
-    slots: impl Iterator<Item = &'a DetectSlot>,
+    slots: impl Iterator<Item = &'a DetectSlot> + Clone,
     over: bool,
     it: &DetectItem,
     secs: u32,
     coin_px: f32,
+    name_w: f32,
     decimals: usize,
     badges: &BadgesConfig,
     p: MoonPalette,
     is_light: bool,
     cx: &App,
 ) -> Option<Div> {
+    // Split between the fields that GROW with their content, not between every chip here: a coin
+    // token, a countdown, and a badge are a handful of characters each and take what they need, so
+    // charging the name half the area for standing next to one is what left it cut with the card
+    // half empty. Two growable fields in one cluster still halve it, because then they really do
+    // compete.
+    let share = (name_w / slots.clone().filter(|s| grows(s.field)).count().max(1) as f32)
+        .max(NAME_MIN_W);
     let chips: Vec<AnyElement> = slots
         .filter_map(|s| {
             chip(
-                s.field, over, it, secs, coin_px, decimals, badges, p, is_light, cx,
+                s.field, over, it, secs, coin_px, share, decimals, badges, p, is_light, cx,
             )
         })
         .collect();
@@ -561,13 +738,26 @@ fn mini_layout(
 ) -> Div {
     let n = detect_slot_count(DETECT_SIZE_MINI);
     let slots = &scfg.slots[..n];
+    // A row spans the card minus the rail and the paddings applied at the bottom of this function.
+    let row_area = inner_w(scfg, MINI_PAD_L, MINI_PAD_R);
     let row = |range: std::ops::Range<usize>| {
+        // Each side leaves room for the other only if the other has something to draw.
+        let draws = |right: bool| {
+            slots[range.clone()]
+                .iter()
+                .any(|s| s.right == right && s.field != DetectField::None)
+        };
+        let (l_name_w, r_name_w) = (
+            side_name_w(row_area, draws(true)),
+            side_name_w(row_area, draws(false)),
+        );
         let l = cluster(
             slots[range.clone()].iter().filter(|s| !s.right),
             false,
             it,
             secs,
             12.0,
+            l_name_w,
             decimals,
             badges,
             p,
@@ -580,6 +770,7 @@ fn mini_layout(
             it,
             secs,
             12.0,
+            r_name_w,
             decimals,
             badges,
             p,
@@ -595,8 +786,8 @@ fn mini_layout(
     };
     v_flex()
         .size_full()
-        .pl(pad_l(scfg, 7.0, cx))
-        .pr(design::ui_px(cx, 6.0))
+        .pl(pad_l(scfg, MINI_PAD_L, cx))
+        .pr(design::ui_px(cx, MINI_PAD_R))
         .py(design::ui_px(cx, 4.0))
         .justify_between()
         .child(row(0..2))
@@ -619,6 +810,10 @@ fn medium_layout(
     let n = detect_slot_count(DETECT_SIZE_MEDIUM);
     let slots = &scfg.slots[..n];
     let half = n / 2;
+    let chart_on = scfg.chart != DetectChart::None;
+    let col_name_w = medium_col_name_w(scfg);
+    // Overlay corners sit inside the zone instead, two to a row.
+    let over_name_w = split_name_w(if chart_on { medium_zone_base(scfg) } else { 0.0 });
     // Each side column takes its top row from the first three slots and bottom row from the rest.
     let column = |right: bool| -> Div {
         let top = cluster(
@@ -629,6 +824,7 @@ fn medium_layout(
             it,
             secs,
             13.0,
+            col_name_w,
             decimals,
             badges,
             p,
@@ -643,6 +839,7 @@ fn medium_layout(
             it,
             secs,
             13.0,
+            col_name_w,
             decimals,
             badges,
             p,
@@ -675,6 +872,7 @@ fn medium_layout(
             it,
             secs,
             13.0,
+            over_name_w,
             decimals,
             badges,
             p,
@@ -695,7 +893,6 @@ fn medium_layout(
         Some(host.child(c))
     };
 
-    let chart_on = scfg.chart != DetectChart::None;
     let mid = if chart_on {
         // The zone takes the space between columns. Stretch the vector across its full width;
         // otherwise the fixed box hugs the left content and is clipped on the right. Keep the
@@ -724,10 +921,10 @@ fn medium_layout(
 
     h_flex()
         .size_full()
-        .pl(pad_l(scfg, 8.0, cx))
-        .pr(design::ui_px(cx, 6.0))
+        .pl(pad_l(scfg, MEDIUM_PAD_L, cx))
+        .pr(design::ui_px(cx, MEDIUM_PAD_R))
         .items_stretch()
-        .gap(design::ui_px(cx, 6.0))
+        .gap(design::ui_px(cx, MEDIUM_GAP))
         .child(column(false))
         .child(mid)
         .child(column(true))
@@ -748,8 +945,25 @@ fn large_layout(
 ) -> Div {
     let n = detect_slot_count(DETECT_SIZE_LARGE);
     let slots = &scfg.slots[..n];
+    // Bands and the chart zone are the same width here — the zone spans the full inner card — so
+    // one area serves both, shared by each area's left and right cluster.
+    let band_area = inner_w(scfg, LARGE_PAD, LARGE_PAD) - LARGE_GAP;
+    // Whether the opposite edge of a band or of an overlay row draws anything: an edge alone in its
+    // row has no one to leave room for and keeps the whole width.
+    let draws = |over: bool, below: bool, right: bool| {
+        slots.iter().any(|s| {
+            eff_over(scfg, s) == over
+                && s.below == below
+                && s.right == right
+                && s.field != DetectField::None
+        })
+    };
     // Build each non-overlay band above or below the chart with clusters at both edges.
     let band = |below: bool| -> Div {
+        let (l_name_w, r_name_w) = (
+            side_name_w(band_area, draws(false, below, true)),
+            side_name_w(band_area, draws(false, below, false)),
+        );
         let l = cluster(
             slots
                 .iter()
@@ -758,6 +972,7 @@ fn large_layout(
             it,
             secs,
             14.0,
+            l_name_w,
             decimals,
             badges,
             p,
@@ -772,6 +987,7 @@ fn large_layout(
             it,
             secs,
             14.0,
+            r_name_w,
             decimals,
             badges,
             p,
@@ -784,12 +1000,13 @@ fn large_layout(
             .h(design::ui_px(cx, BAND_H))
             .justify_between()
             .items_center()
-            .gap(design::ui_px(cx, 6.0))
+            .gap(design::ui_px(cx, LARGE_GAP))
             .children(l)
             .children(r)
     };
     // Build each chart-overlay corner from its above/below and left/right flags.
     let corner = |below: bool, right: bool| -> Option<Div> {
+        let name_w = side_name_w(band_area, draws(true, below, !right));
         let c = cluster(
             slots
                 .iter()
@@ -798,6 +1015,7 @@ fn large_layout(
             it,
             secs,
             14.0,
+            name_w,
             decimals,
             badges,
             p,
@@ -846,8 +1064,8 @@ fn large_layout(
 
     v_flex()
         .size_full()
-        .pl(pad_l(scfg, 8.0, cx))
-        .pr(design::ui_px(cx, 8.0))
+        .pl(pad_l(scfg, LARGE_PAD, cx))
+        .pr(design::ui_px(cx, LARGE_PAD))
         .py(design::ui_px(cx, 6.0))
         .child(band(false))
         .child(mid)

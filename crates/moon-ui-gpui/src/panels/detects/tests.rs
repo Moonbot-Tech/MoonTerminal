@@ -1,5 +1,6 @@
 //! Regression tests for detection presentation scoping.
 
+use super::cards::{self, strategy_chip_text};
 use super::{detect_expired, detection_core_visible, detection_route_visible};
 
 /// Body of `DetectsPanel::ingest`, the subject of the source-shape assertions below. Its closing
@@ -176,4 +177,61 @@ fn stale_detect_navigation_is_rejected_before_card_removal() {
             "{method} removes a stale card before authority"
         );
     }
+}
+
+/// The strategy chip names the firer, and an alert firing names ITSELF rather than leaving the
+/// slot the user configured empty.
+///
+/// Mutation: make the empty arm return the alert label unconditionally. The third case reddens —
+/// a detect whose card exists but whose strategy did not name it would then be mislabelled an
+/// alert. `DetectRow.strat_name` already substitutes `strat <id>` for an unnamed strategy, so an
+/// empty name reaching here means no strategy at all.
+#[test]
+fn strategy_chip_names_the_firer_or_the_alert() {
+    let alert = "Алерт";
+    assert_eq!(
+        strategy_chip_text("EMA_scalp", false, alert),
+        Some("EMA_scalp")
+    );
+    assert_eq!(strategy_chip_text("", true, alert), Some(alert));
+    assert_eq!(strategy_chip_text("", false, alert), None);
+    // A strategy named with blanks alone names nothing; an alert still says what it is.
+    assert_eq!(strategy_chip_text("   ", false, alert), None);
+    assert_eq!(strategy_chip_text("   ", true, alert), Some(alert));
+    // Surrounding blanks never reach the card as leading indentation.
+    assert_eq!(strategy_chip_text("  Waves  ", false, alert), Some("Waves"));
+    // A named strategy is itself even on an alert firing: both can be true at once.
+    assert_eq!(strategy_chip_text("Waves", true, alert), Some("Waves"));
+}
+
+/// Turning a card's chart off must hand its width to the text, and a lone edge must not reserve
+/// space for a neighbour that is not there.
+///
+/// Mutation: subtract the chart zone unconditionally in `medium_col_name_w`. The first assertion
+/// reddens — that is the version that cut names to a third of a card standing half empty.
+#[test]
+fn name_budget_follows_the_space_a_card_actually_has() {
+    let mut cfg = moon_core::config::DetectSizeCfg {
+        w: 210,
+        chart: moon_core::config::DetectChart::Candles,
+        ..Default::default()
+    };
+    let with_chart = cards::medium_col_name_w(&cfg);
+    cfg.chart = moon_core::config::DetectChart::None;
+    let without_chart = cards::medium_col_name_w(&cfg);
+    assert!(
+        without_chart > with_chart * 1.5,
+        "a chart-less card must spend the freed zone on text: {without_chart} vs {with_chart}"
+    );
+    // Roughly five more characters at the caption step is what the chart costs the name.
+    assert!(
+        with_chart > 60.0,
+        "a 210px card with a chart still owes the name a readable run, got {with_chart}"
+    );
+
+    // A cluster alone in its row keeps the whole width; one facing a neighbour splits it.
+    assert_eq!(cards::side_name_w(100.0, false), 100.0);
+    assert_eq!(cards::side_name_w(100.0, true), 50.0);
+    // Never below the floor, however narrow the card is configured.
+    assert!(cards::side_name_w(1.0, true) >= 24.0);
 }

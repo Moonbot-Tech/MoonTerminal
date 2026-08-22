@@ -53,3 +53,20 @@ fn detect_view_partial_toml_fills_defaults() {
     assert_eq!(cfg.mini, DetectViewCfg::default().mini);
     assert_eq!(cfg.medium.h, DetectViewCfg::default().medium.h);
 }
+
+/// EVERY assignable field survives the share round trip, independent of how many slots a size has.
+///
+/// The round-trip test above walks slots, not variants, so it can only ever cover as many fields
+/// as the largest size has slots — nine against ten fields today, and the gap grows with each
+/// field added. A field that fails to serialize would silently read back as `None`, emptying the
+/// slot the user configured.
+#[test]
+fn detect_view_roundtrip_preserves_every_assignable_field() {
+    for field in DetectField::ALL {
+        let mut cfg = DetectViewCfg::default();
+        cfg.large.slots[0].field = field;
+        let text = cfg.to_share_string().expect("serialize");
+        let back = DetectViewCfg::parse_share(&text).expect("parse");
+        assert_eq!(back.large.slots[0].field, field, "{field:?} lost in transit");
+    }
+}

@@ -322,11 +322,7 @@ pub(super) fn strat_db_dump(
     for (n, v) in s.fields.iter() {
         fields.insert(n.to_string(), fv_json(v));
     }
-    let name = s
-        .strategy_name()
-        .filter(|n| !n.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("strat {}", s.strategy_id));
+    let name = strat_display_name(s);
     crate::strat_db::StratDump {
         // Signed representation: the core writes an order's strategyid as a Delphi signed value.
         strategy_id: s.strategy_id as i64,
@@ -340,6 +336,68 @@ pub(super) fn strat_db_dump(
         server_ms: s.last_date as i64,
         fields,
         local_edit,
+    }
+}
+
+/// Returns the user-visible name of a strategy, or `strat <id>` when the core sent none.
+///
+/// The serializer does NOT transmit a field equal to its schema default, so an unnamed strategy
+/// arrives with no `StrategyName` at all; an explicitly emptied name arrives as `""`. Both are the
+/// same thing to a reader, so both take the identifier fallback — a strategy always has an id, and
+/// a blank label in a table or on a detect card names nothing.
+pub(super) fn strat_display_name(s: &StrategySnapshot) -> String {
+    s.strategy_name()
+        .filter(|n| !n.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| strat_id_name(s.strategy_id))
+}
+
+/// Names a strategy by the one thing it always has.
+fn strat_id_name(strategy_id: u64) -> String {
+    format!("strat {strategy_id}")
+}
+
+/// Returns the name to carry on a detect: [`strat_display_name`] on one line and bounded, or empty
+/// when NO strategy produced the detect.
+///
+/// Empty therefore never means "a strategy that nobody named" — such a strategy comes back as
+/// `strat <id>`, exactly as the Strategies window and the report database name it. It means the
+/// snapshot behind this detect is absent: an alert firing, which is a drawn chart object and has no
+/// strategy at all, or a detect that beat its core's strategy set. The two are one case for a
+/// reader, because the second carries no sound and no TTL either, so nothing but an alert becomes a
+/// card; a chart caption, which reads every row, prints nothing for both.
+///
+/// The name is core-supplied text of unbounded length that ends up in a 2000-row-per-core ring and
+/// on a chart caption, so it takes the same treatment as the detect's own line beside it: control
+/// characters become spaces — a name is drawn on ONE line, and fusing the words around a newline
+/// would rename it — invisible format characters are dropped, and the result is cut to
+/// [`crate::feed::DETECT_STRAT_NAME_KEEP`].
+pub(super) fn detect_strat_name(s: Option<&StrategySnapshot>) -> String {
+    let Some(s) = s else {
+        return String::new();
+    };
+    // Same sanitizer the venue captions use, for the same reason: a name of nothing but bidi marks
+    // must not count as a name and then draw as one. Control characters go too — this is printed on
+    // ONE line.
+    let flattened: String = s
+        .strategy_name()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !crate::venue::is_invisible_format(*c))
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    // Cut only AFTER trimming, then tidy the new tail: cutting first lets a name padded with
+    // leading blanks come back empty, which is the one answer this must never give for a strategy
+    // that exists. Anything left with nothing to show falls back to the identifier, exactly as
+    // `strat_display_name` does for the same strategy elsewhere.
+    let bounded: String = flattened
+        .trim()
+        .chars()
+        .take(crate::feed::DETECT_STRAT_NAME_KEEP)
+        .collect();
+    match bounded.trim_end() {
+        "" => strat_id_name(s.strategy_id),
+        name => name.to_string(),
     }
 }
 
