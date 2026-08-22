@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
+use gpui::prelude::FluentBuilder;
 use moon_core::util::fmt;
 use moon_ui::{MoonButtonVariant, MoonDisclosure, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
@@ -400,72 +401,125 @@ impl AssetsView {
 
         // Left column: core names with free and total USDT balances.
         let mut list = v_flex().w_full().gap_0();
-        for agg in aggs {
-            let cid = agg.id;
-            let active = selected == Some(cid);
-            let mut item = h_flex()
-                .id(SharedString::from(format!("asset-core-{cid}")))
-                .w_full()
-                .h(design::fit_h_px(cx, 24.0, 13.0, 5.0))
-                .px(design::ui_px(cx, 8.0))
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .cursor_pointer()
-                .text_color(rgb(p.text))
-                .child(div().flex_1().min_w_0().truncate().child(agg.name.clone()))
-                // Per-core trust, rendered by the module that owns the vocabulary — so a core
-                // shown as current here cannot be one the footer total counts as stale.
-                .child(super::balances::figure(Some(agg), p, cx))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let AssetsScope::Group(_) = &this.scope {
-                        if let Some(scope) = this.effective_scope(this.backend.read(cx)) {
-                            if scope.is_auto_core() {
-                                // A selected Auto core pins the wallet host to the rail.
-                                return;
-                            }
-                            if scope.is_workspace_owned() {
-                                // Auto Overview: pick a transfer host without touching the rail or
-                                // Classic's retained `selected_core`.
-                                if this.overview_wallet_pick != Some(cid) {
-                                    this.overview_wallet_pick = Some(cid);
-                                    if let Err(error) =
-                                        this.backend.read(cx).session.refresh_transfer_assets(cid)
-                                    {
-                                        log::warn!("assets refresh failed for core {cid}: {error}");
-                                        window.push_notification(
-                                            MoonNotification::error(error.to_string()),
-                                            cx,
-                                        );
-                                    }
-                                    let backend = this.backend.clone();
-                                    this.rebuild_cache(backend.read(cx));
-                                    cx.notify();
+        let venues = self.backend.read(cx).session.core_venues();
+        let sections = crate::core_order::exchange_sections(
+            aggs.iter()
+                .enumerate()
+                .map(|(index, agg)| (index, venues.get(&agg.id))),
+        );
+        for (venue, members) in sections {
+            let label = crate::controls::venue_section_label(venue);
+            let logo = self
+                .exchange_logos_ready
+                .then_some(venue)
+                .flatten()
+                .and_then(|venue| venue.brand())
+                .and_then(crate::media::exchange_logos::exchange_logo);
+            let heading_id = SharedString::from(match venue {
+                Some(venue) => format!("asset-exchange-{}-{}", venue.id.code, venue.id.dex),
+                None => "asset-exchange-unknown".to_string(),
+            });
+            list = list.child(
+                h_flex()
+                    .id(heading_id)
+                    .w_full()
+                    .h(design::fit_h_px(cx, 23.0, 14.0, 4.5))
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .px(design::ui_px(cx, 8.0))
+                    .bg(design::moon_alpha(p.panel_high, 0.72))
+                    .border_b_1()
+                    .border_color(rgb(p.border_soft))
+                    .text_size(design::t_caption(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(p.text_muted))
+                    .when_some(logo, |row, logo| {
+                        row.child(
+                            img(logo)
+                                .flex_none()
+                                .w(design::ui_px(cx, 13.0))
+                                .h(design::ui_px(cx, 13.0))
+                                .rounded(design::ui_px(cx, 2.0)),
+                        )
+                    })
+                    .child(div().min_w_0().truncate().child(label)),
+            );
+            for index in members {
+                let agg = &aggs[index];
+                let cid = agg.id;
+                let active = selected == Some(cid);
+                let core_name = agg.name.clone();
+                let mut item = h_flex()
+                    .id(SharedString::from(format!("asset-core-{cid}")))
+                    .w_full()
+                    .h(design::fit_h_px(cx, 24.0, 13.0, 5.0))
+                    .px(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .cursor_pointer()
+                    .text_color(rgb(p.text))
+                    .child(div().flex_1().min_w_0().truncate().child(core_name))
+                    // Per-core trust, rendered by the module that owns the vocabulary — so a core
+                    // shown as current here cannot be one the footer total counts as stale.
+                    .child(super::balances::figure(Some(agg), p, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let AssetsScope::Group(_) = &this.scope {
+                            if let Some(scope) = this.effective_scope(this.backend.read(cx)) {
+                                if scope.is_auto_core() {
+                                    // A selected Auto core pins the wallet host to the rail.
+                                    return;
                                 }
-                                return;
+                                if scope.is_workspace_owned() {
+                                    // Auto Overview: pick a transfer host without touching the rail or
+                                    // Classic's retained `selected_core`.
+                                    if this.overview_wallet_pick != Some(cid) {
+                                        this.overview_wallet_pick = Some(cid);
+                                        if let Err(error) = this
+                                            .backend
+                                            .read(cx)
+                                            .session
+                                            .refresh_transfer_assets(cid)
+                                        {
+                                            log::warn!(
+                                                "assets refresh failed for core {cid}: {error}"
+                                            );
+                                            window.push_notification(
+                                                MoonNotification::error(error.to_string()),
+                                                cx,
+                                            );
+                                        }
+                                        let backend = this.backend.clone();
+                                        this.rebuild_cache(backend.read(cx));
+                                        cx.notify();
+                                    }
+                                    return;
+                                }
                             }
                         }
-                    }
-                    if this.selected_core != Some(cid) {
-                        this.selected_core = Some(cid);
-                        if let Err(error) =
-                            this.backend.read(cx).session.refresh_transfer_assets(cid)
-                        {
-                            log::warn!("assets refresh failed for core {cid}: {error}");
-                            window
-                                .push_notification(MoonNotification::error(error.to_string()), cx);
+                        if this.selected_core != Some(cid) {
+                            this.selected_core = Some(cid);
+                            if let Err(error) =
+                                this.backend.read(cx).session.refresh_transfer_assets(cid)
+                            {
+                                log::warn!("assets refresh failed for core {cid}: {error}");
+                                window.push_notification(
+                                    MoonNotification::error(error.to_string()),
+                                    cx,
+                                );
+                            }
+                            let backend = this.backend.clone();
+                            this.rebuild_cache(backend.read(cx));
+                            cx.notify();
                         }
-                        let backend = this.backend.clone();
-                        this.rebuild_cache(backend.read(cx));
-                        cx.notify();
-                    }
-                }));
-            if active {
-                item = item.bg(rgb(p.panel)).text_color(rgb(p.blue));
-            } else {
-                item = item.hover(|s| s.bg(rgb(p.shell_high)));
+                    }));
+                if active {
+                    item = item.bg(rgb(p.panel)).text_color(rgb(p.blue));
+                } else {
+                    item = item.hover(|s| s.bg(rgb(p.shell_high)));
+                }
+                list = list.child(item);
             }
-            list = list.child(item);
         }
 
         // Style the left container like the wallet columns, including the same `shell_high` header,
@@ -484,8 +538,10 @@ impl AssetsView {
         // shift all three neighbours every time a core connected.
         let left = v_flex()
             .w(px(420.0))
+            .min_w(px(240.0))
             .h_full()
-            .flex_none()
+            .flex_grow_0()
+            .flex_shrink_1()
             .border_r_1()
             .border_color(rgb(p.border))
             .child(

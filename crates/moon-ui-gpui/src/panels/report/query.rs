@@ -309,11 +309,12 @@ impl ReportPanel {
         // pair is that one minute rather than an empty range.
         let date_to = pto.or_else(|| self.to_query.map(date_range::inclusive_end));
         let backend = self.backend.read(cx);
-        let strategy_name_mask = self
-            .workspace_scope(backend)
-            .is_some_and(|scope| scope.is_auto_core())
-            .then(|| self.strategy_name_mask.trim().to_string())
-            .unwrap_or_default();
+        let strategy_name_mask =
+            if super::strategy_name_mask_enabled(self.workspace_scope(backend).as_ref()) {
+                self.strategy_name_mask.trim().to_string()
+            } else {
+                String::new()
+            };
         ReportFilter {
             core_uids: self.effective_core_ids(backend),
             date_from,

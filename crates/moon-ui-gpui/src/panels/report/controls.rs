@@ -405,16 +405,15 @@ impl ReportPanel {
             .into_any_element()
     }
 
-    /// Render the separate AutoCore-only strategy-name mask field.
+    /// Render the separate Auto-workspace strategy-name mask field.
     ///
     /// Args:
     ///     cx: Panel context used to resolve workspace scope, width, and localized tooltip.
     ///
     /// Returns:
-    ///     A retained MoonUI input for AutoCore, otherwise no element.
+    ///     A retained MoonUI input for Auto Overview or AutoCore, otherwise no element.
     pub(super) fn strategy_name_mask_field(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        self.workspace_scope(self.backend.read(cx))
-            .is_some_and(|scope| scope.is_auto_core())
+        super::strategy_name_mask_enabled(self.workspace_scope(self.backend.read(cx)).as_ref())
             .then(|| {
                 div()
                     .id("rep-strategy-mask-tip")

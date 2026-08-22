@@ -19,8 +19,8 @@
 //! and demands each one appear below. The guarantee it rests on is that every field is listed HERE,
 //! in one function, rather than sampled across the call site.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -140,6 +140,7 @@ pub(crate) fn data_sig(
 
     let mut h = DefaultHasher::new();
     view.prefs.group_by_venue.hash(&mut h);
+    view.exchange_logos_ready.hash(&mut h);
     view.filter.search.hash(&mut h);
     view.filter.kind.hash(&mut h);
     view.filter.dir.hash(&mut h);

@@ -894,9 +894,9 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     );
 }
 
-/// Auto Report must keep its strategy-name mask scope-safe and its wrapping toolbar semantic.
+/// Auto Report must keep its strategy-name mask workspace-safe and its wrapping toolbar semantic.
 ///
-/// Plausible breakages: rendering or applying the retained mask in Classic/Overview; dropping it
+/// Plausible breakages: hiding the retained mask in Overview or applying it in Classic; dropping it
 /// from persistence or stale-query identity; restoring the shared fixed core-trigger width; using
 /// DB history before the live group name; or placing free dividers between wrapping controls so a
 /// separator can wrap alone. The binary view has no importable library target, so this contract
@@ -904,6 +904,7 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
 #[test]
 fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
     let render = read_src("panels/report/render.rs");
+    let report_mod = read_src("panels/report/mod.rs");
     let controls = read_src("panels/report/controls.rs");
     let query = read_src("panels/report/query.rs");
     let state = read_src("panels/report/state.rs");
@@ -911,14 +912,14 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
 
     let mask_field = braced_body(&controls, "pub(super) fn strategy_name_mask_field(");
     for needle in [
-        ".is_some_and(|scope| scope.is_auto_core())",
+        "super::strategy_name_mask_enabled(",
         "MoonInput::new(\"rep-strategy-mask\")",
         ".state(&self.strategy_name_mask_input)",
         "report.filter.strategy_mask_tip",
     ] {
         assert!(
             mask_field.contains(needle),
-            "the separate AutoCore mask field must retain {needle:?}"
+            "the separate Auto-workspace mask field must retain {needle:?}"
         );
     }
 
@@ -938,10 +939,15 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
 
     let filter = braced_body(&query, "pub(super) fn filter(");
     assert!(
-        filter.contains(".is_some_and(|scope| scope.is_auto_core())")
+        filter.contains("super::strategy_name_mask_enabled(")
             && filter.contains("strategy_name_mask,")
             && filter.contains("self.strategy_name_mask.trim().to_string()"),
-        "only AutoCore may copy the retained mask into the shared ReportFilter"
+        "both Auto scopes, but no Classic host, may copy the retained mask into ReportFilter"
+    );
+    let eligibility = braced_body(&report_mod, "fn strategy_name_mask_enabled(");
+    assert!(
+        eligibility.contains("EffectiveCoreScope::is_workspace_owned"),
+        "one shared workspace-owned predicate must keep Auto Overview and AutoCore aligned"
     );
     let catalog = braced_body(&query, "fn strategy_catalog_scope(");
     assert!(
@@ -998,7 +1004,6 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
             && persist.contains("show_open: self.show_open,"),
         "every Report filter write must pass the complete named filter set, including active positions"
     );
-    let report_mod = read_src("panels/report/mod.rs");
     let persist_helper = braced_body(&report_mod, "pub(super) fn next_prefs_for_period_pick(");
     assert!(
         persist_helper.contains("prefs.strategy_name_mask = Some(live.strategy_name_mask.clone())")

@@ -1,7 +1,7 @@
-//! Right-click menu of a strategy row: the one destructive action the Analytics table offers,
-//! plus the gate deciding whether it can run at all.
+//! Right-click menu of a strategy row: report-only cleanup and full strategy purge, plus the gate
+//! deciding whether each action can run.
 //!
-//! MoonUI's Root owns the open menu (`open_moon_context_menu`), as it does for the strategies
+//! MoonUI's Root owns the open menu (`open_fitted_moon_context_menu`), as it does for the strategies
 //! tree and the report row.
 
 use gpui::{Context, Pixels, Point, Window};
@@ -9,6 +9,7 @@ use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowE
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
+use super::super::super::purge::{PurgeMode, PurgeTarget};
 use super::super::parse_strat_key;
 
 /// Whether a strategy row may be purged, and why not when it may not.
@@ -56,18 +57,21 @@ impl PurgeGate {
 /// the decision can be unit-tested without a window, a backend, or a core session.
 ///
 /// `alive` is the aggregate's liveness marker (0 deleted, 1 disabled, 2 enabled). `None` means no
-/// strategy database is attached, which says nothing about the core — `live` decides that.
+/// strategy database is attached, which says nothing about core readiness or current placement.
 ///
-/// Refusals are resolved in this order: invalid target, manual strategy, deleted strategy,
-/// disabled report replication, offline or missing strategy, then workspace membership. Asking
-/// `in_workspace` last makes an offline core outside the group report the actionable connection
-/// state first and keeps every refusal reason and its precedence in one place.
+/// Refusals are resolved in this order: invalid target, manual strategy, a deleted strategy for a
+/// complete purge, disabled report replication, offline core, a missing live strategy for a
+/// complete purge, then workspace membership. Asking `in_workspace` last makes an offline core
+/// outside the group report the actionable connection state first and keeps every refusal reason
+/// and its precedence in one place.
 ///
 /// Args:
 ///     key: Strategy row key in `strategyid@core_uid` form.
 ///     alive: Liveness marker carried by the row's aggregate.
+///     mode: Report-only cleanup or the complete strategy purge.
 ///     replicates: Whether that core replicates its report (`ServerConfig.feed.reports`).
-///     live: Whether that core is connected AND still carries this strategy id.
+///     ready: Whether that core can receive and confirm commands.
+///     carries: Whether the connected core still carries this strategy id.
 ///     in_workspace: Whether the focused Auto group holds write authority over that core.
 ///
 /// Returns:
@@ -75,8 +79,10 @@ impl PurgeGate {
 pub(in crate::analytics) fn purge_gate(
     key: &str,
     alive: Option<i64>,
+    mode: PurgeMode,
     replicates: impl Fn(u64) -> bool,
-    live: impl Fn(u64, u64) -> bool,
+    ready: impl Fn(u64) -> bool,
+    carries: impl Fn(u64, u64) -> bool,
     in_workspace: impl Fn(u64) -> bool,
 ) -> PurgeGate {
     let Some((strategy_id, Some(core_uid))) = parse_strat_key(key) else {
@@ -86,14 +92,17 @@ pub(in crate::analytics) fn purge_gate(
     if strategy_id == 0 {
         return PurgeGate::Manual;
     }
-    if alive == Some(0) {
+    if mode == PurgeMode::Whole && alive == Some(0) {
         return PurgeGate::AlreadyDeleted;
     }
     if !replicates(core_uid) {
         return PurgeGate::NoReportFeed;
     }
     let sid = strategy_id as u64;
-    if !live(core_uid, sid) {
+    if !ready(core_uid) {
+        return PurgeGate::Offline;
+    }
+    if mode == PurgeMode::Whole && !carries(core_uid, sid) {
         return PurgeGate::Offline;
     }
     if !in_workspace(core_uid) {
@@ -102,8 +111,10 @@ pub(in crate::analytics) fn purge_gate(
     PurgeGate::Allowed { core_uid, sid }
 }
 
-/// Menu width: the label is a whole sentence, so the strategies tree's 190 would wrap it.
-const MENU_W: f32 = 340.0;
+/// Minimum fitted width preserving the menu's existing footprint for short translations.
+const MENU_MIN_W: f32 = 340.0;
+/// Maximum fitted width before an anomalously long disabled reason truncates inside the viewport.
+const MENU_MAX_W: f32 = 560.0;
 
 impl AnalyticsView {
     /// Classify a row using live backend state and the current action authority.
@@ -111,6 +122,7 @@ impl AnalyticsView {
     /// Args:
     ///     key: Strategy row key in `strategyid@core_uid` form.
     ///     alive: Strategy liveness marker from the row aggregate.
+    ///     mode: Report-only cleanup or the complete strategy purge.
     ///     cx: Application context used to read live core and workspace state.
     ///
     /// Returns:
@@ -119,6 +131,7 @@ impl AnalyticsView {
         &self,
         key: &str,
         alive: Option<i64>,
+        mode: PurgeMode,
         cx: &gpui::App,
     ) -> PurgeGate {
         let backend = self.backend.read(cx);
@@ -126,6 +139,7 @@ impl AnalyticsView {
         purge_gate(
             key,
             alive,
+            mode,
             |core_uid| {
                 // `ServerConfig.id == uid` since schema v11, so the row's core_uid indexes config
                 // directly. An unknown core replicates nothing we could wait on.
@@ -136,14 +150,22 @@ impl AnalyticsView {
                     .find(|server| server.id == core_uid)
                     .is_some_and(|server| server.feed.reports)
             },
-            |core_uid, sid| {
+            |core_uid| {
                 // `CoreStore` keeps the pre-outage strategy snapshot across a disconnect, so
-                // "the store knows this strategy" alone would leave the action enabled on a core
-                // that cannot receive a single one of the three command types.
-                backend.session.store().core(core_uid).is_some_and(|core| {
-                    core.status == moon_core::feed::ConnStatus::Ready
-                        && core.strategies.iter().any(|strategy| strategy.id == sid)
-                })
+                // readiness is checked separately from strategy presence: report-only cleanup
+                // remains valid after the strategy itself has disappeared.
+                backend
+                    .session
+                    .store()
+                    .core(core_uid)
+                    .is_some_and(|core| core.status == moon_core::feed::ConnStatus::Ready)
+            },
+            |core_uid, sid| {
+                backend
+                    .session
+                    .store()
+                    .core(core_uid)
+                    .is_some_and(|core| core.strategies.iter().any(|strategy| strategy.id == sid))
             },
             // Classic holds no group, so it authorizes every core.
             |core_uid| action_cores.is_none_or(|cores| cores.contains(&core_uid)),
@@ -177,8 +199,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let gate = self.strategy_purge_gate(&key, alive, cx);
+        let gate = self.strategy_purge_gate(&key, alive, PurgeMode::Whole, cx);
         let label = t!("analytics.purge.menu").to_string();
+        let (whole_name, whole_core_name) = (name.clone(), core_name.clone());
         let item = match gate {
             PurgeGate::Allowed { core_uid, sid } => {
                 let view = cx.entity();
@@ -186,14 +209,11 @@ impl AnalyticsView {
                     .tone(MoonTone::Danger)
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
-                        let (name, core_name) = (name.clone(), core_name.clone());
+                        let (name, core_name) = (whole_name.clone(), whole_core_name.clone());
                         view.update(app, |this, cx| {
                             this.open_purge_dialog(
-                                core_uid,
-                                sid,
-                                name,
-                                core_name,
-                                period_trades,
+                                PurgeMode::Whole,
+                                PurgeTarget::new(core_uid, sid, name, core_name, period_trades),
                                 window,
                                 cx,
                             );
@@ -210,10 +230,48 @@ impl AnalyticsView {
                     .disabled(true)
             }
         };
+        let rows_gate = self.strategy_purge_gate(&key, alive, PurgeMode::RowsOnly, cx);
+        let rows_label = t!("analytics.purge.rows.menu").to_string();
+        let rows_item = match rows_gate {
+            PurgeGate::Allowed { core_uid, sid } => {
+                let view = cx.entity();
+                MoonMenuItem::with_key("an-purge-report-rows", rows_label)
+                    .tone(MoonTone::Danger)
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        let (name, core_name) = (name.clone(), core_name.clone());
+                        view.update(app, |this, cx| {
+                            this.open_purge_dialog(
+                                PurgeMode::RowsOnly,
+                                PurgeTarget::new(core_uid, sid, name, core_name, period_trades),
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+            }
+            refused => {
+                let reason = refused
+                    .reason_key()
+                    .unwrap_or("analytics.purge.gate_offline");
+                MoonMenuItem::with_key(
+                    "an-purge-report-rows",
+                    format!("{rows_label} — {}", t!(reason)),
+                )
+                .disabled(true)
+            }
+        };
         // No `cx.notify()`: the menu is Root-owned and repaints itself, while a notify here would
         // rebuild the whole Analytics tree — this entity has none of the stacked repaint throttles
         // the dock panels sit behind.
-        window.open_moon_context_menu(cx, "an-strat-row-menu", pos, vec![item], MENU_W);
+        window.open_fitted_moon_context_menu(
+            cx,
+            "an-strat-row-menu",
+            pos,
+            vec![rows_item, MoonMenuItem::separator(), item],
+            MENU_MIN_W,
+            MENU_MAX_W,
+        );
     }
 }
 

@@ -1,5 +1,5 @@
-//! "Delete the strategy and its trades from the report": the confirmation dialog, its ordered
-//! core-confirmed strategy sequence, and the optional empty-folder request that follows it.
+//! Strategy report cleanup: the exact-snapshot rows-only mode and the complete strategy purge with
+//! its ordered core-confirmed sequence and optional empty-folder request.
 //!
 //! # Why this is a sequence and not a command batch
 //!
@@ -60,6 +60,96 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// More than one batch is allowed because trades keep closing into a strategy that is still live,
 /// while the final bound prevents an endlessly busy strategy from looping forever.
 const PURGE_PASSES: usize = 3;
+
+/// Scope of one Analytics strategy-row deletion command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::analytics) enum PurgeMode {
+    /// Hide only the exact report rows counted for confirmation.
+    RowsOnly,
+    /// Hide all rows, disable and delete the strategy, then clean an empty folder.
+    Whole,
+}
+
+impl PurgeMode {
+    /// Progress steps visible for this operation.
+    fn steps(self) -> &'static [PurgeStep] {
+        match self {
+            Self::RowsOnly => &[PurgeStep::Rows],
+            Self::Whole => &PurgeStep::ORDER,
+        }
+    }
+
+    /// Confirmation-dialog title key.
+    fn title_key(self) -> &'static str {
+        match self {
+            Self::RowsOnly => "analytics.purge.rows.title",
+            Self::Whole => "analytics.purge.title",
+        }
+    }
+
+    /// Confirmation explanation key.
+    fn steps_key(self) -> &'static str {
+        match self {
+            Self::RowsOnly => "analytics.purge.rows.steps",
+            Self::Whole => "analytics.purge.steps",
+        }
+    }
+
+    /// Empty-count summary key.
+    fn no_rows_key(self) -> &'static str {
+        match self {
+            Self::RowsOnly => "analytics.purge.rows.no_rows",
+            Self::Whole => "analytics.purge.no_rows",
+        }
+    }
+
+    /// Success message key.
+    fn done_key(self) -> &'static str {
+        match self {
+            Self::RowsOnly => "analytics.purge.rows.done",
+            Self::Whole => "analytics.purge.done",
+        }
+    }
+
+    /// Locale key explaining a send or confirmation failure in this operation's scope.
+    fn failure_key(self, fail: PurgeFail) -> &'static str {
+        match (self, fail) {
+            (Self::RowsOnly, PurgeFail::Send) => "analytics.purge.rows.send_failed",
+            (Self::RowsOnly, PurgeFail::Confirm) => "analytics.purge.rows.timeout",
+            (_, PurgeFail::Send) => "analytics.purge.send_failed",
+            (_, PurgeFail::Confirm) => "analytics.purge.timeout",
+            (_, PurgeFail::CoreLost) => "analytics.purge.core_lost",
+        }
+    }
+}
+
+/// Stable strategy-row identity and captions captured when its context-menu action is chosen.
+pub(in crate::analytics) struct PurgeTarget {
+    core_uid: u64,
+    sid: u64,
+    name: String,
+    core_name: String,
+    period_trades: i64,
+}
+
+impl PurgeTarget {
+    /// Capture one row without making the confirmation re-resolve mutable live labels.
+    pub(in crate::analytics) fn new(
+        core_uid: u64,
+        sid: u64,
+        name: String,
+        core_name: String,
+        period_trades: i64,
+    ) -> Self {
+        Self {
+            core_uid,
+            sid,
+            name,
+            core_name,
+            period_trades,
+        }
+    }
+}
 
 /// Return whether a purge target remains inside the current Analytics workspace.
 ///
@@ -151,12 +241,13 @@ pub(super) enum PurgeState {
     Failed { step: PurgeStep, fail: PurgeFail },
 }
 
-/// One open "delete the strategy and its trades" operation.
+/// One open report-row cleanup or complete strategy-purge operation.
 pub(super) struct PurgeOp {
     /// Identity of THIS operation. A completion belonging to a dialog the user already closed and
     /// reopened must not publish into the new one, and a bare `is_some()` check cannot tell them
     /// apart.
     seq: u64,
+    mode: PurgeMode,
     core_uid: u64,
     sid: u64,
     name: String,
@@ -171,6 +262,8 @@ pub(super) struct PurgeOp {
     /// screen when the sequence reports success, or "done" would read as "every trade is gone"
     /// while these are still in the report.
     legacy_rows: i64,
+    /// Exact addressable rows shown in the confirmation for a report-only operation.
+    rec_ids: Vec<i64>,
     state: PurgeState,
 }
 
@@ -186,10 +279,15 @@ pub(super) struct PurgeOp {
 ///
 /// Returns:
 ///     The count (or the "nothing to delete" line), then the legacy caveat when there is one.
-pub(super) fn purge_summary_lines(total: usize, period: i64, legacy: i64) -> Vec<String> {
+pub(super) fn purge_summary_lines(
+    mode: PurgeMode,
+    total: usize,
+    period: i64,
+    legacy: i64,
+) -> Vec<String> {
     let mut lines = Vec::new();
     if total == 0 {
-        lines.push(t!("analytics.purge.no_rows").to_string());
+        lines.push(t!(mode.no_rows_key()).to_string());
     } else {
         lines.push(t!("analytics.purge.counts", total = total, period = period).to_string());
     }
@@ -256,9 +354,11 @@ struct PurgeRun {
     view: WeakEntity<AnalyticsView>,
     executor: BackgroundExecutor,
     seq: u64,
+    mode: PurgeMode,
     core_uid: u64,
     sid: u64,
     key: db::ReportStrategyKey,
+    exact_rec_ids: Vec<i64>,
     reader: Option<Connection>,
 }
 
@@ -532,6 +632,24 @@ impl PurgeRun {
         Ok(())
     }
 
+    /// Hide the exact report-row snapshot shown by a report-only confirmation.
+    ///
+    /// The strategy remains active, so rows closed after confirmation deliberately survive. A
+    /// multi-pass sweep would chase new inflow and could turn a correct cleanup into a timeout.
+    async fn purge_exact_rows(&mut self, cx: &mut AsyncApp) -> Result<(), PurgeStop> {
+        let ids = std::mem::take(&mut self.exact_rec_ids);
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let sent: std::collections::HashSet<i64> = ids.iter().copied().collect();
+        let baseline = self.report_generation(cx);
+        self.send(cx, PurgeStep::Rows, |session| {
+            session.set_report_rows_deleted_ids(self.core_uid, true, ids)
+        })?;
+        self.await_rows_gone(cx, PurgeStep::Rows, &sent, baseline)
+            .await
+    }
+
     /// Wait until none of `sent` is addressable any more.
     ///
     /// The core commits the batch and echoes it back, and that echo is what clears the rows
@@ -626,6 +744,9 @@ impl PurgeRun {
     /// The whole ordered sequence.
     async fn run(&mut self, cx: &mut AsyncApp) -> Result<(), PurgeStop> {
         self.open_step(cx, PurgeStep::Rows)?;
+        if self.mode == PurgeMode::RowsOnly {
+            return self.purge_exact_rows(cx).await;
+        }
         self.purge_rows(cx, PurgeStep::Rows).await?;
 
         self.open_step(cx, PurgeStep::Disable)?;
@@ -733,33 +854,36 @@ impl AnalyticsView {
     /// Open the confirmation for one strategy row and start counting its trades.
     ///
     /// Args:
-    ///     core_uid: Core the strategy belongs to.
-    ///     sid: Live strategy id.
-    ///     name: Display name already resolved by the row.
-    ///     core_name: Core label already resolved by the row.
-    ///     period_trades: Trades the row counts for the selected period.
+    ///     mode: Report-only cleanup or the complete strategy purge.
+    ///     target: Stable strategy identity and row captions captured by the context menu.
     ///     window: Analytics owner window.
     ///     cx: Analytics context.
     pub(in crate::analytics) fn open_purge_dialog(
         &mut self,
-        core_uid: u64,
-        sid: u64,
-        name: String,
-        core_name: String,
-        period_trades: i64,
+        mode: PurgeMode,
+        target: PurgeTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let PurgeTarget {
+            core_uid,
+            sid,
+            name,
+            core_name,
+            period_trades,
+        } = target;
         self.purge_seq = self.purge_seq.wrapping_add(1);
         let seq = self.purge_seq;
         self.strat_purge = Some(PurgeOp {
             seq,
+            mode,
             core_uid,
             sid,
             name,
             core_name,
             period_trades,
             legacy_rows: 0,
+            rec_ids: Vec::new(),
             state: PurgeState::Counting,
         });
         self.purge_dialog(window, cx);
@@ -779,8 +903,9 @@ impl AnalyticsView {
                     op.state = match rows {
                         Ok(rows) => {
                             op.legacy_rows = rows.legacy_rows;
+                            op.rec_ids = rows.rec_ids;
                             PurgeState::Ready {
-                                total: rows.rec_ids.len(),
+                                total: op.rec_ids.len(),
                             }
                         }
                         // A read failure must never render as "0 trades": the user would confirm a
@@ -799,6 +924,11 @@ impl AnalyticsView {
     /// they had when the dialog opened.
     fn purge_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity();
+        let title = self
+            .strat_purge
+            .as_ref()
+            .map(|op| t!(op.mode.title_key()).to_string())
+            .unwrap_or_default();
         window.open_unique_moon_dialog(
             "an-strategy-purge-dialog",
             cx,
@@ -822,7 +952,7 @@ impl AnalyticsView {
                             .py_2()
                             .border_b_1()
                             .border_color(moon(p.border))
-                            .child(t!("analytics.purge.title").to_string()),
+                            .child(title.clone()),
                     )
                     .on_cancel(move |_, _, cx| {
                         cancel_view.update(cx, |this, cx| this.close_purge(cx));
@@ -853,7 +983,8 @@ impl AnalyticsView {
         else {
             return;
         };
-        let (seq, core_uid, sid) = (op.seq, op.core_uid, op.sid);
+        let (seq, core_uid, sid, mode, exact_rec_ids) =
+            (op.seq, op.core_uid, op.sid, op.mode, op.rec_ids.clone());
         let workspace = self
             .workspace_scope
             .as_ref()
@@ -880,12 +1011,14 @@ impl AnalyticsView {
                 view: view.clone(),
                 executor,
                 seq,
+                mode,
                 core_uid,
                 sid,
                 key: db::ReportStrategyKey {
                     core_uid,
                     strategy_id: sid as i64,
                 },
+                exact_rec_ids,
                 reader: None,
             };
             let outcome = run.run(cx).await;
@@ -895,9 +1028,9 @@ impl AnalyticsView {
                     match outcome {
                         Ok(()) => {
                             this.publish_purge(seq, cx, |op| op.state = PurgeState::Done);
-                            // The row is built from trades that are now hidden and a strategy that
-                            // is now gone; ask for the refresh that drops it rather than waiting
-                            // for the next periodic one.
+                            // The row aggregate changed in both modes: report rows are now hidden,
+                            // and a complete purge also removed the strategy. Refresh immediately
+                            // instead of waiting for the next periodic pass.
                             this.mark_report_data_stale();
                             this.request_report_refresh(RefreshUrgency::User, false, cx);
                         }
@@ -954,9 +1087,10 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
             body = body.child(MoonAlert::error("an-purge-count-error", msg.clone()));
         }
         PurgeState::Ready { total } => {
-            for (index, line) in purge_summary_lines(*total, op.period_trades, op.legacy_rows)
-                .into_iter()
-                .enumerate()
+            for (index, line) in
+                purge_summary_lines(op.mode, *total, op.period_trades, op.legacy_rows)
+                    .into_iter()
+                    .enumerate()
             {
                 // The legacy caveat is the only line after the count, and it is a warning.
                 let color = if index == 0 { p.text } else { p.orange };
@@ -965,25 +1099,23 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
             // Only what the operation will DO. An "it can be restored" note used to sit here and
             // was removed deliberately: the terminal offers no route back for these rows, so the
             // sentence promised the user something that does not exist.
-            for note in [t!("analytics.purge.steps").to_string()] {
-                body = body.child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(note),
-                );
-            }
+            body = body.child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .child(t!(op.mode.steps_key()).to_string()),
+            );
         }
         state @ (PurgeState::Running(_)
         | PurgeState::Done
         | PurgeState::FolderSendFailed
         | PurgeState::Failed { .. }) => {
-            body = body.child(purge_progress(state, p));
+            body = body.child(purge_progress(state, op.mode, p));
             if matches!(state, PurgeState::Done) {
                 body = body.child(
                     div()
                         .text_color(moon(p.green))
-                        .child(t!("analytics.purge.done").to_string()),
+                        .child(t!(op.mode.done_key()).to_string()),
                 );
                 // The rows the protocol could not address are still there; saying so beside the
                 // success line is what keeps "done" from reading as "every trade is gone".
@@ -995,11 +1127,7 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
                 }
             }
             if let PurgeState::Failed { step, fail } = state {
-                let key = match fail {
-                    PurgeFail::Send => "analytics.purge.send_failed",
-                    PurgeFail::Confirm => "analytics.purge.timeout",
-                    PurgeFail::CoreLost => "analytics.purge.core_lost",
-                };
+                let key = op.mode.failure_key(*fail);
                 let message = match fail {
                     PurgeFail::CoreLost => t!(key).to_string(),
                     _ => t!(key, step = t!(step.label_key())).to_string(),
@@ -1023,14 +1151,14 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
 ///
 /// Everything before the step in flight has been confirmed by the core, which is what makes it
 /// safe to tell the user those steps stand.
-fn purge_progress(state: &PurgeState, p: MoonPalette) -> AnyElement {
+fn purge_progress(state: &PurgeState, mode: PurgeMode, p: MoonPalette) -> AnyElement {
     let stopped_at = match state {
         PurgeState::Running(step) => Some((*step, false)),
         PurgeState::Failed { step, .. } => Some((*step, true)),
         _ => None,
     };
     let mut list = v_flex().w_full().gap_1();
-    for step in PurgeStep::ORDER {
+    for &step in mode.steps() {
         // Colour alone does not say WHICH step is running — the finished ones are coloured too,
         // and on a fast core the whole list can look uniformly "coloured in". The marker is the
         // part that reads at a glance; it is composed here rather than stored in the dictionary,

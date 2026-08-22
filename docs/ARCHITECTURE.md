@@ -351,9 +351,10 @@ writing; sort key and direction use one SQLite statement. Natural-width cache id
 scale, live locale, and the exact resolved font, so language or font changes cannot reuse stale
 header widths.
 
-The group-owned `AutoCore` Report retains a separate strategy-name mask beside the exact strategy
-selector. It is applied only to the current effective Auto core, combines conjunctively with exact
-keys, and uses full Unicode case-folded literal substring matching through the shared
+The group-owned Auto Report retains a separate strategy-name mask beside the exact strategy
+selector. It is applied to every core in the effective Auto scope (the complete Overview or one
+selected core), combines conjunctively with exact keys, and uses full Unicode case-folded literal
+substring matching through the shared
 `ReportFilter`, so rows,
 totals, stale-result identity, and export cannot diverge. Strategy catalog discovery clears both
 strategy predicates and therefore never self-locks under either filter. The Auto core trigger takes
