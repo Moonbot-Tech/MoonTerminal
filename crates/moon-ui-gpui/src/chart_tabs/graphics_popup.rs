@@ -24,6 +24,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting, seg_row};
+use super::popup_slot::ChartPopup;
 use crate::design;
 use crate::panels::{
     popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
@@ -551,8 +552,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
 /// persisting go through [`LayoutPopupHost::apply_tab_setting`]; each host implements its own
 /// "apply to all", exactly as [`super::candle_popup::CandlePopupHost`] does.
 pub(super) trait GraphicsPopupHost: LayoutPopupHost {
-    fn graphics_popup_open(&self) -> bool;
-    fn set_graphics_popup_open(&mut self, open: bool);
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn graphics_override(&self, cx: &App) -> Option<ChartGraphicsCfg>;
 
@@ -579,15 +578,11 @@ pub(super) trait GraphicsPopupHost: LayoutPopupHost {
 
     /// Close the popup.
     ///
-    /// The already-closed guard is load-bearing: clicking the button while the popup is open makes
-    /// `Popover` fire `on_open_change(false)` twice (outside-click handler, then the trigger
-    /// re-arming).
+    /// Ownership is checked by the slot, which is load-bearing: clicking the button while the popup
+    /// is open makes `Popover` fire `on_open_change(false)` twice (outside-click handler, then the
+    /// trigger re-arming).
     fn close_graphics_popup(&mut self, cx: &mut Context<Self>) {
-        if !self.graphics_popup_open() {
-            return;
-        }
-        self.set_graphics_popup_open(false);
-        cx.notify();
+        self.close_chart_popup(ChartPopup::Graphics, cx);
     }
 }
 
@@ -617,18 +612,14 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         .placement(MoonPopoverPlacement::BottomEnd)
         .content_width(f32::from(content_width(cx)))
         .close_on_content_click(false)
-        .open(this.graphics_popup_open())
+        .open(this.popup_shows(ChartPopup::Graphics))
         .on_open_change(move |open, _window, app| {
             open_entity.update(app, |this, cx| {
-                this.set_graphics_popup_open(open);
-                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
-                // four, so leaving it up would show it over a popup that never armed it.
-                this.apply_press_mut().open = false;
-                cx.notify();
+                this.report_chart_popup(ChartPopup::Graphics, open, cx)
             });
         })
         .trigger(trigger);
-    if !this.graphics_popup_open() {
+    if !this.popup_shows(ChartPopup::Graphics) {
         return popover;
     }
     let p = MoonPalette::active(cx);

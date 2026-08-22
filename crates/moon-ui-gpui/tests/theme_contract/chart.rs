@@ -696,6 +696,54 @@ fn the_chart_popups_write_their_settings_through_the_tab_spec() {
     }
 }
 
+/// A chart host shows ONE overlay at a time, and that has to be structural rather than remembered.
+///
+/// Both hosts used to carry a `bool` per popup, and nothing in the code kept them apart: two of the
+/// six — the labels popup, which must keep `overlay_closable(false)` because its dropdown menus
+/// paint in their own deferred layers, and the drawing-tool panel, whose dismiss layer sits under
+/// the button row — simply stayed on screen under whatever opened next. The fix is one
+/// `PopupSlot` per host, so the regression to catch is a new `..._popup_open: bool` field bringing
+/// an independent flag back.
+#[test]
+fn a_chart_host_shows_one_overlay_at_a_time() {
+    for module in [
+        "chart_tabs/mod.rs",
+        "chart_tabs/detached_host/mod.rs",
+        "chart_tabs/settings.rs",
+    ] {
+        let source = code_only(&read_src(module));
+        assert!(
+            !source.contains("_popup_open: bool"),
+            "{module}: chart overlays go through the one PopupSlot, never a flag of their own"
+        );
+    }
+    // The slot's own guarantee: opening reports what it displaced, so the caller can settle it, and
+    // hiding checks ownership so a late close report cannot shut the popup that replaced it.
+    let slot = code_only(&read_src("chart_tabs/popup_slot.rs"));
+    assert!(
+        slot.contains("self.0.replace(popup).filter(|prev| *prev != popup)"),
+        "popup_slot.rs: showing a popup must name the one it displaced"
+    );
+    assert!(
+        slot.contains("if self.0 != Some(popup)"),
+        "popup_slot.rs: hiding must be a no-op unless that popup is the one showing"
+    );
+    // Every popover on a host routes its open/close report through the slot rather than a setter of
+    // its own, which is what makes the exclusion hold for all of them at once.
+    for module in [
+        "chart_tabs/common.rs",
+        "chart_tabs/candle_popup.rs",
+        "chart_tabs/graphics_popup.rs",
+        "chart_tabs/labels_popup/mod.rs",
+    ] {
+        let source = code_only(&read_src(module));
+        assert!(
+            source.contains("report_chart_popup(ChartPopup::"),
+            "{module}: the popover must report open and close to the shared slot"
+        );
+    }
+}
+
 /// The durable trade-history query must read the PANEL's effective graphics settings, must NOT be
 /// narrowed by the trade-kind checkboxes, and must skip the round trip when both are clear.
 ///

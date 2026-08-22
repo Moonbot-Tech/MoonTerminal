@@ -3,9 +3,11 @@
 //! value ([`StackSetting`]: apply to a stack and write to a spec), spec upsert, the
 //! [`LayoutPopupHost`] trait with shared layout-popup logic (open/seed/read/commit/close plus
 //! setting application) and shared overlay/dismiss rendering, and the [`CoinPopupHost`] trait with
-//! coin-search input plumbing. Host-specific differences (the target tab/panel, Apply to all, and
-//! `is_custom`) remain in the trait implementations ([`super::settings`] /
-//! [`super::detached_host`]).
+//! coin-search input plumbing. Every overlay a host shows — the four settings popups, the drawing
+//! tool's defaults panel and the market list — is opened and closed through `LayoutPopupHost`'s one
+//! [`super::popup_slot::PopupSlot`], which is what makes them mutually exclusive. Host-specific
+//! differences (the target tab/panel, Apply to all, and `is_custom`) remain in the trait
+//! implementations ([`super::settings`] / [`super::detached_host`]).
 
 use gpui::*;
 use moon_ui::{
@@ -13,6 +15,7 @@ use moon_ui::{
     MoonSegmentedControl, v_flex,
 };
 
+use super::popup_slot::{ChartPopup, PopupSlot};
 use super::{layout_popup, stack};
 use crate::Backend;
 use crate::design;
@@ -347,8 +350,12 @@ pub(super) struct LayoutPopupSnapshot {
 /// default methods contain the SHARED popup and setting-application logic formerly duplicated.
 pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'static {
     // --- Host popup state and inputs ---
-    fn popup_open(&self) -> bool;
-    fn set_popup_open(&mut self, open: bool);
+    /// The host's ONE overlay slot, shared by every popup on its toolbar row.
+    ///
+    /// Every popup on a host goes through this, which is what makes them mutually exclusive; see
+    /// [`super::popup_slot`] for why a slot rather than a flag each.
+    fn popup_slot(&self) -> PopupSlot;
+    fn popup_slot_mut(&mut self) -> &mut PopupSlot;
     fn fit_input(&self) -> &Entity<MoonInputState>;
     fn scroll_input(&self) -> &Entity<MoonInputState>;
     fn rename_input(&self) -> &Entity<MoonInputState>;
@@ -379,6 +386,94 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>);
     /// This popup's twelve layout values as they stand right now, for the ⧉ row to perform.
     fn layout_press_values(&self, cx: &App) -> Vec<StackSetting>;
+
+    // --- The one open overlay ---
+
+    /// Whether `popup` is the overlay this host is showing.
+    fn popup_shows(&self, popup: ChartPopup) -> bool {
+        self.popup_slot().shows(popup)
+    }
+
+    /// Show `popup`, closing whichever overlay was up.
+    ///
+    /// The single entry point for OPENING anything on a chart host: pressing a toolbar button,
+    /// focusing the market field, coming back from a modal editor. Routing them all through here is
+    /// what keeps two popups from sharing the screen — nothing else on the host closes a sibling.
+    ///
+    /// Notifies even when `popup` was ALREADY the one showing, deliberately: the market list calls
+    /// this on every keystroke, and the repaint it needs is for the query behind it rather than for
+    /// the open flag. An early return here would leave the list showing matches for older text.
+    ///
+    /// Args:
+    ///     popup: The overlay to show.
+    ///     cx: Host context.
+    fn open_chart_popup(&mut self, popup: ChartPopup, cx: &mut Context<Self>) {
+        if let Some(displaced) = self.popup_slot_mut().show(popup) {
+            self.settle_closed_popup(displaced, cx);
+        }
+        // The armed ⧉ row belongs to the popup that opened it: one press is shared by all four, so
+        // leaving it up would show it over a popup that never armed it.
+        self.apply_press_mut().open = false;
+        cx.notify();
+    }
+
+    /// Hide `popup`, if it is the one showing.
+    ///
+    /// A no-op otherwise — a close report can arrive for a popup something else already replaced;
+    /// see [`PopupSlot::hide`].
+    ///
+    /// Args:
+    ///     popup: The overlay asking to be hidden.
+    ///     cx: Host context.
+    fn close_chart_popup(&mut self, popup: ChartPopup, cx: &mut Context<Self>) {
+        if !self.popup_slot_mut().hide(popup) {
+            return;
+        }
+        self.settle_closed_popup(popup, cx);
+        self.apply_press_mut().open = false;
+        cx.notify();
+    }
+
+    /// Route a popover's `on_open_change` report to the slot.
+    ///
+    /// The three settings popovers each report open and close the same way; this is that call.
+    ///
+    /// Args:
+    ///     popup: The overlay the report is about.
+    ///     open: What the popover now says its state is.
+    ///     cx: Host context.
+    fn report_chart_popup(&mut self, popup: ChartPopup, open: bool, cx: &mut Context<Self>) {
+        match open {
+            true => self.open_chart_popup(popup, cx),
+            false => self.close_chart_popup(popup, cx),
+        }
+    }
+
+    /// Show `popup` if it is not up, hide it if it is — for a button that is its own dismissal.
+    fn toggle_chart_popup(&mut self, popup: ChartPopup, cx: &mut Context<Self>) {
+        match self.popup_shows(popup) {
+            true => self.close_chart_popup(popup, cx),
+            false => self.open_chart_popup(popup, cx),
+        }
+    }
+
+    /// Settle what a popup owes as it leaves the screen.
+    ///
+    /// Only ⚙ owes anything: its layout fields are committed on the way out rather than per
+    /// keystroke, so a popup displaced by a press on a neighbouring button has to commit here —
+    /// exactly as it does when dismissed by a click on the chart. The Custom-tab NAME field is not
+    /// part of that: it commits from its own `Blur`/Enter subscription, which is gated on the ⚙
+    /// popup still being the one showing, so a name typed and never confirmed is dropped on every
+    /// close path. That predates the slot and is left as it was.
+    ///
+    /// Args:
+    ///     popup: The overlay that just stopped showing.
+    ///     cx: Host context.
+    fn settle_closed_popup(&mut self, popup: ChartPopup, cx: &mut Context<Self>) {
+        if popup == ChartPopup::Layout {
+            self.commit_layout_popup(cx);
+        }
+    }
 
     /// ARM the ⧉ press: the row that opens names which kinds of tab it reaches, and performs it
     /// with the values this popup holds AT THAT MOMENT — never a snapshot taken here.
@@ -473,23 +568,6 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             cx,
         );
     }
-
-    /// Close the popup, optionally committing the size field first.
-    ///
-    /// The already-closed guard is load-bearing, not defensive: clicking the gear while the popup is
-    /// open makes `Popover` fire `on_open_change(false)` TWICE — once from its outside-click handler
-    /// and once from the trigger re-arming — and without the guard the second one would run
-    /// `commit_layout_popup` again.
-    fn close_layout_popup(&mut self, commit: bool, cx: &mut Context<Self>) {
-        if !self.popup_open() {
-            return;
-        }
-        if commit {
-            self.commit_layout_popup(cx);
-        }
-        self.set_popup_open(false);
-        cx.notify();
-    }
 }
 
 /// ⚙ layout popup shared by both hosts: a `MoonPopover` anchored to the gear that opens it, with
@@ -525,24 +603,20 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         // Outside-click dismissal stays ON: nothing in here opens a deferred overlay of its own
         // (the segmented controls render inline), so there is no menu whose click could be mistaken
         // for an outside click. Dismissal is the ✕, a click outside, Escape, or the gear.
-        .open(this.popup_open())
+        .open(this.popup_shows(ChartPopup::Layout))
         .on_open_change(move |open, window, app| {
             open_entity.update(app, |this, cx| {
-                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
-                // four, so leaving it up would show it over a popup that never armed it.
-                this.apply_press_mut().open = false;
                 if open {
                     this.seed_layout_popup_inputs(window, cx);
-                    this.set_popup_open(true);
-                } else {
-                    // Closing COMMITS the size field, which is why this cannot just flip the flag.
-                    this.close_layout_popup(true, cx);
                 }
-                cx.notify();
+                // Closing COMMITS the size field; `settle_closed_popup` owns that, so every way out
+                // of this popup — ✕, outside click, Escape, the gear, or a press on a neighbouring
+                // button that displaces it — commits exactly once.
+                this.report_chart_popup(ChartPopup::Layout, open, cx);
             });
         })
         .trigger(trigger);
-    if !this.popup_open() {
+    if !this.popup_shows(ChartPopup::Layout) {
         return popover;
     }
     let p = MoonPalette::active(cx);
@@ -651,7 +725,9 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
             });
         },
         move |_, _w, app| {
-            close_entity.update(app, |this, cx| this.close_layout_popup(true, cx));
+            close_entity.update(app, |this, cx| {
+                this.close_chart_popup(ChartPopup::Layout, cx)
+            });
         },
     );
     // The ⧉ row rides ABOVE the popup's own content, inline: see `apply_row`.

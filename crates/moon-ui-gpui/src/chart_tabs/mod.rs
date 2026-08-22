@@ -23,6 +23,7 @@ mod ingest;
 mod labels_popup;
 mod layout_popup;
 mod main_stack;
+mod popup_slot;
 mod settings;
 mod sig;
 mod stack;
@@ -37,6 +38,7 @@ pub(crate) use add_stack::AddChartStack;
 use common::LayoutPopupHost;
 pub(crate) use common::seg_row;
 pub(crate) use main_stack::MainChartStack;
+use popup_slot::ChartPopup;
 use sig::chart_tabs_sig;
 
 use crate::persistence::chart_persist::StackLayoutMode;
@@ -329,18 +331,13 @@ pub struct ChartTabs {
     /// and restoring detached windows must happen outside `render()`.
     window_handle: AnyWindowHandle,
     focus: FocusHandle,
-    /// Whether the selected tool's settings panel is open under its toolbar button.
-    fig_style_popup_open: bool,
-    /// Anchored layout-settings popup for the active tab.
-    /// Chart text renders below the regular GPUI scene, so this popup needs no separate OS window.
-    layout_popup_open: bool,
-    /// Anchored Candles and Trades popup for global candle-display settings.
-    candle_popup_open: bool,
-    /// Anchored Chart graphics popup for the ACTIVE TAB's chart-drawing settings.
-    graphics_popup_open: bool,
-    /// Whether the chart-labels popup is open. What a module PRINTS is edited in its own
-    /// dialog, which owns its state for as long as it is up.
-    labels_popup_open: bool,
+    /// The ONE overlay this strip is showing: ⚙ layout, candles, graphics, labels, the armed
+    /// tool's defaults panel, or the market-match list.
+    ///
+    /// One slot rather than a flag each, so opening any of them closes the rest; the popups need no
+    /// separate OS window because chart text renders below the regular GPUI scene. What a labels
+    /// module PRINTS is edited in its own dialog, which owns its state for as long as it is up.
+    popup: popup_slot::PopupSlot,
     /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
     /// Scroll-mode height field.
@@ -352,8 +349,6 @@ pub struct ChartTabs {
     coin_input: Entity<MoonInputState>,
     /// Current market-input text mirrored from `coin_input` on `Change`.
     coin_query: String,
-    /// Whether the market-match dropdown is open.
-    coin_popup_open: bool,
     /// Arbitrary drawing-color picker offered at the end of the settings panel's swatch row.
     fig_color_picker: Entity<MoonColorPickerState>,
 }
@@ -565,10 +560,10 @@ impl ChartTabs {
             this.sync_auto_workspace_chart(cx);
             // The tool-settings panel belongs to an ARMED tool. Disarming — through the picker's
             // Cursor entry or a per-tool hotkey — closes it HERE, before the signature early return
-            // below, so the flag cannot survive to re-open a panel nobody asked for the next time a
+            // below, so the slot cannot survive to re-open a panel nobody asked for the next time a
             // tool is armed.
             if !backend.read(cx).fig_draw_mode {
-                this.fig_style_popup_open = false;
+                this.close_chart_popup(ChartPopup::FigStyle, cx);
             }
             let sig = chart_tabs_sig(backend.read(cx), &this.group);
             if sig == this.last_sig {
@@ -633,9 +628,8 @@ impl ChartTabs {
                     }
                     if this.coin_query != value {
                         // Clearing the text does not close the list; it falls back to suggestions.
-                        this.coin_popup_open = true;
                         this.coin_query = value;
-                        cx.notify();
+                        this.open_chart_popup(ChartPopup::Coin, cx);
                     }
                 }
             },
@@ -671,7 +665,7 @@ impl ChartTabs {
         cx.subscribe(
             &layout_fit_input,
             |this, _input, ev: &MoonInputEvent, cx| {
-                if this.layout_popup_open
+                if this.popup_shows(ChartPopup::Layout)
                     && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
                 {
                     this.commit_layout_popup(cx);
@@ -682,7 +676,7 @@ impl ChartTabs {
         cx.subscribe(
             &layout_scroll_input,
             |this, _input, ev: &MoonInputEvent, cx| {
-                if this.layout_popup_open
+                if this.popup_shows(ChartPopup::Layout)
                     && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
                 {
                     this.commit_layout_popup(cx);
@@ -695,7 +689,7 @@ impl ChartTabs {
         cx.subscribe(
             &custom_name_input,
             |this, input, ev: &MoonInputEvent, cx| {
-                if this.layout_popup_open
+                if this.popup_shows(ChartPopup::Layout)
                     && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
                 {
                     let name = input.read(cx).value().to_string();
@@ -739,17 +733,12 @@ impl ChartTabs {
             restore_pending,
             window_handle: window.window_handle(),
             focus: cx.focus_handle(),
-            fig_style_popup_open: false,
-            layout_popup_open: false,
-            candle_popup_open: false,
-            graphics_popup_open: false,
-            labels_popup_open: false,
+            popup: popup_slot::PopupSlot::default(),
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),
-            coin_popup_open: false,
             fig_color_picker,
         };
         // Read from the window being built rather than looked up later: `group_windows` is filled
@@ -793,7 +782,7 @@ impl ChartTabs {
         // reset sequenced behind the commit would leave invisible foreign markets selected and
         // counted in the popup footer.
         if prune_coin_selection_to_scope(&mut self.coin_selected, next) {
-            self.coin_popup_open = false;
+            self.close_chart_popup(ChartPopup::Coin, cx);
         }
         let current_target = self.main.read(cx).active_target(cx);
         let market_revision = next.and_then(|core| {

@@ -7,7 +7,8 @@ use std::time::Duration;
 use gpui::*;
 use rust_i18n::t;
 
-use super::common::CoinPopupHost;
+use super::common::{CoinPopupHost, LayoutPopupHost};
+use super::popup_slot::ChartPopup;
 use super::{AddChartStack, CUSTOM_NUM_BASE, ChartTabs, Tab, coin_search};
 use crate::Backend;
 use crate::persistence::chart_persist::{StackLayoutMode, StackOrientation};
@@ -85,8 +86,7 @@ impl ChartTabs {
         let group = self.group.clone();
         self.backend
             .update(cx, |b, _| b.refresh_coin_suggest(&group, bucket.as_ref()));
-        self.coin_popup_open = true;
-        cx.notify();
+        self.open_chart_popup(ChartPopup::Coin, cx);
     }
 
     /// Open the selected coin on the ACTIVE tab: Main → fullscreen chart; Add/Custom → its stack.
@@ -190,7 +190,7 @@ impl ChartTabs {
         // Clear the selection, field, and popup.
         self.coin_selected.clear();
         self.coin_query.clear();
-        self.coin_popup_open = false;
+        self.close_chart_popup(ChartPopup::Coin, cx);
         self.sync_active_scale(cx);
         self.sync_inactive_chart_visibility(cx);
         self.refresh_orderbook_gates(cx);
@@ -730,7 +730,7 @@ impl CoinPopupHost for ChartTabs {
     /// Clear the coin field and close the list after selection or an outside click.
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
-        self.coin_popup_open = false;
+        self.close_chart_popup(ChartPopup::Coin, cx);
         cx.notify();
     }
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {

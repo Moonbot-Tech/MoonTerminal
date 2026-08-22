@@ -21,6 +21,8 @@ use moon_core::figures::{FigureTool, ToolDef};
 use rust_i18n::t;
 
 use super::ChartTabs;
+use super::common::LayoutPopupHost as _;
+use super::popup_slot::ChartPopup;
 use crate::design;
 
 /// Width of the tool field, in font-scaled units. A fifth narrower than it first shipped: the
@@ -172,7 +174,7 @@ impl ChartTabs {
 
         // The settings button and, hanging under it, the shared panel for this tool's defaults.
         // Disarming the tool closes it rather than leaving it parked over the chart.
-        let open = self.fig_style_popup_open && current.is_some();
+        let open = self.popup_shows(ChartPopup::FigStyle) && current.is_some();
         let settings = div()
             .relative()
             // The dismiss layer under the cluster closes the panel on mouse-DOWN, and this button
@@ -195,8 +197,7 @@ impl ChartTabs {
                     .disabled(current.is_none())
                     .tooltip(t!("chart.fig.tool_settings").to_string())
                     .on_click(cx.listener(|this, _, _w, cx| {
-                        this.fig_style_popup_open = !this.fig_style_popup_open;
-                        cx.notify();
+                        this.toggle_chart_popup(ChartPopup::FigStyle, cx)
                     }))
                     .render(),
             )
