@@ -68,11 +68,13 @@ pub enum DetectField {
     Exchange,
     /// Exchange kind (spot/futures/…).
     ExchangeKind,
+    /// Name of the strategy that fired the detect, or the alert label when none did.
+    Strategy,
 }
 
 impl DetectField {
     /// All assignable fields (slot-dropdown order; `None` = "—").
-    pub const ALL: [DetectField; 9] = [
+    pub const ALL: [DetectField; 10] = [
         DetectField::None,
         DetectField::Coin,
         DetectField::Time,
@@ -82,6 +84,7 @@ impl DetectField {
         DetectField::Delta1h,
         DetectField::Exchange,
         DetectField::ExchangeKind,
+        DetectField::Strategy,
     ];
 }
 

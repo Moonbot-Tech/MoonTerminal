@@ -59,6 +59,7 @@ fn field_key(f: DetectField) -> &'static str {
         DetectField::Delta1h => "detects.field.d1",
         DetectField::Exchange => "detects.view.exchange",
         DetectField::ExchangeKind => "detects.view.exchange_kind",
+        DetectField::Strategy => "detects.field.strategy",
     }
 }
 

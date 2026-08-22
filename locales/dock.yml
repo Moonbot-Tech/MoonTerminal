@@ -154,6 +154,14 @@ detects.field.d1:
   ru: "Δ 1ч"
   en: "Δ 1h"
   es: "Δ 1h"
+detects.field.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+detects.field.strategy_alert:
+  ru: "Алерт"
+  en: "Alert"
+  es: "Alerta"
 detects.view.size_mini:
   ru: "Мини"
   en: "Mini"

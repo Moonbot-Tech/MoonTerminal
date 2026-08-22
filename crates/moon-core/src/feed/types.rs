@@ -305,9 +305,15 @@ pub struct DetectRow {
     /// to [`DETECT_MSG_KEEP`] on the way in: the ring holds two thousand of these per core, and a
     /// caption cannot show a paragraph anyway.
     pub msg: String,
-    /// User-assigned name of the strategy that produced it, resolved from the strategy snapshot the
-    /// same way the sound and TTL above are. Empty when no snapshot holds that id — an alert
-    /// firing without a strategy, or a snapshot that has not arrived yet.
+    /// Name of the strategy that produced it, resolved from the strategy snapshot the same way the
+    /// sound and TTL above are, and bounded to [`DETECT_STRAT_NAME_KEEP`] on one line.
+    ///
+    /// A strategy nobody named still comes back named — `strat <id>` — so EMPTY never means an
+    /// unnamed strategy. It means no snapshot backed this detect: an alert firing, which is a drawn
+    /// chart object and has no strategy at all, or a detect that arrived before its core's strategy
+    /// set. Readers treat the two alike, and can: a snapshot-less detect carries no sound and no
+    /// TTL either, so it never becomes a detect card, and the chart caption that reads every row
+    /// prints nothing for both.
     pub strat_name: String,
 }
 
@@ -317,6 +323,13 @@ pub struct DetectRow {
 /// next to what a core is free to send. The bound is here because the retained ring multiplies it:
 /// two thousand rows per core, on every core.
 pub const DETECT_MSG_KEEP: usize = 200;
+
+/// Longest strategy name retained on a detect, in characters.
+///
+/// Same reasoning as [`DETECT_MSG_KEEP`] and a quarter of it: the wire type behind a strategy name
+/// is a 16-bit-length string, the ring multiplies whatever arrives by two thousand rows per core,
+/// and a card chip shows a fraction of this much anyway.
+pub const DETECT_STRAT_NAME_KEEP: usize = 50;
 
 /// One core server-log line from `Event::ServerLog`, decoupled from moonproto.
 #[derive(Debug, Clone)]
