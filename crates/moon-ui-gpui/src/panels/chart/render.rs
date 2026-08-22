@@ -155,11 +155,18 @@ impl Render for ChartPanel {
             // colors are editable in the same way as the dark set.
             let orders = eff.orders.get(palette.is_light()).clone();
             let theme = eff.theme.get(palette.is_light()).clone();
-            // Candles use the panel's per-tab override or the global layout default.
-            let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
+            // Candles use the panel's per-tab override, or the default of the KIND of tab this
+            // panel sits on — the main chart, a torn-off window, or a comparison. Resolving the
+            // base field here instead would draw Main's default on every chart in the application
+            // and make the split invisible.
+            let candle_view = self
+                .candle_view
+                .unwrap_or_else(|| b.layout.candle_view_for(self.default_kind));
             // Chart graphics follow the same per-tab override as candles: the palette popup writes
-            // the tab's own value, and only a tab without one falls back to the global default.
-            let chart_graphics = self.chart_graphics.unwrap_or(b.layout.chart_graphics);
+            // the tab's own value, and only a tab without one falls back to its kind's default.
+            let chart_graphics = self
+                .chart_graphics
+                .unwrap_or_else(|| b.layout.chart_graphics_for(self.default_kind));
             // Captions come from the settings SIGNATURE rather than being rebuilt here: it already
             // holds this panel's effective value, sanitized, and is restamped by the same backend
             // observation and the same setters that can change it. Rebuilding it per render meant

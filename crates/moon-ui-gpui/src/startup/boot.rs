@@ -260,6 +260,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         detached_panel_windows: HashMap::new(),
         chart_repin_request: Vec::new(),
         chart_apply_all: Vec::new(),
+        chart_defaults_clear: std::collections::VecDeque::new(),
+        chart_defaults_rev: 0,
         chart_x_sync: None,
         chart_x_sync_rev: 0,
         detached_chart_windows: Vec::new(),

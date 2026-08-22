@@ -277,7 +277,10 @@ impl ChartTabs {
         // The anchor first: it is the chart the reader was already looking at, so it keeps the
         // left-hand place and the lock.
         let coins = vec![anchor.clone(), target];
-        self.create_compare_tab(label, coins, anchor, cx);
+        // NO broom: this comparison is two charts the reader named, and hiding the second one's
+        // plot behind its order book would answer with less than was asked for. The other way in —
+        // "show me this coin everywhere" — keeps it, because a dozen full charts is unreadable.
+        self.create_compare_tab(label, coins, anchor, false, cx);
     }
 
     pub(super) fn open_compare_tab(
@@ -348,18 +351,20 @@ impl ChartTabs {
             }
             out
         };
-        self.create_compare_tab(label, coins, (core, market), cx);
+        self.create_compare_tab(label, coins, (core, market), true, cx);
     }
 
-    /// Build the tab itself: a horizontal stack of `coins`, locked onto `anchor` in broom mode.
+    /// Build the tab itself: a horizontal stack of `coins`, locked onto `anchor`.
     ///
     /// Shared by both ways in — "compare this coin everywhere" and "compare these two" — because
-    /// the tab they produce is the same thing, and the difference is only which charts it holds.
+    /// the tab they produce is the same thing; the difference is which charts it holds and whether
+    /// the neighbours are broomed down to their order books.
     fn create_compare_tab(
         &mut self,
         label: String,
         coins: Vec<(CoreId, String)>,
         anchor: (CoreId, String),
+        broom: bool,
         cx: &mut Context<Self>,
     ) {
         let num = self.next_custom_num;
@@ -383,8 +388,7 @@ impl ChartTabs {
                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);
             }
             s.pin_all(c);
-            // Lock the anchor and enable broom mode so neighbors show only their order books.
-            s.restore_compare(Some(anchor.clone()), true, c);
+            s.restore_compare(Some(anchor.clone()), broom, c);
         });
         self.custom.push((num, bucket.clone(), stack.clone()));
         self.custom_labels.insert(num, label.clone());
@@ -392,7 +396,7 @@ impl ChartTabs {
         self.persist_custom(cx, num, &bucket, &coins, &label);
         self.upsert_spec(cx, num, &bucket, move |s| {
             s.compare_anchor = Some(anchor);
-            s.compare_orderbook_only = true;
+            s.compare_orderbook_only = broom;
         });
         self.watch_custom_stack(num, &bucket, &stack, cx);
         self.sync_active_scale(cx);

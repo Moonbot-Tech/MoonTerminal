@@ -9,10 +9,9 @@
 //!
 //! Like the layout and candle popups beside it, these settings are PER TAB: the target is the tab
 //! strip's active tab or the detached window's panel. The tab spec persists them to `charts.json`
-//! through `ChartTabSpec::chart_graphics`, and a tab without an override follows the global
-//! `layout.chart_graphics` default. The ⧉ button distributes this target's settings to all
-//! Add/Custom tabs and detached windows and updates that default; it includes Main only when Main is
-//! the source, exactly as the candle popup's does.
+//! through `ChartTabSpec::chart_graphics`, and a tab without an override follows the default of its
+//! KIND of tab (`chart_tabs::apply_all`). The ⧉ button opens the row that names which kinds a press
+//! addresses and stores these settings as their default.
 //!
 //! All controls are stateless: they are re-derived from the stored config on every render, which is
 //! what lets the popup live in a chart host that repaints constantly.
@@ -473,10 +472,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
             SharedString::from(format!("{id}-apply-all")),
             t!("chart.apply_all_tabs_windows").to_string(),
             move |_, _w, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    let cfg = this.graphics_cfg(cx);
-                    this.apply_graphics_all(cfg, cx);
-                });
+                entity.update(app, |this, cx| this.arm_apply_press(cx));
             },
         )
     };
@@ -559,9 +555,6 @@ pub(super) trait GraphicsPopupHost: LayoutPopupHost {
     fn set_graphics_popup_open(&mut self, open: bool);
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn graphics_override(&self, cx: &App) -> Option<ChartGraphicsCfg>;
-    /// Apply settings to all non-Main tabs and windows and update the global default. Include Main
-    /// only when the host's source is Main; Add, Custom, and detached sources leave it unchanged.
-    fn apply_graphics_all(&mut self, cfg: ChartGraphicsCfg, cx: &mut Context<Self>);
 
     /// Read the target's effective settings, NORMALIZED to what the chart actually draws.
     ///
@@ -570,9 +563,12 @@ pub(super) trait GraphicsPopupHost: LayoutPopupHost {
     /// the chart is not using — and, because a write starts from this value, would also persist
     /// the out-of-range number back untouched.
     fn graphics_cfg(&self, cx: &App) -> ChartGraphicsCfg {
+        // By KIND: a write starts from this value, so the Main default read here would be persisted
+        // as a torn-off window's own settings by its very first edit.
+        let kind = self.source_kind(cx);
         let effective = self
             .graphics_override(cx)
-            .unwrap_or(self.backend().read(cx).layout.chart_graphics);
+            .unwrap_or_else(|| self.backend().read(cx).layout.chart_graphics_for(kind));
         moon_chart::normalize_chart_graphics(effective)
     }
 
@@ -625,6 +621,9 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         .on_open_change(move |open, _window, app| {
             open_entity.update(app, |this, cx| {
                 this.set_graphics_popup_open(open);
+                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
+                // four, so leaving it up would show it over a popup that never armed it.
+                this.apply_press_mut().open = false;
                 cx.notify();
             });
         })
@@ -635,6 +634,19 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
     let p = MoonPalette::active(cx);
     let cfg = this.graphics_cfg(cx);
     let entity = cx.entity();
-    popover = popover.content(render_graphics_popup(id_prefix, entity, cfg, p, cx));
+    let row = crate::chart_tabs::apply_row::render_apply_row(
+        this,
+        id_prefix,
+        vec![StackSetting::Graphics(cfg)],
+        None,
+        p,
+        cx,
+    );
+    popover = popover.content(
+        v_flex()
+            .gap_2()
+            .children(row)
+            .child(render_graphics_popup(id_prefix, entity, cfg, p, cx)),
+    );
     popover
 }

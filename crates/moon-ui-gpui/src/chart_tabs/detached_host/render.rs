@@ -247,7 +247,7 @@ impl Render for DetachedChartHost {
                                     t!("chart.layout.tip").to_string(),
                                     popup_open,
                                 ),
-                                t!("chart.layout.apply_all_charts").to_string(),
+                                t!("chart.apply_all_tabs_windows").to_string(),
                                 cx,
                             )),
                     )

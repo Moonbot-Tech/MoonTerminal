@@ -400,6 +400,16 @@ struct Backend {
     /// each press is fully described by its value set; requests originating within `ChartTabs` are
     /// applied directly without this queue.
     chart_apply_all: Vec<chart_tabs::apply_all::ApplyAllRequest>,
+    /// The "set this as the default" presses, for EVERY group window to drop the overrides they
+    /// cleared from its own live stacks. See [`chart_tabs::apply_all::ClearDefaults`].
+    ///
+    /// A queue, not one slot: a detached window's presses are drained in a loop, so two of them can
+    /// land between one window's observations, and the first must not be lost. Each entry carries
+    /// the revision it was made at; a window applies everything newer than what it has seen.
+    chart_defaults_clear: std::collections::VecDeque<(u64, chart_tabs::apply_all::ClearDefaults)>,
+    /// Advances with each such press, including one that stored a value already in the file: a
+    /// stack in another window can still be holding an override the press is meant to drop.
+    chart_defaults_rev: u64,
     /// X-scale synchronization request from Shift+middle-click on a chart, carrying the source
     /// OS window and pixels per millisecond. The owner of that same window, either group `ChartTabs`
     /// or `DetachedChartHost`, applies and saves the scale only for charts in that window.

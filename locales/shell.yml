@@ -497,14 +497,6 @@ chart.layout.tip:
   ru: "Настройки раскладки"
   en: "Layout settings"
   es: "Ajustes de disposición"
-chart.layout.apply_all_windows:
-  ru: "Применить ко всем окнам"
-  en: "Apply to all windows"
-  es: "Aplicar a todas las ventanas"
-chart.layout.apply_all_charts:
-  ru: "Применить ко всем чартам"
-  en: "Apply to all charts"
-  es: "Aplicar a todos los gráficos"
 chart.gather_windows.tip:
   ru: "Собрать окна графиков этой группы"
   en: "Gather this group's chart windows"
@@ -594,9 +586,37 @@ chart.graphics.candle_volume_scale:
   en: "Volume scale colour"
   es: "Color de la escala de volumen"
 chart.apply_all_tabs_windows:
-  ru: "Применить ко всем вкладкам и окнам"
-  en: "Apply to all tabs and windows"
-  es: "Aplicar a todas las pestañas y ventanas"
+  ru: "Выбрать, к каким вкладкам применить"
+  en: "Choose which tabs this applies to"
+  es: "Elegir a qué pestañas se aplica"
+chart.defaults.kind.main:
+  ru: "Основные"
+  en: "Main tabs"
+  es: "Pestañas principales"
+chart.defaults.kind.addto:
+  ru: "AddToChart"
+  en: "AddToChart"
+  es: "AddToChart"
+chart.defaults.kind.compare:
+  ru: "Сравнения"
+  en: "Comparisons"
+  es: "Comparaciones"
+chart.defaults.set:
+  ru: "Сделать дефолтом"
+  en: "Make default"
+  es: "Hacer predeterminado"
+chart.defaults.apply:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"
+chart.defaults.set_hint:
+  ru: "Дефолт для выбранных видов вкладок. Их собственные настройки будут сброшены — в скобках сколько."
+  en: "Default for the ticked kinds of tab. Their own settings are cleared — the count is in brackets."
+  es: "Predeterminado para los tipos marcados. Sus ajustes propios se borran: el número va entre paréntesis."
+chart.defaults.apply_hint:
+  ru: "Записать эти значения всем вкладкам выбранных видов. У этих настроек дефолта нет."
+  en: "Write these values into every tab of the ticked kinds. These settings have no default."
+  es: "Escribir estos valores en cada pestaña de los tipos marcados. Estos ajustes no tienen predeterminado."
 chart.candles.title:
   ru: "Свечи и трейды"
   en: "Candles & trades"

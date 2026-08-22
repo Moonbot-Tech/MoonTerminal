@@ -669,6 +669,21 @@ pub struct WindowLayout {
     /// written before this key existed opens on exactly the corner it had.
     #[serde(default, deserialize_with = "de_lenient_chart_labels")]
     pub chart_labels: super::chart_labels::ChartLabelsCfg,
+    /// Defaults for tabs torn off into their own windows — empty means "follow the fields above".
+    ///
+    /// The three fields above are the MAIN kind's defaults and keep their keys, so a profile
+    /// written before the split opens exactly as it did. See [`super::chart_defaults`].
+    #[serde(
+        default,
+        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient"
+    )]
+    pub chart_defaults_addto: super::chart_defaults::ChartTabDefaults,
+    /// Defaults for tabs under the anchor lock, wherever they live. Empty means "follow Main".
+    #[serde(
+        default,
+        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient"
+    )]
+    pub chart_defaults_compare: super::chart_defaults::ChartTabDefaults,
     // The former `detect_view_by_group` moved to a separate `detects_view.toml`
     // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
     /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
@@ -1513,6 +1528,137 @@ where
 }
 
 impl WindowLayout {
+    /// The candle settings a tab of this kind opens with.
+    pub fn candle_view_for(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> crate::market::candles::CandleViewCfg {
+        self.kind_defaults(kind)
+            .and_then(|d| d.candle_view)
+            .unwrap_or(self.candle_view)
+    }
+
+    /// The chart graphics a tab of this kind opens with.
+    pub fn chart_graphics_for(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> ChartGraphicsCfg {
+        self.kind_defaults(kind)
+            .and_then(|d| d.chart_graphics)
+            .unwrap_or(self.chart_graphics)
+    }
+
+    /// The captions a tab of this kind opens with.
+    pub fn chart_labels_for(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> &super::chart_labels::ChartLabelsCfg {
+        self.kind_defaults(kind)
+            .and_then(|d| d.chart_labels.as_ref())
+            .unwrap_or(&self.chart_labels)
+    }
+
+    /// Store the candle default for one kind, reporting whether it actually moved.
+    pub fn set_candle_view_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: crate::market::candles::CandleViewCfg,
+    ) -> bool {
+        let split = self.split_defaults(|d| &mut d.candle_view, |l| l.candle_view);
+        let moved = match self.kind_defaults_mut(kind) {
+            Some(d) => std::mem::replace(&mut d.candle_view, Some(value)) != Some(value),
+            None => std::mem::replace(&mut self.candle_view, value) != value,
+        };
+        split || moved
+    }
+
+    /// Store the graphics default for one kind, reporting whether it actually moved.
+    pub fn set_chart_graphics_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: ChartGraphicsCfg,
+    ) -> bool {
+        let split = self.split_defaults(|d| &mut d.chart_graphics, |l| l.chart_graphics);
+        let moved = match self.kind_defaults_mut(kind) {
+            Some(d) => std::mem::replace(&mut d.chart_graphics, Some(value)) != Some(value),
+            None => std::mem::replace(&mut self.chart_graphics, value) != value,
+        };
+        split || moved
+    }
+
+    /// Store the caption default for one kind, reporting whether it actually moved.
+    pub fn set_chart_labels_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: super::chart_labels::ChartLabelsCfg,
+    ) -> bool {
+        let split = self.split_defaults(|d| &mut d.chart_labels, |l| l.chart_labels.clone());
+        let moved = match self.kind_defaults_mut(kind) {
+            Some(d) => d.chart_labels.replace(value.clone()) != Some(value),
+            None => std::mem::replace(&mut self.chart_labels, value.clone()) != value,
+        };
+        split || moved
+    }
+
+    /// This kind's own defaults, or `None` for Main, whose defaults are the base fields.
+    fn kind_defaults(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> Option<&super::chart_defaults::ChartTabDefaults> {
+        match kind {
+            super::chart_defaults::ChartTabKind::Main => None,
+            super::chart_defaults::ChartTabKind::AddTo => Some(&self.chart_defaults_addto),
+            super::chart_defaults::ChartTabKind::Compare => Some(&self.chart_defaults_compare),
+        }
+    }
+
+    fn kind_defaults_mut(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> Option<&mut super::chart_defaults::ChartTabDefaults> {
+        match kind {
+            super::chart_defaults::ChartTabKind::Main => None,
+            super::chart_defaults::ChartTabKind::AddTo => Some(&mut self.chart_defaults_addto),
+            super::chart_defaults::ChartTabKind::Compare => Some(&mut self.chart_defaults_compare),
+        }
+    }
+
+    /// Freeze the kinds this write is NOT addressing at what they currently show.
+    ///
+    /// Until the first press the two non-Main kinds hold nothing and follow Main, which is what a
+    /// profile that never used the feature wants. The moment one kind is given its own value that
+    /// stops being true: without this, setting the Main default would still drag the other two
+    /// along, and the reader who just separated them would watch them move together anyway.
+    ///
+    /// Per SETTING, not per kind — separating the captions must not freeze the candles as well —
+    /// and only where the value is still absent, so it can never overwrite a stored default.
+    ///
+    /// Returns whether it wrote anything, and the caller must fold that into its own "changed"
+    /// answer: a press that stores a value already in the file still SPLIT the kinds apart, and
+    /// reporting "nothing moved" would leave that split in memory only, to be lost on restart.
+    fn split_defaults<T: Clone>(
+        &mut self,
+        slot: impl Fn(&mut super::chart_defaults::ChartTabDefaults) -> &mut Option<T>,
+        base: impl Fn(&Self) -> T,
+    ) -> bool {
+        let current = base(self);
+        let mut wrote = false;
+        for kind in [
+            super::chart_defaults::ChartTabKind::AddTo,
+            super::chart_defaults::ChartTabKind::Compare,
+        ] {
+            let value = current.clone();
+            if let Some(defaults) = self.kind_defaults_mut(kind) {
+                let entry = slot(defaults);
+                if entry.is_none() {
+                    *entry = Some(value);
+                    wrote = true;
+                }
+            }
+        }
+        wrote
+    }
+
     /// Loads layout.toml. A missing file yields the default; a corrupt file is logged and yields the default.
     pub fn load() -> Self {
         super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {})

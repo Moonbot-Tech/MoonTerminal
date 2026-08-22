@@ -199,11 +199,9 @@ impl Render for ChartTabs {
             cx.entity(),
             p_strip,
         );
-        let apply_all_label = if matches!(self.active, Tab::Main) {
-            t!("chart.layout.apply_all_windows").to_string()
-        } else {
-            t!("chart.layout.apply_all_charts").to_string()
-        };
+        // One wording wherever the press is made: what it reaches is chosen in the row it opens,
+        // not by which tab happened to be active.
+        let apply_all_label = t!("chart.apply_all_tabs_windows").to_string();
         // Every button in this cluster is icon-only, and that is load-bearing rather than a style
         // preference: MoonUI's `Button` takes its SQUARE path (`size_5`, one value for width and
         // height) only when there is no label and no child. Give one a text label and it switches

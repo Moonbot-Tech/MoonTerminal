@@ -1,10 +1,8 @@
 //! The "Candles and Trades" popup configures candle and trade-zone rendering for the ACTIVE tab
 //! or detached window (the candlestick button beside ⚙; per-tab like the layout settings).
 //! The tab spec persists to charts.json through `ChartTabSpec::candle_view`; tabs without an
-//! override follow the global `layout.candle_view` default. Like the ⚙ "apply to all" action, the
-//! ⧉ button distributes settings to all Add/Custom tabs and detached windows and updates the global
-//! default. It includes Main only when Main is the source (`include_main = true`); Add, Custom, and
-//! detached-window sources preserve Main's current view.
+//! override follow their KIND's default (`chart_tabs::apply_all`). The ⧉ button opens the row that
+//! names which kinds of tab a press addresses and stores these settings as their default.
 //! All controls are stateless segments or checkboxes. Candle colors for up, down, and neutral are
 //! edited under Settings -> Interface in theme.toml and are shared by all windows.
 
@@ -313,10 +311,7 @@ fn render_candle_popup<T: CandlePopupHost>(
             SharedString::from(format!("{id}-apply-all")),
             t!("chart.apply_all_tabs_windows").to_string(),
             move |_, _w, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    let cfg = this.candle_view_current(cx);
-                    this.apply_candle_view_all(cfg, cx);
-                });
+                entity.update(app, |this, cx| this.arm_apply_press(cx));
             },
         )
     };
@@ -382,14 +377,15 @@ pub(super) trait CandlePopupHost: LayoutPopupHost {
     fn set_candle_popup_open(&mut self, open: bool);
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn candle_view_override(&self, cx: &App) -> Option<CandleViewCfg>;
-    /// Apply settings to all non-Main tabs and windows and update the global default. Include Main
-    /// only when the host's source is Main; Add, Custom, and detached sources leave it unchanged.
-    fn apply_candle_view_all(&mut self, cfg: CandleViewCfg, cx: &mut Context<Self>);
 
-    /// Return the target's effective settings: its override or the global layout default.
+    /// Return the target's effective settings: its override or its KIND's default.
+    ///
+    /// By kind, because a write STARTS from this value: resolving the Main default here would let
+    /// the first edit on a torn-off window persist Main's settings as that window's own.
     fn candle_view_current(&self, cx: &App) -> CandleViewCfg {
+        let kind = self.source_kind(cx);
         self.candle_view_override(cx)
-            .unwrap_or(self.backend().read(cx).layout.candle_view)
+            .unwrap_or_else(|| self.backend().read(cx).layout.candle_view_for(kind))
     }
 
     /// Apply settings to the target stacks and persist them in the tab spec.
@@ -440,6 +436,9 @@ pub(super) fn candle_popup_host<T: CandlePopupHost>(
         .on_open_change(move |open, _window, app| {
             open_entity.update(app, |this, cx| {
                 this.set_candle_popup_open(open);
+                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
+                // four, so leaving it up would show it over a popup that never armed it.
+                this.apply_press_mut().open = false;
                 cx.notify();
             });
         })
@@ -450,6 +449,19 @@ pub(super) fn candle_popup_host<T: CandlePopupHost>(
     let p = MoonPalette::active(cx);
     let cfg = this.candle_view_current(cx);
     let entity = cx.entity();
-    popover = popover.content(render_candle_popup(id_prefix, entity, cfg, p, cx));
+    let row = crate::chart_tabs::apply_row::render_apply_row(
+        this,
+        id_prefix,
+        vec![StackSetting::CandleView(cfg)],
+        this.source_x_ppm(cx),
+        p,
+        cx,
+    );
+    popover = popover.content(
+        v_flex()
+            .gap_2()
+            .children(row)
+            .child(render_candle_popup(id_prefix, entity, cfg, p, cx)),
+    );
     popover
 }
