@@ -215,7 +215,7 @@ jobs:
     # 10 GB Actions quota.
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: pip install -r tools/requirements.txt
