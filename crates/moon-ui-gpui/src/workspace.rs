@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use gpui::Context;
 use moon_core::config::WorkspaceMode;
+use moon_core::feed::{ConnStatus, CoreStartupStatus};
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
@@ -543,6 +544,8 @@ pub(crate) struct WorkspaceRosterInput {
     pub(crate) venue: Option<CoreVenue>,
     pub(crate) availability: WorkspaceCoreAvailability,
     pub(crate) ready: bool,
+    pub(crate) connection: Option<ConnStatus>,
+    pub(crate) startup: CoreStartupStatus,
 }
 
 /// Derived roster row rendered by the Auto workspace rail.
@@ -554,6 +557,8 @@ pub(crate) struct WorkspaceRosterRow {
     pub(crate) status: WorkspaceCoreStatus,
     pub(crate) selectable: bool,
     pub(crate) selected: bool,
+    pub(crate) connection: Option<ConnStatus>,
+    pub(crate) startup: CoreStartupStatus,
 }
 
 /// One venue section in the all-core roster.
@@ -626,6 +631,8 @@ pub(crate) fn derive_workspace_roster(
                     status,
                     selectable: input.availability.is_available(),
                     selected: input.group == current_group && selected_core == Some(input.core),
+                    connection: input.connection.clone(),
+                    startup: input.startup,
                 }
             })
             .collect();

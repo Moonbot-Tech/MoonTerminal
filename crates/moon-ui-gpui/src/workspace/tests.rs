@@ -1,7 +1,7 @@
 //! Pure regressions for workspace scope, roster, navigation, ownership, and rail presentation.
 
 use moon_core::config::WorkspaceMode;
-use moon_core::feed::ExchangeId;
+use moon_core::feed::{ConnStatus, CoreStartupStatus, ExchangeId};
 use moon_core::venue::CoreVenue;
 
 use super::{
@@ -319,6 +319,19 @@ fn hidden_owner_reconciles_once_after_config_and_window_changes() {
 /// marking them selectable routes a click into a group with no owning window.
 #[test]
 fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
+    let mut connecting = roster_input(
+        44,
+        "Connecting",
+        "beta",
+        Some(4),
+        true,
+        true,
+        true,
+        true,
+        false,
+    );
+    connecting.connection = Some(ConnStatus::Stage("connected, init".to_string()));
+    connecting.startup.current_step = Some(moon_core::feed::CoreInitStep::AuthCheck);
     let inputs = vec![
         roster_input(11, "Ready", "alpha", Some(4), true, true, true, true, true),
         roster_input(
@@ -335,17 +348,7 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
             false,
             true,
         ),
-        roster_input(
-            44,
-            "Connecting",
-            "beta",
-            Some(4),
-            true,
-            true,
-            true,
-            true,
-            false,
-        ),
+        connecting,
     ];
     let roster = derive_workspace_roster(&inputs, "alpha", Some(11));
 
@@ -387,6 +390,18 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
     assert!(!rows[0].selectable);
     assert_eq!(rows[1].status, WorkspaceCoreStatus::Ready);
     assert!(rows[1].selectable);
+    let connecting = rows
+        .iter()
+        .find(|row| row.core == 44)
+        .expect("the connecting core must remain visible");
+    assert_eq!(
+        connecting.connection,
+        Some(ConnStatus::Stage("connected, init".to_string()))
+    );
+    assert_eq!(
+        connecting.startup.current_step,
+        Some(moon_core::feed::CoreInitStep::AuthCheck)
+    );
     assert_eq!(rows[3].status, WorkspaceCoreStatus::Unavailable);
     assert!(!rows[3].selectable);
 }
@@ -489,6 +504,11 @@ fn roster_input(
     live_group_window: bool,
     ready: bool,
 ) -> WorkspaceRosterInput {
+    let connection = live_session.then_some(if ready {
+        ConnStatus::Ready
+    } else {
+        ConnStatus::Connecting
+    });
     WorkspaceRosterInput {
         core,
         name: name.to_string(),
@@ -509,6 +529,8 @@ fn roster_input(
             },
         ),
         ready,
+        connection,
+        startup: CoreStartupStatus::default(),
     }
 }
 
@@ -536,5 +558,7 @@ fn selectable_row(core: u64, group: &str) -> super::WorkspaceRosterRow {
         status: WorkspaceCoreStatus::Ready,
         selectable: true,
         selected: false,
+        connection: Some(ConnStatus::Ready),
+        startup: CoreStartupStatus::default(),
     }
 }

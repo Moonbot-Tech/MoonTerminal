@@ -6,6 +6,7 @@ use gpui::{AppContext as _, Context, EventEmitter};
 use crate::workspace::{WorkspaceCoreStatus, WorkspaceRailDensity, WorkspaceRosterRow};
 
 use moon_core::config::AUTO_WORKSPACE_RAIL_WIDTH_MIN;
+use moon_core::feed::{ConnStatus, CoreInitStep, CoreStartupState, CoreStartupStatus};
 #[cfg(feature = "debug-tools")]
 use moon_ui::DockEvent;
 use moon_ui::{DockTopologyByName, DockTopologyNode};
@@ -20,7 +21,7 @@ use super::{
     auto_only_detached_panel_names, auto_workspace_activation_fallback,
     auto_workspace_tab_is_eligible, core_rail_metrics, default_auto_workspace_topology,
     ensure_auto_topology_contains_panel, fitted_auto_rail_width, icon_workspace_summary,
-    resolved_auto_workspace_tab, workspace_status_label_visible,
+    resolved_auto_workspace_tab, workspace_core_tooltip, workspace_status_label_visible,
 };
 use crate::window::detached::DetachedSpec;
 
@@ -58,7 +59,31 @@ fn rail_row(core: u64) -> WorkspaceRosterRow {
         status: WorkspaceCoreStatus::Ready,
         selectable: true,
         selected: false,
+        connection: Some(ConnStatus::Ready),
+        startup: CoreStartupStatus::default(),
     }
+}
+
+/// Replacing the problem hover with the generic core identity line must fail: the operator would
+/// again lose the exact live stage and the transport evidence needed to explain a stuck server.
+#[test]
+fn problem_hover_keeps_connection_stage_and_complete_startup_diagnostics() {
+    let mut row = rail_row(18);
+    row.status = WorkspaceCoreStatus::Problem;
+    row.connection = Some(ConnStatus::Failed("authentication refused".to_string()));
+    row.startup = CoreStartupStatus {
+        state: CoreStartupState::Failed,
+        current_step: Some(CoreInitStep::AuthCheck),
+        completed_mask: 1,
+        path_mtu_bytes: Some(1400),
+        ..CoreStartupStatus::default()
+    };
+
+    let tooltip = workspace_core_tooltip(&row);
+
+    assert!(tooltip.contains("authentication refused"));
+    assert!(tooltip.contains("(1/8)"));
+    assert!(tooltip.contains("MTU: 1400"));
 }
 
 /// Catches making Ready rows render the same trailing label as failures in

@@ -40,6 +40,17 @@ pub(super) fn connection_presentation(status: &ConnStatus) -> ConnectionPresenta
     }
 }
 
+/// Return the localized connection label for reuse outside the Core Status panel.
+///
+/// Args:
+///     status: Latest core connection state, including any stage or failure detail.
+///
+/// Returns:
+///     The same lifecycle label rendered by the Core Status status column.
+pub(crate) fn connection_status_text(status: &ConnStatus) -> String {
+    connection_presentation(status).label
+}
+
 /// Format an optional integer percentage.
 ///
 /// Args:
