@@ -236,6 +236,11 @@ pub struct DetectViewCfg {
     pub size: u8,
     /// Decimal places for deltas (Δ24h/Δ1h), 0..=2 — ONE setting for all sizes.
     pub delta_decimals: u8,
+    /// Whether detects routed to a chart tab (`AddToChart > 0`) also appear in the feed — ONE
+    /// setting for all sizes. They are ordinary detects in every other respect: the feed still
+    /// requires `SoundAlert` or an alert firing, and the card still lives for `KeepAlert` seconds.
+    /// Off keeps the historical behavior, where a chart tab consumed them alone.
+    pub show_add_to_chart: bool,
     pub mini: DetectSizeCfg,
     pub medium: DetectSizeCfg,
     pub large: DetectSizeCfg,
@@ -246,6 +251,7 @@ impl Default for DetectViewCfg {
         Self {
             size: DETECT_SIZE_MEDIUM,
             delta_decimals: 1,
+            show_add_to_chart: false,
             mini: default_mini(),
             medium: default_medium(),
             large: default_large(),
@@ -323,6 +329,21 @@ impl DetectViewFile {
 
     pub fn set_group(&mut self, group: &str, cfg: DetectViewCfg) {
         self.groups.insert(group.to_string(), cfg);
+    }
+
+    /// Whether one group's feed shows chart-routed detects.
+    ///
+    /// Separate from [`Self::group`] because this answer is wanted on every backend notification,
+    /// while `group` copies the whole configuration and builds three size layouts for a group that
+    /// has none.
+    ///
+    /// Args:
+    ///     group: Window-group name the feed belongs to.
+    ///
+    /// Returns:
+    ///     `true` when that group asked for `AddToChart` detects; the default is `false`.
+    pub fn shows_add_to_chart(&self, group: &str) -> bool {
+        self.groups.get(group).is_some_and(|c| c.show_add_to_chart)
     }
 }
 

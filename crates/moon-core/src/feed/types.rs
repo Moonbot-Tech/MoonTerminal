@@ -274,7 +274,8 @@ pub struct DetectRow {
     pub time_ms: f64,
     /// Whether the source strategy enables a sound alert through `SoundAlert=Yes`. The UI drops a
     /// detect when both this and `is_alert` are false; drawn-object alerts may therefore render
-    /// without `sound_alert`. Detects auto-added to charts are excluded from the regular buttons.
+    /// without `sound_alert`. Detects auto-added to charts pass the same gate, and reach the
+    /// regular buttons only where the feed's `show_add_to_chart` setting asks for them.
     pub sound_alert: bool,
     /// Number of seconds to keep the button, from strategy `KeepAlert`, defaulting to 60.
     pub keep_alert_secs: u32,

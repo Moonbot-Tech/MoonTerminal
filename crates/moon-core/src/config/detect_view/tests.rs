@@ -8,6 +8,7 @@ fn detect_view_roundtrip_preserves_every_field() {
     let mut cfg = DetectViewCfg::default();
     cfg.size = DETECT_SIZE_LARGE;
     cfg.delta_decimals = 0;
+    cfg.show_add_to_chart = true;
     cfg.mini.w = 77;
     cfg.mini.h = 33;
     cfg.mini.chart = DetectChart::Line;
@@ -45,6 +46,9 @@ fn detect_view_partial_toml_fills_defaults() {
         toml::from_str("size = 2\n[medium]\nw = 150\n").expect("partial parse");
     assert_eq!(cfg.size, DETECT_SIZE_LARGE);
     assert_eq!(cfg.medium.w, 150);
+    // A file written before the setting existed keeps the historical feed: chart-routed detects
+    // stay out of it until the operator asks for them.
+    assert!(!cfg.show_add_to_chart);
     // Everything else comes from the defaults.
     assert_eq!(cfg.mini, DetectViewCfg::default().mini);
     assert_eq!(cfg.medium.h, DetectViewCfg::default().medium.h);

@@ -54,6 +54,10 @@ detects.cfg.decimals:
   ru: "Точность"
   en: "Decimals"
   es: "Decimales"
+detects.cfg.show_add_to_chart:
+  ru: "Показывать детекты AddToChart"
+  en: "Show AddToChart detects"
+  es: "Mostrar detecciones AddToChart"
 detects.cfg.frame_size:
   ru: "Размер и график"
   en: "Size & chart"
