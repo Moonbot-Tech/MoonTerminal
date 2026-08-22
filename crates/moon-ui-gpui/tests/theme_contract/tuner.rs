@@ -1183,9 +1183,26 @@ fn the_strategy_row_menu_and_dialog_go_through_moonui_root() {
     let purge = read_src("analytics/purge.rs");
 
     assert!(
-        menu.contains("window.open_moon_context_menu("),
-        "the row menu opens through MoonUI's context-menu extension"
+        menu.contains("window.open_fitted_moon_context_menu(")
+            && menu.contains("MENU_MIN_W,")
+            && menu.contains("MENU_MAX_W,"),
+        "the row menu must fit its localized actions through MoonUI's context-menu extension"
     );
+    assert!(
+        !menu.contains("window.open_moon_context_menu("),
+        "the clipped fixed-width row menu must not return"
+    );
+    for needle in [
+        "analytics.purge.rows.menu",
+        "PurgeMode::RowsOnly",
+        "MoonMenuItem::separator()",
+        "PurgeMode::Whole",
+    ] {
+        assert!(
+            menu.contains(needle),
+            "the two-action row menu must retain {needle:?}"
+        );
+    }
     assert!(
         purge.contains("window.open_unique_moon_dialog("),
         "the confirmation opens as a unique MoonUI dialog"

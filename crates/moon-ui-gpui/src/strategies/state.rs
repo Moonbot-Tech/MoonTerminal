@@ -235,6 +235,18 @@ impl StrategiesView {
             .detach();
         }
 
+        cx.spawn(async move |view, cx| {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .await;
+            cx.update(|cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.exchange_logos_ready = true;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+
         Self {
             backend,
             display_zone,
@@ -244,6 +256,7 @@ impl StrategiesView {
                 ..StrategyFilter::default()
             },
             prefs,
+            exchange_logos_ready: false,
             settings_open: false,
             workspace_cores,
             selected: None,

@@ -675,8 +675,8 @@ impl ReportPanel {
             }
         })
         .detach();
-        // The name mask is independent of the exact strategy selection. It is visible only in an
-        // AutoCore workspace, but retained here so switching through Classic does not discard it.
+        // The name mask is independent of the exact strategy selection. It is visible throughout
+        // the Auto workspace, but retained here so switching through Classic does not discard it.
         cx.subscribe(
             &strategy_name_mask_input,
             |panel, input, event: &MoonInputEvent, cx| {

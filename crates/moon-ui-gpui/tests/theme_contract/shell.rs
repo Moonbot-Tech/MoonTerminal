@@ -453,6 +453,50 @@ fn the_assets_wallets_header_caret_stays_passive() {
     );
 }
 
+/// The Assets wallet roster groups core rows by venue identity and resolves logos only after an
+/// off-thread prewarm, while every core keeps the trust-aware balance figure and click behavior.
+#[test]
+fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
+    let assets = read_src("panels/assets/mod.rs");
+    let table = read_src("panels/assets/table.rs");
+    let constructor = braced_body(&assets, "pub(super) fn new(");
+    let bottom = braced_body(&table, "pub(super) fn bottom(");
+
+    for needle in [
+        "cx.background_spawn(async { crate::media::exchange_logos::prewarm() })",
+        "this.exchange_logos_ready = true",
+        "cx.notify()",
+    ] {
+        assert!(
+            constructor.contains(needle),
+            "Assets prewarm must retain {needle:?}"
+        );
+    }
+    for needle in [
+        "crate::core_order::exchange_sections(",
+        "crate::controls::venue_section_label(venue)",
+        ".then_some(venue)",
+        ".and_then(|venue| venue.brand())",
+        "crate::media::exchange_logos::exchange_logo",
+        "img(logo)",
+        "super::balances::figure(Some(agg), p, cx)",
+        ".on_click(cx.listener(move |this",
+        "this.overview_wallet_pick = Some(cid)",
+        "this.selected_core = Some(cid)",
+        ".min_w(px(240.0))",
+        ".flex_shrink_1()",
+    ] {
+        assert!(
+            bottom.contains(needle),
+            "grouped Assets roster must retain {needle:?}"
+        );
+    }
+    assert!(
+        bottom.contains("asset-exchange-unknown") && !bottom.contains("status_dot"),
+        "unknown exchange headings stay explicit without a fake logo or status dot"
+    );
+}
+
 #[test]
 fn status_bar_connection_and_license_are_localized() {
     // Neither caption is on the deliberately-untranslated list in locales/README.md, so an English

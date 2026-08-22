@@ -5,6 +5,7 @@ use super::state::{ReportFilterSet, applied_filters};
 use super::{
     Period, ReportKind, ReportPeriodBucket, SideFilter, apply_period_from_prefs,
     next_prefs_for_period_pick, period_bucket_for_scope, row_scope_for, side_id,
+    strategy_name_mask_enabled,
 };
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
@@ -827,6 +828,41 @@ fn period_bucket_changes_only_across_auto_overview() {
         period_bucket_for_scope(Some(&auto_a)),
         "Overview to a server must cross buckets"
     );
+}
+
+/// The strategy-name mask belongs to the complete Auto workspace, not only a selected core.
+///
+/// Mutation: restoring the former `is_auto_core` gate hides and clears the mask in Full summary;
+/// accepting Classic or `None` applies a retained invisible filter outside Auto.
+#[test]
+fn strategy_name_mask_is_enabled_for_both_auto_scopes_only() {
+    let cores = [11, 22];
+    let overview = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        None,
+        &cores,
+        RetainedCoreScope::All,
+    );
+    let auto_core = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        Some(11),
+        &cores,
+        RetainedCoreScope::All,
+    );
+    let classic_all =
+        resolve_group_scope(WorkspaceMode::Classic, None, &cores, RetainedCoreScope::All);
+    let classic_selection = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &cores,
+        RetainedCoreScope::Explicit(&[11]),
+    );
+
+    assert!(strategy_name_mask_enabled(Some(&overview)));
+    assert!(strategy_name_mask_enabled(Some(&auto_core)));
+    assert!(!strategy_name_mask_enabled(Some(&classic_all)));
+    assert!(!strategy_name_mask_enabled(Some(&classic_selection)));
+    assert!(!strategy_name_mask_enabled(None));
 }
 
 /// `ReportPanel::new_with_scope` must restore this host's stored filters BEFORE

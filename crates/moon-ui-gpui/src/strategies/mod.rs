@@ -70,6 +70,8 @@ pub struct StrategiesView {
     filter: StrategyFilter,
     /// Resolved persisted display preferences for grouping and active-row visibility.
     prefs: StrategiesPrefs,
+    /// UI-thread edge proving exchange logos were prewarmed off the tree render path.
+    exchange_logos_ready: bool,
     /// Whether the settings popover is open in this process.
     settings_open: bool,
     /// Concrete singleton Auto scope; `None` leaves the all-core Classic tree authoritative.

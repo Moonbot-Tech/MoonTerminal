@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -64,7 +65,10 @@ fn id_del_strat(core: CoreId, id: u64) -> SharedString {
 /// Data for one tree row, looked up by node ID from `render_row` and decorators.
 pub(crate) enum NodeData {
     /// Always-expanded, non-interactive heading for one canonical exchange section.
-    Exchange { label: String },
+    Exchange {
+        label: String,
+        logo: Option<Arc<RenderImage>>,
+    },
     Core {
         core: CoreId,
         label: String,
@@ -184,11 +188,18 @@ pub(crate) fn build(
             }
             let exchange_id = id_exchange(venue);
             let label = crate::controls::venue_section_label(venue);
+            let logo = view
+                .exchange_logos_ready
+                .then_some(venue)
+                .flatten()
+                .and_then(|venue| venue.brand())
+                .and_then(crate::media::exchange_logos::exchange_logo);
             expanded.push(exchange_id.clone());
             data.insert(
                 exchange_id.clone(),
                 NodeData::Exchange {
                     label: label.clone(),
+                    logo,
                 },
             );
             items.push(
@@ -704,7 +715,9 @@ fn render_row(
     };
 
     match node {
-        NodeData::Exchange { label } => exchange_row(node_id, indent, label, app),
+        NodeData::Exchange { label, logo } => {
+            exchange_row(node_id, indent, label, logo.clone(), app)
+        }
         NodeData::Core {
             core,
             label,
@@ -823,11 +836,18 @@ fn render_row(
 ///     row_id: Stable exchange identity used as the row element ID.
 ///     indent: Tree-provided indentation for the heading depth.
 ///     label: Localized shared venue-section caption.
+///     logo: Prewarmed brand logo, absent for unidentified venues.
 ///     app: Application context providing palette and scaled geometry.
 ///
 /// Returns:
 ///     Non-interactive hierarchy row with no selection, hover, disclosure, drag, or drop behavior.
-fn exchange_row(row_id: SharedString, indent: Pixels, label: &str, app: &App) -> AnyElement {
+fn exchange_row(
+    row_id: SharedString,
+    indent: Pixels,
+    label: &str,
+    logo: Option<Arc<RenderImage>>,
+    app: &App,
+) -> AnyElement {
     let p = MoonPalette::active(app);
     h_flex()
         .id(row_id)
@@ -837,14 +857,15 @@ fn exchange_row(row_id: SharedString, indent: Pixels, label: &str, app: &App) ->
         .pr(design::ui_px(app, 6.0))
         .items_center()
         .gap(design::ui_px(app, 6.0))
-        .child(
-            div()
-                .flex_none()
-                .w(design::ui_px(app, 6.0))
-                .h(design::ui_px(app, 6.0))
-                .rounded_full()
-                .bg(rgb(p.accent)),
-        )
+        .when_some(logo, |row, logo| {
+            row.child(
+                img(logo)
+                    .flex_none()
+                    .w(design::ui_px(app, 13.0))
+                    .h(design::ui_px(app, 13.0))
+                    .rounded(design::ui_px(app, 2.0)),
+            )
+        })
         .child(
             div().flex_1().min_w_0().truncate().child(
                 MoonText::new(label.to_string())

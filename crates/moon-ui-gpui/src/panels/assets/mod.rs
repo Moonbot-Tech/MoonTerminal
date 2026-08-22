@@ -101,6 +101,8 @@ pub struct AssetsView {
     pub(super) sel_cores: HashSet<CoreId>,
     /// Whether the core list and Spot, Futures, and Quarterly wallet section is collapsed.
     pub(super) wallets_collapsed: bool,
+    /// UI-thread edge proving exchange logos were prewarmed off the render path.
+    pub(super) exchange_logos_ready: bool,
     /// Open transfer-quantity dialog and its input. `PendingTransfer` is private to `wallets`, so
     /// this field remains private while child modules can access it.
     pending_transfer: Option<PendingTransfer>,
@@ -268,6 +270,18 @@ impl AssetsView {
         })
         .detach();
 
+        cx.spawn(async move |view, cx| {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .await;
+            cx.update(|cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.exchange_logos_ready = true;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+
         let mut this = Self {
             backend,
             scope,
@@ -279,6 +293,7 @@ impl AssetsView {
             min_value_slider,
             sel_cores: HashSet::new(),
             wallets_collapsed: false,
+            exchange_logos_ready: false,
             pending_transfer: None,
             transfer_input: None,
             gate: RenderGate::default(),

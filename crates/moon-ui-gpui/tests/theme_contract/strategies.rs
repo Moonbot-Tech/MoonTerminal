@@ -432,6 +432,15 @@ fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
 #[test]
 fn strategy_tree_groups_visible_cores_by_venue_identity() {
     let window = read_src("strategies/mod.rs");
+    let state = read_src("strategies/state.rs");
+    let constructor = code_only(braced_body(&state, "pub(super) fn new("));
+    assert!(
+        constructor
+            .contains("cx.background_spawn(async { crate::media::exchange_logos::prewarm() })")
+            && constructor.contains("this.exchange_logos_ready = true")
+            && constructor.contains("cx.notify();"),
+        "strategy exchange logos must prewarm off the UI thread and publish one ready edge"
+    );
     let render = code_only(braced_body(
         &window,
         "fn render(&mut self, window: &mut Window",
@@ -468,6 +477,16 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
     assert!(drop_dest.contains("NodeData::Exchange") && drop_dest.contains("=> None"));
     let row = code_only(braced_body(&tree, "fn render_row("));
     assert!(row.contains("NodeData::Exchange") && row.contains("exchange_row("));
+    let exchange_row = code_only(braced_body(&tree, "fn exchange_row("));
+    assert!(exchange_row.contains("img(logo)"));
+    assert!(!exchange_row.contains("rounded_full()") && !exchange_row.contains("p.accent"));
+    assert!(
+        grouped.contains("exchange_logos_ready")
+            && grouped.contains("venue.brand()")
+            && grouped.contains("exchange_logos::exchange_logo")
+            && grouped.contains("logo,"),
+        "grouped exchange nodes must carry one prewarmed heading logo"
+    );
 
     let cache = read_src("strategies/tree/cache.rs");
     let sig = code_only(braced_body(&cache, "pub(crate) fn data_sig("));

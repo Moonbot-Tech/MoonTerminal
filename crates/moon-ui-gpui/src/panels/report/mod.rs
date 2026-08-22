@@ -351,6 +351,14 @@ pub(super) fn next_prefs_for_period_pick(
     prefs
 }
 
+/// Return whether the effective workspace owns the strategy-name mask.
+///
+/// Both Auto Overview and a selected Auto core are workspace-owned Report scopes. Classic and
+/// standalone Reports retain the stored value but must neither render nor apply it.
+fn strategy_name_mask_enabled(scope: Option<&crate::workspace::EffectiveCoreScope>) -> bool {
+    scope.is_some_and(crate::workspace::EffectiveCoreScope::is_workspace_owned)
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -581,7 +589,7 @@ pub struct ReportPanel {
     strategy_select_selection_dirty: bool,
     /// Literal strategy-name substring retained across Classic and Auto workspace switches.
     strategy_name_mask: String,
-    /// Auto-only input whose value is mirrored in [`Self::strategy_name_mask`].
+    /// Auto-workspace input whose value is mirrored in [`Self::strategy_name_mask`].
     strategy_name_mask_input: Entity<MoonInputState>,
     coin: Entity<MoonInputState>,
     /// Mirror of the coin input, updated on `Change`.

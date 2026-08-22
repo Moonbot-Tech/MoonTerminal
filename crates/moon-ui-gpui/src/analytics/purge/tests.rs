@@ -3,7 +3,7 @@
 
 use moon_core::feed::StrategyRow;
 
-use super::{deletable_folder_after, purge_core_visible, purge_summary_lines};
+use super::{PurgeMode, deletable_folder_after, purge_core_visible, purge_summary_lines};
 
 /// Extract one method from the `PurgeRun` implementation up to the next documented method.
 ///
@@ -102,7 +102,7 @@ fn strategy(id: u64, folder_path: &str) -> StrategyRow {
 /// confirmation that omits them promises a clean sweep the operation will not deliver.
 #[test]
 fn the_legacy_caveat_appears_whenever_there_are_legacy_rows() {
-    let lines = purge_summary_lines(12, 4, 3);
+    let lines = purge_summary_lines(PurgeMode::Whole, 12, 4, 3);
 
     assert_eq!(lines.len(), 2, "count line plus the caveat: {lines:?}");
     assert!(
@@ -114,7 +114,7 @@ fn the_legacy_caveat_appears_whenever_there_are_legacy_rows() {
 /// Adding an unconditional warning would falsely claim that addressable rows must survive.
 #[test]
 fn no_legacy_rows_means_no_caveat() {
-    let lines = purge_summary_lines(12, 4, 0);
+    let lines = purge_summary_lines(PurgeMode::Whole, 12, 4, 0);
 
     assert_eq!(lines.len(), 1, "nothing to warn about: {lines:?}");
 }
@@ -123,8 +123,8 @@ fn no_legacy_rows_means_no_caveat() {
 /// whose trades are already gone.
 #[test]
 fn zero_trades_is_stated_not_counted() {
-    let zero = purge_summary_lines(0, 0, 0);
-    let some = purge_summary_lines(5, 2, 0);
+    let zero = purge_summary_lines(PurgeMode::Whole, 0, 0, 0);
+    let some = purge_summary_lines(PurgeMode::Whole, 5, 2, 0);
 
     assert_ne!(
         zero[0], some[0],
@@ -136,12 +136,61 @@ fn zero_trades_is_stated_not_counted() {
 /// summary carrying only one of them would read as the wrong number rather than as a wider scope.
 #[test]
 fn the_count_line_states_both_scopes() {
-    let lines = purge_summary_lines(120, 37, 0);
+    let lines = purge_summary_lines(PurgeMode::Whole, 120, 37, 0);
 
     assert!(
         lines[0].contains("120") && lines[0].contains("37"),
         "{lines:?}"
     );
+}
+
+/// Report-only progress must never imply that the strategy is being disabled or deleted.
+#[test]
+fn report_rows_only_has_one_progress_step_and_distinct_empty_copy() {
+    assert_eq!(PurgeMode::RowsOnly.steps(), &[super::PurgeStep::Rows]);
+    assert_ne!(
+        purge_summary_lines(PurgeMode::RowsOnly, 0, 0, 0),
+        purge_summary_lines(PurgeMode::Whole, 0, 0, 0)
+    );
+}
+
+/// A one-step report cleanup must not claim that nonexistent earlier steps remain in force.
+#[test]
+fn report_rows_only_has_scope_specific_failure_copy() {
+    assert_eq!(
+        PurgeMode::RowsOnly.failure_key(super::PurgeFail::Send),
+        "analytics.purge.rows.send_failed"
+    );
+    assert_eq!(
+        PurgeMode::RowsOnly.failure_key(super::PurgeFail::Confirm),
+        "analytics.purge.rows.timeout"
+    );
+    assert_eq!(
+        PurgeMode::Whole.failure_key(super::PurgeFail::Confirm),
+        "analytics.purge.timeout"
+    );
+}
+
+/// The report-only path sends the confirmation snapshot once and returns before any strategy or
+/// folder command; reusing the full multi-pass sweep would chase trades closed after confirmation.
+#[test]
+fn report_rows_only_uses_the_exact_confirmation_snapshot() {
+    let src = include_str!("../purge.rs");
+    let exact = purge_run_method(src, "async fn purge_exact_rows(");
+    let run = purge_run_method(src, "async fn run(");
+
+    assert!(exact.contains("std::mem::take(&mut self.exact_rec_ids)"));
+    assert!(exact.contains("set_report_rows_deleted_ids"));
+    assert!(!exact.contains("PURGE_PASSES"));
+    let branch = run
+        .split("if self.mode == PurgeMode::RowsOnly")
+        .nth(1)
+        .and_then(|tail| tail.split("self.purge_rows").next())
+        .expect("rows-only branch must return before the whole purge");
+    assert!(branch.contains("return self.purge_exact_rows(cx).await"));
+    for forbidden in ["apply_strategies", "delete_strategy", "send_empty_folder"] {
+        assert!(!branch.contains(forbidden));
+    }
 }
 
 /// `analytics/purge.rs:deletable_folder_after`: accepting no captured path or a segmentless root

@@ -31,7 +31,7 @@ report.search_strategies:
   ru: "Поиск стратегии..."
   en: "Search strategies..."
   es: "Buscar estrategias..."
-# Separate Auto-only report filter. Unlike the exact picker search above, this value narrows the
+# Separate Auto-workspace report filter. Unlike the exact picker search above, this value narrows the
 # report itself by a literal, case-insensitive strategy-name substring.
 report.filter.strategy_mask_ph:
   ru: "Маска стратегии"
