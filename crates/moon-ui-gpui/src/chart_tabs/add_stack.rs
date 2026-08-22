@@ -79,6 +79,14 @@ pub(crate) struct AddChartStack {
     /// the user's Order book checkbox. Tabs detached into a window are never suspended because the
     /// window maintains its own demand.
     orderbook_suspended: bool,
+    /// The kind last pushed down to the panels, so an unchanged one costs nothing.
+    pushed_kind: Option<moon_core::config::ChartTabKind>,
+    /// Whether this stack has been torn off into its own window.
+    ///
+    /// Kept here because it decides which of the three DEFAULTS its charts follow, and the panels
+    /// cannot see it: the same stack type serves a strip tab and a window, and only the tab
+    /// bookkeeping knows which one this is.
+    detached: bool,
     /// Comparison anchor `(core, market)`: the price-leading chart, locked and positioned left.
     /// `None` disables comparison. Active only in horizontal orientation.
     compare_anchor: Option<(CoreId, String)>,
@@ -150,6 +158,8 @@ impl AddChartStack {
             line_labels: None,
             cursor_labels: None,
             orderbook_suspended: false,
+            pushed_kind: None,
+            detached: false,
             compare_anchor: None,
             compare_y: None,
             compare_orderbook_only: false,
@@ -239,6 +249,43 @@ impl AddChartStack {
         self.hold_vacated = hold;
     }
 
+    /// Which of the three defaults this stack's charts follow.
+    pub(crate) fn default_kind(&self) -> moon_core::config::ChartTabKind {
+        moon_core::config::ChartTabKind::of(self.detached, self.compare_anchor.is_some())
+    }
+
+    /// Record that this stack now lives in its own window, or has come back to the strip.
+    ///
+    /// Called by the tab bookkeeping on detach, on repin, and when a detached window is restored at
+    /// startup. It changes which default the charts follow, so it pushes the answer down.
+    pub(crate) fn set_detached(&mut self, detached: bool, cx: &mut Context<Self>) {
+        if self.detached == detached {
+            return;
+        }
+        self.detached = detached;
+        self.sync_default_kind(cx);
+    }
+
+    /// Tell every chart which default it follows now.
+    ///
+    /// Gated on a real change: this is called from `sync_compare`, which the panel observer runs on
+    /// EVERY panel notification, and leasing every chart entity there to tell it what it already
+    /// knows is exactly the kind of per-notification cost this project measures away. `pushed_kind`
+    /// is the last answer handed out, so a new chart added afterwards is covered by the constructor
+    /// taking the kind directly.
+    fn sync_default_kind(&mut self, cx: &mut Context<Self>) {
+        let kind = self.default_kind();
+        if self.pushed_kind == Some(kind) {
+            return;
+        }
+        self.pushed_kind = Some(kind);
+        for entry in &self.charts {
+            entry
+                .panel
+                .update(cx, |panel, pcx| panel.set_default_kind(kind, pcx));
+        }
+    }
+
     pub(crate) fn compare_anchor(&self) -> Option<(CoreId, String)> {
         self.compare_anchor.clone()
     }
@@ -271,6 +318,9 @@ impl AddChartStack {
             self.layout_orientation,
             cx,
         );
+        // The lock is what makes this a comparison, so putting it on or taking it off changes which
+        // default these charts follow. This is the one path both do go through.
+        self.sync_default_kind(cx);
     }
 
     /// Show a market on a panel AND point that panel's durable trade history at it.
@@ -365,8 +415,18 @@ impl AddChartStack {
         let epoch = self.epoch;
         let theme = self.theme.clone();
         let scale = self.scale;
+        let kind = self.default_kind();
         let panel = cx.new(|cx| {
-            ChartPanel::new_addto(backend, workspace_group, num, bucket, epoch, theme, cx)
+            ChartPanel::new_addto(
+                backend,
+                workspace_group,
+                num,
+                bucket,
+                epoch,
+                theme,
+                kind,
+                cx,
+            )
         });
         // Repaint the stack after any panel change, including a pin toggle: empty-panel pruning and
         // sorting pinned charts to the top happen during render.
@@ -782,6 +842,22 @@ impl AddChartStack {
             .filter(|e| !e.vacated && e.panel.read(cx).pane_count() > 0)
             .map(|e| (e.core, e.market.clone()))
             .collect()
+    }
+
+    /// Pin ONE stack chart, addressed by the market it shows.
+    ///
+    /// For a chart joining a tab whose charts are all pinned — a comparison gaining another venue.
+    /// [`Self::pin_all`] would do it too, and would also re-pin every OTHER chart on the tab,
+    /// including any the reader had deliberately unpinned. This one touches the chart the click
+    /// named and nothing else.
+    pub(crate) fn pin_coin(&self, core: CoreId, market: &str, cx: &mut Context<Self>) {
+        if let Some(e) = self
+            .charts
+            .iter()
+            .find(|e| e.core == core && e.market == market)
+        {
+            e.panel.update(cx, |p, pcx| p.ensure_pinned(pcx));
+        }
     }
 
     /// Pin every stack chart so charts on a custom tab start pinned.

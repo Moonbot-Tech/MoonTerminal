@@ -497,14 +497,6 @@ chart.layout.tip:
   ru: "Настройки раскладки"
   en: "Layout settings"
   es: "Ajustes de disposición"
-chart.layout.apply_all_windows:
-  ru: "Применить ко всем окнам"
-  en: "Apply to all windows"
-  es: "Aplicar a todas las ventanas"
-chart.layout.apply_all_charts:
-  ru: "Применить ко всем чартам"
-  en: "Apply to all charts"
-  es: "Aplicar a todos los gráficos"
 chart.gather_windows.tip:
   ru: "Собрать окна графиков этой группы"
   en: "Gather this group's chart windows"
@@ -594,9 +586,37 @@ chart.graphics.candle_volume_scale:
   en: "Volume scale colour"
   es: "Color de la escala de volumen"
 chart.apply_all_tabs_windows:
-  ru: "Применить ко всем вкладкам и окнам"
-  en: "Apply to all tabs and windows"
-  es: "Aplicar a todas las pestañas y ventanas"
+  ru: "Выбрать, к каким вкладкам применить"
+  en: "Choose which tabs this applies to"
+  es: "Elegir a qué pestañas se aplica"
+chart.defaults.kind.main:
+  ru: "Основные"
+  en: "Main tabs"
+  es: "Pestañas principales"
+chart.defaults.kind.addto:
+  ru: "AddToChart"
+  en: "AddToChart"
+  es: "AddToChart"
+chart.defaults.kind.compare:
+  ru: "Сравнения"
+  en: "Comparisons"
+  es: "Comparaciones"
+chart.defaults.set:
+  ru: "Сделать дефолтом"
+  en: "Make default"
+  es: "Hacer predeterminado"
+chart.defaults.apply:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"
+chart.defaults.set_hint:
+  ru: "Дефолт для выбранных видов вкладок. Их собственные настройки будут сброшены — в скобках сколько."
+  en: "Default for the ticked kinds of tab. Their own settings are cleared — the count is in brackets."
+  es: "Predeterminado para los tipos marcados. Sus ajustes propios se borran: el número va entre paréntesis."
+chart.defaults.apply_hint:
+  ru: "Записать эти значения всем вкладкам выбранных видов. У этих настроек дефолта нет."
+  en: "Write these values into every tab of the ticked kinds. These settings have no default."
+  es: "Escribir estos valores en cada pestaña de los tipos marcados. Estos ajustes no tienen predeterminado."
 chart.candles.title:
   ru: "Свечи и трейды"
   en: "Candles & trades"
@@ -1249,10 +1269,6 @@ chart_labels.frame_caption:
   ru: "Настройки подписи"
   en: "Label settings"
   es: "Ajustes de la etiqueta"
-chart_labels.field_caption:
-  ru: "Что показывать"
-  en: "What it shows"
-  es: "Qué muestra"
 chart_labels.preview:
   ru: "Как будет выглядеть"
   en: "How it will look"
@@ -1262,9 +1278,17 @@ chart_labels.preview_empty:
   en: "Add a label — the sample appears here"
   es: "Añada una etiqueta — aquí aparecerá la muestra"
 chart_labels.add_row:
-  ru: "＋ Строка"
-  en: "＋ Row"
-  es: "＋ Fila"
+  ru: "＋ Модуль"
+  en: "＋ Module"
+  es: "＋ Módulo"
+chart_labels.new_row:
+  ru: "Новый модуль"
+  en: "New module"
+  es: "Módulo nuevo"
+chart_labels.row_full:
+  ru: "Модуль заполнен"
+  en: "Module is full"
+  es: "Módulo lleno"
 chart_labels.add_part:
   ru: "＋ Подпись"
   en: "＋ Label"
@@ -1274,9 +1298,9 @@ chart_labels.row_name:
   en: "Name"
   es: "Nombre"
 chart_labels.row_empty:
-  ru: "Пустая строка"
-  en: "Empty row"
-  es: "Fila vacía"
+  ru: "Пустой модуль"
+  en: "Empty module"
+  es: "Módulo vacío"
 chart_labels.row_empty_hint:
   ru: "Ни одной подписи — добавьте ниже"
   en: "No labels yet — add one below"
@@ -1362,9 +1386,9 @@ chart_labels.color_theme:
   en: "Theme"
   es: "Tema"
 chart_labels.color_sign:
-  ru: "По профиту"
-  en: "By profit"
-  es: "Por beneficio"
+  ru: "По знаку"
+  en: "By sign"
+  es: "Por signo"
 chart_labels.color_fixed:
   ru: "Свой"
   en: "Custom"
@@ -1397,10 +1421,6 @@ chart_labels.group.instrument:
   ru: "Инструмент"
   en: "Instrument"
   es: "Instrumento"
-chart_labels.group.market:
-  ru: "Рынок"
-  en: "Market"
-  es: "Mercado"
 chart_labels.group.position:
   ru: "Позиция"
   en: "Position"
@@ -1497,6 +1517,326 @@ chart_labels.field.funding_in:
   ru: "До фандинга"
   en: "Funding in"
   es: "Funding en"
+chart_labels.field.coin_tags:
+  ru: "Теги монеты"
+  en: "Coin tags"
+  es: "Etiquetas de la moneda"
+chart_labels.field.bid:
+  ru: "Бид"
+  en: "Bid"
+  es: "Bid"
+chart_labels.field.ask:
+  ru: "Аск"
+  en: "Ask"
+  es: "Ask"
+chart_labels.field.spread:
+  ru: "Спред, %"
+  en: "Spread, %"
+  es: "Spread, %"
+chart_labels.field.mark_price:
+  ru: "Марк-цена"
+  en: "Mark price"
+  es: "Precio marca"
+chart_labels.field.mark_delta:
+  ru: "Отклонение марка, %"
+  en: "Mark deviation, %"
+  es: "Desviación de la marca, %"
+chart_labels.field.price_step:
+  ru: "Шаг цены"
+  en: "Price step"
+  es: "Paso de precio"
+chart_labels.field.volume_24h:
+  ru: "Объём 24ч"
+  en: "24h volume"
+  es: "Volumen 24h"
+chart_labels.field.window_delta:
+  ru: "Движение за период"
+  en: "Movement over a window"
+  es: "Movimiento por periodo"
+chart_labels.field.window_volume:
+  ru: "Объём за период"
+  en: "Volume over a window"
+  es: "Volumen por periodo"
+chart_labels.field.window_buy_share:
+  ru: "Доля покупок, %"
+  en: "Buy share, %"
+  es: "Cuota de compras, %"
+chart_labels.field.max_leverage:
+  ru: "Макс. плечо биржи"
+  en: "Venue max leverage"
+  es: "Apalancamiento máx. del exchange"
+chart_labels.field.max_order:
+  ru: "Макс. ордер"
+  en: "Max order"
+  es: "Orden máx."
+chart_labels.field.exch_pos_size:
+  ru: "Позиция на бирже"
+  en: "Exchange position"
+  es: "Posición en el exchange"
+chart_labels.field.exch_pos_price:
+  ru: "Цена входа позиции"
+  en: "Position entry price"
+  es: "Precio de entrada"
+chart_labels.field.liq_price:
+  ru: "Цена ликвидации"
+  en: "Liquidation price"
+  es: "Precio de liquidación"
+chart_labels.field.leverage:
+  ru: "Плечо"
+  en: "Leverage"
+  es: "Apalancamiento"
+chart_labels.field.margin_mode:
+  ru: "Тип маржи"
+  en: "Margin mode"
+  es: "Tipo de margen"
+chart_labels.field.session_pnl:
+  ru: "Профит за сессию"
+  en: "Session profit"
+  es: "Beneficio de la sesión"
+chart_labels.field.coin_balance:
+  ru: "Баланс монеты"
+  en: "Coin balance"
+  es: "Saldo de la moneda"
+chart_labels.short.bid:
+  ru: "Бид"
+  en: "Bid"
+  es: "Bid"
+chart_labels.short.ask:
+  ru: "Аск"
+  en: "Ask"
+  es: "Ask"
+chart_labels.short.spread:
+  ru: "Спред"
+  en: "Spr"
+  es: "Spr"
+chart_labels.short.mark_price:
+  ru: "Марк"
+  en: "Mark"
+  es: "Marca"
+chart_labels.short.mark_delta:
+  ru: "Марк"
+  en: "Mark"
+  es: "Marca"
+chart_labels.short.price_step:
+  ru: "Шаг"
+  en: "Step"
+  es: "Paso"
+chart_labels.short.volume_24h:
+  ru: "Vol 24ч"
+  en: "Vol 24h"
+  es: "Vol 24h"
+chart_labels.short.window_delta:
+  ru: "Δ"
+  en: "Δ"
+  es: "Δ"
+chart_labels.short.window_volume:
+  ru: "Vol "
+  en: "Vol "
+  es: "Vol "
+chart_labels.short.window_buy_share:
+  ru: "Buy "
+  en: "Buy "
+  es: "Buy "
+chart_labels.short.max_leverage:
+  ru: "Макс. плечо"
+  en: "Max lev"
+  es: "Apal. máx"
+chart_labels.short.max_order:
+  ru: "Макс. ордер"
+  en: "Max order"
+  es: "Orden máx"
+chart_labels.short.exch_pos_size:
+  ru: "Поз. биржи"
+  en: "Exch pos"
+  es: "Pos. exch"
+chart_labels.short.exch_pos_price:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+chart_labels.short.liq_price:
+  ru: "Ликв"
+  en: "Liq"
+  es: "Liq"
+chart_labels.short.leverage:
+  ru: "Плечо"
+  en: "Lev"
+  es: "Apal"
+chart_labels.short.session_pnl:
+  ru: "Сессия"
+  en: "Session"
+  es: "Sesión"
+chart_labels.short.coin_balance:
+  ru: "Баланс"
+  en: "Balance"
+  es: "Saldo"
+chart_labels.field.arb_column:
+  ru: "Арбитраж (колонка)"
+  en: "Arbitrage (column)"
+  es: "Arbitraje (columna)"
+chart_labels.preset.arbitrage:
+  ru: "Арбитраж"
+  en: "Arbitrage"
+  es: "Arbitraje"
+arb.title:
+  ru: "Арбитраж: площадки"
+  en: "Arbitrage venues"
+  es: "Arbitraje: mercados"
+arb.hint:
+  ru: "Настройки общие для всех чартов"
+  en: "These settings are shared by every chart"
+  es: "Ajustes comunes a todos los charts"
+arb.printing:
+  ru: "Что печатать"
+  en: "What to print"
+  es: "Qué imprimir"
+arb.venues:
+  ru: "Площадки"
+  en: "Venues"
+  es: "Mercados"
+arb.show:
+  ru: "Строка"
+  en: "Row"
+  es: "Fila"
+arb.show.price_and_spread:
+  ru: "Цена и %"
+  en: "Price and %"
+  es: "Precio y %"
+arb.show.price:
+  ru: "Только цена"
+  en: "Price only"
+  es: "Solo precio"
+arb.show.spread:
+  ru: "Только %"
+  en: "% only"
+  es: "Solo %"
+arb.mark_blocked:
+  ru: "Отмечать закрытые ввод/вывод (⛔)"
+  en: "Mark blocked deposits/withdrawals (⛔)"
+  es: "Marcar depósitos/retiros bloqueados (⛔)"
+arb.move_up:
+  ru: "Выше"
+  en: "Move up"
+  es: "Subir"
+arb.move_down:
+  ru: "Ниже"
+  en: "Move down"
+  es: "Bajar"
+arb.hide:
+  ru: "Скрыть площадку"
+  en: "Hide venue"
+  es: "Ocultar mercado"
+arb.show_venue:
+  ru: "Показать площадку"
+  en: "Show venue"
+  es: "Mostrar mercado"
+arb.reset:
+  ru: "Сбросить список"
+  en: "Reset the list"
+  es: "Restablecer la lista"
+chart_labels.field.detect_strategy:
+  ru: "Стратегия детекта"
+  en: "Detect strategy"
+  es: "Estrategia del detect"
+chart_labels.field.detect_msg:
+  ru: "Строка детекта"
+  en: "Detect line"
+  es: "Línea del detect"
+chart_labels.short.detect_strategy:
+  ru: "Детект"
+  en: "Detect"
+  es: "Detect"
+chart_labels.group.price:
+  ru: "Цена"
+  en: "Price"
+  es: "Precio"
+chart_labels.group.move:
+  ru: "Движение"
+  en: "Movement"
+  es: "Movimiento"
+chart_labels.group.volume:
+  ru: "Объём"
+  en: "Volume"
+  es: "Volumen"
+chart_labels.group.contract:
+  ru: "Контракт"
+  en: "Contract"
+  es: "Contrato"
+chart_labels.group.arbitrage:
+  ru: "Арбитраж"
+  en: "Arbitrage"
+  es: "Arbitraje"
+chart_labels.group.exchange:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Exchange"
+chart_labels.margin.cross:
+  ru: "Кросс"
+  en: "Cross"
+  es: "Cross"
+chart_labels.margin.isolated:
+  ru: "Изолир."
+  en: "Isolated"
+  es: "Aislado"
+chart_labels.sub_settings:
+  ru: "Перейти в настройки подмодуля"
+  en: "Open the sub-module settings"
+  es: "Ir a los ajustes del submódulo"
+chart_labels.value_only:
+  ru: "Красить только значение"
+  en: "Colour the value only"
+  es: "Colorear solo el valor"
+chart_labels.color_min:
+  ru: "Красить от"
+  en: "Colour from"
+  es: "Colorear desde"
+chart_labels.color_min_off:
+  ru: "всегда"
+  en: "always"
+  es: "siempre"
+arb.min_abs:
+  ru: "Показывать от"
+  en: "Show from"
+  es: "Mostrar desde"
+arb.min_abs_off:
+  ru: "всё"
+  en: "all"
+  es: "todo"
+chart_labels.window:
+  ru: "Период"
+  en: "Window"
+  es: "Periodo"
+chart_labels.window.m1:
+  ru: "1м"
+  en: "1m"
+  es: "1m"
+chart_labels.window.m5:
+  ru: "5м"
+  en: "5m"
+  es: "5m"
+chart_labels.window.m15:
+  ru: "15м"
+  en: "15m"
+  es: "15m"
+chart_labels.window.m30:
+  ru: "30м"
+  en: "30m"
+  es: "30m"
+chart_labels.window.h1:
+  ru: "1ч"
+  en: "1h"
+  es: "1h"
+chart_labels.window.h3:
+  ru: "3ч"
+  en: "3h"
+  es: "3h"
+chart_labels.window.h24:
+  ru: "24ч"
+  en: "24h"
+  es: "24h"
+chart_labels.window.h72:
+  ru: "72ч"
+  en: "72h"
+  es: "72h"
 chart_labels.field.order_strategy:
   ru: "Стратегия ордера"
   en: "Order strategy"

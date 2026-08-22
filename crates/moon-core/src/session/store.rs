@@ -96,6 +96,13 @@ pub struct CoreData {
     pub clock_skew: CoreClockSkew,
     /// Recent core detects, trimmed as a ring buffer to `MAX_DETECTS`.
     pub detects: VecDeque<DetectRow>,
+    /// Newest detect per MARKET, for the chart caption that prints "what last fired here".
+    ///
+    /// An index rather than a search: the caption is resolved per pane on an order revision, and
+    /// finding the newest detect for one market means walking the ring — two thousand string
+    /// compares — for the common case of a market that never had one. One entry per market that
+    /// HAS fired, which is a fraction of the ring and never larger than it.
+    pub latest_detect: HashMap<String, DetectRow>,
     /// Latest core strategy snapshot for the Strategies window.
     pub strategies: Vec<StrategyRow>,
     /// Core strategy schema with sections and per-kind fields, or `None` until it arrives.
@@ -223,6 +230,7 @@ impl CoreData {
             order_lines: OrderLineStore::default(),
             clock_skew: CoreClockSkew::default(),
             detects: VecDeque::new(),
+            latest_detect: HashMap::new(),
             strategies: Vec::new(),
             schema: None,
             assets: AssetsSnapshot::default(),
@@ -430,6 +438,8 @@ impl CoreData {
                         self.detects_rev.wrapping_add(1)
                     ));
                     for det in detects {
+                        // Newest wins, and arrival order is the ring's order.
+                        self.latest_detect.insert(det.market.clone(), det.clone());
                         self.detects.push_back(det);
                     }
                     if self.detects.len() > MAX_DETECTS {

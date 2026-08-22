@@ -13,6 +13,7 @@
 //! order dragging in [`trade`]; rendering in [`render`]; and slot wheel, mouse, and hover handling in
 //! [`render_input`].
 
+mod arb_open;
 mod click_series;
 mod figures;
 mod geom;
@@ -136,6 +137,7 @@ fn chart_settings_sig(
     graphics: Option<moon_core::config::ChartGraphicsCfg>,
     candles: Option<moon_core::market::CandleViewCfg>,
     labels: Option<moon_core::config::ChartLabelsCfg>,
+    kind: moon_core::config::ChartTabKind,
 ) -> ChartSettingsSig {
     let effective = backend.preview.as_ref().unwrap_or(&backend.config);
     ChartSettingsSig {
@@ -146,14 +148,14 @@ fn chart_settings_sig(
         // NORMALIZED, because this value is COMPARED: a hand-edited `nan` never equals itself and
         // would make every backend notification look like a settings change.
         chart_graphics: moon_chart::normalize_chart_graphics(
-            graphics.unwrap_or(backend.layout.chart_graphics),
+            graphics.unwrap_or_else(|| backend.layout.chart_graphics_for(kind)),
         ),
-        candle_view: candles.unwrap_or(backend.layout.candle_view),
+        candle_view: candles.unwrap_or_else(|| backend.layout.candle_view_for(kind)),
         // SANITIZED for the same reason graphics is normalized: this value is COMPARED, and a
         // hand-edited file can state a hole between captions or a size outside the drawable range —
         // repaired on read, it would differ from the stored one on every notification.
         chart_labels: {
-            let mut cfg = labels.unwrap_or_else(|| backend.layout.chart_labels.clone());
+            let mut cfg = labels.unwrap_or_else(|| backend.layout.chart_labels_for(kind).clone());
             cfg.sanitize();
             std::rc::Rc::new(cfg)
         },
@@ -162,6 +164,11 @@ fn chart_settings_sig(
 
 pub struct ChartPanel {
     backend: Entity<Backend>,
+    /// Which of the three defaults this panel follows when it has no override of its own.
+    ///
+    /// Owned by the STACK, which is the thing that knows whether it sits in a window and whether
+    /// the anchor lock is on; pushed down through [`Self::set_default_kind`] whenever either moves.
+    default_kind: moon_core::config::ChartTabKind,
     /// Group whose Auto rail authorizes chart navigation and trading; diagnostics stay unscoped.
     workspace_group: Option<String>,
     chart: ChartEngine,
@@ -401,9 +408,10 @@ impl ChartPanel {
             });
         }
         // A fresh panel holds no override yet, so its effective values ARE the global defaults.
+        let kind = moon_core::config::ChartTabKind::Main;
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b, None, None, None)
+            chart_settings_sig(&b, None, None, None, kind)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -432,6 +440,7 @@ impl ChartPanel {
                         this.chart_graphics,
                         this.candle_view,
                         this.chart_labels.clone(),
+                        this.default_kind,
                     ),
                 )
             };
@@ -480,6 +489,7 @@ impl ChartPanel {
         .detach();
         Self {
             backend,
+            default_kind: kind,
             workspace_group,
             chart,
             input: input::ChartInput::default(),
@@ -572,6 +582,7 @@ impl ChartPanel {
         bucket: ChartBucket,
         epoch: f64,
         theme: ChartTheme,
+        kind: moon_core::config::ChartTabKind,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut chart = ChartEngine::new_kind(epoch, theme, ContainerKind::Chart { num, bucket });
@@ -581,7 +592,7 @@ impl ChartPanel {
         // A fresh panel holds no override yet, so its effective values ARE the global defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b, None, None, None)
+            chart_settings_sig(&b, None, None, None, kind)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -609,6 +620,7 @@ impl ChartPanel {
                         this.chart_graphics,
                         this.candle_view,
                         this.chart_labels.clone(),
+                        this.default_kind,
                     ),
                 )
             };
@@ -650,6 +662,7 @@ impl ChartPanel {
         .detach();
         Self {
             backend,
+            default_kind: kind,
             workspace_group: Some(workspace_group),
             chart,
             input: input::ChartInput::default(),
@@ -900,7 +913,13 @@ impl ChartPanel {
             // this value, and a stale one turns the next backend notify into a phantom change.
             self.settings_sig = {
                 let b = self.backend.read(cx);
-                chart_settings_sig(&b, self.chart_graphics, cfg, self.chart_labels.clone())
+                chart_settings_sig(
+                    &b,
+                    self.chart_graphics,
+                    cfg,
+                    self.chart_labels.clone(),
+                    self.default_kind,
+                )
             };
             cx.notify();
         }
@@ -926,7 +945,13 @@ impl ChartPanel {
         // the next backend notification report a settings change that has already been applied.
         self.settings_sig = {
             let b = self.backend.read(cx);
-            chart_settings_sig(&b, cfg, self.candle_view, self.chart_labels.clone())
+            chart_settings_sig(
+                &b,
+                cfg,
+                self.candle_view,
+                self.chart_labels.clone(),
+                self.default_kind,
+            )
         };
         self.requery_trade_history_on_trade_kinds(cx);
         cx.notify();
@@ -948,21 +973,29 @@ impl ChartPanel {
         // and a stale one turns the next backend notify into a phantom settings change.
         self.settings_sig = {
             let b = self.backend.read(cx);
-            chart_settings_sig(&b, self.chart_graphics, self.candle_view, cfg)
+            chart_settings_sig(
+                &b,
+                self.chart_graphics,
+                self.candle_view,
+                cfg,
+                self.default_kind,
+            )
         };
         cx.notify();
     }
 
-    /// Returns this panel's EFFECTIVE chart-drawing settings: its own override or the global
+    /// Returns this panel's EFFECTIVE chart-drawing settings: its own override or its KIND's
     /// default, NORMALIZED to what the chart actually draws.
     ///
     /// Normalized because `layout.toml` is hand-editable and every reader of this config has to see
     /// the same clamped value the drawing path uses.
     pub(super) fn effective_chart_graphics(&self, cx: &App) -> moon_core::config::ChartGraphicsCfg {
-        moon_chart::normalize_chart_graphics(
-            self.chart_graphics
-                .unwrap_or(self.backend.read(cx).layout.chart_graphics),
-        )
+        moon_chart::normalize_chart_graphics(self.chart_graphics.unwrap_or_else(|| {
+            self.backend
+                .read(cx)
+                .layout
+                .chart_graphics_for(self.default_kind)
+        }))
     }
 
     /// Handles Shift+middle-click by requesting Moonbot-style time-axis synchronization within this
@@ -1203,6 +1236,42 @@ impl ChartPanel {
         self.arm_ttl_timer(cx);
         // Notify the panel itself. ChartTabs renders an attached strip tab, but a detached panel
         // lives in another window and would not display the newly detected market without this.
+        cx.notify();
+    }
+
+    /// Point this panel at another of the three defaults.
+    ///
+    /// Called by the stack when it is detached, repinned, or when the anchor lock goes on or off.
+    /// The effective values are recomputed HERE rather than waited for: the settings signature is
+    /// otherwise only rebuilt on a backend notification, and a panel that has just changed kind
+    /// would keep drawing the old kind's default until something unrelated woke it.
+    pub fn set_default_kind(
+        &mut self,
+        kind: moon_core::config::ChartTabKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.default_kind == kind {
+            return;
+        }
+        self.default_kind = kind;
+        let settings_sig = {
+            let b = self.backend.read(cx);
+            chart_settings_sig(
+                &b,
+                self.chart_graphics,
+                self.candle_view,
+                self.chart_labels.clone(),
+                kind,
+            )
+        };
+        if settings_sig == self.settings_sig {
+            return;
+        }
+        self.settings_sig = settings_sig;
+        self.view_dirty = true;
+        // For the reason the backend observer does it: the durable trade-history query is narrowed
+        // by the drawn trade kinds, and those live in the graphics settings this just changed.
+        self.requery_trade_history_on_trade_kinds(cx);
         cx.notify();
     }
 

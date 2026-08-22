@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use moon_core::config::{
-    ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelZone, PnlBasis,
+    ArbViewCfg, ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelZone, PnlBasis,
 };
 use moon_core::feed::OrderRow;
 use moon_core::util::fmt::DeltaSign;
@@ -86,12 +86,380 @@ fn cfg_of(fields: &[ChartLabelField]) -> ChartLabelsCfg {
 
 fn texts_of(cfg: &ChartLabelsCfg, inputs: LabelInputs) -> Vec<String> {
     let mut state = LabelState::default();
-    state.update(&Rc::new(cfg.clone()), inputs);
-    state.texts.iter().map(|t| t.text.clone()).collect()
+    state.update(&Rc::new(cfg.clone()), &Rc::new(ArbViewCfg::default()), inputs);
+    // Prefix and value are stored apart and drawn apart; a test that reads what the chart SHOWS has
+    // to put them back together, which is also what the non-split drawing path does.
+    state
+        .texts
+        .iter()
+        .map(|t| format!("{}{}", t.prefix, t.text))
+        .collect()
+}
+
+/// Like [`texts_of`], for a column whose roster is not the shipped one.
+fn texts_with(cfg: &ChartLabelsCfg, pair: (LabelInputs, Rc<ArbViewCfg>)) -> Vec<String> {
+    let (inputs, view) = pair;
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg.clone()), &view, inputs);
+    state
+        .texts
+        .iter()
+        .map(|t| format!("{}{}", t.prefix, t.text))
+        .collect()
 }
 
 fn one_field(field: ChartLabelField, inputs: LabelInputs) -> Option<String> {
     texts_of(&cfg_of(&[field]), inputs).into_iter().next()
+}
+
+/// Two strategy captions can sit on one chart — the one holding an order and the one that last
+/// fired a detect — so the detect one NAMES itself. A bare name would be unreadable beside the
+/// other.
+#[test]
+fn the_detect_strategy_names_itself() {
+    let inputs = LabelInputs {
+        detect_strategy: "BTC Sniper".into(),
+        ..Default::default()
+    };
+    let text = one_field(ChartLabelField::DetectStrategy, inputs).expect("prints");
+    assert!(text.ends_with("BTC Sniper"), "{text:?}");
+    assert!(text.contains(": "), "the caption prefix is there: {text:?}");
+
+    // The order's strategy stays bare: it is the chart's original caption and the reference
+    // terminal prints it without a prefix.
+    let plain = one_field(
+        ChartLabelField::OrderStrategy,
+        LabelInputs {
+            strategy: "BTC Sniper".into(),
+            ..Default::default()
+        },
+    )
+    .expect("prints");
+    assert_eq!(plain, "BTC Sniper");
+}
+
+/// The core ends every detect line with the strategy that fired it. That is the ONE thing this
+/// caption does not need — the strategy has a caption of its own — and it is the widest part of the
+/// line, so it goes.
+#[test]
+fn a_detect_line_drops_the_strategy_tail() {
+    let text = one_field(
+        ChartLabelField::DetectMsg,
+        LabelInputs {
+            detect_msg: "[SpreadDetection: TD: 43%  dP: 1.1%] (strategy <SP_L_D3h20>)".into(),
+            ..Default::default()
+        },
+    )
+    .expect("prints");
+    assert!(!text.contains("strategy <"), "{text:?}");
+    assert!(text.ends_with("dP: 1.1%]"), "{text:?}");
+
+    // A line that was ONLY the tail keeps its kind and loses the colon that introduced nothing.
+    let bare = one_field(
+        ChartLabelField::DetectMsg,
+        LabelInputs {
+            detect_msg: "MoonStrike: (strategy <STRIKE_13_L>)".into(),
+            ..Default::default()
+        },
+    )
+    .expect("prints");
+    assert!(bare.ends_with("MoonStrike"), "{bare:?}");
+
+    // Mid-sentence, it is part of what the detect said and stays — including when the line happens
+    // to end in the same two characters the tail does.
+    for line in ["(strategy <A>) fired twice", "see (strategy <A>) below (x>)"] {
+        let inline = one_field(
+            ChartLabelField::DetectMsg,
+            LabelInputs {
+                detect_msg: line.into(),
+                ..Default::default()
+            },
+        )
+        .expect("prints");
+        assert!(inline.ends_with(line), "{inline:?}");
+    }
+
+    // A line that was NOTHING but the tail prints nothing at all. An empty caption is not an empty
+    // string: it would still open its module's line and reserve its plate.
+    assert_eq!(
+        one_field(
+            ChartLabelField::DetectMsg,
+            LabelInputs {
+                detect_msg: "(strategy <A>)".into(),
+                ..Default::default()
+            },
+        ),
+        None
+    );
+}
+
+/// A core-supplied line can be a paragraph; the caption carries a readable head of it and says so.
+#[test]
+fn a_long_detect_line_is_cut() {
+    let long = "ц".repeat(300);
+    let text = one_field(
+        ChartLabelField::DetectMsg,
+        LabelInputs {
+            detect_msg: long,
+            ..Default::default()
+        },
+    )
+    .expect("prints");
+    assert!(text.chars().count() < 120, "{}", text.chars().count());
+    assert!(text.ends_with('…'));
+}
+
+/// The prefix and the value are kept APART, because only the value takes the colour. Gluing them
+/// into one string is what made "Фандинг: +3.90%" a block of green.
+#[test]
+fn a_caption_keeps_its_prefix_beside_its_value() {
+    let cfg = cfg_of(&[ChartLabelField::Funding]);
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg), &Rc::new(ArbViewCfg::default()), LabelInputs {
+            context: Some(moon_core::market::MarketContextReadout {
+                funding_pct: Some(3.9),
+                funding_at_ms: Some(1),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+
+    let entry = state.texts.first().expect("funding prints");
+    assert_eq!(entry.text, "+3.90%", "the value carries no prefix");
+    assert!(entry.prefix.ends_with(": "), "{:?}", entry.prefix);
+    assert!(entry.sign.is_some(), "and it is coloured by its sign");
+}
+
+/// Below the threshold a by-sign caption keeps its FIGURE and loses its colour — a column of
+/// hundredths of a percent painted red and green is noise, and hiding the value would be worse.
+#[test]
+fn a_figure_below_the_colour_threshold_prints_without_a_sign() {
+    let mut cfg = cfg_of(&[ChartLabelField::Delta1h]);
+    cfg.rows[0].parts[0].style.color_min_pct = Some(1.0);
+    let quiet = LabelInputs {
+        delta_1h: Some(0.4),
+        ..Default::default()
+    };
+    let loud = LabelInputs {
+        delta_1h: Some(1.4),
+        ..Default::default()
+    };
+
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg.clone()), &Rc::new(ArbViewCfg::default()), quiet);
+    let entry = state.texts.first().expect("prints");
+    assert_eq!(entry.text, "+0.40%", "the value is still there");
+    assert!(entry.sign.is_none(), "but it is not painted");
+
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg), &Rc::new(ArbViewCfg::default()), loud);
+    assert!(state.texts[0].sign.is_some(), "past the threshold it is");
+}
+
+// --- the arbitrage column -------------------------------------------------------------------------
+
+/// A quote from `venue` at `price`, against a market trading at 100.
+fn arb_quote(code: u8, price: f64) -> moon_core::market::ArbQuote {
+    moon_core::market::ArbQuote {
+        venue: moon_core::market::ArbVenue::from_code(code),
+        dex_name: String::new(),
+        price,
+        my_price: 100.0,
+        spread_pct: price - 100.0,
+        deposit_blocked: false,
+        withdraw_blocked: false,
+    }
+}
+
+/// Inputs holding a column's quotes, paired with the roster they are arranged by.
+///
+/// The roster is a separate cache key on `LabelState`, not an input — it is compared by pointer —
+/// so a test hands it alongside rather than inside.
+fn arb_inputs(
+    quotes: Vec<moon_core::market::ArbQuote>,
+    view: ArbViewCfg,
+) -> (LabelInputs, Rc<ArbViewCfg>) {
+    (
+        LabelInputs {
+            arb: quotes,
+            ..Default::default()
+        },
+        Rc::new(view),
+    )
+}
+
+/// ONE configured caption prints a LINE PER VENUE — that is the whole reason the column exists as a
+/// field rather than as eight captions the user has to place by hand.
+#[test]
+fn the_column_prints_one_line_per_venue() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let mut view = ArbViewCfg::default();
+    view.venues = vec![
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
+    ];
+
+    let texts = texts_with(&cfg, arb_inputs(vec![arb_quote(4, 101.0), arb_quote(9, 99.0)], view));
+
+    assert_eq!(texts.len(), 2, "one line per venue, from one caption");
+    assert!(texts[0].starts_with("BinanceF"), "{:?}", texts[0]);
+    assert!(texts[0].contains("+1.00%"), "{:?}", texts[0]);
+    assert!(texts[1].contains("-1.00%"), "{:?}", texts[1]);
+}
+
+/// Each line takes a run index of its OWN, past every caption index — a venue that stops reporting
+/// must not hand its retained run to the venue below it, which would reshape both.
+#[test]
+fn each_line_addresses_its_own_run() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let (inputs, view) = arb_inputs(
+        vec![arb_quote(4, 101.0), arb_quote(9, 99.0)],
+        ArbViewCfg::default(),
+    );
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg), &view, inputs);
+
+    let parts: Vec<usize> = state.texts.iter().map(|t| t.part).collect();
+    assert_eq!(
+        parts,
+        vec![
+            moon_core::config::ARB_PART_BASE,
+            moon_core::config::ARB_PART_BASE + 1
+        ]
+    );
+    assert!(
+        parts
+            .iter()
+            .all(|p| *p >= moon_core::config::CHART_LABEL_PARTS),
+        "an arbitrage line never occupies a caption index"
+    );
+}
+
+/// What each line prints is the roster's choice, and it applies to the whole column.
+#[test]
+fn the_roster_decides_what_each_line_prints() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let mut view = ArbViewCfg::default();
+    view.venues = vec![moon_core::config::ArbVenueCfg::new(
+        moon_core::market::ArbVenue::from_code(4),
+    )];
+
+    view.show = moon_core::config::ArbShow::Price;
+    let price_only = texts_with(&cfg, arb_inputs(vec![arb_quote(4, 101.0)], view.clone()));
+    assert!(!price_only[0].contains('%'), "{:?}", price_only[0]);
+
+    view.show = moon_core::config::ArbShow::Spread;
+    let spread_only = texts_with(&cfg, arb_inputs(vec![arb_quote(4, 101.0)], view));
+    assert!(spread_only[0].contains("+1.00%"), "{:?}", spread_only[0]);
+    assert!(!spread_only[0].contains("101"), "{:?}", spread_only[0]);
+}
+
+/// The venue's NAME is the line's prefix, so "colour the value only" paints the price and the
+/// spread while the venue itself stays readable.
+#[test]
+fn the_venue_name_is_the_lines_prefix() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let texts = {
+        let (inputs, view) = arb_inputs(vec![arb_quote(4, 101.0)], ArbViewCfg::default());
+        let mut state = LabelState::default();
+        state.update(&Rc::new(cfg), &view, inputs);
+        state.texts.clone()
+    };
+
+    let line = texts.first().expect("one venue prints");
+    assert_eq!(line.prefix, "BinanceF ", "the reference terminal's spelling");
+    assert!(line.text.contains("+1.00%"), "{:?}", line.text);
+    assert!(!line.text.contains("BinanceF"), "{:?}", line.text);
+}
+
+/// The column is a TABLE: venue names left-aligned in one column, prices and percentages
+/// right-aligned in theirs, so the decimal points stand under each other. The chart draws captions
+/// in a monospaced face, so padding with spaces is exact — and it is what the reference terminal's
+/// own column looks like.
+#[test]
+fn the_column_lines_its_cells_up() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let mut view = ArbViewCfg::default();
+    view.venues = vec![
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(101)),
+    ];
+    // "BinanceF" is eight characters and "UpBit" five; the prices differ in width too.
+    let quotes = vec![arb_quote(4, 9.5), arb_quote(101, 101.25)];
+
+    let (inputs, view) = arb_inputs(quotes, view);
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg), &view, inputs);
+
+    let lines: Vec<_> = state.texts.iter().collect();
+    assert_eq!(lines.len(), 2);
+    let name_widths: Vec<usize> = lines.iter().map(|l| l.prefix.chars().count()).collect();
+    assert_eq!(
+        name_widths[0], name_widths[1],
+        "the name column is one width: {:?}",
+        lines.iter().map(|l| l.prefix.clone()).collect::<Vec<_>>()
+    );
+    assert!(lines[0].prefix.starts_with("BinanceF"), "{:?}", lines[0].prefix);
+    assert!(lines[1].prefix.starts_with("UpBit "), "{:?}", lines[1].prefix);
+
+    let value_widths: Vec<usize> = lines.iter().map(|l| l.text.chars().count()).collect();
+    assert_eq!(
+        value_widths[0], value_widths[1],
+        "price and percent columns are one width each: {:?}",
+        lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+    );
+}
+
+/// The roster's floor shortens the COLUMN: a dozen venues quoting the same price are a dozen lines
+/// of nothing, and the reader asked to see only what moved.
+#[test]
+fn the_roster_floor_drops_quiet_venues() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let mut view = ArbViewCfg {
+        min_abs_pct: 1.0,
+        ..ArbViewCfg::default()
+    };
+    view.venues = vec![
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(4)),
+        moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
+    ];
+
+    let texts = texts_with(
+        &cfg,
+        arb_inputs(vec![arb_quote(4, 100.5), arb_quote(9, 102.0)], view),
+    );
+
+    assert_eq!(texts.len(), 1, "only the venue past the floor prints");
+    assert!(texts[0].starts_with("GateF"), "{:?}", texts[0]);
+}
+
+/// A venue that cannot be deposited to or withdrawn from is MARKED, not hidden: the spread is real
+/// and the settlement is not, and a reader must not take one for the other.
+#[test]
+fn a_blocked_venue_is_marked() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let mut quote = arb_quote(4, 101.0);
+    quote.withdraw_blocked = true;
+
+    let marked = texts_with(&cfg, arb_inputs(vec![quote.clone()], ArbViewCfg::default()));
+    assert!(marked[0].contains('⛔'), "{:?}", marked[0]);
+
+    let off = ArbViewCfg {
+        mark_blocked: false,
+        ..ArbViewCfg::default()
+    };
+    let unmarked = texts_with(&cfg, arb_inputs(vec![quote], off));
+    assert!(!unmarked[0].contains('⛔'), "{:?}", unmarked[0]);
+}
+
+/// With no quotes the column prints nothing at all — not an empty line, and not a heading with no
+/// rows under it.
+#[test]
+fn a_market_with_no_arbitrage_prints_nothing() {
+    let cfg = cfg_of(&[ChartLabelField::ArbColumn]);
+    let texts = texts_with(&cfg, arb_inputs(Vec::new(), ArbViewCfg::default()));
+    assert!(texts.is_empty());
 }
 
 // --- open-order figures -------------------------------------------------------------------------
@@ -221,7 +589,8 @@ fn the_caption_address_survives_a_skipped_neighbour() {
     };
     let mut state = LabelState::default();
     let cfg_rc = Rc::new(cfg.clone());
-    state.update(&cfg_rc, inputs);
+    let view_rc = Rc::new(ArbViewCfg::default());
+    state.update(&cfg_rc, &view_rc, inputs);
     let addresses: Vec<(usize, usize)> = state.texts.iter().map(|t| (t.row, t.part)).collect();
     assert_eq!(
         addresses,
@@ -240,12 +609,13 @@ fn re_running_with_identical_inputs_reports_no_change() {
     };
     let mut state = LabelState::default();
     let cfg_rc = Rc::new(cfg.clone());
+    let view_rc = Rc::new(ArbViewCfg::default());
     assert!(
-        state.update(&cfg_rc, inputs.clone()),
+        state.update(&cfg_rc, &view_rc, inputs.clone()),
         "the first pass formats"
     );
     assert!(
-        !state.update(&cfg_rc, inputs),
+        !state.update(&cfg_rc, &view_rc, inputs),
         "identical inputs must not reshape a single run"
     );
 }
@@ -261,10 +631,11 @@ fn a_tick_below_the_printed_precision_does_not_change_the_caption() {
         ..Default::default()
     };
     let cfg_rc = Rc::new(cfg.clone());
-    assert!(state.update(&cfg_rc, inputs.clone()));
+    let view_rc = Rc::new(ArbViewCfg::default());
+    assert!(state.update(&cfg_rc, &view_rc, inputs.clone()));
     inputs.delta_24h = Some(1.2341);
     assert!(
-        !state.update(&cfg_rc, inputs),
+        !state.update(&cfg_rc, &view_rc, inputs),
         "the same rounded text must report no change"
     );
 }
@@ -274,8 +645,10 @@ fn a_signed_figure_carries_its_sign_for_coloring() {
     let cfg = cfg_of(&[ChartLabelField::Delta1h]);
     let mut state = LabelState::default();
     let cfg_rc = Rc::new(cfg.clone());
+    let view_rc = Rc::new(ArbViewCfg::default());
     state.update(
         &cfg_rc,
+        &view_rc,
         LabelInputs {
             delta_1h: Some(-2.5),
             ..Default::default()
@@ -291,8 +664,10 @@ fn a_plain_name_reports_no_sign() {
     let cfg = cfg_of(&[ChartLabelField::Coin]);
     let mut state = LabelState::default();
     let cfg_rc = Rc::new(cfg.clone());
+    let view_rc = Rc::new(ArbViewCfg::default());
     state.update(
         &cfg_rc,
+        &view_rc,
         LabelInputs {
             ticker: "BTCUSDT".into(),
             ..Default::default()
@@ -508,7 +883,8 @@ fn the_quote_currency_prints_as_a_plain_name() {
     let cfg = cfg_of(&[ChartLabelField::Quote]);
     let mut state = LabelState::default();
     let cfg_rc = Rc::new(cfg.clone());
-    state.update(&cfg_rc, inputs);
+    let view_rc = Rc::new(ArbViewCfg::default());
+    state.update(&cfg_rc, &view_rc, inputs);
     assert_eq!(state.texts[0].text, "USDT");
     assert_eq!(state.texts[0].sign, None);
 }
@@ -528,12 +904,18 @@ fn the_preview_answers_for_every_field() {
         let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
         row.push_part(field);
         let captions = preview_row(&row);
+        // One line for an ordinary caption; a column caption previews as the whole column, which is
+        // the sample roster's two venues.
+        let expected = if field.is_column() { 2 } else { 1 };
         assert_eq!(
             captions.len(),
-            1,
-            "{field:?} printed nothing in the preview"
+            expected,
+            "{field:?} printed the wrong number of lines in the preview"
         );
-        assert!(!captions[0].text.trim().is_empty(), "{field:?} is blank");
+        assert!(
+            captions.iter().all(|c| !c.text.trim().is_empty()),
+            "{field:?} is blank"
+        );
     }
 }
 
@@ -569,9 +951,11 @@ fn a_hidden_module_prints_nothing_at_all() {
     row.visible = false;
     cfg.rows[0] = row;
     let cfg_rc = Rc::new(cfg);
+    let view_rc = Rc::new(ArbViewCfg::default());
     let mut state = LabelState::default();
     state.update(
         &cfg_rc,
+        &view_rc,
         LabelInputs {
             ticker: "BTCUSDT".into(),
             ..Default::default()

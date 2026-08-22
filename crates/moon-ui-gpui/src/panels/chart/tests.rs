@@ -78,7 +78,17 @@ fn chart_stacks_pass_their_workspace_group_into_every_panel() {
     assert!(main.contains(
         "ChartPanel::new_main(\n                backend,\n                Some(workspace_group),"
     ));
-    assert!(add.contains(
-        "ChartPanel::new_addto(backend, workspace_group, num, bucket, epoch, theme, cx)"
-    ));
+    // Matched without the argument list's layout: the call has since grown a parameter and been
+    // wrapped, and pinning its formatting would make this test fail on `cargo fmt` rather than on
+    // the thing it guards — the group travelling into the panel.
+    assert!(add.contains("ChartPanel::new_addto("));
+    let call = add
+        .split("ChartPanel::new_addto(")
+        .nth(1)
+        .expect("the AddToChart panel constructor must remain present");
+    let args = call.split(')').next().unwrap_or_default();
+    assert!(
+        args.contains("workspace_group"),
+        "AddToChart panels must be constructed with their workspace group: {args:?}"
+    );
 }

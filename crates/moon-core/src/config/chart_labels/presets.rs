@@ -8,10 +8,17 @@
 //! people usually put here", and because the families they name — the instrument, the deltas, the
 //! position — are exactly the rows the reference terminal prints.
 
-use super::{ChartLabelField, LabelAlign, LabelZone};
+use serde::{Deserialize, Serialize};
+
+use super::{ChartLabelField, LabelAlign, LabelFlow, LabelZone};
 
 /// One ready-made row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Serialized, because a module REMEMBERS the preset it was created from: that is what keeps its
+/// name translatable. The serde name is the wire form, so a variant may be reordered freely but
+/// never renamed without migrating `charts.json` and `layout.toml`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LabelPreset {
     /// What is being looked at: the coin, the core that trades it, the venue.
     Instrument,
@@ -23,16 +30,19 @@ pub enum LabelPreset {
     Position,
     /// The perpetual's funding charge and the time to the next one.
     Funding,
+    /// What the same coin costs on every other venue the core watches.
+    Arbitrage,
 }
 
 impl LabelPreset {
     /// Every preset, in menu order: what the chart is, then how it moves, then what is at risk.
-    pub const ALL: [LabelPreset; 5] = [
+    pub const ALL: [LabelPreset; 6] = [
         LabelPreset::Instrument,
         LabelPreset::CoinDeltas,
         LabelPreset::MarketBackdrop,
         LabelPreset::Position,
         LabelPreset::Funding,
+        LabelPreset::Arbitrage,
     ];
 
     /// Locale key of the preset's name, which is also the name the created row takes.
@@ -43,6 +53,7 @@ impl LabelPreset {
             LabelPreset::MarketBackdrop => "chart_labels.preset.market_backdrop",
             LabelPreset::Position => "chart_labels.preset.position",
             LabelPreset::Funding => "chart_labels.preset.funding",
+            LabelPreset::Arbitrage => "chart_labels.preset.arbitrage",
         }
     }
 
@@ -68,6 +79,7 @@ impl LabelPreset {
                 ChartLabelField::OpenPnlPct,
             ],
             LabelPreset::Funding => &[ChartLabelField::Funding, ChartLabelField::FundingIn],
+            LabelPreset::Arbitrage => &[ChartLabelField::ArbColumn],
         }
     }
 
@@ -78,9 +90,24 @@ impl LabelPreset {
     pub fn zone(self) -> LabelZone {
         match self {
             LabelPreset::Instrument | LabelPreset::Funding => LabelZone::ZoneTop,
+            // Over the PLOT, on the left, which is where the reference terminal prints it and the
+            // only band tall enough for a column of a dozen venues.
+            LabelPreset::Arbitrage => LabelZone::ChartTop,
             LabelPreset::CoinDeltas | LabelPreset::MarketBackdrop | LabelPreset::Position => {
                 LabelZone::ChartTop
             }
+        }
+    }
+
+    /// Which way the created module's own captions run.
+    ///
+    /// A column for the arbitrage roster and for nothing else so far: its lines are venues, one
+    /// under another, and printing them across a line would be a row of prices with no way to tell
+    /// which venue each belongs to.
+    pub fn flow(self) -> LabelFlow {
+        match self {
+            LabelPreset::Arbitrage => LabelFlow::Column,
+            _ => LabelFlow::Row,
         }
     }
 
@@ -88,6 +115,7 @@ impl LabelPreset {
     pub fn align(self) -> LabelAlign {
         match self {
             LabelPreset::Instrument | LabelPreset::Funding => LabelAlign::Right,
+            LabelPreset::Arbitrage => LabelAlign::Left,
             LabelPreset::CoinDeltas | LabelPreset::MarketBackdrop | LabelPreset::Position => {
                 LabelAlign::Left
             }

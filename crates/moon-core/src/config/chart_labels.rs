@@ -41,8 +41,27 @@ pub const CHART_LABEL_ROWS: usize = 16;
 /// room around there.
 pub const CHART_LABEL_PARTS: usize = 8;
 
-/// Retained text runs reserved per row: one per part, plus one for the row's printed name.
-pub const ROW_RUN_STRIDE: usize = CHART_LABEL_PARTS + 1;
+/// First run index a module's ARBITRAGE rows occupy, past its captions and its name.
+///
+/// An arbitrage caption prints a whole COLUMN — one line per venue — from a single configured
+/// caption, so its lines cannot be addressed as parts: there are more of them than a module holds,
+/// and how many depends on what the core reports rather than on anything saved. They get their own
+/// range of the same per-row stride instead, which keeps one addressing rule for every retained
+/// run and costs nothing while no chart prints one (the pool grows by index, on demand).
+pub const ARB_PART_BASE: usize = ROW_NAME_PART + 1;
+
+/// First run index reserved for a caption's PREFIX.
+///
+/// A caption whose colour applies to the value alone is two runs, not one: the prefix in the
+/// theme's colour and the figure in the sign's. They cannot share an index — a run holds one string
+/// — and the prefix cannot borrow a neighbour's, so the whole prefix range mirrors the value range
+/// above it. The pool grows by index on demand, so a chart that colours whole captions never
+/// allocates any of this.
+pub const PREFIX_PART_BASE: usize = ARB_PART_BASE + super::arb_view::ARB_MAX_ROWS;
+
+/// Retained text runs reserved per row: one per part, one for the row's printed name, the
+/// arbitrage column's own range, and a prefix run mirroring each of them.
+pub const ROW_RUN_STRIDE: usize = PREFIX_PART_BASE * 2;
 
 /// Run index — and part index — of a row's printed NAME.
 ///
@@ -217,6 +236,79 @@ impl LabelFlow {
     }
 }
 
+/// Retained-history window a caption reads its figure over.
+///
+/// A PARAMETER of the caption rather than a field of its own, and that is the whole point: the
+/// history carries the same two figures — how far it moved, how much traded — over eight windows,
+/// so spelling each pair as a field would put sixteen entries in the catalogue that differ only by
+/// a number. One "Дельта" with a window control beside it is the same power in one menu line, and
+/// it is also how the PnL basis already works.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelWindow {
+    M1,
+    M5,
+    M15,
+    M30,
+    /// The hour, which is what a glance at a chart is usually read against.
+    #[default]
+    H1,
+    H3,
+    H24,
+    H72,
+}
+
+/// How many windows a caption can choose from. The readout that fills them is indexed by
+/// [`LabelWindow::ALL`]'s order, so the two must not drift.
+pub const LABEL_WINDOW_COUNT: usize = 8;
+
+impl LabelWindow {
+    /// Every window, shortest first. THIS order indexes the market readout.
+    pub const ALL: [LabelWindow; LABEL_WINDOW_COUNT] = [
+        LabelWindow::M1,
+        LabelWindow::M5,
+        LabelWindow::M15,
+        LabelWindow::M30,
+        LabelWindow::H1,
+        LabelWindow::H3,
+        LabelWindow::H24,
+        LabelWindow::H72,
+    ];
+
+    /// Windows the retained TRADE buckets cover, and therefore the only ones carrying a buy/sell
+    /// split. Five minutes is the whole span those buckets hold.
+    pub const TRADE_WINDOWS: &'static [LabelWindow] = &[LabelWindow::M1, LabelWindow::M5];
+
+    /// Position in [`Self::ALL`], which is the index the readout is addressed by.
+    pub fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|w| *w == self)
+            .unwrap_or_default()
+    }
+
+    /// The window as a caption spells it: `1м`, `24ч`. Short because it rides INSIDE a caption
+    /// prefix over candles, where the field name has already been shortened for the same reason.
+    pub fn locale_key(self) -> &'static str {
+        match self {
+            LabelWindow::M1 => "chart_labels.window.m1",
+            LabelWindow::M5 => "chart_labels.window.m5",
+            LabelWindow::M15 => "chart_labels.window.m15",
+            LabelWindow::M30 => "chart_labels.window.m30",
+            LabelWindow::H1 => "chart_labels.window.h1",
+            LabelWindow::H3 => "chart_labels.window.h3",
+            LabelWindow::H24 => "chart_labels.window.h24",
+            LabelWindow::H72 => "chart_labels.window.h72",
+        }
+    }
+
+    /// Whether this is the window a part carries when it says nothing, for the file that then does
+    /// not state it.
+    fn is_default(&self) -> bool {
+        *self == LabelWindow::H1
+    }
+}
+
 /// How a part picks its color.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "mode", content = "rgb")]
@@ -272,10 +364,25 @@ impl PnlBasis {
 pub struct LabelStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<LabelColor>,
+    /// Whether only the VALUE takes the colour, leaving the caption's prefix in the theme's.
+    ///
+    /// "Фандинг: +3.90%" reads as a label and a figure, and only the figure is positive — colouring
+    /// the word with it makes the row a block of green that the eye has to re-parse to find the
+    /// number. On by default for exactly that reason; a caption with no prefix is unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_only: Option<bool>,
+    /// Smallest magnitude, in percent, that is worth colouring at all.
+    ///
+    /// A by-sign caption paints every hundredth of a percent as a gain or a loss, and a column of
+    /// arbitrage spreads then reads as noise where only one row matters. Below this the caption
+    /// keeps the theme colour and still prints its value. `0` — the default — colours everything,
+    /// which is what every caption did before this existed.
+    ///
+    /// Percent, so it applies to the fields that print one; see [`ChartLabelField::is_percent`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_min_pct: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_mult: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<bool>,
 }
@@ -285,10 +392,12 @@ pub struct LabelStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResolvedLabelStyle {
     pub color: LabelColor,
+    /// Whether the colour applies to the value alone, leaving the prefix in the theme's colour.
+    pub value_only: bool,
+    /// Magnitude below which a by-sign caption stays in the theme colour, in percent.
+    pub color_min_pct: f32,
     /// Multiplier on the chart's label font size, already clamped to the drawable range.
     pub size_mult: f32,
-    /// Whether a translucent plate is drawn under the row this part belongs to.
-    pub plate: bool,
     /// Whether the printed text carries the field's short caption ("Δ1ч 0.8%" rather than "0.8%").
     pub caption: bool,
 }
@@ -311,6 +420,13 @@ pub struct ChartLabelPart {
     pub style: LabelStyle,
     /// Which orders a position figure counts; meaningless for other fields.
     pub pnl_basis: PnlBasis,
+    /// Which retained-history window a movement or volume figure is read over; meaningless for
+    /// other fields.
+    ///
+    /// Not written while it is the default, like every other flag here: a file states what was
+    /// CHANGED, and a window on a caption that ignores one is noise in a diff.
+    #[serde(skip_serializing_if = "LabelWindow::is_default")]
+    pub window: LabelWindow,
 }
 
 /// Whether a flag is at its default, for the fields a file only states when they are turned off.
@@ -337,11 +453,13 @@ impl ChartLabelPart {
             visible: true,
             style: LabelStyle {
                 color: None,
+                value_only: None,
+                color_min_pct: None,
                 size_mult: None,
-                plate: None,
                 caption: None,
             },
             pnl_basis: PnlBasis::All,
+            window: LabelWindow::H1,
         }
     }
 
@@ -360,6 +478,14 @@ impl ChartLabelPart {
         let base = self.field.default_style();
         ResolvedLabelStyle {
             color: self.style.color.unwrap_or(base.color),
+            value_only: self.style.value_only.unwrap_or(base.value_only),
+            // A hand-edited negative or non-finite threshold is treated as ABSENT rather than
+            // clamped: it means "colour everything", which is the default.
+            color_min_pct: self
+                .style
+                .color_min_pct
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .unwrap_or(base.color_min_pct),
             // A non-finite multiplier is treated as ABSENT rather than clamped: `f32::clamp`
             // passes NaN straight through, and a NaN size reaches the shaper as a caption of no
             // size at all.
@@ -369,7 +495,6 @@ impl ChartLabelPart {
                 .filter(|m| m.is_finite())
                 .unwrap_or(base.size_mult)
                 .clamp(LABEL_SIZE_MULT_MIN, LABEL_SIZE_MULT_MAX),
-            plate: self.style.plate.unwrap_or(base.plate),
             caption: self.style.caption.unwrap_or(base.caption),
         }
     }
@@ -378,15 +503,40 @@ impl ChartLabelPart {
 /// One row of captions: where it is printed, what it is called, and what it prints.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartLabelRow {
-    /// User-assigned name. Empty means the popup shows the row's fields instead, and
-    /// [`Self::show_name`] has nothing to print.
+    /// User-assigned name, which OVERRIDES [`Self::preset`]'s own. Empty means the row is named by
+    /// its preset, or — with no preset either — by the fields it prints.
+    ///
+    /// A name typed here is the user's own words and is stored verbatim, in whatever language they
+    /// typed it. That is exactly why it is not where a preset's name goes: see [`Self::preset`].
     pub name: String,
+    /// Ready-made module this row was created from, if any.
+    ///
+    /// Held so the row can be NAMED in the reader's language: the alternative — storing the
+    /// preset's localized name as [`Self::name`] at creation time — freezes that name in the
+    /// language the row was created in, and the shipped default then names its modules in the
+    /// developer's. The model carries no dictionary, so the lookup key is all it can hold; the
+    /// terminal turns [`LabelPreset::locale_key`] into words.
+    ///
+    /// Purely a LABEL: nothing downstream treats a preset row differently, and editing the row's
+    /// captions does not clear it — a user who renames "Position" and adds a caption to it still
+    /// gets their own name, and one who clears the name gets the translated one back.
+    pub preset: Option<LabelPreset>,
     /// Band this row's captions are printed in.
     pub zone: LabelZone,
     /// Where in that band the row sits.
     pub align: LabelAlign,
     /// Whether the name is printed on the chart as the row's leading caption.
     pub show_name: bool,
+    /// Whether a translucent plate is drawn under this module.
+    ///
+    /// The MODULE's, not a caption's, and that is what the switch means to a reader: the plate is
+    /// one rectangle behind a block of figures, so "put a backing under this" is a question about
+    /// the block. Held per caption it could not be answered at all — half a plate under half a
+    /// line is not a thing the chart can draw — and the switch appeared to do nothing, because a
+    /// caption's neighbours kept growing the same rectangle.
+    ///
+    /// On by default: every caption drew a plate before this moved.
+    pub plate: bool,
     /// Whether the row is drawn at all.
     ///
     /// One switch for the whole family, which is what "hide this for a moment" asks for; a row
@@ -434,6 +584,8 @@ impl Default for ChartLabelRow {
     fn default() -> Self {
         Self {
             name: String::new(),
+            preset: None,
+            plate: true,
             zone: LabelZone::ZoneTop,
             align: LabelAlign::Center,
             show_name: false,
@@ -479,8 +631,24 @@ impl ChartLabelRow {
     ///
     /// A blank row is not a row — `sanitize` drops it, which is what makes removing a row's last
     /// caption remove the row.
+    ///
+    /// A preset does NOT keep a row alive: it is a name for what the row prints, and a row that
+    /// prints nothing has nothing to name. Counting it here would leave a module behind after its
+    /// last caption was deleted — the one thing `sanitize` exists to prevent.
     pub fn is_blank(&self) -> bool {
         self.name.is_empty() && !self.parts.iter().any(ChartLabelPart::is_used)
+    }
+
+    /// Locale key of the name this row takes when [`Self::name`] is empty, if it has one.
+    ///
+    /// The other half of [`Self::name`]: together they answer "what is this module called" without
+    /// the model holding a dictionary. A row with neither is named by its captions, which only the
+    /// terminal can spell.
+    pub fn title_key(&self) -> Option<&'static str> {
+        self.name
+            .is_empty()
+            .then(|| self.preset.map(LabelPreset::locale_key))
+            .flatten()
     }
 
     /// Whether the row puts anything on the chart.
@@ -489,8 +657,11 @@ impl ChartLabelRow {
     }
 
     /// Whether the row prints its own name as a caption.
+    ///
+    /// A preset row counts as named: the switch prints "Позиция" without the user having to type
+    /// it, and it follows the language like every other caption.
     pub fn prints_name(&self) -> bool {
-        self.show_name && !self.name.is_empty()
+        self.show_name && (!self.name.is_empty() || self.preset.is_some())
     }
 
     /// How many leading parts carry a field.
@@ -536,9 +707,13 @@ impl Default for ChartLabelsCfg {
     /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
     /// Not a designer's guess: this is the developer's own Main tab, transcribed from its
-    /// `charts.json` entry on 2026-08-21 — five named modules, each placed and spaced by hand.
-    /// The module names are theirs and travel with the layout; nothing prints them (`show_name` is
-    /// off), they only name the rows in the settings popup.
+    /// `charts.json` entry on 2026-08-21 — five modules, each placed and spaced by hand. Nothing
+    /// prints their names (`show_name` is off); they only name the rows in the settings popup.
+    ///
+    /// Named through [`ChartLabelRow::preset`] rather than by a literal, so the popup speaks the
+    /// reader's language: this set ships to everyone, and typed names would have shipped the
+    /// developer's Russian to every locale. The scale badge has no preset and is named by the
+    /// field it prints, which is translated the same way.
     ///
     /// Every optional figure disappears on its own when it has nothing to report, so a chart with
     /// no position shows the instrument and the scale badge and nothing else.
@@ -547,7 +722,7 @@ impl Default for ChartLabelsCfg {
 
         // The instrument, in the control strip pushed right: coin, core, venue stacked as a block.
         let mut instrument = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
-        instrument.name = "Инструмент".to_string();
+        instrument.preset = Some(LabelPreset::Instrument);
         instrument.flow = LabelFlow::Column;
         instrument.push_part(ChartLabelField::Coin);
         instrument.push_part(ChartLabelField::Core);
@@ -557,7 +732,6 @@ impl Default for ChartLabelsCfg {
 
         // The Y-scale badge rides the plot's own top-right corner, one size up.
         let mut scale = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
-        scale.name = "Масштаб".to_string();
         scale.push_part(ChartLabelField::ScaleBadge);
         scale.parts[0].style.size_mult = Some(1.7);
         cfg.rows[1] = scale;
@@ -565,7 +739,7 @@ impl Default for ChartLabelsCfg {
         // The coin's own movement: a block of two, standing BESIDE the badge rather than under it,
         // with room between them.
         let mut deltas = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
-        deltas.name = "Дельты монеты".to_string();
+        deltas.preset = Some(LabelPreset::CoinDeltas);
         deltas.flow = LabelFlow::Column;
         deltas.placement = LabelFlow::Row;
         deltas.gap = 24;
@@ -575,7 +749,7 @@ impl Default for ChartLabelsCfg {
 
         // What is open, as one line along the plot's top-left edge.
         let mut orders = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
-        orders.name = "Открытые ордера".to_string();
+        orders.preset = Some(LabelPreset::Position);
         orders.placement = LabelFlow::Row;
         orders.push_part(ChartLabelField::OpenOrders);
         orders.push_part(ChartLabelField::OpenPnlMoney);
@@ -585,7 +759,7 @@ impl Default for ChartLabelsCfg {
 
         // Funding under it, spaced off that line; the countdown prints bare, with no prefix.
         let mut funding = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
-        funding.name = "Фандинг".to_string();
+        funding.preset = Some(LabelPreset::Funding);
         funding.gap = 8;
         funding.push_part(ChartLabelField::Funding);
         funding.push_part(ChartLabelField::FundingIn);
@@ -639,6 +813,13 @@ impl ChartLabelsCfg {
             }
             compact(&mut row.parts, ChartLabelPart::is_used);
             for part in &mut row.parts {
+                // A window the field cannot be read over is repaired to one it can: switching a
+                // caption's field must not leave it asking for a figure that never arrives, and a
+                // hand-edited file must not either.
+                let choices = part.field.window_choices();
+                if !choices.contains(&part.window) {
+                    part.window = choices.first().copied().unwrap_or_default();
+                }
                 // A hand-edited `nan` is dropped, not clamped: it would survive the clamp, and a
                 // configuration that does not equal ITSELF turns every comparison downstream — the
                 // panel's settings signature, the engine's change check — into a false change on
@@ -681,14 +862,32 @@ impl ChartLabelsCfg {
         Some(ix)
     }
 
+    /// Append a row that is already built, returning its index, or `None` when there is no room.
+    ///
+    /// The door the module EDITOR comes back through when it was opened on a module that does not
+    /// exist yet: a new module is only worth a slot once it holds something, and a slot taken
+    /// before the editor opened would be a module the user then cancelled out of. A blank row is
+    /// refused here rather than pushed and swept away by [`Self::sanitize`], so the caller can tell
+    /// "no room" from "nothing to add".
+    pub fn push_prepared(&mut self, row: ChartLabelRow) -> Option<usize> {
+        if row.is_blank() {
+            return None;
+        }
+        let ix = self.first_free_row()?;
+        self.rows[ix] = row;
+        Some(ix)
+    }
+
     /// Append a row built from a preset: its fields, in its band, under its name.
     ///
-    /// The name is the caller's, already localized — the model holds no dictionary, and a key baked
-    /// into a saved profile would keep speaking the language it was created in.
-    pub fn push_preset(&mut self, preset: LabelPreset, name: String) -> Option<usize> {
+    /// The NAME is not stored — the preset is, and the terminal looks it up in the dictionary every
+    /// time it prints it. A localized string baked into a saved profile keeps speaking the language
+    /// it was created in, which is what the shipped default did before this.
+    pub fn push_preset(&mut self, preset: LabelPreset) -> Option<usize> {
         let ix = self.first_free_row()?;
         let mut row = ChartLabelRow::new(preset.zone(), preset.align());
-        row.name = name;
+        row.preset = Some(preset);
+        row.flow = preset.flow();
         for field in preset.fields() {
             if !row.push_part(*field) {
                 break;

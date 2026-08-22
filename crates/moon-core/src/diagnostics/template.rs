@@ -134,11 +134,24 @@ ENV: MOON_DIAG_KLINE_CACHE=1",
         key: "market_sources",
         default: "false",
         doc: "\
-Market data sources: which source served a request, the cache prefix it read, and the one-time
-native backfill for a coarse timeframe.
-Answers \"why is this chart showing old prices\" and \"did anything come out of the cache at all\".
+Market data sources: which source served a request, the cache prefix it read, the one-time
+native backfill for a coarse timeframe, and the ARBITRAGE read — the core's own watch mask, the
+venue codes that actually reported, and the Hyperliquid deployer names.
+Answers \"why is this chart showing old prices\", \"did anything come out of the cache at all\" and
+\"which platform byte is the venue the reference terminal calls OkxF\".
 COST: moderate — rises with cursor movement, since a hovering cursor re-reads sources.
 ENV: MOON_DIAG_MARKET_SOURCES=1",
+    },
+    KeyDoc {
+        section: "log",
+        key: "chart_input",
+        default: "false",
+        doc: "\
+Chart hit-testing: where a press landed and which rectangles it was tested against.
+Answers \"why did clicking this label do something else\" — the chart draws in its own pass, in
+its own units, and a hit test that disagrees with the drawing cannot be seen by reading either.
+COST: one line per tested press; nothing while the pointer only moves.
+ENV: MOON_DIAG_CHART_INPUT=1",
     },
     KeyDoc {
         section: "log",

@@ -205,6 +205,84 @@ impl ChartTabs {
     /// name, horizontal orientation (the only orientation supporting comparison), an anchor lock,
     /// and broom mode, so neighbors show only their order books. Right-clicking the same coin again
     /// focuses the existing tab by name instead of creating a duplicate.
+    /// Compare two charts: the one a click came FROM, and the one it asked for.
+    ///
+    /// Two shapes, and which one applies is the difference between "start comparing" and "keep
+    /// comparing":
+    ///
+    /// - already on a custom tab holding the anchor — the case of clicking a second venue in a
+    ///   comparison just opened — the target joins THAT tab. A second tab for the same coin would
+    ///   split the comparison in half, which is the opposite of what the click asked for.
+    /// - otherwise a tab is created holding exactly the two: the anchor first, since it is the
+    ///   chart the reader was looking at, and the target beside it.
+    ///
+    /// Deliberately NOT `open_compare_tab`'s "every core on every exchange": an arbitrage click
+    /// names ONE venue, and answering it with a dozen charts is answering a question nobody asked.
+    pub(super) fn open_compare_with(
+        &mut self,
+        anchor: (CoreId, String),
+        target: (CoreId, String),
+        cx: &mut Context<Self>,
+    ) {
+        if self.compare_tab_holds(&anchor, cx) {
+            self.open_coin_on_active(target.0, target.1.clone(), cx);
+            // Pinned, like every other chart on the tab: `create_compare_tab` pins the pair it
+            // opens with and restoring the tab pins everything it loads, so a chart arriving
+            // through the coin path — which adds on the TTL the detect feed needs — would be the
+            // one chart on a comparison showing an unpinned marker and sorting below its neighbors.
+            if let Some(panel) = self.active_stack() {
+                panel.update(cx, |s, c| s.pin_coin(target.0, &target.1, c));
+            }
+            return;
+        }
+        self.open_compare_pair(anchor, target, cx);
+    }
+
+    /// Whether the ACTIVE tab is a custom one already showing this chart.
+    ///
+    /// KNOWN LIMIT: a comparison DETACHED into its own window is not this tab, so a venue clicked
+    /// there opens a new comparison in the strip instead of joining the window the click came from.
+    /// Routing it back would need the press to name the window it happened in — the request carries
+    /// only the anchor chart, and a detached window holding the same market is not proof the click
+    /// was made there.
+    fn compare_tab_holds(&self, anchor: &(CoreId, String), cx: &App) -> bool {
+        if !self.active_is_custom() {
+            return false;
+        }
+        let Some(panel) = self.active_stack() else {
+            return false;
+        };
+        panel
+            .read(cx)
+            .coins(cx)
+            .iter()
+            .any(|(core, market)| *core == anchor.0 && market == &anchor.1)
+    }
+
+    /// Create a comparison tab holding exactly two charts.
+    fn open_compare_pair(
+        &mut self,
+        anchor: (CoreId, String),
+        target: (CoreId, String),
+        cx: &mut Context<Self>,
+    ) {
+        let label = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .market_label(anchor.0, &anchor.1)
+            .display_coin()
+            .to_string();
+        // The anchor first: it is the chart the reader was already looking at, so it keeps the
+        // left-hand place and the lock.
+        let coins = vec![anchor.clone(), target];
+        // NO broom: this comparison is two charts the reader named, and hiding the second one's
+        // plot behind its order book would answer with less than was asked for. The other way in —
+        // "show me this coin everywhere" — keeps it, because a dozen full charts is unreadable.
+        self.create_compare_tab(label, coins, anchor, false, cx);
+    }
+
     pub(super) fn open_compare_tab(
         &mut self,
         core: CoreId,
@@ -273,6 +351,22 @@ impl ChartTabs {
             }
             out
         };
+        self.create_compare_tab(label, coins, (core, market), true, cx);
+    }
+
+    /// Build the tab itself: a horizontal stack of `coins`, locked onto `anchor`.
+    ///
+    /// Shared by both ways in — "compare this coin everywhere" and "compare these two" — because
+    /// the tab they produce is the same thing; the difference is which charts it holds and whether
+    /// the neighbours are broomed down to their order books.
+    fn create_compare_tab(
+        &mut self,
+        label: String,
+        coins: Vec<(CoreId, String)>,
+        anchor: (CoreId, String),
+        broom: bool,
+        cx: &mut Context<Self>,
+    ) {
         let num = self.next_custom_num;
         self.next_custom_num += 1;
         let bucket = ChartBucket::Shared;
@@ -286,7 +380,6 @@ impl ChartTabs {
                 self.theme.clone(),
             )
         });
-        let anchor = (core, market);
         stack.update(cx, |s, c| {
             s.set_hold_vacated(false);
             s.set_orientation(Some(StackOrientation::Horizontal), c);
@@ -295,8 +388,7 @@ impl ChartTabs {
                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);
             }
             s.pin_all(c);
-            // Lock the anchor and enable broom mode so neighbors show only their order books.
-            s.restore_compare(Some(anchor.clone()), true, c);
+            s.restore_compare(Some(anchor.clone()), broom, c);
         });
         self.custom.push((num, bucket.clone(), stack.clone()));
         self.custom_labels.insert(num, label.clone());
@@ -304,7 +396,7 @@ impl ChartTabs {
         self.persist_custom(cx, num, &bucket, &coins, &label);
         self.upsert_spec(cx, num, &bucket, move |s| {
             s.compare_anchor = Some(anchor);
-            s.compare_orderbook_only = true;
+            s.compare_orderbook_only = broom;
         });
         self.watch_custom_stack(num, &bucket, &stack, cx);
         self.sync_active_scale(cx);

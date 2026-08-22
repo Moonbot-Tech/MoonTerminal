@@ -111,6 +111,7 @@ impl ChartEngine {
             text_run_cursor: 0,
             caption_runs: Vec::new(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
+            arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::default()),
             firetest_text_labels: Vec::new(),
             firetest_text_runs: Vec::new(),
             firetest_text_layer: GpuCanvasRetainedTextLayer::default(),
@@ -654,6 +655,72 @@ impl ChartEngine {
             return false;
         }
         data.chart_graphics = cfg;
+        data.last_order_sig = u64::MAX;
+        data.mark_view_dirty();
+        true
+    }
+
+    /// The arbitrage venue whose NAME is under a point, in the pane's own logical pixels.
+    ///
+    /// Read off what the last frame DREW — the caption pass records each name's rectangle as it
+    /// places it — because the column moves with the pane and with the roster, and a rectangle
+    /// recomputed at click time would have to repeat the whole placement to be right.
+    ///
+    /// Args:
+    ///     pane: Pane index the point belongs to.
+    ///     x, y: Point in the pane's own logical pixels.
+    ///
+    /// Returns:
+    ///     The venue's platform code and its DEX name (empty for an ordinary exchange).
+    pub fn arb_venue_at(&self, pane: usize, x: f32, y: f32) -> Option<(u8, String)> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let hit = render
+            .panes
+            .get(pane)?
+            .arb_hits
+            .iter()
+            .find(|hit| hit.contains(x, y))?;
+        Some((hit.code, hit.dex.clone()))
+    }
+
+    /// Rectangles of the arbitrage venue names a pane drew, in the pane's own logical pixels.
+    ///
+    /// For the cursor overlay: a native cursor can only be set during PAINT, so the panel lays
+    /// transparent zones over these and lets the library ask for the pointer. Only reachable venues
+    /// are handed out — the others are not targets.
+    pub fn arb_hit_rects(&self, pane: usize) -> Vec<(f32, f32, f32, f32)> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let Some(pane) = render.panes.get(pane) else {
+            return Vec::new();
+        };
+        pane.arb_hits
+            .iter()
+            .filter(|hit| hit.reachable)
+            .map(|hit| (hit.x, hit.y, hit.w, hit.h))
+            .collect()
+    }
+
+    /// Applies the GLOBAL arbitrage roster — which venues the column lists, in what order, under
+    /// what name and colour. Returns true on change.
+    ///
+    /// Global rather than per tab, so every chart takes the same handle; the panel hands it down on
+    /// render exactly like the captions beside it, and the pointer test carries the common case.
+    pub fn set_arb_view(&mut self, cfg: std::rc::Rc<moon_core::config::ArbViewCfg>) -> bool {
+        let mut data = self.data.borrow_mut();
+        if std::rc::Rc::ptr_eq(&data.arb_view, &cfg) {
+            return false;
+        }
+        let unchanged = *data.arb_view == *cfg;
+        data.arb_view = cfg.clone();
+        data.render.borrow_mut().arb_view = cfg;
+        if unchanged {
+            return false;
+        }
+        // The column is arranged where the captions are RESOLVED, on the sync paths, and those
+        // short-circuit on an unchanged signature — so a roster edit reaches a chart whose market
+        // has not moved only if the signature is invalidated here.
         data.last_order_sig = u64::MAX;
         data.mark_view_dirty();
         true

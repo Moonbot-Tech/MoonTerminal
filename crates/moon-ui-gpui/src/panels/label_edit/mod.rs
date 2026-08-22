@@ -41,6 +41,20 @@ pub struct LabelEditState {
     /// Where an accepted module goes. `Rc` because the dialog's content closure is rebuilt on every
     /// render and each rebuild needs its own handle.
     on_done: Rc<dyn Fn(ChartLabelRow, &mut App)>,
+    /// Which field picker is open, by its element id.
+    ///
+    /// The picker is a CONTROLLED popover — see [`crate::controls::field_picker`] — because a pick
+    /// has to outlive the close: the library's own close-on-click fires on mouse-down and takes the
+    /// button out of the tree before the click lands on it. Keyed by id rather than a bare flag so
+    /// a second picker can be added without the two fighting over one switch.
+    picker_open: Option<SharedString>,
+    /// Opens the arbitrage roster window, for a module whose caption prints that column.
+    ///
+    /// Handed in rather than opened here, for the reason this dialog takes `on_done` rather than
+    /// writing the configuration itself: the roster is the BACKEND's, and this window knows nothing
+    /// about backends. It is invoked like an OK — the module is applied first — because the two
+    /// windows cannot stand on top of each other.
+    on_open_arb: Rc<dyn Fn(&mut Window, &mut App)>,
     /// Run when the dialog goes away, whichever way it goes: OK, Cancel, the ✕, or the overlay.
     ///
     /// The opener uses it to bring back the popup it closed. A popover paints in its own deferred
@@ -58,11 +72,21 @@ impl LabelEditState {
     fn accepted_row(&self, cx: &App) -> ChartLabelRow {
         let mut row = self.row.clone();
         row.name = self.name_input.read(cx).value().trim().to_string();
-        // The checkbox is disabled while the field is empty, so a module left without a name must
-        // not carry a switch that says it prints one — it would come back the moment a name is
-        // typed, which is not what the user set.
-        row.show_name = row.show_name && !row.name.is_empty();
+        // The checkbox is disabled while the module has no name AT ALL, so one left nameless must
+        // not carry a switch that says it prints one — it would come back the moment a name was
+        // typed, which is not what the user set. A preset module always has a name to print, even
+        // with the field empty, and keeps its switch.
+        row.show_name = row.show_name && (!row.name.is_empty() || row.preset.is_some());
         row
+    }
+
+    /// Open or close one field picker, by id.
+    fn set_picker(state: &Entity<Self>, id: &str, open: bool, cx: &mut App) {
+        let id = SharedString::from(id.to_string());
+        state.update(cx, |s, cx| {
+            s.picker_open = open.then_some(id);
+            cx.notify();
+        });
     }
 
     /// Keep the selection on a caption that exists.
@@ -94,17 +118,26 @@ pub(crate) fn open_label_edit(
     cx: &mut App,
     on_done: impl Fn(ChartLabelRow, &mut App) + 'static,
     on_dismiss: impl Fn(&mut App) + 'static,
+    on_open_arb: impl Fn(&mut Window, &mut App) + 'static,
 ) {
-    let name_input = cx.new(|cx| {
-        MoonInputState::new(window, cx).placeholder(t!("chart_labels.row_name_hint").to_string())
-    });
+    // A preset module shows ITS OWN name as the placeholder rather than the generic hint: the
+    // field is empty because the name comes from the dictionary, and an empty box under a chart
+    // that clearly prints "Позиция" otherwise reads as a name that got lost. Typing here overrides
+    // it; clearing the field gives the translated name back.
+    let hint = row
+        .title_key()
+        .map(|key| t!(key).to_string())
+        .unwrap_or_else(|| t!("chart_labels.row_name_hint").to_string());
+    let name_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder(hint));
     name_input.update(cx, |st, c| st.set_value(row.name.clone(), window, c));
     let state = cx.new(|_| LabelEditState {
         row,
         selected: 0,
         name_input,
+        picker_open: None,
         on_done: Rc::new(on_done),
         on_dismiss: Rc::new(on_dismiss),
+        on_open_arb: Rc::new(on_open_arb),
     });
 
     window.open_unique_moon_dialog("chart-label-edit", cx, move |dialog, _window, cx| {

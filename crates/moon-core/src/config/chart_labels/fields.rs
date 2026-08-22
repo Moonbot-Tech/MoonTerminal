@@ -70,11 +70,73 @@ pub enum ChartLabelField {
     Funding,
     /// Time remaining until funding is next charged.
     FundingIn,
+    /// The venue's own tags for this coin: `Seed`, `Alpha`, `Monitoring`.
+    CoinTags,
+    /// Best bid and best ask.
+    Bid,
+    Ask,
+    /// Distance between them as a percentage of the ask: what a market order gives up.
+    Spread,
+    /// Exchange mark price — what liquidation and funding are computed against.
+    MarkPrice,
+    /// Signed distance of that mark from the last traded price, in percent.
+    MarkDelta,
+    /// The market's own price step.
+    PriceStep,
+    /// 24-hour volume as the venue states it, in the quote currency.
+    Volume24h,
+    /// Price movement over the caption's [`super::LabelWindow`], as an unsigned magnitude.
+    ///
+    /// The Screener's delta figure, not a signed change: it answers "how far did it travel", which
+    /// is what a short window is read for. The signed hour and day changes are [`Self::Delta1h`]
+    /// and [`Self::Delta24h`], and they stay separate because they answer which WAY.
+    WindowDelta,
+    /// Traded volume over that window, in the quote currency.
+    WindowVolume,
+    /// Share of that volume that was buying, in percent. Only short windows carry the split.
+    WindowBuyShare,
+    /// Maximum leverage the venue allows on this market.
+    MaxLeverage,
+    /// Largest order the venue accepts here, in the quote currency.
+    MaxOrder,
+    /// Position the EXCHANGE reports on this market, in the base coin, signed by direction.
+    ///
+    /// A different fact from [`Self::PosSize`] beside it: this is what the account actually holds,
+    /// including anything traded by hand or by another terminal, while the open-order figures count
+    /// only what this core's strategies opened.
+    ExchPosSize,
+    /// Average entry price of that exchange position.
+    ExchPosPrice,
+    /// Liquidation price the venue reports for it.
+    LiqPrice,
+    /// Account leverage in force on this market.
+    Leverage,
+    /// Whether margin here is cross or isolated.
+    MarginMode,
+    /// Profit this core booked on this coin during the session.
+    SessionPnl,
+    /// Free balance of the coin itself.
+    CoinBalance,
+    /// Strategy that produced the newest detect THIS core fired on this market.
+    ///
+    /// A different question from [`Self::OrderStrategy`] beside it: that one names the strategy
+    /// holding an open order, this one names the strategy that last SAW something here — which is
+    /// often a strategy that took no position at all.
+    DetectStrategy,
+    /// The line that detect carried, as the core wrote it.
+    DetectMsg,
+    /// Every arbitrage venue the core watches for this coin, as a COLUMN: one line per venue.
+    ///
+    /// The one caption that is not a single figure, because the figure it states is a comparison
+    /// and a comparison against one venue is not what anybody reads it for. Which venues appear, in
+    /// what order, under what name and in what colour is [`crate::config::ArbViewCfg`] — a global
+    /// roster, not a per-chart setting, because "Gate is green to me" is not a fact about one tab.
+    ArbColumn,
 }
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 22] = [
+    pub const ALL: [ChartLabelField; 45] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -97,6 +159,29 @@ impl ChartLabelField {
         ChartLabelField::BtcDelta72h,
         ChartLabelField::Funding,
         ChartLabelField::FundingIn,
+        ChartLabelField::CoinTags,
+        ChartLabelField::Bid,
+        ChartLabelField::Ask,
+        ChartLabelField::Spread,
+        ChartLabelField::MarkPrice,
+        ChartLabelField::MarkDelta,
+        ChartLabelField::PriceStep,
+        ChartLabelField::Volume24h,
+        ChartLabelField::WindowDelta,
+        ChartLabelField::WindowVolume,
+        ChartLabelField::WindowBuyShare,
+        ChartLabelField::MaxLeverage,
+        ChartLabelField::MaxOrder,
+        ChartLabelField::ExchPosSize,
+        ChartLabelField::ExchPosPrice,
+        ChartLabelField::LiqPrice,
+        ChartLabelField::Leverage,
+        ChartLabelField::MarginMode,
+        ChartLabelField::SessionPnl,
+        ChartLabelField::CoinBalance,
+        ChartLabelField::DetectStrategy,
+        ChartLabelField::DetectMsg,
+        ChartLabelField::ArbColumn,
     ];
 
     /// Menu section this field belongs to.
@@ -106,9 +191,10 @@ impl ChartLabelField {
             | ChartLabelField::Core
             | ChartLabelField::Venue
             | ChartLabelField::Quote
+            | ChartLabelField::CoinTags
             | ChartLabelField::None => ChartLabelGroup::Instrument,
-            ChartLabelField::LastPrice
-            | ChartLabelField::Delta1h
+            ChartLabelField::LastPrice => ChartLabelGroup::Price,
+            ChartLabelField::Delta1h
             | ChartLabelField::Delta24h
             | ChartLabelField::ScaleBadge
             | ChartLabelField::CompareDelta
@@ -116,15 +202,37 @@ impl ChartLabelField {
             | ChartLabelField::ExchangeDelta24h
             | ChartLabelField::BtcDelta1h
             | ChartLabelField::BtcDelta24h
-            | ChartLabelField::BtcDelta72h
-            | ChartLabelField::Funding
-            | ChartLabelField::FundingIn => ChartLabelGroup::Market,
+            | ChartLabelField::BtcDelta72h => ChartLabelGroup::Move,
+            | ChartLabelField::Bid
+            | ChartLabelField::Ask
+            | ChartLabelField::Spread
+            | ChartLabelField::MarkPrice
+            | ChartLabelField::MarkDelta
+            | ChartLabelField::PriceStep => ChartLabelGroup::Price,
+            ChartLabelField::WindowDelta => ChartLabelGroup::Move,
+            ChartLabelField::Volume24h
+            | ChartLabelField::WindowVolume
+            | ChartLabelField::WindowBuyShare => ChartLabelGroup::Volume,
+            ChartLabelField::Funding
+            | ChartLabelField::FundingIn
+            | ChartLabelField::MaxLeverage
+            | ChartLabelField::MaxOrder => ChartLabelGroup::Contract,
+            ChartLabelField::ArbColumn => ChartLabelGroup::Arbitrage,
             ChartLabelField::OpenPnlPct
             | ChartLabelField::OpenPnlMoney
             | ChartLabelField::OpenOrders
             | ChartLabelField::PosSize
             | ChartLabelField::Exposure => ChartLabelGroup::Position,
-            ChartLabelField::OrderStrategy => ChartLabelGroup::Strategy,
+            ChartLabelField::ExchPosSize
+            | ChartLabelField::ExchPosPrice
+            | ChartLabelField::LiqPrice
+            | ChartLabelField::Leverage
+            | ChartLabelField::MarginMode
+            | ChartLabelField::SessionPnl
+            | ChartLabelField::CoinBalance => ChartLabelGroup::Exchange,
+            ChartLabelField::OrderStrategy
+            | ChartLabelField::DetectStrategy
+            | ChartLabelField::DetectMsg => ChartLabelGroup::Strategy,
         }
     }
 
@@ -154,6 +262,29 @@ impl ChartLabelField {
             ChartLabelField::BtcDelta72h => "chart_labels.field.btc_delta_72h",
             ChartLabelField::Funding => "chart_labels.field.funding",
             ChartLabelField::FundingIn => "chart_labels.field.funding_in",
+            ChartLabelField::CoinTags => "chart_labels.field.coin_tags",
+            ChartLabelField::Bid => "chart_labels.field.bid",
+            ChartLabelField::Ask => "chart_labels.field.ask",
+            ChartLabelField::Spread => "chart_labels.field.spread",
+            ChartLabelField::MarkPrice => "chart_labels.field.mark_price",
+            ChartLabelField::MarkDelta => "chart_labels.field.mark_delta",
+            ChartLabelField::PriceStep => "chart_labels.field.price_step",
+            ChartLabelField::Volume24h => "chart_labels.field.volume_24h",
+            ChartLabelField::WindowDelta => "chart_labels.field.window_delta",
+            ChartLabelField::WindowVolume => "chart_labels.field.window_volume",
+            ChartLabelField::WindowBuyShare => "chart_labels.field.window_buy_share",
+            ChartLabelField::MaxLeverage => "chart_labels.field.max_leverage",
+            ChartLabelField::MaxOrder => "chart_labels.field.max_order",
+            ChartLabelField::ExchPosSize => "chart_labels.field.exch_pos_size",
+            ChartLabelField::ExchPosPrice => "chart_labels.field.exch_pos_price",
+            ChartLabelField::LiqPrice => "chart_labels.field.liq_price",
+            ChartLabelField::Leverage => "chart_labels.field.leverage",
+            ChartLabelField::MarginMode => "chart_labels.field.margin_mode",
+            ChartLabelField::SessionPnl => "chart_labels.field.session_pnl",
+            ChartLabelField::CoinBalance => "chart_labels.field.coin_balance",
+            ChartLabelField::DetectStrategy => "chart_labels.field.detect_strategy",
+            ChartLabelField::DetectMsg => "chart_labels.field.detect_msg",
+            ChartLabelField::ArbColumn => "chart_labels.field.arb_column",
         }
     }
 
@@ -179,6 +310,27 @@ impl ChartLabelField {
             ChartLabelField::BtcDelta72h => Some("chart_labels.short.btc_72h"),
             ChartLabelField::Funding => Some("chart_labels.short.funding"),
             ChartLabelField::FundingIn => Some("chart_labels.short.funding_in"),
+            ChartLabelField::Bid => Some("chart_labels.short.bid"),
+            ChartLabelField::Ask => Some("chart_labels.short.ask"),
+            ChartLabelField::Spread => Some("chart_labels.short.spread"),
+            ChartLabelField::MarkPrice => Some("chart_labels.short.mark_price"),
+            ChartLabelField::MarkDelta => Some("chart_labels.short.mark_delta"),
+            ChartLabelField::PriceStep => Some("chart_labels.short.price_step"),
+            ChartLabelField::Volume24h => Some("chart_labels.short.volume_24h"),
+            // The window fields name themselves with the WINDOW rather than a fixed word: the
+            // caption builder appends it, so one prefix says both which figure and over what.
+            ChartLabelField::WindowDelta => Some("chart_labels.short.window_delta"),
+            ChartLabelField::WindowVolume => Some("chart_labels.short.window_volume"),
+            ChartLabelField::WindowBuyShare => Some("chart_labels.short.window_buy_share"),
+            ChartLabelField::MaxLeverage => Some("chart_labels.short.max_leverage"),
+            ChartLabelField::MaxOrder => Some("chart_labels.short.max_order"),
+            ChartLabelField::ExchPosSize => Some("chart_labels.short.exch_pos_size"),
+            ChartLabelField::ExchPosPrice => Some("chart_labels.short.exch_pos_price"),
+            ChartLabelField::LiqPrice => Some("chart_labels.short.liq_price"),
+            ChartLabelField::Leverage => Some("chart_labels.short.leverage"),
+            ChartLabelField::SessionPnl => Some("chart_labels.short.session_pnl"),
+            ChartLabelField::CoinBalance => Some("chart_labels.short.coin_balance"),
+            ChartLabelField::DetectStrategy => Some("chart_labels.short.detect_strategy"),
             _ => None,
         }
     }
@@ -198,6 +350,69 @@ impl ChartLabelField {
         )
     }
 
+    /// Whether what this field prints is a PERCENTAGE.
+    ///
+    /// The colour threshold is stated in percent, so it can only be applied to a caption whose
+    /// value is one: "colour from 1%" means nothing to a price, a size, or a countdown, and
+    /// applying it there would silently drop the colour from figures the user never set a
+    /// threshold for.
+    pub fn is_percent(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::ScaleBadge
+                | ChartLabelField::CompareDelta
+                | ChartLabelField::Delta1h
+                | ChartLabelField::Delta24h
+                | ChartLabelField::OpenPnlPct
+                | ChartLabelField::ExchangeDelta1h
+                | ChartLabelField::ExchangeDelta24h
+                | ChartLabelField::BtcDelta1h
+                | ChartLabelField::BtcDelta24h
+                | ChartLabelField::BtcDelta72h
+                | ChartLabelField::Funding
+                | ChartLabelField::Spread
+                | ChartLabelField::MarkDelta
+                | ChartLabelField::WindowDelta
+                | ChartLabelField::WindowBuyShare
+                // Every line of the column is a spread, so the whole column is.
+                | ChartLabelField::ArbColumn
+        )
+    }
+
+    /// Whether this field prints a COLUMN of its own rather than one value.
+    ///
+    /// Asked by the drawing pass, which addresses such a caption's lines in their own run range,
+    /// and by the editor, which offers the roster's settings instead of a prefix switch.
+    pub fn is_column(self) -> bool {
+        matches!(self, ChartLabelField::ArbColumn)
+    }
+
+    /// Windows this field can actually be read over.
+    ///
+    /// Not every figure exists over every window: the buy/sell split comes from the retained trade
+    /// buckets, which cover five minutes, while the longer windows are built from candles that
+    /// carry no split at all. Offering the day there would offer a caption that prints nothing and
+    /// reads as broken.
+    pub fn window_choices(self) -> &'static [super::LabelWindow] {
+        match self {
+            ChartLabelField::WindowBuyShare => super::LabelWindow::TRADE_WINDOWS,
+            _ => &super::LabelWindow::ALL,
+        }
+    }
+
+    /// Whether this field reads a [`super::LabelWindow`], and therefore shows that control.
+    ///
+    /// Asked of the FIELD, like [`Self::uses_pnl_basis`], so a window cannot linger on a caption
+    /// whose field was changed to something that ignores one.
+    pub fn uses_window(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::WindowDelta
+                | ChartLabelField::WindowVolume
+                | ChartLabelField::WindowBuyShare
+        )
+    }
+
     /// Style this field draws with when its part overrides nothing.
     ///
     /// These are the sizes and colors the hard-coded caption used, so the default configuration
@@ -206,24 +421,27 @@ impl ChartLabelField {
         match self {
             // The coin leads, one size up: it is the fact a glance needs.
             ChartLabelField::Coin => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.25,
-                plate: true,
                 caption: false,
             },
             // The comparison delta is the one figure a broom-mode pane exists to show.
             ChartLabelField::CompareDelta => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::BySign,
                 size_mult: 1.7,
-                plate: true,
                 caption: false,
             },
             // Deliberately smaller than the comparison delta beside it: a secondary indicator must
             // not compete with the figure the pane is being read for.
             ChartLabelField::ScaleBadge => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.45,
-                plate: true,
                 caption: false,
             },
             ChartLabelField::Delta1h
@@ -235,26 +453,53 @@ impl ChartLabelField {
             | ChartLabelField::BtcDelta72h
             | ChartLabelField::Funding
             | ChartLabelField::OpenPnlPct
+            | ChartLabelField::MarkDelta
+            | ChartLabelField::SessionPnl
+            // Every line of the column is a spread against this market, and which SIDE it is on is
+            // the whole reading. The venue's name is the line's prefix and keeps the theme colour.
+            | ChartLabelField::ArbColumn
             | ChartLabelField::OpenPnlMoney => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::BySign,
                 size_mult: 1.0,
-                plate: true,
                 caption: true,
             },
             // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
             ChartLabelField::OpenOrders
             | ChartLabelField::PosSize
             | ChartLabelField::Exposure
-            | ChartLabelField::FundingIn => ResolvedLabelStyle {
+            | ChartLabelField::FundingIn
+            | ChartLabelField::Bid
+            | ChartLabelField::Ask
+            | ChartLabelField::Spread
+            | ChartLabelField::MarkPrice
+            | ChartLabelField::PriceStep
+            | ChartLabelField::Volume24h
+            | ChartLabelField::WindowDelta
+            | ChartLabelField::WindowVolume
+            | ChartLabelField::WindowBuyShare
+            | ChartLabelField::MaxLeverage
+            | ChartLabelField::MaxOrder
+            | ChartLabelField::ExchPosSize
+            | ChartLabelField::ExchPosPrice
+            | ChartLabelField::LiqPrice
+            | ChartLabelField::Leverage
+            | ChartLabelField::CoinBalance
+            // Two strategy captions can sit on one chart — the one holding an order and the one
+            // that last fired — and a bare name says nothing about which is which.
+            | ChartLabelField::DetectStrategy => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.0,
-                plate: true,
                 caption: true,
             },
             _ => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
                 color: LabelColor::Theme,
                 size_mult: 1.0,
-                plate: true,
                 caption: false,
             },
         }
@@ -265,25 +510,50 @@ impl ChartLabelField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartLabelGroup {
     Instrument,
-    Market,
+    /// What the coin COSTS: the quote side and the venue's own marks.
+    Price,
+    /// How far it moved — this coin's own change, the exchange's, BTC's.
+    Move,
+    /// How much traded.
+    Volume,
+    /// What the contract itself charges and allows: funding, caps.
+    Contract,
     Position,
+    /// What the EXCHANGE reports on this market for this core's account, as opposed to what this
+    /// core's own orders add up to. Its own section because the two answer different questions, and
+    /// a reader picking "position size" has to be told which one they are picking.
+    Exchange,
     Strategy,
+    /// The column of other venues' prices, which is one field and its own subject.
+    Arbitrage,
 }
 
 impl ChartLabelGroup {
     /// Sections in menu order.
-    pub const ALL: [ChartLabelGroup; 4] = [
+    /// Sections in picker order: what it IS, what it costs, how it moves, how much traded, what
+    /// the contract charges, what is open — ours then the venue's — who acted, and the column.
+    pub const ALL: [ChartLabelGroup; 9] = [
         ChartLabelGroup::Instrument,
-        ChartLabelGroup::Market,
+        ChartLabelGroup::Price,
+        ChartLabelGroup::Move,
+        ChartLabelGroup::Volume,
+        ChartLabelGroup::Contract,
         ChartLabelGroup::Position,
+        ChartLabelGroup::Exchange,
         ChartLabelGroup::Strategy,
+        ChartLabelGroup::Arbitrage,
     ];
 
     pub fn locale_key(self) -> &'static str {
         match self {
             ChartLabelGroup::Instrument => "chart_labels.group.instrument",
-            ChartLabelGroup::Market => "chart_labels.group.market",
+            ChartLabelGroup::Price => "chart_labels.group.price",
+            ChartLabelGroup::Move => "chart_labels.group.move",
+            ChartLabelGroup::Volume => "chart_labels.group.volume",
+            ChartLabelGroup::Contract => "chart_labels.group.contract",
+            ChartLabelGroup::Arbitrage => "chart_labels.group.arbitrage",
             ChartLabelGroup::Position => "chart_labels.group.position",
+            ChartLabelGroup::Exchange => "chart_labels.group.exchange",
             ChartLabelGroup::Strategy => "chart_labels.group.strategy",
         }
     }

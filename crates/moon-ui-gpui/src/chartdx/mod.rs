@@ -197,6 +197,27 @@ pub(super) struct PlacedLabel {
     pub solid: bool,
 }
 
+/// One arbitrage venue name as it was drawn, and which venue it names.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ArbHit {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Protocol platform code, and the DEX name for a deployer.
+    pub code: u8,
+    pub dex: String,
+    /// Whether a core is connected to this venue — whether the click has anywhere to go.
+    pub reachable: bool,
+}
+
+impl ArbHit {
+    /// Whether a point in the pane's own logical pixels lands on this name.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.w && y >= self.y && y <= self.y + self.h
+    }
+}
+
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
 // STATIC grid density uses fixed width and height divisions. Like Moonbot, the grid stays still and
@@ -304,6 +325,10 @@ struct PaneRender {
     labels_shot_substituted: bool,
     /// Strategy name of the newest open order on this market, from the same sync.
     label_strategy: String,
+    /// Strategy and line of the newest detect this pane's core fired on this market, from the same
+    /// sync. Replaced only by the next detect on that market — see `LabelInputs::detect_strategy`.
+    label_detect_strategy: String,
+    label_detect_msg: String,
     /// Open-position figures per basis, from the same sync.
     label_basis: [text::BasisStats; 3],
     /// Signed one-hour and 24-hour changes, refreshed with the market snapshot.
@@ -312,6 +337,31 @@ struct PaneRender {
     /// Exchange and BTC background movement plus funding, refreshed with the same snapshot and
     /// only while a caption asks for any of it.
     label_context: Option<moon_core::market::MarketContextReadout>,
+    /// Quote side, venue caps, coin tags and the exchange's own position, on the same terms as
+    /// [`Self::label_context`]: refreshed with the market snapshot, and only while a caption asks.
+    label_figures: Option<moon_core::market::MarketFiguresReadout>,
+    /// Retained-history movement and volume per window, gated separately because it costs more.
+    label_windows: Option<moon_core::market::MarketWindowsReadout>,
+    /// Venues this terminal is connected to, refreshed with the session sync that fills the order
+    /// figures beside it. Empty until a caption asks for the column.
+    label_arb_reachable: Vec<(u8, String)>,
+    /// Where each arbitrage venue NAME was drawn, in the pane's own logical pixels.
+    ///
+    /// Rebuilt by the caption pass on every presented frame and reused in place, because a click
+    /// has to hit what the LAST frame actually drew: the column moves with the pane, and a stale
+    /// rectangle would open the wrong exchange.
+    pub(super) arb_hits: Vec<ArbHit>,
+    /// Arbitrage quotes for this pane's market, refreshed on a throttle rather than per revision:
+    /// the protocol only hands them over one venue at a time, each behind the market lock.
+    label_arb: Vec<moon_core::market::ArbQuote>,
+    /// When they were last read, in Unix milliseconds. Zero means never.
+    label_arb_read_ms: i64,
+    /// Market those quotes were read for.
+    ///
+    /// Carried because the THROTTLE outlives a retarget: a pane switched to another coin would
+    /// otherwise keep printing the previous one's arbitrage prices until the quarter-second was up.
+    /// Every other readout here follows the new market on the revision that changed it.
+    label_arb_market: String,
     /// Wall clock the funding countdown is measured against, QUANTIZED TO THE MINUTE.
     ///
     /// Quantized because it is part of the caption cache key: the raw clock would differ on every
@@ -530,7 +580,16 @@ impl PaneRender {
             label_basis: [text::BasisStats::default(); 3],
             delta_1h: None,
             delta_24h: None,
+            label_detect_strategy: String::new(),
+            label_detect_msg: String::new(),
             label_context: None,
+            label_figures: None,
+            label_windows: None,
+            arb_hits: Vec::new(),
+            label_arb_reachable: Vec::new(),
+            label_arb: Vec::new(),
+            label_arb_read_ms: 0,
+            label_arb_market: String::new(),
             label_now_ms: 0,
             view: ChartViewGpu::default(),
             layers: PlatformLayers::new(),
@@ -710,6 +769,10 @@ struct RenderState {
     /// pane: the configuration owns a name string per row, and cloning it by value would allocate
     /// sixteen strings in the frame loop for nothing.
     chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
+    /// The arbitrage roster the caption column is arranged by, mirrored like `chart_labels` and for
+    /// the same reason: the text pass reads it per pane on every rebuild and must not borrow the
+    /// data state. GLOBAL — one roster for every chart — so every pane shares this handle.
+    arb_view: Rc<moon_core::config::ArbViewCfg>,
     firetest_text_labels: Vec<String>,
     firetest_text_runs: Vec<GpuCanvasTextRun>,
     firetest_text_layer: GpuCanvasRetainedTextLayer,
@@ -1013,6 +1076,9 @@ struct ChartDataState {
     /// and style. A per-tab override or the `layout.chart_labels` fallback, like the two above.
     /// Shared with the render mirror through an `Rc`; see the field there.
     chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
+    /// The GLOBAL arbitrage roster, shared with the render mirror the same way. Not a per-tab
+    /// override: which venues matter and what colour they are is one answer for the whole terminal.
+    arb_view: Rc<moon_core::config::ArbViewCfg>,
     /// Saved X scale in pixels per millisecond from Shift+middle-click sync. NEW panels start with it
     /// instead of the built-in time-window default; `None` uses that default.
     default_x_ppm: Option<f32>,

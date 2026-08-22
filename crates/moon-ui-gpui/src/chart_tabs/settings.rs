@@ -245,8 +245,8 @@ impl ChartTabs {
     /// Drain "apply to all" requests from detached chart windows in THIS group.
     ///
     /// They send requests through Backend because they cannot access the group's stacks directly.
-    /// Every popup's ⧉ travels in the same queue and runs the same walk; a detached source always
-    /// leaves Main unchanged (`include_main = false`), like ⚙.
+    /// Every popup's ⧉ travels in the same queue and runs the same walk, with the targets the
+    /// window's own row already chose.
     pub(super) fn drain_apply_all(&mut self, cx: &mut Context<Self>) {
         if self.backend.read(cx).chart_apply_all.is_empty() {
             // The common case by a wide margin: this drain is called from the backend observer, so
@@ -262,9 +262,25 @@ impl ChartTabs {
                 mine
             });
         for r in reqs {
-            // A detached-window request leaves Main unchanged, like ⚙ with `include_main = false`.
-            self.apply_all(r.apply, false, cx);
+            // The press already names its targets: the window that made it showed the same row.
+            self.apply_all(r.apply, cx);
         }
+    }
+}
+
+/// The ⧉ press: the strip performs it itself, over its own group.
+impl super::apply_row::ApplyRowHost for ChartTabs {
+    fn apply_press(&self) -> &super::apply_row::ApplyPress {
+        &self.apply_press
+    }
+    fn apply_press_mut(&mut self) -> &mut super::apply_row::ApplyPress {
+        &mut self.apply_press
+    }
+    fn apply_row_counts(&self, values: &[StackSetting], cx: &App) -> [usize; 3] {
+        apply_all::override_counts(&self.backend.read(cx).chart_specs, values)
+    }
+    fn perform_apply(&mut self, apply: ApplyAll, cx: &mut Context<Self>) {
+        self.apply_all(apply, cx);
     }
 }
 
@@ -287,22 +303,6 @@ impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
                 .and_then(|p| p.read(cx).chart_graphics()),
         }
     }
-    fn apply_graphics_all(
-        &mut self,
-        cfg: moon_core::config::ChartGraphicsCfg,
-        cx: &mut Context<Self>,
-    ) {
-        // Main receives a copy only when its own popup is open, matching ⚙ and the candle popup.
-        let include_main = matches!(self.active, Tab::Main);
-        self.apply_all(
-            ApplyAll {
-                values: vec![StackSetting::Graphics(cfg)],
-                x_ppm: None,
-            },
-            include_main,
-            cx,
-        );
-    }
 }
 
 /// Host for the "Chart labels" popup targeting the ACTIVE tab, like ⚙ and the candle popup.
@@ -323,18 +323,6 @@ impl super::labels_popup::LabelsPopupHost for ChartTabs {
                 .and_then(|p| p.read(cx).chart_labels()),
         }
     }
-    fn apply_labels_all(&mut self, cfg: moon_core::config::ChartLabelsCfg, cx: &mut Context<Self>) {
-        // Main receives a copy only when its own popup is open, matching ⚙ and the other popups.
-        let include_main = matches!(self.active, Tab::Main);
-        self.apply_all(
-            ApplyAll {
-                values: vec![StackSetting::Labels(cfg)],
-                x_ppm: None,
-            },
-            include_main,
-            cx,
-        );
-    }
 }
 
 /// Host for the "Candles and Trades" candlestick popup targeting the ACTIVE tab, like ⚙.
@@ -354,30 +342,6 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
                 self.add_stack(*n, b).and_then(|p| p.read(cx).candle_view())
             }
         }
-    }
-    fn apply_candle_view_all(
-        &mut self,
-        cfg: moon_core::market::CandleViewCfg,
-        cx: &mut Context<Self>,
-    ) {
-        // Copy this window's X scale with the candle settings when one is set.
-        let x_ppm = self
-            .backend
-            .read(cx)
-            .layout
-            .chart_x_ppm_by_group
-            .get(&self.group)
-            .copied();
-        // Main receives a copy only when its own popup is open, matching ⚙ behavior.
-        let include_main = matches!(self.active, Tab::Main);
-        self.apply_all(
-            ApplyAll {
-                values: vec![StackSetting::CandleView(cfg)],
-                x_ppm,
-            },
-            include_main,
-            cx,
-        );
     }
 }
 
@@ -466,26 +430,37 @@ impl LayoutPopupHost for ChartTabs {
     /// Apply all active-tab layout-popup settings plus price scale directly to every group stack.
     ///
     /// Candle view, chart graphics and X scale are not copied: each has its own popup and its own ⧉.
-    /// `include_main` indicates that the popup is open on Main.
-    fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
-        let include_main = matches!(self.active, Tab::Main);
+    /// These twelve values have no default of their own, so the press WRITES them into the tabs of
+    /// the kinds it names rather than storing them.
+    fn layout_press_values(&self, cx: &App) -> Vec<StackSetting> {
         let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
         let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);
         let snap = self.layout_popup_snapshot(cx);
-        let values = apply_all::layout_values(
+        apply_all::layout_values(
             &snap,
             hf,
             hs,
             self.active_scale_value(cx),
             self.active_layout_orientation(cx),
-        );
-        self.apply_all(
-            ApplyAll {
-                values,
-                x_ppm: None,
-            },
-            include_main,
-            cx,
-        );
+        )
+    }
+
+    fn source_kind(&self, cx: &App) -> moon_core::config::ChartTabKind {
+        match &self.active {
+            Tab::Main => self.main.read(cx).default_kind(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .map(|p| p.read(cx).default_kind())
+                .unwrap_or(moon_core::config::ChartTabKind::Main),
+        }
+    }
+
+    fn source_x_ppm(&self, cx: &App) -> Option<f32> {
+        self.backend
+            .read(cx)
+            .layout
+            .chart_x_ppm_by_group
+            .get(&self.group)
+            .copied()
     }
 }

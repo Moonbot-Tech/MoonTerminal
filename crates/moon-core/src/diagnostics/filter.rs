@@ -24,6 +24,8 @@ const BALANCES_TARGET: &str = "moon_core::feed::live";
 const KLINE_CACHE_TARGET: &str = "moon_core::market::kline_cache";
 /// Module prefix carrying market-source tracing, including cache-prefix reads and native backfill.
 const MARKET_SOURCES_TARGET: &str = "moon_core::market::source";
+/// Module prefix carrying chart hit-test tracing.
+const CHART_INPUT_TARGET: &str = "moon_ui_gpui::panels::chart";
 
 /// The directive string for `cfg`, taking the base from `RUST_LOG` when it is set.
 pub fn filter_string(cfg: &DiagCfg) -> String {
@@ -49,6 +51,7 @@ pub fn compose(cfg: &DiagCfg, base: Option<&str>) -> String {
     area(cfg.log.balances, BALANCES_TARGET);
     area(cfg.log.kline_cache, KLINE_CACHE_TARGET);
     area(cfg.log.market_sources, MARKET_SOURCES_TARGET);
+    area(cfg.log.chart_input, CHART_INPUT_TARGET);
     // Appended last so a hand-written directive can raise something an area already covers; it is
     // the escape hatch, and an escape hatch that loses to the presets is not one.
     let extra = cfg.log.filter.trim();

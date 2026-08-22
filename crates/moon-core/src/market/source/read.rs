@@ -26,12 +26,92 @@ fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCan
 }
 
 use super::{
-    CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, DetectSnapshot,
-    LatestPriceError, MarketContextReadout, MarketDataSource, MarketRevisions, MarketTickerReadout,
+    ArbQuote, ArbVenue, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
+    ChartHistoryRead, CoinTag,
+    DetectSnapshot, LatestPriceError, MarketContextReadout, MarketDataSource,
+    MarketFiguresReadout, MarketRevisions, MarketTickerReadout, MarketWindowsReadout,
     drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
     trade_price_range,
 };
 use crate::market::candles::ChartCandle;
+use moonproto::state::TradeVolumeTotals;
+
+/// What a market's position actually is: size signed by DIRECTION, with the entry and liquidation
+/// prices of the leg that size came from.
+///
+/// Two facts the net figure alone gets wrong, and both are already handled this way in
+/// `feed::assets` — the Assets panel lost short positions to each of them once:
+///
+/// 1. **Hedge mode keeps the legs separately.** A core holding only a short reports `pos_size == 0`
+///    with `short_pos_size` set, and reading the net would call that market flat.
+/// 2. **Direction is not always in the sign.** A core can report a POSITIVE NET size with
+///    `pos_dir == Sell`, and taking the sign alone would paint that short as a long.
+///
+/// The second rule applies to the NET branch only, and that is not a shortcut: `OrderType::Sell` is
+/// byte 0 and is also `OrderType::default()` — what a core writes when it states no direction at
+/// all. A leg branch already knows its direction from the leg it read, so consulting `pos_dir`
+/// there would turn every long-only hedge position into a short the moment that field was absent.
+/// `feed::assets` draws the line in the same place.
+pub(super) fn position_of(pos: &moonproto::state::MarketBalancePosition) -> (Option<f64>, f64, f64) {
+    let (size, price, liq) = if pos.pos_size != 0.0 {
+        (pos.pos_size, pos.pos_price, pos.liq_price)
+    } else if pos.short_pos_size.abs() > pos.long_pos_size.abs() {
+        (
+            -pos.short_pos_size.abs(),
+            pos.short_pos_price,
+            pos.short_liq_price,
+        )
+    } else if pos.long_pos_size != 0.0 {
+        (
+            pos.long_pos_size.abs(),
+            pos.long_pos_price,
+            pos.long_liq_price,
+        )
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    if !(size.is_finite() && size != 0.0) {
+        return (None, 0.0, 0.0);
+    }
+    // Only the NET figure can be positive on a short; a leg's sign was decided above.
+    let net_short = pos.pos_size != 0.0 && pos.pos_dir == moonproto::OrderType::Sell;
+    let signed = match net_short {
+        true => -size.abs(),
+        false => size,
+    };
+    (Some(signed), price, liq)
+}
+
+/// Deployer names out of one snapshot's `AuthCheck` response.
+fn dex_names_of(snapshot: &moonproto::MoonClientSnapshot) -> Vec<String> {
+    snapshot
+        .auth_info()
+        .map(|info| info.known_dexes.iter().map(|d| d.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// The protocol's platform code for a raw wire byte.
+///
+/// `ArbPlatformCode::from_byte` is not public outside the protocol's diagnostics build, and the
+/// named constants cover only what THAT build knew about — which is exactly the venue this terminal
+/// then cannot read (the reference terminal shows an `OkxF` column whose code appears in no
+/// constant). `hyper_deployer` is public and is a plain `50 + index` with wrapping arithmetic, so
+/// it reaches every byte.
+///
+/// Ugly on purpose, and deliberately the ONLY place the numbering is bridged: see
+/// docs-internal/FORK_BUGS.md, where a public byte constructor is asked for.
+fn platform_code(byte: u8) -> moonproto::ArbPlatformCode {
+    moonproto::ArbPlatformCode::hyper_deployer(byte.wrapping_sub(ArbVenue::DEPLOYER_BASE))
+}
+
+/// A figure the venue states, or nothing.
+///
+/// Zero is how every unset double arrives from the wire — an absent bid, a spot market's mark, a
+/// coin whose 24-hour volume has not been sent yet — and a caption that printed it would state a
+/// fact the exchange never gave. Non-finite is the same case through a different door.
+fn positive(v: f64) -> Option<f64> {
+    (v.is_finite() && v > 0.0).then_some(v)
+}
 
 /// Lower bound of every history-retry delay in this file, in seconds.
 ///
@@ -572,6 +652,364 @@ impl MarketDataSource {
                 .filter(|v| v.is_finite()),
             funding_at_ms,
         })
+    }
+
+    /// Return the per-market figures a chart caption can print, beyond price and context.
+    ///
+    /// TWO snapshots, because the value spans two subjects. The market half — quotes, the venue's
+    /// caps, its tags — comes from the deduplicated PROVIDER, since `BTCUSDT@Binance` quotes the
+    /// same for every core on that exchange. The position half comes from the CONSUMER core, since
+    /// what is open is an account fact and differs between two cores watching one market. A caller
+    /// that read them separately could pair one core's position with another's price; here it
+    /// cannot.
+    ///
+    /// Everything is `Option` and absence is a real answer: a spot market has no mark price, an
+    /// unlevered account no leverage, and a caption prints nothing rather than a confident zero.
+    ///
+    /// Args:
+    ///     core: Consumer core the pane belongs to.
+    ///     market: Data-key market name.
+    ///
+    /// Returns:
+    ///     The figures, or `None` when neither half has a snapshot yet.
+    pub fn market_figures(&self, core: CoreId, market: &str) -> Option<MarketFiguresReadout> {
+        let mut out = MarketFiguresReadout::default();
+        let exchange = self.exchange_of(core);
+        let provider_snapshot = self
+            .provider_of(core)
+            .and_then(|provider| self.core_client(provider))
+            .and_then(|client| client.snapshot_versioned());
+        let mut any = false;
+        if let Some(snapshot) = provider_snapshot.as_ref() {
+            let markets = snapshot.markets();
+            if let Some(handle) = markets.get(market) {
+                any = true;
+                out.tags = CoinTag::from_bits(markets.tags(market).bits());
+                handle.with(|m| {
+                    out.bid = positive(m.price.bid);
+                    out.ask = positive(m.price.ask);
+                    // `mark_price_found` is the venue's own answer to "does this market have one",
+                    // and it is the only one that separates a spot market from a futures market
+                    // whose first mark has not arrived.
+                    out.mark = m.price.mark_price_found.then(|| m.price.mark_price).and_then(positive);
+                    out.price_step = positive(m.price.chart_price_step);
+                    out.vol_24h = positive(m.volume);
+                    out.max_leverage = (m.max_leverage > 0).then_some(m.max_leverage);
+                    out.max_order = max_order_notional(
+                        market,
+                        exchange,
+                        m.max_notional(),
+                        m.max_qty(),
+                        m.price.ask,
+                        m.contract_size(),
+                    );
+                });
+            }
+        }
+        let core_snapshot = self
+            .core_client(core)
+            .and_then(|client| client.snapshot_versioned());
+        if let Some(snapshot) = core_snapshot.as_ref() {
+            if let Some(handle) = snapshot.markets().get(market) {
+                any = true;
+                let pos = handle.balance_position();
+                // A flat market reports a zero size, and that is NOT the same as "no position
+                // arrived": the entry and liquidation prices are only meaningful while something is
+                // open, so they are withheld together with it rather than printed as zeros.
+                let (size, price, liq) = position_of(&pos);
+                out.pos_size = size;
+                out.pos_price = size.and(positive(price));
+                out.liq_price = size.and(positive(liq));
+                out.leverage_x = (pos.leverage_x > 0).then_some(pos.leverage_x);
+                out.isolated = pos
+                    .position_type
+                    .is_known()
+                    .then(|| pos.position_type.is_isolated());
+                // Session profit is a SUM and is legitimately zero on a coin traded to break even,
+                // so it is reported whenever it is a number at all.
+                out.session_pnl = pos.total_profit().is_finite().then(|| pos.total_profit());
+                out.coin_balance = pos.asset_balance.is_finite().then_some(pos.asset_balance);
+            }
+        }
+        any.then_some(out)
+    }
+
+    /// Return the Hyperliquid deployer names one core knows, indexed by deployer index.
+    ///
+    /// The same list the arbitrage quotes are named from, read WITHOUT a market — the settings
+    /// window has a roster but no coin, and a window that numbered the deployers while the chart
+    /// beside it named them would be two answers to one question.
+    ///
+    /// Args:
+    ///     core: Core whose `AuthCheck` response is read. Its OWN, not its market provider's: the
+    ///         deployer list is part of a core's identity, and a Binance provider knows none.
+    ///
+    /// Returns:
+    ///     Names by index, empty when the core sent no list.
+    pub fn arb_dex_names(&self, core: CoreId) -> Vec<String> {
+        let own = self
+            .core_client(core)
+            .and_then(|c| c.snapshot_versioned())
+            .map(|snapshot| dex_names_of(&snapshot))
+            .unwrap_or_default();
+        if !own.is_empty() {
+            return own;
+        }
+        // The list is Hyperliquid's, and a core connected elsewhere sends none — but the arbitrage
+        // slots it reports still carry deployer codes, and a terminal watching several cores
+        // usually has a Hyperliquid one among them. Any core's list names the same deployers,
+        // because the index comes from the same protocol.
+        self.any_dex_names()
+    }
+
+    /// The first non-empty deployer list any connected core knows, by ASCENDING core id.
+    ///
+    /// The order is the point: cores live in a `HashMap`, and taking whichever one iteration
+    /// happened to reach first would let the settings window and the chart behind it spell the same
+    /// deployer differently — and differently again on the next open.
+    pub fn any_dex_names(&self) -> Vec<String> {
+        let clients: Vec<_> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let mut cores: Vec<CoreId> = inner.clients.keys().copied().collect();
+            cores.sort_unstable();
+            cores
+                .into_iter()
+                .filter_map(|core| inner.clients.get(&core).and_then(SharedMoonClient::get))
+                .collect()
+        };
+        clients
+            .into_iter()
+            .filter_map(|client| client.snapshot_versioned())
+            .map(|snapshot| dex_names_of(&snapshot))
+            .find(|names| !names.is_empty())
+            .unwrap_or_default()
+    }
+
+    /// Return every arbitrage price the core holds for one market, newest first by venue order.
+    ///
+    /// The core keeps a ring of ten points per venue plus a "now" entry, and both carry the OTHER
+    /// venue's price; only the ring carries what THIS market cost at the same moment. The spread is
+    /// therefore computed from the ring's latest point, and a venue whose ring is still empty is
+    /// skipped rather than compared against a live price it was never quoted with.
+    ///
+    /// Venues the core is not watching (`enabled == false`) never appear: the switch is the core's
+    /// own, and a row for a venue that reports nothing would be a permanently empty line.
+    ///
+    /// Args:
+    ///     core: Consumer core whose provider owns the market data.
+    ///     market: Data-key market name.
+    ///
+    /// Returns:
+    ///     The quotes, or `None` when the provider, its client, its snapshot or the market is
+    ///     unavailable. An empty vector means the market has no arbitrage venues at all.
+    pub fn market_arb(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
+        // The pane's OWN core first, its market-data provider second — the opposite of every other
+        // readout here, and the reason is that arbitrage is not market data.
+        //
+        // A slot exists only where `apply_arb_payload` wrote it, and that path is gated on the
+        // core's own `client_settings`: it stores nothing at all without them, and only for the
+        // platforms that core's mask asks for. So the slots live on whichever core has arbitrage
+        // configured, which under deduplication is usually NOT the core elected to serve prices for
+        // that exchange. Reading the provider found a market object with an empty slot map and
+        // reported "no arbitrage" for a coin the reference terminal shows a full column for.
+        // Beyond those two: any core on the SAME exchange. The prices themselves belong to the
+        // coin, not to an account — every core quoting `ENAUSDT@Bybit` sees the same Binance price
+        // — but only a core with arbitrage configured stores them, and that may be neither the pane
+        // nor the provider. Restricted to one exchange on purpose: the spread's base is the market's
+        // OWN last price, so a core trading this coin somewhere else would state a spread against
+        // the wrong venue.
+        let exchange = self.exchange_of(core);
+        let same_exchange: Vec<CoreId> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let mut cores: Vec<CoreId> = inner
+                .clients
+                .keys()
+                .copied()
+                .filter(|id| inner.exchange_of_provider(*id) == exchange)
+                .collect();
+            // Ascending, so which core answers does not depend on hash order.
+            cores.sort_unstable();
+            cores
+        };
+        let candidates = [Some(core), self.provider_of(core)]
+            .into_iter()
+            .flatten()
+            .chain(same_exchange);
+        let mut seen = Vec::new();
+        for candidate in candidates {
+            if seen.contains(&candidate) {
+                continue;
+            }
+            seen.push(candidate);
+            if let Some(quotes) = self.market_arb_on(candidate, market) {
+                if !quotes.is_empty() {
+                    return Some(quotes);
+                }
+            }
+        }
+        Some(Vec::new())
+    }
+
+    /// The arbitrage quotes ONE core holds for a market.
+    fn market_arb_on(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
+        let snapshot = self.core_client(core)?.snapshot_versioned()?;
+        let handle = snapshot.markets().get(market)?;
+        // This market's own price, for the spread's base when the point carries none.
+        let own_price = handle.with(|m| positive(m.price.p_last).or_else(|| positive(m.price.ask)));
+        let mut out = Vec::new();
+        // WHICH venues to ask about is the UNION of two answers, and it has to be a union.
+        //
+        // The core's own `client_settings.arb_config` is the checkbox list the reference terminal
+        // shows, and it is the only thing that knows a venue this build has never heard of — the
+        // reference terminal's `OkxF` column, whose code appears in no protocol constant. But it is
+        // ALSO a setting that arrives late, can be absent on a build that does not send it, and can
+        // legitimately be all-false while the core still fills arbitrage slots. Trusting it alone
+        // emptied the column on a core that had been printing one: the first run had no settings
+        // and used the fallback, the second had settings and asked about nothing.
+        //
+        // So: everything this build can name is always asked about, and the mask only ADDS to that.
+        //
+        // Asked venue by venue because that is the only door the protocol opens: the slot map is
+        // private and `arb_slot` copies one entry at a time (see docs-internal/FORK_BUGS.md). The
+        // mask test itself is an array read, so scanning the whole byte range costs nothing; only a
+        // venue that is actually asked about pays for a lock, and the walk is behind the caller's
+        // throttle.
+        let wanted = snapshot
+            .settings()
+            .client_settings
+            .as_ref()
+            .map(|s| &s.arb_config);
+        // Deployer NAMES. `AuthCheck` is a mandatory start-up step, so a Hyperliquid core carries
+        // this list; a core connected elsewhere sends none and borrows one from a core that does —
+        // the index is the protocol's, not the core's.
+        //
+        // The index is the arbitrage code minus the deployer base, which is the same shape
+        // `HyperDexIndex` uses into this very list. NOT VERIFIED against a live core: if the two
+        // turn out to be off by one — `known_dexes[0]` is the unnamed default validator — this is
+        // the one line to shift.
+        let dex_names = self.arb_dex_names(core);
+        for byte in 0u8..=255 {
+            let code = platform_code(byte);
+            // No settings yet — the core has not sent them, or this is a build that does not — so
+            // fall back to what this build can name. Without this an arbitrage column would stay
+            // empty until the settings arrive, which looks like the feature is broken.
+            let venue_of_byte = ArbVenue::from_code(byte);
+            let asked = venue_of_byte.is_known_or_scanned_deployer()
+                || wanted.is_some_and(|cfg| cfg.is_wanted(code));
+            if !asked {
+                continue;
+            }
+            let Some(slot) = handle.arb_slot(code).filter(|s| s.enabled) else {
+                continue;
+            };
+            let venue = venue_of_byte;
+            let point = slot.latest_point();
+            // The ring's newest point, or the "now" entry when the ring has not been written yet:
+            // the core stamps both, and dropping the venue because only one of them has arrived
+            // hides a price the reference terminal is already showing.
+            let price = match positive(f64::from(point.price)) {
+                Some(price) => price,
+                None => match positive(f64::from(slot.now.price)) {
+                    Some(price) => price,
+                    None => continue,
+                },
+            };
+            // `my_price` is stamped INTO the point when the arbitrage price arrives, from this
+            // market's own last price at that moment. A market that had no price then leaves it at
+            // zero, and the spread has no base — so fall back to what the market costs now. Zero on
+            // both means this market has never been priced, and there is no spread to state.
+            let Some(my_price) = positive(f64::from(point.my_price)).or(own_price) else {
+                continue;
+            };
+            out.push(ArbQuote {
+                venue,
+                dex_name: venue
+                    .deployer_index()
+                    .and_then(|index| dex_names.get(usize::from(index)))
+                    .cloned()
+                    .unwrap_or_default(),
+                price,
+                my_price,
+                spread_pct: (price - my_price) / my_price * 100.0,
+                deposit_blocked: slot.isolated_flags.deposit_blocked(),
+                withdraw_blocked: slot.isolated_flags.withdraw_blocked(),
+            });
+        }
+        // What the core watches, what actually reported, and what the deployer indices are called.
+        // Behind `log.market_sources` in cfg/diagnostics.toml, because this is the one question the
+        // sources cannot answer: the codes are the core's, and a venue this build cannot name shows
+        // up here as its raw byte.
+        if log::log_enabled!(super::SOURCE_TRACE_LEVEL) {
+            let watched: Vec<u8> = match wanted {
+                Some(cfg) => (0u8..=255)
+                    .filter(|byte| cfg.is_wanted(platform_code(*byte)))
+                    .collect(),
+                None => Vec::new(),
+            };
+            log::log!(
+                super::SOURCE_TRACE_LEVEL,
+                "арбитраж {market} ядро {core:?}: настройки {} · маска {watched:?} · слотов отдали {} {:?} · дексы {:?}",
+                match wanted.is_some() {
+                    true => "есть",
+                    false => "НЕТ (ядро не сохраняет арб вообще)",
+                },
+                out.len(),
+                out.iter().map(|q| q.venue.code()).collect::<Vec<_>>(),
+                dex_names,
+            );
+        }
+        Some(out)
+    }
+
+    /// Return the retained-history figures for every window a caption may ask for.
+    ///
+    /// Separate from [`Self::market_figures`] because it costs more: the derived snapshot walks the
+    /// retained trade buckets and the 5-minute candle ring, while the figures above are field reads
+    /// off a market object. Splitting them lets a chart that prints only a spread pay for only a
+    /// spread.
+    ///
+    /// The delta is the COMBINED range magnitude — the same figure the Screener's columns show, so
+    /// a coin cannot read as moving 3% on the chart and 5% in the table. Volume comes from the
+    /// retained trade buckets for the windows they cover (five minutes) and from candles beyond
+    /// that; the buy share exists only where the trades do, because candles carry no split.
+    ///
+    /// Args:
+    ///     core: Consumer core whose provider owns the history.
+    ///     market: Data-key market name.
+    ///
+    /// Returns:
+    ///     The windows, or `None` when the provider, its client, or its snapshot is unavailable.
+    pub fn market_windows(&self, core: CoreId, market: &str) -> Option<MarketWindowsReadout> {
+        let provider = self.provider_of(core)?;
+        let snapshot = self.core_client(provider)?.snapshot_versioned()?;
+        let derived = snapshot.market_history_derived_snapshot_now(market)?;
+        let deltas = derived.deltas;
+        let trades = derived.trade_volumes;
+        let candles = derived.candle_volumes;
+        let mut out = MarketWindowsReadout::default();
+        // Ordered exactly like `LabelWindow::ALL`, which is what the caption indexes by.
+        let rows: [(f64, f64, Option<TradeVolumeTotals>); crate::config::LABEL_WINDOW_COUNT] = [
+            (deltas.one_minute, 0.0, Some(trades.one_minute)),
+            (deltas.five_minutes, candles.five_minutes, Some(trades.five_minutes)),
+            (deltas.fifteen_minutes, candles.fifteen_minutes, None),
+            (deltas.thirty_minutes, candles.thirty_minutes, None),
+            (deltas.one_hour, candles.one_hour, None),
+            (deltas.three_hours, candles.three_hours, None),
+            (deltas.twenty_four_hours, candles.twenty_four_hours, None),
+            (deltas.seventy_two_hours, candles.seventy_two_hours, None),
+        ];
+        for (slot, (delta, candle_volume, trade_totals)) in out.windows.iter_mut().zip(rows) {
+            slot.delta_pct = positive(delta);
+            // Trades win where they exist: they are the live tail, while a candle window shorter
+            // than one 5-minute bar cannot be built at all.
+            let traded = trade_totals.map(|t| t.total_value()).and_then(positive);
+            slot.volume_quote = traded.or_else(|| positive(candle_volume));
+            slot.buy_share_pct = trade_totals.and_then(|t| {
+                let total = t.total_value();
+                (total > 0.0).then(|| t.buy_value / total * 100.0)
+            });
+        }
+        Some(out)
     }
 
     /// Return one market's exchange-imposed trading limits for a consumer core.

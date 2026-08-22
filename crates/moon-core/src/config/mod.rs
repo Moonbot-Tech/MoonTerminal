@@ -16,7 +16,9 @@
 //! - `backup` creates daily snapshots in `backups/settings/` and protects schema migrations;
 //! - `uid_counter` requires every counter construction path to name the optional store floor.
 
+pub mod arb_view;
 pub mod badges;
+pub mod chart_defaults;
 pub mod chart_labels;
 pub mod core_groups;
 pub mod crypto;
@@ -48,35 +50,38 @@ mod uid_counter;
 #[cfg(test)]
 mod tests;
 
+pub use arb_view::{ARB_MAX_ROWS, ArbRow, ArbShow, ArbVenueCfg, ArbViewCfg};
 pub use badges::{BadgeEntry, BadgesConfig};
+pub use chart_defaults::{ChartTabDefaults, ChartTabKind};
 pub use chart_labels::{
-    ChartLabelField, ChartLabelGroup, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign,
-    LabelColor, LabelFlow, LabelPreset, LabelStyle, LabelZone, PnlBasis, ResolvedLabelStyle,
-    CHART_LABEL_PARTS, CHART_LABEL_ROWS, LABEL_GAP_MAX, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    ROW_NAME_PART, ROW_RUN_STRIDE,
+    ARB_PART_BASE, CHART_LABEL_PARTS, CHART_LABEL_ROWS, ChartLabelField, ChartLabelGroup,
+    ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LABEL_GAP_MAX, LABEL_SIZE_MULT_MAX,
+    LABEL_SIZE_MULT_MIN, LABEL_WINDOW_COUNT, LabelAlign, LabelColor, LabelFlow, LabelPreset,
+    LabelStyle, LabelWindow, LabelZone, PREFIX_PART_BASE, PnlBasis, ROW_NAME_PART, ROW_RUN_STRIDE,
+    ResolvedLabelStyle,
 };
 pub use core_groups::{
-    move_group, sanitize_core_groups, unique_group_name, CoreGroup, CORE_GROUPS_MAX,
-    CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX,
+    CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX, CORE_GROUPS_MAX, CoreGroup, move_group,
+    sanitize_core_groups, unique_group_name,
 };
 pub use detect_view::{
-    detect_slot_count, DetectChart, DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg,
-    DetectViewFile, DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI,
+    DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
+    DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, DetectViewFile, detect_slot_count,
 };
 pub use groups::{
-    GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode, DEFAULT_ORDER_SIZES_USD,
+    DEFAULT_ORDER_SIZES_USD, GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
 pub use hotkeys::{
-    HotkeysConfig, MouseGestureBinding, MoveGestureCommand, MoveKind, MoveSide,
-    MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS,
-    SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, MoveGestureCommand, MoveKind,
+    MoveSide, ORDER_SIZE_KEYS, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX,
+    SPLIT_PARTS_MIN,
 };
 pub use lang::Language;
 pub use layout::{
-    clamp_auto_workspace_rail_width, ChartGraphicsCfg, DetachedLayout, GeomRect, GroupLayout,
-    ReportFilterPrefs, TableSortPreference, WindowLayout, WorkspaceMode,
     AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
-    AUTO_WORKSPACE_RAIL_WIDTH_MIN,
+    AUTO_WORKSPACE_RAIL_WIDTH_MIN, ChartGraphicsCfg, DetachedLayout, GeomRect, GroupLayout,
+    ReportFilterPrefs, TableSortPreference, WindowLayout, WorkspaceMode,
+    clamp_auto_workspace_rail_width,
 };
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};

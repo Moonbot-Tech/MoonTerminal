@@ -136,6 +136,9 @@ impl ChartTabs {
         } else {
             self.add.remove(pos);
         }
+        // The panel now follows the WINDOW default rather than the strip's, and only this
+        // bookkeeping knows it moved.
+        panel.update(cx, |s, c| s.set_detached(true, c));
         self.detached.push((n, bucket.clone(), panel));
         if self.active == tab {
             self.active = Tab::Main;
@@ -348,6 +351,8 @@ impl ChartTabs {
                 .position(|(num, c, _)| *num == n && *c == bucket)
             {
                 let (num, c, pnl) = self.detached.remove(p);
+                // Back in the strip: it follows the strip's default again.
+                pnl.update(cx, |s, c| s.set_detached(false, c));
                 if is_custom {
                     self.custom.push((num, c, pnl));
                     if let Some(label) = custom_label {
@@ -566,6 +571,7 @@ impl ChartTabs {
                         .is_some()
                     {
                         panel.update(cx, |p, pcx| p.set_scene_visible(false, pcx));
+                        panel.update(cx, |s, c| s.set_detached(true, c));
                         this.detached.push((n, bucket, panel));
                     }
                 }

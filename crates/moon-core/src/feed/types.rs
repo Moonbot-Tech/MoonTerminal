@@ -297,7 +297,25 @@ pub struct DetectRow {
     /// Source strategy direction from `is_short`, where `true` means short. Used to outline the
     /// feed badge by direction. A missing strategy snapshot defaults to `false`, or long.
     pub is_short: bool,
+    /// The detect's own line, as the core wrote it — the text Moonbot prints in its log.
+    ///
+    /// Carried rather than dropped because it is the only thing that says WHY the detect fired, and
+    /// the chart prints it beside the coin it fired on. Empty when the core sent none, and bounded
+    /// to [`DETECT_MSG_KEEP`] on the way in: the ring holds two thousand of these per core, and a
+    /// caption cannot show a paragraph anyway.
+    pub msg: String,
+    /// User-assigned name of the strategy that produced it, resolved from the strategy snapshot the
+    /// same way the sound and TTL above are. Empty when no snapshot holds that id — an alert
+    /// firing without a strategy, or a snapshot that has not arrived yet.
+    pub strat_name: String,
 }
+
+/// Longest detect line retained, in characters.
+///
+/// Generous next to what a caption can print — the chart cuts it again to what fits — and small
+/// next to what a core is free to send. The bound is here because the retained ring multiplies it:
+/// two thousand rows per core, on every core.
+pub const DETECT_MSG_KEEP: usize = 200;
 
 /// One core server-log line from `Event::ServerLog`, decoupled from moonproto.
 #[derive(Debug, Clone)]

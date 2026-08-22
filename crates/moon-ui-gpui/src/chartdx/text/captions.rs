@@ -19,12 +19,13 @@
 
 use gpui::{Hsla, point, px};
 use moon_core::config::{
-    CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelColor, LabelZone,
-    ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
+    ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelColor,
+    LabelZone, PREFIX_PART_BASE, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
 };
 use moon_core::util::fmt::DeltaSign;
 
 use super::caption::{CaptionBox, CaptionGeom, caption_geom};
+use crate::chartdx::ArbHit;
 use super::labels::LabelText;
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
 use crate::chartdx::RenderState;
@@ -35,12 +36,16 @@ const CAPTION_GAP: f32 = 8.0;
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
-/// Number of backing plates a pane publishes: one per band and alignment.
+/// Number of backing plates a pane publishes: one per MODULE.
 ///
-/// Rows that share a band but not an alignment are independent stacks — left, centre and right do
-/// not overlap horizontally, so each starts at the band's own edge — and each needs its own plate,
-/// or one plate would span the gap between two of them and darken the candles in between.
-pub(in crate::chartdx) const CAPTION_PLATES: usize = LabelZone::ALL.len() * LabelAlign::ALL.len();
+/// Per module, because that is whose switch it is — see `ChartLabelRow::plate`. One plate for a
+/// whole band used to span every line in it, so switching the backing off on one thing changed
+/// nothing visible while switching it off on the tallest thing in the band looked like switching it
+/// off everywhere.
+///
+/// Indexed BY the module, not by draw order: a module's plate then keeps its slot whatever its
+/// neighbours do, which is the same reason its captions address their runs by index.
+pub(in crate::chartdx) const CAPTION_PLATES: usize = moon_core::config::CHART_LABEL_ROWS;
 
 /// The pane rectangles a caption pass needs, in LOGICAL pixels.
 #[derive(Clone, Copy)]
@@ -66,6 +71,9 @@ struct Item {
     row: usize,
     part: usize,
     style: ResolvedLabelStyle,
+    /// Whether the MODULE this caption belongs to draws a backing plate. Copied onto the item
+    /// because the drawing pass has the items and not the configuration.
+    plate: bool,
     /// Font size in logical pixels, already resolved and clamped.
     size: f32,
 }
@@ -156,6 +164,10 @@ impl RenderState {
         // the pane and the runs live on `self`, and this pass runs on every presented frame.
         // `label_placed` beside it uses the same take-and-return.
         let texts = std::mem::take(&mut self.panes[idx].labels.texts);
+        // Taken and returned like the texts above: the hit rectangles are rebuilt every frame and
+        // the buffer is reused, so a chart with an arbitrage column allocates nothing per frame.
+        let mut hits = std::mem::take(&mut self.panes[idx].arb_hits);
+        hits.clear();
         let result = self.draw_all_zones(
             ctx,
             idx,
@@ -165,8 +177,10 @@ impl RenderState {
             corner,
             caption_fg,
             &mut plates,
+            &mut hits,
         );
         self.panes[idx].labels.texts = texts;
+        self.panes[idx].arb_hits = hits;
         result?;
         let changed = self.panes[idx].caption_plates != plates;
         if changed {
@@ -187,12 +201,13 @@ impl RenderState {
         corner: Option<CaptionGeom>,
         caption_fg: Hsla,
         plates: &mut [[f32; 4]; CAPTION_PLATES],
+        hits: &mut Vec<ArbHit>,
     ) -> anyhow::Result<()> {
         let Some(corner) = corner else {
             return Ok(());
         };
-        for (zone_ix, zone) in LabelZone::ALL.into_iter().enumerate() {
-            for (align_ix, align) in LabelAlign::ALL.into_iter().enumerate() {
+        for zone in LabelZone::ALL {
+            for align in LabelAlign::ALL {
                 let rows = self.collect_rows(cfg, texts, zone, align);
                 if rows.is_empty() {
                     continue;
@@ -206,10 +221,17 @@ impl RenderState {
                 } else {
                     geom.plot_top
                 };
-                let plate = self.draw_stack(
-                    ctx, idx, texts, &rows, column, start_y, limit_y, downward, caption_fg,
+                let module_plates = self.draw_stack(
+                    ctx, idx, texts, &rows, column, start_y, limit_y, downward, caption_fg, hits,
                 )?;
-                plates[zone_ix * LabelAlign::ALL.len() + align_ix] = plate.plate(geom.scale_factor);
+                // A module lives in exactly one band, so a band writes only its own slots and
+                // cannot overwrite another's.
+                for (module_ix, box_) in module_plates {
+                    let Some(slot) = plates.get_mut(module_ix) else {
+                        continue;
+                    };
+                    *slot = box_.plate(geom.scale_factor);
+                }
             }
         }
         Ok(())
@@ -237,6 +259,7 @@ impl RenderState {
                 row: text.row,
                 part: text.part,
                 style,
+                plate: row_cfg.plate,
                 size: (base * style.size_mult).clamp(6.0, 60.0),
             })
         };
@@ -279,10 +302,13 @@ impl RenderState {
         limit_y: f32,
         downward: bool,
         caption_fg: Hsla,
-    ) -> anyhow::Result<CaptionBox> {
-        let mut plate = CaptionBox::default();
+        hits: &mut Vec<ArbHit>,
+    ) -> anyhow::Result<Vec<(usize, CaptionBox)>> {
+        let mut plates: Vec<(usize, CaptionBox)> = Vec::new();
         let mut y = start_y;
-        let mut drawn = 0usize;
+        // Whether anything has actually been PUT on the pane. Not the loop index: the first line
+        // of a band is exempt from the clamp below, and "first" means first DRAWN.
+        let mut any_drawn = false;
         for row in rows {
             let row_h = row.height();
             // The module's own spacing, in the direction the band runs: below the previous line in
@@ -303,7 +329,7 @@ impl RenderState {
             } else {
                 y - gap - row_h < limit_y
             };
-            if overflows && drawn > 0 {
+            if overflows && any_drawn {
                 break;
             }
             y += if downward { gap } else { -gap };
@@ -311,13 +337,17 @@ impl RenderState {
             // drawing it. Taking that height from the styles rather than from a measurement is what
             // makes this possible without drawing the row twice.
             let top = if downward { y } else { y - row_h };
+            // One box PER MODULE on this line: two modules can share a line — that is what the
+            // placement axis is for — and one rectangle behind both would put a backing under the
+            // module that switched it off.
             self.draw_row(
-                ctx, idx, texts, &row.cells, column, top, caption_fg, &mut plate,
+                ctx, idx, texts, &row.cells, column, top, limit_y, downward, caption_fg,
+                &mut plates, hits,
             )?;
-            drawn += 1;
+            any_drawn = true;
             y += if downward { row_h } else { -row_h };
         }
-        Ok(plate)
+        Ok(plates)
     }
 
     /// Draw one row of captions, returning the row's LEFT edge.
@@ -333,8 +363,14 @@ impl RenderState {
         cells: &[Cell],
         column: Column,
         top: f32,
+        // Edge of the band this line lives in, and which way the band fills. A CELL can be taller
+        // than the pane on its own — an arbitrage column is one line per venue — and the caller's
+        // per-line guard exempts the first line of a band, so the stack is clipped here too.
+        limit_y: f32,
+        downward: bool,
         caption_fg: Hsla,
-        plate: &mut CaptionBox,
+        plates: &mut Vec<(usize, CaptionBox)>,
+        hits: &mut Vec<ArbHit>,
     ) -> anyhow::Result<f32> {
         if cells.is_empty() {
             return Ok(column.x);
@@ -377,25 +413,148 @@ impl RenderState {
             };
             let mut y = top;
             let mut drawn_w = 0.0_f32;
-            for item in &cell.items {
+            for (n_item, item) in cell.items.iter().enumerate() {
+                // Out of pane. Which END of the stack is lost depends on which way the band fills,
+                // and getting that backwards is how an over-tall arbitrage column printed one venue
+                // outside the plot and dropped the two dozen that would have fitted:
+                //
+                // - a band filling DOWNWARD keeps its top lines and drops the tail;
+                // - a band filling UPWARD is anchored at its BOTTOM edge, so the lines that fall
+                //   off are the ones at the top — skipped, not a reason to stop.
+                //
+                // One line always survives, mirroring the first LINE of a band above: a pane can be
+                // shorter than one line of text, and a stack that printed nothing there would take
+                // the chart's only identification with it.
+                let past_edge = if downward {
+                    y + item.line_h() > limit_y
+                } else {
+                    y < limit_y
+                };
+                let last = n_item + 1 == cell.items.len();
+                if past_edge {
+                    if downward {
+                        if n_item > 0 {
+                            break;
+                        }
+                    } else if !last {
+                        y += item.line_h();
+                        continue;
+                    }
+                }
                 let Some(entry) = texts.get(item.pos) else {
                     continue;
                 };
-                let (text, _) = fit_caption(ctx, &entry.text, item, budget);
+                // A line's own colour wins over the caption's style: an arbitrage row is coloured
+                // by its VENUE, which one style cannot say for a dozen lines.
+                let value_color = match entry.color {
+                    Some(rgb) => gpui::rgb(rgb).into(),
+                    None => self.caption_color(item.style.color, entry.sign, caption_fg),
+                };
+                // A prefix that takes the same colour as its value is not a second run: gluing them
+                // makes ONE string, which shapes once and cannot drift apart. Only "colour the
+                // value alone" needs the split, and then the prefix keeps the theme's colour.
+                // The prefix is measured FIRST, through its OWN retained run: it is drawn with
+                // the value and spends the same budget, and measuring it through a throwaway run
+                // would re-shape it on every measure and every frame — the cost `caption_runs`
+                // exists to avoid.
+                let prefix_w = match item.style.value_only && !entry.prefix.is_empty() {
+                    true => self.measure_caption_run(
+                        ctx,
+                        idx,
+                        item.row,
+                        PREFIX_PART_BASE + item.part,
+                        &entry.prefix,
+                        item.size,
+                    ),
+                    false => 0.0,
+                };
+                // Too little room for the pair: the caption falls back to ONE run holding both,
+                // truncated as a whole. A split that kept the full-width prefix would paint it past
+                // the band's edge, and truncating the prefix instead would leave a caption naming
+                // nothing.
+                let split = prefix_w > 0.0 && budget - prefix_w >= MIN_LEGIBLE_W;
+                let prefix_w = if split { prefix_w } else { 0.0 };
+                let glued = match split {
+                    true => entry.text.clone(),
+                    false => format!("{}{}", entry.prefix, entry.text),
+                };
+                let (text, value_w) = fit_caption(ctx, &glued, item, budget - prefix_w);
                 if text.is_empty() {
                     continue;
                 }
-                let color = self.caption_color(item.style.color, entry.sign, caption_fg);
+                if split {
+                    // A right-anchored caption ends at `anchor_x`, so BOTH runs are placed from
+                    // that edge backwards: the value takes the last `value_w`, and the prefix the
+                    // `prefix_w` before it. Placing the prefix at the value's own left edge — one
+                    // subtraction short — draws the two on top of each other.
+                    let prefix_x = if rightwards {
+                        anchor_x
+                    } else {
+                        anchor_x - value_w - prefix_w
+                    };
+                    // An arbitrage line's prefix is the VENUE's name, and clicking it opens this
+                    // coin there. The rectangle is recorded from the placement above rather than
+                    // recomputed later: a click has to hit what was actually drawn.
+                    if let Some((code, dex)) = entry.venue.clone() {
+                        hits.push(ArbHit {
+                            x: prefix_x,
+                            y,
+                            w: prefix_w,
+                            h: item.line_h(),
+                            code,
+                            dex,
+                            reachable: entry.reachable,
+                        });
+                    }
+                    // A venue this terminal cannot open is drawn faded: the column still states
+                    // its price — that is what the column is for — but the name is not a target,
+                    // and a reader should see which ones are.
+                    let prefix_color = match entry.venue.is_some() && !entry.reachable {
+                        true => caption_fg.opacity(0.45),
+                        false => caption_fg,
+                    };
+                    self.draw_caption_run(
+                        ctx,
+                        idx,
+                        item.row,
+                        PREFIX_PART_BASE + item.part,
+                        &entry.prefix,
+                        item.size,
+                        prefix_x,
+                        y,
+                        // The prefix always draws LEFT-anchored from the point computed above:
+                        // right-anchoring it would place its right edge where its left edge belongs.
+                        0.0,
+                        prefix_color,
+                    )?;
+                    crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
+                }
+                let value_x = match (split, rightwards) {
+                    (true, true) => anchor_x + prefix_w,
+                    _ => anchor_x,
+                };
+                let _ = value_w;
                 let metrics = self.draw_caption_run(
-                    ctx, idx, item.row, item.part, &text, item.size, anchor_x, y, ax, color,
+                    ctx, idx, item.row, item.part, &text, item.size, value_x, y, ax, value_color,
                 )?;
                 crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
-                let w = metrics.width.as_f32();
+                let w = metrics.width.as_f32() + prefix_w;
                 drawn_w = drawn_w.max(w);
                 let box_left = if rightwards { anchor_x } else { anchor_x - w };
                 left_edge = left_edge.min(box_left);
-                if item.style.plate {
-                    plate.add(box_left, w, y, metrics.line_height.as_f32());
+                // Grown into the box of the MODULE this caption belongs to. A module whose
+                // plate is switched off never opens one, so its captions grow nothing.
+                if item.plate {
+                    match plates.iter_mut().find(|(row, _)| *row == item.row) {
+                        Some((_, box_)) => {
+                            box_.add(box_left, w, y, metrics.line_height.as_f32())
+                        }
+                        None => {
+                            let mut box_ = CaptionBox::default();
+                            box_.add(box_left, w, y, metrics.line_height.as_f32());
+                            plates.push((item.row, box_));
+                        }
+                    }
                 }
                 y += item.line_h();
             }
@@ -445,7 +604,14 @@ impl RenderState {
             .iter()
             .filter_map(|item| {
                 let entry = texts.get(item.pos)?;
-                Some(fit_caption(ctx, &entry.text, item, budget).1)
+                // Same rule as the drawing pass: a split caption is a prefix plus a value, and its
+                // width is the sum. Measuring only the glued form would misplace every centred line
+                // holding one.
+                // The whole caption, prefix and value as one string. Deliberately NOT measured
+                // as two: the column's width is the same either way in a monospaced face, and a
+                // second measurement here would shape the prefix again on every frame.
+                let glued = format!("{}{}", entry.prefix, entry.text);
+                Some(fit_caption(ctx, &glued, item, budget).1)
             })
             .fold(0.0_f32, f32::max)
     }
@@ -463,6 +629,37 @@ impl RenderState {
                 _ => caption_fg,
             },
         }
+    }
+
+    /// Measure a caption's text through the retained run it will be DRAWN with.
+    ///
+    /// The run keeps its shaping, so measuring and then drawing the same string costs one shaping
+    /// rather than two — which is the whole reason these runs are addressed by index instead of
+    /// taken from a cursor.
+    fn measure_caption_run(
+        &mut self,
+        ctx: &gpui::GpuCanvasTextContext<'_>,
+        pane_ix: usize,
+        row_ix: usize,
+        part_ix: usize,
+        text: &str,
+        size: f32,
+    ) -> f32 {
+        let run_ix = (pane_ix * CHART_LABEL_ROWS + row_ix) * ROW_RUN_STRIDE + part_ix;
+        if self.caption_runs.len() <= run_ix {
+            self.caption_runs
+                .resize_with(run_ix + 1, gpui::GpuCanvasTextRun::default);
+        }
+        self.caption_runs[run_ix]
+            .measure(
+                ctx,
+                text,
+                gpui::font(crate::design::mono()),
+                px(size),
+                px(size + 4.0),
+            )
+            .width
+            .as_f32()
     }
 
     /// Draw one caption through its OWN retained run.
@@ -543,16 +740,23 @@ impl RenderState {
             venue: pr.venue.clone(),
             quote: pr.quote.clone(),
             strategy: pr.label_strategy.clone(),
+            detect_strategy: pr.label_detect_strategy.clone(),
+            detect_msg: pr.label_detect_msg.clone(),
             last_price: pr.cached_last_price,
             scale_badge: pr.scale_badge,
             compare_pct,
             delta_1h: pr.delta_1h,
             delta_24h: pr.delta_24h,
             context: pr.label_context,
+            figures: pr.label_figures.clone(),
+            windows: pr.label_windows,
+            arb: pr.label_arb.clone(),
+            arb_reachable: pr.label_arb_reachable.clone(),
             now_ms: pr.label_now_ms,
             basis: pr.label_basis,
         };
-        let changed = self.panes[idx].labels.update(&cfg, inputs);
+        let arb_view = self.arb_view.clone();
+        let changed = self.panes[idx].labels.update(&cfg, &arb_view, inputs);
         // Recorded whether or not the texts changed: `update` is a cache and answers "nothing
         // moved" when the substitution happens to produce the same string, but the shot's proof
         // asks what the CURRENT labels were built from, not whether they differ from last time.
@@ -572,6 +776,15 @@ impl RenderState {
 fn caption_style(row: &ChartLabelRow, part: usize) -> Option<ResolvedLabelStyle> {
     if part == ROW_NAME_PART {
         return Some(ChartLabelRow::name_style());
+    }
+    // An arbitrage line is drawn in its OWN run range, past every part index, and takes the style
+    // of the caption that produced it — the whole column is one configured caption, so its size and
+    // its plate are set once. Only the colour differs per line, and that rides on the line itself.
+    if part >= ARB_PART_BASE {
+        let column = row.parts[..row.used_parts()]
+            .iter()
+            .find(|p| p.field.is_column() && p.visible)?;
+        return Some(column.resolved_style());
     }
     Some(row.parts.get(part)?.resolved_style())
 }
@@ -604,6 +817,8 @@ fn group_lines(
 ) -> Vec<Vec<Vec<usize>>> {
     let mut lines: Vec<Vec<Vec<usize>>> = Vec::new();
     let mut current: Option<usize> = None;
+    // Whether the caption placed last was an arbitrage line.
+    let mut was_column_line = false;
     for (pos, text) in texts.iter().enumerate() {
         let Some(row_cfg) = cfg.rows.get(text.row) else {
             continue;
@@ -619,13 +834,22 @@ fn group_lines(
             lines.push(Vec::new());
         }
         let line = lines.last_mut().expect("a line was opened above");
-        // Inside a module that runs down a column, every caption after the first joins the column
-        // the module opened. Everything else opens one of its own.
+        // An arbitrage line is part of a COLUMN by its own nature — one venue under another — and
+        // the module's flow does not apply to it: that switch decides how the module's ordinary
+        // captions run, and a module can hold both. So arbitrage lines join each other and nothing
+        // else joins them.
+        let is_column_line = text.part >= ARB_PART_BASE;
+        let joins = match (is_column_line, was_column_line) {
+            (true, true) => same_module,
+            (true, false) | (false, true) => false,
+            (false, false) => same_module && !row_cfg.flow.is_row(),
+        };
         match line.last_mut() {
-            Some(cell) if same_module && !row_cfg.flow.is_row() => cell.push(pos),
+            Some(cell) if joins => cell.push(pos),
             _ => line.push(vec![pos]),
         }
         current = Some(text.row);
+        was_column_line = is_column_line;
     }
     lines
 }

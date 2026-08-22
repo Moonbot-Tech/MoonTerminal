@@ -46,7 +46,7 @@ mod venue_label;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
-pub(crate) use label_fields::field_menu_items;
+pub(crate) use label_fields::{field_picker, row_display_name, row_title};
 pub(crate) use core_combo::{
     core_combo, core_menu_sections, toggle_exchange_cores, CoreAllRowMode,
 };

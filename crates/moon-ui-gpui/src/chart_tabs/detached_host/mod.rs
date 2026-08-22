@@ -27,6 +27,8 @@ mod render;
 /// charts.json through `observe_window_bounds` and requests repinning on `on_release` through
 /// `chart_repin_request`, which `ChartTabs` drains.
 pub(super) struct DetachedChartHost {
+    /// The ⧉ press this window has armed but not yet queued. See `chart_tabs::apply_row`.
+    apply_press: super::apply_row::ApplyPress,
     panel: Entity<AddChartStack>,
     backend: Entity<Backend>,
     group: String,
@@ -371,6 +373,7 @@ impl DetachedChartHost {
             bucket,
             window_id,
             persist_armed: !restored,
+            apply_press: super::apply_row::ApplyPress::default(),
             restore_size,
             layout_popup_open: false,
             candle_popup_open: false,
@@ -724,20 +727,6 @@ impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
     fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
         self.panel.read(cx).chart_graphics()
     }
-    fn apply_graphics_all(
-        &mut self,
-        cfg: moon_core::config::ChartGraphicsCfg,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_graphics(cfg, cx);
-        self.queue_apply_all(
-            ApplyAll {
-                values: vec![StackSetting::Graphics(cfg)],
-                x_ppm: None,
-            },
-            cx,
-        );
-    }
 }
 
 /// Host for the "Chart labels" popup targeting THIS window's panel.
@@ -754,16 +743,6 @@ impl super::labels_popup::LabelsPopupHost for DetachedChartHost {
     fn labels_override(&self, cx: &App) -> Option<moon_core::config::ChartLabelsCfg> {
         self.panel.read(cx).chart_labels()
     }
-    fn apply_labels_all(&mut self, cfg: moon_core::config::ChartLabelsCfg, cx: &mut Context<Self>) {
-        self.apply_labels(cfg.clone(), cx);
-        self.queue_apply_all(
-            ApplyAll {
-                values: vec![StackSetting::Labels(cfg)],
-                x_ppm: None,
-            },
-            cx,
-        );
-    }
 }
 
 /// Host for the "Candles and Trades" candlestick popup targeting THIS window's panel.
@@ -778,23 +757,6 @@ impl super::candle_popup::CandlePopupHost for DetachedChartHost {
     }
     fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
         self.panel.read(cx).candle_view()
-    }
-    fn apply_candle_view_all(
-        &mut self,
-        cfg: moon_core::market::CandleViewCfg,
-        cx: &mut Context<Self>,
-    ) {
-        // Apply immediately to this window and queue the rest through Backend for the group strip to
-        // drain. Copy this window's X scale with the candle settings.
-        self.apply_candle_view(cfg, cx);
-        let x_ppm = self.panel.read(cx).x_ppm();
-        self.queue_apply_all(
-            ApplyAll {
-                values: vec![StackSetting::CandleView(cfg)],
-                x_ppm,
-            },
-            cx,
-        );
     }
 }
 
@@ -877,20 +839,38 @@ impl LayoutPopupHost for DetachedChartHost {
     /// Apply this window's settings to all by queueing them through Backend for the tab strip,
     /// because the host cannot access group stacks directly. Copy ALL window settings, including
     /// scale and order-book toggle, while leaving Main unchanged.
-    fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
+    fn layout_press_values(&self, cx: &App) -> Vec<StackSetting> {
         let snap = self.layout_popup_snapshot(cx);
         let height_fit = self.read_layout_height(StackLayoutMode::Fit, cx);
         let height_scroll = self.read_layout_height(StackLayoutMode::Scroll, cx);
         let scale = self.panel.read(cx).scale();
         let orientation = self.panel.read(cx).layout_orientation();
-        let values = apply_all::layout_values(&snap, height_fit, height_scroll, scale, orientation);
-        self.queue_apply_all(
-            ApplyAll {
-                values,
-                x_ppm: None,
-            },
-            cx,
-        );
+        apply_all::layout_values(&snap, height_fit, height_scroll, scale, orientation)
+    }
+
+    fn source_kind(&self, cx: &App) -> moon_core::config::ChartTabKind {
+        self.panel.read(cx).default_kind()
+    }
+
+    fn source_x_ppm(&self, cx: &App) -> Option<f32> {
+        self.panel.read(cx).x_ppm()
+    }
+}
+
+/// The ⧉ press: a detached window owns one panel and no group bookkeeping, so it queues the press
+/// for its strip — which walks the group, this window's own stack included.
+impl super::apply_row::ApplyRowHost for DetachedChartHost {
+    fn apply_press(&self) -> &super::apply_row::ApplyPress {
+        &self.apply_press
+    }
+    fn apply_press_mut(&mut self) -> &mut super::apply_row::ApplyPress {
+        &mut self.apply_press
+    }
+    fn apply_row_counts(&self, values: &[StackSetting], cx: &App) -> [usize; 3] {
+        apply_all::override_counts(&self.backend.read(cx).chart_specs, values)
+    }
+    fn perform_apply(&mut self, apply: ApplyAll, cx: &mut Context<Self>) {
+        self.queue_apply_all(apply, cx);
     }
 }
 

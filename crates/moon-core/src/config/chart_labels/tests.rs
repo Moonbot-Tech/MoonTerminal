@@ -10,7 +10,7 @@ fn the_default_is_the_shipped_working_layout() {
         .iter()
         .map(|r| {
             (
-                r.name.as_str(),
+                r.preset,
                 r.zone,
                 r.align,
                 r.flow,
@@ -24,6 +24,7 @@ fn the_default_is_the_shipped_working_layout() {
         })
         .collect();
     use ChartLabelField as F;
+    use LabelPreset as P;
     use LabelAlign as A;
     use LabelFlow as Fl;
     use LabelZone as Z;
@@ -32,7 +33,7 @@ fn the_default_is_the_shipped_working_layout() {
         vec![
             // The instrument as a block in the control strip.
             (
-                "Инструмент",
+                Some(P::Instrument),
                 Z::ZoneTop,
                 A::Right,
                 Fl::Column,
@@ -42,7 +43,7 @@ fn the_default_is_the_shipped_working_layout() {
             ),
             // The badge on the plot's top-right, with the coin's deltas standing BESIDE it.
             (
-                "Масштаб",
+                None,
                 Z::ChartTop,
                 A::Right,
                 Fl::Row,
@@ -51,7 +52,7 @@ fn the_default_is_the_shipped_working_layout() {
                 vec![F::ScaleBadge]
             ),
             (
-                "Дельты монеты",
+                Some(P::CoinDeltas),
                 Z::ChartTop,
                 A::Right,
                 Fl::Column,
@@ -61,7 +62,7 @@ fn the_default_is_the_shipped_working_layout() {
             ),
             // What is open, along the top-left edge, with funding spaced under it.
             (
-                "Открытые ордера",
+                Some(P::Position),
                 Z::ChartTop,
                 A::Left,
                 Fl::Row,
@@ -70,7 +71,7 @@ fn the_default_is_the_shipped_working_layout() {
                 vec![F::OpenOrders, F::OpenPnlMoney, F::OpenPnlPct, F::Exposure]
             ),
             (
-                "Фандинг",
+                Some(P::Funding),
                 Z::ChartTop,
                 A::Left,
                 Fl::Row,
@@ -353,14 +354,66 @@ fn every_preset_fits_a_row_and_is_named() {
 #[test]
 fn a_preset_row_carries_its_fields_band_and_name() {
     let mut cfg = ChartLabelsCfg::empty();
-    let ix = cfg
-        .push_preset(LabelPreset::Position, "Позиция".to_string())
-        .expect("there is room");
+    let ix = cfg.push_preset(LabelPreset::Position).expect("there is room");
     let row = &cfg.rows[ix];
-    assert_eq!(row.name, "Позиция");
+    assert_eq!(row.preset, Some(LabelPreset::Position));
     assert_eq!(row.zone, LabelPreset::Position.zone());
     assert_eq!(row.align, LabelPreset::Position.align());
     assert_eq!(row.used_parts(), LabelPreset::Position.fields().len());
+}
+
+/// A preset row is named from the DICTIONARY, not from a string frozen at creation time — which is
+/// what makes the shipped default readable in a locale the developer does not speak.
+#[test]
+fn a_preset_names_the_row_until_the_user_names_it_themselves() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let ix = cfg.push_preset(LabelPreset::Funding).expect("there is room");
+    let row = &mut cfg.rows[ix];
+    assert!(row.name.is_empty(), "no localized string is stored");
+    assert_eq!(row.title_key(), Some(LabelPreset::Funding.locale_key()));
+
+    row.name = "Мой фандинг".to_string();
+    assert_eq!(row.title_key(), None, "the user's own name wins");
+    row.name.clear();
+    assert_eq!(
+        row.title_key(),
+        Some(LabelPreset::Funding.locale_key()),
+        "clearing the name gives the translated one back"
+    );
+}
+
+/// The name switch follows what the row can PRINT: a preset row has a name without one being typed,
+/// and a row with neither has nothing to print.
+#[test]
+fn a_preset_row_can_print_its_name_with_no_name_typed() {
+    let mut row = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
+    row.push_part(ChartLabelField::Funding);
+    row.show_name = true;
+    assert!(!row.prints_name(), "nothing to print without a name");
+    row.preset = Some(LabelPreset::Funding);
+    assert!(row.prints_name());
+}
+
+/// A module the editor was opened on before it existed is only worth a slot once it holds
+/// something: a blank one would be swept away by the next `sanitize` anyway.
+#[test]
+fn a_prepared_row_is_added_only_when_it_holds_something() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let blank = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
+    assert_eq!(cfg.push_prepared(blank), None);
+    assert_eq!(cfg.used_rows(), 0);
+
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::LastPrice);
+    assert_eq!(cfg.push_prepared(row.clone()), Some(0));
+    assert_eq!(cfg.rows[0], row);
+
+    // Every slot taken: the caller is told, rather than silently losing the module.
+    let mut full = ChartLabelsCfg::empty();
+    for _ in 0..CHART_LABEL_ROWS {
+        full.push_prepared(row.clone()).expect("room while filling");
+    }
+    assert_eq!(full.push_prepared(row), None);
 }
 
 #[test]
@@ -418,6 +471,8 @@ fn the_configuration_round_trips_through_toml() {
     let mut cfg = ChartLabelsCfg::default();
     cfg.rows[0].name = "Инструмент".to_string();
     cfg.rows[0].show_name = true;
+    // Row 4 keeps its preset and no name: the pair a file has to state separately.
+    assert_eq!(cfg.rows[4].preset, Some(LabelPreset::Funding));
     cfg.rows[0].parts[0].style.color = Some(LabelColor::Fixed(0x112233));
     cfg.rows[0].parts[0].style.size_mult = Some(1.5);
     cfg.rows[3].parts[1].pnl_basis = PnlBasis::Real;
@@ -823,4 +878,87 @@ fn the_gap_round_trips_and_is_capped() {
     let back: ChartLabelsCfg = toml::from_str(&text).expect("parses");
     assert_eq!(back, cfg);
     assert_eq!(back.rows[1].gap, 12);
+}
+
+/// A caption cannot ask for a figure that does not exist over that window: the buy/sell split comes
+/// from the retained trade buckets, which hold five minutes. Switching a caption's field — or a
+/// hand-edited file — is repaired rather than left printing nothing.
+#[test]
+fn a_window_the_field_cannot_read_is_repaired() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyShare);
+    row.parts[0].window = LabelWindow::H24;
+    row.push_part(ChartLabelField::WindowDelta);
+    row.parts[1].window = LabelWindow::H24;
+    cfg.rows[0] = row;
+
+    cfg.sanitize();
+
+    assert_eq!(
+        cfg.rows[0].parts[0].window,
+        LabelWindow::M1,
+        "the buy share falls back to a window the trades cover"
+    );
+    assert_eq!(
+        cfg.rows[0].parts[1].window,
+        LabelWindow::H24,
+        "a field that reads every window keeps the one it was given"
+    );
+}
+
+/// The colour threshold is a magnitude, so a negative or non-finite one is treated as ABSENT — the
+/// default, "colour everything" — rather than clamped into something the user never asked for.
+#[test]
+fn a_broken_colour_threshold_falls_back_to_colouring_everything() {
+    let mut part = ChartLabelPart::new(ChartLabelField::Delta1h);
+    part.style.color_min_pct = Some(f32::NAN);
+    assert_eq!(part.resolved_style().color_min_pct, 0.0);
+
+    part.style.color_min_pct = Some(-1.0);
+    assert_eq!(part.resolved_style().color_min_pct, 0.0);
+
+    part.style.color_min_pct = Some(0.5);
+    assert_eq!(part.resolved_style().color_min_pct, 0.5);
+}
+
+/// Colouring the value alone is the DEFAULT: "Фандинг: +3.90%" is a label and a figure, and only
+/// the figure has a sign.
+#[test]
+fn a_caption_colours_its_value_alone_by_default() {
+    assert!(ChartLabelPart::new(ChartLabelField::Funding).resolved_style().value_only);
+    let mut part = ChartLabelPart::new(ChartLabelField::Funding);
+    part.style.value_only = Some(false);
+    assert!(!part.resolved_style().value_only);
+}
+
+/// The backing plate belongs to the MODULE, and a file states it there. A file written before it
+/// moved says nothing, and every module then draws one — which is what those files looked like,
+/// since every caption carried its own plate and they all defaulted to on.
+#[test]
+fn the_plate_is_a_module_setting_and_defaults_to_drawn() {
+    let row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    assert!(row.plate, "a module draws its backing unless told otherwise");
+
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut named = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    named.push_part(ChartLabelField::Funding);
+    named.plate = false;
+    cfg.rows[0] = named;
+
+    let text = toml::to_string_pretty(&cfg).expect("serializes");
+    assert!(text.contains("plate"), "a module that turned it OFF states so: {text}");
+    let back: ChartLabelsCfg = toml::from_str(&text).expect("parses");
+    assert!(!back.rows[0].plate);
+
+    // The other direction: a file that never heard of the setting.
+    let old = r#"
+        [[rows]]
+        zone = "chart_top"
+        align = "left"
+        [[rows.parts]]
+        field = "funding"
+    "#;
+    let read: ChartLabelsCfg = toml::from_str(old).expect("parses");
+    assert!(read.rows[0].plate, "absent means drawn");
 }

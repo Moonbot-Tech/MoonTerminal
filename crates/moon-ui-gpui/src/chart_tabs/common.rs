@@ -122,66 +122,46 @@ pub(crate) enum StackSetting {
     Scale(Option<f32>),
 }
 
-/// A setting that ALSO has a global default in `layout.toml`, inherited by every tab without an
-/// override of its own.
+/// A setting that ALSO has a default in `layout.toml`, inherited by every tab without an override
+/// of its own — one per KIND of tab, see `moon_core::config::ChartTabKind`.
 ///
-/// A ⧉ press overwrites that default, which is what makes new tabs — and every tab still following
-/// it — adopt the pressed values. It names the slot only: the VALUE always travels as the
+/// A ⧉ press stores one of those defaults, which is what makes new tabs — and every tab still
+/// following it — adopt the pressed values. It names the slot only: the VALUE always travels as the
 /// [`StackSetting`] itself, so the two cannot disagree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GlobalSlot {
-    /// `layout.candle_view`, from the "Candles and Trades" popup.
+    /// The candle defaults, from the "Candles and Trades" popup.
     CandleView,
-    /// `layout.chart_graphics`, from the "Chart graphics" popup.
+    /// The chart-graphics defaults, from the "Chart graphics" popup.
     Graphics,
-    /// `layout.chart_labels`, from the "Chart labels" popup.
+    /// The caption defaults, from the "Chart labels" popup.
     Labels,
 }
 
 impl GlobalSlot {
-    /// Read the value this default currently holds, as the setting to apply.
+    /// Store a pressed value as one KIND's default, reporting whether it actually moved.
     ///
-    /// NORMALIZED where the setting has a drawable range: `layout.toml` is hand-editable, and this
-    /// value gets materialized into `charts.json` when Main is pinned, where an out-of-range number
-    /// would then outlive the file it came from.
-    pub(crate) fn read(self, layout: &moon_core::config::WindowLayout) -> StackSetting {
-        match self {
-            GlobalSlot::CandleView => StackSetting::CandleView(layout.candle_view),
-            GlobalSlot::Graphics => {
-                StackSetting::Graphics(moon_chart::normalize_chart_graphics(layout.chart_graphics))
-            }
-            GlobalSlot::Labels => {
-                let mut cfg = layout.chart_labels.clone();
-                cfg.sanitize();
-                StackSetting::Labels(cfg)
-            }
-        }
-    }
-
-    /// Store a pressed value as the new global default, reporting whether it actually moved.
-    ///
-    /// The caller uses that answer to skip waking every chart in the application for a press that
-    /// stored what was already there.
-    pub(crate) fn write(
+    /// The caller uses that answer to skip marking the file dirty for a press that stored what was
+    /// already there.
+    pub(crate) fn write_default(
         self,
         layout: &mut moon_core::config::WindowLayout,
+        kind: moon_core::config::ChartTabKind,
         value: StackSetting,
     ) -> bool {
         match (self, value) {
             (GlobalSlot::CandleView, StackSetting::CandleView(v)) => {
-                let changed = layout.candle_view != v;
-                layout.candle_view = v;
-                changed
+                layout.set_candle_view_default(kind, v)
             }
+            // NORMALIZED and SANITIZED on the way in, for the reason the panel does it on the way
+            // out: this value is COMPARED, and `layout.toml` is hand-editable, so a stored
+            // impossibility would look like a change on every notification for the rest of time.
             (GlobalSlot::Graphics, StackSetting::Graphics(v)) => {
-                let changed = layout.chart_graphics != v;
-                layout.chart_graphics = v;
-                changed
+                layout.set_chart_graphics_default(kind, moon_chart::normalize_chart_graphics(v))
             }
-            (GlobalSlot::Labels, StackSetting::Labels(v)) => {
-                let changed = layout.chart_labels != v;
-                layout.chart_labels = v;
-                changed
+            (GlobalSlot::Labels, StackSetting::Labels(mut v)) => {
+                v.sanitize();
+                layout.set_chart_labels_default(kind, v)
             }
             // Unreachable through `StackSetting::global_slot`, which pairs slot and value by
             // construction. Storing a mismatched value would be worse than storing none.
@@ -189,12 +169,47 @@ impl GlobalSlot {
         }
     }
 
-    /// Whether the Main stack holds its own value for this setting rather than following the default.
-    pub(crate) fn main_has_override(self, main: &super::MainChartStack) -> bool {
+    /// The Main stack's own value for this setting, or `None` when it follows its kind's default.
+    pub(crate) fn main_value(self, main: &super::MainChartStack) -> Option<StackSetting> {
         match self {
-            GlobalSlot::CandleView => main.candle_view().is_some(),
-            GlobalSlot::Graphics => main.chart_graphics().is_some(),
-            GlobalSlot::Labels => main.chart_labels().is_some(),
+            GlobalSlot::CandleView => main.candle_view().map(StackSetting::CandleView),
+            GlobalSlot::Graphics => main.chart_graphics().map(StackSetting::Graphics),
+            GlobalSlot::Labels => main.chart_labels().map(StackSetting::Labels),
+        }
+    }
+
+    /// One stack's own value for this setting, or `None` when it follows its kind's default.
+    pub(crate) fn stack_value(self, stack: &super::AddChartStack) -> Option<StackSetting> {
+        match self {
+            GlobalSlot::CandleView => stack.candle_view().map(StackSetting::CandleView),
+            GlobalSlot::Graphics => stack.chart_graphics().map(StackSetting::Graphics),
+            GlobalSlot::Labels => stack.chart_labels().map(StackSetting::Labels),
+        }
+    }
+
+    /// Drop the Main stack's own value for this setting, so it follows its kind's default again.
+    pub(crate) fn clear_on_main(
+        self,
+        main: &mut super::MainChartStack,
+        cx: &mut Context<super::MainChartStack>,
+    ) {
+        match self {
+            GlobalSlot::CandleView => main.set_candle_view(None, cx),
+            GlobalSlot::Graphics => main.set_chart_graphics(None, cx),
+            GlobalSlot::Labels => main.set_chart_labels(None, cx),
+        }
+    }
+
+    /// Drop one stack's own value for this setting, so it follows its kind's default again.
+    pub(crate) fn clear_on_stack(
+        self,
+        stack: &mut super::AddChartStack,
+        cx: &mut Context<super::AddChartStack>,
+    ) {
+        match self {
+            GlobalSlot::CandleView => stack.set_candle_view(None, cx),
+            GlobalSlot::Graphics => stack.set_chart_graphics(None, cx),
+            GlobalSlot::Labels => stack.set_chart_labels(None, cx),
         }
     }
 }
@@ -330,7 +345,7 @@ pub(super) struct LayoutPopupSnapshot {
 /// Host of the ⚙ layout-settings popup. Required methods expose host state and the target
 /// (`ChartTabs` targets its active tab, while `DetachedChartHost` targets the window panel);
 /// default methods contain the SHARED popup and setting-application logic formerly duplicated.
-pub(super) trait LayoutPopupHost: Sized + 'static {
+pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'static {
     // --- Host popup state and inputs ---
     fn popup_open(&self) -> bool;
     fn set_popup_open(&mut self, open: bool);
@@ -339,6 +354,13 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
     fn rename_input(&self) -> &Entity<MoonInputState>;
 
     // --- Target tab ---
+    /// Which of the three kinds the tab this popup edits IS.
+    ///
+    /// A press starts by addressing its own kind, which is what makes the common case one click:
+    /// the reader adjusting a torn-off window means the torn-off windows.
+    fn source_kind(&self, cx: &App) -> moon_core::config::ChartTabKind;
+    /// This window's X time scale, which only the candle popup's press carries.
+    fn source_x_ppm(&self, cx: &App) -> Option<f32>;
     fn backend(&self) -> &Entity<Backend>;
     fn spec_group(&self) -> &str;
     /// Target persistence key: `(num, bucket)`.
@@ -355,10 +377,16 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
     fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>);
     /// Apply a value to the target stack(s), dispatching to Main/active stack or the window panel.
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>);
-    /// Apply to all non-Main stacks. The strip also includes Main only when Main is the source
-    /// (`include_main = true`); Add, Custom, and detached-window sources leave Main unchanged.
-    /// Detached windows route the request through Backend because they cannot access group stacks.
-    fn apply_all_from_popup(&mut self, cx: &mut Context<Self>);
+    /// This popup's twelve layout values as they stand right now, for the ⧉ row to perform.
+    fn layout_press_values(&self, cx: &App) -> Vec<StackSetting>;
+
+    /// ARM the ⧉ press: the row that opens names which kinds of tab it reaches, and performs it
+    /// with the values this popup holds AT THAT MOMENT — never a snapshot taken here.
+    fn arm_apply_press(&mut self, cx: &mut Context<Self>) {
+        let source = self.source_kind(cx);
+        self.apply_press_mut().arm(source);
+        cx.notify();
+    }
 
     // --- Shared default logic ---
 
@@ -500,6 +528,9 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         .open(this.popup_open())
         .on_open_change(move |open, window, app| {
             open_entity.update(app, |this, cx| {
+                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
+                // four, so leaving it up would show it over a popup that never armed it.
+                this.apply_press_mut().open = false;
                 if open {
                     this.seed_layout_popup_inputs(window, cx);
                     this.set_popup_open(true);
@@ -532,7 +563,15 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let tav_entity = entity.clone();
     let ll_entity = entity.clone();
     let cl_entity = entity;
-    popover = popover.content(layout_popup::render_layout_popup(
+    let row = super::apply_row::render_apply_row(
+        this,
+        id_prefix,
+        this.layout_press_values(cx),
+        None,
+        p,
+        cx,
+    );
+    let content = layout_popup::render_layout_popup(
         id_prefix,
         snap.mode,
         snap.orientation,
@@ -560,7 +599,7 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         },
         apply_all_label,
         move |app| {
-            all_entity.update(app, |this, cx| this.apply_all_from_popup(cx));
+            all_entity.update(app, |this, cx| this.arm_apply_press(cx));
         },
         move |checked, app| {
             ob_entity.update(app, |this, cx| {
@@ -614,7 +653,9 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         move |_, _w, app| {
             close_entity.update(app, |this, cx| this.close_layout_popup(true, cx));
         },
-    ));
+    );
+    // The ⧉ row rides ABOVE the popup's own content, inline: see `apply_row`.
+    popover = popover.content(v_flex().gap_2().children(row).child(content));
     popover
 }
 

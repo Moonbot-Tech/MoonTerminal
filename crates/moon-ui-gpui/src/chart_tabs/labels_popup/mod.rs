@@ -8,9 +8,9 @@
 //!
 //! Like the layout, candle and graphics popups beside it, these settings are PER TAB: the target is
 //! the tab strip's active tab or the detached window's panel, persisted to `charts.json` through
-//! `ChartTabSpec::chart_labels`, with a tab that has no override following the global
-//! `layout.chart_labels` default. ⧉ distributes this target's configuration to all Add/Custom tabs
-//! and detached windows and updates that default, including Main only when Main is the source.
+//! `ChartTabSpec::chart_labels`, with a tab that has no override following the default of its KIND
+//! of tab (`chart_tabs::apply_all`). ⧉ opens the row that names which kinds a press addresses and
+//! stores this configuration as their default.
 
 use gpui::*;
 use moon_core::config::ChartLabelsCfg;
@@ -96,14 +96,11 @@ fn render_labels_popup<T: LabelsPopupHost>(
 ) -> AnyElement {
     let apply_all_btn = popup_apply_all_button(
         SharedString::from(format!("{id}-apply-all")),
-        t!("chart.layout.apply_all_tip").to_string(),
+        t!("chart.apply_all_tabs_windows").to_string(),
         {
             let entity = entity.clone();
             move |_, _w, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    let cfg = this.labels_cfg(cx);
-                    this.apply_labels_all(cfg, cx);
-                });
+                entity.update(app, |this, cx| this.arm_apply_press(cx));
             }
         },
     );
@@ -178,18 +175,23 @@ pub(crate) trait LabelsPopupHost: LayoutPopupHost {
     fn set_labels_popup_open(&mut self, open: bool);
     /// The target's per-tab override, or `None` to follow the global default.
     fn labels_override(&self, cx: &App) -> Option<ChartLabelsCfg>;
-    /// Apply to all non-Main tabs and windows and update the global default. Main is included only
-    /// when the host's source is Main.
-    fn apply_labels_all(&mut self, cfg: ChartLabelsCfg, cx: &mut Context<Self>);
 
     /// The target's effective configuration, SANITIZED to what the chart can actually lay out.
     ///
     /// Sanitized for the reason the graphics popup normalizes: a write starts from this value, so
     /// reading a hand-edited impossibility would persist it back untouched.
     fn labels_cfg(&self, cx: &App) -> ChartLabelsCfg {
-        let mut cfg = self
-            .labels_override(cx)
-            .unwrap_or_else(|| self.backend().read(cx).layout.chart_labels.clone());
+        // By KIND, for the reason the other two popups resolve by kind: a write starts from this
+        // value, so reading Main's captions on a torn-off window would persist them as that
+        // window's own on the first click.
+        let kind = self.source_kind(cx);
+        let mut cfg = self.labels_override(cx).unwrap_or_else(|| {
+            self.backend()
+                .read(cx)
+                .layout
+                .chart_labels_for(kind)
+                .clone()
+        });
         cfg.sanitize();
         cfg
     }
@@ -239,6 +241,9 @@ pub(super) fn labels_popup_host<T: LabelsPopupHost>(
         .on_open_change(move |open, _window, app| {
             open_entity.update(app, |this, cx| {
                 this.set_labels_popup_open(open);
+                // The armed ⧉ row belongs to the popup that opened it: one press is shared by all
+                // four, so leaving it up would show it over a popup that never armed it.
+                this.apply_press_mut().open = false;
                 cx.notify();
             });
         })
@@ -249,6 +254,20 @@ pub(super) fn labels_popup_host<T: LabelsPopupHost>(
     let p = MoonPalette::active(cx);
     let cfg = this.labels_cfg(cx);
     let entity = cx.entity();
-    popover = popover.content(render_labels_popup(id_prefix, entity, cfg, p, cx));
+    // The ⧉ row rides ABOVE the popup's own content, inline: see `apply_row`.
+    let row = crate::chart_tabs::apply_row::render_apply_row(
+        this,
+        id_prefix,
+        vec![StackSetting::Labels(cfg.clone())],
+        None,
+        p,
+        cx,
+    );
+    popover = popover.content(
+        v_flex()
+            .gap_2()
+            .children(row)
+            .child(render_labels_popup(id_prefix, entity, cfg, p, cx)),
+    );
     popover
 }

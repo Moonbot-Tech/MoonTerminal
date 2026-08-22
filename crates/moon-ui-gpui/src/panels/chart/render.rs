@@ -141,6 +141,7 @@ impl Render for ChartPanel {
             candle_view,
             chart_graphics,
             chart_labels,
+            arb_view,
         ) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
@@ -154,16 +155,26 @@ impl Render for ChartPanel {
             // colors are editable in the same way as the dark set.
             let orders = eff.orders.get(palette.is_light()).clone();
             let theme = eff.theme.get(palette.is_light()).clone();
-            // Candles use the panel's per-tab override or the global layout default.
-            let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
+            // Candles use the panel's per-tab override, or the default of the KIND of tab this
+            // panel sits on — the main chart, a torn-off window, or a comparison. Resolving the
+            // base field here instead would draw Main's default on every chart in the application
+            // and make the split invisible.
+            let candle_view = self
+                .candle_view
+                .unwrap_or_else(|| b.layout.candle_view_for(self.default_kind));
             // Chart graphics follow the same per-tab override as candles: the palette popup writes
-            // the tab's own value, and only a tab without one falls back to the global default.
-            let chart_graphics = self.chart_graphics.unwrap_or(b.layout.chart_graphics);
+            // the tab's own value, and only a tab without one falls back to its kind's default.
+            let chart_graphics = self
+                .chart_graphics
+                .unwrap_or_else(|| b.layout.chart_graphics_for(self.default_kind));
             // Captions come from the settings SIGNATURE rather than being rebuilt here: it already
             // holds this panel's effective value, sanitized, and is restamped by the same backend
             // observation and the same setters that can change it. Rebuilding it per render meant
             // sanitizing sixteen rows and deep-copying their names on every frame.
             let chart_labels = self.settings_sig.chart_labels.clone();
+            // The roster is GLOBAL: the same handle for every chart, taken straight off the
+            // backend rather than through the per-tab settings signature beside it.
+            let arb_view = b.arb_view.clone();
             (
                 theme,
                 orders,
@@ -172,6 +183,7 @@ impl Render for ChartPanel {
                 candle_view,
                 chart_graphics,
                 chart_labels,
+                arb_view,
             )
         };
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
@@ -190,6 +202,7 @@ impl Render for ChartPanel {
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
             | self.chart.set_chart_labels(chart_labels)
+            | self.chart.set_arb_view(arb_view)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
             | self.chart.set_line_labels(self.line_labels)
@@ -665,6 +678,15 @@ impl Render for ChartPanel {
             // in `frame()`; see data_state::apply_slot_geometry. The first present therefore uses
             // the real slot, without expanding to a default size or lagging during reflow.
             .child(self.chart.canvas().text_under().absolute().size_full())
+            // Transparent zones over the arbitrage venue NAMES, for one reason: a native cursor can
+            // only be asked for during PAINT, so a hover handler cannot set it — a styled element
+            // over the name can. They carry no click handler; the press is still routed by the
+            // chart's own input, which is where every other chart gesture is decided.
+            //
+            // Rectangles come from what the LAST frame drew, which is a frame behind during a
+            // resize. That is invisible for a cursor and would be wrong for a click, which is the
+            // other reason the click is not handled here.
+            .children(self.arb_cursor_zones())
             // Top-left status row. The container is hoisted out of the trade-history status so the
             // live order figures still appear while that durable read is Idle; it is rendered only
             // when at least one of the two sources produced something.

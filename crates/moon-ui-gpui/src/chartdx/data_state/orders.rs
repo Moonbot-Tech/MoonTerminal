@@ -59,6 +59,25 @@ impl ChartDataState {
         let wants_venue_cfg = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
         let wants_position_cfg =
             labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
+        // Which venues have a core behind them, for the column's dimming. Read ONCE for the sync,
+        // like the caption gates beside it: it is a property of the connected cores, not of a pane,
+        // and a walk per pane would repeat it for every chart in a stack.
+        let arb_reachable: Vec<(u8, String)> = labels_cfg
+            .any_drawn(|f| f == ChartLabelField::ArbColumn)
+            .then(|| {
+                session
+                    .core_venues()
+                    .values()
+                    .map(|venue| (venue.id.code, venue.dex.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let wants_detect_cfg = labels_cfg.any_drawn(|f| {
+            matches!(
+                f,
+                ChartLabelField::DetectStrategy | ChartLabelField::DetectMsg
+            )
+        });
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -121,6 +140,19 @@ impl ChartDataState {
             // FORMATTED result and is the one that decides whether anything has to repaint.
             pr.label_basis = basis;
             pr.label_strategy = strategy;
+            // The newest detect THIS core fired on THIS market, straight off the store's index —
+            // the ring itself is two thousand rows and this runs per pane on every order revision.
+            let (detect_strategy, detect_msg) = wants_detect_cfg
+                .then(|| {
+                    let core_st = session.store().core(pane.core)?;
+                    let det = core_st.latest_detect.get(&pane.market)?;
+                    Some((det.strat_name.clone(), det.msg.clone()))
+                })
+                .flatten()
+                .unwrap_or_default();
+            pr.label_arb_reachable = arb_reachable.clone();
+            pr.label_detect_strategy = detect_strategy;
+            pr.label_detect_msg = detect_msg;
             let device_gen = pr.layers.device_gen();
             let device_lost = pr.last_device_gen != device_gen;
             if device_lost {

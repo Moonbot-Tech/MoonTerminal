@@ -435,6 +435,13 @@ pub fn tab_badges_path() -> PathBuf {
     cfg_dir().join("tab_badges.json")
 }
 
+/// Arbitrage column presentation (which venues, in what order, name and colour) in a separate
+/// portable file: it is a roster a trader sets once and carries between machines, not a per-chart
+/// setting like the caption modules that print it.
+pub fn arb_view_path() -> PathBuf {
+    cfg_dir().join("arb_view.toml")
+}
+
 /// Detect-tape presentation (dimensions/chart/rail/size slots, per group) in a separate
 /// portable file that can be shared through Copy/Paste in the ⚙ popup.
 pub fn detects_view_path() -> PathBuf {

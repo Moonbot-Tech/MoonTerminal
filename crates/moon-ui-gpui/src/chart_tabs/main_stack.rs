@@ -77,6 +77,8 @@ pub(crate) struct MainChartStack {
     /// Per-window crosshair-label visibility for stack charts; `None` defaults to enabled.
     cursor_labels: Option<bool>,
     /// Comparison anchor `(core, market)` that leads the price scale; `None` disables comparison.
+    /// The kind last pushed down to the panels, so an unchanged one costs nothing.
+    pushed_kind: Option<moon_core::config::ChartTabKind>,
     compare_anchor: Option<(CoreId, String)>,
     /// Shared comparison Y range copied from the anchor's current Y window.
     compare_y: Option<(f32, f32)>,
@@ -207,6 +209,7 @@ impl MainChartStack {
             time_axis_visible: None,
             line_labels: None,
             cursor_labels: None,
+            pushed_kind: None,
             compare_anchor: None,
             compare_y: None,
             compare_orderbook_only: false,
@@ -239,6 +242,11 @@ impl MainChartStack {
         let theme = self.theme.clone();
         let workspace_group = self.group.clone();
         let market = market.to_string();
+        // The constructor starts every main panel on the Main default, which is wrong while the
+        // stack is under the anchor lock — and `sync_default_kind`'s gate would then skip it,
+        // because the kind it would push is the one it has already pushed. Told here instead, where
+        // the panel is created. The Add stack has no such branch: its constructor takes the kind.
+        let kind = self.default_kind();
         let panel = cx.new(|cx| {
             ChartPanel::new_main(
                 backend,
@@ -249,6 +257,7 @@ impl MainChartStack {
                 cx,
             )
         });
+        panel.update(cx, |p, pcx| p.set_default_kind(kind, pcx));
         cx.observe(&panel, |this, _, cx| {
             let mut dirty = this.prune_empty(cx);
             if dirty {
@@ -314,6 +323,25 @@ impl MainChartStack {
         panel
     }
 
+    /// Which of the three defaults the main chart follows: never a window, but it can be locked.
+    pub(crate) fn default_kind(&self) -> moon_core::config::ChartTabKind {
+        moon_core::config::ChartTabKind::of(false, self.compare_anchor.is_some())
+    }
+
+    /// Tell every chart which default it follows now. See `AddChartStack::sync_default_kind`.
+    fn sync_default_kind(&mut self, cx: &mut Context<Self>) {
+        let kind = self.default_kind();
+        if self.pushed_kind == Some(kind) {
+            return;
+        }
+        self.pushed_kind = Some(kind);
+        for entry in &self.charts {
+            entry
+                .panel
+                .update(cx, |panel, pcx| panel.set_default_kind(kind, pcx));
+        }
+    }
+
     /// Synchronize comparison mode while preserving the active market across anchor reordering.
     ///
     /// Args:
@@ -342,6 +370,9 @@ impl MainChartStack {
                 |ix, key| self.charts.get(ix).is_some_and(|entry| entry.is(key)),
             );
         }
+        // Unconditional, like the Add stack's: `changed` reports a moved chart LIST, while the lock
+        // itself can go on or off without one, and it is the lock that picks the default.
+        self.sync_default_kind(cx);
         changed
     }
 

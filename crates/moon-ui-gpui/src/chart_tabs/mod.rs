@@ -10,6 +10,7 @@
 mod add_stack;
 // `pub(crate)` because Backend queues a detached window's ⧉ press as `ApplyAllRequest`.
 pub(crate) mod apply_all;
+pub(crate) mod apply_row;
 mod candle_popup;
 mod graphics_popup;
 // `pub(crate)` because the header price ticker reuses `search` and `render_popup`.
@@ -296,6 +297,11 @@ pub struct ChartTabs {
     /// Signature of inputs that change the tab strip: AddToChart detects, split configuration,
     /// and explicit requests to open a market on Main.
     last_sig: u64,
+    /// Last default-setting press this strip has already applied to its own stacks.
+    last_defaults_rev: u64,
+    /// The ⧉ press this host has armed but not yet performed. See [`apply_row`].
+    apply_press: apply_row::ApplyPress,
+
     /// Successfully applied Auto chart target plus one deduplicated unresolved retry identity.
     ///
     /// Construction seeds `applied_core` only when the actual restored Main target already belongs
@@ -549,6 +555,9 @@ impl ChartTabs {
         cx.observe(&backend, |this, backend, cx| {
             // Drain apply-to-all requests from detached windows before the signature early return.
             this.drain_apply_all(cx);
+            // And the defaults a press in ANY window set, which this window's stacks must stop
+            // shadowing with overrides of their own.
+            this.drain_default_clears(cx);
             // Shift+middle-click in this window applies its scale to every stack and persists it.
             this.drain_x_sync(cx);
             // A target core's catalog can become ready without another workspace-selection edge.
@@ -695,6 +704,10 @@ impl ChartTabs {
             },
         )
         .detach();
+        // A strip that has just been built holds no overrides worth clearing; starting at the
+        // current revision keeps it from replaying a press that happened before it existed. Read
+        // BEFORE the handle moves into the struct.
+        let initial_defaults_rev = backend.read(cx).chart_defaults_rev;
         let mut this = Self {
             backend,
             group,
@@ -712,6 +725,8 @@ impl ChartTabs {
             seen: HashMap::new(),
             add_seq: HashMap::new(),
             last_sig: initial_sig,
+            apply_press: apply_row::ApplyPress::default(),
+            last_defaults_rev: initial_defaults_rev,
             auto_workspace_chart_state: AutoWorkspaceChartState::seeded(
                 initial_auto_workspace_core,
                 initial_main_target,
@@ -919,8 +934,14 @@ impl ChartTabs {
         let req = self.backend.update(cx, |b, _| {
             b.take_open_compare_request_for_group(self.group.as_str())
         });
-        if let Some((core, market)) = req {
-            self.open_compare_tab(core, market, cx);
+        if let Some(((core, market), anchor)) = req {
+            match anchor {
+                // A comparison BETWEEN two charts: the one it was started from and the one asked
+                // for. Anything else — a detect card, a coin menu — names one coin and lets the tab
+                // gather the rest.
+                Some(anchor) => self.open_compare_with(anchor, (core, market), cx),
+                None => self.open_compare_tab(core, market, cx),
+            }
             self.last_sig = chart_tabs_sig(self.backend.read(cx), self.group.as_str());
         }
     }
