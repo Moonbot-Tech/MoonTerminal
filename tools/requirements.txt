@@ -2,4 +2,4 @@
 #   pip install -r tools/requirements.txt
 #
 # The Rust build needs none of this — only `make tour` and `make tour-check` do.
-PyYAML>=6.0
+PyYAML==6.0.3

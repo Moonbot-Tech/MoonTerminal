@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -39,6 +41,97 @@ AUTHORED_EXTRAS = {"html"}
 
 #: Keys allowed beside ``locale`` in a reference slot.
 LOCALE_EXTRAS = {"args", "html"}
+
+ALLOWED_MARKUP = {"a", "b", "code"}
+
+
+class _MarkupValidator(HTMLParser):
+    """Reject browser-active HTML outside the tour's tiny formatting subset."""
+
+    def __init__(self, where: str, problems: Problems) -> None:
+        """Remember the content slot that owns any reported markup defect."""
+        super().__init__(convert_charrefs=True)
+        self.where = where
+        self.problems = problems
+        self.stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Validate an opening tag, its attributes and any link destination."""
+        if tag not in ALLOWED_MARKUP:
+            self.problems.add(self.where, f"HTML tag <{tag}> is not allowed")
+            return
+        self.stack.append(tag)
+        values = dict(attrs)
+        if len(values) != len(attrs):
+            self.problems.add(self.where, f"HTML tag <{tag}> repeats an attribute")
+        if tag != "a":
+            if attrs:
+                self.problems.add(self.where, f"HTML tag <{tag}> cannot carry attributes")
+            return
+        extra = set(values) - {"href", "target", "rel"}
+        if extra:
+            self.problems.add(self.where, f"HTML link has unsupported attributes {sorted(extra)}")
+        href = values.get("href") or ""
+        if not _is_safe_https_href(href):
+            self.problems.add(
+                self.where,
+                "HTML links must use an absolute https:// URL without credentials, whitespace or markup delimiters",
+            )
+        if values.get("target") != "_blank":
+            self.problems.add(self.where, 'HTML links must use target="_blank"')
+        rel = set((values.get("rel") or "").split())
+        if "noopener" not in rel:
+            self.problems.add(self.where, 'HTML links must include rel="noopener"')
+
+    def handle_endtag(self, tag: str) -> None:
+        """Reject a closing tag that is outside the same formatting subset."""
+        if tag not in ALLOWED_MARKUP:
+            self.problems.add(self.where, f"HTML closing tag </{tag}> is not allowed")
+            return
+        if not self.stack or self.stack[-1] != tag:
+            self.problems.add(self.where, f"HTML closing tag </{tag}> is out of order")
+            return
+        self.stack.pop()
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Reject self-closing markup because the current subset needs none."""
+        self.problems.add(self.where, f"self-closing HTML tag <{tag}/> is not allowed")
+
+    def handle_comment(self, data: str) -> None:
+        """Reject comments so they cannot hide unreviewed browser markup."""
+        self.problems.add(self.where, "HTML comments are not allowed")
+
+    def close(self) -> None:
+        """Report any formatting tag left open at the end of the fragment."""
+        super().close()
+        if self.stack:
+            self.problems.add(self.where, f"unclosed HTML tag(s): {self.stack}")
+
+
+def _is_safe_https_href(href: str) -> bool:
+    """Accept a complete web URL that is safe in both HTML and Markdown output."""
+    if any(character.isspace() or ord(character) < 0x20 for character in href):
+        return False
+    if any(character in href for character in "()<>[]`\\"):
+        return False
+    try:
+        parsed = urlsplit(href)
+        return (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return False
+
+
+def _validate_markup(where: str, values: dict[str, str], problems: Problems) -> None:
+    """Validate every translated fragment before it can reach ``innerHTML``."""
+    for code, value in values.items():
+        parser = _MarkupValidator(f"{where}.{code}", problems)
+        parser.feed(value)
+        parser.close()
 
 
 @dataclass(frozen=True)
@@ -138,7 +231,10 @@ class _Resolver:
                 value = value.replace("%{" + name + "}", str(replacement))
             values[code] = value
 
-        return Text(values=values, html=bool(raw.get("html")), locale_key=key)
+        markup = self._markup_flag(where, raw)
+        if markup:
+            _validate_markup(where, values, self.problems)
+        return Text(values=values, html=markup, locale_key=key)
 
     def _authored(self, where: str, raw: dict) -> Text:
         extra = set(raw) - set(self.codes) - AUTHORED_EXTRAS
@@ -160,7 +256,18 @@ class _Resolver:
             else:
                 values[code] = value
 
-        return Text(values=values, html=bool(raw.get("html")))
+        markup = self._markup_flag(where, raw)
+        if markup:
+            _validate_markup(where, values, self.problems)
+        return Text(values=values, html=markup)
+
+    def _markup_flag(self, where: str, raw: dict) -> bool:
+        """Require the optional markup flag to be a real boolean."""
+        value = raw.get("html", False)
+        if not isinstance(value, bool):
+            self.problems.add(where, f"html must be true or false, got {value!r}")
+            return False
+        return value
 
 
 def _load_yaml(path: Path, schema: str, problems: Problems) -> dict:

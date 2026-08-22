@@ -157,6 +157,8 @@ body{
 .mark{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.015em;font-size:16px}
 .moon{width:18px;height:18px;flex:none}
 .top .spacer{flex:1 1 auto;min-width:8px}
+.kb-link{font:600 12px/1 var(--mono);color:var(--accent-fg);text-decoration:none;white-space:nowrap}
+.kb-link:hover{text-decoration:underline}
 .seg{display:flex;border:1px solid var(--border);border-radius:var(--r-btn);overflow:hidden}
 .seg button{
   appearance:none;border:0;background:transparent;color:var(--text-soft);
@@ -451,6 +453,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
     MoonTerminal
   </span>
   <span class="spacer"></span>
+  <a class="kb-link" href="knowledge/">AI-база / AI docs</a>
   <div class="seg" role="group" aria-label="Язык / Language">
     <button type="button" data-lang="ru" aria-pressed="true">RU</button>
     <button type="button" data-lang="en" aria-pressed="false">EN</button>
@@ -460,6 +463,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
     <button type="button" data-theme-set="light" aria-pressed="false" data-i18n="th.light">Светлая</button>
   </div>
 </header>
+<noscript><div class="wrap" style="padding-top:18px"><a class="kb-link" href="knowledge/">Открыть текстовую базу знаний / Open the text knowledge base</a></div></noscript>
 
 <main class="wrap">
 
@@ -731,8 +735,8 @@ const T = {
     "en": "The terminal in one screen"
   },
   "hero.lead": {
-    "ru": "Ниже — настоящее главное окно MoonTerminal, собранное из палитры, метрик и локалей самого приложения. Нажмите любую зону: объяснение придёт той же строкой подсказки, которую вы увидите, наведя мышь в терминале.",
-    "en": "Below is the real MoonTerminal main window, assembled from the application's own palette, metrics and locale files. Click any zone: the explanation is the very tooltip you get by hovering it in the terminal."
+    "ru": "Ниже — интерактивная схема главного окна MoonTerminal, собранная из модели тура, палитры, метрик и выбранных строк локализации приложения. Нажмите любую зону, чтобы увидеть документированное пояснение и его источник.",
+    "en": "Below is an interactive schematic of the MoonTerminal main window, assembled from the tour model, palette, metrics, and selected application locale strings. Click any zone to see its documented explanation and source."
   },
   "map.h": {
     "ru": "Карта окна",
@@ -795,8 +799,8 @@ const T = {
     "en": "MoonTerminal — desktop trading terminal for the Moonbot core. Windows · macOS · Linux."
   },
   "ft.built": {
-    "ru": "Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*.yml.",
-    "en": "This page is assembled from repository data: palette and metrics from themes/moon-terminal.toml, every label and explanation from locales/*.yml."
+    "ru": "Страница собрана из данных репозитория: палитра и метрики — из зафиксированного снимка темы MoonUI; подписи и пояснения — из проверенной модели тура и выбранных locales/*.yml. Это схема, а не запись живой сессии.",
+    "en": "This page is assembled from repository data: palette and metrics come from a committed MoonUI theme snapshot; labels and explanations come from the validated tour model and selected locales/*.yml. It is a schematic, not a live-session capture."
   },
   "ui.ws": {
     "ru": "Авто",

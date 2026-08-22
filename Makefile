@@ -32,8 +32,9 @@ ifeq ($(OS),Windows_NT)
 else
   PYTHON ?= python3
 endif
-# tools/ is the import root: the generator is the package tools/tour.
-TOUR := PYTHONPATH=tools $(PYTHON) -m tour
+# Run from the repository root as a namespace package. This spelling works in
+# both Windows cmd and POSIX shells without an inline environment assignment.
+TOUR := $(PYTHON) -m tools.tour
 
 ifeq ($(OS),Windows_NT)
   TARGET := --target x86_64-pc-windows-msvc
@@ -57,12 +58,12 @@ else
   SIGN = @true
 endif
 
-.PHONY: run build release check fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help tour tour-check tour-theme tour-test
+.PHONY: run build release check fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help tour tour-site tour-check tour-theme tour-test
 
 help:
 	@echo "make run | build | release | check | fmt | clean | codesign-setup"
 	@echo "deps: update-moon-ui (MoonUI pin) | update-moonproto (deliberate) | update-all (moves EVERYTHING)"
-	@echo "docs: tour (regenerate the user tour) | tour-check (verify it is current) | tour-theme (refresh the palette)"
+	@echo "docs: tour (regenerate the user tour) | tour-site (build the publishable site) | tour-check (verify it is current) | tour-theme (refresh the palette)"
 	@echo "bin: $(BIN)"
 
 # macOS: create the self-signed code-signing certificate once (otherwise it will be created
@@ -127,7 +128,12 @@ update-forks: update-all
 tour:
 	$(TOUR)
 
-# Fail if the committed page is not what the sources produce. This is the CI gate.
+# Build the complete Pages artifact. Override TOUR_SITE_OUT for CI or previews.
+TOUR_SITE_OUT ?= .tmp/tour-site
+tour-site:
+	$(TOUR) --site-out $(TOUR_SITE_OUT)
+
+# Optional local guard for the committed interactive-page copy.
 tour-check:
 	$(TOUR) --check
 

@@ -7,13 +7,27 @@ lives in this repository.
 ```bash
 pip install -r tools/requirements.txt   # PyYAML, once
 
-make tour          # regenerate the page
-make tour-check    # fail if the committed page is stale (this is the CI gate)
+make tour          # regenerate the committed interactive page
+make tour-site     # build the full Pages site: HTML + Markdown + llms.txt
+make tour-check    # optional local check that the committed tour page is current
 make tour-test     # the generator's own tests
 make tour-theme    # refresh the palette from a MoonUI checkout (its own commit)
 ```
 
-**The generated page is committed.** CI verifies it is current; it never writes it.
+**The interactive page is committed for review.** GitHub Pages now builds the complete
+site from source on every relevant commit, so publication does not depend on somebody
+remembering to regenerate Markdown files or spend LLM tokens.
+
+The Pages artifact additionally contains:
+
+- `knowledge/index.html` — a human landing page;
+- `llms.txt` and `llms-full.txt` — a short agent index and the full corpus;
+- `kb/*.md` — one Markdown file per topic;
+- `knowledge.jsonl` — one bilingual fact per line;
+- `robots.txt` and `sitemap.xml` — public discovery hints.
+
+Run `make tour-site TOUR_SITE_OUT=<directory>` for a local preview. Generated
+knowledge files are build artifacts rather than a second hand-maintained source.
 
 ## What is generated and what is not
 

@@ -13,21 +13,26 @@ data, so it is the only assertion here whose two sides have independent origins.
 
 from __future__ import annotations
 
+import copy
+import io
+import json
+import posixpath
 import re
 import shutil
 import sys
 import tempfile
 import unittest
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tour import emit, paths, render as render_mod  # noqa: E402
-from tour.content import load as load_content  # noqa: E402
+from tour import emit, knowledge, paths, render as render_mod  # noqa: E402
+from tour.__main__ import main as tour_main  # noqa: E402
+from tour.content import Language, load as load_content  # noqa: E402
 from tour.errors import ContentError, TourError  # noqa: E402
 from tour.locales import load as load_locales  # noqa: E402
 from tour.theme import load as load_theme, resolve as resolve_theme  # noqa: E402
@@ -83,6 +88,231 @@ class Determinism(unittest.TestCase):
         self.assertEqual(
             committed, page, "docs/tour/index.html is stale — run `make tour`"
         )
+
+
+class KnowledgeBundle(unittest.TestCase):
+    """Checks the complete artifact uploaded by the Pages workflow."""
+
+    def bundle(self):
+        """Build the knowledge artifact through the same inputs as Pages."""
+        themes = load_theme(resolve_theme())
+        locales = load_locales(paths.LOCALES_DIR)
+        content = load_content(paths.CONTENT_DIR, locales)
+        content.problems.raise_if_any("content is not usable")
+        template = paths.KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")
+        return knowledge.build(content, themes, template), content
+
+    def test_two_bundles_are_byte_identical(self):
+        """The same repository inputs must produce byte-identical files."""
+        first, _ = self.bundle()
+        second, _ = self.bundle()
+        self.assertEqual(first.files, second.files)
+
+    def test_configured_language_is_rendered_without_renderer_changes(self):
+        """Adding a validated language must change content, not public paths or code."""
+        _, original = self.bundle()
+        content = copy.deepcopy(original)
+        content.languages.append(Language(code="es", label="ES", html_lang="es"))
+        texts = list(content.page.values())
+        for zone in content.zones:
+            texts.extend((zone["title"], zone["body"]))
+        for step in content.steps:
+            texts.extend((step["title"], step["body"]))
+        for panel in content.panels:
+            texts.append(panel["description"])
+        for window in content.windows:
+            texts.extend((window["title"], window["body"]))
+        for group in content.hotkeys:
+            texts.append(group["caption"])
+            texts.extend(row["action"] for row in group["rows"])
+        for text in texts:
+            text.values["es"] = f"ES: {text.values['en']}"
+        themes = load_theme(resolve_theme())
+        template = paths.KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")
+        bundle = knowledge.build(content, themes, template)
+        for path in (
+            Path("kb/getting-started.md"),
+            Path("kb/interface.md"),
+            Path("kb/panels.md"),
+            Path("kb/windows.md"),
+        ):
+            self.assertIn("### es:", bundle.files[path], path)
+        self.assertIn("**es:**", bundle.files[Path("kb/hotkeys.md")])
+        self.assertIn("languages: [ru, en, es]", bundle.files[Path("kb/index.md")])
+
+    def test_bundle_has_the_public_contract_files(self):
+        """The URLs advertised to agents must remain a stable public contract."""
+        bundle, _ = self.bundle()
+        expected = {
+            Path("knowledge/index.html"),
+            Path("knowledge.jsonl"),
+            Path("llms.txt"),
+            Path("llms-full.txt"),
+            Path("robots.txt"),
+            Path("sitemap.xml"),
+            Path("kb/index.md"),
+            Path("kb/getting-started.md"),
+            Path("kb/interface.md"),
+            Path("kb/panels.md"),
+            Path("kb/windows.md"),
+            Path("kb/hotkeys.md"),
+        }
+        self.assertEqual(set(bundle.files), expected)
+
+    def test_markdown_front_matter_declares_identity_and_limits(self):
+        """Every topic must expose machine-readable identity without volatile metadata."""
+        bundle, _ = self.bundle()
+        for path, body in bundle.files.items():
+            if path.suffix != ".md":
+                continue
+            self.assertTrue(body.startswith("---\n"), path)
+            metadata = yaml.safe_load(body.split("---", 2)[1])
+            self.assertEqual(metadata["schema"], "moonterminal.tour.topic.v1", path)
+            self.assertEqual(metadata["primary_language"], "ru", path)
+            self.assertEqual(metadata["languages"], ["ru", "en"], path)
+            self.assertEqual(metadata["coverage"]["count"] > 0, True, path)
+            self.assertNotIn("generated_at", metadata, path)
+            self.assertNotIn("last_verified_at", metadata, path)
+            self.assertTrue(
+                any("not documented" in limit for limit in metadata["limitations"]),
+                path,
+            )
+
+    def test_jsonl_contains_every_curated_fact(self):
+        """Every authored tour fact must appear exactly once in the search corpus."""
+        bundle, content = self.bundle()
+        rows = [json.loads(line) for line in bundle.files[Path("knowledge.jsonl")].splitlines()]
+        expected = (
+            len(content.steps)
+            + len(content.zones)
+            + len(content.panels)
+            + len(content.windows)
+            + sum(len(group["rows"]) for group in content.hotkeys)
+        )
+        self.assertEqual(len(rows), expected)
+        self.assertTrue(all(set(row["title"]) == set(content.codes) for row in rows))
+        self.assertTrue(all("source" not in row for row in rows))
+        self.assertTrue(
+            all(
+                row["provenance"][part]["source_type"]
+                in {"authored-tour", "locale-literal"}
+                for row in rows
+                for part in ("title", "text")
+            )
+        )
+
+    def test_llms_index_points_only_to_generated_or_human_pages(self):
+        """An agent following llms.txt must not land on a missing local URL."""
+        bundle, _ = self.bundle()
+        llms = bundle.files[Path("llms.txt")]
+        public_paths = re.findall(
+            rf"{re.escape(knowledge.PUBLIC_BASE)}/([^\s)]+)", llms
+        )
+        generated = {path.as_posix() for path in bundle.files}
+        generated.update({"", "knowledge/"})
+        self.assertTrue(public_paths)
+        self.assertEqual([path for path in public_paths if path not in generated], [])
+
+    def test_every_published_link_resolves_from_its_actual_url(self):
+        """Moving Markdown into llms-full must not leave relative links behind."""
+        bundle, _ = self.bundle()
+        generated = {path.as_posix() for path in bundle.files}
+        generated.add("index.html")
+        missing = []
+        markdown_link = re.compile(r"\[[^\]]*\]\(([^)\s]+)")
+        for source, body in bundle.files.items():
+            links = markdown_link.findall(body)
+            if source.suffix == ".html":
+                links.extend(re.findall(r'href="([^"]+)"', body))
+            for href in links:
+                target = href.split("#", 1)[0].split("?", 1)[0]
+                if href.startswith(knowledge.PUBLIC_BASE):
+                    target = target.removeprefix(knowledge.PUBLIC_BASE).lstrip("/")
+                elif re.match(r"^[a-z][a-z0-9+.-]*:", href, re.I):
+                    continue
+                else:
+                    target = posixpath.normpath(
+                        posixpath.join(source.parent.as_posix(), target)
+                    )
+                if not target or target.endswith("/") or target == ".":
+                    target = posixpath.join(target, "index.html")
+                target = posixpath.normpath(target)
+                if target not in generated:
+                    missing.append((source.as_posix(), href, target))
+        self.assertEqual(missing, [])
+
+    def test_markdown_does_not_leak_quickstart_html(self):
+        """Allowed browser markup must become ordinary machine-readable Markdown."""
+        bundle, _ = self.bundle()
+        quickstart = bundle.files[Path("kb/getting-started.md")]
+        self.assertNotIn("<code>", quickstart)
+        self.assertNotIn("<a ", quickstart)
+        self.assertIn("[Releases](https://github.com/Moonbot-Tech/MoonTerminal/releases/latest)", quickstart)
+
+    def test_every_hotkey_code_span_preserves_its_source_literal(self):
+        """Markdown escaping must not change the shortcut a user should press."""
+        bundle, content = self.bundle()
+        actual = re.findall(
+            r"^\| `([^`]*)` \|", bundle.files[Path("kb/hotkeys.md")], re.M
+        )
+        expected = [
+            row["combo"] for group in content.hotkeys for row in group["rows"]
+        ]
+        self.assertEqual(actual, expected)
+
+    def test_human_index_local_links_resolve_inside_the_site(self):
+        """Every relative link in the human landing page must reach a generated file."""
+        bundle, _ = self.bundle()
+        page = bundle.files[Path("knowledge/index.html")]
+        generated = {path.as_posix() for path in bundle.files}
+        generated.add("index.html")
+        missing = []
+        for href in re.findall(r'href="([^"]+)"', page):
+            if href.startswith(("http://", "https://", "#")):
+                continue
+            target = href.split("#", 1)[0]
+            candidate = posixpath.normpath(posixpath.join("knowledge", target))
+            if target.endswith("/"):
+                candidate = posixpath.normpath(posixpath.join(candidate, "index.html"))
+            if candidate not in generated:
+                missing.append(href)
+        self.assertEqual(missing, [])
+
+    def test_every_generated_text_file_is_lf_only(self):
+        """Cross-platform generation must preserve the repository's LF contract."""
+        bundle, _ = self.bundle()
+        for path, body in bundle.files.items():
+            self.assertNotIn("\r", body, path)
+            self.assertTrue(body.endswith("\n"), path)
+            self.assertFalse(body.endswith("\n\n"), path)
+
+
+class CommandLine(unittest.TestCase):
+    """Checks mutually exclusive modes and fail-closed site directories."""
+
+    def test_conflicting_site_modes_fail_before_creating_a_target(self):
+        """Ambiguous write modes must exit with argparse status 2 and write nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "site"
+            cases = (["--out", str(Path(tmp) / "one.html"), "--site-out", str(root)], ["--check", "--site-out", str(root)])
+            for args in cases:
+                with self.subTest(args=args), redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        tour_main(args)
+                    self.assertEqual(caught.exception.code, 2)
+                    self.assertFalse(root.exists())
+
+    def test_site_output_refuses_an_unknown_existing_file(self):
+        """A stale orphan must never ride inside the uploaded Pages artifact."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "site"
+            root.mkdir()
+            sentinel = root / "private.txt"
+            sentinel.write_text("do not publish", encoding="utf-8")
+            with redirect_stderr(io.StringIO()):
+                result = tour_main(["--site-out", str(root)])
+            self.assertEqual(result, 2)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "do not publish")
 
 
 class Output(unittest.TestCase):
@@ -264,6 +494,63 @@ class Escaping(unittest.TestCase):
         raw = [k for k, t in content.page.items() if t.html]
         self.assertEqual(raw, [], "page chrome must not carry markup")
         self.assertTrue(all(s["body"].html for s in content.steps))
+
+    def test_active_or_malformed_quickstart_html_is_rejected(self):
+        """A content edit must not turn the public Pages origin into an XSS surface."""
+        attacks = [
+            "<script>alert(1)</script>",
+            "<svg onload=alert(1)></svg>",
+            "<img src=x onerror=alert(1)>",
+            "<iframe src=https://example.com></iframe>",
+            '<a href="javascript:alert(1)" target="_blank" rel="noopener">x</a>',
+            '<a href="data:text/html,x" target="_blank" rel="noopener">x</a>',
+            '<a href="https://example.com" style="color:red" target="_blank" rel="noopener">x</a>',
+            '<a href="https://safe.example/) [evil](javascript:alert(1))" target="_blank" rel="noopener">x</a>',
+            '<a href="https://safe.example/) &lt;img src=x onerror=alert(1)&gt;" target="_blank" rel="noopener">x</a>',
+            '<a href="https://user:secret@example.com/path" target="_blank" rel="noopener">x</a>',
+            "<b><code>out of order</b></code>",
+        ]
+        locales = load_locales(paths.LOCALES_DIR)
+        for payload in attacks:
+            with self.subTest(payload=payload):
+                def inject(doc, value=payload):
+                    """Put one adversarial fragment into an allowed markup slot."""
+                    doc["steps"][0]["body"]["ru"] = value
+
+                with broken_content("quickstart.yml", inject) as content_dir:
+                    with self.assertRaises(ContentError):
+                        content = load_content(content_dir, locales)
+                        content.problems.raise_if_any("content is not usable", ContentError)
+
+    def test_markdown_source_text_cannot_create_active_markup(self):
+        """Plain and allowed-HTML text may not inject Markdown or raw HTML."""
+        payload = (
+            '<img src=x onerror=alert(1)> [js](javascript:alert(1)) '
+            '[data](data:text/html,x) `code` # heading | cell\n- item'
+        )
+        for value, has_markup in ((payload, False), (f"<b>{payload}</b>", True)):
+            with self.subTest(has_markup=has_markup):
+                rendered = knowledge._markdown_text(value, has_markup)
+                self.assertNotIn("<img", rendered)
+                self.assertNotIn("](javascript:", rendered)
+                self.assertNotIn("](data:", rendered)
+                self.assertNotIn("`code`", rendered)
+                self.assertNotIn("\n", rendered)
+                self.assertIn(r"\[js\]\(javascript:alert\(1\)\)", rendered)
+
+    def test_markdown_link_destination_encodes_delimiters(self):
+        """A second safety layer keeps even pre-encoded URLs inside one link."""
+        href = "https://safe.example/%29%20%5Bevil%5D%28javascript:alert%281%29%29"
+        rendered = knowledge._markdown_text(
+            f'<a href="{href}" target="_blank" rel="noopener">safe</a>', True
+        )
+        self.assertEqual(rendered, f"[safe]({href})")
+        unsafe = "https://safe.example/) [evil](javascript:alert(1))"
+        destination = knowledge._markdown_destination(unsafe)
+        self.assertNotIn(" ", destination)
+        self.assertNotIn("[", destination)
+        self.assertNotIn("(", destination)
+        self.assertNotIn(")", destination)
 
 
 if __name__ == "__main__":

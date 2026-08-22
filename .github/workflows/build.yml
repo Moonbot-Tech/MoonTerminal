@@ -1,9 +1,13 @@
 name: build
 
-# Four jobs, three of which gate a merge:
+permissions:
+  contents: read
+
+# Five jobs, four of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
 #   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
 #   Audit        — cargo-deny over the committed lockfile. Blocking.
+#   Tour         — deterministic interactive and AI documentation. Blocking.
 #   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
 #                  backend on a native runner, which Windows cannot do at all: no
 #                  macOS SDK and no Apple linker. Reaches both architectures the release
@@ -200,11 +204,11 @@ jobs:
           command: check advisories bans sources
 
   tour:
-    name: Tour page is current
+    name: Tour and knowledge site
     runs-on: ubuntu-latest
-    # docs/tour/index.html is GENERATED from locales/*.yml, tools/tour/content/*.yml and a
-    # committed snapshot of MoonUI's theme. Editing a source and forgetting to regenerate is
-    # the failure this gate exists to catch, and it is the one that will actually happen.
+    # The complete site is GENERATED from locales/*.yml, tools/tour/content/*.yml and a
+    # committed snapshot of MoonUI's theme. This gate proves a clean clone can build the exact
+    # artifact that Pages will deploy; no committed Markdown copy needs manual regeneration.
     #
     # What it CANNOT prove: that the committed theme snapshot still matches MoonUI. MoonUI is a
     # cargo git dependency with no file path on a runner, so nothing here can read it. The
@@ -214,10 +218,12 @@ jobs:
     # and a fourth cache writer would evict the live gate caches from the repository's shared
     # 10 GB Actions quota.
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
       - run: pip install -r tools/requirements.txt
       - run: make tour-check
+      - name: Build complete site from sources
+        run: make tour-site TOUR_SITE_OUT="${{ runner.temp }}/moonterminal-site"
       - run: make tour-test
