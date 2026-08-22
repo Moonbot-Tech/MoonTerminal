@@ -15,6 +15,8 @@ mod bg;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
 mod period;
+/// Typed load-state algebra for Analytics profit queries.
+mod profit_load;
 pub(crate) mod profit_monitor;
 /// Deleting a strategy and its report trades in confirmed order, then requesting empty-folder cleanup.
 mod purge;
@@ -32,6 +34,7 @@ mod tuner;
 pub(in crate::analytics) use period::{
     Period, Tab, custom_bounds, day_of_secs, exact_secs_of_day, fmt_day, secs_of_day,
 };
+pub(in crate::analytics) use profit_load::ProfitLoadState;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -52,11 +55,9 @@ use crate::valuation_health;
 use crate::{Backend, design};
 use moon_core::db::analytics::{DayCell, PreviousPeriodBasis, Query, StrategyBase, Summary};
 use moon_core::db::valuation::{ValuationMode, ValuationStatus};
-use moon_core::db::{
-    FailKind, ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, SideFilter,
-};
+use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, QuoteBreakdown, ReadFail, SideFilter};
 
-use crate::load_state::{LoadState, Note, note_el};
+use crate::load_state::{LoadState, note_el};
 use refresh::{
     BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh, visible_refresh,
 };
@@ -155,115 +156,6 @@ pub(in crate::analytics) fn pnl_unit_label() -> &'static str {
         Some(ProfitUnit::Quote(currency)) => currency.ticker(),
         None => "",
     })
-}
-
-/// UI load state that preserves the database's profit-scope invariant.
-pub(in crate::analytics) enum ProfitLoadState<T> {
-    /// A request is in flight and no scalar unit has been verified yet.
-    Loading,
-    /// Comparable or legitimately empty scalar data and its optional exact unit.
-    Ready {
-        /// `None` belongs only to an empty query that has no currency to infer.
-        unit: Option<ProfitUnit>,
-        /// Current scalar payload.
-        data: Arc<T>,
-    },
-    /// Raw money is unsafe as one scalar; only per-quote totals are retained.
-    Split(QuoteBreakdown),
-    /// The report replica or required schema is not available yet.
-    NotReady,
-    /// A classified read failure with no stale scalar payload.
-    Failed(ReadFail),
-}
-
-impl<T> Default for ProfitLoadState<T> {
-    /// Begin with a fresh unitless loading state.
-    ///
-    /// Returns:
-    ///     Loading state without stale scalar data.
-    fn default() -> Self {
-        Self::Loading
-    }
-}
-
-impl<T> ProfitLoadState<T> {
-    /// Publish one typed database result without creating contradictory unit/split fields.
-    ///
-    /// Args:
-    ///     result: Comparable, empty, split-only, or failed database result.
-    ///
-    /// Returns:
-    ///     Nothing.
-    fn apply(&mut self, result: moon_core::db::ReadResult<ProfitScope<T>>) {
-        *self = match result {
-            Ok(ProfitScope::Comparable { unit, data }) => Self::Ready {
-                unit: Some(unit),
-                data: Arc::new(data),
-            },
-            Ok(ProfitScope::Empty(data)) => Self::Ready {
-                unit: None,
-                data: Arc::new(data),
-            },
-            Ok(ProfitScope::Split(totals)) => Self::Split(totals),
-            Err(ReadFail::NotReady) => Self::NotReady,
-            Err(error) => Self::Failed(error),
-        };
-    }
-
-    /// Borrow scalar data when the scope is comparable or legitimately empty.
-    ///
-    /// Returns:
-    ///     Current scalar payload, or `None` for loading, split, and failed states.
-    fn data(&self) -> Option<&Arc<T>> {
-        match self {
-            Self::Ready { data, .. } => Some(data),
-            Self::Loading | Self::Split(_) | Self::NotReady | Self::Failed(_) => None,
-        }
-    }
-
-    /// Return scalar data or the exact placeholder for the current load outcome.
-    ///
-    /// Args:
-    ///     empty: Predicate that classifies a successful scalar payload as empty.
-    ///
-    /// Returns:
-    ///     Ready scalar data or a loading, empty, unavailable, split, or failure note.
-    fn view(&self, empty: impl FnOnce(&T) -> bool) -> Result<&Arc<T>, Note> {
-        match self {
-            Self::Loading => Err(Note::Loading),
-            Self::Ready { data, .. } if empty(data) => Err(Note::Empty),
-            Self::Ready { data, .. } => Ok(data),
-            Self::Split(_) => Err(Note::IncomparableQuote),
-            Self::NotReady => Err(Note::NotReady),
-            Self::Failed(ReadFail::IncomparableQuote) => Err(Note::IncomparableQuote),
-            Self::Failed(error) => Err(Note::Failed {
-                msg: error.to_string().into(),
-                kind: error.kind().unwrap_or(FailKind::Other),
-            }),
-        }
-    }
-
-    /// Exact unit carried by the ready scalar payload.
-    ///
-    /// Returns:
-    ///     Quote currency or Percent, or `None` outside a comparable scope.
-    fn unit(&self) -> Option<ProfitUnit> {
-        match self {
-            Self::Ready { unit, .. } => *unit,
-            Self::Loading | Self::Split(_) | Self::NotReady | Self::Failed(_) => None,
-        }
-    }
-
-    /// Split totals retained for an incomparable raw-money scope.
-    ///
-    /// Returns:
-    ///     Per-quote totals only for the split state.
-    fn split(&self) -> Option<&QuoteBreakdown> {
-        match self {
-            Self::Split(totals) => Some(totals),
-            Self::Loading | Self::Ready { .. } | Self::NotReady | Self::Failed(_) => None,
-        }
-    }
 }
 
 /// Process-lifetime Analytics choices restored when its OS window is recreated.
