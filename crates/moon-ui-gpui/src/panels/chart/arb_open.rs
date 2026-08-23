@@ -63,20 +63,6 @@ impl ChartPanel {
     }
 }
 
-/// Whether a core is connected to the venue an arbitrage line names.
-///
-/// An arbitrage platform code IS the core's platform ordinal for an ordinary exchange — the
-/// protocol builds one from the other by copying the byte — so those compare directly. A
-/// Hyperliquid deployer is the exception: every deployer shares the futures ordinal, and only the
-/// DEX name tells them apart. Which is also why an ordinary exchange must NOT match a core that has
-/// a DEX: `xyz` and plain Hyperliquid futures would otherwise be the same venue.
-fn venue_matches(venue: &moon_core::venue::CoreVenue, code: u8, dex: &str) -> bool {
-    match dex.is_empty() {
-        true => venue.id.code == code && venue.dex.is_empty(),
-        false => venue.dex == dex,
-    }
-}
-
 /// What a click on a venue name does.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ArbOpen {
@@ -186,7 +172,7 @@ impl ChartPanel {
             let Some(venue) = venues.get(&hit.core) else {
                 continue;
             };
-            if venue_matches(venue, code, dex)
+            if venue.matches_arb(code, dex)
                 && !out.iter().any(|(existing, _)| *existing == hit.core)
             {
                 out.push((hit.core, hit.market));
@@ -272,6 +258,3 @@ impl ChartPanel {
         window.open_fitted_moon_context_menu(cx, "arb-core-menu", screen, items, 140.0, 320.0);
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -94,7 +94,7 @@ pub(super) fn position_of(
 }
 
 /// Deployer names out of one snapshot's `AuthCheck` response.
-fn dex_names_of(snapshot: &moonproto::MoonClientSnapshot) -> Vec<String> {
+pub(super) fn dex_names_of(snapshot: &moonproto::MoonClientSnapshot) -> Vec<String> {
     snapshot
         .auth_info()
         .map(|info| info.known_dexes.iter().map(|d| d.name.clone()).collect())
@@ -111,7 +111,7 @@ fn dex_names_of(snapshot: &moonproto::MoonClientSnapshot) -> Vec<String> {
 ///
 /// Ugly on purpose, and deliberately the ONLY place the numbering is bridged: see
 /// docs-internal/FORK_BUGS.md, where a public byte constructor is asked for.
-fn platform_code(byte: u8) -> moonproto::ArbPlatformCode {
+pub(super) fn platform_code(byte: u8) -> moonproto::ArbPlatformCode {
     moonproto::ArbPlatformCode::hyper_deployer(byte.wrapping_sub(ArbVenue::DEPLOYER_BASE))
 }
 
@@ -120,7 +120,7 @@ fn platform_code(byte: u8) -> moonproto::ArbPlatformCode {
 /// Zero is how every unset double arrives from the wire — an absent bid, a spot market's mark, a
 /// coin whose 24-hour volume has not been sent yet — and a caption that printed it would state a
 /// fact the exchange never gave. Non-finite is the same case through a different door.
-fn positive(v: f64) -> Option<f64> {
+pub(super) fn positive(v: f64) -> Option<f64> {
     (v.is_finite() && v > 0.0).then_some(v)
 }
 
@@ -676,180 +676,25 @@ impl MarketDataSource {
             .unwrap_or_default()
     }
 
-    /// Return every arbitrage price the core holds for one market, newest first by venue order.
+    /// Return every arbitrage price known for the coin on this market, newest first by venue order.
     ///
-    /// The core keeps a ring of ten points per venue plus a "now" entry, and both carry the OTHER
-    /// venue's price; only the ring carries what THIS market cost at the same moment. The spread is
-    /// therefore computed from the ring's latest point, and a venue whose ring is still empty is
-    /// skipped rather than compared against a live price it was never quoted with.
-    ///
-    /// Venues the core is not watching (`enabled == false`) never appear: the switch is the core's
-    /// own, and a row for a venue that reports nothing would be a permanently empty line.
+    /// The prices are the COIN's, not the core's: Moonbot's server sends one arbitrage stream and a
+    /// core merely files it, so a terminal with arbitrage configured on a single core prints the
+    /// column on every chart it has. The spread is restated against the CHARTED market's own price,
+    /// the chart's own venue is left out of its own column, and a quote older than the book's
+    /// staleness bound is dropped rather than compared against a live price it no longer belongs
+    /// with. All of it lives in [`super::arb`], which also explains why coverage is the union of the
+    /// donors' market universes.
     ///
     /// Args:
-    ///     core: Consumer core whose provider owns the market data.
-    ///     market: Data-key market name.
+    ///     core: Consumer core whose pane is being captioned.
+    ///     market: Data-key market name on that core.
     ///
     /// Returns:
-    ///     The quotes, or `None` when the provider, its client, its snapshot or the market is
-    ///     unavailable. An empty vector means the market has no arbitrage venues at all.
+    ///     The quotes. An empty vector means nothing is known about this coin — no core has
+    ///     arbitrage configured, none of them trades it, or every quote for it has gone stale.
     pub fn market_arb(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
-        // The pane's OWN core first, its market-data provider second — the opposite of every other
-        // readout here, and the reason is that arbitrage is not market data.
-        //
-        // A slot exists only where `apply_arb_payload` wrote it, and that path is gated on the
-        // core's own `client_settings`: it stores nothing at all without them, and only for the
-        // platforms that core's mask asks for. So the slots live on whichever core has arbitrage
-        // configured, which under deduplication is usually NOT the core elected to serve prices for
-        // that exchange. Reading the provider found a market object with an empty slot map and
-        // reported "no arbitrage" for a coin the reference terminal shows a full column for.
-        // Beyond those two: any core on the SAME exchange. The prices themselves belong to the
-        // coin, not to an account — every core quoting `ENAUSDT@Bybit` sees the same Binance price
-        // — but only a core with arbitrage configured stores them, and that may be neither the pane
-        // nor the provider. Restricted to one exchange on purpose: the spread's base is the market's
-        // OWN last price, so a core trading this coin somewhere else would state a spread against
-        // the wrong venue.
-        let exchange = self.exchange_of(core);
-        let same_exchange: Vec<CoreId> = {
-            let inner = self.inner.read().expect("market source poisoned");
-            let mut cores: Vec<CoreId> = inner
-                .clients
-                .keys()
-                .copied()
-                .filter(|id| inner.exchange_of_provider(*id) == exchange)
-                .collect();
-            // Ascending, so which core answers does not depend on hash order.
-            cores.sort_unstable();
-            cores
-        };
-        let candidates = [Some(core), self.provider_of(core)]
-            .into_iter()
-            .flatten()
-            .chain(same_exchange);
-        let mut seen = Vec::new();
-        for candidate in candidates {
-            if seen.contains(&candidate) {
-                continue;
-            }
-            seen.push(candidate);
-            if let Some(quotes) = self.market_arb_on(candidate, market) {
-                if !quotes.is_empty() {
-                    return Some(quotes);
-                }
-            }
-        }
-        Some(Vec::new())
-    }
-
-    /// The arbitrage quotes ONE core holds for a market.
-    fn market_arb_on(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
-        let snapshot = self.core_client(core)?.snapshot_versioned()?;
-        let handle = snapshot.markets().get(market)?;
-        // This market's own price, for the spread's base when the point carries none.
-        let own_price = handle.with(|m| positive(m.price.p_last).or_else(|| positive(m.price.ask)));
-        let mut out = Vec::new();
-        // WHICH venues to ask about is the UNION of two answers, and it has to be a union.
-        //
-        // The core's own `client_settings.arb_config` is the checkbox list the reference terminal
-        // shows, and it is the only thing that knows a venue this build has never heard of — the
-        // reference terminal's `OkxF` column, whose code appears in no protocol constant. But it is
-        // ALSO a setting that arrives late, can be absent on a build that does not send it, and can
-        // legitimately be all-false while the core still fills arbitrage slots. Trusting it alone
-        // emptied the column on a core that had been printing one: the first run had no settings
-        // and used the fallback, the second had settings and asked about nothing.
-        //
-        // So: everything this build can name is always asked about, and the mask only ADDS to that.
-        //
-        // Asked venue by venue because that is the only door the protocol opens: the slot map is
-        // private and `arb_slot` copies one entry at a time (see docs-internal/FORK_BUGS.md). The
-        // mask test itself is an array read, so scanning the whole byte range costs nothing; only a
-        // venue that is actually asked about pays for a lock, and the walk is behind the caller's
-        // throttle.
-        let wanted = snapshot
-            .settings()
-            .client_settings
-            .as_ref()
-            .map(|s| &s.arb_config);
-        // Deployer NAMES. `AuthCheck` is a mandatory start-up step, so a Hyperliquid core carries
-        // this list; a core connected elsewhere sends none and borrows one from a core that does —
-        // the index is the protocol's, not the core's.
-        //
-        // The index is the arbitrage code minus the deployer base, which is the same shape
-        // `HyperDexIndex` uses into this very list. NOT VERIFIED against a live core: if the two
-        // turn out to be off by one — `known_dexes[0]` is the unnamed default validator — this is
-        // the one line to shift.
-        let dex_names = self.arb_dex_names(core);
-        for byte in 0u8..=255 {
-            let code = platform_code(byte);
-            // No settings yet — the core has not sent them, or this is a build that does not — so
-            // fall back to what this build can name. Without this an arbitrage column would stay
-            // empty until the settings arrive, which looks like the feature is broken.
-            let venue_of_byte = ArbVenue::from_code(byte);
-            let asked = venue_of_byte.is_known_or_scanned_deployer()
-                || wanted.is_some_and(|cfg| cfg.is_wanted(code));
-            if !asked {
-                continue;
-            }
-            let Some(slot) = handle.arb_slot(code).filter(|s| s.enabled) else {
-                continue;
-            };
-            let venue = venue_of_byte;
-            let point = slot.latest_point();
-            // The ring's newest point, or the "now" entry when the ring has not been written yet:
-            // the core stamps both, and dropping the venue because only one of them has arrived
-            // hides a price the reference terminal is already showing.
-            let price = match positive(f64::from(point.price)) {
-                Some(price) => price,
-                None => match positive(f64::from(slot.now.price)) {
-                    Some(price) => price,
-                    None => continue,
-                },
-            };
-            // `my_price` is stamped INTO the point when the arbitrage price arrives, from this
-            // market's own last price at that moment. A market that had no price then leaves it at
-            // zero, and the spread has no base — so fall back to what the market costs now. Zero on
-            // both means this market has never been priced, and there is no spread to state.
-            let Some(my_price) = positive(f64::from(point.my_price)).or(own_price) else {
-                continue;
-            };
-            out.push(ArbQuote {
-                venue,
-                dex_name: venue
-                    .deployer_index()
-                    .and_then(|index| dex_names.get(usize::from(index)))
-                    .cloned()
-                    .unwrap_or_default(),
-                price,
-                my_price,
-                spread_pct: (price - my_price) / my_price * 100.0,
-                deposit_blocked: slot.isolated_flags.deposit_blocked(),
-                withdraw_blocked: slot.isolated_flags.withdraw_blocked(),
-            });
-        }
-        // What the core watches, what actually reported, and what the deployer indices are called.
-        // Behind `log.market_sources` in cfg/diagnostics.toml, because this is the one question the
-        // sources cannot answer: the codes are the core's, and a venue this build cannot name shows
-        // up here as its raw byte.
-        if log::log_enabled!(super::SOURCE_TRACE_LEVEL) {
-            let watched: Vec<u8> = match wanted {
-                Some(cfg) => (0u8..=255)
-                    .filter(|byte| cfg.is_wanted(platform_code(*byte)))
-                    .collect(),
-                None => Vec::new(),
-            };
-            log::log!(
-                super::SOURCE_TRACE_LEVEL,
-                "арбитраж {market} ядро {core:?}: настройки {} · маска {watched:?} · слотов отдали {} {:?} · дексы {:?}",
-                match wanted.is_some() {
-                    true => "есть",
-                    false => "НЕТ (ядро не сохраняет арб вообще)",
-                },
-                out.len(),
-                out.iter().map(|q| q.venue.code()).collect::<Vec<_>>(),
-                dex_names,
-            );
-        }
-        Some(out)
+        self.arb_quotes(core, market)
     }
 
     /// Return the retained-history figures for every window a caption may ask for.

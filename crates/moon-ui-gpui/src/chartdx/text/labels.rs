@@ -631,12 +631,10 @@ fn push_arb_rows(
             part: ARB_PART_BASE + n,
             text,
             prefix,
-            reachable: inputs.arb_reachable.iter().any(|(code, dex)| match cell.dex.is_empty() {
-                // The same rule the click uses to find a core: an ordinary exchange matches by
-                // platform code and must not match a core that has a dex; a deployer matches by
-                // its dex name alone, since every deployer shares one code.
-                true => *code == cell.code && dex.is_empty(),
-                false => *dex == cell.dex,
+            // The venue directory's own rule, the same one the click uses to find a core and the
+            // column uses to keep a chart's own exchange out of it.
+            reachable: inputs.arb_reachable.iter().any(|(code, dex)| {
+                moon_core::venue::arb_row_matches((*code, dex.as_str()), (cell.code, &cell.dex))
             }),
             venue: Some((cell.code, cell.dex)),
             // The SPREAD is what carries a direction here; the venue's own colour, when it has one,
