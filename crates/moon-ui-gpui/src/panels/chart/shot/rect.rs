@@ -7,13 +7,13 @@ use gpui::{Bounds, Pixels};
 
 /// A capture rectangle in PHYSICAL pixels, relative to the window's client area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ShotRect {
+pub(crate) struct ShotRect {
     /// Left edge, client-relative.
-    pub(super) x: i32,
+    pub(crate) x: i32,
     /// Top edge, client-relative.
-    pub(super) y: i32,
-    pub(super) width: u32,
-    pub(super) height: u32,
+    pub(crate) y: i32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 /// Convert the chart engine's published slot geometry into a client-relative capture rectangle.

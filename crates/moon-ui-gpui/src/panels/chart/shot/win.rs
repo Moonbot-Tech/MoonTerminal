@@ -25,9 +25,9 @@ use windows::Win32::UI::WindowsAndMessaging::IsIconic;
 use super::rect::ShotRect;
 
 /// Bytes for one captured rectangle, in the layout a `CF_DIB` body already wants.
-pub(super) struct DibImage {
-    pub(super) width: u32,
-    pub(super) height: u32,
+pub(crate) struct DibImage {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     /// Rows BOTTOM-UP, three bytes per pixel in BGR order, each row padded to a 4-byte boundary.
     /// This is the DIB pixel array verbatim: it goes on the clipboard untouched, and
     /// [`Self::to_rgb_top_down`] is what turns it into something an encoder will take.
@@ -52,7 +52,7 @@ impl DibImage {
     ///
     /// Returns:
     ///     Top-down RGB bytes without DIB row padding.
-    pub(super) fn to_rgb_top_down(&self) -> Vec<u8> {
+    pub(crate) fn to_rgb_top_down(&self) -> Vec<u8> {
         let row_bytes = self.width as usize * 3;
         // Filled by `extend` rather than zeroed first: every byte is overwritten anyway, so a
         // `vec![0; ..]` here would memset the whole picture for nothing.
@@ -125,7 +125,7 @@ impl Drop for Bitmap {
 ///
 /// Returns:
 ///     The captured pixels, or an error naming the step that failed.
-pub(super) fn capture_client_rect(hwnd: HWND, rect: ShotRect) -> anyhow::Result<DibImage> {
+pub(crate) fn capture_client_rect(hwnd: HWND, rect: ShotRect) -> anyhow::Result<DibImage> {
     // Nothing on screen to read. Refused rather than captured: a minimized window's client area
     // maps to some other window's pixels, which would be copied without complaint.
     if unsafe { IsIconic(hwnd) }.as_bool() {

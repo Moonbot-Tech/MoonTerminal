@@ -42,6 +42,12 @@ mod shell;
 mod startup;
 mod strategies;
 mod ui_session;
+// The UI-control atlas, kept OUT of this repository: a crawl that is not published, plus the
+// trade fixtures it runs against. `build.rs` defines `uidoc` only when the overlay is on disk, so
+// a clone without it compiles this crate unchanged and no feature promises what is missing.
+#[cfg(uidoc)]
+#[path = "../../../private/uidoc/mod.rs"]
+mod uidoc;
 mod update;
 mod valuation_health;
 mod window;
@@ -547,6 +553,13 @@ struct CoreFilterRevision;
 /// Returns:
 ///     Success after the selected process role exits.
 fn main() -> anyhow::Result<()> {
+    // Before the updater, before the configuration, before a window: the UI-atlas tools that work
+    // on a file the crawl already wrote need none of it, and running them through a normal launch
+    // would put a six-minute walk between a rule and its result.
+    #[cfg(uidoc)]
+    if uidoc::run_offline_tools(std::env::args()) {
+        return Ok(());
+    }
     match update::dispatch_process_mode()? {
         update::ProcessDispatch::Run(receipt) => startup::run(receipt),
         update::ProcessDispatch::Exit => Ok(()),

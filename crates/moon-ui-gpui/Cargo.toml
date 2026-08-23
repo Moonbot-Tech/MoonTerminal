@@ -7,6 +7,11 @@ description = "MoonTerminal GPUI shell over moon-core and MoonUI."
 [features]
 default = ["linux-x11", "linux-wayland"]
 debug-tools = ["moon-core/moonproto-diagnostics"]
+# Pairs with `--profile inspector` (see the workspace Cargo.toml) to build the UI-control atlas.
+# Carries no dependency and no code HERE: the atlas itself is a local overlay outside this
+# repository, and `build.rs` arms it only when this feature and that overlay are both present.
+# Enabling it without the overlay changes nothing but a build warning.
+ui-inspector = []
 linux-x11 = ["gpui_platform/x11"]
 linux-wayland = ["gpui_platform/wayland"]
 

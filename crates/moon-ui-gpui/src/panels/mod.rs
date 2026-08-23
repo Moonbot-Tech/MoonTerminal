@@ -21,6 +21,15 @@
 mod alerts;
 mod assets;
 mod chart;
+/// The desktop capture the chart shot is built on, reached by the UI-atlas run too.
+///
+/// Re-exported rather than made public wholesale: the atlas needs exactly these three items, and a
+/// DIB is bottom-up, DWORD-padded and BGR - three differences that are silent when missed, so one
+/// implementation of that flip in the process is one place for it to be right.
+#[cfg(all(uidoc, target_os = "windows"))]
+pub(crate) use chart::shot::rect::ShotRect;
+#[cfg(all(uidoc, target_os = "windows"))]
+pub(crate) use chart::shot::win::{DibImage, capture_client_rect};
 /// Shared panel widgets — also reached from `controls`, which builds the same tooltips and chips.
 pub(crate) mod common;
 mod core_status;
