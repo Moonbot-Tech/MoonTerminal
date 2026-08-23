@@ -233,7 +233,7 @@ fn hop(
 ///     cx: Application context used to read chart state.
 ///
 /// Returns:
-///     The capture outcome after the compositor barrier and ownership check.
+///     The outcome, after the compositor barrier and the ownership check.
 fn capture(
     backend: &Entity<Backend>,
     panel: &Entity<ChartPanel>,
@@ -273,19 +273,30 @@ fn capture(
     let Some(rect) = rect::slot_capture_rect(bounds, scale, device_size) else {
         return ShotOutcome::NoChart;
     };
-    super::capture_windows(native, rect)
+    // Read HERE, beside the capture, rather than when the hotkey was pressed: a dozen frame
+    // callbacks have passed while the substituted caption reached the screen, and the burnt-in
+    // header must describe the frame that was actually photographed.
+    let inputs = panel.read(cx).shot_inputs(backend.read(cx));
+    let when_ms = chrono::Utc::now().timestamp_millis();
+    super::capture_windows(native, rect, &inputs, when_ms)
 }
 
-/// Restore the caption, then tell the user.
+/// Restore the caption, then finish the shot and tell the user.
 ///
-/// Ordered, and both halves matter. The restore runs on EVERY outcome, which is what keeps the
-/// exchange from being left on the user's own screen; the renderer's deadline is only the backstop
-/// for a chain that never got here at all. The notification comes last because the capture is
-/// already taken by this point - pushed any earlier it would be inside the picture.
+/// Ordered, and every half matters.
+///
+/// **The restore runs FIRST and SYNCHRONOUSLY, on every path.** That is what keeps the exchange
+/// caption from being left standing on the user's own screen; the renderer's deadline is only the
+/// backstop for a chain that never got here at all. Nothing after it is unbounded any more — the
+/// shot ends at the clipboard — so the restore and the notification are one synchronous pair, and
+/// there is no longer any asynchronous tail the restore could be deferred into.
+///
+/// **The notification comes last**, because the capture is already taken by this point - pushed
+/// any earlier it would be standing inside the picture it announces.
 ///
 /// Args:
 ///     panel: Chart whose caption must be restored.
-///     outcome: Result to log and announce after restoring the caption.
+///     outcome: What the capture achieved.
 ///     gpui_window: Live window that shows the result notification.
 ///     cx: Application context used to update the panel and notification layer.
 fn finish(

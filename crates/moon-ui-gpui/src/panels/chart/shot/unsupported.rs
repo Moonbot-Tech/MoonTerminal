@@ -6,13 +6,22 @@
 //! quietly does nothing. The Windows path reads the composited desktop through GDI; the equivalents
 //! are `CGWindowListCreateImage` on macOS and a compositor-specific portal on Linux, neither of
 //! which this goal built.
+//!
+//! What that means CONCRETELY on macOS and Linux: nothing is captured, nothing reaches the
+//! clipboard, and no header strip is drawn. Every one of those is a product of a capture that does
+//! not exist here, not a separate feature that could ship without one.
 
 use gpui::AnyWindowHandle;
 
 use super::ShotOutcome;
 use super::rect::ShotRect;
 
-/// Refuse the capture, naming the platform rather than failing silently.
+/// Refuse the shot, naming the platform rather than failing silently.
+///
+/// Named `refuse` rather than after the clipboard: this arm never copied anything, so naming it
+/// after the one thing it does not do would describe the Windows path instead of this one. The
+/// name survives the file's removal unchanged, because it was never the file it was avoiding
+/// naming — it was the refusal it states.
 ///
 /// Args:
 ///     window: The window the chart is drawn in, unused here.
@@ -21,7 +30,7 @@ use super::rect::ShotRect;
 ///
 /// Returns:
 ///     Always [`ShotOutcome::Unsupported`].
-pub(super) fn capture_to_clipboard(
+pub(super) fn refuse(
     _window: AnyWindowHandle,
     _rect: ShotRect,
     _cx: &mut gpui::App,

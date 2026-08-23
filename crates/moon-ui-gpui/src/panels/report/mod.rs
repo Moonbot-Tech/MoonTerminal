@@ -26,6 +26,7 @@ mod selection;
 mod state;
 mod strategy_filter;
 mod totals;
+mod trade_detail;
 mod trade_log;
 mod widths;
 mod window;

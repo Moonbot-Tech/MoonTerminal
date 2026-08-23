@@ -1124,6 +1124,14 @@ struct ChartDataState {
     /// Index of the warning badge under the cursor.
     warn_hovered: Option<usize>,
     market_source: Option<MarketDataSource>,
+    /// Frozen market history this engine draws INSTEAD of the live source, when it has one.
+    ///
+    /// Set only by the trade window, which owns its own engine. While it is `Some`, the history
+    /// read below is answered from these rows and the live source is never consulted — so a replay
+    /// cannot reach the user's main chart even by mistake: that engine's field is `None` and there
+    /// is no shared key either could collide on. Contrast `moon_core::fixture`, whose bench state
+    /// is process-wide by design.
+    trade_replay: Option<Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,

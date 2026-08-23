@@ -724,3 +724,88 @@ fn saved_geometry_names_its_display_and_identity_outranks_coordinates() {
         );
     }
 }
+
+/// `panels/chart/trade.rs` must keep every historical-order guard as the first executable
+/// statement, and `panels/chart/render.rs` must keep both market-action routes behind
+/// `!self.historical`. Moving one guard below its gesture resolution or removing either render
+/// gate would let a closed-trade viewer issue live orders, or hide Panic Sell and Cancel Buy from
+/// the main and detached live charts.
+#[test]
+fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
+    let trade = read_src("panels/chart/trade.rs");
+    for (name, signature) in [
+        ("place-order click", "pub(super) fn try_place_order_click("),
+        ("move-orders click", "pub(super) fn try_move_orders_click("),
+        ("place-order hotkey", "pub(crate) fn place_order_at_cursor("),
+        (
+            "cancel-order click",
+            "pub(super) fn try_cancel_order_click(",
+        ),
+        ("order menu", "pub(super) fn try_open_order_menu("),
+        ("cancel hovered order", "pub fn cancel_hovered_order("),
+        ("send sells to zone", "pub(super) fn send_sells_to_zone("),
+        ("split hovered order", "pub fn split_hovered_order("),
+        ("start order drag", "pub(super) fn try_start_order_drag("),
+    ] {
+        let body = code_only(braced_body(&trade, signature));
+        assert!(
+            body.split_once('{')
+                .expect("each order action must have a function body")
+                .1
+                .trim_start()
+                .starts_with("if self.historical {"),
+            "{name} must reject a historical chart before its first executable statement"
+        );
+    }
+
+    let render = code_only(&read_src("panels/chart/render.rs"));
+    assert!(
+        render.contains("let market_actions = !self.historical;"),
+        "market actions must be derived from the historical mode rather than hardcoded"
+    );
+    assert!(
+        render.contains("if market_actions && !single_pane && !self.orderbook_only {"),
+        "the multi-pane Cancel Buy and Panic Sell route must remain independently gated"
+    );
+    assert!(
+        render.contains("let action_overlay = if market_actions && single_pane {"),
+        "the single-pane Cancel Buy and Panic Sell overlay must remain independently gated"
+    );
+
+    let chart_mod = read_src("panels/chart/mod.rs");
+    for signature in [
+        "pub fn set_orderbook_enabled(",
+        "pub fn set_action_btn_pos(",
+    ] {
+        assert!(
+            code_only(braced_body(&chart_mod, signature)).contains("if self.historical"),
+            "{signature} must refuse settings that could restore a historical chart's live UI"
+        );
+    }
+    assert!(
+        code_only(braced_body(&chart_mod, "pub fn new_historical("))
+            .contains("sync_orderbook_refs("),
+        "the historical constructor must drop its order-book subscription, not merely hide pixels"
+    );
+
+    let trade_window = code_only(&read_module("trade_window"));
+    assert!(
+        !trade_window.contains("set_orderbook_enabled(")
+            && !trade_window.contains("set_action_btn_pos("),
+        "the trade window must not directly re-enable the historical chart's live controls"
+    );
+    let opener = code_only(braced_body(
+        &trade_window,
+        "pub(crate) fn open_trade_window(",
+    ));
+    let pin = opener
+        .find("view.tf_min = 1")
+        .expect("the trade window must pin replay candles to one minute");
+    let view = opener
+        .find("let view = cx.new")
+        .expect("the trade window must construct its view after configuring the panel");
+    assert!(
+        opener.contains("new_historical(") && opener.contains("set_candle_view(") && pin < view,
+        "the opener must build a historical panel and pin one-minute candles before the first view fetch"
+    );
+}

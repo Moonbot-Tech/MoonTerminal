@@ -1,0 +1,138 @@
+_version: 2
+
+# Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
+# Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
+
+trade_window.open:
+  ru: "Открыть окно сделки"
+  en: "Open trade window"
+  es: "Abrir ventana de la operación"
+
+trade_window.blocked.unresolved:
+  ru: "Окно сделки недоступно — ядро не подключено"
+  en: "Trade window unavailable - the core is not connected"
+  es: "Ventana de la operación no disponible: el core no está conectado"
+
+trade_window.retry:
+  ru: "Повторить"
+  en: "Retry"
+  es: "Reintentar"
+
+trade_window.state.loading:
+  ru: "Загружаю рынок вокруг сделки…"
+  en: "Loading the market around this trade…"
+  es: "Cargando el mercado alrededor de la operación…"
+
+trade_window.state.failed:
+  ru: "Не удалось получить данные с биржи. Можно повторить."
+  en: "Could not fetch data from the exchange. You can retry."
+  es: "No se pudieron obtener los datos del exchange. Puedes reintentar."
+
+trade_window.state.rate_limited:
+  ru: "Биржа ограничила запросы. Повтор через %{secs} с."
+  en: "The exchange is rate-limiting requests. Retry in %{secs} s."
+  es: "El exchange está limitando las solicitudes. Reintenta en %{secs} s."
+
+trade_window.state.unknown_symbol:
+  ru: "Биржа не знает такого рынка."
+  en: "The exchange does not know this market."
+  es: "El exchange no conoce este mercado."
+
+trade_window.source.ticks:
+  ru: "тики с биржи"
+  en: "exchange ticks"
+  es: "ticks del exchange"
+
+# Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки.
+trade_window.source.candles_tf:
+  ru: "свечи %{min} мин"
+  en: "%{min}-minute candles"
+  es: "velas de %{min} min"
+
+trade_window.empty.no_data:
+  ru: "За это время по рынку нет данных."
+  en: "The market has no data for this period."
+  es: "El mercado no tiene datos para este período."
+
+trade_window.empty.no_endpoint:
+  ru: "У %{brand} нет публичного источника истории, который умеет терминал."
+  en: "%{brand} has no public history source this build can use."
+  es: "%{brand} no tiene una fuente pública de historial que esta versión pueda usar."
+
+trade_window.empty.unknown_venue:
+  ru: "Биржа ядра неизвестна этой версии терминала."
+  en: "This build does not recognise the core's exchange."
+  es: "Esta versión no reconoce el exchange del core."
+
+trade_window.empty.core_offline:
+  ru: "Ядро сделки не подключено — биржу и рынок не определить."
+  en: "The trade's core is not connected, so its exchange and market cannot be identified."
+  es: "El core de la operación no está conectado, así que no se puede identificar su exchange ni su mercado."
+
+trade_window.empty.bad_window:
+  ru: "У сделки некорректное время открытия или закрытия."
+  en: "The trade's open or close time is not usable."
+  es: "La hora de apertura o cierre de la operación no es utilizable."
+
+trade_window.figure.side:
+  ru: "Направление"
+  en: "Side"
+  es: "Dirección"
+
+trade_window.figure.entry:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+
+trade_window.figure.exit:
+  ru: "Выход"
+  en: "Exit"
+  es: "Salida"
+
+trade_window.figure.quantity:
+  ru: "Объём"
+  en: "Quantity"
+  es: "Cantidad"
+
+trade_window.figure.profit:
+  ru: "Прибыль"
+  en: "Profit"
+  es: "Beneficio"
+
+trade_window.figure.profit_pct:
+  ru: "Прибыль, %"
+  en: "Profit, %"
+  es: "Beneficio, %"
+
+trade_window.figure.opened:
+  ru: "Открыта"
+  en: "Opened"
+  es: "Abierta"
+
+trade_window.figure.closed:
+  ru: "Закрыта"
+  en: "Closed"
+  es: "Cerrada"
+
+trade_window.figure.held:
+  ru: "В позиции"
+  en: "Held"
+  es: "En posición"
+
+trade_window.figure.unknown:
+  ru: "нет данных"
+  en: "unknown"
+  es: "sin datos"
+
+# LONG / SHORT — отраслевой стандарт, не переводится (см. README), но живёт в словаре,
+# чтобы обе подписи правились в одном месте.
+trade_window.side.long:
+  ru: "LONG"
+  en: "LONG"
+  es: "LONG"
+
+trade_window.side.short:
+  ru: "SHORT"
+  en: "SHORT"
+  es: "SHORT"

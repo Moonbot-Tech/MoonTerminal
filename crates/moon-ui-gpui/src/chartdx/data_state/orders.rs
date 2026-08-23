@@ -53,12 +53,20 @@ impl ChartDataState {
         // here, beside the configuration it overrides, because both answers must hold for the whole
         // sync — a shot arming halfway through would otherwise caption some panes and not others.
         let shot = st.shot_caption_active();
+        // Whether this ENGINE draws a frozen replay rather than a live market. Engine-level, not
+        // per-pane: the override lives on the engine a trade window owns, so it is the same answer
+        // for every pane it holds and is resolved once for the whole sync.
+        let frozen = self.trade_replay.is_some();
         // Both caption gates are answered ONCE for the sync, not per pane: they read the
         // configuration, which cannot change inside a sync, and a walk over sixteen rows of eight
         // captions per pane per order revision is real work for an answer that never differs.
         let wants_venue_cfg = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
-        let wants_position_cfg =
-            labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
+        // `!frozen` for the same reason the order lines below are emptied: these captions read the
+        // core's CURRENT open position and the strategy behind it. Printed over a trade that closed
+        // hours ago they are not stale, they are about a different thing entirely — and a caption
+        // is read as describing the picture under it.
+        let wants_position_cfg = !frozen
+            && labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
         // Which venues have a core behind them, for the column's dimming. Read ONCE for the sync,
         // like the caption gates beside it: it is a property of the connected cores, not of a pane,
         // and a walk per pane would repeat it for every chart in a stack.
@@ -72,12 +80,15 @@ impl ChartDataState {
                     .collect()
             })
             .unwrap_or_default();
-        let wants_detect_cfg = labels_cfg.any_drawn(|f| {
-            matches!(
-                f,
-                ChartLabelField::DetectStrategy | ChartLabelField::DetectMsg
-            )
-        });
+        // The LATEST detect this core fired, which is a live event. Same argument as the position
+        // captions above.
+        let wants_detect_cfg = !frozen
+            && labels_cfg.any_drawn(|f| {
+                matches!(
+                    f,
+                    ChartLabelField::DetectStrategy | ChartLabelField::DetectMsg
+                )
+            });
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -161,10 +172,30 @@ impl ChartDataState {
                 pixels_changed = true;
             }
 
-            let order_price = session
-                .store()
-                .core(pane.core)
-                .and_then(|core_st| core_st.order_lines.auto_fit_range(&pane.market));
+            // An engine holding a FROZEN REPLAY draws no LIVE orders, and this is the only place
+            // that can enforce it: the buttons and the click gestures are gone from the trade
+            // window, but the order LAYER is built here, from the session store, for every pane
+            // this engine owns. Left alone it would paint the user's current buy and sell lines,
+            // their zones and their labels across a chart of a trade that closed hours ago — live
+            // prices over past candles, which is not decoration but a wrong picture.
+            //
+            // Only the ORDER source is emptied. Figures, news marks, warning badges and — the whole
+            // point of this window — the trade-history ARROWS ride the same userdata pass further
+            // down and are untouched.
+            //
+            // `None` for the live chart is impossible here: `trade_replay` is set only on an engine
+            // a trade window owns, so every other chart in the application takes the same branch it
+            // always did.
+            let no_orders = moon_core::session::order_lines::OrderLineStore::default();
+            // The auto-Y fit goes with them. A fit stretched to reach a live order's price would
+            // squash the very candles the window exists to show.
+            let order_price = match frozen {
+                true => None,
+                false => session
+                    .store()
+                    .core(pane.core)
+                    .and_then(|core_st| core_st.order_lines.auto_fit_range(&pane.market)),
+            };
             if pr.cached_order_price != order_price {
                 pr.cached_order_price = order_price;
                 self.view_dirty = true;
@@ -175,13 +206,22 @@ impl ChartDataState {
             let warn_sig = self.warn_sig();
             let trade_history_sig = self.trade_history_sig(&pane.view);
             if let Some(core_st) = session.store().core(pane.core) {
+                // The ONE order source both consumers below read. Emptied on a frozen engine, so
+                // neither the geometry nor the labels can reach a live order.
+                let order_lines = match frozen {
+                    true => &no_orders,
+                    false => &core_st.order_lines,
+                };
+                // Both are order-line state, so they follow the order lines out. Input to a
+                // historical chart is already gated, but a hover or a drag left over from before
+                // the replay attached must not privilege a label that is no longer drawn.
                 let highlight_uid = self
                     .order_highlight
-                    .and_then(|(core, uid)| (core == pane.core).then_some(uid));
+                    .and_then(|(core, uid)| (core == pane.core && !frozen).then_some(uid));
                 let drag_preview = self
                     .order_drag_preview
                     .and_then(|(core, uid, kind, price)| {
-                        (core == pane.core).then_some((uid, kind, price))
+                        (core == pane.core && !frozen).then_some((uid, kind, price))
                     });
                 let drag_preview_sig =
                     drag_preview.map(|(uid, kind, price)| (uid, kind, price.to_bits()));
@@ -200,7 +240,7 @@ impl ChartDataState {
                     let mut markers = Vec::new();
                     let mut zones = Vec::new();
                     moon_chart::build_order_geometry(
-                        &core_st.order_lines,
+                        order_lines,
                         &pane.market,
                         &self.orders,
                         &self.chart_graphics,
@@ -263,7 +303,7 @@ impl ChartDataState {
                     build_order_labels(
                         &mut pr.order_labels,
                         &mut pr.orderbook_labels,
-                        &core_st.order_lines,
+                        order_lines,
                         &pane.market,
                         &self.theme,
                         quote_usd,

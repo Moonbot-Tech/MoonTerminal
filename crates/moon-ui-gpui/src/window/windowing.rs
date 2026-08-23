@@ -276,6 +276,50 @@ pub(crate) fn detached_chart_window_options(
     options
 }
 
+/// Build options for a trade-detail window: one closed trade replayed in its market context.
+///
+/// It inherits the DETACHED-CHART policy exactly — independent rather than owned, taskbar hidden,
+/// transparent titlebar — and for the same reasons: it draws a chart in its own GPU pass, and an
+/// owned window on Windows raises its owner when clicked, which would drag the user's Main chart
+/// across monitors every time they looked at a trade. It is opened from the Report, sits beside
+/// Main and is clicked constantly, so it is the worst possible ownership candidate.
+///
+/// It is a SEPARATE factory rather than a wider `detached_chart_window_options` because its
+/// contract differs in one way that must not leak: a transient viewer has a floor below which its
+/// figures rail and chart stop being legible, and putting that floor on detached charts would
+/// constrain a window nobody asked to constrain.
+///
+/// # Arguments
+///
+/// * `title` - Window title, naming the coin and the trade's close time.
+/// * `window_bounds` - Initial geometry: the geometry remembered for trade windows when one has
+///   been saved and still lands on an attached display, otherwise the default placement. One
+///   rectangle is shared by every trade window, so the caller applies its own cascade on top.
+/// * `display_id` - Display selected for the window, if known.
+/// * `min_size` - Smallest size at which the chart and the figures rail both stay readable.
+///
+/// # Returns
+///
+/// Independent trade-window options with hidden taskbar visibility and a size floor.
+pub(crate) fn trade_window_options(
+    title: impl Into<SharedString>,
+    window_bounds: WindowBounds,
+    display_id: Option<DisplayId>,
+    min_size: Size<Pixels>,
+) -> WindowOptions {
+    let mut options = app_window_options(
+        title,
+        window_bounds,
+        display_id,
+        Some(min_size),
+        APP_ID.to_string(),
+        None,
+        true,
+    );
+    options.taskbar_visibility = WindowTaskbarVisibility::Hidden;
+    options
+}
+
 /// Build options for the startup login window.
 ///
 /// Deliberately a standalone application window rather than a tool window: it can be the FIRST and
@@ -614,12 +658,54 @@ pub(crate) fn window_geom(window: &Window) -> Option<(i32, i32, u32, u32)> {
     let WindowBounds::Windowed(b) = window.window_bounds() else {
         return None;
     };
-    Some((
-        f32::from(b.origin.x) as i32,
-        f32::from(b.origin.y) as i32,
-        f32::from(b.size.width) as u32,
-        f32::from(b.size.height) as u32,
-    ))
+    Some(int_rect(b))
+}
+
+/// One rectangle of logical pixels, truncated to integers.
+///
+/// The SINGLE conversion behind both [`window_geom`] and [`display_rects`], and it exists because
+/// those two results are COMPARED: a saved window rectangle is tested for overlap against the
+/// attached displays. Two hand-written copies of this arithmetic would agree today and drift on the
+/// first edit, and a comparison between two coordinate spaces agrees or disagrees by accident.
+///
+/// # Arguments
+///
+/// * `bounds` - Rectangle in logical pixels.
+///
+/// # Returns
+///
+/// The same rectangle as `(x, y, width, height)` integers.
+fn int_rect(bounds: Bounds<Pixels>) -> (i32, i32, u32, u32) {
+    (
+        f32::from(bounds.origin.x) as i32,
+        f32::from(bounds.origin.y) as i32,
+        f32::from(bounds.size.width) as u32,
+        f32::from(bounds.size.height) as u32,
+    )
+}
+
+/// The attached displays as integer rectangles `(x, y, width, height)`.
+///
+/// Read against a rectangle produced by [`window_geom`], and converted by the SAME [`int_rect`]
+/// both of them call — the two results are compared, so sharing the conversion is what makes them
+/// comparable by construction rather than by two copies happening to match.
+///
+/// The caller is `moon_core::config::layout::GeomRect::is_reachable_on`, which asks whether a
+/// remembered window position still lands somewhere the user can reach. An EMPTY result means the
+/// platform named no displays, which that function reads as "unknown" and not as "nowhere".
+///
+/// # Arguments
+///
+/// * `cx` - Application context used to enumerate displays.
+///
+/// # Returns
+///
+/// One rectangle per attached display.
+pub(crate) fn display_rects(cx: &App) -> Vec<(i32, i32, u32, u32)> {
+    cx.displays()
+        .into_iter()
+        .map(|display| int_rect(display.bounds()))
+        .collect()
 }
 
 /// Configure an opaque Windows DWM frame with square corners and fixed dark border/caption colors.

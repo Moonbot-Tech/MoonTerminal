@@ -54,13 +54,39 @@ impl Drop for ClipboardGuard {
 /// `SetClipboardData` fail — a deviation from the code next door that is deliberate, not an
 /// oversight. The chart shot always has a window to name, so it names it.
 ///
+/// The PNG encode happens HERE, and before the clipboard is opened. It was briefly the caller's,
+/// because a second consumer - a file on disk - needed the same bytes and encoding twice would
+/// have doubled the slowest step in the shot. That consumer is gone, and with it the only reason
+/// to hand this function a buffer it cannot check: nothing tied `png` to `image`, so the two
+/// formats could silently come to describe different pictures. Owning the encode makes that
+/// impossible by construction, and costs nothing now that there is only one consumer.
+///
 /// Args:
 ///     owner: The window that takes clipboard ownership.
-///     image: The captured pixels, in DIB layout.
+///     image: The composed picture, in DIB layout.
 ///
 /// Returns:
-///     `Ok(())` once both formats are on the clipboard.
+///     `Ok(())` once the clipboard holds a usable picture. A failure to publish the SECOND format
+///     is logged and swallowed rather than returned - see the hand-off below for why that is the
+///     honest answer and not a swallowed error.
 pub(super) fn publish(owner: HWND, image: &DibImage) -> anyhow::Result<()> {
+    // The ONE validation standing between a malformed `DibImage` and an out-of-bounds read inside
+    // the OS. A `CF_DIB` body is a header followed by the pixel array, and every consumer sizes its
+    // read from the header's own width and height - so a buffer shorter than those describe is not
+    // a Rust bug that panics, it is a wild read in whatever application pastes the picture. The
+    // dimensions are bounded to `i32` in the same breath because that is the type the header
+    // states them in.
+    if !image.is_consistent() {
+        bail!(
+            "refusing to publish a {}x{} picture whose pixel array is {} bytes",
+            image.width,
+            image.height,
+            image.rows.len()
+        );
+    }
+    i32::try_from(image.width).context("picture width does not fit a CF_DIB header")?;
+    i32::try_from(image.height).context("picture height does not fit a CF_DIB header")?;
+
     // Encoded BEFORE the clipboard is opened. Holding the global clipboard lock across a PNG
     // encode would stall every other application that touches the clipboard meanwhile, and the
     // encode is by far the slowest step here.
@@ -87,20 +113,19 @@ pub(super) fn publish(owner: HWND, image: &DibImage) -> anyhow::Result<()> {
     // CF_DIB first: it is the format the widest set of applications reads, so even if the second
     // hand-off failed the clipboard would still hold a usable picture.
     hand_over(dib_block, CF_DIB.0 as u32).context("publishing CF_DIB")?;
-    hand_over(png_block, png_format()).context("publishing the PNG format")?;
+    // ...and BECAUSE that is true, a failure here is NOT this function's failure. Once CF_DIB has
+    // landed the user can paste the chart into Paint, Word, Excel and every native Win32 consumer;
+    // what they lose is the alpha-free round trip into Chromium-based applications. Returning an
+    // error for that would make the caller report a FAILED shot and send the user back to
+    // re-shoot, while the clipboard they were just told is empty in fact holds their picture.
+    //
+    // This swallow once carried a second justification - that an error would also skip the file
+    // the shot wrote. That file is gone, and the argument above never depended on it: it rests on
+    // CF_DIB alone being a usable picture, which is as true with no file as it was with one.
+    if let Err(error) = hand_over(png_block, png_format()) {
+        log::warn!("chart shot: the clipboard took CF_DIB but refused the PNG format: {error:#}");
+    }
     Ok(())
-}
-
-/// The registered `"PNG"` clipboard format id.
-///
-/// Deliberately the same NAME GPUI registers: `RegisterClipboardFormatW` returns the same id for
-/// the same name process-wide and system-wide, so GPUI's own reader recognizes what we publish and
-/// an in-application paste round-trips.
-///
-/// Returns:
-///     The registered format identifier for the case-insensitive `PNG` name.
-fn png_format() -> u32 {
-    unsafe { RegisterClipboardFormatW(windows::core::w!("PNG")) }
 }
 
 /// Encode the capture as PNG in memory. Nothing reaches the disk anywhere in the shot.
@@ -122,6 +147,18 @@ fn encode_png(image: &DibImage) -> anyhow::Result<Vec<u8>> {
         image::ExtendedColorType::Rgb8,
     )?;
     Ok(png)
+}
+
+/// The registered `"PNG"` clipboard format id.
+///
+/// Deliberately the same NAME GPUI registers: `RegisterClipboardFormatW` returns the same id for
+/// the same name process-wide and system-wide, so GPUI's own reader recognizes what we publish and
+/// an in-application paste round-trips.
+///
+/// Returns:
+///     The registered format identifier for the case-insensitive `PNG` name.
+fn png_format() -> u32 {
+    unsafe { RegisterClipboardFormatW(windows::core::w!("PNG")) }
 }
 
 /// Concatenate `parts` into a moveable global block the clipboard could take.

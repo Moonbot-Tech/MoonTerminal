@@ -176,6 +176,17 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // A HISTORICAL VIEWER places no orders, and this is the FIRST of the nine order entry
+        // points that says so. The trade-detail window draws a market that already happened, so a
+        // gesture here would send a LIVE command at a price read off an old chart.
+        //
+        // Refused at the entry point rather than deeper down, and by returning "I did not claim
+        // this press" rather than by swallowing it: pan, zoom and the crosshair go on working
+        // normally in that window, which is what the user wants there. The other eight guards
+        // carry a one-line reference to this explanation instead of a ninth copy of it.
+        if self.historical {
+            return false;
+        }
         // Resolve Long/Short from the configured buy-set and short-set gestures; unrelated gestures
         // are not order placement.
         let short = {
@@ -230,6 +241,10 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         let command = {
             let b = self.backend.read(cx);
             let cfg = b.preview.as_ref().unwrap_or(&b.config);
@@ -316,6 +331,10 @@ impl ChartPanel {
     /// The chart owns pane-Y-to-price conversion, so placement remains here rather than in the
     /// shared hotkey dispatcher. Returns `false` when the cursor is not over a pane.
     pub(crate) fn place_order_at_cursor(&mut self, short: bool, cx: &mut Context<Self>) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         match self.input.cursor {
             Some(pos) => self.place_order_at_pos(pos, short, cx),
             None => false,
@@ -590,6 +609,10 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         // Use the hover gate in separate-zone chart space so only the start cross competes. A nearer
         // Sell line must not shadow a cross that was presented with the pointer cursor.
         let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
@@ -642,6 +665,10 @@ impl ChartPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         // Open a menu only while order hover already marks an interactive line and has changed the
         // cursor. Elsewhere right-click retains its normal zoom or fullscreen-exit behavior.
         if self.order_hover.is_none() {
@@ -715,6 +742,10 @@ impl ChartPanel {
     /// `order_hover` identifies the hovered `(core, uid)`. Returns `false` when no order is hovered
     /// so the key can continue propagating, for example to Tab focus navigation.
     pub fn cancel_hovered_order(&mut self, cx: &mut Context<Self>) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         let Some(hover) = self.order_hover else {
             return false;
         };
@@ -746,6 +777,10 @@ impl ChartPanel {
         z: f64,
         cx: &mut Context<Self>,
     ) {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return;
+        }
         if !self.workspace_action_allowed(self.backend.read(cx), core) {
             log::warn!(
                 "sells to zone: core={} market={market} is not authorized for this workspace group, nothing sent",
@@ -766,6 +801,10 @@ impl ChartPanel {
     /// of an order that has none. Anything else returns `false`, leaving the caller its market-level
     /// fallback rather than sending a command the core would discard.
     pub fn split_hovered_order(&mut self, parts: i32, cx: &mut Context<Self>) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         let Some(hover) = self.order_hover else {
             return false;
         };
@@ -914,6 +953,10 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // Historical viewer: no orders. Rationale at `try_place_order_click`.
+        if self.historical {
+            return false;
+        }
         // A live drag owns the line until ITS button is released. A second button pressed mid-drag
         // would otherwise replace the drag, and the first button's release would then find a drag
         // it does not own, drop the move on the floor and spring the line back.

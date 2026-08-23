@@ -445,7 +445,7 @@ fn report_chart_history(
 ///
 /// Returns:
 ///     Catalog-verified market, or `None` while the selected core cannot resolve it.
-fn resolve_market(b: &Backend, core: u64, coin: &str) -> Option<String> {
+pub(super) fn resolve_market(b: &Backend, core: u64, coin: &str) -> Option<String> {
     let exchange = b.session.market_source().exchange_of(core);
     let quote = b
         .config

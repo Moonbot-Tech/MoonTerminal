@@ -41,6 +41,7 @@ mod settings;
 mod shell;
 mod startup;
 mod strategies;
+mod trade_window;
 mod ui_session;
 // The UI-control atlas, kept OUT of this repository: a crawl that is not published, plus the
 // trade fixtures it runs against. `build.rs` defines `uidoc` only when the overlay is on disk, so
@@ -426,6 +427,13 @@ struct Backend {
     /// Closing a group window closes its detached charts; closing a detached window removes it by
     /// `window_id`. This is separate from `detached`, which tracks detached dock panels.
     detached_chart_windows: Vec<(String, WindowHandle<Root>)>,
+    /// Trade-detail windows, keyed by the trade they show as `((core_uid, record_id), handle)`.
+    ///
+    /// Its own list rather than a shared registry, exactly like `detached_chart_windows` above:
+    /// each window class answers different questions about its members. Re-clicking a trade
+    /// already in this list focuses that window instead of opening a second one, and the list is
+    /// capped so a walk down the report cannot accumulate chart engines.
+    trade_windows: Vec<((u64, i64), WindowHandle<Root>)>,
     /// Time of the last active input in each group's primary window, updated by mouse movement while
     /// focused. Main's inactivity timeout, configured by `main_idle_close_secs`, measures from this
     /// value. It stops advancing when the window loses focus or the mouse stops, then charts close

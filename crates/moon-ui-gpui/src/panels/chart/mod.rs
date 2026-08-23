@@ -202,8 +202,31 @@ pub struct ChartPanel {
     /// disabled by default.
     auto_pin: bool,
     /// Per-window/tab positions of the market-action buttons in the chart area; defaults to Right.
+    ///
+    /// Read only when [`Self::historical`] is false: a historical viewer draws no market action at
+    /// any position, so these are inert there rather than merely defaulted to `Hide`.
     cancel_buy_pos: crate::persistence::chart_persist::ChartBtnPos,
     panic_sell_pos: crate::persistence::chart_persist::ChartBtnPos,
+    /// Whether this panel is a HISTORICAL VIEWER rather than a live chart.
+    ///
+    /// Set once at construction and never afterwards, because it is a property of the WINDOW this
+    /// panel was built for, not a preference. It is what the trade-detail window uses: that window
+    /// shows what the market did around a trade that already closed, so everything belonging to
+    /// LIVE trading is out of place in it.
+    ///
+    /// Two things are structurally absent while it is set, and both are removals rather than
+    /// fences:
+    ///
+    /// * the ORDER BOOK, which describes the market RIGHT NOW and has nothing to say about a trade
+    ///   that closed hours ago — it also costs the window roughly a fifth of its width;
+    /// * `Cancel Buy` and `Panic Sell`, which send commands to a real core against real money. A
+    ///   user reading a closed trade has no reason to expect a live weapon under the cursor. A
+    ///   disabled or hidden button would still say "trading happens here", so the buttons are not
+    ///   built at all and no later `set_action_btn_pos` can bring them back.
+    ///
+    /// It is FALSE for every other panel — Main, the stacks, detached chart windows, group windows
+    /// and the Profit Monitor all keep their book and their trading controls unchanged.
+    historical: bool,
     /// Per-window/tab price-axis position. It is applied through the engine's
     /// `set_price_axis_pos` and affects layout and hit-testing; defaults to Left.
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
@@ -369,6 +392,48 @@ impl ChartPanel {
         Self::new_main(backend, None, focus_open, epoch, theme, cx)
     }
 
+    /// Construct a chart that is a HISTORICAL VIEWER: no order book, no trading controls.
+    ///
+    /// The trade-detail window's constructor. It differs from [`Self::new`] in exactly what the
+    /// [`Self::historical`] field documents, and the difference is structural rather than a
+    /// setting: nothing this panel is later told can put a live order book or a `Panic Sell` button
+    /// back onto a picture of a trade that closed hours ago.
+    ///
+    /// A separate constructor rather than a parameter on [`Self::new_main`] so the live call sites
+    /// keep the signatures they have; the flag is unreachable from any of them.
+    ///
+    /// Args:
+    ///     backend: Shared application state and session command surface.
+    ///     focus_open: Optional initial core and market.
+    ///     epoch: Chart time origin.
+    ///     theme: Runtime chart theme.
+    ///     cx: Panel context used for observers and market references.
+    ///
+    /// Returns:
+    ///     A chart panel holding no order-book demand and drawing no market action.
+    pub fn new_historical(
+        backend: Entity<Backend>,
+        focus_open: Option<(CoreId, String)>,
+        epoch: f64,
+        theme: ChartTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut panel = Self::new_main(backend, None, focus_open, epoch, theme, cx);
+        panel.historical = true;
+        // Turned off through the same field the live path uses, so the engine's own layout gives
+        // the book's width back to the plot (`horizontal_chart_layout` sets `glass_w = 0`).
+        panel.orderbook_enabled = false;
+        // `new_main` retained a book reference for the focus market a moment ago; this releases it
+        // before any coordination tick can read the demand set, so a historical viewer never
+        // subscribes to a live book at all.
+        panel.sync_orderbook_refs(cx);
+        // The dim control strip marks where an order-placement click lands. There is no order
+        // placement here, so shading a strip for it would be a leftover of the thing just removed.
+        panel.show_zone = false;
+        panel.view_dirty = true;
+        panel
+    }
+
     /// Construct a Main chart with an optional group-scoped Auto action authority.
     ///
     /// Args:
@@ -504,6 +569,7 @@ impl ChartPanel {
             auto_pin: false,
             cancel_buy_pos: Default::default(),
             panic_sell_pos: Default::default(),
+            historical: false,
             price_axis_pos: Default::default(),
             time_axis_visible: true,
             line_labels: true,
@@ -677,6 +743,7 @@ impl ChartPanel {
             auto_pin: false,
             cancel_buy_pos: Default::default(),
             panic_sell_pos: Default::default(),
+            historical: false,
             price_axis_pos: Default::default(),
             time_axis_visible: true,
             line_labels: true,
@@ -777,6 +844,78 @@ impl ChartPanel {
         self.chart.slot_geometry()
     }
 
+    /// Everything the shot's burnt-in header states, snapshotted in ONE read.
+    ///
+    /// Here for the same reason [`Self::shot_geometry`] is, and for one more. `self.chart` and the
+    /// panel's own overrides are private to this module tree, so the shot could not reach any of
+    /// this — but more importantly, this metadata BELONGS to the chart: the ticker is the
+    /// renderer's cached caption value, the venue is the exact string the privacy substitution
+    /// puts on the picture, the movement windows are addressed by a catalogue order only this
+    /// layer knows, and the timeframe is an override whose `None` means "follow the global
+    /// default". Reassembling all of that at the capture site would put the same knowledge in two
+    /// places and let the burnt-in line disagree with the chart under it.
+    ///
+    /// Read at CAPTURE time rather than when the hotkey was pressed: about a dozen frame callbacks
+    /// separate the two while the substituted caption reaches the screen, and the header must
+    /// describe the frame that was actually photographed.
+    ///
+    /// Args:
+    ///     backend: Live backend, read in the same callback as the capture.
+    ///
+    /// Returns:
+    ///     The header's inputs. Absent figures stay absent — a market whose history has not
+    ///     answered is reported as unknown, never as zero.
+    pub(crate) fn shot_inputs(&self, backend: &Backend) -> shot::ShotInputs {
+        let theme = backend
+            .preview
+            .as_ref()
+            .unwrap_or(&backend.config)
+            .chart_theme();
+        let target = self.active_target();
+        let venue = target
+            .as_ref()
+            .map(|(core, _)| backend.session.core_venues().get(core))
+            .map(crate::controls::venue_section_label)
+            .unwrap_or_default();
+        // Addressed through `LabelWindow::index()` rather than by literal 2/4/5. The readout is
+        // indexed by `LabelWindow::ALL`'s order and the catalogue says so itself; a second copy of
+        // that mapping here would be free to drift, and the symptom would be a header quietly
+        // stating the 30-minute move under a "1h" label.
+        let windows = target.as_ref().and_then(|(core, market)| {
+            backend
+                .session
+                .market_source()
+                .market_windows(*core, market)
+        });
+        let delta = |window: moon_core::config::LabelWindow| -> Option<f64> {
+            windows.as_ref()?.windows[window.index()].delta_pct
+        };
+        shot::ShotInputs {
+            coin: self
+                .pane_ticker()
+                .or_else(|| target.map(|(_, market)| market)),
+            venue,
+            // `None` follows the global default, which is the same resolution this panel already
+            // performs when it is constructed.
+            tf_min: self
+                .candle_view
+                .unwrap_or_else(|| backend.layout.candle_view_for(self.default_kind))
+                .tf_min,
+            bg: theme.bg,
+            // The chart's own supporting-text colour, NOT a hard-coded dark. `bg` is
+            // user-configurable and dark by default, so fixed dark text would be invisible for
+            // most users; this is the one colour guaranteed to read against `bg` in every theme.
+            text: theme.axis_label,
+            delta_3h: delta(moon_core::config::LabelWindow::H3),
+            delta_1h: delta(moon_core::config::LabelWindow::H1),
+            delta_15m: delta(moon_core::config::LabelWindow::M15),
+            // The chart's own badge, read from the renderer rather than derived here: hiding it is
+            // a decision `chartdx::scale_badge_pct` makes, and a second copy of that decision would
+            // be free to disagree with the badge inside the picture.
+            scale_pct: self.chart.scale_badge(),
+        }
+    }
+
     /// Arm or clear the corner caption's shot substitution: the EXCHANGE in place of the core name.
     ///
     /// Here for the same reason [`Self::shot_geometry`] is — `self.chart` is private to this module
@@ -854,6 +993,48 @@ impl ChartPanel {
         self.main_stack_scroll = enabled;
     }
 
+    /// Draw a frozen trade replay on this panel instead of the live market source.
+    ///
+    /// Used only by the trade-detail window, which owns its panel outright. Every other panel
+    /// leaves the engine's replay slot empty and keeps the live path unchanged.
+    ///
+    /// Args:
+    ///     series: The frozen series, or `None` to return this panel to the live source.
+    ///     cx: Panel context.
+    pub(crate) fn attach_trade_replay(
+        &mut self,
+        series: Option<std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart.set_trade_replay(series);
+        self.view_dirty = true;
+        cx.notify();
+    }
+
+    /// Place the viewport on an absolute millisecond interval.
+    ///
+    /// The same primitive the Report's main-chart focus already uses; exposed so the trade window
+    /// can frame the interval its rows actually cover without reaching into the engine itself.
+    ///
+    /// Args:
+    ///     from_ms: Interval start in Unix milliseconds.
+    ///     to_ms: Interval end in Unix milliseconds.
+    pub(crate) fn show_time_range(&mut self, from_ms: i64, to_ms: i64) {
+        self.chart.show_time_range(from_ms as f64, to_ms as f64);
+        self.view_dirty = true;
+    }
+
+    /// Release every live market reference this panel took, without dropping the panel.
+    ///
+    /// The trade window calls this when it closes: a frozen viewer must not leave the application
+    /// subscribed to a market it opened only to look at the past.
+    ///
+    /// Args:
+    ///     cx: Application context.
+    pub(crate) fn release_market_refs(&mut self, cx: &mut App) {
+        self.release_all_market_refs(cx);
+    }
+
     pub(crate) fn sync_orders_if_visible(&mut self, cx: &mut Context<Self>, force: bool) {
         if !self.scene_visible {
             return;
@@ -881,6 +1062,12 @@ impl ChartPanel {
     /// Enables or disables this window/tab's order book. Rendering applies the engine flag, and the
     /// backend order-book reference is synchronized for demand-driven subscription.
     pub fn set_orderbook_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        // A historical viewer has no live book to enable. Refused here rather than left to the
+        // caller, so the absence is a property of the panel instead of a discipline every future
+        // call site has to remember.
+        if self.historical {
+            return;
+        }
         if self.orderbook_enabled != enabled {
             self.orderbook_enabled = enabled;
             self.view_dirty = true;
@@ -897,6 +1084,26 @@ impl ChartPanel {
             self.view_dirty = true;
             cx.notify();
         }
+    }
+
+    /// The candle settings this panel actually draws with right now.
+    ///
+    /// `candle_view` is an OVERRIDE: `None` means "follow the global default for my kind of tab".
+    /// A caller that wants to change ONE field of the effective settings has to start from the
+    /// resolved value, or it silently discards every other choice the user made.
+    ///
+    /// The one other place that performs this resolution — the shot caption's `tf_min` — is left
+    /// inline on purpose: it already holds `backend` borrowed for the surrounding literal, so
+    /// calling this would re-borrow it through `cx`.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the global defaults.
+    ///
+    /// Returns:
+    ///     The override when this panel has one, otherwise the global default for its kind.
+    pub fn effective_candle_view(&self, cx: &App) -> moon_core::market::CandleViewCfg {
+        self.candle_view
+            .unwrap_or_else(|| self.backend.read(cx).layout.candle_view_for(self.default_kind))
     }
 
     /// Sets this window/tab's candle and trade display settings. `None` uses the global default;
@@ -1051,6 +1258,12 @@ impl ChartPanel {
         panic_sell: crate::persistence::chart_persist::ChartBtnPos,
         cx: &mut Context<Self>,
     ) {
+        // The market actions do not exist on a historical viewer, so there is no position for them
+        // to take. This is the second half of the removal: rendering skips them, and no stored or
+        // pushed-down setting can put them back.
+        if self.historical {
+            return;
+        }
         if self.cancel_buy_pos != cancel_buy || self.panic_sell_pos != panic_sell {
             self.cancel_buy_pos = cancel_buy;
             self.panic_sell_pos = panic_sell;

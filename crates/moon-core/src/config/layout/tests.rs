@@ -1243,3 +1243,76 @@ fn a_malformed_display_identity_costs_only_itself() {
         Some((3, 4, None))
     );
 }
+
+/// `GeomRect::is_reachable_on` must preserve reachable saved geometry when displays cannot be
+/// enumerated and use overlap rather than containment. Dropping the empty-display fallback or
+/// narrowing the overlap rule would make remembered windows reset to their defaults or drag a
+/// deliberately edge-hanging window back on-screen at every reopen.
+#[test]
+fn saved_geometry_reachability_keeps_unknown_and_partially_visible_windows() {
+    let rect = |x, y, w, h| GeomRect {
+        x,
+        y,
+        w,
+        h,
+        display_uuid: None,
+    };
+
+    assert!(
+        rect(900, 700, 400, 300).is_reachable_on(&[], 1),
+        "an unavailable display list means unknown, not unreachable"
+    );
+    assert!(
+        !rect(500, 500, 100, 100).is_reachable_on(&[(0, 0, 200, 200)], 1),
+        "a rectangle wholly outside every display must fall back to a visible placement"
+    );
+    assert!(
+        rect(-20, 10, 50, 50).is_reachable_on(&[(0, 0, 100, 100)], 1_000),
+        "a window with enough overlap must remain where the user placed it"
+    );
+    assert!(
+        !rect(0, 0, 0, 50).is_reachable_on(&[(0, 0, 100, 100)], 1)
+            && !rect(0, 0, 50, 0).is_reachable_on(&[(0, 0, 100, 100)], 1),
+        "zero-sized rectangles cannot be restored as reachable windows"
+    );
+    assert!(
+        rect(i32::MAX, i32::MAX, u32::MAX, u32::MAX)
+            .is_reachable_on(&[(i32::MAX, i32::MAX, 1, 1)], 1),
+        "extreme persisted coordinates must be evaluated without overflow or a panic"
+    );
+}
+
+/// `WindowLayout::trade_window` must survive current and pre-field TOML documents. Removing the
+/// field or its lenient default would discard a remembered trade-detail placement after restart,
+/// including when an older layout is first read by a newer terminal.
+#[test]
+fn trade_window_geometry_round_trips_and_legacy_layouts_remain_readable() {
+    let saved = GeomRect {
+        x: -120,
+        y: 80,
+        w: 1_200,
+        h: 760,
+        display_uuid: Some(uuid::Uuid::from_u128(
+            0x0123_4567_89ab_cdef_0123_4567_89ab_cdef,
+        )),
+    };
+    let layout = WindowLayout {
+        trade_window: Some(saved),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&layout).expect("trade window layout must serialize");
+    let decoded: WindowLayout =
+        toml::from_str(&encoded).expect("trade window layout must deserialize");
+    assert_eq!(
+        decoded
+            .trade_window
+            .map(|geom| (geom.x, geom.y, geom.w, geom.h, geom.display_uuid)),
+        Some((saved.x, saved.y, saved.w, saved.h, saved.display_uuid)),
+        "writing and reading the layout must preserve the complete remembered rectangle"
+    );
+
+    let legacy: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("a layout written before trade-window geometry must still deserialize");
+    assert!(legacy.trade_window.is_none());
+    assert_eq!(legacy.analytics_period.as_deref(), Some("p-cur-month"));
+}
