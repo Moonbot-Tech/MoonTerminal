@@ -335,6 +335,14 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let fixture =
         fixture::bootstrap(std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()))?;
 
+    // Right after the fixture and still before anything reads a setting: an atlas run resets the
+    // configuration to the state it always starts from. A crawl clicks, clicks change dock layout
+    // and active tabs, and the terminal persists those — so without this, every run would begin
+    // from wherever the previous one stopped and its cached atlas would describe a window that no
+    // longer exists.
+    #[cfg(uidoc)]
+    crate::uidoc::prepare_baseline(std::env::args());
+
     // Diagnostics BEFORE the logger: the `[log]` areas in `cfg/diagnostics.toml` decide the
     // logger's filter, so they have to be known before it is built. Reading that file this early is
     // safe precisely because it neither creates directories nor logs — a missing file yields
@@ -507,6 +515,12 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let app = gpui_platform::application().with_assets(moon_ui::MoonAssets);
     app.run(move |cx| {
         init_moon_ui(cx);
+        // Right after the components, never before: `init_moon_ui` installs an inspector renderer
+        // of its own, and both that renderer and the per-state registration are last-one-wins.
+        // No-op unless `--ui-atlas` was passed to a capture build; the walk it arms waits for the
+        // window on its own clock.
+        #[cfg(uidoc)]
+        crate::uidoc::start_if_requested(cx);
         // Say it out loud rather than relying on the default: on macOS this switch decides whether
         // a Control+left press is delivered as a right click with Control erased. Moonbot's
         // default move gesture for a sell line IS Ctrl+Left, so the terminal needs the raw press;

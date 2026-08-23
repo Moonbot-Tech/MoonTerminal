@@ -113,7 +113,11 @@ pub fn run(
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
     // The TTL is approximately one year.
     let mut dets = Vec::new();
-    let mut seq = 0u64;
+    // Numbered from ONE. The ingest side skips everything with `seq <= last` and starts `last` at
+    // zero, so a detect numbered zero is never taken. With fifty detects that lost one of them and
+    // nobody noticed; with one detect per core - which is what a bench wants - it lost all of them,
+    // and the chart tabs simply never appeared.
+    let mut seq = 1u64;
     for w in 1..=windows {
         for m in 0..charts {
             dets.push(DetectRow {

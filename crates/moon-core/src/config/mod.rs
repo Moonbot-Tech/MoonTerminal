@@ -534,6 +534,14 @@ impl AppConfig {
             anyhow::bail!("MOON_CONFIG_PLAINTEXT key пустой");
         }
 
+        // One core, or a list of them. The list exists because a bench's cores have to BE the
+        // cores its data belongs to: `orders_rep` carries `core_uid` and `core_name`, and a core
+        // list invented beside the data can only drift from it. The caller reads the pairs out of
+        // the database and passes them here.
+        let cores = std::env::var("MOON_CONFIG_PLAINTEXT_CORES")
+            .ok()
+            .map(|list| Self::parse_plaintext_cores(&list))
+            .transpose()?;
         let name = std::env::var("MOON_CONFIG_PLAINTEXT_NAME").unwrap_or_else(|_| "default".into());
         let group = std::env::var("MOON_CONFIG_PLAINTEXT_GROUP")
             .unwrap_or_else(|_| servers::default_group());
@@ -543,9 +551,61 @@ impl AppConfig {
         log::warn!(
             "MOON_CONFIG_PLAINTEXT=1: тестовый plaintext-конфиг, servers.enc/keyring пропущены"
         );
+        let cores = cores.unwrap_or_else(|| vec![(1, name)]);
+        // The developer's own settings, read the same way a normal run reads them. This mode
+        // replaces the CORES and nothing else: everything arranged by hand — how charts split, the
+        // stack height, the font scale — has to survive to the next launch, or a bench layout
+        // cannot be pinned at all.
+        let (settings, load) = store::read_settings();
         Ok(Some(Self::build_plaintext_config(
-            uid_floor, theme, orders, badges, name, group, market, key, synthetic,
+            uid_floor,
+            theme,
+            orders,
+            badges,
+            cores,
+            group,
+            market,
+            key,
+            synthetic,
+            settings,
+            !load.permits_overwrite(),
         )))
+    }
+
+    /// Read `uid:name` pairs out of `MOON_CONFIG_PLAINTEXT_CORES`.
+    ///
+    /// Args:
+    ///     list: Comma-separated pairs, e.g. `1:BB1,3:BinF1`.
+    ///
+    /// Returns:
+    ///     The cores in the order given.
+    ///
+    /// Errors:
+    ///     Refuses an empty list, a malformed pair or a repeated uid rather than silently
+    ///     configuring fewer cores than asked for: a bench missing a core shows empty panels and
+    ///     looks like a data problem.
+    fn parse_plaintext_cores(list: &str) -> anyhow::Result<Vec<(u64, String)>> {
+        let mut cores: Vec<(u64, String)> = Vec::new();
+        for entry in list.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let (uid, name) = entry.split_once(':').ok_or_else(|| {
+                anyhow::anyhow!("MOON_CONFIG_PLAINTEXT_CORES: {entry:?} не вида uid:имя")
+            })?;
+            let uid: u64 = uid.trim().parse().map_err(|_| {
+                anyhow::anyhow!("MOON_CONFIG_PLAINTEXT_CORES: {uid:?} не число")
+            })?;
+            let name = name.trim();
+            if uid == 0 || name.is_empty() {
+                anyhow::bail!("MOON_CONFIG_PLAINTEXT_CORES: пустое имя или нулевой uid в {entry:?}");
+            }
+            if cores.iter().any(|(known, _)| *known == uid) {
+                anyhow::bail!("MOON_CONFIG_PLAINTEXT_CORES: uid {uid} повторяется");
+            }
+            cores.push((uid, name.to_string()));
+        }
+        if cores.is_empty() {
+            anyhow::bail!("MOON_CONFIG_PLAINTEXT_CORES задан, но пуст");
+        }
+        Ok(cores)
     }
 
     /// Build the runtime config after environment parsing has supplied one plaintext server.
@@ -558,55 +618,72 @@ impl AppConfig {
         theme: ChartThemeSet,
         orders: OrdersStyleSet,
         badges: BadgesConfig,
-        name: String,
+        cores: Vec<(u64, String)>,
         group: String,
         market: String,
         key: String,
         synthetic: bool,
+        settings: schema::SettingsFile,
+        settings_unreadable: bool,
     ) -> Self {
-        let mut config = Self {
-            servers: vec![ServerConfig {
-                id: 1,
-                uid: 1,
+        // The uid the counter must start above. Taken from the cores actually configured rather
+        // than fixed at 2: a bench whose data uses uid 3 would otherwise have the next core issued
+        // a uid that is already in use.
+        let next = cores.iter().map(|(uid, _)| *uid).max().unwrap_or(1) + 1;
+        let servers = cores
+            .into_iter()
+            .map(|(uid, name)| ServerConfig {
+                // Since schema v11 the runtime CoreId EQUALS the uid, and panels, databases,
+                // subscriptions and layout all bind to it. A positional id here made the second
+                // core come up as core 2 while its trades were recorded under core 3.
+                id: uid,
+                uid,
                 name,
                 active: true,
                 show_window: true,
                 feed: FeedFlags::default(),
-                key: Secret::new(key),
-                group,
-                market,
+                key: Secret::new(key.clone()),
+                group: group.clone(),
+                market: market.clone(),
                 color: servers::default_color(),
                 synthetic,
                 chart_bundle: String::new(),
                 default_alert_strategy: 0,
-            }],
+            })
+            .collect();
+        let mut config = Self {
+            servers,
             groups: Vec::new(),
             core_groups: Vec::new(),
-            language: Language::default(),
-            market_mode: MarketDataMode::default(),
-            charts_split_by_core: true,
-            charts_stack_scroll: false,
-            charts_stack_compress: false,
-            chart_stack_height: schema::default_chart_stack_height(),
-            separate_control_zones: true,
+            language: settings.language,
+            market_mode: settings.market_mode,
+            charts_split_by_core: settings.charts_split_by_core,
+            charts_stack_scroll: settings.charts_stack_scroll,
+            charts_stack_compress: settings.charts_stack_compress,
+            chart_stack_height: settings.chart_stack_height,
+            separate_control_zones: settings.separate_control_zones,
+            // Idle close stays OFF whatever the file says: a bench is looked at rather than used,
+            // and a Main chart that closes itself after a quiet minute takes the screenshot with it.
             main_idle_close_secs: 0,
-            log_to_file: true,
-            log_retention_days: servers::default_log_retention_days(),
-            ui_font_delta: schema::default_ui_font_delta(),
-            ui_theme_mode: UiThemeMode::default(),
-            ui_scale: schema::default_ui_scale(),
-            chart_memory_percent: schema::default_chart_memory_percent(),
-            core_sort: CoreSortMode::default(),
-            report_valuation_mode: ValuationMode::default(),
-            // The plaintext config issues uid 1 above, so the counter starts at 2 before applying
-            // the optional store floor. This mode can share `data/` with encrypted-config runs.
-            next_uid: UidCounter::new(2, uid_floor),
+            log_to_file: settings.log_to_file,
+            log_retention_days: settings.log_retention_days,
+            ui_font_delta: settings.ui_font_delta,
+            ui_theme_mode: settings.ui_theme_mode,
+            ui_scale: settings.ui_scale,
+            chart_memory_percent: settings.chart_memory_percent,
+            core_sort: settings.core_sort,
+            report_valuation_mode: settings.report_valuation_mode,
+            // The counter starts above the highest uid issued above, before applying the optional
+            // store floor. This mode can share `data/` with encrypted-config runs.
+            next_uid: UidCounter::new(next, uid_floor),
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,
             badges,
-            // Plaintext mode never reads settings.toml, so there is nothing to overwrite or damage.
-            settings_unreadable: false,
+            // Carried from the read above: an unreadable settings.toml must block a write-back
+            // here for the same reason it does on every other path — a save would replace settings
+            // that were never read with defaults.
+            settings_unreadable,
             chart_core_remap_needed: false,
         };
         ensure_server_group_configs(&config.servers, &mut config.groups);

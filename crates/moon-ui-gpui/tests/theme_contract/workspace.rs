@@ -246,7 +246,10 @@ fn detached_panel_activation_and_activity_refresh_auto_singleton_ownership() {
                 == 1,
         "native detached-panel activation must attribute both activity and Auto ownership once"
     );
-    let render = code_only(braced_body(&detached, "fn render(&mut self, window:"));
+    // Anchored on the signature without its first parameter NAME: the detached root no longer
+    // takes `window` in render, because its window-level listener is installed by a paint-phase
+    // hook (`window::input_hook`) rather than called from render.
+    let render = code_only(braced_body(&detached, "fn render(&mut self,"));
     assert!(
         render.contains("phase == DispatchPhase::Capture && window.is_window_active()")
             && render.contains("b.note_main_input(&group);")

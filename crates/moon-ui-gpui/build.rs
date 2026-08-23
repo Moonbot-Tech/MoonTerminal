@@ -3,6 +3,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../../assets/icons");
     println!("cargo:rerun-if-changed=../../Cargo.lock");
     println!("cargo:rustc-check-cfg=cfg(moon_profile_debug)");
+    println!("cargo:rustc-check-cfg=cfg(uidoc)");
+    emit_uidoc_overlay();
     emit_build_metadata();
     if std::env::var("PROFILE").is_ok_and(|profile| profile == "debug") {
         println!("cargo:rustc-cfg=moon_profile_debug");
@@ -18,6 +20,42 @@ fn main() {
     if let Err(err) = embed_exe_icon() {
         println!("cargo:warning=failed to embed MoonTerminal exe icon: {err}");
     }
+}
+
+/// Define `uidoc` when the private UI-atlas overlay is present, and say nothing when it is not.
+///
+/// The atlas is not part of this repository: it lives in `private/uidoc`, which is excluded
+/// locally, and `main.rs` reaches it through a `#[path]` guarded by this cfg. Presence on disk is
+/// the switch rather than a Cargo feature, because a feature published here would name files a
+/// clone does not have and fail to build the moment anyone enabled it.
+///
+/// Both the `ui-inspector` feature and the directory are required; the doc comment on the
+/// function body says why one of them cannot stand in for the other.
+///
+/// The rerun path is emitted ONLY when the overlay exists. A `rerun-if-changed` naming a missing
+/// file makes Cargo re-run this script - and therefore recompile the whole crate - on every single
+/// build, which is a heavy price for a directory that appears once. The consequence is the one
+/// documented in `private/README.md`: after creating the overlay for the first time, touch this
+/// file (or any git ref, which is already a rerun path) so the cfg is picked up.
+fn emit_uidoc_overlay() {
+    // Two conditions, because neither alone is enough. The feature says the build was asked for;
+    // it cannot say the code is there. The overlay says the code is there; it cannot say the
+    // inspector APIs the code calls were compiled, since those hang on `debug-assertions` raised
+    // per package by `--profile inspector` and a build script cannot see another package's
+    // profile. The feature is the developer's half of that statement.
+    if std::env::var_os("CARGO_FEATURE_UI_INSPECTOR").is_none() {
+        return;
+    }
+    let entry = std::path::Path::new("../../private/uidoc/mod.rs");
+    if !entry.is_file() {
+        println!(
+            "cargo:warning=ui-inspector is on but private/uidoc is missing: the atlas is a local \
+             overlay and this build has none, so --ui-atlas will do nothing"
+        );
+        return;
+    }
+    println!("cargo:rerun-if-changed=../../private/uidoc/mod.rs");
+    println!("cargo:rustc-cfg=uidoc");
 }
 
 /// Generates `GROUP_ICONS: &[Option<&[u8]>]` (index = icon ID) from `assets/icons/<id>.png`

@@ -23,14 +23,14 @@
 //! Windows Graphics Capture — `windows-capture` is already in `Cargo.lock` under `zed-scap`, though
 //! it is not built on the Windows target today and would bring an async frame pool with it.
 
-mod rect;
+pub(crate) mod rect;
 
 #[cfg(windows)]
 mod caption;
 #[cfg(windows)]
 mod clipboard_win;
 #[cfg(windows)]
-mod win;
+pub(crate) mod win;
 
 #[cfg(not(windows))]
 mod unsupported;
