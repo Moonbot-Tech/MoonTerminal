@@ -148,7 +148,7 @@ pub(in crate::chartdx) struct LabelText {
     pub part: usize,
     pub text: String,
     /// The caption's own prefix — "PnL", "Фандинг1ч" — kept APART from the value rather than glued
-    /// to the front of it.
+    /// to the front of it. [`Self::glued`] is the one place the two are put back together.
     ///
     /// Separate because the two are coloured separately: a by-sign caption paints the figure, and
     /// painting the word with it turns the row into a block of green the eye has to re-parse. Empty
@@ -173,6 +173,16 @@ pub(in crate::chartdx) struct LabelText {
     /// cannot express — one caption prints a dozen lines and they are not all Gate. `None`
     /// everywhere else, where the style answers.
     pub color: Option<u32>,
+}
+
+impl LabelText {
+    /// Prefix and value as ONE string, the way a caption is measured when it is not drawn split.
+    ///
+    /// The two are kept apart because they are COLOURED apart; every place that needs to know how
+    /// wide the pair is glues them here rather than spelling the concatenation out again.
+    pub fn glued(&self) -> String {
+        format!("{}{}", self.prefix, self.text)
+    }
 }
 
 /// A pane's caption state: what it read, and what it formatted from it.

@@ -804,7 +804,8 @@ impl Default for ChartLabelsCfg {
         cfg.rows[5] = arbitrage;
 
         // What fired, and what is trading: centred over the plot, where a line of the core's own
-        // prose has the width to be read.
+        // prose has the width to be read. It is the only caption that WRAPS, so the modules beside
+        // it yield to it — as much as it asks for, and never more than a share of the plot.
         let mut detect = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Center);
         detect.preset = Some(LabelPreset::Detect);
         detect.flow = LabelFlow::Column;
