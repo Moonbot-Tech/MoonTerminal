@@ -265,6 +265,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         chart_x_sync: None,
         chart_x_sync_rev: 0,
         detached_chart_windows: Vec::new(),
+        trade_windows: Vec::new(),
         last_main_input: std::collections::HashMap::new(),
         exclude_bl_delta: std::collections::HashMap::new(),
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]

@@ -19,6 +19,7 @@ mod chart;
 mod core_pick;
 mod naming;
 mod shell;
+mod shot;
 mod startup;
 mod strategies;
 mod theme;

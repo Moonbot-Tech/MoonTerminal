@@ -206,9 +206,9 @@ hotkeys.chart_shot:
   en: "Make Shot"
   es: "Make Shot"
 hotkeys.chart_shot_hint:
-  ru: "Копирует картинку графика — со стаканом и названием монеты — в буфер обмена. На диск ничего не пишется. Только Windows. Moonbot-дефолт: Ctrl+F10."
-  en: "Copies a picture of the chart — order book and coin name included — to the clipboard. Nothing is written to disk. Windows only. Moonbot default: Ctrl+F10."
-  es: "Copia una imagen del gráfico — con el libro de órdenes y el nombre de la moneda — al portapapeles. No se escribe nada en disco. Solo Windows. Valor por defecto de Moonbot: Ctrl+F10."
+  ru: "Копирует картинку графика — со стаканом, названием монеты, биржей, временем, масштабом и движением — в буфер обмена. Только Windows. Moonbot-дефолт: Ctrl+F10."
+  en: "Copies a picture of the chart — order book, coin name, venue, time, scale and movement included — to the clipboard. Windows only. Moonbot default: Ctrl+F10."
+  es: "Copia una imagen del gráfico — con el libro de órdenes, el nombre de la moneda, el mercado, la hora, la escala y el movimiento — al portapapeles. Solo Windows. Valor por defecto de Moonbot: Ctrl+F10."
 hotkeys.chart_shot_done:
   ru: "График скопирован в буфер обмена"
   en: "Chart copied to the clipboard"
@@ -225,6 +225,10 @@ hotkeys.chart_shot_failed:
   ru: "Не удалось снять график — подробности в логе"
   en: "Could not capture the chart — see the log"
   es: "No se pudo capturar el gráfico — consulta el registro"
+hotkeys.chart_shot_tf:
+  ru: "ТФ %{tf}"
+  en: "TF %{tf}"
+  es: "TF %{tf}"
 
 hotkeys.group.order_move:
   ru: "Сдвиг ордеров"

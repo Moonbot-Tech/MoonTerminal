@@ -2,16 +2,48 @@
 
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
-use crate::market::source::{MarketLabel, MarketLimits, max_order_notional};
+use crate::market::source::{max_order_notional, MarketLabel, MarketLimits};
 use crate::session::CoreId;
 
 use super::{
-    ArbQuote, ArbVenue, CoinTag, DetectSnapshot, LatestPriceError, MarketContextReadout,
-    MarketDataSource, MarketFiguresReadout, MarketRevisions, MarketTickerReadout,
-    MarketWindowsReadout, rows_to_ticks,
+    rows_to_ticks, ArbQuote, ArbVenue, CoinTag, DetectSnapshot, LatestPriceError,
+    MarketContextReadout, MarketDataSource, MarketFiguresReadout, MarketRevisions,
+    MarketTickerReadout, MarketWindowsReadout,
 };
 use crate::market::candles::ChartCandle;
 use moonproto::state::TradeVolumeTotals;
+
+/// Why a core's exchange could not be addressed for a trade replay.
+///
+/// Two DIFFERENT facts, and the window says a different thing for each: one asks the user to
+/// reconnect a core, the other tells them this build does not know their exchange.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplayAddressError {
+    /// The core has no live market-data provider, so nothing about its exchange is knowable.
+    NotConnected,
+    /// The core is connected, but its platform ordinal is newer than this build's directory.
+    UnknownVenue,
+}
+
+/// How one core's exchange is addressed by the trade replay, resolved from one source snapshot.
+///
+/// See [`MarketDataSource::replay_address`], which is the only thing that builds it.
+///
+/// Deliberately not `Debug`: the cache handle owns a channel into a worker thread and has no
+/// printable state, and deriving it here would force a `Debug` impl onto that type purely to
+/// satisfy a value nobody logs.
+#[derive(Clone)]
+pub struct ReplayAddress {
+    /// The venue the core is connected to, as the exchange directory names it.
+    pub venue: crate::venue::Venue,
+    /// Kline-cache address shared by every core on this exchange.
+    pub exchange_key: String,
+    /// Handle to the ONE open kline cache, or `None` before the terminal supplied its path.
+    ///
+    /// Handed over rather than reopened: the cache owns a SQLite connection and a worker thread,
+    /// and a second instance on the same file would mean a second of each.
+    pub cache: Option<crate::market::kline_cache::KlineCache>,
+}
 
 /// What a market's position actually is: size signed by DIRECTION, with the entry and liquidation
 /// prices of the leg that size came from.
@@ -29,7 +61,9 @@ use moonproto::state::TradeVolumeTotals;
 /// all. A leg branch already knows its direction from the leg it read, so consulting `pos_dir`
 /// there would turn every long-only hedge position into a short the moment that field was absent.
 /// `feed::assets` draws the line in the same place.
-pub(super) fn position_of(pos: &moonproto::state::MarketBalancePosition) -> (Option<f64>, f64, f64) {
+pub(super) fn position_of(
+    pos: &moonproto::state::MarketBalancePosition,
+) -> (Option<f64>, f64, f64) {
     let (size, price, liq) = if pos.pos_size != 0.0 {
         (pos.pos_size, pos.pos_price, pos.liq_price)
     } else if pos.short_pos_size.abs() > pos.long_pos_size.abs() {
@@ -237,6 +271,53 @@ impl MarketDataSource {
             "USDT",
             exchange,
         )
+    }
+
+    /// Everything a trade replay needs to address one core's exchange, resolved in ONE lock.
+    ///
+    /// This is the single bridge from a report row's `core_uid` to the public REST world, and it
+    /// exists as one call rather than three because all three answers must come from the SAME
+    /// snapshot: a provider election that moved between two reads would pair one core's venue with
+    /// another's cache key and quietly file rows under the wrong exchange.
+    ///
+    /// It also carries the ONE honest limitation of the whole feature. Neither the venue nor the
+    /// cache key is durable — the platform ordinal is reported by a LIVE core and is never written
+    /// to `servers.enc` — so a trade whose core is offline, disabled, or since removed resolves to
+    /// `None` here and the window says so by name. That is the same boundary the existing Report
+    /// coin click already stops at; making it durable means widening the report replica's schema,
+    /// which is a different change with a different blast radius.
+    ///
+    /// Args:
+    ///     core: Core that recorded the report row.
+    ///
+    /// Returns:
+    ///     The venue, the shared kline-cache address, and a handle to the cache itself, or `None`
+    ///     when this core has no live market-data provider.
+    pub fn replay_address(&self, core: CoreId) -> Result<ReplayAddress, ReplayAddressError> {
+        let inner = self.inner.read().expect("market source poisoned");
+        let provider = inner
+            .core_provider
+            .get(&core)
+            .copied()
+            .ok_or(ReplayAddressError::NotConnected)?;
+        let exchange = inner
+            .provider_exchange
+            .get(&provider)
+            .copied()
+            .ok_or(ReplayAddressError::NotConnected)?;
+        // `venue` answers `None` for an ordinal this build does not know rather than guessing a
+        // neighbour's. That is a DIFFERENT fact from a core being offline — the core here is
+        // connected and answering — so it is carried as its own error rather than collapsed into
+        // one "cannot resolve", which would tell the user to reconnect something already
+        // connected.
+        let venue = crate::venue::venue(exchange.code).ok_or(ReplayAddressError::UnknownVenue)?;
+        Ok(ReplayAddress {
+            venue,
+            // The exact spelling the live path and the recorder already file rows under; a
+            // divergence here would silently split the cache in two.
+            exchange_key: format!("{}:{:08x}", exchange.code, exchange.dex),
+            cache: inner.kline_cache.clone(),
+        })
     }
 
     /// The naming family of the exchange `core` reads market data from.
@@ -492,7 +573,11 @@ impl MarketDataSource {
                     // `mark_price_found` is the venue's own answer to "does this market have one",
                     // and it is the only one that separates a spot market from a futures market
                     // whose first mark has not arrived.
-                    out.mark = m.price.mark_price_found.then(|| m.price.mark_price).and_then(positive);
+                    out.mark = m
+                        .price
+                        .mark_price_found
+                        .then(|| m.price.mark_price)
+                        .and_then(positive);
                     out.price_step = positive(m.price.chart_price_step);
                     out.vol_24h = positive(m.volume);
                     out.max_leverage = (m.max_leverage > 0).then_some(m.max_leverage);
@@ -796,7 +881,11 @@ impl MarketDataSource {
         // Ordered exactly like `LabelWindow::ALL`, which is what the caption indexes by.
         let rows: [(f64, f64, Option<TradeVolumeTotals>); crate::config::LABEL_WINDOW_COUNT] = [
             (deltas.one_minute, 0.0, Some(trades.one_minute)),
-            (deltas.five_minutes, candles.five_minutes, Some(trades.five_minutes)),
+            (
+                deltas.five_minutes,
+                candles.five_minutes,
+                Some(trades.five_minutes),
+            ),
             (deltas.fifteen_minutes, candles.fifteen_minutes, None),
             (deltas.thirty_minutes, candles.thirty_minutes, None),
             (deltas.one_hour, candles.one_hour, None),

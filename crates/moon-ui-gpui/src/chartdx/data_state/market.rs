@@ -451,18 +451,31 @@ impl ChartDataState {
             let read_history = history_source_changed || force_history_reset || panned_off_edge;
             let mut history = if read_history {
                 let read_timer = crate::diag::timer();
-                let history = source.read_chart_history_into(
-                    pane.core,
-                    &pane.market,
-                    pane.view.epoch_ms,
-                    history_from,
-                    history_to,
-                    force_history_reset,
-                    scan_price,
-                    candle_params_opt,
-                    &mut pr.history_cursor,
-                    &mut pr.history_buffers,
-                );
+                // An engine holding a frozen replay answers from it and never touches the live
+                // source: the rows are already fetched, already clipped, and belong to a trade
+                // that closed. The live arm below is byte-identical to what it always was, which
+                // is the point — the main chart's path is not conditional on this feature.
+                let history = match self.trade_replay.as_ref() {
+                    Some(series) => Some(series.read_into(
+                        pane.view.epoch_ms,
+                        history_from,
+                        history_to,
+                        candle_params_opt,
+                        &mut pr.history_buffers,
+                    )),
+                    None => source.read_chart_history_into(
+                        pane.core,
+                        &pane.market,
+                        pane.view.epoch_ms,
+                        history_from,
+                        history_to,
+                        force_history_reset,
+                        scan_price,
+                        candle_params_opt,
+                        &mut pr.history_cursor,
+                        &mut pr.history_buffers,
+                    ),
+                };
                 crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
                 if force_history_reset && let Some(started) = read_timer {
                     crate::diag::bump_by(
@@ -490,20 +503,32 @@ impl ChartDataState {
                     || (h.price_line_capacity > 0
                         && h.price_line_capacity != pr.combo_price_line_capacity)
             });
+            // A replay always answers `combo_reset`, so this capacity re-read is unreachable for
+            // one; the arm is written anyway rather than left to `source`, because a future change
+            // to that guard must not silently send a replay pane back to the live source.
             if capacity_changed && history.as_ref().is_some_and(|h| !h.combo_reset) {
                 let read_timer = crate::diag::timer();
-                history = source.read_chart_history_into(
-                    pane.core,
-                    &pane.market,
-                    pane.view.epoch_ms,
-                    history_from,
-                    history_to,
-                    true,
-                    scan_price,
-                    candle_params_opt,
-                    &mut pr.history_cursor,
-                    &mut pr.history_buffers,
-                );
+                history = match self.trade_replay.as_ref() {
+                    Some(series) => Some(series.read_into(
+                        pane.view.epoch_ms,
+                        history_from,
+                        history_to,
+                        candle_params_opt,
+                        &mut pr.history_buffers,
+                    )),
+                    None => source.read_chart_history_into(
+                        pane.core,
+                        &pane.market,
+                        pane.view.epoch_ms,
+                        history_from,
+                        history_to,
+                        true,
+                        scan_price,
+                        candle_params_opt,
+                        &mut pr.history_cursor,
+                        &mut pr.history_buffers,
+                    ),
+                };
                 crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
                 if let Some(started) = read_timer {
                     crate::diag::bump_by(

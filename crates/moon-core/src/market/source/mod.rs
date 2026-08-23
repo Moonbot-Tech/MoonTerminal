@@ -7,6 +7,8 @@ mod refresh;
 #[cfg(test)]
 mod tests;
 
+pub use read::{ReplayAddress, ReplayAddressError};
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};

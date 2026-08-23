@@ -20,7 +20,7 @@
 
 mod alerts;
 mod assets;
-mod chart;
+pub(crate) mod chart;
 /// The desktop capture the chart shot is built on, reached by the UI-atlas run too.
 ///
 /// Re-exported rather than made public wholesale: the atlas needs exactly these three items, and a

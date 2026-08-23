@@ -269,6 +269,52 @@ impl GeomRect {
             .or_else(|| previous.and_then(|previous| previous.display_uuid));
         self
     }
+
+    /// Whether this rectangle still lands somewhere the user can actually reach.
+    ///
+    /// A saved geometry outlives the monitors it was saved on: a laptop undocked from a second
+    /// screen, a display rearranged, a resolution changed. Restoring such a rectangle opens the
+    /// window at coordinates no monitor covers, where it is invisible and — for a window that
+    /// hides its taskbar button, as the trade window does — unreachable. The caller falls back to
+    /// its own default placement instead.
+    ///
+    /// The test is OVERLAP AREA, not containment: a window deliberately hanging off the edge of a
+    /// screen is a placement the user chose, and demanding full containment would move it back on
+    /// every reopen. What it rejects is a rectangle whose intersection with every attached display
+    /// is too small to grab — the title bar has to be on a screen for the window to be draggable.
+    ///
+    /// Pure, and free of any window-system type, so the rule is unit-testable without a display:
+    /// `displays` is simply the attached monitors as `(x, y, w, h)` in the same coordinate space
+    /// the rectangle was saved in. An EMPTY list means the caller could not enumerate displays at
+    /// all, which is "unknown" rather than "nowhere" — the saved rectangle is kept, exactly as
+    /// [`Self::keeping_display_of`] keeps an unknown identity.
+    ///
+    /// # Arguments
+    ///
+    /// * `displays` - Attached display rectangles as `(x, y, w, h)`.
+    /// * `min_visible` - Smallest visible area, in square pixels, that still counts as reachable.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the rectangle is usable as-is.
+    #[must_use]
+    pub fn is_reachable_on(&self, displays: &[(i32, i32, u32, u32)], min_visible: u64) -> bool {
+        if self.w == 0 || self.h == 0 {
+            return false;
+        }
+        if displays.is_empty() {
+            return true;
+        }
+        let (left, top) = (i64::from(self.x), i64::from(self.y));
+        let (right, bottom) = (left + i64::from(self.w), top + i64::from(self.h));
+        displays.iter().any(|&(dx, dy, dw, dh)| {
+            let (dleft, dtop) = (i64::from(dx), i64::from(dy));
+            let (dright, dbottom) = (dleft + i64::from(dw), dtop + i64::from(dh));
+            let overlap_w = right.min(dright) - left.max(dleft);
+            let overlap_h = bottom.min(dbottom) - top.max(dtop);
+            overlap_w > 0 && overlap_h > 0 && (overlap_w as u64) * (overlap_h as u64) >= min_visible
+        })
+    }
 }
 
 /// Legacy egui detached-tab compatibility record; live detached state uses `detached.json`.
@@ -446,6 +492,14 @@ pub struct WindowLayout {
     /// Independent desktop Profit Monitor geometry.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_window: Option<GeomRect>,
+    /// Geometry shared by EVERY trade-detail window, so one reopens where the user left the last.
+    ///
+    /// One rectangle for all of them rather than one per trade: the user adjusts the window once
+    /// and expects that shape back, and a per-trade key would mean the first open of every new coin
+    /// ignored every adjustment ever made. Two windows may be open at once, so the second still
+    /// cascades off this rectangle instead of landing exactly on the first.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window: Option<GeomRect>,
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_period: Option<String>,

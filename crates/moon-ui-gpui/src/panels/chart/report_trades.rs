@@ -136,7 +136,7 @@ impl ChartPanel {
     ///
     /// Returns:
     ///     Nothing; unchanged records leave the existing buffer intact.
-    fn publish_trade_history(
+    pub(crate) fn publish_trade_history(
         &mut self,
         records: Rc<Vec<moon_core::db::ChartTradeRecord>>,
         cx: &mut Context<Self>,

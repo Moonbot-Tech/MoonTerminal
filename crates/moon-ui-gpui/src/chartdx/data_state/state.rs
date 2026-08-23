@@ -43,6 +43,7 @@ impl ChartDataState {
             warn_marks: std::rc::Rc::new(Vec::new()),
             warn_hovered: None,
             market_source: None,
+            trade_replay: None,
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
@@ -98,6 +99,31 @@ impl ChartDataState {
             }
         }
         sig
+    }
+
+    /// Draw a frozen replay instead of the live market source, or go back to the live one.
+    ///
+    /// Every pane's `resident_left_rel` is reset to NaN, which is the SAME mechanism a device loss
+    /// and a source-generation change already use to force a full history re-read on the next
+    /// frame. Without it the pane would keep its previous coverage mark, decide nothing had
+    /// changed, and never read the series that just arrived — which is exactly what an
+    /// asynchronously fetched replay does: the window opens empty and the rows land seconds later.
+    ///
+    /// Args:
+    ///     series: The frozen series to draw, or `None` to return this engine to the live source.
+    pub(crate) fn set_trade_replay(
+        &mut self,
+        series: Option<std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
+    ) {
+        self.trade_replay = series;
+        let mut render = self.render.borrow_mut();
+        for pane in &mut render.panes {
+            pane.resident_left_rel = f32::NAN;
+            pane.gpu_prepare_dirty = true;
+        }
+        render.needs_present = true;
+        drop(render);
+        self.view_dirty = true;
     }
 
     pub(crate) fn sync_orders_if_visible(&mut self, session: &SessionManager, force: bool) -> bool {

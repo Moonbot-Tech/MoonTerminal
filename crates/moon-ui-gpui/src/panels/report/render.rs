@@ -84,7 +84,12 @@ impl ReportPanel {
                 if modifiers.shift || modifiers.secondary() {
                     return;
                 }
-                view_double.update(app, |this, cx| this.keep_report_row_selected(row, cx));
+                view_double.update(app, |this, cx| {
+                    // The selection quirk does not go away, so the compensation stays and the new
+                    // action is ADDED to the gesture that already fires rather than replacing it.
+                    this.keep_report_row_selected(row, cx);
+                    this.open_trade_detail(row, cx);
+                });
             })
             .on_select_all_rows(move |_window, app| {
                 view_select_all.update(app, |this, cx| this.select_all_report_rows(cx));

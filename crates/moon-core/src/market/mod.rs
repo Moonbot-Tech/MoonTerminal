@@ -10,6 +10,7 @@ pub mod candles;
 pub mod kline_cache;
 mod screener;
 mod source;
+pub mod trade_replay;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -23,10 +24,11 @@ use crate::session::CoreId;
 pub use candles::{CandleViewCfg, ChartCandle};
 pub use screener::ScreenerRow;
 pub use source::{
-    pick_market_for_coin, ArbQuote, ArbVenue, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
-    ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError, MarketDataSource,
-    MarketFiguresReadout, MarketLabel, MarketContextReadout, MarketLimits, MarketRevisions,
-    MarketTickerReadout, MarketWindowsReadout, MaxOrder, MaxOrderSource, WindowFigures,
+    pick_market_for_coin, ArbQuote, ArbVenue, CandleReadParams, ChartHistoryBuffers,
+    ChartHistoryCursor, ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError,
+    MarketContextReadout, MarketDataSource, MarketFiguresReadout, MarketLabel, MarketLimits,
+    MarketRevisions, MarketTickerReadout, MarketWindowsReadout, MaxOrder, MaxOrderSource,
+    ReplayAddress, ReplayAddressError, WindowFigures,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

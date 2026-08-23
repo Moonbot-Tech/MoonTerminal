@@ -43,6 +43,23 @@ impl DibImage {
         dib_stride(self.width)
     }
 
+    /// Whether `rows` actually holds the picture `width` and `height` claim.
+    ///
+    /// The fields are plain and public within this module, so nothing in the type stops a producer
+    /// from building a `DibImage` whose buffer disagrees with its dimensions — and there are two
+    /// producers now, [`read_dib`] and [`rgb_to_dib`], where there used to be one. That
+    /// disagreement is not a Rust-side bug: `rows.as_ptr()` is handed to `SetDIBitsToDevice`
+    /// alongside a `BITMAPINFO` derived from the SAME width and height, so GDI reads exactly as
+    /// many bytes as the header describes and a short buffer is an out-of-bounds read inside the
+    /// OS. Checked at every FFI hand-off rather than trusted, because a documented invariant is
+    /// only as good as the next person who adds a third producer.
+    ///
+    /// Returns:
+    ///     `true` when the buffer length matches the padded stride times the height.
+    pub(super) fn is_consistent(&self) -> bool {
+        self.rows.len() == self.stride().saturating_mul(self.height as usize)
+    }
+
     /// Repack to the top-down, unpadded, RGB form every image encoder expects.
     ///
     /// Three separate differences, all of them silent if missed: DIB rows run bottom-up, they are
@@ -70,6 +87,50 @@ impl DibImage {
     }
 }
 
+/// Rebuild a DIB pixel array from top-down, unpadded RGB bytes.
+///
+/// The exact inverse of [`DibImage::to_rgb_top_down`], and it exists because the shot's
+/// composition pass works in the encoder's layout while the clipboard's `CF_DIB` body must be
+/// handed back in the DIB's. The same three differences apply in this direction — rows go
+/// BOTTOM-UP, each row is padded to a DWORD, and the channel order is BGR — and every one of them
+/// is as silent when missed here as it is there: the result still encodes, still pastes, and is
+/// upside down, sheared, or red-and-blue-swapped.
+///
+/// Args:
+///     width: Picture width in pixels.
+///     height: Picture height in pixels.
+///     rgb: `width * height * 3` bytes, top-down, RGB.
+///
+/// Returns:
+///     The same picture in DIB layout, or `None` when `rgb` does not match the dimensions given -
+///     a mismatch there would otherwise be read as a shear rather than as the bug it is.
+pub(super) fn rgb_to_dib(width: u32, height: u32, rgb: &[u8]) -> Option<DibImage> {
+    let row_bytes = width as usize * 3;
+    if width == 0 || height == 0 || rgb.len() != row_bytes * height as usize {
+        return None;
+    }
+    let stride = dib_stride(width);
+    // Zeroed rather than `extend`ed, because the PADDING bytes at the end of every row are never
+    // written below and must still be defined: they travel to the clipboard inside the CF_DIB body.
+    let mut rows = vec![0u8; stride * height as usize];
+    for (source, target) in rgb
+        .chunks_exact(row_bytes)
+        .rev()
+        .zip(rows.chunks_exact_mut(stride))
+    {
+        for (px, out) in source.chunks_exact(3).zip(target.chunks_exact_mut(3)) {
+            out[0] = px[2];
+            out[1] = px[1];
+            out[2] = px[0];
+        }
+    }
+    Some(DibImage {
+        width,
+        height,
+        rows,
+    })
+}
+
 /// Padded row length for a 24-bpp DIB: three bytes per pixel, rounded up to a 4-byte boundary.
 ///
 /// Args:
@@ -77,12 +138,12 @@ impl DibImage {
 ///
 /// Returns:
 ///     The aligned row length in bytes.
-fn dib_stride(width: u32) -> usize {
+pub(super) fn dib_stride(width: u32) -> usize {
     (width as usize * 3).next_multiple_of(4)
 }
 
 /// Releases a screen DC obtained from `GetDC`.
-struct ScreenDc(HDC);
+pub(super) struct ScreenDc(pub(super) HDC);
 
 impl Drop for ScreenDc {
     fn drop(&mut self) {
@@ -92,7 +153,7 @@ impl Drop for ScreenDc {
 
 /// Deletes a memory DC created by `CreateCompatibleDC`. A different call from `ScreenDc`'s on
 /// purpose: `ReleaseDC` on a memory DC leaks it and `DeleteDC` on a window DC is an error.
-struct MemoryDc(HDC);
+pub(super) struct MemoryDc(pub(super) HDC);
 
 impl Drop for MemoryDc {
     fn drop(&mut self) {
@@ -102,7 +163,7 @@ impl Drop for MemoryDc {
 }
 
 /// Deletes a bitmap created by `CreateCompatibleBitmap`.
-struct Bitmap(HBITMAP);
+pub(super) struct Bitmap(pub(super) HBITMAP);
 
 impl Drop for Bitmap {
     fn drop(&mut self) {
@@ -188,14 +249,43 @@ pub(crate) fn capture_client_rect(hwnd: HWND, rect: ShotRect) -> anyhow::Result<
     restore_selection(memory.0, previous);
     blit.context("BitBlt from the desktop DC")?;
 
+    read_dib(screen.0, bitmap.0, rect.width, rect.height)
+}
+
+/// Copy a GDI bitmap's pixels out as a `CF_DIB`-shaped array.
+///
+/// The ONE place `GetDIBits` is asked for this shape, and deliberately so: the shot has two
+/// producers of a bitmap - the desktop capture above and the strip composition in
+/// `super::paint_win` - and their outputs both end up on the clipboard, where a `CF_DIB` body must
+/// agree exactly with the header `dib_header_bytes` derives. Two copies of these fields could
+/// drift; one cannot.
+///
+/// The bitmap must NOT be selected into any DC when this is called - `GetDIBits` documents that,
+/// and a still-selected bitmap returns zero rows rather than an error.
+///
+/// Args:
+///     screen: A DC compatible with the bitmap; only used to describe the format.
+///     bitmap: The bitmap to read.
+///     width: Its width in pixels.
+///     height: Its height in pixels.
+///
+/// Returns:
+///     The pixels in DIB layout, or an error naming how many scan lines actually arrived.
+pub(super) fn read_dib(
+    screen: HDC,
+    bitmap: HBITMAP,
+    width: u32,
+    height: u32,
+) -> anyhow::Result<DibImage> {
+    let signed_height = i32::try_from(height).context("bitmap height does not fit in i32")?;
     let mut info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>())
                 .expect("BITMAPINFOHEADER fits in u32"),
-            biWidth: width,
+            biWidth: i32::try_from(width).context("bitmap width does not fit in i32")?,
             // POSITIVE height asks for the DIB's own bottom-up row order, which is what a CF_DIB
             // body must be. `DibImage::to_rgb_top_down` flips it for the encoder.
-            biHeight: height,
+            biHeight: signed_height,
             biPlanes: 1,
             // 24 bpp on purpose. Alpha in a BI_RGB DIB is undefined, and consumers that read it
             // anyway see zero and paste a fully transparent - usually black - rectangle. A screen
@@ -207,26 +297,26 @@ pub(crate) fn capture_client_rect(hwnd: HWND, rect: ShotRect) -> anyhow::Result<
         ..Default::default()
     };
 
-    let stride = dib_stride(rect.width);
-    let mut rows = vec![0u8; stride * rect.height as usize];
+    let stride = dib_stride(width);
+    let mut rows = vec![0u8; stride * height as usize];
     let copied = unsafe {
         GetDIBits(
-            screen.0,
-            bitmap.0,
+            screen,
+            bitmap,
             0,
-            rect.height,
+            height,
             Some(rows.as_mut_ptr().cast()),
             &mut info,
             DIB_RGB_COLORS,
         )
     };
-    if copied != height {
-        bail!("GetDIBits copied {copied} of {height} scan lines");
+    if copied != signed_height {
+        bail!("GetDIBits copied {copied} of {signed_height} scan lines");
     }
 
     Ok(DibImage {
-        width: rect.width,
-        height: rect.height,
+        width,
+        height,
         rows,
     })
 }
@@ -242,7 +332,7 @@ pub(crate) fn capture_client_rect(hwnd: HWND, rect: ShotRect) -> anyhow::Result<
 ///
 /// Returns:
 ///     Nothing; restores `previous` when it is valid.
-fn restore_selection(dc: HDC, previous: HGDIOBJ) {
+pub(super) fn restore_selection(dc: HDC, previous: HGDIOBJ) {
     if !previous.is_invalid() {
         unsafe { SelectObject(dc, previous) };
     }
@@ -263,6 +353,11 @@ pub(super) fn dib_header_bytes(image: &DibImage) -> Vec<u8> {
     let header = BITMAPINFOHEADER {
         biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>())
             .expect("BITMAPINFOHEADER fits in u32"),
+        // Plain casts, and that is safe HERE rather than everywhere: every caller validates the
+        // image with `DibImage::is_consistent` and bounds both dimensions to `i32` before staging
+        // a `CF_DIB` body, so a value that could truncate never reaches this function. The check
+        // lives at the hand-off because that is where a bad value would become an OS-side read;
+        // repeating it here would only move the question, not answer it.
         biWidth: image.width as i32,
         biHeight: image.height as i32,
         biPlanes: 1,
@@ -281,3 +376,6 @@ pub(super) fn dib_header_bytes(image: &DibImage) -> Vec<u8> {
     };
     bytes.to_vec()
 }
+
+#[cfg(test)]
+mod tests;

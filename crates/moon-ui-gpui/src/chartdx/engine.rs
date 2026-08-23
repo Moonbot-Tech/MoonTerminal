@@ -320,6 +320,39 @@ impl ChartEngine {
             .filter(|ticker| !ticker.is_empty())
     }
 
+    /// Returns the first active pane's Y-scale badge, as a whole percentage of the visible range.
+    ///
+    /// Read rather than recomputed, for the same reason [`Self::pane_ticker`] is: the value is
+    /// decided by `scale_badge_pct` and cached during `sync_from_market_source`, and that decision
+    /// is more than a division — an untouched fixed percentage that already matches the selected
+    /// step is deliberately HIDDEN, and manual and auto price modes answer differently. A second
+    /// derivation elsewhere would be free to disagree, and the surface that reads this is the chart
+    /// SHOT, where the symptom would be a burnt-in figure contradicting the badge visible in the
+    /// very same picture.
+    ///
+    /// `None` means the chart is showing no badge, which is not the same fact as a zero.
+    ///
+    /// The CONFIGURATION is consulted before the cache, and that order is the whole point. Hiding
+    /// the badge's row — or the caption itself — removes it from the chart without clearing the
+    /// value cached behind it, because `sync_from_market_source` caches what the view is doing and
+    /// not what the captions print. A reader that took the cache alone would burn a scale into a
+    /// picture that visibly has none, which is the exact disagreement this accessor exists to make
+    /// impossible.
+    pub fn scale_badge(&self) -> Option<i32> {
+        let state = self.state.borrow();
+        if !state
+            .chart_labels
+            .any_drawn(|field| field == moon_core::config::ChartLabelField::ScaleBadge)
+        {
+            return None;
+        }
+        state
+            .panes
+            .iter()
+            .find(|p| p.active)
+            .and_then(|p| p.scale_badge)
+    }
+
     /// Returns the first active pane's last price, which the anchor supplies for neighbor deltas.
     pub fn last_price(&self) -> Option<f64> {
         self.state
@@ -477,6 +510,20 @@ impl ChartEngine {
         records: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
     ) -> bool {
         self.data.borrow_mut().set_trade_history(records)
+    }
+
+    /// Draw a frozen trade replay instead of the live market source.
+    ///
+    /// Only the trade window calls this, on the engine it owns. Every other engine leaves the
+    /// field `None` and keeps the live path it always had.
+    ///
+    /// Args:
+    ///     series: The frozen series, or `None` to return to the live source.
+    pub(crate) fn set_trade_replay(
+        &mut self,
+        series: Option<std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
+    ) {
+        self.data.borrow_mut().set_trade_replay(series);
     }
 
     /// Set the trade arrow under the cursor, which draws grown and fully opaque.

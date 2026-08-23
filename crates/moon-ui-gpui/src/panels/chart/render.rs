@@ -301,7 +301,13 @@ impl Render for ChartPanel {
         // A visible book already marks this area, so do not duplicate it. Tuple fields are
         // (idx, logical left, logical top, logical width, logical height), converted from axis_panes
         // device pixels by dividing by ppp, like the close buttons.
-        let show_zone_marker = self.show_zone && self.separate_zones(cx) && !self.orderbook_enabled;
+        // `!self.historical` for the reason the strip exists at all: it marks where an
+        // order-placement click lands, and a historical viewer places no orders. Shading a strip
+        // for a gesture that was just removed would leave the window still saying "trading here".
+        let show_zone_marker = self.show_zone
+            && !self.historical
+            && self.separate_zones(cx)
+            && !self.orderbook_enabled;
         let zone_markers: Vec<(usize, f32, f32, f32, f32)> = if show_zone_marker {
             axis_panes
                 .iter()
@@ -341,6 +347,11 @@ impl Render for ChartPanel {
         // the mirrored MoonUI metrics live in exactly one place. This layout controls button
         // width from the available chart zone.
         let act_btn_h = crate::design::micro_control_h_value(cx);
+        // A HISTORICAL VIEWER builds NEITHER market action — not a disabled one, not a hidden one:
+        // both placement paths below are skipped whole, so nothing named `Cancel Buy` or
+        // `Panic Sell` reaches the element tree of a window showing a trade that already closed.
+        // Every live chart has `historical == false` and reaches exactly the code it always did.
+        let market_actions = !self.historical;
         let cancel_pos = self.cancel_buy_pos;
         let panic_pos = self.panic_sell_pos;
         // For the container's populated pane, place buttons through the GPUI `action_overlay` below
@@ -360,7 +371,7 @@ impl Render for ChartPanel {
             String,
             bool,
         )> = Vec::new();
-        if !single_pane && !self.orderbook_only {
+        if market_actions && !single_pane && !self.orderbook_only {
             for (idx, rect, _) in axis_panes.iter() {
                 let Some((core, market)) = self.chart.pane_target(*idx) else {
                     continue;
@@ -464,7 +475,7 @@ impl Render for ChartPanel {
         // The chart zone is the slot minus the configured-side price-axis gutter, right
         // book/control zone, and bottom time axis. Its regions correspond to Left/Center/Right
         // anchors.
-        let action_overlay = if single_pane {
+        let action_overlay = if market_actions && single_pane {
             self.chart.pane_target(0).and_then(|(core, market)| {
                 let backend = self.backend.read(cx);
                 let armed = backend.is_panic_armed(core, &market);

@@ -522,6 +522,31 @@ impl ReportPanel {
                 MoonMenuItem::with_key("rep-row-trade-log", t!(reason).to_string()).disabled(true)
             }
         }];
+        // The DISCOVERABLE path to the trade window: a double-click is invisible, and it is also
+        // the only place a "why not" can be shown at all, since a double-click has nowhere to put
+        // one.
+        let detail_view = cx.entity();
+        let mut trade_log = trade_log;
+        // Resolved HERE, not in the callback. A Report refresh republishes the rows while the menu
+        // is open, so a retained row INDEX would let the action land on a different trade; the
+        // resolved target is carried instead, exactly as the trade-log entry above carries its
+        // request.
+        trade_log.push(match self.trade_detail_target(row, cx) {
+            Some(target) => {
+                MoonMenuItem::with_key("rep-row-trade-window", super::trade_detail::menu_label())
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        let target = target.clone();
+                        detail_view
+                            .update(app, |this, cx| this.open_trade_detail_target(target, cx));
+                    })
+            }
+            None => MoonMenuItem::with_key(
+                "rep-row-trade-window",
+                t!("trade_window.blocked.unresolved").to_string(),
+            )
+            .disabled(true),
+        });
         // With no explicit filter the coin actions may act on every core the selector currently
         // knows, exactly as the coin cell's menu did.
         let selected_cores = self.effective_core_ids(self.backend.read(cx));
