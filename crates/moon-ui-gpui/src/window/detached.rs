@@ -495,25 +495,30 @@ impl Render for DetachedWindow {
     ///
     /// Returns:
     ///     Full-window element containing the detached panel titlebar and live content.
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::DETACHED_RENDER);
         // Detached panels share Main's group but live in a separate OS window whose mouse movement
         // Shell cannot observe. Record group activity from any widget in this active window so Main's
         // inactivity policy does not close its chart while the user works in a detached panel.
-        {
+        //
+        // Registered through a paint-phase hook rather than called here: `on_mouse_event`
+        // belongs to paint and `render` runs a phase earlier (`window::input_hook`).
+        let activity_hook = {
             let backend = self.backend.clone();
             let group = self.group.clone();
-            // Use the capture phase, as Shell does, so activity is recorded before bubble handlers
-            // and cannot be suppressed by their stop_propagation calls.
-            window.on_mouse_event::<MouseMoveEvent>(move |_e, phase, window, cx| {
-                if phase == DispatchPhase::Capture && window.is_window_active() {
-                    backend.update(cx, |b, bcx| {
-                        b.note_main_input(&group);
-                        b.focus_auto_workspace(&group, bcx);
-                    });
-                }
-            });
-        }
+            // Use the capture phase, as Shell does, so activity is recorded before bubble
+            // handlers and cannot be suppressed by their stop_propagation calls.
+            crate::window::input_hook::window_mouse_hook(
+                move |_e: &MouseMoveEvent, phase, window: &mut Window, cx| {
+                    if phase == DispatchPhase::Capture && window.is_window_active() {
+                        backend.update(cx, |b, bcx| {
+                            b.note_main_input(&group);
+                            b.focus_auto_workspace(&group, bcx);
+                        });
+                    }
+                },
+            )
+        };
         let p = MoonPalette::active(cx);
         let title = format!(
             "{} · {}",
@@ -567,6 +572,8 @@ impl Render for DetachedWindow {
                     .overflow_hidden()
                     .child(self.content.clone()),
             )
+            // The window-level activity hook, installed when this is painted.
+            .child(activity_hook)
     }
 }
 

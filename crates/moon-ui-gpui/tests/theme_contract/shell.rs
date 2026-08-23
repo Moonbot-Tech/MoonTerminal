@@ -1618,9 +1618,14 @@ fn bare_key_bindings_ignore_a_refocused_state_and_a_mouse_gesture() {
                 source.contains("modifier_watch.interrupt()"),
                 "{name} must withdraw a lone-modifier tap when a mouse gesture starts"
             );
+            // Through `window::input_hook`, not inline: `Window::on_mouse_event` belongs to the
+            // paint phase and `render` runs a phase earlier, which is a debug assertion in the
+            // fork and killed the UI-atlas capture build on its first frame. What must not change
+            // is that the listener is a WINDOW-level one - the chart consumes its own presses, so
+            // a listener on the root element never sees them.
             assert!(
-                source.contains("on_mouse_event::<MouseDownEvent>"),
-                "{name} must take mouse-down at the window level: the chart consumes its own presses"
+                source.contains("window_mouse_hook(") && source.contains("&MouseDownEvent"),
+                "{name} must take mouse-down at the window level, through window::input_hook"
             );
         }
     }

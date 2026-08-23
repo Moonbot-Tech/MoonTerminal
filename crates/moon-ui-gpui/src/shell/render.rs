@@ -9,6 +9,7 @@ use moon_ui::{MoonPalette, MoonWindowFrame, v_flex};
 
 use super::Shell;
 use crate::chrome::terminal_chrome;
+use crate::window::input_hook::window_mouse_hook;
 use crate::{controls, design};
 
 impl Shell {
@@ -187,28 +188,33 @@ impl Render for Shell {
         // Use the capture phase rather than bubble: the chart's element-level mouse-move handler
         // calls `stop_propagation`, which would suppress a bubble listener. Capture runs first, so
         // movement over the chart cannot be missed and accidentally trigger inactivity closure.
-        {
+        //
+        // Registered through a paint-phase hook rather than called here: `on_mouse_event`
+        // belongs to paint and `render` runs a phase earlier (`window::input_hook`).
+        let activity_hook = {
             let backend = self.backend.clone();
             let group = self.group.clone();
-            window.on_mouse_event::<MouseMoveEvent>(move |_e, phase, window, cx| {
+            window_mouse_hook(move |_e: &MouseMoveEvent, phase, window: &mut Window, cx| {
                 if phase == DispatchPhase::Capture && window.is_window_active() {
                     backend.update(cx, |b, _| b.note_main_input(&group));
                 }
-            });
-        }
+            })
+        };
 
         // A modifier held for a MOUSE gesture — the Ctrl+Left order move, an Alt drag — is a
         // prefix too, and releasing it must not fire a lone-modifier binding. Window-level and in
         // the capture phase for the same reason as the move listener above: the chart consumes its
         // own presses, so a bubble listener on the root would never see them.
-        {
+        //
+        // Same hook, same reason.
+        let modifier_hook = {
             let view = cx.entity();
-            window.on_mouse_event::<MouseDownEvent>(move |_e, phase, _window, cx| {
+            window_mouse_hook(move |_e: &MouseDownEvent, phase, _window: &mut Window, cx| {
                 if phase == DispatchPhase::Capture {
                     view.update(cx, |this, _| this.modifier_watch.interrupt());
                 }
-            });
-        }
+            })
+        };
 
         v_flex()
             .size_full()
@@ -282,5 +288,8 @@ impl Render for Shell {
             // Header price-ticker source picker and its dismiss layer.
             .children(ticker_dismiss)
             .children(ticker_overlay)
+            // The window-level input hooks, installed when these are painted.
+            .child(activity_hook)
+            .child(modifier_hook)
     }
 }

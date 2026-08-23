@@ -126,14 +126,19 @@ impl Render for DetachedChartHost {
         // A modifier held for a MOUSE gesture is a prefix too, and releasing it must not fire a
         // lone-modifier binding. Window-level and in the capture phase: the chart consumes its own
         // presses, so a bubble listener on this root would never see them.
-        {
+        //
+        // Registered through a paint-phase hook rather than called here: `on_mouse_event`
+        // belongs to paint and `render` runs a phase earlier (`window::input_hook`).
+        let modifier_hook = {
             let view = cx.entity();
-            window.on_mouse_event::<MouseDownEvent>(move |_e, phase, _window, cx| {
-                if phase == DispatchPhase::Capture {
-                    view.update(cx, |this, _| this.modifier_watch.interrupt());
-                }
-            });
-        }
+            crate::window::input_hook::window_mouse_hook(
+                move |_e: &MouseDownEvent, phase, _window: &mut Window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        view.update(cx, |this, _| this.modifier_watch.interrupt());
+                    }
+                },
+            )
+        };
         // Only detached tab windows have this header; the main dock does not. Scale is on the left,
         // and "close all charts" is on the right.
         v_flex()
@@ -289,5 +294,7 @@ impl Render for DetachedChartHost {
             )
             .children(coin_dismiss)
             .children(coin_popup)
+            // The window-level modifier watch, installed when this is painted.
+            .child(modifier_hook)
     }
 }
