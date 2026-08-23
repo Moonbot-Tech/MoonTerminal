@@ -1,4 +1,5 @@
 mod archive;
+mod history;
 #[cfg(test)]
 mod label_tests;
 mod read;
@@ -889,8 +890,8 @@ struct MarketDataSourceInner {
     /// identifies one core rather than the exchange.
     provider_exchange: HashMap<CoreId, crate::feed::ExchangeId>,
     /// Who may currently ask the core for a coarse-timeframe native backfill; see
-    /// [`read::NativeBackfillGate`], which owns the claim state and the whole rationale.
-    native_backfill: read::NativeBackfillGate,
+    /// [`history::NativeBackfillGate`], which owns the claim state and the whole rationale.
+    native_backfill: history::NativeBackfillGate,
     /// Who has already been asked for a core chart archive; see [`archive`].
     ///
     /// Shared behind an `Arc` so the chart read can take its handle in the same guard that

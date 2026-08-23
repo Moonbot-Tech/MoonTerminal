@@ -1592,9 +1592,15 @@ fn analytics_core_metadata_is_throttled_across_tabs() {
 #[test]
 fn the_analytics_render_root_schedules_no_repaints() {
     let src = read_src("analytics/mod.rs");
+    let render_src = read_src("analytics/render.rs");
+
+    assert!(
+        src.contains("mod render;"),
+        "the Analytics module must wire the extracted render implementation"
+    );
 
     // Guard the render root as well as its predicate so scheduling cannot move one line outward.
-    let render = braced_body(&src, "fn render(&mut self, window: &mut Window");
+    let render = braced_body(&render_src, "fn render(&mut self, window: &mut Window");
     for scheduler in ["cx.spawn(", "spawn_in(", ".timer(", "on_next_frame("] {
         assert!(
             !render.contains(scheduler),
@@ -2070,6 +2076,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
     );
 
     let analytics = read_src("analytics/mod.rs");
+    let analytics_render = read_src("analytics/render.rs");
     let adopt = braced_body(&analytics, "fn observe_valuation_mode(");
     assert!(
         adopt.contains("self.reload(cx)"),
@@ -2083,7 +2090,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
         "the mode must be adopted from the periodic poll"
     );
     let render = braced_body(
-        &analytics,
+        &analytics_render,
         "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)",
     );
     for banned in ["observe_report_generation(", "observe_valuation_mode("] {
