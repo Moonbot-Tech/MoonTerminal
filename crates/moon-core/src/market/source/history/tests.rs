@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
-/// `read.rs:native_backfill_due` must keep an elapsed retry due while a just-claimed or
+/// `history.rs:native_backfill_due` must keep an elapsed retry due while a just-claimed or
 /// clock-earlier retry remains blocked; changing the due comparison would either suppress missing
 /// history or multiply requests against the MoonBot core.
 #[test]
@@ -29,7 +29,7 @@ fn native_backfill_due_obeys_elapsed_retry_and_clock_order() {
     ));
 }
 
-/// `read.rs:history_retry_next_delay_s` must retain the documented 30, 60, 120, 240, 480, 600
+/// `history.rs:history_retry_next_delay_s` must retain the documented 30, 60, 120, 240, 480, 600
 /// sequence; removing its floor or cap would respectively hammer or silently starve history
 /// recovery after a transient core disconnect.
 #[test]
@@ -48,7 +48,7 @@ fn history_retry_delay_stays_floored_and_capped() {
     assert_eq!(actual, [30, 60, 120, 240, 480, 600, 600]);
 }
 
-/// `read.rs:history_retry_next_delay_s` must normalize a recorded zero into the retry band and
+/// `history.rs:history_retry_next_delay_s` must normalize a recorded zero into the retry band and
 /// resume at the doubled 30-second floor; restarting below that schedule would distort recovery.
 #[test]
 fn history_retry_delay_normalizes_zero_to_the_doubled_floor() {
@@ -61,14 +61,14 @@ fn history_retry_delay_normalizes_zero_to_the_doubled_floor() {
     );
 }
 
-/// `read.rs:history_retry_next_delay_s` must cap a u32::MAX prior delay without overflowing;
+/// `history.rs:history_retry_next_delay_s` must cap a u32::MAX prior delay without overflowing;
 /// losing that guard would crash the terminal's retry path instead of safely preserving history.
 #[test]
 fn history_retry_delay_handles_u32_max_without_overflow() {
     assert_eq!(history_retry_next_delay_s(Some(u32::MAX)), 600);
 }
 
-/// `read.rs:NativeBackfillGate::claim` must spend exactly five claims before refusing a key;
+/// `history.rs:NativeBackfillGate::claim` must spend exactly five claims before refusing a key;
 /// removing the budget would keep an unfillable market consuming the core's exchange-request
 /// allowance indefinitely.
 #[test]
@@ -87,7 +87,7 @@ fn native_backfill_gate_spends_the_five_claim_budget() {
     assert_eq!(gate.claim(key, now), None);
 }
 
-/// `read.rs:NativeBackfillGate::{claim,forget_provider,retain_providers,clear}` must claim before
+/// `history.rs:NativeBackfillGate::{claim,forget_provider,retain_providers,clear}` must claim before
 /// queueing and restore only dropped providers' budgets; delaying the claim or skipping a reset
 /// would respectively duplicate a request across panels or leave a replacement core without history.
 #[test]
