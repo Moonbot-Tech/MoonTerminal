@@ -1,3 +1,4 @@
+mod arb;
 mod archive;
 mod history;
 #[cfg(test)]
@@ -891,6 +892,18 @@ struct MarketDataSourceInner {
     /// survive selected-provider changes. `CoreId` itself is a stable uid since schema v11, but it
     /// identifies one core rather than the exchange.
     provider_exchange: HashMap<CoreId, crate::feed::ExchangeId>,
+    /// What every core is connected to, as the session identified it.
+    ///
+    /// Wider than `provider_exchange` beside it, which holds only elected providers: the arbitrage
+    /// column has to know the venue of the core a PANE sits on, whoever serves its prices, to keep
+    /// that venue out of its own column.
+    core_venue: HashMap<CoreId, crate::venue::CoreVenue>,
+    /// Arbitrage quotes by coin; see [`arb`] for why they are not per core.
+    ///
+    /// Behind its own `Mutex` inside this lock so a read that takes minutes' worth of market locks
+    /// does not hold the source's write side. Never lock it while holding the source lock for
+    /// anything but a copy.
+    arb_book: Arc<Mutex<arb::ArbBook>>,
     /// Who may currently ask the core for a coarse-timeframe native backfill; see
     /// [`history::NativeBackfillGate`], which owns the claim state and the whole rationale.
     native_backfill: history::NativeBackfillGate,

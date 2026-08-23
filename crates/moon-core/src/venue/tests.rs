@@ -1,6 +1,6 @@
 use moonproto::ExchangeCode;
 
-use super::{arb_alias, venue, Brand, CoreVenue, MarketKind, Venue, ARB_VENUES};
+use super::{arb_alias, arb_row_matches, venue, Brand, CoreVenue, MarketKind, Venue, ARB_VENUES};
 use crate::symbol::Exchange;
 
 /// The ordinals are wire values, so the oracle is moonproto's own constants rather than the
@@ -284,4 +284,53 @@ fn market_kinds_have_distinct_label_keys() {
     let mut deduped = sorted.to_vec();
     deduped.dedup();
     assert_eq!(deduped.len(), unique, "market-kind keys must be distinct");
+}
+
+fn core_venue(code: u8, dex: &str) -> CoreVenue {
+    CoreVenue {
+        id: crate::feed::ExchangeId::with_dex(code, dex),
+        dex: dex.to_string(),
+        reported: String::new(),
+    }
+}
+
+/// An ordinary exchange is matched by its platform ordinal, which the arbitrage code copies.
+#[test]
+fn an_exchange_matches_the_core_on_the_same_platform() {
+    assert!(core_venue(4, "").matches_arb(4, ""));
+    assert!(!core_venue(3, "").matches_arb(4, ""));
+}
+
+/// A Hyperliquid deployer shares the futures ordinal with every other deployer, so only its DEX
+/// name identifies it — and a plain Hyperliquid core is NOT one of them.
+#[test]
+fn a_deployer_matches_by_its_dex_name() {
+    assert!(core_venue(13, "hyna").matches_arb(51, "hyna"));
+    assert!(!core_venue(13, "para").matches_arb(51, "hyna"));
+    assert!(
+        !core_venue(13, "").matches_arb(51, "hyna"),
+        "plain Hyperliquid futures is not the hyna deployer"
+    );
+}
+
+/// The other direction of the same rule: a core WITH a DEX is not the exchange the ordinal names,
+/// or every deployer would answer for Hyperliquid futures itself.
+#[test]
+fn an_exchange_does_not_match_a_core_with_a_dex() {
+    assert!(!core_venue(13, "xyz").matches_arb(13, ""));
+    assert!(core_venue(13, "").matches_arb(13, ""));
+}
+
+/// The free function and the method are one rule, so the caption pass — which holds bare pairs —
+/// cannot dim a row the click would open.
+#[test]
+fn the_pair_form_answers_exactly_like_the_venue_form() {
+    for (code, dex) in [(4u8, ""), (13, "hyna"), (13, "")] {
+        for row in [(4u8, ""), (51, "hyna"), (13, "")] {
+            assert_eq!(
+                arb_row_matches((code, dex), row),
+                core_venue(code, dex).matches_arb(row.0, row.1),
+            );
+        }
+    }
 }

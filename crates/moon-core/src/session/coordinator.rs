@@ -238,6 +238,10 @@ impl SessionManager {
             .collect();
         self.market_source
             .set_provider_exchanges(&provider_exchange);
+        // Every core's venue, not just the elected providers': the arbitrage column keeps a pane's
+        // own exchange out of its own column, and a pane sits on a core whether or not that core
+        // serves prices.
+        self.market_source.set_core_venues(&self.core_venue);
         self.core_provider = new_core_provider;
     }
 }

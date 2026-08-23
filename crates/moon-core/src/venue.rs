@@ -123,6 +123,29 @@ impl CoreVenue {
         venue(self.id.code)
     }
 
+    /// Whether this core is connected to the venue an arbitrage row names.
+    ///
+    /// THE one spelling of that rule, because three places ask it: the chart dims a row with no
+    /// core behind it, a click on the row opens the coin on that core, and the column drops the
+    /// row for the chart's own venue. Three readings of it would let a row be clickable and
+    /// undimmed and still be the chart's own exchange.
+    ///
+    /// An arbitrage platform code IS the core's platform ordinal for an ordinary exchange — the
+    /// protocol builds one from the other by copying the byte — so those compare directly. A
+    /// Hyperliquid deployer is the exception: every deployer shares the futures ordinal, and only
+    /// the DEX name tells them apart. Which is also why an ordinary exchange must NOT match a core
+    /// that has a DEX: `xyz` and plain Hyperliquid futures would otherwise be the same venue.
+    ///
+    /// Args:
+    ///     code: Platform code of the arbitrage row.
+    ///     dex: DEX name the row carries, empty for an ordinary exchange.
+    ///
+    /// Returns:
+    ///     `true` when this core is that venue.
+    pub fn matches_arb(&self, code: u8, dex: &str) -> bool {
+        arb_row_matches((self.id.code, self.dex.as_str()), (code, dex))
+    }
+
     /// Return the brand whose logo represents this venue.
     ///
     /// Returns:
@@ -399,6 +422,26 @@ pub const ARB_VENUES: [(u8, &str); 19] = [
     // Delisted, and `ExchangeCode::WasBittrex` for that reason, but an old core can still quote it.
     (1, "Bittrex"),
 ];
+
+/// Whether a core's venue is the venue an arbitrage row names.
+///
+/// Free-standing because one caller has no [`CoreVenue`] in hand: the chart's caption pass carries
+/// the connected venues as bare `(code, dex)` pairs, having resolved them once for a whole sync
+/// rather than per pane. The rule is stated once here and read three times; see
+/// [`CoreVenue::matches_arb`] for why it is not a plain code comparison.
+///
+/// Args:
+///     core: Platform ordinal and DEX name of the core.
+///     row: Platform code and DEX name of the arbitrage row.
+///
+/// Returns:
+///     `true` when the core is connected to that venue.
+pub fn arb_row_matches(core: (u8, &str), row: (u8, &str)) -> bool {
+    match row.1.is_empty() {
+        true => core.0 == row.0 && core.1.is_empty(),
+        false => core.1 == row.1,
+    }
+}
 
 /// What one platform code is CALLED in an arbitrage column.
 ///

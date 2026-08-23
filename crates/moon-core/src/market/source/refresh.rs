@@ -33,6 +33,8 @@ impl MarketDataSource {
                 candle_subs: std::sync::Mutex::new(HashMap::new()),
                 kline_cache: None,
                 provider_exchange: HashMap::new(),
+                core_venue: HashMap::new(),
+                arb_book: Default::default(),
                 native_backfill: Default::default(),
                 archive: Default::default(),
             })),
@@ -246,6 +248,13 @@ impl MarketDataSource {
         // WITHIN one slot; replacing the slot has to drop them.
         inner.archive.forget_provider(core);
         inner.native_backfill.forget_provider(core);
+        // A new client slot is a new market universe: its arbitrage quotes, and the answers about
+        // which market carries which coin on it, are about the slot that just went away.
+        inner
+            .arb_book
+            .lock()
+            .expect("arb book poisoned")
+            .forget_core(core);
         bump_generation(&mut inner.provider_generations, core);
     }
 
@@ -261,9 +270,29 @@ impl MarketDataSource {
         inner.market_revisions.remove(&core);
         inner.provider_orderbook_kind.remove(&core);
         inner.core_provider.remove(&core);
+        inner.core_venue.remove(&core);
         inner.archive.forget_provider(core);
         inner.native_backfill.forget_provider(core);
+        inner
+            .arb_book
+            .lock()
+            .expect("arb book poisoned")
+            .forget_core(core);
         bump_generation(&mut inner.provider_generations, core);
+    }
+
+    /// Publish what each core is connected to, for the reads that need a venue rather than a
+    /// provider.
+    ///
+    /// Separate from `set_provider_exchanges` beside it, which covers only elected providers: the
+    /// arbitrage column asks about the venue of the core a PANE sits on. Cheap and called on the
+    /// same reconciliation, so the map cannot lag an identity that just arrived.
+    pub fn set_core_venues(&self, venues: &HashMap<CoreId, crate::venue::CoreVenue>) {
+        let mut inner = self.inner.write().expect("market source poisoned");
+        if inner.core_venue == *venues {
+            return;
+        }
+        inner.core_venue = venues.clone();
     }
 
     pub fn set_provider_map(&self, core_provider: &HashMap<CoreId, CoreId>) {
