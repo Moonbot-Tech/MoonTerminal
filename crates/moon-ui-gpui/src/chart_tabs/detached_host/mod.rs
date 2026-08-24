@@ -9,6 +9,7 @@ use moon_ui::{MoonInputEvent, MoonInputState};
 use rust_i18n::t;
 use std::time::Duration;
 
+use super::add_stack::detect_cap::resolved_max_charts_evict;
 use super::apply_all::{self, ApplyAll, ApplyAllRequest};
 use super::common::{
     CoinPopupHost, LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting,
@@ -302,8 +303,10 @@ impl DetachedChartHost {
                 panel.update(cx, |p, pcx| p.set_arrival_flash(saved_arrival_flash, pcx));
             }
             // A detached AddToChart window keeps receiving its tab's detects, so its cap has to be
-            // back BEFORE the first of them arrives — otherwise the window reopens uncapped and the
-            // popup's first commit writes that emptiness back over the stored number.
+            // back BEFORE the first of them arrives — otherwise the window reopens on the built-in
+            // default instead of the stored number, and its popup's first commit writes that back.
+            // Skipping the call when BOTH halves are unset is what keeps a tab unconfigured across
+            // a restart rather than materializing today's default into it.
             if saved_max_charts.0.is_some() || saved_max_charts.1.is_some() {
                 panel.update(cx, |p, pcx| {
                     p.set_max_charts(saved_max_charts.0, saved_max_charts.1, pcx)
@@ -830,7 +833,7 @@ impl LayoutPopupHost for DetachedChartHost {
             line_labels: p.line_labels().unwrap_or(true),
             cursor_labels: p.cursor_labels().unwrap_or(true),
             arrival_flash: p.arrival_flash().unwrap_or(true),
-            max_charts_evict: p.max_charts_evict().unwrap_or(false),
+            max_charts_evict: resolved_max_charts_evict(p.max_charts_evict()),
         }
     }
     fn popup_is_custom(&self, cx: &App) -> bool {
@@ -862,7 +865,7 @@ impl LayoutPopupHost for DetachedChartHost {
             height_scroll,
             scale,
             orientation,
-            self.read_max_charts(cx),
+            self.cap_to_persist(cx),
             {
                 let (columns, exact, _) = self.current_grid(cx);
                 (columns, exact, self.read_min_slot(cx))

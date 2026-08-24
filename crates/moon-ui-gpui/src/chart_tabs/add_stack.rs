@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
-mod detect_cap;
+pub(in crate::chart_tabs) mod detect_cap;
 
 use super::stack::grid;
 use super::stack::{
@@ -83,10 +83,11 @@ pub(crate) struct AddChartStack {
     measured: Rc<Cell<Size<Pixels>>>,
     /// Whether an arriving chart flashes its accent border (per window). `None` = enabled.
     arrival_flash: Option<bool>,
-    /// Cap on charts a DETECT may open here (per window). `None` or zero = uncapped.
+    /// Cap on charts a DETECT may open here (per window). `None` = the built-in default cap;
+    /// `Some(0)` = uncapped. Resolved through `detect_cap::resolved_max_charts`.
     max_charts: Option<u16>,
-    /// What a detect does at the cap: replace the stalest chart when `Some(true)`, otherwise go
-    /// unshown. `None` = drop, so a cap on its own never closes a chart.
+    /// What a detect does at the cap: replace the stalest chart when `Some(true)`, go unshown when
+    /// `Some(false)`. `None` = the built-in default, which replaces the stalest chart.
     max_charts_evict: Option<bool>,
     /// Positions of the Cancel Buy / Panic Sell buttons in the chart zone (per window).
     /// `None` = default Right.
