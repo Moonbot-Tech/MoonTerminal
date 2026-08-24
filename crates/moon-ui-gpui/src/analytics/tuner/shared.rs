@@ -8,6 +8,7 @@ use gpui::*;
 use moon_ui::{
     MoonDisclosure, MoonDisclosureDirection, MoonPalette, MoonTooltipView, h_flex, v_flex,
 };
+use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use crate::design;
@@ -210,4 +211,51 @@ pub(super) fn collapse_caret(
         .tooltip(tip)
         .on_toggle(on_toggle)
         .into_any_element()
+}
+
+impl AnalyticsView {
+    /// The narrow full-height rail between a tuning axis' left area and its right-hand column,
+    /// carrying the one caret that folds that column away.
+    ///
+    /// Built in BOTH states, and that is the whole point: once the column is gone this rail is
+    /// the only control left that can bring it back. Folding it into the expanded branch — while
+    /// "simplifying" a render guard, or because it reads as part of the column — makes the
+    /// collapse a one-way door whose state survives a restart, so the user's only recovery is
+    /// hand-editing `layout.toml`.
+    ///
+    /// A METHOD rather than a free function taking its tooltips, unlike [`collapse_caret`]: that
+    /// helper serves carets whose wording differs per card, while every rail in the tab is the
+    /// same control over the same flag, so all three axes would otherwise re-derive the same two
+    /// keys and the same listener.
+    ///
+    /// The caret is that shared [`collapse_caret`], so a horizontal fold borrows the page's
+    /// vertical up/down pose: `MoonDisclosureDirection` offers no horizontal pair, and agreeing
+    /// with the two carets already on this page beats axis-literalism. The tooltips carry the
+    /// meaning.
+    ///
+    /// Args:
+    ///     p: Active palette used for the caret's hover color.
+    ///     cx: GPUI context, for the UI-scaled rail width and the toggle listener.
+    ///
+    /// Returns:
+    ///     The rail, ready to sit between the left area and the column.
+    pub(super) fn side_rail(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        v_flex()
+            .flex_none()
+            // DISCLOSURE_BOX plus breathing room, through `ui_px` so the rail tracks the UI
+            // slider exactly as the caret's own `box_size` does.
+            .w(design::ui_px(cx, 16.0))
+            .h_full()
+            .items_center()
+            .justify_center()
+            .child(collapse_caret(
+                "an-tuner-side-collapse",
+                self.side_collapsed,
+                t!("analytics.tuner.side_collapse").to_string(),
+                t!("analytics.tuner.side_expand").to_string(),
+                p,
+                cx.listener(|this, _, _, cx| this.toggle_side_collapsed(cx)),
+            ))
+            .into_any_element()
+    }
 }

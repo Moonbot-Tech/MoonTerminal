@@ -431,6 +431,17 @@ pub struct AnalyticsView {
     /// `layout.analytics_hist_collapsed`; like `kpi_collapsed` a display lens, so toggling only
     /// repaints — the histogram keeps loading underneath.
     hist_collapsed: bool,
+    /// Collapse the tuner's whole RIGHT-HAND column — the shared "Fact vs variants" matrix and
+    /// the axis' own tool below it — so the strategy list takes the freed width. One flag serves
+    /// every axis, because it is the same column in each. Persisted in
+    /// `layout.analytics_tuner_side_collapsed`; like `kpi_collapsed` a display lens, so toggling
+    /// only repaints.
+    ///
+    /// Deliberately ORTHOGONAL to `kpi_collapsed`: folding the column away leaves the matrix's
+    /// own two-row collapse untouched, so restoring the column restores exactly the matrix the
+    /// user left inside it. Forcing either value here would destroy a choice they made on
+    /// purpose and persisted.
+    side_collapsed: bool,
     /// Threshold tuner (Filters mode), with its state defined in its own module.
     tuner: tuner::TunerState,
     /// The "By coin" mode: the table's view controls, the picked coins that define
@@ -626,6 +637,8 @@ impl AnalyticsView {
         let saved_kpi_collapsed = backend.read(cx).layout.analytics_kpi_collapsed;
         // Distribution card collapse state from the previous run (default expanded).
         let saved_hist_collapsed = backend.read(cx).layout.analytics_hist_collapsed;
+        // Right-column collapse state from the previous run (default expanded).
+        let saved_side_collapsed = backend.read(cx).layout.analytics_tuner_side_collapsed;
         // Visible strategy-list columns from the previous run, one mask per axis. An older
         // config holding the single-mask key seeds all three, so a choice already made is
         // carried over instead of reset; absent entirely, each axis takes its own default.
@@ -778,6 +791,7 @@ impl AnalyticsView {
             },
             kpi_collapsed: saved_kpi_collapsed,
             hist_collapsed: saved_hist_collapsed,
+            side_collapsed: saved_side_collapsed,
             tuner: tuner::TunerState::load(
                 saved_tuner_iters,
                 saved_tuner_edges,
@@ -1814,6 +1828,31 @@ impl AnalyticsView {
         self.hist_collapsed = !self.hist_collapsed;
         self.backend.update(cx, |b, _| {
             b.layout.analytics_hist_collapsed = self.hist_collapsed;
+            b.layout_dirty = true;
+        });
+        cx.notify();
+    }
+
+    /// Collapse/expand the tuner's whole right-hand column, in every axis at once. Collapsed
+    /// drops the "Fact vs variants" matrix and the axis' own tool below it, and the strategy
+    /// list takes the freed width; the rail carrying this caret stays on screen in both states,
+    /// because it is the only way back.
+    ///
+    /// A pure display lens, the widest one on this page, and the same rule as
+    /// `toggle_hist_collapsed` with three times the blast radius: it persists and repaints, and
+    /// it must NOT gate a read. Every axis' staleness gate — `TunerState::needs_reload` and its
+    /// coins/time equivalents — counts dirty flags that only a COMPLETED read clears, so
+    /// suppressing a read while the column is hidden would leave those flags permanently set:
+    /// the reload gate would re-fire every frame in all three axes, and expanding would show a
+    /// spinner where the user left numbers. Unlike `set_metric_choice`, this function must never
+    /// grow a reload.
+    ///
+    /// It also leaves `kpi_collapsed` alone. With the column not built the matrix is dormant
+    /// rather than contradictory, so expanding rebuilds it exactly as the user left it.
+    fn toggle_side_collapsed(&mut self, cx: &mut Context<Self>) {
+        self.side_collapsed = !self.side_collapsed;
+        self.backend.update(cx, |b, _| {
+            b.layout.analytics_tuner_side_collapsed = self.side_collapsed;
             b.layout_dirty = true;
         });
         cx.notify();

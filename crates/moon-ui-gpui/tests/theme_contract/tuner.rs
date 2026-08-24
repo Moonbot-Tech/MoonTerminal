@@ -916,6 +916,114 @@ fn the_distribution_card_collapse_is_a_display_lens_only() {
     }
 }
 
+/// `analytics/mod.rs::toggle_side_collapsed`: adding `self.reload(cx)`, dropping the layout-dirty
+/// write, or making a filter/coin/time read path inspect `side_collapsed` must fail this test.
+///
+/// The user-visible consequence is either a multi-axis rescan from a display-only caret, or an
+/// expanding column that shows a spinner because its hidden read never cleared the staleness gate.
+#[test]
+fn the_tuner_right_column_collapse_is_a_display_lens_only() {
+    let analytics = read_src("analytics/mod.rs");
+    let toggle = code_only(braced_body(&analytics, "fn toggle_side_collapsed("));
+
+    assert!(
+        toggle.contains("analytics_tuner_side_collapsed") && toggle.contains("layout_dirty = true"),
+        "toggle_side_collapsed must persist the choice and mark the layout dirty, or the display choice dies with the process"
+    );
+    assert!(
+        code_only(&analytics).contains(
+            "let saved_side_collapsed = backend.read(cx).layout.analytics_tuner_side_collapsed;"
+        ),
+        "AnalyticsView::new must seed side_collapsed from the persisted layout flag"
+    );
+    for (rel, src) in [
+        (
+            "analytics/tuner/filter/mod.rs",
+            read_src("analytics/tuner/filter/mod.rs"),
+        ),
+        (
+            "analytics/tuner/filter/state.rs",
+            read_src("analytics/tuner/filter/state.rs"),
+        ),
+        (
+            "analytics/tuner/coins/mod.rs",
+            read_src("analytics/tuner/coins/mod.rs"),
+        ),
+        (
+            "analytics/tuner/time/state.rs",
+            read_src("analytics/tuner/time/state.rs"),
+        ),
+    ] {
+        assert!(
+            !code_only(&src).contains("side_collapsed"),
+            "{rel} must not gate a completed read on the hidden right column; its dirty state would re-fire the reload gate"
+        );
+    }
+    assert!(
+        !toggle.contains("reload") && !toggle.contains("request_axis_if_stale"),
+        "toggle_side_collapsed is a display lens and must not trigger a multi-axis reload"
+    );
+}
+
+/// `AnalyticsView::side_rail`: moving either `self.side_rail(p, cx)` call inside its collapsed
+/// guard must fail this test, because a persisted collapse would leave no visible way to expand.
+#[test]
+fn the_tuner_right_column_rail_is_built_before_each_collapse_guard() {
+    let tuner = read_src("analytics/tuner/mod.rs");
+    let time = read_src("analytics/tuner/time/mod.rs");
+    let shared = read_src("analytics/tuner/shared.rs");
+    let strategies_tab = code_only(braced_body(&tuner, "pub(super) fn strategies_tab("));
+    let strat_time = code_only(braced_body(
+        &time,
+        "pub(in crate::analytics::tuner) fn strat_time(",
+    ));
+
+    for (name, body, guard) in [
+        (
+            "analytics/tuner/mod.rs::strategies_tab",
+            &strategies_tab,
+            "if !side_collapsed",
+        ),
+        (
+            "analytics/tuner/time/mod.rs::strat_time",
+            &strat_time,
+            "(!side_collapsed)",
+        ),
+    ] {
+        let rail = body
+            .find("let rail = self.side_rail(p, cx);")
+            .unwrap_or_else(|| panic!("{name} must bind its always-present side rail"));
+        let collapsed = body
+            .find(guard)
+            .unwrap_or_else(|| panic!("{name} must retain its expanded-only column guard"));
+        assert!(
+            rail < collapsed,
+            "{name} must build the side rail before the collapse guard, or a persisted collapse becomes a one-way door"
+        );
+        assert_eq!(
+            body.matches("self.side_rail(").count(),
+            1,
+            "{name} must have exactly one code-only side-rail call; a comment cannot satisfy this reachability check"
+        );
+    }
+
+    let rail = code_only(braced_body(&shared, "pub(super) fn side_rail("));
+    let caret = chain_between(
+        &rail,
+        "collapse_caret(",
+        ".into_any_element()",
+        "the tuner's side-rail caret",
+    );
+    assert!(
+        caret.contains("self.side_collapsed"),
+        "side_rail must pass its persisted collapse state to collapse_caret"
+    );
+    assert!(
+        !rail.contains("if self.side_collapsed") && !rail.contains("if !self.side_collapsed"),
+        "side_rail must never decide whether to exist from side_collapsed; both call sites keep it reachable"
+    );
+}
+
 /// A strategy-row click resolves its gesture through the pure `row_click_intent`, so the
 /// Shift-over-Ctrl precedence is decided somewhere a test can reach.
 ///
