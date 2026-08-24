@@ -318,12 +318,23 @@ impl ChartTabs {
             cx.notify();
             return;
         }
-        // Collect the same exact market from other group cores, at most one core per exchange; the
-        // anchor provider is already taken. Skip cores without a provider (no market snapshot),
-        // because their coin availability cannot be checked.
+        // Collect the same COIN from other group cores, at most one core per exchange; the anchor
+        // provider is already taken. Skip cores without a provider (no market snapshot), because
+        // their coin availability cannot be checked.
+        //
+        // By identity rather than by an identical market NAME, which is what this used to require:
+        // exchanges spell one coin `1000BONKUSDT`, `1kBONK`, `BONK_USDT` and `BONK-USDT-SWAP`, so
+        // the name test quietly limited the comparison to venues that happened to agree. The
+        // identity is the core's own (`MarketLabel::canonic`), and the market chosen on each core
+        // is the shared rule's — the perpetual over an expiry, the anchor's quote currency first,
+        // which is what keeps a BTC comparison from opening ten Bybit expiries.
         let coins: Vec<(CoreId, String)> = {
             let b = self.backend.read(cx);
             let ms = b.session.market_source();
+            let anchor = ms.market_label(core, &market);
+            // The identity is BOTH the query and the filter: a catalog search matches the literal
+            // text, and only `canonic` is spelled the same way on every exchange.
+            let wanted = anchor.identity();
             let mut used = std::collections::HashSet::new();
             used.insert(ms.provider_of(core));
             let mut out = vec![(core, market.clone())];
@@ -340,13 +351,14 @@ impl ChartTabs {
                 if provider.is_none() || used.contains(&provider) {
                     continue;
                 }
-                if ms
-                    .search_markets(s.id, &market, coin_search::COIN_SEARCH_LIMIT)
-                    .iter()
-                    .any(|m| m == &market)
-                {
+                let labelled = ms.labelled_search(s.id, &wanted, coin_search::COIN_MATCH_LIMIT);
+                if let Some(found) = moon_core::market::pick_market_for_identity(
+                    &labelled,
+                    &wanted,
+                    &anchor.quote,
+                ) {
                     used.insert(provider);
-                    out.push((s.id, market.clone()));
+                    out.push((s.id, found.to_string()));
                 }
             }
             out

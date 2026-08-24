@@ -373,17 +373,28 @@ impl MarketDataSource {
                             let coin = m.market_currency.trim();
                             (!coin.is_empty()).then(|| {
                                 let quote = m.base_currency.trim().to_ascii_uppercase();
+                                // What the NAME alone says, read ONCE: both fields below fall back
+                                // to it, and this runs per market of a search result.
+                                let from_name = MarketLabel::from_name(market, exchange);
                                 MarketLabel {
                                     coin: coin.to_string(),
+                                    // The core's own cross-exchange identity, carried whole. See
+                                    // `MarketLabel::canonic` for why it is not derived here.
+                                    canonic: m.market_currency_canonic.trim().to_string(),
                                     // A COIN-M contract reports no base currency at all, so its
                                     // quote comes from the name (`BTCUSD_PERP` → `USD`); without
                                     // this the pair collapses to a bare coin.
-                                    quote: if quote.is_empty() {
-                                        MarketLabel::from_name(market, exchange).quote
-                                    } else {
-                                        quote
+                                    quote: match quote.is_empty() {
+                                        true => from_name.quote,
+                                        false => quote,
                                     },
-                                    contract: None,
+                                    // The expiry the NAME carries, which the token often does not:
+                                    // Bybit's dated contract is the market `BTCUSDT-25SEP26` whose
+                                    // token is a flat `BTCUSDT25SEP`, and reading only the token
+                                    // made every one of its ten expiries look like a perpetual.
+                                    // COIN-M spells it inside the token (`BTC_0925`) and answers
+                                    // from there, so this fills a gap rather than competing.
+                                    contract: from_name.contract,
                                 }
                             })
                         })
@@ -1015,6 +1026,8 @@ impl MarketDataSource {
         let Some(queries) = crate::coin_naming::queries_for(core) else {
             return;
         };
+        // No snapshot is not "this core does not have the coin": the catalog arrives after the
+        // connection, so the sweep has to come back for it.
         let Some(snapshot) = self
             .core_client(core)
             .and_then(|client| client.snapshot_versioned())
@@ -1049,7 +1062,36 @@ impl MarketDataSource {
                 }));
             }
         }
-        crate::coin_naming::record_core(core, core_name, venue, &rows);
+        crate::coin_naming::record_core(core, core_name, venue, &rows, true);
+    }
+
+    /// Search one core's markets and label every hit, for a caller that filters by identity.
+    ///
+    /// The pairing is the shape [`super::pick_market_for_identity`] takes, and it exists as one
+    /// function because three callers build it — the arbitrage book, the comparison tab and the
+    /// arbitrage row's click — and a caller that zipped the two lists in a different order would
+    /// label markets with each other's names.
+    ///
+    /// Args:
+    ///     core: Core whose universe is searched.
+    ///     query: Text to search for; the coin's identity, for the callers here.
+    ///     limit: Most markets to take from this core.
+    ///
+    /// Returns:
+    ///     `(market name, label)` pairs, parallel and in the search's own ranking.
+    pub fn labelled_search(
+        &self,
+        core: CoreId,
+        query: &str,
+        limit: usize,
+    ) -> Vec<(String, MarketLabel)> {
+        let names = self.search_markets(core, query, limit);
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        names
+            .iter()
+            .cloned()
+            .zip(self.market_labels(core, &refs))
+            .collect()
     }
 
     /// Search the provider's market universe for a terminal coin-search box.

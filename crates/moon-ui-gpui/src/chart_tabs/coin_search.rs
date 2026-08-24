@@ -14,7 +14,7 @@
 //! [`super::common::coin_pick_handler`]).
 
 /// Maximum number of MoonProto search matches to retrieve per core.
-pub(super) use crate::controls::coin_search::COIN_SEARCH_LIMIT;
+pub(super) use crate::controls::coin_search::COIN_MATCH_LIMIT;
 /// Shared coin search and dropdown renderer (`pub(crate)` because the header price ticker in
 /// `shell/ticker.rs` also reuses it).
 pub(crate) use crate::controls::coin_search::{render_popup, search};

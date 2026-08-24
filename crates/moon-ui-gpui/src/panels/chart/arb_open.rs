@@ -145,6 +145,11 @@ impl ChartPanel {
     /// The coin is matched through the shared search — the same enumeration the News panel and the
     /// coin picker use — so a Hyperliquid spot index or a contract tail resolves the way it does
     /// everywhere else, rather than by a reading of the market's name here.
+    ///
+    /// WHICH of a core's markets is opened is the shared identity rule, not the first hit: a Bybit
+    /// core lists BTC under ten expiries beside the perpetual, and a click that opened one of those
+    /// would show a chart whose price differs from the row that was clicked. One market per core —
+    /// the perpetual, in the quote currency the click came from.
     fn cores_trading_here(
         &self,
         current: CoreId,
@@ -154,31 +159,43 @@ impl ChartPanel {
         cx: &Context<Self>,
     ) -> Vec<(CoreId, String)> {
         let b = self.backend.read(cx);
-        let coin = b
-            .session
-            .market_source()
-            .market_label(current, market)
-            .coin;
-        if coin.is_empty() {
+        let label = b.session.market_source().market_label(current, market);
+        let venues = b.session.core_venues();
+        // Searched by the IDENTITY the core resolved, not by this chart's spelling of the coin: a
+        // catalog is matched against the literal query, and `1kBONK` occurs in no field of the
+        // same coin's market on Binance. `canonic` is a field every catalog carries and its own
+        // search ranks among the first.
+        let wanted = label.identity();
+        if wanted.is_empty() {
             return Vec::new();
         }
-        let venues = b.session.core_venues();
-        let wanted = moon_core::symbol::coin_match_key(&coin);
-        let mut out: Vec<(CoreId, String)> = Vec::new();
-        for hit in coin_search::search(b, "", None, &coin) {
-            if hit.core == current || hit.label.match_key() != wanted {
+        // Every hit this core offers for the coin, so the identity rule picks among them rather
+        // than taking whichever the search ranked first.
+        let mut per_core: Vec<(CoreId, Vec<(String, moon_core::market::MarketLabel)>)> = Vec::new();
+        for hit in coin_search::search_limited(b, "", None, &wanted, coin_search::COIN_MATCH_LIMIT)
+        {
+            if hit.core == current {
                 continue;
             }
             let Some(venue) = venues.get(&hit.core) else {
                 continue;
             };
-            if venue.matches_arb(code, dex)
-                && !out.iter().any(|(existing, _)| *existing == hit.core)
-            {
-                out.push((hit.core, hit.market));
+            if !venue.matches_arb(code, dex) {
+                continue;
+            }
+            match per_core.iter_mut().find(|(core, _)| *core == hit.core) {
+                Some((_, hits)) => hits.push((hit.market, hit.label)),
+                None => per_core.push((hit.core, vec![(hit.market, hit.label)])),
             }
         }
-        out
+        per_core
+            .into_iter()
+            .filter_map(|(core, hits)| {
+                let market =
+                    moon_core::market::pick_market_for_identity(&hits, &wanted, &label.quote)?;
+                Some((core, market.to_string()))
+            })
+            .collect()
     }
 
     /// Open one target the way the pressed button asked.
