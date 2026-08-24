@@ -976,9 +976,9 @@ fn a_hidden_module_prints_nothing_at_all() {
 /// ROUNDED value: a coin-margined core reports fractions of a BTC, which two decimals cannot show.
 #[test]
 fn a_zero_core_pnl_prints_nothing() {
-    let figures_with = |session_pnl: Option<f64>| LabelInputs {
+    let figures_with = |core_pnl: Option<f64>| LabelInputs {
         figures: Some(moon_core::market::MarketFiguresReadout {
-            session_pnl,
+            core_pnl,
             ..Default::default()
         }),
         ..Default::default()
@@ -999,6 +999,37 @@ fn a_zero_core_pnl_prints_nothing() {
     let text = one_field(ChartLabelField::SessionPnl, figures_with(Some(-12.4)))
         .expect("a real amount prints");
     assert!(text.ends_with("-12.4"), "{text:?}");
+}
+
+/// The core's Session counter is the opposite case: the core states it as a snapshot of its own,
+/// so a zero MEANS "nothing since the reset" and only absence — a core too old to publish it at
+/// all — leaves the caption unprinted. The two must not be collapsed into one rule.
+#[test]
+fn a_zero_session_still_prints_but_an_absent_one_does_not() {
+    let figures_with = |session: Option<f64>| LabelInputs {
+        figures: Some(moon_core::market::MarketFiguresReadout {
+            session,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let zero = one_field(ChartLabelField::SessionProfit, figures_with(Some(0.0)))
+        .expect("a stated zero prints");
+    assert!(zero.ends_with('0') && !zero.contains('+'), "{zero:?}");
+    let dust = one_field(ChartLabelField::SessionProfit, figures_with(Some(-0.004)))
+        .expect("an amount that rounds away still prints its magnitude");
+    assert!(
+        !dust.contains('+') && !dust.contains('-'),
+        "a loss rounding to zero must not wear a plus: {dust:?}"
+    );
+    assert!(
+        one_field(ChartLabelField::SessionProfit, figures_with(None)).is_none(),
+        "a core that publishes no session profit prints nothing"
+    );
+    let text = one_field(ChartLabelField::SessionProfit, figures_with(Some(48.15)))
+        .expect("a real amount prints");
+    assert!(text.ends_with("+48.15"), "{text:?}");
 }
 
 /// A period's readout, as the sync path hands one over.
