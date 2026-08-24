@@ -176,8 +176,17 @@ impl AnalyticsView {
         // (time_grid lazily creates inputs) so the borrows do not overlap.
         let list = self.strat_list_card(p, window, cx);
         let heatmap = self.time_heatmap(p, cx);
-        let kpi = self.time_kpi(p, cx);
-        let grid = self.time_grid(p, window, cx);
+        // The right column's fold is the SAME flag every other axis uses, and its rail is built
+        // in both states — collapsed, it is the only control that can bring the column back.
+        // The column's own widgets are built only while it is expanded, so a hidden column costs
+        // no lazy `MoonInputState` creation in `time_grid`.
+        let side_collapsed = self.side_collapsed;
+        let rail = self.side_rail(p, cx);
+        let column = (!side_collapsed).then(|| {
+            let kpi = self.time_kpi(p, cx);
+            let grid = self.time_grid(p, window, cx);
+            (kpi, grid)
+        });
         // The write-confirmation dialog is SHARED with "By filter" (`save_dialog_overlay`);
         // we render it here too, because "By time" returns from `strategies_tab` earlier
         // than the point where that path adds the overlay.
@@ -196,7 +205,11 @@ impl AnalyticsView {
                     .min_h_0()
                     .gap(design::ui_px(cx, 8.0))
                     .child(div().flex_1().min_w_0().h_full().min_h_0().child(list))
-                    .child(
+                    .child(rail)
+                    // A live slider drag is safe from the caret: `slider_drag_overlay` below
+                    // covers the whole body while `time_tuner.slider_drag` is `Some`, so the
+                    // rail cannot be clicked mid-drag and the flag cannot flip under one.
+                    .children(column.map(|(kpi, grid)| {
                         // Just wide enough for the "WorkingWeekTime" name column plus the v1/v2
                         // inputs on one line — no slack for the "in strategy" column to inflate.
                         v_flex()
@@ -206,8 +219,8 @@ impl AnalyticsView {
                             .min_h_0()
                             .gap(design::ui_px(cx, 8.0))
                             .child(kpi)
-                            .child(grid),
-                    ),
+                            .child(grid)
+                    })),
             )
             // Bottom: the "By hour" heatmap at FULL width (same height as the filter histogram).
             .child(

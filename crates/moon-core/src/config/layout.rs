@@ -671,6 +671,22 @@ pub struct WindowLayout {
     /// answers "not collapsed".
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub analytics_hist_collapsed: bool,
+    /// Analytics tuner right-hand column ("Fact vs variants" plus the axis-specific tool):
+    /// `true` folds the whole column away so the strategy list takes the freed width. One flag
+    /// serves every axis (Filters / Coins / Time), because it is the same column
+    /// in each — exactly like [`Self::analytics_kpi_collapsed`].
+    ///
+    /// A display lens like the two flags above, so it persists rather than resetting each
+    /// session, and it is deliberately INDEPENDENT of `analytics_kpi_collapsed`: folding the
+    /// column away leaves the matrix's own two-row collapse untouched, so restoring the column
+    /// restores exactly what the user had inside it. `false` (the default, and every existing
+    /// config) shows the column.
+    ///
+    /// Read leniently for the same reason as [`Self::analytics_hist_collapsed`]: it lands in the
+    /// hand-edited analytics block, and a quoted `"true"` must not cost the user every window
+    /// position in the file.
+    #[serde(default, deserialize_with = "de_lenient_bool")]
+    pub analytics_tuner_side_collapsed: bool,
     /// Analytics "By filter" automatic composition: `true` lets the search choose WHICH fields to
     /// filter on, out of sample, instead of searching every field the checkboxes admit.
     ///

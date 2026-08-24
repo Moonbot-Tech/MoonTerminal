@@ -327,6 +327,14 @@ analytics.tuner.kpi_expand:
   ru: "Развернуть все показатели"
   en: "Expand all metrics"
   es: "Expandir todas las métricas"
+analytics.tuner.side_collapse:
+  ru: "Свернуть правую панель — список шире"
+  en: "Collapse the right panel — a wider list"
+  es: "Contraer el panel derecho — lista más ancha"
+analytics.tuner.side_expand:
+  ru: "Развернуть правую панель"
+  en: "Expand the right panel"
+  es: "Expandir el panel derecho"
 analytics.tuner.metric:
   ru: "Показатель"
   en: "Metric"

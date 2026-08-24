@@ -643,6 +643,12 @@ impl AnalyticsView {
         // "Coins" builds its table before the immutable reads of the right column
         // (the lazy search input needs &mut self).
         let coins_card = (mode == StratMode::Coins).then(|| self.coins_card(p, window, cx));
+        // The right column's fold is one flag for every axis, and the rail carrying its caret is
+        // built in BOTH states — collapsed, it is the only control left that can bring the column
+        // back. The column below is then simply not built: `left` is already `.flex_1()`, so it
+        // takes the freed width with no width arithmetic anywhere.
+        let side_collapsed = self.side_collapsed;
+        let rail = self.side_rail(p, cx);
         let mut left = v_flex()
             .flex_1()
             .min_w_0()
@@ -662,9 +668,13 @@ impl AnalyticsView {
             .size_full()
             .p(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 8.0))
-            .child(left);
+            .child(left)
+            .child(rail);
         match mode {
-            StratMode::Filters => {
+            // Every arm builds its right column only while expanded. `fields_grid` and
+            // `coins_field_card` lazily create input entities, so a hidden column does not need
+            // them.
+            StratMode::Filters if !side_collapsed => {
                 // KPI is pinned at the top; ONLY the thresholds container scrolls.
                 main = main.child(
                     v_flex()
@@ -678,7 +688,7 @@ impl AnalyticsView {
                         .child(self.fields_grid(p, window, cx)),
                 );
             }
-            StratMode::Coins => {
+            StratMode::Coins if !side_collapsed => {
                 // Same right column as every other axis: the shared "Fact vs variants"
                 // matrix on top, the axis' own tool below it — here the list field, which
                 // now owns the whole remaining height.
@@ -694,6 +704,7 @@ impl AnalyticsView {
                         .child(pick),
                 );
             }
+            StratMode::Filters | StratMode::Coins => {}
             StratMode::Time => unreachable!("Time mode returns early above"),
         }
         // The save confirmation window — an overlay on top of the tab.
