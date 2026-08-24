@@ -100,10 +100,7 @@ pub(crate) fn open_trade_window(
             y: geom.y.saturating_add(step),
             ..*geom
         };
-        candidate.is_reachable_on(
-            &crate::window::windowing::display_rects(cx),
-            MIN_VISIBLE_PX,
-        )
+        candidate.is_reachable_on(&crate::window::windowing::display_rects(cx), MIN_VISIBLE_PX)
     });
     // The display is resolved before the origin is adjusted, because the adjustment is expressed
     // relative to the display finally chosen. The saved identity outranks the saved coordinates,
@@ -193,6 +190,22 @@ pub(crate) fn open_trade_window(
                 view.mode = moon_core::market::CandleViewCfg::default().mode;
             }
             panel.set_candle_view(Some(view), pcx);
+            // THE SHARED VERTICAL SCALE, on the same terms as the timeframe pin above: in place
+            // before the first fetch answers, so the picture never appears at one scale and jumps
+            // to another as the rows land.
+            //
+            // Normalized rather than trusted. The value comes back from a hand-editable file whose
+            // deserializer checks only that it is a number, and an unmatched one would be applied
+            // to the chart while the control beside it labelled itself "Auto".
+            //
+            // Nothing re-applies this later and nothing needs to: a pinned percentage leaves the
+            // view's auto and manual flags both clear, and the per-frame Y fit re-targets the
+            // range from that percentage on every frame while they stay clear. So the pin holds
+            // itself through the empty first frames, through the rows arriving, and through a
+            // Retry - which touches the series and never the scale.
+            let stored =
+                crate::controls::normalized_scale(owner.read(pcx).layout.trade_window_scale);
+            panel.set_scale(stored, pcx);
         });
         let view = cx.new(|vcx| {
             let mut this = TradeWindowView {

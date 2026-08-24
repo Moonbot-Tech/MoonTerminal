@@ -500,6 +500,26 @@ pub struct WindowLayout {
     /// cascades off this rectangle instead of landing exactly on the first.
     #[serde(default, deserialize_with = "de_lenient")]
     pub trade_window: Option<GeomRect>,
+
+    /// Price scale shared by EVERY trade-detail window, as a fraction of price.
+    ///
+    /// One value for all of them, on exactly the terms the geometry above is shared on: the user
+    /// picks a scale once and every trade opened afterwards arrives at it. A per-trade key would
+    /// mean the first look at each new position ignored the choice, which is the opposite of what
+    /// was asked for. Not a per-tab value either - `ChartTabSpec.scale` is where a TAB's scale
+    /// lives, and a trade window is a window rather than a tab.
+    ///
+    /// `None` is Auto, and it is also what "never configured" reads as. Those two collapse ON
+    /// PURPOSE: a window that has never been given a scale must open in Auto, which is the same
+    /// picture `None` already asks for, so distinguishing them would buy a state with no
+    /// behaviour behind it.
+    ///
+    /// The VALUE is not trusted on the way back in. `de_lenient` checks the serialized type and
+    /// nothing else, so a hand-edited file can return a non-finite, negative or simply
+    /// non-preset number; the reader normalizes it before it reaches a chart, or the scale drawn
+    /// and the scale displayed would disagree on every restart.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_scale: Option<f32>,
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_period: Option<String>,

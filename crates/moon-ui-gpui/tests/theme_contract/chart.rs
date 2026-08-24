@@ -901,3 +901,51 @@ fn move_gestures_stay_a_click_on_every_button() {
         "the gesture resolves against the bindings and sends one bulk command"
     );
 }
+
+/// Removing `engine.rs:ChartEngine::set_follow`'s `self.historical ||` guard must fail: the
+/// global Live flag re-anchors a closed-trade window to now and leaves its old candles off-screen.
+#[test]
+fn historical_panels_make_the_engine_ignore_the_global_follow_flag() {
+    let engine = read_src("chartdx/engine.rs");
+    let follow = code_only(braced_body(&engine, "pub fn set_follow("));
+    assert!(
+        follow.contains("if self.historical || self.follow == follow {"),
+        "set_follow must return before the live-reset body when the engine is historical"
+    );
+    let panel = read_src("panels/chart/mod.rs");
+    let historical = code_only(braced_body(&panel, "pub fn new_historical("));
+    assert!(
+        historical.contains("panel.chart.set_historical(true);"),
+        "new_historical must tell its engine that the panel shows a closed interval"
+    );
+}
+
+/// Removing `window.rs`'s `normalized_scale` call must fail: a hand-edited non-preset scale
+/// alters a trade chart while the dropdown misleadingly labels the persisted setting Auto.
+#[test]
+fn trade_windows_normalize_their_persisted_scale_before_applying_it() {
+    let window = code_only(&read_src("trade_window/window.rs"));
+    assert!(
+        window.contains("normalized_scale(owner.read(pcx).layout.trade_window_scale)"),
+        "the persisted trade-window scale must be normalized before set_scale receives it"
+    );
+}
+
+/// `report_trades.rs:ChartPanel::load_history_scope` must only publish loaded markers after a
+/// Report coin click; a viewport action would move or rescale the reader's chart unrequested.
+#[test]
+fn report_coin_history_load_does_not_change_the_viewport() {
+    let source = code_only(&read_src("panels/chart/report_trades.rs"));
+    let load_history = braced_body(&source, "fn load_history_scope(");
+    let successful_load = braced_body(load_history, "Ok(history) => {");
+    for forbidden in [
+        "this.chart.show_time_range(",
+        "this.chart.center_time_range(",
+        "this.mark_input_changed(cx);",
+    ] {
+        assert!(
+            !successful_load.contains(forbidden),
+            "a Report coin click must not change the viewport through `{forbidden}`"
+        );
+    }
+}

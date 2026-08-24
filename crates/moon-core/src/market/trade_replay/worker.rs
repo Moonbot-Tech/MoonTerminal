@@ -74,7 +74,17 @@ enum Remembered {
 /// What identifies one replay question, so an identical one is recognised on reopen.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OutcomeKey {
-    /// Host the rows came from, which pins the venue and the market kind together.
+    /// Venue the rows were fetched for.
+    ///
+    /// The host ALONE will not do, and the reason is not hypothetical. One host commonly answers
+    /// both of a brand's markets — `api.bybit.com`, `api.gateio.ws` and `api.bitget.com` each do —
+    /// while the exchange-native market name is frequently IDENTICAL across them: Bybit spot and
+    /// Bybit linear are both `BTCUSDT`, and so are BitGet's two. Keyed on the host alone, a spot
+    /// replay and a futures replay of the same pair over the same window are one entry, and
+    /// whichever ran first serves the other its candles — or its authoritative `Empty`. The venue
+    /// is what actually separates them, so it is what the key carries.
+    venue: crate::venue::Venue,
+    /// Host the rows came from, which is the rate-limit budget they were fetched under.
     host: &'static str,
     /// Exchange-native market name.
     market: String,
@@ -179,6 +189,7 @@ fn serve(
         return TradeReplayOutcome::Empty(TradeReplayEmpty::NoEndpoint { brand: venue.brand });
     };
     let key = OutcomeKey {
+        venue,
         host: route.host(),
         market: request.market.clone(),
         from_ms: request.window.from_ms,
@@ -246,6 +257,33 @@ fn serve(
     }
     // The venue answered, so its refusal history is stale whatever the rows say.
     gate.clear(route.host());
+    // A window's right edge is routinely in the FUTURE: `replay_window` pads the trade's close by
+    // at least `TRAIL_FLOOR_MS`, and nothing clamps that to now. So replaying a trade that closed
+    // minutes ago asks every venue for the minute currently forming, and most of them send it.
+    // That bar is still changing, and the rows below are merged into the kline cache the LIVE
+    // recorder shares, so keeping one files a half-built minute as settled history.
+    //
+    // Dropped HERE rather than in the parsers, for three reasons. Two venues send no closed-flag
+    // at all, so no per-venue filter could cover them. A parser is pure by design, and reading a
+    // clock inside one is what would stop the recorded fixtures from being a complete test of it.
+    // And the bar's own open time answers the question for every venue at once.
+    //
+    // The vendor flags the parsers DO read stay: a vendor is authoritative about its own bar in a
+    // way a clock comparison is not, and the two disagree only where the vendor is right.
+    //
+    // `now_unix_ms_i64` answers 0 when the clock precedes the epoch. Zero is not a plausible now,
+    // and taking it as one would put every real bar in the future and drop the lot, so a clock
+    // that cannot be read leaves the rows exactly as they arrive — today's behaviour.
+    let now_ms = crate::util::time::now_unix_ms_i64();
+    let before_drop = rows.len();
+    if now_ms > 0 {
+        let closed_before_ms = (now_ms - BAR_MS) as f64;
+        rows.retain(|candle| candle.t_open_ms <= closed_before_ms);
+    }
+    // A dropped bar makes this run INCOMPLETE, which is exactly what that flag already means: the
+    // window has not been fully answered yet. Without this, a window whose only bar is the forming
+    // one empties out and is remembered as an authoritative "this market did not trade".
+    complete = complete && rows.len() == before_drop;
     write_cached_bars(request.address.cache.as_ref(), request, &rows);
     if rows.is_empty() {
         // Only a COMPLETE run may be remembered, empty or not: a cancelled one proves nothing

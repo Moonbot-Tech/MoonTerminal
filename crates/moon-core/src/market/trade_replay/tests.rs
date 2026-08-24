@@ -194,14 +194,24 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
     );
 }
 
-/// `market/trade_replay/mod.rs:replay_window` must reject impossible stamps and retain a
-/// pre-epoch trade after moving its request edge to the Unix epoch.
+/// `market/trade_replay/mod.rs:replay_window` must frame a same-second trade on its context
+/// floors, reject reversed or non-positive stamps, and retain a pre-epoch trade at the Unix epoch.
 #[test]
-fn replay_window_rejects_degenerate_stamps_and_preserves_epoch_bounds() {
+fn replay_window_accepts_same_second_stamps_and_rejects_invalid_inputs() {
+    let same_second = replay_window(10_000, 10_000).expect("same-second trade");
     assert_eq!(
-        replay_window(100, 100),
+        (same_second.from_ms, same_second.to_ms),
+        (6_400_000, 11_200_000),
+        "a same-second trade needs the 60-minute lead and 20-minute trail floors"
+    );
+    assert!(
+        !same_second.over_budget,
+        "the floor-only same-second window stays inside the replay budget"
+    );
+    assert_eq!(
+        replay_window(101, 100),
         None,
-        "replay_window accepting equal stamps would request a chart for no trade"
+        "replay_window accepting an exit before its open would request an impossible chart"
     );
     assert_eq!(
         replay_window(0, 100),

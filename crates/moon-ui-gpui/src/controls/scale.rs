@@ -1,4 +1,4 @@
-//! Price-scale (Y) dropdowns for the chart-tab strip and AddToChart stacks.
+//! Price-scale (Y) dropdowns for chart tabs, AddToChart stacks, and trade-detail windows.
 
 use gpui::*;
 use rust_i18n::t;
@@ -32,6 +32,34 @@ fn scale_label(scale: Option<f32>) -> String {
         .map(|(label, _)| (*label).to_string())
         .unwrap_or_else(|| t!("toolbar.scale_auto").to_string())
 }
+
+/// Keeps a persisted scale only when it is one this control can actually display.
+///
+/// A stored scale is read back from a hand-editable file whose deserializer checks the TYPE and
+/// not the value, so it can return a non-finite, non-positive or simply non-preset number. Handed
+/// on unchecked, such a value would be applied to the chart while [`scale_label`] - which matches
+/// presets exactly - labelled the trigger "Auto", leaving the picture and its own caption
+/// disagreeing on every restart. Normalizing on the way IN keeps "the trigger states what the
+/// chart is on" true by construction.
+///
+/// Args:
+///     stored: The persisted value, straight off the layout file.
+///
+/// Returns:
+///     The value when it is a known preset, or `None` for Auto.
+pub(crate) fn normalized_scale(stored: Option<f32>) -> Option<f32> {
+    let value = stored?;
+    if !value.is_finite() {
+        return None;
+    }
+    SCALES
+        .iter()
+        .filter_map(|(_, preset)| *preset)
+        .find(|preset| (*preset - value).abs() <= f32::EPSILON)
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Returns the next price-scale step for the Scale +/- shortcuts.
 ///
@@ -145,6 +173,47 @@ pub(crate) fn scale_dropdown_for_tabs(
         p,
         move |pct, cx| {
             tabs.update(cx, |t, tcx| t.pick_active_scale(pct, tcx));
+        },
+    )
+    .into_any_element()
+}
+
+/// Builds the trade-detail window's own price-scale dropdown.
+///
+/// The TRIGGER is the required indication, and it has to be, because the chart itself cannot
+/// carry one: `ChartEngine::scale_badge` returns nothing unless the user has switched on an
+/// unrelated chart label, and even then `scale_badge_pct` deliberately hides a cleanly pinned
+/// percentage, since an untouched fixed scale reads back as the step that was chosen. A cleanly
+/// pinned 10% therefore draws NOTHING on the plot under any setting - so the control states the
+/// answer instead, permanently and without depending on anything else being enabled.
+///
+/// Micro trigger rather than the detached window's taller one: this sits in a window header
+/// beside a title cluster, which is the tab strip's proportions and not a toolbar's.
+///
+/// Args:
+///     cx: Application context used to create the shared dropdown.
+///     scale: Configured scale, or `None` for Auto.
+///     view: Trade window receiving a selected scale.
+///     p: Current Moon palette.
+///
+/// Returns:
+///     The trade-window scale dropdown element.
+pub(crate) fn scale_dropdown_for_trade_window(
+    cx: &App,
+    scale: Option<f32>,
+    view: Entity<crate::trade_window::TradeWindowView>,
+    p: MoonPalette,
+) -> AnyElement {
+    scale_dropdown(
+        cx,
+        scale,
+        "trade-window-scale-tip",
+        "trade-window-scale-dropdown",
+        "scale-trade",
+        MoonButtonSize::Micro,
+        p,
+        move |pct, cx| {
+            view.update(cx, |this, vcx| this.pick_scale(pct, vcx));
         },
     )
     .into_any_element()
