@@ -113,7 +113,7 @@ impl ChartTabs {
                         "[ingest] +coin n={n} bucket={bucket:?} market={market} → DETACHED-окно"
                     ));
                 }
-                tab.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
+                tab.update(cx, |p, pcx| p.add_detect_coin(core, &market, ttl, pcx));
             } else {
                 let panel = cx.new(|_| {
                     AddChartStack::new(
@@ -134,6 +134,8 @@ impl ChartTabs {
                     saved_show_zone,
                     saved_auto_pin,
                     saved_orientation,
+                    saved_arrival_flash,
+                    saved_max_charts,
                     saved_action_pos,
                     saved_axis_pos,
                     saved_time_axis,
@@ -156,6 +158,8 @@ impl ChartTabs {
                         spec.and_then(|s| s.show_zone),
                         spec.and_then(|s| s.auto_pin),
                         spec.and_then(|s| s.layout_orientation),
+                        spec.and_then(|s| s.arrival_flash),
+                        spec.map_or((None, None), |s| (s.max_charts, s.max_charts_evict)),
                         spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos)),
                         spec.and_then(|s| s.price_axis_pos),
                         spec.and_then(|s| s.time_axis_visible),
@@ -195,6 +199,16 @@ impl ChartTabs {
                 if saved_orientation.is_some() {
                     panel.update(cx, |p, pcx| p.set_orientation(saved_orientation, pcx));
                 }
+                if saved_arrival_flash.is_some() {
+                    panel.update(cx, |p, pcx| p.set_arrival_flash(saved_arrival_flash, pcx));
+                }
+                // Restored BEFORE the first chart goes in, so a tab reopened at its cap does not
+                // spend one detect getting there.
+                if saved_max_charts.0.is_some() || saved_max_charts.1.is_some() {
+                    panel.update(cx, |p, pcx| {
+                        p.set_max_charts(saved_max_charts.0, saved_max_charts.1, pcx)
+                    });
+                }
                 if saved_action_pos.0.is_some() || saved_action_pos.1.is_some() {
                     panel.update(cx, |p, pcx| {
                         p.set_action_btn_pos(saved_action_pos.0, saved_action_pos.1, pcx)
@@ -226,7 +240,7 @@ impl ChartTabs {
                         p.restore_compare(saved_compare.0.clone(), saved_compare.1, pcx)
                     });
                 }
-                panel.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
+                panel.update(cx, |p, pcx| p.add_detect_coin(core, &market, ttl, pcx));
                 self.watch_regular_stack_target(&panel, cx);
                 self.add.push((n, bucket.clone(), panel));
                 // Order tabs by `(number, bucket)`, matching egui's `sort_by_key` behavior.

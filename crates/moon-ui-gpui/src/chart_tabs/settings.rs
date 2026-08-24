@@ -115,6 +115,31 @@ impl ChartTabs {
         v.unwrap_or(false)
     }
 
+    /// Whether arriving charts flash on the active tab. Unset means they do.
+    pub(super) fn active_arrival_flash(&self, cx: &App) -> bool {
+        let v = match &self.active {
+            Tab::Main => self.main.read(cx).arrival_flash(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).arrival_flash()),
+        };
+        v.unwrap_or(true)
+    }
+
+    /// The active tab's detect cap as raw `Option`s: `(cap, replace the stalest)`.
+    pub(super) fn active_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>) {
+        match &self.active {
+            Tab::Main => {
+                let s = self.main.read(cx);
+                (s.max_charts(), s.max_charts_evict())
+            }
+            Tab::Add(n, b) | Tab::Custom(n, b) => self.add_stack(*n, b).map_or((None, None), |p| {
+                let s = p.read(cx);
+                (s.max_charts(), s.max_charts_evict())
+            }),
+        }
+    }
+
     /// Return the active tab's Cancel Buy and Panic Sell button positions, defaulting to Right.
     pub(super) fn active_action_btn_pos(&self, cx: &App) -> (ChartBtnPos, ChartBtnPos) {
         let (c, pp) = self.active_action_btn_pos_opt(cx);
@@ -344,6 +369,9 @@ impl LayoutPopupHost for ChartTabs {
     fn scroll_input(&self) -> &Entity<MoonInputState> {
         &self.layout_scroll_input
     }
+    fn max_charts_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_max_charts_input
+    }
     fn rename_input(&self) -> &Entity<MoonInputState> {
         &self.custom_name_input
     }
@@ -366,6 +394,12 @@ impl LayoutPopupHost for ChartTabs {
     fn current_orientation(&self, cx: &App) -> Option<StackOrientation> {
         self.active_layout_orientation(cx)
     }
+    fn current_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>) {
+        self.active_max_charts(cx)
+    }
+    fn target_is_main(&self, _cx: &App) -> bool {
+        matches!(self.active, Tab::Main)
+    }
     fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
         self.active_action_btn_pos_opt(cx)
     }
@@ -386,6 +420,8 @@ impl LayoutPopupHost for ChartTabs {
             time_axis: self.active_time_axis_visible(cx),
             line_labels: self.active_line_labels(cx),
             cursor_labels: self.active_cursor_labels(cx),
+            arrival_flash: self.active_arrival_flash(cx),
+            max_charts_evict: self.active_max_charts(cx).1.unwrap_or(false),
         }
     }
     fn popup_is_custom(&self, _cx: &App) -> bool {
@@ -418,13 +454,15 @@ impl LayoutPopupHost for ChartTabs {
         let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
         let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);
         let snap = self.layout_popup_snapshot(cx);
-        apply_all::layout_values(
+        let values = apply_all::layout_values(
             &snap,
             hf,
             hs,
             self.active_scale_value(cx),
             self.active_layout_orientation(cx),
-        )
+            self.read_max_charts(cx),
+        );
+        self.applicable_here(values, cx)
     }
 
     fn source_kind(&self, cx: &App) -> moon_core::config::ChartTabKind {

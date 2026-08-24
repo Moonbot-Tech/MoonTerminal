@@ -562,6 +562,7 @@ impl ChartTabs {
             Option<moon_core::market::CandleViewCfg>,
             Option<moon_core::config::ChartGraphicsCfg>,
             Option<moon_core::config::ChartLabelsCfg>,
+            Option<bool>,
         )> = {
             let all = &self.backend.read(cx).chart_specs;
             all.iter()
@@ -589,6 +590,7 @@ impl ChartTabs {
                             s.candle_view,
                             s.chart_graphics,
                             s.chart_labels.clone(),
+                            s.arrival_flash,
                         )
                     })
                 })
@@ -615,6 +617,7 @@ impl ChartTabs {
             candle_view,
             chart_graphics,
             chart_labels,
+            arrival_flash,
         ) in specs
         {
             let stack = cx.new(|_| {
@@ -666,6 +669,10 @@ impl ChartTabs {
                 }
                 if chart_labels.is_some() {
                     s.set_chart_labels(chart_labels, c);
+                }
+                // Before the coins go in: each of them arrives, and an arrival is what flashes.
+                if arrival_flash.is_some() {
+                    s.set_arrival_flash(arrival_flash, c);
                 }
                 for (core, market) in &coins {
                     s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

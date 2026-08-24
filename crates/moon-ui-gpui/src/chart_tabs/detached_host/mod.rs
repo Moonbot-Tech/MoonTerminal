@@ -73,6 +73,8 @@ pub(super) struct DetachedChartHost {
     layout_fit_input: Entity<MoonInputState>,
     /// Size input for Scroll mode.
     layout_scroll_input: Entity<MoonInputState>,
+    /// Detect-cap input in the ⚙ popup, on windows detects actually reach.
+    layout_max_charts_input: Entity<MoonInputState>,
     /// Custom-tab name input in the ⚙ popup, only when this window holds a detached Custom tab.
     custom_name_input: Entity<MoonInputState>,
     /// Window-header market-search input; its universe depends on this window bucket's cores.
@@ -217,6 +219,8 @@ impl DetachedChartHost {
                     s.candle_view,
                     s.chart_graphics,
                     s.x_ppm,
+                    s.arrival_flash,
+                    (s.max_charts, s.max_charts_evict),
                 )
             })
         });
@@ -236,6 +240,8 @@ impl DetachedChartHost {
             candle_view,
             chart_graphics,
             saved_x_ppm,
+            saved_arrival_flash,
+            saved_max_charts,
         )) = saved
         {
             if m.is_some() || hf.is_some() || hs.is_some() {
@@ -288,31 +294,28 @@ impl DetachedChartHost {
             if cursor_labels.is_some() {
                 panel.update(cx, |p, pcx| p.set_cursor_labels(cursor_labels, pcx));
             }
+            if saved_arrival_flash.is_some() {
+                panel.update(cx, |p, pcx| p.set_arrival_flash(saved_arrival_flash, pcx));
+            }
+            // A detached AddToChart window keeps receiving its tab's detects, so its cap has to be
+            // back BEFORE the first of them arrives — otherwise the window reopens uncapped and the
+            // popup's first commit writes that emptiness back over the stored number.
+            if saved_max_charts.0.is_some() || saved_max_charts.1.is_some() {
+                panel.update(cx, |p, pcx| {
+                    p.set_max_charts(saved_max_charts.0, saved_max_charts.1, pcx)
+                });
+            }
         }
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
-        cx.subscribe(
+        let layout_max_charts_input = cx.new(|cx| MoonInputState::new(window, cx));
+        for input in [
             &layout_fit_input,
-            |this, _input, ev: &MoonInputEvent, cx| {
-                if this.popup_shows(ChartPopup::Layout)
-                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
-                {
-                    this.commit_layout_popup(cx);
-                }
-            },
-        )
-        .detach();
-        cx.subscribe(
             &layout_scroll_input,
-            |this, _input, ev: &MoonInputEvent, cx| {
-                if this.popup_shows(ChartPopup::Layout)
-                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
-                {
-                    this.commit_layout_popup(cx);
-                }
-            },
-        )
-        .detach();
+            &layout_max_charts_input,
+        ] {
+            super::common::subscribe_layout_commit(input, cx);
+        }
         // Custom-tab name input commits renaming on Blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
@@ -374,6 +377,7 @@ impl DetachedChartHost {
             last_x_sync_rev: initial_x_sync_rev,
             layout_fit_input,
             layout_scroll_input,
+            layout_max_charts_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),
@@ -749,6 +753,9 @@ impl LayoutPopupHost for DetachedChartHost {
     fn scroll_input(&self) -> &Entity<MoonInputState> {
         &self.layout_scroll_input
     }
+    fn max_charts_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_max_charts_input
+    }
     fn rename_input(&self) -> &Entity<MoonInputState> {
         &self.custom_name_input
     }
@@ -766,6 +773,14 @@ impl LayoutPopupHost for DetachedChartHost {
     }
     fn current_orientation(&self, cx: &App) -> Option<StackOrientation> {
         self.panel.read(cx).layout_orientation()
+    }
+    fn current_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>) {
+        let p = self.panel.read(cx);
+        (p.max_charts(), p.max_charts_evict())
+    }
+    /// Never: a detached window holds an AddToChart or Custom tab, never the Main one.
+    fn target_is_main(&self, _cx: &App) -> bool {
+        false
     }
     fn action_btn_pos_opt(
         &self,
@@ -792,6 +807,8 @@ impl LayoutPopupHost for DetachedChartHost {
             time_axis: p.time_axis_visible().unwrap_or(true),
             line_labels: p.line_labels().unwrap_or(true),
             cursor_labels: p.cursor_labels().unwrap_or(true),
+            arrival_flash: p.arrival_flash().unwrap_or(true),
+            max_charts_evict: p.max_charts_evict().unwrap_or(false),
         }
     }
     fn popup_is_custom(&self, cx: &App) -> bool {
@@ -817,7 +834,15 @@ impl LayoutPopupHost for DetachedChartHost {
         let height_scroll = self.read_layout_height(StackLayoutMode::Scroll, cx);
         let scale = self.panel.read(cx).scale();
         let orientation = self.panel.read(cx).layout_orientation();
-        apply_all::layout_values(&snap, height_fit, height_scroll, scale, orientation)
+        let values = apply_all::layout_values(
+            &snap,
+            height_fit,
+            height_scroll,
+            scale,
+            orientation,
+            self.read_max_charts(cx),
+        );
+        self.applicable_here(values, cx)
     }
 
     fn source_kind(&self, cx: &App) -> moon_core::config::ChartTabKind {

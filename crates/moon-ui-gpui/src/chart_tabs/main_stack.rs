@@ -12,7 +12,7 @@ use moon_ui::{
 };
 
 use super::stack::{
-    ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
+    ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
     set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
@@ -432,7 +432,8 @@ impl MainChartStack {
         panel.update(cx, |panel, panel_cx| {
             panel.apply_history_scope(core, market.clone(), history, panel_cx);
         });
-        self.charts.push(ChartStackEntry::new(core, market, panel));
+        self.charts
+            .push(ChartStackEntry::new(core, market, panel, SlotOwner::Reader));
         self.active = Some(self.charts.len() - 1);
         self.show_stack = false;
         self.sync_visibility(cx);
@@ -482,8 +483,10 @@ impl MainChartStack {
                 panel_cx,
             );
         });
-        self.charts
-            .insert(active, ChartStackEntry::new(core, market, panel));
+        self.charts.insert(
+            active,
+            ChartStackEntry::new(core, market, panel, SlotOwner::Reader),
+        );
         self.active = Some(active);
         self.show_stack = false;
         self.sync_visibility(cx);
@@ -1013,6 +1016,36 @@ impl MainChartStack {
         apply_setting(&mut self.auto_pin, on, &self.charts, cx, |c, cx| {
             set_panels_auto_pin(c, on.unwrap_or(false), cx)
         });
+    }
+
+    // --- The two settings Main does not have ---
+    //
+    // Main draws no arrival flash — it has no `flash_arrival` — and detects never reach it: ingest
+    // routes them to numbered AddToChart stacks only. `StackSetting::applies_to` keeps both values
+    // away from Main, so these four exist purely to satisfy the one macro that dispatches every
+    // setting to either stack type. They report "not set" and store nothing: holding a value that
+    // nothing can read would be worse than not holding it.
+
+    pub(crate) fn arrival_flash(&self) -> Option<bool> {
+        None
+    }
+
+    pub(crate) fn set_arrival_flash(&mut self, _on: Option<bool>, _cx: &mut Context<Self>) {}
+
+    pub(crate) fn max_charts(&self) -> Option<u16> {
+        None
+    }
+
+    pub(crate) fn max_charts_evict(&self) -> Option<bool> {
+        None
+    }
+
+    pub(crate) fn set_max_charts(
+        &mut self,
+        _max: Option<u16>,
+        _evict: Option<bool>,
+        _cx: &mut Context<Self>,
+    ) {
     }
 
     pub(crate) fn layout_orientation(&self) -> Option<StackOrientation> {
