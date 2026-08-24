@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonDateTimePickerEvent, MoonDateTimePickerState, MoonInputState,
-    MoonVirtualListScrollHandle, Root,
+    MoonBackgroundPolicy, MoonDateTimePickerEvent, MoonDateTimePickerState, MoonInputEvent,
+    MoonInputState, MoonVirtualListScrollHandle, Root,
 };
 use rust_i18n::t;
 
@@ -106,6 +106,13 @@ pub(crate) fn probe_select_spec() -> Option<&'static str> {
 
 /// Delay before showing the busy overlay, so quick recomputations do not flash the dimmer.
 const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// How long typing in the strategy-name mask settles before the tabs are re-read.
+///
+/// Lives beside [`AnalyticsView::reload`] rather than beside the control that feeds it, because
+/// what it protects is the READ: one reload cancels every in-flight axis and restarts a
+/// full-period scan, so the cost is set here, not by the toolbar.
+const MASK_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
 
 // Comparable profit unit for this frame's shared formatters.
 //
@@ -289,6 +296,25 @@ pub struct AnalyticsView {
     side: SideFilter,
     /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
     emu: Option<bool>,
+    /// Literal, case-insensitive part of the strategy NAME every tab narrows by. Empty = no
+    /// filter. Persisted in `layout.analytics_strategy_mask`, so a family the user works in
+    /// survives a restart the way the period does.
+    strategy_mask: String,
+    /// The mask the last started read actually used.
+    ///
+    /// Separate from [`Self::strategy_mask`], which follows the KEYSTROKES: without it, an Enter
+    /// or a blur carrying the value a `Change` event has already mirrored looks like "nothing
+    /// changed" and silently skips the immediate reload it exists to perform.
+    strategy_mask_applied: String,
+    /// Retained input widget for the mask, so its cursor and text survive every repaint.
+    strategy_mask_input: Entity<MoonInputState>,
+    /// The pending debounced reload, held so the NEXT keystroke drops it.
+    ///
+    /// Dropping a `Task` cancels it, which is the whole mechanism — the same one the tuner's coin
+    /// axis uses. [`Self::reload`] has no in-flight guard of its own: it cancels every read, bumps
+    /// the sequence and restarts every axis, so a reload per character would be a cancel storm
+    /// over full-period scans rather than a queue that coalesces.
+    strategy_mask_debounce: Option<Task<()>>,
     /// Profit metric: absolute quote money (`Quote`) or the report `Profit` column
     /// (`Percent` = profit ÷ spent). Persisted in `layout.analytics_profit_percent`.
     metric: ProfitMetric,
@@ -596,6 +622,37 @@ impl AnalyticsView {
         })
         .detach();
 
+        // The strategy-name mask: restored before the first read, so the very first Summary the
+        // window draws is already narrowed and the box already shows what narrowed it.
+        let saved_strategy_mask = backend
+            .read(cx)
+            .layout
+            .analytics_strategy_mask
+            .clone()
+            .unwrap_or_default();
+        let strategy_mask_input = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .default_value(saved_strategy_mask.clone())
+                .placeholder(t!("analytics.filter.strategy_mask_ph").to_string())
+        });
+        cx.subscribe(
+            &strategy_mask_input,
+            |this, input, event: &MoonInputEvent, cx| match event {
+                MoonInputEvent::Change => {
+                    let value = input.read(cx).value().to_string();
+                    this.set_strategy_mask(value, false, cx);
+                }
+                // Finishing the edit commits at once: a user who presses Enter or clicks away has
+                // stopped typing, and should not sit out the rest of the debounce.
+                MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. } => {
+                    let value = input.read(cx).value().to_string();
+                    this.set_strategy_mask(value, true, cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
         // Period: the previous layout selection, defaulting to the current calendar month.
         let saved_period = backend
             .read(cx)
@@ -732,6 +789,10 @@ impl AnalyticsView {
             side: SideFilter::All,
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
+            strategy_mask: saved_strategy_mask.clone(),
+            strategy_mask_applied: saved_strategy_mask,
+            strategy_mask_input,
+            strategy_mask_debounce: None,
             metric: saved_metric,
             prefer_usdt: saved_prefer_usdt,
             valuation_mode: saved_valuation_mode,
@@ -1126,6 +1187,7 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
+            strategy_name_mask: self.strategy_mask.clone(),
             metric: self.metric,
             valuation: self.valuation_mode,
             prefer_usdt: self.prefer_usdt,
@@ -1254,6 +1316,11 @@ impl AnalyticsView {
     /// Args:
     ///     cx: GPUI context used to start all required background reads.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        // Whatever started this read, it carries the mask AS IT STANDS NOW — `query_for` copies the
+        // live text, not the debounced one. So this IS the applied value, and recording it here is
+        // what keeps a still-pending debounce from starting the very same read a second time after
+        // an unrelated filter change happened to reload first.
+        self.strategy_mask_applied = self.strategy_mask.clone();
         self.cancel_latest_reads();
         // Retire every request this scope change invalidates, including ones no branch below
         // restarts. On the Calendar tab neither `reload_summary` nor `reload_strategy_base` runs,
@@ -1778,6 +1845,70 @@ impl AnalyticsView {
             self.reload(cx);
             cx.notify();
         }
+    }
+
+    /// Adopt typed mask text, persist it, and reload once the typing has settled.
+    ///
+    /// The decision is taken against [`Self::strategy_mask_applied`] — what the last STARTED read
+    /// used — rather than against the mirrored text, because a `Change` event has already mirrored
+    /// the value by the time the matching Enter or blur arrives. Comparing the two would make the
+    /// commit path a no-op and leave the debounce as the only route, which is exactly the reload
+    /// the commit exists to skip ahead of.
+    ///
+    /// Args:
+    ///     value: Raw text now in the field. Trimming and folding belong to the query layer.
+    ///     immediate: Whether the edit is finished (Enter, blur) rather than still being typed.
+    ///     cx: Analytics view context used to persist, arm the timer, and reload.
+    ///
+    /// Returns:
+    ///     Nothing.
+    fn set_strategy_mask(&mut self, value: String, immediate: bool, cx: &mut Context<Self>) {
+        let text_changed = self.strategy_mask != value;
+        if !text_changed && !immediate {
+            return;
+        }
+        if text_changed {
+            self.strategy_mask = value.clone();
+            self.backend.update(cx, |b, _| {
+                b.layout.analytics_strategy_mask = Some(value.clone());
+                b.layout_dirty = true;
+            });
+        }
+        // Any fresh decision retires whatever timer is still pending: dropping the task cancels it.
+        self.strategy_mask_debounce = None;
+        if self.strategy_mask_applied == value {
+            // Nothing to read: the reads on screen already used exactly this mask.
+            if text_changed {
+                cx.notify();
+            }
+            return;
+        }
+        if immediate {
+            // `reload` records the applied value itself.
+            self.reload(cx);
+            cx.notify();
+            return;
+        }
+        self.strategy_mask_debounce = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(MASK_DEBOUNCE).await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    // Something else may have reloaded meanwhile — a core, side or period change
+                    // carries the live mask too — in which case this timer has nothing left to do.
+                    // The handle is deliberately NOT cleared here: dropping a task from inside its
+                    // own body cancels the body, and a spent handle sitting in the field until the
+                    // next keystroke replaces it costs nothing.
+                    if this.strategy_mask_applied == this.strategy_mask {
+                        return;
+                    }
+                    this.reload(cx);
+                    cx.notify();
+                });
+            });
+        }));
+        // Repaint at typing speed even though the database is not read yet.
+        cx.notify();
     }
 
     /// Switch between raw quote money and percent. Every figure and tuner sweep is computed under

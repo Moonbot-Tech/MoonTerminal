@@ -24,6 +24,7 @@ fn query(from: i64, to: i64) -> Query {
         side: SideFilter::All,
         emulator: Some(false),
         strategies: Vec::new(),
+        strategy_name_mask: String::new(),
         metric: Default::default(),
         valuation: Default::default(),
         prefer_usdt: false,

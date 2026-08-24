@@ -23,6 +23,7 @@ fn q() -> Query {
         side: SideFilter::All,
         emulator: None,
         strategies: Vec::new(),
+        strategy_name_mask: String::new(),
         metric: Default::default(),
         valuation: Default::default(),
         prefer_usdt: false,

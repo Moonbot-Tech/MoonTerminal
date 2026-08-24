@@ -784,6 +784,17 @@ analytics.core_selection.clear:
   ru: "Сбросить выбор ядер"
   en: "Clear core selection"
   es: "Borrar selección de núcleos"
+# Analytics toolbar filter: a literal, case-insensitive part of the strategy NAME. It narrows the
+# summary, the cumulative-profit curve, the calendar and the group tables at once. Own keys rather
+# than the Report's, because the tooltip has to name this window.
+analytics.filter.strategy_mask_ph:
+  ru: "Маска стратегии"
+  en: "Strategy mask"
+  es: "Máscara de estrategia"
+analytics.filter.strategy_mask_tip:
+  ru: "Фильтр аналитики по части названия стратегии без учёта регистра. Например, EMA_ или Hook_M1."
+  en: "Filter Analytics by a case-insensitive part of the strategy name. For example, EMA_ or Hook_M1."
+  es: "Filtra Analytics por una parte del nombre de la estrategia, sin distinguir mayúsculas. Por ejemplo, EMA_ o Hook_M1."
 analytics.trades_count:
   ru: "%{n} закрытых сделок"
   en: "%{n} closed trades"

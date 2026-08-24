@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
-    MoonDateTimePicker, MoonDropdown, MoonMenuSize, MoonPalette, MoonSegmentItem,
+    MoonDateTimePicker, MoonDropdown, MoonInput, MoonMenuSize, MoonPalette, MoonSegmentItem,
     MoonSegmentedControl, h_flex,
 };
 use rust_i18n::t;
@@ -67,6 +67,12 @@ const KIND_TRIGGER_W: f32 = 102.0;
 const METRIC_TRIGGER_W: f32 = 116.0;
 /// Unscaled horizontal spacing between neighboring toolbar controls.
 const TOOLBAR_GAP: f32 = 6.0;
+
+/// Unscaled width of the strategy-name mask field.
+///
+/// The same 150 the Report gives its own mask box, so a user who knows one field's reach
+/// reads the other the same way.
+const MASK_FIELD_W: f32 = 150.0;
 
 /// Base floor for a period preset's fitted cell width.
 const PRESET_CELL_MIN_W: f32 = 44.0;
@@ -463,6 +469,32 @@ impl AnalyticsView {
                     .children(core_caption),
             )
             .child(selectors);
+        // The strategy-name mask is its OWN atomic group, a peer of `filters` rather than a child
+        // of it: the selector group does not wrap internally, so folding the field in there would
+        // raise that atom's floor by the field's whole width and clip it in a narrow dock instead
+        // of moving it to the next line. The divider travels INSIDE the group for the same reason
+        // the period bar keeps its own: a free rule can wrap onto a line by itself.
+        //
+        // It lives here and not in `period_bar` because `render` hides that bar entirely on the
+        // Calendar tab, and the Calendar is one of the surfaces the mask has to narrow.
+        let mask = design::chrome_section(cx)
+            .child(design::chrome_divider(cx, p))
+            .child(
+                div()
+                    .id("an-strategy-mask-tip")
+                    .flex_none()
+                    .w(design::font_w_px(cx, MASK_FIELD_W))
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("analytics.filter.strategy_mask_tip").to_string(),
+                    ))
+                    .child(
+                        MoonInput::new("an-strategy-mask")
+                            .state(&self.strategy_mask_input)
+                            .small()
+                            .cleanable(true),
+                    ),
+            );
+        row = row.child(mask);
         row.child(filters)
     }
 
