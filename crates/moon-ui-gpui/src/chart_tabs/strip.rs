@@ -270,7 +270,7 @@ impl Render for ChartTabs {
             self,
             "chart-labels",
             MoonButton::new("chart-labels-settings")
-                .leading_icon(MoonButtonIconSlot::new("icons/a-large-small.svg"))
+                .leading_icon(MoonButtonIconSlot::new("icons/chart-labels.svg"))
                 .tooltip(t!("chart_labels.tip").to_string())
                 .size(MoonButtonSize::Micro)
                 .variant(if labels_popup_open {
