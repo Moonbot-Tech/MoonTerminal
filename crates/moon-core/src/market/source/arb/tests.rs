@@ -165,14 +165,14 @@ fn forgetting_a_core_drops_its_picks_and_the_donor_roster() {
         },
     );
     book.markets.insert(
-        ("ENA".to_string(), 4),
+        ("ENA".to_string(), "USDT".to_string(), 4),
         MarketPick {
             at_ms: 1,
             market: Some("ENAUSDT".to_string()),
         },
     );
     book.markets.insert(
-        ("ENA".to_string(), 5),
+        ("ENA".to_string(), "USDT".to_string(), 5),
         MarketPick {
             at_ms: 1,
             market: None,
@@ -184,7 +184,7 @@ fn forgetting_a_core_drops_its_picks_and_the_donor_roster() {
 
     // The quotes name their donor, so every coin's entry is rebuilt rather than filtered.
     assert!(book.coins.is_empty());
-    assert!(!book.markets.contains_key(&("ENA".to_string(), 4)));
-    assert!(book.markets.contains_key(&("ENA".to_string(), 5)));
+    assert!(!book.markets.contains_key(&("ENA".to_string(), "USDT".to_string(), 4)));
+    assert!(book.markets.contains_key(&("ENA".to_string(), "USDT".to_string(), 5)));
     assert!(book.donors.is_none());
 }

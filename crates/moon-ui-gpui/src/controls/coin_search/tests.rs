@@ -187,6 +187,7 @@ fn a_dated_contract_never_groups_with_its_perpetual() {
         server: "Core A".to_string(),
         label: MarketLabel {
             coin: "BTC".to_string(),
+            canonic: String::new(),
             quote: "USDT".to_string(),
             contract: None,
         },
@@ -197,6 +198,7 @@ fn a_dated_contract_never_groups_with_its_perpetual() {
         server: "Core B".to_string(),
         label: MarketLabel {
             coin: "BTC_0925".to_string(),
+            canonic: String::new(),
             quote: "USDT".to_string(),
             contract: None,
         },

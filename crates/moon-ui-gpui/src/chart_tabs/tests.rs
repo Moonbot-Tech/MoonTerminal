@@ -14,6 +14,7 @@ use std::collections::HashSet;
 fn label(coin: &str, quote: &str) -> MarketLabel {
     MarketLabel {
         coin: coin.to_string(),
+        canonic: String::new(),
         quote: quote.to_string(),
         contract: None,
     }

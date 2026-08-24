@@ -136,7 +136,7 @@ struct MarketPick {
 #[derive(Default)]
 pub(super) struct ArbBook {
     coins: HashMap<String, CoinEntry>,
-    markets: HashMap<(String, CoreId), MarketPick>,
+    markets: HashMap<(String, String, CoreId), MarketPick>,
     /// Cores with arbitrage configured, ascending, and when the roster was built.
     donors: Option<(i64, Vec<CoreId>)>,
     /// Bumped whenever a core is forgotten.
@@ -170,7 +170,7 @@ impl ArbBook {
     /// market picks are answers about a universe that is gone.
     pub(super) fn forget_core(&mut self, core: CoreId) {
         self.coins.clear();
-        self.markets.retain(|(_, donor), _| *donor != core);
+        self.markets.retain(|(_, _, donor), _| *donor != core);
         self.donors = None;
         self.generation = self.generation.wrapping_add(1);
     }
@@ -218,7 +218,10 @@ impl MarketDataSource {
     /// whole body.
     pub(super) fn arb_quotes(&self, core: CoreId, market: &str) -> Option<Vec<ArbQuote>> {
         let label = self.market_label(core, market);
-        let coin_key = label.match_key();
+        // The CORE's own identity for the coin, not its spelling: a Bybit chart on `1kBONK` and a
+        // Binance donor holding `1000BONK` are the same book entry, and only the catalog can say
+        // so — see `MarketLabel::canonic`.
+        let coin_key = label.identity();
         // No coin, no book: the market has not been labelled yet, which happens between a pane
         // being assigned a market and the catalog arriving. Reading the pane's OWN core directly is
         // the one answer available, and it is the answer this used to give.
@@ -315,7 +318,7 @@ impl MarketDataSource {
     /// The book's rows for one coin, read afresh when the entry has expired.
     ///
     /// Args:
-    ///     coin_key: Folded coin token, the book's key.
+    ///     coin_key: The coin's cross-exchange identity, the book's key.
     ///     label: How the CHARTED market is named, for the coin to search donors by and the quote
     ///         currency their markets have to agree with.
     ///     core: The pane's core, read directly when no core has arbitrage configured.
@@ -419,6 +422,10 @@ impl MarketDataSource {
     /// minute — and it accepts only a market whose QUOTE currency is comparable with the chart's.
     /// Without that a spot donor's `ENABTC` would be divided by a USDT price and print −99.99 % on
     /// every venue, which reads as a market-wide collapse rather than as a mismatched pair.
+    ///
+    /// Which of several matching markets it takes is [`super::pick_market_for_identity`]'s rule:
+    /// the perpetual over an expiry, the chart's own quote currency first. A donor read from a
+    /// dated contract would state every spread against that contract's basis.
     fn arb_donor_market(
         &self,
         coin_key: &str,
@@ -426,7 +433,15 @@ impl MarketDataSource {
         donor: CoreId,
         now: i64,
     ) -> Option<String> {
-        let cache_key = (coin_key.to_string(), donor);
+        // Keyed by the QUOTE as well as the coin: the answer depends on it twice — a candidate
+        // whose currency is not comparable is refused outright, and the pick prefers the chart's
+        // own. Without it a USDC chart's answer would be served to a USDT one, and a `None` cached
+        // by either would blank the other's column for half a minute.
+        let cache_key = (
+            coin_key.to_string(),
+            label.quote.to_ascii_uppercase(),
+            donor,
+        );
         let book = self.arb_book();
         if let Some(pick) = book
             .lock()
@@ -438,16 +453,18 @@ impl MarketDataSource {
                 return pick.market.clone();
             }
         }
-        let coin = label.display_coin();
-        let names = self.search_markets(donor, coin, SEARCH_LIMIT);
-        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        let labelled: Vec<(String, super::MarketLabel)> = names
-            .iter()
-            .cloned()
-            .zip(self.market_labels(donor, &refs))
+        // Searched by the IDENTITY, not by this chart's own spelling. A donor's catalog is matched
+        // against the literal query — `market_search_quality` compares it with the six name fields
+        // — and `1kBONK` appears in none of a Binance market's, so searching the chart's token
+        // found nothing and cached the miss. The identity is `canonic`, which every core's catalog
+        // does carry and which its search ranks among those fields.
+        let labelled: Vec<(String, super::MarketLabel)> = self
+            .labelled_search(donor, coin_key, SEARCH_LIMIT)
+            .into_iter()
             .filter(|(_, found)| quotes_comparable(&label.quote, &found.quote))
             .collect();
-        let market = super::pick_market_for_coin(&labelled, coin).map(str::to_string);
+        let market =
+            super::pick_market_for_identity(&labelled, coin_key, &label.quote).map(str::to_string);
         book.lock()
             .expect("arb book poisoned")
             .markets

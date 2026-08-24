@@ -37,6 +37,14 @@ use ranking::{
 /// Maximum number of MoonProto search results requested per core.
 pub(crate) const COIN_SEARCH_LIMIT: usize = 8;
 
+/// Results per core for "the same instrument on another exchange", where the list is filtered by
+/// identity afterwards rather than shown.
+///
+/// Far wider than the popup's, and it has to be: a live Bybit core lists BTC under ten expiries
+/// beside the perpetual, and at eight rows the perpetual can fall outside the answer entirely —
+/// the comparison would then open a dated contract while claiming to show the coin.
+pub(crate) const COIN_MATCH_LIMIT: usize = 32;
+
 /// Returns the cores whose market universes feed this token field. None searches the full group,
 /// the same as a shared bucket.
 ///
@@ -187,6 +195,20 @@ pub(crate) fn search(
     bucket: Option<&ChartBucket>,
     query: &str,
 ) -> Vec<CoinHit> {
+    search_limited(b, group, bucket, query, COIN_SEARCH_LIMIT)
+}
+
+/// [`search`] with the per-core cap stated by the caller.
+///
+/// The popup wants a short list because it renders it; a caller looking for ONE instrument wants
+/// every candidate, because it filters them by identity and shows one.
+pub(crate) fn search_limited(
+    b: &Backend,
+    group: &str,
+    bucket: Option<&ChartBucket>,
+    query: &str,
+    limit: usize,
+) -> Vec<CoinHit> {
     let query = normalize_layout(query.trim());
     let query = query.trim();
     if query.is_empty() {
@@ -196,7 +218,7 @@ pub(crate) fn search(
     let pairs: Vec<(CoreId, String)> = cores_for(b, group, bucket)
         .into_iter()
         .flat_map(|core| {
-            ms.search_markets(core, query, COIN_SEARCH_LIMIT)
+            ms.search_markets(core, query, limit)
                 .into_iter()
                 .map(move |market| (core, market))
         })

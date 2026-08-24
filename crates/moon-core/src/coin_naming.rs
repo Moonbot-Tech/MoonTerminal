@@ -163,7 +163,14 @@ impl CatalogNaming {
 ///     core_name: Server name as the user sees it.
 ///     venue: Exchange caption, for reading the table without resolving core ids.
 ///     rows: Every market read, before the selector is applied.
-pub fn record_core(core: u64, core_name: &str, venue: &str, rows: &[CatalogNaming]) {
+///     catalog_read: Whether the core's catalog could be read at all.
+pub fn record_core(
+    core: u64,
+    core_name: &str,
+    venue: &str,
+    rows: &[CatalogNaming],
+    catalog_read: bool,
+) {
     let Some(selector) = crate::diagnostics::with_coin_naming_selector(str::to_string) else {
         return;
     };
@@ -188,12 +195,15 @@ pub fn record_core(core: u64, core_name: &str, venue: &str, rows: &[CatalogNamin
             )
         })
         .collect();
-    // An empty table is not a finished core: the catalog arrives after the connection, so the
-    // first ticks of a run legitimately see nothing and the sweep has to come back.
-    if lines.is_empty() {
-        return;
-    }
-    if crate::diagnostics::channel_lines("coin_naming.log", &lines) {
+    let finished = match lines.is_empty() {
+        // A core whose catalog WAS read and simply does not list the coin is finished. It writes
+        // nothing, and without this it would re-search its whole market universe on every
+        // reconciliation tick for as long as the selector stands — in a fleet, every core that
+        // lacks the coin would pay for the one that has it.
+        true => catalog_read,
+        false => crate::diagnostics::channel_lines("coin_naming.log", &lines),
+    };
+    if finished {
         swept()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
