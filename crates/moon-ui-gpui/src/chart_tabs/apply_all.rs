@@ -21,7 +21,7 @@
 //!   than each keeping a frozen copy of it. A later change of that default reaches them again;
 //!   copying, which is what the old press did, was a one-way ticket.
 //! - **writes the values** into the tabs of those kinds as their own overrides. This is what the ⚙
-//!   layout popup does, because its twelve values have no default to set: they are per-tab only.
+//!   layout popup does, because its values have no default to set: they are per-tab only.
 //!
 //! # Reaching the other windows
 //!
@@ -230,7 +230,10 @@ impl super::ChartTabs {
     fn write_into_kinds(&mut self, apply: ApplyAll, cx: &mut Context<Self>) {
         let targets = apply.targets;
         if targets.has(self.main.read(cx).default_kind()) {
-            let values = apply.values.clone();
+            // Filtered per TARGET, not once for the press: a value can mean something on one
+            // addressed tab and nothing on the next, and writing it where it means nothing leaves a
+            // setting in the spec that the tab's own popup does not show and cannot clear.
+            let values = applicable(&apply.values, true, false);
             self.main.update(cx, |s, c| {
                 for v in &values {
                     set_stack_setting!(s, c, v.clone());
@@ -246,7 +249,7 @@ impl super::ChartTabs {
             if !targets.has(stack.read(cx).default_kind()) {
                 continue;
             }
-            let values = apply.values.clone();
+            let values = applicable(&apply.values, false, self.is_custom_tab(num, &bucket, cx));
             stack.update(cx, |s, c| {
                 for v in &values {
                     set_stack_setting!(s, c, v.clone());
@@ -393,6 +396,22 @@ impl super::ChartTabs {
         }
     }
 
+    /// Whether `(num, bucket)` is a CUSTOM tab — a set of markets its owner picked.
+    ///
+    /// Asked of both the strip and the spec: a custom tab torn off into a window has left
+    /// `self.custom` for `self.detached`, where nothing distinguishes it from an ordinary
+    /// AddToChart window except the market list its spec still carries.
+    fn is_custom_tab(&self, num: u32, bucket: &ChartBucket, cx: &App) -> bool {
+        if self.custom.iter().any(|(n, b, _)| *n == num && b == bucket) {
+            return true;
+        }
+        self.backend
+            .read(cx)
+            .chart_specs
+            .iter()
+            .any(|s| s.matches(&self.group, num, bucket) && s.custom_coins.is_some())
+    }
+
     /// This group's stacks, wherever they live: Add tabs, custom tabs, detached windows.
     fn group_stacks(&self, _cx: &App) -> Vec<(u32, ChartBucket, Entity<super::AddChartStack>)> {
         self.add
@@ -402,6 +421,19 @@ impl super::ChartTabs {
             .map(|(n, b, p)| (*n, b.clone(), p.clone()))
             .collect()
     }
+}
+
+/// The values of a press that mean something on a tab described by these two facts.
+///
+/// One line, called at every target, so a setting that does not belong on a tab reaches neither its
+/// stack nor its spec — see [`StackSetting::applies_to`] for why the popup's own visibility check
+/// is not enough on its own.
+fn applicable(values: &[StackSetting], is_main: bool, is_custom: bool) -> Vec<StackSetting> {
+    values
+        .iter()
+        .filter(|v| v.applies_to(is_main, is_custom))
+        .cloned()
+        .collect()
 }
 
 /// How many stored tabs of each kind a press would overwrite, for the popup to state.
@@ -423,9 +455,9 @@ pub(super) fn override_counts(specs: &[ChartTabSpec], values: &[StackSetting]) -
 
 /// Build the ⚙ layout popup's value set from the source tab's settings.
 ///
-/// The snapshot already carries every resolved layout value the popup shows; the three that are not
-/// in it — both mode heights and the price scale — come from the source's fields, because the popup
-/// edits the heights in text fields whose uncommitted contents are the source of truth.
+/// The snapshot already carries every resolved layout value the popup shows; the ones that are not
+/// in it — both mode heights, the price scale, and the detect cap — come from the source's fields,
+/// because the popup edits those in text fields whose uncommitted contents are the source of truth.
 ///
 /// Args:
 ///     snap: The source tab's resolved layout settings.
@@ -433,15 +465,18 @@ pub(super) fn override_counts(specs: &[ChartTabSpec], values: &[StackSetting]) -
 ///     height_scroll: Scroll-mode slot extent, or `None` for the default.
 ///     scale: Price scale, or `None` for Auto.
 ///     orientation: Source orientation, unresolved: `None` copies "no orientation named".
+///     max_charts: Detect cap from the popup field, or `None` for uncapped.
 ///
 /// Returns:
-///     The values a ⧉ press on the layout popup copies, in application order.
+///     The values a ⧉ press on the layout popup copies, in application order. The caller keeps only
+///     the ones its own tab actually has, through `LayoutPopupHost::applicable_here`.
 pub(super) fn layout_values(
     snap: &LayoutPopupSnapshot,
     height_fit: Option<u16>,
     height_scroll: Option<u16>,
     scale: Option<f32>,
     orientation: Option<StackOrientation>,
+    max_charts: Option<u16>,
 ) -> Vec<StackSetting> {
     vec![
         StackSetting::Layout(Some(snap.mode), height_fit, height_scroll),
@@ -456,6 +491,8 @@ pub(super) fn layout_values(
         StackSetting::TimeAxis(snap.time_axis),
         StackSetting::LineLabels(snap.line_labels),
         StackSetting::CursorLabels(snap.cursor_labels),
+        StackSetting::ArrivalFlash(snap.arrival_flash),
+        StackSetting::MaxCharts(max_charts, snap.max_charts_evict),
     ]
 }
 

@@ -1929,3 +1929,24 @@ chart_labels.short.exposure:
   ru: "Сумма"
   en: "Size"
   es: "Tamaño"
+# --- Detect flow: how many charts detects may open on a tab and what happens at that number ---
+chart.layout.frame_detect_flow:
+  ru: "Поток детектов"
+  en: "Detect flow"
+  es: "Flujo de detecciones"
+chart.layout.max_charts:
+  ru: "Максимум"
+  en: "Maximum"
+  es: "Máximo"
+chart.layout.max_charts_hint:
+  ru: "0 — без ограничения"
+  en: "0 — no limit"
+  es: "0 — sin límite"
+chart.layout.max_charts_evict:
+  ru: "Заменять самый старый"
+  en: "Replace the stalest"
+  es: "Reemplazar el más antiguo"
+chart.layout.no_arrival_flash:
+  ru: "Не мигать рамкой"
+  en: "No arrival flash"
+  es: "Sin parpadeo al llegar"

@@ -152,6 +152,38 @@ fn axis_selector_row(
 pub(super) const MIN_H: u16 = 20;
 pub(super) const MAX_H: u16 = 4000;
 
+/// Upper bound on the detect cap. Zero remains valid and means uncapped; the ceiling is here to
+/// keep a stray keystroke from asking for a stack of ten thousand charts, each of which is a real
+/// GPU canvas.
+pub(super) const MAX_CHARTS_MAX: u16 = 999;
+
+/// The arrival/detect controls, or `None` on a tab that draws no arrival flash at all.
+///
+/// Bundled rather than passed as four more parameters: this function already carries fifteen
+/// callbacks, and these belong to one frame that appears or stays away as a unit.
+pub(super) struct DetectFlow<'a> {
+    /// The cap controls, or `None` on a tab detects never reach. The flash is NOT part of this: it
+    /// fires on any arrival, a hand-picked coin included, so a tab can want it off while having no
+    /// detect feed to cap.
+    pub cap: Option<DetectCap<'a>>,
+    /// Whether an arriving chart flashes its border. The checkbox states the negative — "do not
+    /// flash" is the thing a reader goes looking for — and inverts on the way in and out.
+    pub flash: bool,
+    pub on_toggle_flash: DetectFlowToggle,
+}
+
+/// The detect cap and what happens at it, shown only where detects arrive.
+pub(super) struct DetectCap<'a> {
+    /// Cap field state. Committed by the host on the way out, like the two size fields.
+    pub max_input: &'a Entity<MoonInputState>,
+    /// Whether a detect at the cap replaces the stalest chart instead of going unshown.
+    pub evict: bool,
+    pub on_toggle_evict: DetectFlowToggle,
+}
+
+/// One detect-flow checkbox handler, named so the fields above stay readable.
+type DetectFlowToggle = Box<dyn Fn(bool, &mut App)>;
+
 /// Popup CONTENT width in rendered pixels: the two 110-unit FIT/SCROLL segments plus the group
 /// frame around them. `MoonPopover` adds its own padding and border outside this.
 pub(super) fn content_width(cx: &App) -> Pixels {
@@ -187,6 +219,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2, S2>(
     time_axis_visible: bool,
     line_labels: bool,
     cursor_labels: bool,
+    detect_flow: Option<DetectFlow<'_>>,
     p: MoonPalette,
     cx: &App,
     on_pick_mode: F,
@@ -338,6 +371,56 @@ where
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_cursor_labels(*ch, app));
 
+    // "Detect flow" frame: how many charts detects may open on this tab, what a detect does once
+    // that number is reached, and whether an arrival announces itself. Built only for tabs detects
+    // actually reach; elsewhere the whole frame stays away rather than showing dead controls.
+    let detect_group = detect_flow.map(|flow| {
+        let cap_rows = flow.cap.map(|cap| {
+            let cap_line = h_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                .child(
+                    div()
+                        .text_color(rgb(p.text))
+                        .child(t!("chart.layout.max_charts").to_string()),
+                )
+                .child(
+                    div().w(px(64.0)).child(
+                        MoonInput::new(SharedString::from(format!("{id}-max-charts")))
+                            .state(cap.max_input)
+                            .small(),
+                    ),
+                );
+            let cap_hint = div()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(t!("chart.layout.max_charts_hint").to_string());
+            let evict_cb = MoonCheckbox::new(SharedString::from(format!("{id}-max-charts-evict")))
+                .label(t!("chart.layout.max_charts_evict").to_string())
+                .checked(cap.evict)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |ch: &bool, _w, app| (cap.on_toggle_evict)(*ch, app));
+            v_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .child(cap_line)
+                .child(cap_hint)
+                .child(evict_cb)
+        });
+        // Stated as the negative: ticked means "do not flash", so the stored value is the inverse
+        // of the box on both directions.
+        let flash_cb = MoonCheckbox::new(SharedString::from(format!("{id}-no-arrival-flash")))
+            .label(t!("chart.layout.no_arrival_flash").to_string())
+            .checked(!flow.flash)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| (flow.on_toggle_flash)(!*ch, app));
+        popup_group("frame-detect-flow", t!("chart.layout.frame_detect_flow")).child(
+            v_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .children(cap_rows)
+                .child(flash_cb),
+        )
+    });
+
     // Position selectors for Cancel Buy and Panic Sell in the chart zone (dash, L, C, R). Their
     // names are Moonbot brand terms and deliberately remain untranslated.
     let cancel_pos_row = pos_selector_row(
@@ -457,6 +540,7 @@ where
                     .child(cursor_labels_cb),
             ),
         )
+        .children(detect_group)
         // Remaining controls: auto-pin, button positions, and price axis.
         .child(auto_pin_cb)
         .child(cancel_pos_row)

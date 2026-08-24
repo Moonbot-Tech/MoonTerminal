@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
+mod detect_cap;
+
 use super::stack::{
-    COMPACT_STABLE, ChartStackEntry, apply_setting, chart_stack_card, compare_role,
+    COMPACT_STABLE, ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role,
     render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
     set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
@@ -62,6 +64,13 @@ pub(crate) struct AddChartStack {
     auto_pin: Option<bool>,
     /// Stack orientation (per window). `None` = default Vertical.
     layout_orientation: Option<StackOrientation>,
+    /// Whether an arriving chart flashes its accent border (per window). `None` = enabled.
+    arrival_flash: Option<bool>,
+    /// Cap on charts a DETECT may open here (per window). `None` or zero = uncapped.
+    max_charts: Option<u16>,
+    /// What a detect does at the cap: replace the stalest chart when `Some(true)`, otherwise go
+    /// unshown. `None` = drop, so a cap on its own never closes a chart.
+    max_charts_evict: Option<bool>,
     /// Positions of the Cancel Buy / Panic Sell buttons in the chart zone (per window).
     /// `None` = default Right.
     cancel_buy_pos: Option<ChartBtnPos>,
@@ -151,6 +160,9 @@ impl AddChartStack {
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
+            arrival_flash: None,
+            max_charts: None,
+            max_charts_evict: None,
             cancel_buy_pos: None,
             panic_sell_pos: None,
             price_axis_pos: None,
@@ -187,7 +199,17 @@ impl AddChartStack {
     ///
     /// Not free, and worth knowing before adding more of these: a present is a WINDOW present, so
     /// every sibling canvas in that window re-runs its own pass, text shaping included.
+    ///
+    /// Gated HERE rather than in `ChartPanel::set_arrival_pulse`, and deliberately NOT beside the
+    /// process-wide `MOON_ARRIVAL_FLASH` switch in `chartdx::render_state`: that one is a
+    /// measurement kill switch and belongs where a flash becomes state, while this is a property of
+    /// a TAB, which the panel cannot see — the same `ChartPanel` type serves Main, which flashes
+    /// nothing at all. This is the one place a tab's charts start a flash, so the single check
+    /// covers all three arrival paths.
     fn flash_arrival(&mut self, i: usize, cx: &mut Context<Self>) {
+        if !self.arrival_flash_on() {
+            return;
+        }
         let Some(entry) = self.charts.get(i) else {
             return;
         };
@@ -197,6 +219,72 @@ impl AddChartStack {
             .panel
             .clone()
             .update(cx, |p, _| p.set_arrival_pulse(Some(at), accent));
+    }
+
+    /// Whether an arriving chart on this tab flashes its border. Unset means it does, which is what
+    /// every tab did before the setting existed.
+    fn arrival_flash_on(&self) -> bool {
+        self.arrival_flash.unwrap_or(true)
+    }
+
+    pub(crate) fn arrival_flash(&self) -> Option<bool> {
+        self.arrival_flash
+    }
+
+    /// Set whether arriving charts flash, clearing any flash already in flight when switched off.
+    ///
+    /// The clear is load-bearing: the pulse is own-pass state with 2.6 s of life of its own, so a
+    /// chart that arrived a moment before the box was ticked would keep pulsing to the end of its
+    /// window — and the setting would read as not having taken.
+    pub(crate) fn set_arrival_flash(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
+        if self.arrival_flash == on {
+            return;
+        }
+        self.arrival_flash = on;
+        if !self.arrival_flash_on() {
+            let accent = moon_ui::MoonPalette::active(cx).accent;
+            for entry in &self.charts {
+                entry
+                    .panel
+                    .clone()
+                    .update(cx, |p, _| p.set_arrival_pulse(None, accent));
+            }
+        }
+        // Notifies although `render` reads nothing of this: a ⧉ press from the tab strip writes
+        // into a DETACHED window's stack, and that window repaints only when its stack says so —
+        // without this its open ⚙ would keep showing the old tick. Once per user action, not per
+        // frame.
+        cx.notify();
+    }
+
+    pub(crate) fn max_charts(&self) -> Option<u16> {
+        self.max_charts
+    }
+
+    pub(crate) fn max_charts_evict(&self) -> Option<bool> {
+        self.max_charts_evict
+    }
+
+    /// Set the detect cap and what happens at it.
+    ///
+    /// Deliberately closes NOTHING when the cap is lowered below what is already open: the cap
+    /// governs what a detect may open, and trimming here would close charts the user is watching
+    /// the moment a digit is typed. The excess drains by itself as those charts reach their TTL.
+    /// Clamped HERE rather than only where the field is typed, because a value can also arrive from
+    /// a hand-edited `charts.json`. Notifies for the reason `set_arrival_flash` does.
+    pub(crate) fn set_max_charts(
+        &mut self,
+        max: Option<u16>,
+        evict: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let max = max.map(|m| m.min(super::layout_popup::MAX_CHARTS_MAX));
+        if self.max_charts == max && self.max_charts_evict == evict {
+            return;
+        }
+        self.max_charts = max;
+        self.max_charts_evict = evict;
+        cx.notify();
     }
 
     /// Arm the roughly 1 Hz COMPRESS-compaction debounce timer if needed. It ticks while charts
@@ -358,11 +446,28 @@ impl AddChartStack {
         });
     }
 
+    /// Open a market the USER asked for: coin search, a custom tab, a detached window's own field.
+    ///
+    /// Uncapped by design — the detect cap governs the feed, not what the reader explicitly opens.
+    /// Detects come through [`Self::add_detect_coin`] instead.
     pub(super) fn add_coin(
         &mut self,
         core: CoreId,
         market: &str,
         ttl_ms: f64,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_coin(core, market, ttl_ms, SlotOwner::Reader, cx);
+    }
+
+    /// Put a market on this stack: extend a live chart's TTL, take back a held slot, or build a new
+    /// panel. The two entry points above differ only in what they check BEFORE calling this.
+    fn open_coin(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        ttl_ms: f64,
+        owner: SlotOwner,
         cx: &mut Context<Self>,
     ) {
         let (_, compress, _) = resolve_layout(
@@ -383,6 +488,9 @@ impl AddChartStack {
                 self.touch_count_change(); // The chart reopened, so reset the debounce interval.
                 self.flash_arrival(i, cx);
             }
+            // The latest arrival owns the slot: opening a detected market by hand takes it out of
+            // the cap's reach, and a detect on a hand-opened one hands it back.
+            self.charts[i].owner = owner;
             let panel = self.charts[i].panel.clone();
             Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
             cx.notify();
@@ -398,6 +506,7 @@ impl AddChartStack {
                 self.charts[i].market = market.to_string();
                 self.charts[i].arrived_at = Instant::now();
                 self.charts[i].vacated = false;
+                self.charts[i].owner = owner;
                 self.touch_count_change(); // A chart reused an empty slot; reset the debounce.
                 self.flash_arrival(i, cx);
                 let panel = self.charts[i].panel.clone();
@@ -490,7 +599,7 @@ impl AddChartStack {
         }
         Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
         self.charts
-            .push(ChartStackEntry::new(core, market.to_string(), panel));
+            .push(ChartStackEntry::new(core, market.to_string(), panel, owner));
         self.touch_count_change(); // A new chart appeared; reset the debounce interval.
         self.arm_compact_timer(cx); // Start the compaction timer if it is not already armed.
         self.flash_arrival(self.charts.len() - 1, cx); // Flash the border on the new slot.
@@ -839,7 +948,7 @@ impl AddChartStack {
     pub(crate) fn coins(&self, cx: &App) -> Vec<(CoreId, String)> {
         self.charts
             .iter()
-            .filter(|e| !e.vacated && e.panel.read(cx).pane_count() > 0)
+            .filter(|e| e.is_live(cx))
             .map(|e| (e.core, e.market.clone()))
             .collect()
     }

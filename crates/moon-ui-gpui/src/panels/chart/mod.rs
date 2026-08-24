@@ -805,6 +805,17 @@ impl ChartPanel {
         self.chart.pane_count()
     }
 
+    /// Wall-clock deadline (unix ms) after which this panel's chart auto-closes, or `None` when it
+    /// has no deadline to reach — a pinned pane, or one that is not TTL-driven at all.
+    ///
+    /// It is the panel's age as the stack means it: a repeat detect for the same market pushes the
+    /// deadline forward, so the EARLIEST deadline is the chart that has gone longest unseen. The
+    /// detect cap picks its victim by exactly that, which is why the `None` matters as much as the
+    /// number: a pinned chart offers no deadline and can never be chosen.
+    pub fn ttl_deadline_ms(&self) -> Option<f64> {
+        self.chart.next_ttl_deadline_ms()
+    }
+
     /// Returns whether any pane is pinned. The stack sorts pinned charts first, and
     /// `prune_ttl` skips them.
     pub fn is_pinned(&self) -> bool {

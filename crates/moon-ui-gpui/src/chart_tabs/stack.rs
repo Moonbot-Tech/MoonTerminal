@@ -30,6 +30,22 @@ pub(super) struct ChartStackEntry {
     /// occupies the first empty slot, and all slots reset once every slot is empty. It renders as a
     /// transparent placeholder.
     pub vacated: bool,
+    /// Who put the current market here.
+    ///
+    /// The detect cap evicts only its own: a coin typed into the search field is what the reader
+    /// asked for, and it carries a year-long TTL precisely so the detect feed cannot age it out —
+    /// letting the cap close it would take that back. The LAST arrival decides, so a manual open of
+    /// a detected market claims the slot, and a detect on a hand-opened one hands it back.
+    pub owner: SlotOwner,
+}
+
+/// Who a stack slot's current market came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SlotOwner {
+    /// The reader opened it: coin search, a custom tab's set, a Main double-click.
+    Reader,
+    /// The detect feed opened it, and the detect cap may take it back.
+    DetectFeed,
 }
 
 impl ChartStackEntry {
@@ -42,13 +58,39 @@ impl ChartStackEntry {
         self.core == key.0 && self.market == key.1
     }
 
-    pub(super) fn new(core: CoreId, market: String, panel: Entity<ChartPanel>) -> Self {
+    pub(super) fn new(
+        core: CoreId,
+        market: String,
+        panel: Entity<ChartPanel>,
+        owner: SlotOwner,
+    ) -> Self {
         Self {
             core,
             market,
             panel,
             arrived_at: Instant::now(),
             vacated: false,
+            owner,
+        }
+    }
+
+    /// Whether this slot currently shows a chart: not held empty, and its panel still has a pane.
+    ///
+    /// Both halves are needed, and this is the one place that says so: `vacated` is set from the
+    /// panel's own observer, so a chart closed a moment ago is briefly an un-flagged empty slot.
+    pub(super) fn is_live(&self, cx: &App) -> bool {
+        !self.vacated && self.panel.read(cx).pane_count() > 0
+    }
+
+    /// This slot's eviction deadline, or `None` when it may not be evicted at all.
+    ///
+    /// Two kinds of chart withhold it: a PINNED one, which has no TTL deadline, and one the reader
+    /// opened by hand, whose year-long TTL exists so the detect feed cannot age it out — the cap
+    /// must not do by the back door what that TTL was set to forbid.
+    pub(super) fn evictable_deadline(&self, cx: &App) -> Option<f64> {
+        match self.owner {
+            SlotOwner::DetectFeed => self.panel.read(cx).ttl_deadline_ms(),
+            SlotOwner::Reader => None,
         }
     }
 }

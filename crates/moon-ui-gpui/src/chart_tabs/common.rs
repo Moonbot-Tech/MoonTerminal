@@ -11,8 +11,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
-    MoonSegmentedControl, v_flex,
+    MoonAccent, MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonSegmentItem, MoonSegmentedControl, v_flex,
 };
 
 use super::popup_slot::{ChartPopup, PopupSlot};
@@ -123,6 +123,12 @@ pub(crate) enum StackSetting {
     Labels(moon_core::config::ChartLabelsCfg),
     /// Price scale, where `None` means Auto. Copied by the ⚙ popup's ⧉ along with the layout.
     Scale(Option<f32>),
+    /// Whether an arriving chart flashes its accent border.
+    ArrivalFlash(bool),
+    /// Detect cap and what a detect does at it: `(cap, replace the stalest)`. `None` — and zero —
+    /// leave the stack uncapped. The two travel together because neither says anything alone: a cap
+    /// with no policy has no behavior at the limit, and a policy with no cap never applies.
+    MaxCharts(Option<u16>, bool),
 }
 
 /// A setting that ALSO has a default in `layout.toml`, inherited by every tab without an override
@@ -228,6 +234,24 @@ impl StackSetting {
         }
     }
 
+    /// Whether this setting means anything on a tab described by these two facts.
+    ///
+    /// Applicability lives on the SETTING, beside `global_slot` and `rebuilds_orderbook_demand`,
+    /// rather than in the popup that draws it — the popup is only one of the places that decides.
+    /// The ⧉ walk is the other, and it addresses tabs by KIND: a custom tab that is not detached is
+    /// kind `AddTo` like any other, so a press that skipped the control on screen would still have
+    /// written it into that tab's spec — a cap nobody could see and nobody could clear.
+    pub(crate) fn applies_to(&self, is_main: bool, is_custom: bool) -> bool {
+        match self {
+            // Main draws no arrival flash at all.
+            StackSetting::ArrivalFlash(_) => !is_main,
+            // Ingest routes detects to numbered AddToChart tabs only: Main is opened by hand, and a
+            // custom tab holds the markets its owner picked.
+            StackSetting::MaxCharts(..) => !is_main && !is_custom,
+            _ => true,
+        }
+    }
+
     /// Whether applying this setting can change which markets need an order book.
     ///
     /// One definition for both callers: the single-setting path below and the ⧉ walk, which rebuilds
@@ -261,6 +285,11 @@ impl StackSetting {
             StackSetting::Graphics(v) => s.chart_graphics = Some(v),
             StackSetting::Labels(v) => s.chart_labels = Some(v),
             StackSetting::Scale(v) => s.scale = v,
+            StackSetting::ArrivalFlash(v) => s.arrival_flash = Some(v),
+            StackSetting::MaxCharts(max, evict) => {
+                s.max_charts = max;
+                s.max_charts_evict = Some(evict);
+            }
         }
     }
 }
@@ -306,6 +335,12 @@ macro_rules! set_stack_setting {
             }
             crate::chart_tabs::common::StackSetting::Labels(v) => $s.set_chart_labels(Some(v), $c),
             crate::chart_tabs::common::StackSetting::Scale(v) => $s.set_scale(v, $c),
+            crate::chart_tabs::common::StackSetting::ArrivalFlash(v) => {
+                $s.set_arrival_flash(Some(v), $c)
+            }
+            crate::chart_tabs::common::StackSetting::MaxCharts(max, evict) => {
+                $s.set_max_charts(max, Some(evict), $c)
+            }
         }
     };
 }
@@ -343,6 +378,11 @@ pub(super) struct LayoutPopupSnapshot {
     pub time_axis: bool,
     pub line_labels: bool,
     pub cursor_labels: bool,
+    pub arrival_flash: bool,
+    /// Whether a detect at the cap replaces the stalest chart instead of going unshown. The cap
+    /// ITSELF is not here: it lives in the popup's field like the two heights, and is read from
+    /// there so a number typed but not yet committed is the one that travels.
+    pub max_charts_evict: bool,
 }
 
 /// Host of the ⚙ layout-settings popup. Required methods expose host state and the target
@@ -359,6 +399,8 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn fit_input(&self) -> &Entity<MoonInputState>;
     fn scroll_input(&self) -> &Entity<MoonInputState>;
     fn rename_input(&self) -> &Entity<MoonInputState>;
+    /// The detect-cap field, committed on the way out like the two size fields.
+    fn max_charts_input(&self) -> &Entity<MoonInputState>;
 
     // --- Target tab ---
     /// Which of the three kinds the tab this popup edits IS.
@@ -375,6 +417,14 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     /// Current target layout: `(mode, height_fit, height_scroll)`.
     fn current_layout(&self, cx: &App) -> (Option<StackLayoutMode>, Option<u16>, Option<u16>);
     fn current_orientation(&self, cx: &App) -> Option<StackOrientation>;
+    /// Target detect cap as raw `Option`s: `(cap, replace the stalest)`.
+    fn current_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>);
+    /// Whether this popup edits the MAIN tab. A detached window is never Main.
+    ///
+    /// A fact about the target rather than a per-setting predicate: which settings that fact rules
+    /// out is [`StackSetting::applies_to`]'s to say, in one place, for both the popup and the ⧉
+    /// walk. `source_kind` cannot stand in for it — Main with a comparison anchor reports `Compare`.
+    fn target_is_main(&self, cx: &App) -> bool;
     /// Target action-button positions as raw `Option`s for independently editing cancel/panic.
     fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>);
     fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot;
@@ -384,7 +434,8 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>);
     /// Apply a value to the target stack(s), dispatching to Main/active stack or the window panel.
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>);
-    /// This popup's twelve layout values as they stand right now, for the ⧉ row to perform.
+    /// This popup's layout values as they stand right now, for the ⧉ row to perform. The two
+    /// detect-flow values join them only on a target whose popup actually shows them.
     fn layout_press_values(&self, cx: &App) -> Vec<StackSetting>;
 
     // --- The one open overlay ---
@@ -536,7 +587,65 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         self.scroll_input()
             .clone()
             .update(cx, |input, c| input.set_value(scroll, window, c));
+        // Zero rather than blank for an unset cap, matching Fit's zero: both mean "no limit", and a
+        // blank field reads as a value the popup failed to load.
+        let cap = self.current_max_charts(cx).0.unwrap_or(0).to_string();
+        self.max_charts_input()
+            .clone()
+            .update(cx, |input, c| input.set_value(cap, window, c));
         self.seed_rename_input(window, cx);
+    }
+
+    /// Whether the arrival-flash switch belongs on this target's popup.
+    fn arrival_flash_applies(&self, cx: &App) -> bool {
+        StackSetting::ArrivalFlash(true)
+            .applies_to(self.target_is_main(cx), self.popup_is_custom(cx))
+    }
+
+    /// Whether the detect-cap controls belong on this target's popup.
+    fn detect_cap_applies(&self, cx: &App) -> bool {
+        StackSetting::MaxCharts(None, false)
+            .applies_to(self.target_is_main(cx), self.popup_is_custom(cx))
+    }
+
+    /// Keep only the values that mean something on THIS target, for a ⧉ press it is the source of.
+    ///
+    /// A press carries what its popup showed: without this, a press from Main would hand every
+    /// addressed AddToChart tab the resolved defaults of two controls Main never drew — clearing
+    /// their caps and switching their flashes back on as a side effect of copying a height.
+    fn applicable_here(&self, values: Vec<StackSetting>, cx: &App) -> Vec<StackSetting> {
+        let (is_main, is_custom) = (self.target_is_main(cx), self.popup_is_custom(cx));
+        values
+            .into_iter()
+            .filter(|v| v.applies_to(is_main, is_custom))
+            .collect()
+    }
+
+    /// Read the detect cap from its field: ZERO means uncapped, a number is clamped to
+    /// `MAX_CHARTS_MAX`, and anything unreadable — including a momentarily EMPTY field — keeps the
+    /// target's current value.
+    ///
+    /// Blank deliberately does NOT mean uncapped, unlike the height fields: removing a cap is what
+    /// the zero the hint names is for, while a blank field is what the user sees mid-edit, and a
+    /// checkbox pressed at that moment would otherwise carry the emptiness along and drop the cap.
+    fn read_max_charts(&self, cx: &App) -> Option<u16> {
+        let fallback = self.current_max_charts(cx).0;
+        let value = self.max_charts_input().read(cx).value().to_string();
+        // Parsed as u32, not u16: a number past 65535 is an over-large CAP, not an unreadable
+        // field, and clamping it is closer to what was asked for than silently keeping the old
+        // value. Like the size fields, an out-of-range number stays on screen until the popup is
+        // reopened, at which point it reads back as the clamped value that took effect.
+        match value.trim().parse::<u32>() {
+            Ok(0) => None,
+            Ok(raw) => Some(raw.min(u32::from(layout_popup::MAX_CHARTS_MAX)) as u16),
+            Err(_) => fallback,
+        }
+    }
+
+    /// Set whether a detect at the cap replaces the stalest chart, keeping the cap itself as typed.
+    fn apply_max_charts_evict(&mut self, evict: bool, cx: &mut Context<Self>) {
+        let cap = self.read_max_charts(cx);
+        self.apply_tab_setting(StackSetting::MaxCharts(cap, evict), cx);
     }
 
     /// Read a mode height from its field: blank → `None`, invalid → the target's current value.
@@ -567,7 +676,45 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             StackSetting::Layout(Some(mode.unwrap_or(StackLayoutMode::Fit)), hf, hs),
             cx,
         );
+        // The cap field commits on the way out for the same reason the size fields do: committing
+        // per keystroke would apply "1" on the way to "12".
+        //
+        // Only where the field was actually SHOWN, and only when it moved. A tab whose popup hides
+        // the cap has no value to commit, and writing one anyway would put a number the user never
+        // chose into its spec — and mark `charts.json` dirty on every blur of an unrelated field.
+        if !self.detect_cap_applies(cx) {
+            return;
+        }
+        let (current_cap, current_evict) = self.current_max_charts(cx);
+        let cap = self.read_max_charts(cx);
+        if cap == current_cap {
+            // The checkbox writes its own half the moment it is clicked, so an unchanged number
+            // leaves nothing for this to do.
+            return;
+        }
+        self.apply_tab_setting(
+            StackSetting::MaxCharts(cap, current_evict.unwrap_or(false)),
+            cx,
+        );
     }
+}
+
+/// Commit the ⚙ popup's fields when one of them loses focus or takes Enter.
+///
+/// One subscription for every numeric field of the popup, on both hosts: each had a byte-identical
+/// copy per field, and the copies are what let a field be added without being committed.
+pub(super) fn subscribe_layout_commit<T: LayoutPopupHost>(
+    input: &Entity<MoonInputState>,
+    cx: &mut Context<T>,
+) {
+    cx.subscribe(input, |this, _input, ev: &MoonInputEvent, cx| {
+        if this.popup_shows(ChartPopup::Layout)
+            && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
+        {
+            this.commit_layout_popup(cx);
+        }
+    })
+    .detach();
 }
 
 /// ⚙ layout popup shared by both hosts: a `MoonPopover` anchored to the gear that opens it, with
@@ -636,6 +783,8 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let pap_entity = entity.clone();
     let tav_entity = entity.clone();
     let ll_entity = entity.clone();
+    let ev_entity = entity.clone();
+    let fl_entity = entity.clone();
     let cl_entity = entity;
     let row = super::apply_row::render_apply_row(
         this,
@@ -662,6 +811,25 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         snap.time_axis,
         snap.line_labels,
         snap.cursor_labels,
+        this.arrival_flash_applies(cx)
+            .then(|| layout_popup::DetectFlow {
+                cap: this
+                    .detect_cap_applies(cx)
+                    .then(|| layout_popup::DetectCap {
+                        max_input: this.max_charts_input(),
+                        evict: snap.max_charts_evict,
+                        on_toggle_evict: Box::new(move |checked, app| {
+                            ev_entity
+                                .update(app, |this, cx| this.apply_max_charts_evict(checked, cx));
+                        }),
+                    }),
+                flash: snap.arrival_flash,
+                on_toggle_flash: Box::new(move |on, app| {
+                    fl_entity.update(app, |this, cx| {
+                        this.apply_tab_setting(StackSetting::ArrivalFlash(on), cx)
+                    });
+                }),
+            }),
         p,
         cx,
         move |mode, app| {

@@ -171,6 +171,18 @@ pub struct ChartTabSpec {
     /// Per-window/tab stack orientation. None defaults to Vertical.
     #[serde(default)]
     pub layout_orientation: Option<StackOrientation>,
+    /// Whether a chart arriving in this tab's stack flashes its accent border. None defaults to
+    /// enabled, which is what every file written before this field existed says.
+    #[serde(default)]
+    pub arrival_flash: Option<bool>,
+    /// Cap on how many detect charts this tab's stack shows at once. None — and zero — mean no cap,
+    /// the behavior of every file written before this field existed.
+    #[serde(default)]
+    pub max_charts: Option<u16>,
+    /// What a detect does once the cap is reached: replace the stalest chart when true, or go
+    /// unshown when false. None defaults to false, so a cap alone never closes a chart.
+    #[serde(default)]
+    pub max_charts_evict: Option<bool>,
     /// Per-window/tab position of Cancel Buy in the chart area. None defaults to Right.
     #[serde(default)]
     pub cancel_buy_pos: Option<ChartBtnPos>,
@@ -256,6 +268,9 @@ impl ChartTabSpec {
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
+            arrival_flash: None,
+            max_charts: None,
+            max_charts_evict: None,
             cancel_buy_pos: None,
             panic_sell_pos: None,
             custom_coins: None,

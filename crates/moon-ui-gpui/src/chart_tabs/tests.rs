@@ -140,7 +140,10 @@ fn auto_retarget_replaces_the_active_main_slot_without_appending() {
         .expect("Auto Main replacement method must precede empty-panel pruning");
 
     assert!(body.contains("self.remove_chart_at(active, cx);"));
-    assert!(body.contains(".insert(active, ChartStackEntry::new(core, market, panel));"));
+    // Matched in two pieces because rustfmt splits the call across lines: what this pins is the
+    // INDEXED insertion, not the formatting it happens to have today.
+    assert!(body.contains("self.charts.insert("));
+    assert!(body.contains("ChartStackEntry::new(core, market, panel,"));
     assert!(!body.contains("self.charts.push("));
 }
 
@@ -233,7 +236,10 @@ fn prune_coin_selection_drops_markets_outside_the_new_scope() {
 
     let pruned = prune_coin_selection_to_scope(&mut selected, Some(7));
 
-    assert!(pruned, "a selection spanning more than the new scope must report a change");
+    assert!(
+        pruned,
+        "a selection spanning more than the new scope must report a change"
+    );
     assert_eq!(
         selected,
         HashSet::from([(7, "BTCUSDT".to_string()), (7, "ETHUSDT".to_string())])

@@ -342,6 +342,8 @@ pub struct ChartTabs {
     layout_fit_input: Entity<MoonInputState>,
     /// Scroll-mode height field.
     layout_scroll_input: Entity<MoonInputState>,
+    /// Detect-cap field, shown in the layout popup on tabs detects actually reach.
+    layout_max_charts_input: Entity<MoonInputState>,
     /// Custom-tab name field, shown only for `Custom` in the layout popup.
     custom_name_input: Entity<MoonInputState>,
     /// Per-window market-search input in the tab strip; available markets depend on the active
@@ -662,28 +664,14 @@ impl ChartTabs {
         .detach();
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
-        cx.subscribe(
+        let layout_max_charts_input = cx.new(|cx| MoonInputState::new(window, cx));
+        for input in [
             &layout_fit_input,
-            |this, _input, ev: &MoonInputEvent, cx| {
-                if this.popup_shows(ChartPopup::Layout)
-                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
-                {
-                    this.commit_layout_popup(cx);
-                }
-            },
-        )
-        .detach();
-        cx.subscribe(
             &layout_scroll_input,
-            |this, _input, ev: &MoonInputEvent, cx| {
-                if this.popup_shows(ChartPopup::Layout)
-                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
-                {
-                    this.commit_layout_popup(cx);
-                }
-            },
-        )
-        .detach();
+            &layout_max_charts_input,
+        ] {
+            common::subscribe_layout_commit(input, cx);
+        }
         // Commit the custom-tab name field from the layout popup on blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
@@ -736,6 +724,7 @@ impl ChartTabs {
             popup: popup_slot::PopupSlot::default(),
             layout_fit_input,
             layout_scroll_input,
+            layout_max_charts_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),

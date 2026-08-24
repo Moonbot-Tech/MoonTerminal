@@ -45,6 +45,8 @@ fn loud_snapshot() -> LayoutPopupSnapshot {
         time_axis: false,
         line_labels: false,
         cursor_labels: false,
+        arrival_flash: false,
+        max_charts_evict: true,
     }
 }
 
@@ -83,7 +85,7 @@ fn an_empty_target_set_addresses_nothing() {
 fn only_values_that_have_a_default_can_become_one() {
     let storable = vec![StackSetting::CandleView(CandleViewCfg::default())];
     assert!(storable.iter().all(|v| v.global_slot().is_some()));
-    let layout = layout_values(&loud_snapshot(), None, None, None, None);
+    let layout = layout_values(&loud_snapshot(), None, None, None, None, None);
     assert!(
         layout.iter().all(|v| v.global_slot().is_none()),
         "the layout values have no default to set: the press must write them into tabs"
@@ -158,6 +160,7 @@ fn the_layout_press_carries_every_layout_value() {
         Some(700),
         Some(1.5),
         Some(StackOrientation::Horizontal),
+        Some(6),
     );
     let mut s = spec();
     write_all(&values, &mut s);
@@ -176,10 +179,69 @@ fn the_layout_press_carries_every_layout_value() {
     assert_eq!(s.time_axis_visible, Some(false));
     assert_eq!(s.line_labels, Some(false));
     assert_eq!(s.cursor_labels, Some(false));
+    assert_eq!(s.arrival_flash, Some(false));
+    assert_eq!(s.max_charts, Some(6));
+    assert_eq!(s.max_charts_evict, Some(true));
     // Not the layout popup's to copy: each has its own ⧉.
     assert_eq!(s.candle_view, None);
     assert_eq!(s.chart_graphics, None);
     assert_eq!(s.x_ppm, None);
+}
+
+/// A press from a popup that HID the detect-flow controls must not carry them.
+///
+/// Breakage this pins: passing the snapshot's resolved values unconditionally. Main's popup shows
+/// neither control and a custom tab's shows no cap, so their resolved values are the permissive
+/// defaults — and a press sent from there to copy an unrelated layout value would clear every
+/// addressed AddToChart tab's cap and switch its flash back on, with nothing on screen saying so.
+#[test]
+fn a_press_that_never_showed_the_detect_controls_leaves_them_alone() {
+    let flash = StackSetting::ArrivalFlash(true);
+    let cap = StackSetting::MaxCharts(Some(6), true);
+    // Main: neither control is drawn there, and neither may travel from or into it.
+    assert!(!flash.applies_to(true, false));
+    assert!(!cap.applies_to(true, false));
+    // A custom tab flashes arrivals but receives no detects, so exactly half applies.
+    assert!(flash.applies_to(false, true));
+    assert!(!cap.applies_to(false, true));
+    // An ordinary AddToChart tab has both.
+    assert!(flash.applies_to(false, false));
+    assert!(cap.applies_to(false, false));
+    // Everything else is unaffected by either fact.
+    for v in layout_values(&loud_snapshot(), None, None, None, None, None) {
+        if matches!(
+            v,
+            StackSetting::ArrivalFlash(_) | StackSetting::MaxCharts(..)
+        ) {
+            continue;
+        }
+        assert!(
+            v.applies_to(true, false) && v.applies_to(false, true),
+            "{v:?} must reach every kind of tab"
+        );
+    }
+}
+
+/// The filter runs at every TARGET of a press, not once at its source.
+///
+/// Breakage this pins: filtering only where the popup draws its controls. A custom tab that is not
+/// detached is kind `AddTo` like any other, so a press from a numbered AddToChart tab addressing
+/// "AddToChart" reaches it — and would leave a cap in its spec that its own popup never shows and
+/// therefore cannot clear.
+#[test]
+fn a_cap_never_reaches_a_custom_tab() {
+    let values = layout_values(&loud_snapshot(), None, None, None, None, Some(6));
+    let mut custom = spec();
+    for v in values.iter().filter(|v| v.applies_to(false, true)) {
+        v.clone().write_spec(&mut custom);
+    }
+    assert_eq!(custom.max_charts, None, "no cap on a custom tab");
+    assert_eq!(custom.max_charts_evict, None);
+    assert_eq!(
+        custom.arrival_flash,
+        Some(false),
+        "the flash still travels: a custom tab draws one"
+    );
 }
 
 /// A source that never named an orientation copies "none named" rather than the resolved default.
@@ -191,7 +253,7 @@ fn the_layout_press_carries_every_layout_value() {
 fn an_unset_orientation_travels_as_unset() {
     let snap = loud_snapshot();
     assert_eq!(snap.orientation, StackOrientation::Horizontal);
-    let values = layout_values(&snap, None, None, None, None);
+    let values = layout_values(&snap, None, None, None, None, None);
     let mut s = spec();
     s.layout_orientation = Some(StackOrientation::Horizontal);
     write_all(&values, &mut s);
@@ -204,7 +266,14 @@ fn an_unset_orientation_travels_as_unset() {
     write_all(&values, &mut s);
     assert_eq!(s.scale, None);
     // And a named orientation still travels as itself.
-    let named = layout_values(&snap, None, None, None, Some(StackOrientation::Vertical));
+    let named = layout_values(
+        &snap,
+        None,
+        None,
+        None,
+        Some(StackOrientation::Vertical),
+        None,
+    );
     write_all(&named, &mut s);
     assert_eq!(s.layout_orientation, Some(StackOrientation::Vertical));
 }
@@ -258,7 +327,7 @@ fn only_the_inheritable_settings_name_a_slot() {
         StackSetting::Labels(Default::default()).global_slot(),
         Some(GlobalSlot::Labels)
     );
-    for v in layout_values(&loud_snapshot(), None, None, None, None) {
+    for v in layout_values(&loud_snapshot(), None, None, None, None, None) {
         assert_eq!(
             v.global_slot(),
             None,
@@ -365,7 +434,7 @@ fn a_stored_default_is_normalized_on_the_way_in() {
 #[test]
 fn only_an_orderbook_value_rebuilds_demand() {
     assert!(
-        layout_values(&loud_snapshot(), None, None, None, None)
+        layout_values(&loud_snapshot(), None, None, None, None, None)
             .iter()
             .any(|v| v.rebuilds_orderbook_demand()),
         "the layout press carries the order-book toggle, so its walk must rebuild demand"
