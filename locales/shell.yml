@@ -1605,6 +1605,10 @@ chart_labels.field.session_pnl:
   ru: "PnL монеты (ядро)"
   en: "Coin PnL (core)"
   es: "PnL de la moneda (núcleo)"
+chart_labels.field.session_profit:
+  ru: "Сессия"
+  en: "Session"
+  es: "Sesión"
 chart_labels.field.coin_balance:
   ru: "Баланс монеты"
   en: "Coin balance"
@@ -1721,6 +1725,10 @@ chart_labels.short.session_pnl:
   ru: "PnL"
   en: "PnL"
   es: "PnL"
+chart_labels.short.session_profit:
+  ru: "Сессия"
+  en: "Session"
+  es: "Sesión"
 chart_labels.short.coin_balance:
   ru: "Баланс"
   en: "Balance"

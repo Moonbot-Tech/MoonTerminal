@@ -34,7 +34,7 @@ fn quote_to_usdt(markets: &MarketsState, quote: &str) -> f64 {
 
 /// Exchange rate of the account's base currency (`base`) in USDT. USDT/stablecoins use 1;
 /// otherwise searches for the base/USDT market or `base_currency_price`. 0 means unknown.
-fn base_rate(markets: &MarketsState, base: &str) -> f64 {
+pub(crate) fn base_rate(markets: &MarketsState, base: &str) -> f64 {
     let b = base.to_ascii_uppercase();
     if is_stable(&b) {
         return 1.0;

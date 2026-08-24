@@ -1127,9 +1127,17 @@ impl ChartDataState {
                     | LabelField::Leverage
                     | LabelField::MarginMode
                     | LabelField::SessionPnl
+                    | LabelField::SessionProfit
                     | LabelField::CoinBalance
             )
         });
+        // Inside the readout above but gated apart, because valuing it walks the catalogue for the
+        // core's base-currency rate. A modern core states this counter for EVERY market — zero
+        // included — so its own presence gates nothing, and a chart drawing only a Bid would pay
+        // that walk per pane on every revision.
+        let wants_session = st
+            .chart_labels
+            .any_drawn(|f| f == LabelField::SessionProfit);
         // Its own gate rather than a share of the one above: this readout walks the retained trade
         // buckets and the 5-minute candle ring, so a chart that prints a spread and no window
         // figure must not pay for that walk on every market revision.
@@ -1188,7 +1196,7 @@ impl ChartDataState {
             let figures = target
                 .as_ref()
                 .filter(|_| wants_figures)
-                .and_then(|(core, market)| source.market_figures(*core, market));
+                .and_then(|(core, market)| source.market_figures(*core, market, wants_session));
             let windows = target
                 .as_ref()
                 .filter(|_| wants_windows)

@@ -34,7 +34,7 @@ const ORDERBOOK_PULL_PERIOD_MS: u64 = 200;
 /// `limits.market_trace_min_interval_ms`. A function rather than a constant because the value is
 /// live: the order-book pull runs five times a second, so this floor is what decides whether the
 /// channel is readable, and it has to be adjustable without a rebuild.
-fn market_diag_floor() -> Duration {
+pub(super) fn market_diag_floor() -> Duration {
     crate::diagnostics::market_trace_min_interval()
 }
 
@@ -53,7 +53,7 @@ fn market_diag_enabled() -> bool {
     crate::diagnostics::markets()
 }
 
-fn market_diag_due(key: impl Into<String>, floor: Duration) -> bool {
+pub(super) fn market_diag_due(key: impl Into<String>, floor: Duration) -> bool {
     if !market_diag_enabled() {
         return false;
     }
@@ -73,7 +73,7 @@ fn market_diag_due(key: impl Into<String>, floor: Duration) -> bool {
     }
 }
 
-fn market_diag(msg: impl std::fmt::Display) {
+pub(super) fn market_diag(msg: impl std::fmt::Display) {
     if market_diag_enabled() {
         log::info!("[market_diag] {msg}");
     }
@@ -592,10 +592,24 @@ pub struct MarketFiguresReadout {
     pub isolated: Option<bool>,
     /// The core's own per-coin profit counter (`b + l + s`), which MoonBot prints as `PnL`.
     ///
-    /// NOT the `Session` figure beside it in MoonBot's chart header: that one is an accumulator the
-    /// bot keeps for itself and never puts on the wire. Zero on part of the venues even where
-    /// MoonBot shows an amount, so a reader must not take a zero here for "traded to break even".
-    pub session_pnl: Option<f64>,
+    /// NOT the `Session` figure beside it in MoonBot's chart header — that one is [`Self::session`].
+    /// Zero on part of the venues even where MoonBot shows an amount, so a reader must not take a
+    /// zero here for "traded to break even".
+    pub core_pnl: Option<f64>,
+    /// The `Session` figure MoonBot prints in its chart header, IN USDT.
+    ///
+    /// The counter the markets table's "Reset Session" clears. A real zero arrives as `Some(0.0)`,
+    /// which is what lets a caption tell "nothing was earned since the reset" from the three ways
+    /// this can be `None`: no caption asked for it, the core publishes no session-profit snapshot
+    /// at all (every build predating the protocol field), or its base currency could not be valued
+    /// in USDT — which also covers the moments right after connect, before `BaseCheck` names that
+    /// currency. All three print nothing, and none of them may print a zero.
+    ///
+    /// Converted here rather than at the caption, because the raw value is in the CORE's base
+    /// currency: a coin-margined core states it in BTC, and printing that under a dollar sign is
+    /// how `0.0004 BTC` reads as nothing at all. A base this build cannot value is therefore
+    /// withheld rather than shown unconverted.
+    pub session: Option<f64>,
     /// Free balance of the coin itself, for a spot market.
     pub coin_balance: Option<f64>,
 }

@@ -599,10 +599,25 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::SessionPnl => inputs
             .figures
             .as_ref()
-            .and_then(|f| f.session_pnl)
+            .and_then(|f| f.core_pnl)
             .and_then(|v| {
                 let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
                 (sign != DeltaSign::Zero).then_some((text, Some(sign)))
+            }),
+        // A zero DOES print here, unlike the counter above: the core states this one as a snapshot
+        // of its own, so a zero is "nothing earned since the reset" and absence is "this core does
+        // not publish it" — the readout already carries that difference as `None`.
+        //
+        // The sign is dropped once the amount rounds to zero. `signed_amount` picks its prefix from
+        // the ROUNDED value, so a loss of a third of a cent would otherwise render `+0` — a minus
+        // wearing a plus. Bare `0` states the same magnitude without claiming a direction.
+        ChartLabelField::SessionProfit => inputs
+            .figures
+            .as_ref()
+            .and_then(|f| f.session)
+            .map(|v| match fmt::signed_amount(v, MONEY_DECIMALS) {
+                (_, DeltaSign::Zero) => ("0".to_string(), Some(DeltaSign::Zero)),
+                (text, sign) => (text, Some(sign)),
             }),
         ChartLabelField::CoinBalance => figure(inputs, |f| f.coin_balance)
             .map(|v| (plain(&fmt::compact_si(v)), None)),
@@ -1228,7 +1243,8 @@ fn sample_inputs() -> LabelInputs {
             liq_price: Some(41_120.0),
             leverage_x: Some(10),
             isolated: Some(true),
-            session_pnl: Some(-12.40),
+            core_pnl: Some(-12.40),
+            session: Some(48.15),
             coin_balance: Some(0.42),
         }),
         windows: Some(moon_core::market::MarketWindowsReadout {

@@ -564,7 +564,12 @@ impl MarketDataSource {
     ///
     /// Returns:
     ///     The figures, or `None` when neither half has a snapshot yet.
-    pub fn market_figures(&self, core: CoreId, market: &str) -> Option<MarketFiguresReadout> {
+    pub fn market_figures(
+        &self,
+        core: CoreId,
+        market: &str,
+        want_session: bool,
+    ) -> Option<MarketFiguresReadout> {
         let mut out = MarketFiguresReadout::default();
         let exchange = self.exchange_of(core);
         let provider_snapshot = self
@@ -628,8 +633,68 @@ impl MarketDataSource {
                 // Reported whenever it is a number at all; whether a ZERO is worth printing is the
                 // caption's call, not this readout's. It is not the "traded to break even" it looks
                 // like: the core leaves this counter at zero on part of its venues.
-                out.session_pnl = pos.total_profit().is_finite().then(|| pos.total_profit());
+                out.core_pnl = pos.total_profit().is_finite().then(|| pos.total_profit());
+                // The core's Session counter, valued in USDT. Read through the handle we already
+                // hold, and gated on a caption actually asking for it: on a modern core EVERY
+                // market carries a value — the snapshot states zero for the ones it omits — so the
+                // value's own presence gates nothing, and a chart drawing only a Bid would still
+                // pay `base_rate`'s catalogue walk per pane on every revision.
+                //
+                // The conversion is `feed::assets`'s, not moonproto's `session_profit_for`: that
+                // one resolves the rate from correlation markets alone and answers `None` whenever
+                // the core sent no correlation market for its own base currency. This one settles
+                // a stablecoin base at 1 before looking anything up, which is every USDT and USDC
+                // core, and only walks the catalogue for a coin-denominated base such as BTC.
+                out.session = want_session
+                    .then(|| handle.session_profit())
+                    .flatten()
+                    .filter(|v| v.is_finite())
+                    .and_then(|base_value| {
+                        // Borrowed, not cloned: this runs per pane on every market revision, and
+                        // the currency name is read and dropped inside the same expression.
+                        let base_ccy = snapshot
+                            .server_info()
+                            .base_currency_name
+                            .as_deref()
+                            .unwrap_or_default();
+                        let rate = crate::feed::assets::base_rate(snapshot.markets(), base_ccy);
+                        (rate > 0.0).then_some(base_value * rate)
+                    });
                 out.coin_balance = pos.asset_balance.is_finite().then_some(pos.asset_balance);
+                // `channels.markets` prints what the core actually stated for this market, which is
+                // the one thing a screenshot cannot show: a caption printing nothing looks the same
+                // whether the balance row never arrived, arrived with a zero profit, or arrived
+                // fine and the base currency could not be valued. Throttled per core+market on the
+                // shared market-trace floor, because this sits on a per-pane revision path.
+                //
+                // `leverage_x` is the tell for the first case: the core sets it to 1 when it resets
+                // a market it did not state, so `lev=1` beside an all-zero row means no balance row
+                // for this market rather than a flat one.
+                if super::market_diag_due(
+                    format!("figures:{core:?}:{market}"),
+                    super::market_diag_floor(),
+                ) {
+                    super::market_diag(format!(
+                        "figures core={core:?} market={market} tp_b={} tp_l={} tp_s={} total={} \
+                         session={:?} base_ccy={:?} rate={} pos_size={} lev={}",
+                        pos.total_profit_b,
+                        pos.total_profit_l,
+                        pos.total_profit_s,
+                        pos.total_profit(),
+                        handle.session_profit(),
+                        snapshot.server_info().base_currency_name,
+                        crate::feed::assets::base_rate(
+                            snapshot.markets(),
+                            snapshot
+                                .server_info()
+                                .base_currency_name
+                                .as_deref()
+                                .unwrap_or_default()
+                        ),
+                        pos.pos_size,
+                        pos.leverage_x,
+                    ));
+                }
             }
         }
         any.then_some(out)

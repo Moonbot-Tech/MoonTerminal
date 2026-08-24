@@ -135,6 +135,12 @@ pub enum ChartLabelField {
     /// row's buy/long/short profit, and the core leaves it at zero on part of its venues — which is
     /// why a zero here prints NOTHING rather than a confident `+0`.
     SessionPnl,
+    /// The `Session` figure MoonBot prints in its own chart header, in USDT.
+    ///
+    /// The counter its markets table resets, which the core publishes as an authoritative snapshot
+    /// of its own. Absent on a core too old to publish one — the caption then prints nothing rather
+    /// than a zero, which is the whole reason the protocol carries "unknown" apart from "none".
+    SessionProfit,
     /// Free balance of the coin itself.
     CoinBalance,
     /// Strategy that produced the newest detect THIS core fired on this market.
@@ -156,7 +162,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 48] = [
+    pub const ALL: [ChartLabelField; 49] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -201,6 +207,7 @@ impl ChartLabelField {
         ChartLabelField::Leverage,
         ChartLabelField::MarginMode,
         ChartLabelField::SessionPnl,
+        ChartLabelField::SessionProfit,
         ChartLabelField::CoinBalance,
         ChartLabelField::DetectStrategy,
         ChartLabelField::DetectMsg,
@@ -255,6 +262,7 @@ impl ChartLabelField {
             | ChartLabelField::Leverage
             | ChartLabelField::MarginMode
             | ChartLabelField::SessionPnl
+            | ChartLabelField::SessionProfit
             | ChartLabelField::CoinBalance => ChartLabelGroup::Exchange,
             ChartLabelField::OrderStrategy
             | ChartLabelField::DetectStrategy
@@ -310,6 +318,7 @@ impl ChartLabelField {
             ChartLabelField::Leverage => "chart_labels.field.leverage",
             ChartLabelField::MarginMode => "chart_labels.field.margin_mode",
             ChartLabelField::SessionPnl => "chart_labels.field.session_pnl",
+            ChartLabelField::SessionProfit => "chart_labels.field.session_profit",
             ChartLabelField::CoinBalance => "chart_labels.field.coin_balance",
             ChartLabelField::DetectStrategy => "chart_labels.field.detect_strategy",
             ChartLabelField::DetectMsg => "chart_labels.field.detect_msg",
@@ -362,6 +371,7 @@ impl ChartLabelField {
             ChartLabelField::LiqPrice => Some("chart_labels.short.liq_price"),
             ChartLabelField::Leverage => Some("chart_labels.short.leverage"),
             ChartLabelField::SessionPnl => Some("chart_labels.short.session_pnl"),
+            ChartLabelField::SessionProfit => Some("chart_labels.short.session_profit"),
             ChartLabelField::CoinBalance => Some("chart_labels.short.coin_balance"),
             ChartLabelField::DetectStrategy => Some("chart_labels.short.detect_strategy"),
             _ => None,
@@ -562,6 +572,7 @@ impl ChartLabelField {
             | ChartLabelField::OpenPnlPct
             | ChartLabelField::MarkDelta
             | ChartLabelField::SessionPnl
+            | ChartLabelField::SessionProfit
             // Every line of the column is a spread against this market, and which SIDE it is on is
             // the whole reading. The venue's name is the line's prefix and keeps the theme colour.
             | ChartLabelField::ArbColumn
