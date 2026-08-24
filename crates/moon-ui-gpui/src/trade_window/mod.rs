@@ -34,6 +34,7 @@
 //! chrome cannot be reached.
 
 mod figures;
+pub(crate) mod frame;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -346,13 +347,58 @@ impl TradeWindowView {
         cx.notify();
     }
 
+    /// The price scale this window's chart is set to, for its own control to state.
+    ///
+    /// Read off the PANEL rather than back out of the layout, so the trigger reports what this
+    /// chart is actually on. The two agree today, and reading the chart is what keeps them
+    /// agreeing if they ever stop.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the panel.
+    ///
+    /// Returns:
+    ///     The configured scale, or `None` for Auto.
+    pub(crate) fn scale(&self, cx: &App) -> Option<f32> {
+        self.panel.read(cx).scale()
+    }
+
+    /// Applies a price scale to this window and remembers it for subsequently opened trade windows.
+    ///
+    /// Display-only, like everything else this window can do: it changes how the closed trade is
+    /// drawn and reaches no core. The forcing variant is deliberate — see
+    /// [`crate::panels::chart::ChartPanel::force_scale`] — so picking the preset already shown
+    /// undoes a vertical drag instead of being swallowed as a no-op.
+    ///
+    /// Args:
+    ///     pct: The chosen scale, or `None` for Auto.
+    ///     cx: View context.
+    pub(crate) fn pick_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
+        self.panel
+            .update(cx, |panel, pcx| panel.force_scale(pct, pcx));
+        self.backend.update(cx, |b, _| {
+            // Compare-then-mark, the discipline the geometry observer beside this one uses: a
+            // redundant write would schedule a file write for a choice nobody changed.
+            if b.layout.trade_window_scale != pct {
+                b.layout.trade_window_scale = pct;
+                b.layout_dirty = true;
+            }
+        });
+        cx.notify();
+    }
+
     /// Hand a fetched series to this window's chart and focus it on the trade.
     ///
     /// Args:
     ///     series: The frozen rows.
     ///     cx: View context.
     fn publish(&mut self, series: TradeReplaySeries, cx: &mut Context<Self>) {
-        let (from_ms, to_ms) = (series.window.from_ms, series.window.to_ms);
+        // Read off the series BEFORE it is moved into the panel, exactly as `source` and `tf_min`
+        // are in `apply`.
+        let frame = frame::trade_frame(
+            self.record.buy_date.saturating_mul(1_000),
+            self.record.close_date.saturating_mul(1_000),
+            series.tf_ms,
+        );
         let record = self.record.clone();
         self.panel.update(cx, |panel, pcx| {
             panel.attach_trade_replay(Some(std::rc::Rc::new(series)), pcx);
@@ -363,18 +409,37 @@ impl TradeWindowView {
             // published here or the window shows a chart with nothing marked on it — which is the
             // one thing this whole feature exists to fix.
             panel.publish_trade_history(std::rc::Rc::new(vec![record]), pcx);
-            // The viewport is placed on the window the rows actually cover, not on the position
-            // alone: showing the padding is what makes it a picture of the trade IN CONTEXT.
+            // The viewport is placed on the TRADE with its own proportional context, not on the
+            // window the rows cover. Those differ on purpose: the fetch is asymmetric by design,
+            // so framing it put a short position three quarters of the way to the right while a
+            // long one sat centred — two trades, two differently composed pictures, which is the
+            // thing the user asked to be made the same everywhere.
             //
-            // ONE boundary, stated rather than defended against: `moon_chart`'s view clamps a
-            // requested range to its own `MAX_WINDOW_MS` of one year and anchors what is left at
-            // the START. A position held longer than a year therefore opens on its entry with the
-            // exit outside the frame. That is not silent — the chart takes the wheel like any
-            // other, so the exit is one scroll away — and it is strictly better than what this
-            // line used to receive, which for such a trade was a seven-day slice from the middle
-            // holding NEITHER arrow. Negotiating the viewport down for a case this rare would buy
-            // machinery nobody can test against a defect nobody has hit.
-            panel.show_time_range(from_ms, to_ms);
+            // The padding argument is ZERO because the framing rule has already built the
+            // breathing room into the interval. Asking for more here would push the right edge
+            // past the twenty-minute trailing margin the fetch guarantees and draw blank.
+            //
+            // TWO boundaries, both stated rather than defended against, and neither one a framing
+            // choice this function is free to make.
+            //
+            // A position held longer than the fetch's own seven-day budget keeps only its floors,
+            // so the framing rule hands back exactly what was downloaded and such a trade opens
+            // off-centre rather than centred.
+            //
+            // And past ROUGHLY A YEAR the exit leaves the opening viewport altogether. The
+            // doubling the framing rule would otherwise apply does NOT survive that far: any
+            // position over about three and a half days already puts the fetch over its budget,
+            // which collapses the downloaded window to the two floors, and the clamp above then
+            // holds the interval at the held duration plus those eighty minutes. So it is the
+            // POSITION reaching a year that trips the chart's 365-day cap, not twice the position
+            // reaching it at six months. The cap anchors what remains at the START. Centring it
+            // would show the middle of such a trade and NEITHER end, which is worse: the entry is
+            // the more useful of the two to open on. Neither boundary is silent — the chart takes
+            // the wheel like any other, so the exit is a scroll away — and no one-year window can
+            // hold both ends of a multi-year trade.
+            if let Some((start_ms, end_ms)) = frame {
+                panel.show_time_range(start_ms, end_ms, 0.0);
+            }
         });
         cx.notify();
     }

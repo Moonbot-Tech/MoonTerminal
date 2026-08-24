@@ -212,7 +212,14 @@ impl ReplayWindow {
 /// Returns:
 ///     The window to fetch, or `None` when the stamps cannot describe one.
 pub fn replay_window(buy_date_s: i64, close_date_s: i64) -> Option<ReplayWindow> {
-    if buy_date_s <= 0 || close_date_s <= 0 || close_date_s <= buy_date_s {
+    // A close in the SAME second as the open is a real trade, not a bad stamp. These stamps carry
+    // whole seconds, so a position that filled and closed inside one of them is recorded with two
+    // identical numbers - a scalp, which is exactly the kind of trade a reader most wants replayed
+    // and the kind this guard used to refuse outright. Only a close BEFORE the open, or a
+    // non-positive stamp, is unusable. A zero-length position needs no special handling
+    // downstream: its proportional context is zero, so the floors below decide the whole window,
+    // which is what they exist for.
+    if buy_date_s <= 0 || close_date_s <= 0 || close_date_s < buy_date_s {
         return None;
     }
     let open_ms = buy_date_s.checked_mul(1_000)?;

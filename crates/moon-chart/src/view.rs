@@ -199,6 +199,34 @@ const MIN_WINDOW_MS: f32 = 30_000.0;
 /// How long to keep manual X mode after the last pan before automatically returning to live.
 const MANUAL_HOLD_MS: f64 = 3000.0;
 
+/// Narrowest plot a framing request will accept as REAL, in pixels.
+///
+/// Not a cosmetic threshold: the caller's width comes from a layout whose own chart-width
+/// computation ends in `.max(1.0)`, so a slot that has never been presented reports ONE PIXEL
+/// rather than zero. The range-fitting method's `area_w <= 0.0` guard is therefore unreachable
+/// from the application, and a request honoured at that width derives its
+/// pixels-per-millisecond for a one-pixel plot and then disables the default-window refit. The
+/// visible span at a real width is then wider than asked for by the ratio of the two, which
+/// draws correct axes over an empty plot. Anything below this stays PENDING instead.
+const MIN_FRAME_AREA_W: f32 = 32.0;
+
+/// A framing request that outlives the frame it was made on.
+///
+/// The width a request needs is known only inside a prepared frame, while the request itself is
+/// made from application code that may run before the first present. Keeping the interval lets
+/// the view apply it at the first real width, and RETAINING it afterwards is what re-frames the
+/// same interval across a resize - which a plain one-shot call cannot do, because it clears the
+/// default-scale flags that would otherwise trigger the refit.
+#[derive(Clone, Copy)]
+struct FrameRequest {
+    start_ms: f64,
+    end_ms: f64,
+    padding: f32,
+    /// Width the request was last honoured at, or NaN while it is still pending. Compared rather
+    /// than flagged so a resize re-applies and an identical width does not.
+    applied_area_w: f32,
+}
+
 #[derive(Clone)]
 pub struct ChartView {
     /// Fixed time origin (unix ms), set at startup.
@@ -270,6 +298,8 @@ pub struct ChartView {
     /// reading the timer for both made one excursion into the future switch a pane's three-second
     /// return off for the rest of its life.
     manual_persistent: bool,
+    /// Interval this view has been asked to frame, retained until a user gesture overrides it.
+    frame_request: Option<FrameRequest>,
 }
 
 impl ChartView {
@@ -306,6 +336,7 @@ impl ChartView {
             last_update_ms: 0.0,
             manual_until: 0.0,
             manual_persistent: false,
+            frame_request: None,
         }
     }
 
@@ -408,6 +439,9 @@ impl ChartView {
         if (self.px_per_ms - ppm).abs() <= self.px_per_ms * 1e-6 {
             return false;
         }
+        // An external scale sync is a user zoom made on another chart; it owns the X axis from
+        // here, so a retained frame must not re-impose itself on the next resize.
+        self.clear_frame_request();
         self.px_per_ms = ppm;
         self.x_default_scale = false;
         self.x_init_pending = false;
@@ -494,6 +528,9 @@ impl ChartView {
 
     /// Immediately returns to live (the Live button), anchored to now.
     pub fn resume_live(&mut self, now_ms: f64) {
+        // The Live button is the one authority that outranks a frame outright: it asks for the
+        // live edge, which is the opposite of a closed interval.
+        self.clear_frame_request();
         self.follow = true;
         self.right_time_ms = now_ms;
         self.manual_until = 0.0;
@@ -603,6 +640,78 @@ impl ChartView {
         changed
     }
 
+    /// Ask the view to frame an interval as soon as a real plot width is known.
+    ///
+    /// Use this outside a prepared frame instead of applying a range immediately. The caller
+    /// there cannot know the plot width - the slot has not been presented yet, and the
+    /// layout answers with one pixel rather than admitting it - so measuring at call time
+    /// produces a scale for a plot that does not exist. Following is disabled IMMEDIATELY,
+    /// before any width exists, so nothing re-anchors the view to the live edge in the frames
+    /// between the request and the first present.
+    ///
+    /// Args:
+    ///     start_ms: Inclusive absolute Unix-millisecond interval start.
+    ///     end_ms: Inclusive absolute Unix-millisecond interval end.
+    ///     padding_fraction: Fraction reserved on each side, clamped below one half.
+    ///
+    /// Returns:
+    ///     `true` when the interval was valid and is now pending or applied.
+    pub fn request_time_range(
+        &mut self,
+        start_ms: f64,
+        end_ms: f64,
+        padding_fraction: f32,
+    ) -> bool {
+        if !start_ms.is_finite() || !end_ms.is_finite() || end_ms < start_ms {
+            return false;
+        }
+        self.frame_request = Some(FrameRequest {
+            start_ms,
+            end_ms,
+            padding: padding_fraction,
+            applied_area_w: f32::NAN,
+        });
+        self.set_manual_persistent();
+        true
+    }
+
+    /// Apply a pending framing request, or re-apply a honoured one at a new width.
+    ///
+    /// Called once per prepared frame, where the width is finally real. Re-applying on a WIDTH
+    /// CHANGE is the point: a framed view has left default-scale mode, so the ordinary
+    /// [`Self::ensure_default_window`] refit no longer runs for it, and without this a resize
+    /// would keep the pixels-per-millisecond and silently widen the visible span instead of
+    /// redrawing the same interval.
+    ///
+    /// Args:
+    ///     area_w: Current chart plot width in pixels.
+    ///
+    /// Returns:
+    ///     `true` when the view changed and the frame needs redrawing.
+    pub fn apply_frame_request(&mut self, area_w: f32) -> bool {
+        let Some(request) = self.frame_request else {
+            return false;
+        };
+        if !area_w.is_finite() || area_w < MIN_FRAME_AREA_W || area_w == request.applied_area_w {
+            return false;
+        }
+        let changed =
+            self.show_time_range(request.start_ms, request.end_ms, area_w, request.padding);
+        // Recorded even when nothing moved, so an unchanged width stops re-entering this branch.
+        if let Some(pending) = self.frame_request.as_mut() {
+            pending.applied_area_w = area_w;
+        }
+        changed
+    }
+
+    /// Forget any framing request, because something with more authority moved the view.
+    ///
+    /// A user gesture always outranks a frame: re-applying the interval on the next resize after
+    /// the user has panned away from it would drag them back to a picture they deliberately left.
+    fn clear_frame_request(&mut self) {
+        self.frame_request = None;
+    }
+
     // ── Y scale (toolbar buttons) ─────────────────────────────────────────────
 
     /// The "Auto" button: dynamically fits the visible range.
@@ -701,6 +810,7 @@ impl ChartView {
     /// Panning LEFT walks into the future, up to [`Self::max_right_time_ms`], so a plan can be
     /// drawn on empty chart ahead of the live edge.
     pub fn pan_x_px(&mut self, dx: f32, now_ms: f64, area_w: f32) {
+        self.clear_frame_request();
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
         self.right_time_ms -= dt_ms;
         self.follow = false;
@@ -739,6 +849,7 @@ impl ChartView {
     /// Returns:
     ///     Nothing; the X scale and anchor are updated in place.
     pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
+        self.clear_frame_request();
         let was_follow = self.follow;
         let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);

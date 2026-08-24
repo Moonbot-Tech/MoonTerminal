@@ -205,6 +205,15 @@ impl ChartDataState {
             };
             pane.view
                 .ensure_default_window(chart_area.w, self.present_rate_hz, self.default_x_ppm);
+            // A framing request asked for outside a prepared frame lands HERE, at the first width
+            // that is real, and lands again whenever that width changes. `chart_area.w` is the same
+            // value `ensure_default_window` above and `visible_x` below are given, so the applied
+            // scale and the window read back cannot disagree. The view rejects the one-pixel width
+            // this layout reports before the first present, and the order-book-only case the
+            // comment below describes, on its own minimum-width guard.
+            if pane.view.apply_frame_request(chart_area.w) {
+                pixels_changed = true;
+            }
             // Prepare is the only place that knows the anchor, the scale AND the width at once, so
             // the future ceiling is re-applied here rather than in each mutator that can break it.
             // Not while the pane shows only its order book: `chart_w` is floored at 1 px there, and

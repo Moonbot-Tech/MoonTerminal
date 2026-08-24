@@ -154,7 +154,6 @@ impl ChartPanel {
     ///     market: Catalog-verified canonical market.
     ///     scope: Default or published Report history scope.
     ///     replace_visible: Whether loading/errors clear the prior marker set.
-    ///     focus: Whether the first successful result may focus one trade interval.
     ///     cx: Panel context used for background work and publication.
     ///
     /// Returns:
@@ -165,7 +164,6 @@ impl ChartPanel {
         market: String,
         scope: ChartHistoryScope,
         replace_visible: bool,
-        focus: bool,
         cx: &mut Context<Self>,
     ) {
         let mut exact_coins = vec![market.clone()];
@@ -185,17 +183,11 @@ impl ChartPanel {
         {
             exact_coins.push(label_coin);
         }
-        let (filter, report_coin, focus_record_id) = match &scope {
-            ChartHistoryScope::Default => (None, None, None),
+        let (filter, report_coin) = match &scope {
+            ChartHistoryScope::Default => (None, None),
             ChartHistoryScope::Report {
-                filter,
-                exact_coin,
-                focus_record_id,
-            } => (
-                Some(filter.clone()),
-                Some(exact_coin.clone()),
-                *focus_record_id,
-            ),
+                filter, exact_coin, ..
+            } => (Some(filter.clone()), Some(exact_coin.clone())),
         };
         if let Some(report_coin) = report_coin.filter(|coin| !coin.trim().is_empty())
             && !exact_coins
@@ -278,18 +270,16 @@ impl ChartPanel {
                             this.publish_trade_history(Rc::new(Vec::new()), cx);
                         }
                         Ok(history) => {
-                            if focus
-                                && let Some(record) = focus_record_id
-                                    .and_then(|id| {
-                                        history.records.iter().find(|record| record.record_id == id)
-                                    })
-                                    .or_else(|| history.records.first())
-                            {
-                                this.chart.show_time_range(
-                                    record.buy_date as f64 * 1_000.0,
-                                    record.close_date as f64 * 1_000.0,
-                                );
-                            }
+                            // NO VIEWPORT CHANGE HERE, and that is the decision rather
+                            // than an omission. Clicking a coin in the Report opens that COIN's
+                            // chart; the trades are drawn on it as markers, but the reader asked
+                            // for the market, not for one position. Moving or rescaling their
+                            // chart on their behalf takes it off the live edge and changes a view
+                            // they own, to show them something the markers already show.
+                            //
+                            // The double-click path is the one that frames a trade, and it does so
+                            // in its OWN window, which exists for exactly that. Keeping the two
+                            // apart is the point: this one stays an ordinary live chart.
                             this.report_trades.status = ReportTradesStatus::Ready;
                             this.publish_trade_history(Rc::new(history.records), cx);
                         }
@@ -339,7 +329,7 @@ impl ChartPanel {
         if self.history_request_is_redundant(core, &market, &scope) {
             return;
         }
-        self.load_history_scope(core, market, scope, true, true, cx);
+        self.load_history_scope(core, market, scope, true, cx);
     }
 
     /// Point this panel's durable history at a market WITHOUT moving its camera.
@@ -367,7 +357,7 @@ impl ChartPanel {
         if self.history_request_is_redundant(core, &market, &scope) {
             return;
         }
-        self.load_history_scope(core, market, scope, true, false, cx);
+        self.load_history_scope(core, market, scope, true, cx);
     }
 
     /// Whether a history request for this target would repeat work already done or under way.
@@ -543,7 +533,6 @@ impl ChartPanel {
             market,
             self.report_trades.scope.clone(),
             false,
-            false,
             cx,
         );
     }
@@ -564,7 +553,6 @@ impl ChartPanel {
             market,
             self.report_trades.scope.clone(),
             true,
-            false,
             cx,
         );
     }

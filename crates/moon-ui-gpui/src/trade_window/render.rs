@@ -84,9 +84,9 @@ impl Render for TradeWindowView {
             // phase, because the chart panel below is focusable and would otherwise be free to
             // consume the press before it ever bubbles up here.
             .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                this.on_key(ev, window, cx)
-            }))
+            .capture_key_down(
+                cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_key(ev, window, cx)),
+            )
             .child(
                 h_flex()
                     .h(header_h)
@@ -106,6 +106,26 @@ impl Render for TradeWindowView {
                             .min_w_0()
                             .items_center(),
                     )
+                    // THE VERTICAL-SCALE CONTROL, and it is also the only place the chosen scale
+                    // is ever STATED: the chart's own scale badge is gated on a chart-label
+                    // setting the user need not have on, and hides a cleanly pinned percentage
+                    // even when they do. Reached through the `controls` facade because the
+                    // `scale` module behind it is private.
+                    //
+                    // `chrome_section` is `flex_none`, for the same reason the close button below
+                    // is: the title cluster beside it is `flex_1().min_w_0()` and would otherwise
+                    // squeeze the trigger to nothing at the minimum window width. The row's own
+                    // `CHROME_GAP` supplies the space on both sides of the rule, so the divider
+                    // carries no margin of its own.
+                    .child(design::chrome_divider(cx, p))
+                    .child(design::chrome_section(cx).child(
+                        crate::controls::scale_dropdown_for_trade_window(
+                            cx,
+                            self.scale(cx),
+                            cx.entity(),
+                            p,
+                        ),
+                    ))
                     // THE CLOSE BUTTON. `.controls(...)` and `.show_controls(...)` above only
                     // CONFIGURE the frame; the buttons are drawn by this separate call, and
                     // without it the window has no chrome affordance at all. That is not a

@@ -22,7 +22,7 @@
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
 //! - [`strips`] provides size and sell preset strips with native MoonUI interaction;
-//! - [`scale`] provides price-scale dropdowns for tabs and AddToChart stacks;
+//! - [`scale`] provides price-scale dropdowns for tabs, AddToChart stacks, and trade windows;
 //! - [`date_range`] provides the shared from/to date+time bounds of Report and Analytics;
 //! - [`toolbar`] composes the toolbar row.
 
@@ -46,20 +46,23 @@ mod venue_label;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
-pub(crate) use label_fields::{field_picker, row_display_name, row_title};
 pub(crate) use core_combo::{
-    core_combo, core_menu_sections, toggle_exchange_cores, CoreAllRowMode,
+    CoreAllRowMode, core_combo, core_menu_sections, toggle_exchange_cores,
 };
 pub(crate) use core_groups::group_is_applied;
 pub(crate) use core_host::{CoreComboHost, core_combo_extras};
 pub(crate) use core_quick::toggle_core_selection;
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
+pub(crate) use label_fields::{field_picker, row_display_name, row_title};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;
 pub use metric::{MetricTarget, OpenMetricPopup, TradeMetric, metric_popup_content};
 
 use moon_core::market::{MarketLimits, MaxOrderSource};
-pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
+pub(crate) use scale::{
+    normalized_scale, scale_dropdown_for_add_stack, scale_dropdown_for_tabs,
+    scale_dropdown_for_trade_window, step_scale,
+};
 pub use toolbar::toolbar;
 pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};
 

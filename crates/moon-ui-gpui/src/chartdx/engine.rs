@@ -182,6 +182,7 @@ impl ChartEngine {
             orders: OrdersStyle::default(),
             scale: None,
             follow: true,
+            historical: false,
             present_rate_hz: 60.0,
         }
     }
@@ -948,11 +949,26 @@ impl ChartEngine {
         changed
     }
 
+    /// Marks this engine a historical viewer, whose subject is a closed interval and not `now`.
+    ///
+    /// Args:
+    ///     historical: Whether the engine draws a finished interval rather than the live edge.
+    pub fn set_historical(&mut self, historical: bool) {
+        self.historical = historical;
+    }
+
     /// Applies the toolbar's global Live/Pause follow state to this `ChartEngine`'s single pane.
     /// Only an explicit change to the global flag has an effect. Per-pane pan and rejoin state lives
     /// in `view.follow`; `sync_follow_from_views` supplies the already consolidated value here.
+    ///
+    /// A HISTORICAL engine refuses the global flag outright. `ChartPanel::render` applies
+    /// `backend.follow` to every panel it draws, and that flag defaults to on, so without this
+    /// guard the frame a trade window just requested was undone one frame later: the mismatch made
+    /// this method fire, and its body calls `resume_live` plus `reset_default_window_on_next_prepare`
+    /// on the pane, re-anchoring it to `now` with the built-in six-hour window. A trade older than
+    /// that window then fell off the left edge, leaving labelled axes over an empty plot.
     pub fn set_follow(&mut self, follow: bool, now_ms: f64) -> bool {
-        if self.follow == follow {
+        if self.historical || self.follow == follow {
             return false;
         }
         self.follow = follow;
@@ -978,36 +994,37 @@ impl ChartEngine {
         self.follow
     }
 
-    /// Focus the first pane on one historical interval and persist manual X navigation.
+    /// Request framing of the first pane on an interval and persist manual X navigation.
+    ///
+    /// The interval is REQUESTED rather than applied: the plot width is knowable only inside a
+    /// prepared frame, and this method is reached from application code that commonly runs before
+    /// the first present. It used to measure the width itself, through `pane_rects` and
+    /// `horizontal_chart_layout`, both of which floor an unpresented slot at ONE PIXEL rather than
+    /// reporting that they do not know - so the interval was framed for a one-pixel plot and the
+    /// visible span at the real width came out wider by the ratio of the two, drawing correct axes
+    /// over an empty plot. The view now holds the request until a real width exists, and re-applies
+    /// it on resize.
     ///
     /// Args:
     ///     start_ms: Absolute Unix-millisecond entry timestamp.
     ///     end_ms: Absolute Unix-millisecond close timestamp.
+    ///     padding_fraction: Fraction of the window reserved on each side. A caller that already
+    ///         built its own context into the interval passes zero; one handing over a bare
+    ///         interval asks for breathing room here.
     ///
     /// Returns:
-    ///     Whether a valid interval changed the view.
-    pub(crate) fn show_time_range(&mut self, start_ms: f64, end_ms: f64) -> bool {
-        let rect_w = self
-            .pane_rects()
-            .first()
-            .map(|(_, rect)| rect.w)
-            .unwrap_or_else(|| self.slot_dev_width());
-        let width = {
-            let data = self.data.borrow();
-            horizontal_chart_layout(
-                rect_w,
-                data.orderbook_only,
-                data.orderbook_enabled,
-                data.price_axis_pos,
-                data.last_ppp,
-            )
-            .3
-        };
+    ///     Whether a valid interval was accepted.
+    pub(crate) fn show_time_range(
+        &mut self,
+        start_ms: f64,
+        end_ms: f64,
+        padding_fraction: f32,
+    ) -> bool {
         let changed = self
             .container
             .borrow_mut()
             .view_mut(0)
-            .is_some_and(|view| view.show_time_range(start_ms, end_ms, width, 0.15));
+            .is_some_and(|view| view.request_time_range(start_ms, end_ms, padding_fraction));
         if changed {
             self.follow = false;
             let mut data = self.data.borrow_mut();

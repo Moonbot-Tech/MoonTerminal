@@ -420,6 +420,12 @@ impl ChartPanel {
     ) -> Self {
         let mut panel = Self::new_main(backend, None, focus_open, epoch, theme, cx);
         panel.historical = true;
+        // The engine must know too, and not only the panel: `Self::render` applies the
+        // application-wide Live flag to whatever engine it is drawing, so a viewer that is
+        // historical only at the panel level is still dragged back to the live edge one frame
+        // after its interval is framed. Telling the engine here makes the immunity structural
+        // rather than a rule every future Live call site has to remember.
+        panel.chart.set_historical(true);
         // Turned off through the same field the live path uses, so the engine's own layout gives
         // the book's width back to the plot (`horizontal_chart_layout` sets `glass_w = 0`).
         panel.orderbook_enabled = false;
@@ -1019,8 +1025,12 @@ impl ChartPanel {
     /// Args:
     ///     from_ms: Interval start in Unix milliseconds.
     ///     to_ms: Interval end in Unix milliseconds.
-    pub(crate) fn show_time_range(&mut self, from_ms: i64, to_ms: i64) {
-        self.chart.show_time_range(from_ms as f64, to_ms as f64);
+    ///     padding_fraction: Breathing room added on each side. Zero when the caller has already
+    ///         built its own context into the interval, which is what the trade window does -
+    ///         adding more here would push the frame past the edges its data was fetched for.
+    pub(crate) fn show_time_range(&mut self, from_ms: i64, to_ms: i64, padding_fraction: f32) {
+        self.chart
+            .show_time_range(from_ms as f64, to_ms as f64, padding_fraction);
         self.view_dirty = true;
     }
 
@@ -1057,6 +1067,39 @@ impl ChartPanel {
             self.view_dirty = true;
             cx.notify();
         }
+    }
+
+    /// This panel's configured price scale, where `None` means Auto.
+    ///
+    /// What was PICKED, which is what a scale control must state. It is not a readout of the
+    /// window currently drawn: a vertical drag or a right-button zoom moves that window without
+    /// changing the choice, and reporting the dragged window instead would make the control's
+    /// own label wander while the user is holding the mouse.
+    ///
+    /// Returns:
+    ///     The configured scale, or `None` for Auto.
+    pub(crate) fn scale(&self) -> Option<f32> {
+        self.scale
+    }
+
+    /// Applies this panel's price scale even when the stored choice has not changed.
+    ///
+    /// [`Self::set_scale`] returns early on an unchanged value, and the engine caches on the same
+    /// value again, so re-picking the preset already displayed is normally swallowed. That is the
+    /// right economy while nothing else moves the Y window - but a vertical drag or a
+    /// right-button zoom sets the view's own manual flag, which parks the pinned percentage, and
+    /// then the one gesture a user would reach for to undo it, choosing the scale that is already
+    /// shown, does nothing at all. Going through the engine's uncached path makes the visible
+    /// choice always re-appliable.
+    ///
+    /// Args:
+    ///     pct: The scale to apply, or `None` for Auto.
+    ///     cx: Panel context.
+    pub(crate) fn force_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
+        self.scale = pct;
+        self.chart.reapply_scale(pct);
+        self.view_dirty = true;
+        cx.notify();
     }
 
     /// Enables or disables this window/tab's order book. Rendering applies the engine flag, and the
@@ -1102,8 +1145,12 @@ impl ChartPanel {
     /// Returns:
     ///     The override when this panel has one, otherwise the global default for its kind.
     pub fn effective_candle_view(&self, cx: &App) -> moon_core::market::CandleViewCfg {
-        self.candle_view
-            .unwrap_or_else(|| self.backend.read(cx).layout.candle_view_for(self.default_kind))
+        self.candle_view.unwrap_or_else(|| {
+            self.backend
+                .read(cx)
+                .layout
+                .candle_view_for(self.default_kind)
+        })
     }
 
     /// Sets this window/tab's candle and trade display settings. `None` uses the global default;
@@ -1566,13 +1613,19 @@ impl ChartPanel {
 
     fn mark_input_changed(&mut self, cx: &mut Context<Self>) {
         self.chart.sync_follow_from_views();
-        let follow = self.chart.follow();
-        self.backend.update(cx, |b, bcx| {
-            if b.follow != follow {
-                b.follow = follow;
-                bcx.notify();
-            }
-        });
+        // A historical viewer PUBLISHES nothing: the application-wide Live flag describes the live
+        // charts, and this window has no live edge to have left. Without the guard, panning inside
+        // a trade window switched the MAIN chart's Live off, because this pane is permanently
+        // manual by construction.
+        if !self.historical {
+            let follow = self.chart.follow();
+            self.backend.update(cx, |b, bcx| {
+                if b.follow != follow {
+                    b.follow = follow;
+                    bcx.notify();
+                }
+            });
+        }
         self.view_dirty = true;
         // If the input moved a pane into manual mode, arm its wall-clock return to live.
         self.arm_auto_live_timer(cx);

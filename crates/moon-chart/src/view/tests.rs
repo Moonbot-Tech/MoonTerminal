@@ -752,3 +752,28 @@ fn a_selected_step_survives_the_next_frame() {
         "the step's range was rewritten by the next frame: {after_click} -> {next_frame}"
     );
 }
+
+/// Weakening `view.rs:apply_frame_request` to accept a one-pixel plot, or dropping retained
+/// requests, must fail: an old trade opens blank or a resized trade silently widens its span.
+#[test]
+fn frame_requests_wait_for_real_width_reframe_on_resize_and_yield_to_user_navigation() {
+    let epoch = 1_700_000_000_000.0;
+    let start = epoch + 60_000.0;
+    let end = start + 120_000.0;
+    let mut view = ChartView::new(epoch);
+    assert!(view.request_time_range(start, end, 0.0));
+    assert!(!view.follow);
+    assert_eq!(view.auto_live_deadline_ms(), None);
+    assert!(!view.apply_frame_request(1.0));
+    assert!(view.apply_frame_request(900.0));
+    let (_, span_900) = view.visible_x(900.0);
+    assert!((span_900 - (end - start) as f32).abs() < 0.1);
+    assert!(view.apply_frame_request(1400.0));
+    let (_, span_1400) = view.visible_x(1400.0);
+    assert!((span_1400 - span_900).abs() < 0.1);
+    assert!(!view.apply_frame_request(1400.0));
+    view.pan_x_px(10.0, epoch + 1_000_000.0, 1400.0);
+    let anchor_after_pan = view.right_time_ms;
+    assert!(!view.apply_frame_request(900.0));
+    assert_eq!(view.right_time_ms, anchor_after_pan);
+}

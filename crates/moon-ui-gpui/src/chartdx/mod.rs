@@ -1227,5 +1227,12 @@ pub struct ChartEngine {
     orders: OrdersStyle,
     scale: Option<f32>,
     follow: bool,
+    /// Whether this engine draws a CLOSED interval rather than the live edge.
+    ///
+    /// A historical viewer has no "now" to follow, so the application-wide Live flag has no
+    /// authority over it. The flag lives here rather than being checked at the one call site
+    /// because `set_follow` is reachable from the render pass, the toolbar and FireTest alike:
+    /// guarding the caller would leave the next caller to rediscover the rule.
+    historical: bool,
     present_rate_hz: f32,
 }
