@@ -1000,3 +1000,142 @@ fn a_zero_core_pnl_prints_nothing() {
         .expect("a real amount prints");
     assert!(text.ends_with("-12.4"), "{text:?}");
 }
+
+/// A period's readout, as the sync path hands one over.
+fn volumes(readout: moon_core::market::VolumeSpanReadout) -> LabelInputs {
+    LabelInputs {
+        volumes: vec![(
+            moon_core::market::VolumeSpan::Millis(
+                moon_core::config::LabelWindow::default().millis(),
+            ),
+            readout,
+        )],
+        ..Default::default()
+    }
+}
+
+/// A whole reading of a lopsided minute: three quarters bought.
+fn sample_readout() -> moon_core::market::VolumeSpanReadout {
+    moon_core::market::VolumeSpanReadout {
+        buy_quote: 12_000.0,
+        sell_quote: 4_000.0,
+        buy_base: 0.6,
+        sell_base: 0.2,
+        trades: 418,
+        complete: true,
+        base_exact: true,
+        total_quote_candles: None,
+    }
+}
+
+/// The block's three figures must come from ONE reading: `Bv + Sv` is what `Vol` prints.
+///
+/// Breakage: a total from a second source — which is where it used to come from — lets a chart
+/// print `Bv 12k`, `Sv 4k` and a total that is neither their sum nor anybody's number.
+#[test]
+fn the_volume_total_is_the_sum_of_the_two_sides() {
+    let inputs = volumes(sample_readout());
+    let bought = one_field(ChartLabelField::WindowBuyVolume, inputs.clone()).expect("prints");
+    let sold = one_field(ChartLabelField::WindowSellVolume, inputs.clone()).expect("prints");
+    let total = one_field(ChartLabelField::WindowVolume, inputs.clone()).expect("prints");
+    let share = one_field(ChartLabelField::WindowBuyShare, inputs).expect("prints");
+
+    assert!(bought.contains("12"), "{bought:?}");
+    assert!(sold.contains("4"), "{sold:?}");
+    assert!(total.contains("16"), "12k bought plus 4k sold is 16k: {total:?}");
+    assert!(share.contains("75"), "{share:?}");
+}
+
+/// A period the retained history does not cover is MARKED, never hidden and never presented whole.
+///
+/// Breakage: a chart that says `Bv 12.7k` over a minute it has ten seconds of is stating a figure
+/// the terminal does not have — and the reader has no way to see that from the caption.
+#[test]
+fn an_uncovered_period_is_marked() {
+    let short = moon_core::market::VolumeSpanReadout {
+        complete: false,
+        ..sample_readout()
+    };
+    let text = one_field(ChartLabelField::WindowBuyVolume, volumes(short)).expect("still prints");
+    assert!(text.contains('~'), "{text:?}");
+
+    let whole =
+        one_field(ChartLabelField::WindowBuyVolume, volumes(sample_readout())).expect("prints");
+    assert!(!whole.contains('~'), "{whole:?}");
+}
+
+/// A coin figure over a stretch served by mini-candles is marked too: those rows carry a value and
+/// no quantity, so the coin amount is short by exactly that stretch.
+#[test]
+fn a_coin_figure_is_marked_when_the_aggregates_answered() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.parts[0].units = moon_core::config::VolumeUnits::Base;
+    cfg.rows[0] = row;
+
+    let inexact = moon_core::market::VolumeSpanReadout {
+        base_exact: false,
+        ..sample_readout()
+    };
+    let text = texts_of(&cfg, volumes(inexact)).remove(0);
+    assert!(text.contains('~'), "{text:?}");
+
+    // The same caption in MONEY is whole: the quote halves are exact over every span.
+    let mut money = cfg.clone();
+    money.rows[0].parts[0].units = moon_core::config::VolumeUnits::Quote;
+    let text = texts_of(&money, volumes(inexact)).remove(0);
+    assert!(!text.contains('~'), "{text:?}");
+}
+
+/// The heading prints the PERIOD, and prints it before any history has arrived.
+///
+/// Breakage: a heading that waited for data would take the right-click target with it — the menu
+/// that sets the period would be unreachable exactly while the period is unset.
+#[test]
+fn the_heading_names_the_period_without_any_reading() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowSpanName);
+    cfg.rows[0] = row;
+
+    let text = texts_of(&cfg, LabelInputs::default()).remove(0);
+    assert!(!text.is_empty(), "the heading prints with no volumes at all");
+
+    let mut trades = cfg.clone();
+    trades.rows[0].parts[0].span = moon_core::config::LabelSpan::Trades(500);
+    let text = texts_of(&trades, LabelInputs::default()).remove(0);
+    assert!(text.contains("500"), "a trade span names its count: {text:?}");
+}
+
+/// The bar states the side's share of the whole, and a silent market draws none.
+///
+/// Breakage: a full bar over a market that did not trade reads as "all buying", and a share taken
+/// from the COIN halves would disagree with the bar on the line above whenever the two sides traded
+/// at different prices.
+#[test]
+fn the_bar_is_the_side_s_share_and_a_silent_market_has_none() {
+    let cfg = cfg_of(&[ChartLabelField::WindowBuyVolume]);
+    let cfg_rc = Rc::new(cfg);
+    let mut state = LabelState::default();
+    state.update(
+        &cfg_rc,
+        &Rc::new(ArbViewCfg::default()),
+        volumes(sample_readout()),
+    );
+    let bar = state.texts[0].bar.expect("a buy caption draws a bar");
+    assert!(!bar.sell);
+    assert!((bar.fill - 0.75).abs() < 0.001, "{:?}", bar.fill);
+
+    let silent = moon_core::market::VolumeSpanReadout {
+        buy_quote: 0.0,
+        sell_quote: 0.0,
+        ..sample_readout()
+    };
+    let mut state = LabelState::default();
+    state.update(&cfg_rc, &Rc::new(ArbViewCfg::default()), volumes(silent));
+    assert!(
+        state.texts.first().and_then(|t| t.bar).is_none(),
+        "nothing traded, so there is nothing to compare"
+    );
+}

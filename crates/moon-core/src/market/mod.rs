@@ -29,7 +29,7 @@ pub use source::{
     ChartHistoryCursor, ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError,
     MarketContextReadout, MarketDataSource, MarketFiguresReadout, MarketLabel, MarketLimits,
     MarketRevisions, MarketTickerReadout, MarketWindowsReadout, MaxOrder, MaxOrderSource,
-    ReplayAddress, ReplayAddressError, WindowFigures,
+    ReplayAddress, ReplayAddressError, VolumeSpan, VolumeSpanReadout, WindowFigures,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

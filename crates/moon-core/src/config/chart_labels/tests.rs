@@ -916,11 +916,15 @@ fn the_gap_round_trips_and_is_capped() {
     assert_eq!(back.rows[1].gap, 12);
 }
 
-/// A caption cannot ask for a figure that does not exist over that window: the buy/sell split comes
-/// from the retained trade buckets, which hold five minutes. Switching a caption's field — or a
-/// hand-edited file — is repaired rather than left printing nothing.
+/// Every window is now readable over every field, the split ones included.
+///
+/// The buy/sell figures used to stop at five minutes, which is as far as the protocol's own rolling
+/// buckets reach; the retained mini-candles carry a split of their own and removed that ceiling. A
+/// window the retained history does not actually cover is reported as INCOMPLETE by the readout,
+/// not repaired away here — silently moving a caption from the day to the minute would answer a
+/// different question than the one on screen.
 #[test]
-fn a_window_the_field_cannot_read_is_repaired() {
+fn a_split_figure_keeps_the_long_window_it_was_given() {
     let mut cfg = ChartLabelsCfg::empty();
     let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
     row.push_part(ChartLabelField::WindowBuyShare);
@@ -931,16 +935,91 @@ fn a_window_the_field_cannot_read_is_repaired() {
 
     cfg.sanitize();
 
+    assert_eq!(cfg.rows[0].parts[0].window, LabelWindow::H24);
+    assert_eq!(cfg.rows[0].parts[1].window, LabelWindow::H24);
+}
+
+/// A custom span is repaired into what the history can be asked for, and dropped from a caption
+/// that reads no period at all.
+///
+/// Breakage: a zero span reaches the ring as "the last nothing" and a caption that changed field
+/// would keep obeying a period nothing beside it names — the block's heading would say one thing
+/// and the figure under it would cover another.
+#[test]
+fn a_custom_span_is_clamped_and_dropped_where_it_means_nothing() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.parts[0].span = LabelSpan::Minutes(0);
+    row.push_part(ChartLabelField::WindowSellVolume);
+    row.parts[1].span = LabelSpan::Trades(u32::MAX);
+    row.push_part(ChartLabelField::Coin);
+    row.parts[2].span = LabelSpan::Minutes(15);
+    cfg.rows[0] = row;
+
+    cfg.sanitize();
+
+    assert_eq!(cfg.rows[0].parts[0].span, LabelSpan::Minutes(1));
     assert_eq!(
-        cfg.rows[0].parts[0].window,
-        LabelWindow::M1,
-        "the buy share falls back to a window the trades cover"
+        cfg.rows[0].parts[1].span,
+        LabelSpan::Trades(LABEL_SPAN_TRADES_MAX)
     );
     assert_eq!(
-        cfg.rows[0].parts[1].window,
-        LabelWindow::H24,
-        "a field that reads every window keeps the one it was given"
+        cfg.rows[0].parts[2].span,
+        LabelSpan::Window,
+        "a caption that reads no period keeps none"
     );
+}
+
+/// Two captions over one period are ONE history read, and a trade count ignores the window.
+///
+/// Breakage: the sync path turns every entry here into a read of the retained rings. A module
+/// printing the buying, the selling and their total would pay three times for one answer, on every
+/// pane, several times a second.
+#[test]
+fn the_volume_spans_are_deduplicated() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.parts[0].window = LabelWindow::M5;
+    row.push_part(ChartLabelField::WindowSellVolume);
+    row.parts[1].window = LabelWindow::M5;
+    // The heading prints a SETTING and reads nothing, so it must not order a read of its own.
+    row.push_part(ChartLabelField::WindowSpanName);
+    row.parts[2].window = LabelWindow::H24;
+    // Two counts of the same size differ only by an unused window; they are one read.
+    row.push_part(ChartLabelField::WindowTrades);
+    row.parts[3].span = LabelSpan::Trades(500);
+    row.parts[3].window = LabelWindow::M1;
+    row.push_part(ChartLabelField::WindowVolume);
+    row.parts[4].span = LabelSpan::Trades(500);
+    row.parts[4].window = LabelWindow::H72;
+    cfg.rows[0] = row;
+    cfg.sanitize();
+
+    assert_eq!(
+        cfg.volume_spans(),
+        vec![
+            (LabelSpan::Window, LabelWindow::M5),
+            (LabelSpan::Trades(500), LabelWindow::default()),
+        ]
+    );
+}
+
+/// A hidden module orders no history read.
+///
+/// Breakage: the gate is what keeps a chart printing no volume from walking retained rows on every
+/// market revision — and a module switched off is exactly the case a reader expects to cost nothing.
+#[test]
+fn a_hidden_module_asks_for_no_volume() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.visible = false;
+    cfg.rows[0] = row;
+    cfg.sanitize();
+
+    assert!(cfg.volume_spans().is_empty());
 }
 
 /// The colour threshold is a magnitude, so a negative or non-finite one is treated as ABSENT — the

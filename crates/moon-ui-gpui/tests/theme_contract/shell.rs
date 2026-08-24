@@ -84,7 +84,10 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
         "the sole publisher must compute the visible anchor-aware target at ChartTabs level"
     );
     assert!(
-        chart_tabs.contains("cx.observe(&main, |this, _main, cx| {")
+        // The OBSERVER is the contract, not what its closure calls the entity: the same observer
+        // now also relays captions edited from a chart's own right-click menu, which needs the
+        // handle rather than a discarded argument.
+        chart_tabs.contains("cx.observe(&main, |this,")
             && chart_tabs.contains("this.sync_main_chart_target(cx);")
             && ingest.contains("self.watch_regular_stack_target(&panel, cx);")
             && windows.contains("this.watch_regular_stack_target(&panel, cx);"),

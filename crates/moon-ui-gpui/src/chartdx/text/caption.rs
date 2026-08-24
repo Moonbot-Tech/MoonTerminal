@@ -134,7 +134,7 @@ pub(super) fn caption_geom(
 /// rows is wrong for every other combination — which is how a plate ends up half-covering the text
 /// it exists to make legible.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct CaptionBox {
+pub(in crate::chartdx) struct CaptionBox {
     left: f32,
     right: f32,
     top: f32,
@@ -166,6 +166,19 @@ impl CaptionBox {
         self.right = self.right.max(left + width);
         self.top = self.top.min(top);
         self.bottom = self.bottom.max(top + height);
+    }
+
+    /// The bare rectangle the runs occupy, with no plate padding, or `None` for an empty box.
+    ///
+    /// What a HIT test wants: padding exists so a backing does not crowd the glyphs, and a click
+    /// target grown by it would answer for a few pixels of neighbouring chart.
+    pub(super) fn bounds(&self) -> Option<(f32, f32, f32, f32)> {
+        self.any.then_some((
+            self.left,
+            self.top,
+            self.right - self.left,
+            self.bottom - self.top,
+        ))
     }
 
     /// The padded plate rectangle in DEVICE pixels, or an empty one for a column with no runs.

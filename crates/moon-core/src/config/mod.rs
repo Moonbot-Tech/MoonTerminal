@@ -56,9 +56,10 @@ pub use chart_defaults::{ChartTabDefaults, ChartTabKind};
 pub use chart_labels::{
     ARB_PART_BASE, CHART_LABEL_PARTS, CHART_LABEL_ROWS, ChartLabelField, ChartLabelGroup,
     ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LABEL_GAP_MAX, LABEL_SIZE_MULT_MAX,
-    LABEL_SIZE_MULT_MIN, LABEL_WINDOW_COUNT, LABEL_WRAP_LINES, LabelAlign, LabelColor, LabelFlow,
-    LabelPreset, LabelStyle, LabelWindow, LabelZone, PREFIX_PART_BASE, PnlBasis, ROW_NAME_PART,
-    ROW_RUN_STRIDE, ResolvedLabelStyle, WRAP_PART_BASE,
+    LABEL_SIZE_MULT_MIN, LABEL_SPAN_MINUTES_MAX, LABEL_SPAN_TRADES_MAX, LABEL_WINDOW_COUNT,
+    LABEL_WRAP_LINES, LabelAlign, LabelColor, LabelFlow, LabelPreset, LabelSpan, LabelStyle,
+    LabelWindow, LabelZone, PREFIX_PART_BASE, PnlBasis, ROW_NAME_PART, ROW_RUN_STRIDE,
+    ResolvedLabelStyle, VolumeUnits, WRAP_PART_BASE,
 };
 pub use core_groups::{
     CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX, CORE_GROUPS_MAX, CoreGroup, move_group,

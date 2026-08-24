@@ -7,8 +7,10 @@ mod read;
 mod refresh;
 #[cfg(test)]
 mod tests;
+mod volume;
 
 pub use read::{ReplayAddress, ReplayAddressError};
+pub use volume::{VolumeSpan, VolumeSpanReadout};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -528,22 +530,21 @@ pub struct ArbQuote {
 
 /// One retained-history window, in the figures a caption can print from it.
 ///
-/// Both figures are `Option` for the same reason [`MarketContextReadout`]'s funding is: a coin that
+/// The figure is `Option` for the same reason [`MarketContextReadout`]'s funding is: a coin that
 /// has not traded in the window and a coin whose history has not arrived both produce zero, and a
 /// caption that printed it would claim a quiet market rather than an unknown one.
+///
+/// VOLUME is deliberately not here. It used to be, from a second set of sources — trade buckets for
+/// the short windows, 5-minute candles beyond them — and once the chart learned to print the buying
+/// and the selling halves separately, that became two answers to one question: the halves come from
+/// the split-carrying sources, the total came from candles that carry no split, and `Bv + Sv` did
+/// not have to equal `Vol`. Every traded amount now goes through [`volume::VolumeSpanReadout`],
+/// which produces the halves and their sum from the SAME rows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WindowFigures {
     /// Price movement over the window, in percent. UNSIGNED — this is the range magnitude the
     /// Screener's `Δ` columns show, not a signed change from an average.
     pub delta_pct: Option<f64>,
-    /// Traded volume over the window, in the market's quote currency.
-    pub volume_quote: Option<f64>,
-    /// Share of that volume that was BUYING, in percent.
-    ///
-    /// Only the short windows have it: the buy/sell split comes from the retained trade buckets,
-    /// which cover five minutes, while the longer windows are built from candles that carry no
-    /// split at all.
-    pub buy_share_pct: Option<f64>,
 }
 
 /// Retained-history figures for every window a caption may ask for.
@@ -904,6 +905,12 @@ struct MarketDataSourceInner {
     /// does not hold the source's write side. Never lock it while holding the source lock for
     /// anything but a copy.
     arb_book: Arc<Mutex<arb::ArbBook>>,
+    /// Traded amounts by `(provider, span, market)`; see [`volume`] for what it costs to fill.
+    ///
+    /// Beside the arbitrage book and held the same way — behind its own `Arc<Mutex<_>>` so a read
+    /// takes the handle out of the source lock and then talks to MoonProto with that lock released.
+    /// Locking it while holding the source's write side would invert `remove_client`'s order.
+    volume_book: Arc<Mutex<volume::VolumeBook>>,
     /// Who may currently ask the core for a coarse-timeframe native backfill; see
     /// [`history::NativeBackfillGate`], which owns the claim state and the whole rationale.
     native_backfill: history::NativeBackfillGate,

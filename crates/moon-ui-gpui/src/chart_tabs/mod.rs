@@ -41,6 +41,7 @@ pub(crate) use main_stack::MainChartStack;
 use popup_slot::ChartPopup;
 use sig::chart_tabs_sig;
 
+use crate::chart_tabs::labels_popup::LabelsPopupHost as _;
 use crate::persistence::chart_persist::StackLayoutMode;
 
 use gpui::*;
@@ -552,7 +553,20 @@ impl ChartTabs {
         if group_x_ppm.is_some() {
             main.update(cx, |s, c| s.set_x_ppm(group_x_ppm, false, c));
         }
-        cx.observe(&main, |this, _main, cx| {
+        cx.observe(&main, |this, main, cx| {
+            // Captions edited from a chart's own right-click menu, arriving from the panel through
+            // the stack. Persisted HERE because this is the half that knows which tab spec they
+            // belong to — see `panels::chart::volume_menu`.
+            //
+            // Only while MAIN is the tab on screen: `apply_labels` writes to whichever tab is
+            // active, so an edit relayed while an AddToChart tab is shown would be written into
+            // that tab's spec. It cannot be relayed later either — the edit belongs to the chart it
+            // was made on — so it is taken and dropped rather than held.
+            if let Some(cfg) = main.update(cx, |stack, _| stack.take_pending_labels()) {
+                if matches!(this.active, Tab::Main) {
+                    this.apply_labels(cfg, cx);
+                }
+            }
             // Main owns focus changes, while ChartTabs owns the visible anchor-aware group target.
             this.sync_main_chart_target(cx);
             // A selected Auto core may have arrived before Main had an active slot. Include the
@@ -1034,6 +1048,14 @@ impl ChartTabs {
             let is_active = this
                 .active_stack()
                 .is_some_and(|active| active.entity_id() == stack.entity_id());
+            // Only the ACTIVE tab's edit is taken, and only it is persisted here. A DETACHED
+            // stack carries this observer too and is never active — its edits belong to the
+            // window's own host, which relays them itself, so taking one here would swallow it.
+            if is_active {
+                if let Some(cfg) = stack.update(cx, |stack, _| stack.take_pending_labels()) {
+                    this.apply_labels(cfg, cx);
+                }
+            }
             if is_active {
                 this.sync_main_chart_target(cx);
             }

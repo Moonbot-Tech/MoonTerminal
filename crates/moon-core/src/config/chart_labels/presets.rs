@@ -32,16 +32,19 @@ pub enum LabelPreset {
     Funding,
     /// What the same coin costs on every other venue the core watches.
     Arbitrage,
+    /// How much was bought and how much was sold over a period, with the period named above them.
+    Volumes,
     /// The last detect this core fired on this coin, and the strategy behind what is open.
     Detect,
 }
 
 impl LabelPreset {
     /// Every preset, in menu order: what the chart is, then how it moves, then what is at risk.
-    pub const ALL: [LabelPreset; 7] = [
+    pub const ALL: [LabelPreset; 8] = [
         LabelPreset::Instrument,
         LabelPreset::CoinDeltas,
         LabelPreset::MarketBackdrop,
+        LabelPreset::Volumes,
         LabelPreset::Position,
         LabelPreset::Funding,
         LabelPreset::Arbitrage,
@@ -57,6 +60,7 @@ impl LabelPreset {
             LabelPreset::Position => "chart_labels.preset.position",
             LabelPreset::Funding => "chart_labels.preset.funding",
             LabelPreset::Arbitrage => "chart_labels.preset.arbitrage",
+            LabelPreset::Volumes => "chart_labels.preset.volumes",
             LabelPreset::Detect => "chart_labels.preset.detect",
         }
     }
@@ -85,6 +89,15 @@ impl LabelPreset {
             ],
             LabelPreset::Funding => &[ChartLabelField::Funding, ChartLabelField::FundingIn],
             LabelPreset::Arbitrage => &[ChartLabelField::ArbColumn],
+            // The period first, then the two sides under it — the reference terminal's own block.
+            // The whole volume and the trade count are left OUT and switched on from the chart's
+            // own menu: they answer a second question, and a four-line block over the candles is
+            // already as tall as this corner takes.
+            LabelPreset::Volumes => &[
+                ChartLabelField::WindowSpanName,
+                ChartLabelField::WindowBuyVolume,
+                ChartLabelField::WindowSellVolume,
+            ],
             LabelPreset::Detect => &[
                 ChartLabelField::DetectStrategy,
                 ChartLabelField::DetectMsg,
@@ -106,7 +119,25 @@ impl LabelPreset {
             LabelPreset::CoinDeltas
             | LabelPreset::MarketBackdrop
             | LabelPreset::Position
+            // Over the plot, where the reference terminal prints it: the block is three lines and
+            // the control strip is only as wide as the order book.
+            | LabelPreset::Volumes
             | LabelPreset::Detect => LabelZone::ChartTop,
+        }
+    }
+
+    /// Period the created module's captions read over.
+    ///
+    /// A MINUTE for the volume block, which is what the reference terminal opens it at — and the
+    /// only answer that is also cheap: one, three and five minutes are maintained incrementally by
+    /// the protocol itself, while anything longer is accumulated from retained rows. Creating the
+    /// block at the catalogue's default hour made every new one pay for that accumulation.
+    ///
+    /// `None` leaves the caption's own default alone, which is what every other preset wants.
+    pub fn window(self) -> Option<super::LabelWindow> {
+        match self {
+            LabelPreset::Volumes => Some(super::LabelWindow::M1),
+            _ => None,
         }
     }
 
@@ -119,8 +150,11 @@ impl LabelPreset {
         match self {
             // A column for the roster, and for the detect module: its three captions are a line of
             // prose, a strategy name and another strategy name, and side by side they read as one
-            // run-on sentence.
-            LabelPreset::Arbitrage | LabelPreset::Detect => LabelFlow::Column,
+            // run-on sentence. The volume block stacks for the same reason its bars do: the two
+            // sides are compared against each other, and a comparison reads down, not across.
+            LabelPreset::Arbitrage | LabelPreset::Volumes | LabelPreset::Detect => {
+                LabelFlow::Column
+            }
             _ => LabelFlow::Row,
         }
     }
@@ -130,9 +164,10 @@ impl LabelPreset {
         match self {
             LabelPreset::Instrument | LabelPreset::Funding => LabelAlign::Right,
             LabelPreset::Arbitrage => LabelAlign::Left,
-            LabelPreset::CoinDeltas | LabelPreset::MarketBackdrop | LabelPreset::Position => {
-                LabelAlign::Left
-            }
+            LabelPreset::CoinDeltas
+            | LabelPreset::MarketBackdrop
+            | LabelPreset::Position
+            | LabelPreset::Volumes => LabelAlign::Left,
             // Centred: a detect line is the widest thing the chart prints, and either edge would
             // put it under a module that is already there.
             LabelPreset::Detect => LabelAlign::Center,

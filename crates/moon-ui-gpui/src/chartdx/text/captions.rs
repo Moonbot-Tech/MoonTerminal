@@ -35,8 +35,8 @@ use moon_core::util::fmt::DeltaSign;
 use super::caption::{CaptionBox, CaptionGeom, caption_geom};
 use super::labels::LabelText;
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
-use crate::chartdx::ArbHit;
 use crate::chartdx::RenderState;
+use crate::chartdx::{ArbHit, VolumeHit};
 
 /// Horizontal gap between two captions on the same row.
 const CAPTION_GAP: f32 = 8.0;
@@ -44,6 +44,34 @@ const CAPTION_GAP: f32 = 8.0;
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
+
+/// Width of a buy/sell proportion bar, in the chart's own logical pixels.
+///
+/// Fixed rather than proportional to the figure beside it: the bar is read by comparing it with the
+/// bar on the line above, and two tracks of different lengths cannot be compared at a glance.
+const BAR_W: f32 = 30.0;
+
+/// Height of that bar as a share of the caption's line height, and its floor in logical pixels.
+const BAR_H_RATIO: f32 = 0.34;
+const BAR_H_MIN: f32 = 2.0;
+
+/// One proportion bar, placed and ready for the readout batch.
+///
+/// Published by this pass the way the backing plates are — geometry decided where the text was
+/// actually drawn — and coloured where the rectangles are built, which is the only place that holds
+/// the order book's own bid/ask colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::chartdx) struct CaptionBar {
+    /// `[x, y, width, height]` of the whole track.
+    ///
+    /// LOGICAL pixels while the pass builds it, DEVICE pixels once it is published — converted in
+    /// one place, the way a module's plate is, so the two cannot end up in different spaces.
+    pub dst: [f32; 4],
+    /// Share of that track the filled part takes, `0.0..=1.0`.
+    pub fill: f32,
+    /// Whether this is the selling side.
+    pub sell: bool,
+}
 /// Number of backing plates a pane publishes: one per MODULE.
 ///
 /// Per module, because that is whose switch it is — see `ChartLabelRow::plate`. One plate for a
@@ -229,6 +257,12 @@ impl RenderState {
         // the buffer is reused, so a chart with an arbitrage column allocates nothing per frame.
         let mut hits = std::mem::take(&mut self.panes[idx].arb_hits);
         hits.clear();
+        // The SCRATCH buffer, not the published one: what was published has to stay in place until
+        // the comparison below, or "did the geometry move" is answered against an empty vector.
+        let mut bars = std::mem::take(&mut self.panes[idx].caption_bars_scratch);
+        bars.clear();
+        let mut vol_hits = std::mem::take(&mut self.panes[idx].volume_boxes);
+        vol_hits.clear();
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
         // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
         // during the pass: carrying entries across panes would leak a Vec per frame and let a
@@ -244,14 +278,47 @@ impl RenderState {
             caption_fg,
             &mut plates,
             &mut hits,
+            &mut bars,
+            &mut vol_hits,
         );
         self.panes[idx].labels.texts = texts;
         self.panes[idx].arb_hits = hits;
         result?;
-        let changed = self.panes[idx].caption_plates != plates;
+        for bar in &mut bars {
+            let sf = geom.scale_factor;
+            bar.dst = [
+                bar.dst[0] * sf,
+                bar.dst[1] * sf,
+                bar.dst[2] * sf,
+                bar.dst[3] * sf,
+            ];
+        }
+        // The bars ride the plates' own "did the geometry move" flag: both are published to the
+        // readout batch, and a bar whose fill changed has to reach it exactly like a plate that
+        // moved.
+        let changed =
+            self.panes[idx].caption_plates != plates || self.panes[idx].caption_bars != bars;
         if changed {
             self.panes[idx].caption_plates = plates;
+            // Swapped rather than assigned: the published bars become the next pass's scratch, so
+            // neither buffer is reallocated and what is published is replaced only when it moved.
+            std::mem::swap(&mut self.panes[idx].caption_bars, &mut bars);
         }
+        self.panes[idx].caption_bars_scratch = bars;
+        // Rebuilt in place so a chart with a volume block allocates nothing per frame.
+        let hits = &mut self.panes[idx].volume_hits;
+        hits.clear();
+        hits.extend(vol_hits.iter().filter_map(|(row, box_)| {
+            let (x, y, w, h) = box_.bounds()?;
+            Some(VolumeHit {
+                x,
+                y,
+                w,
+                h,
+                row: *row,
+            })
+        }));
+        self.panes[idx].volume_boxes = vol_hits;
         Ok(changed)
     }
 
@@ -268,6 +335,8 @@ impl RenderState {
         caption_fg: Hsla,
         plates: &mut [[f32; 4]; CAPTION_PLATES],
         hits: &mut Vec<ArbHit>,
+        bars: &mut Vec<CaptionBar>,
+        vol_hits: &mut Vec<(usize, CaptionBox)>,
     ) -> anyhow::Result<()> {
         let Some(corner) = corner else {
             return Ok(());
@@ -335,6 +404,8 @@ impl RenderState {
                     downward,
                     caption_fg,
                     hits,
+                    bars,
+                    vol_hits,
                 )?;
                 taken.set(align, used_w);
                 // A module lives in exactly one band, so a band writes only its own slots and
@@ -510,6 +581,8 @@ impl RenderState {
         downward: bool,
         caption_fg: Hsla,
         hits: &mut Vec<ArbHit>,
+        bars: &mut Vec<CaptionBar>,
+        vol_hits: &mut Vec<(usize, CaptionBox)>,
     ) -> anyhow::Result<(Vec<(usize, CaptionBox)>, f32)> {
         let mut plates: Vec<(usize, CaptionBox)> = Vec::new();
         // The band is as wide as its widest LINE — what the bands drawn after it have to clear.
@@ -561,6 +634,8 @@ impl RenderState {
                 caption_fg,
                 &mut plates,
                 hits,
+                bars,
+                vol_hits,
             )?;
             used_w = used_w.max(row_w);
             any_drawn = true;
@@ -595,6 +670,8 @@ impl RenderState {
         caption_fg: Hsla,
         plates: &mut Vec<(usize, CaptionBox)>,
         hits: &mut Vec<ArbHit>,
+        bars: &mut Vec<CaptionBar>,
+        vol_hits: &mut Vec<(usize, CaptionBox)>,
     ) -> anyhow::Result<f32> {
         if cells.is_empty() {
             return Ok(0.0);
@@ -779,7 +856,16 @@ impl RenderState {
                     self.caption_wraps[item.wrap_ix] = lines;
                     continue;
                 }
-                let (text, value_w) = fit_caption(ctx, &glued, item, budget - prefix_w);
+                // The bar's track is part of what this caption occupies, so its room is taken out
+                // of the budget BEFORE the text is fitted to what is left. Added afterwards, the
+                // track would be drawn past the width the band actually allotted — over whatever
+                // the layout put beside it — and the plate grown from the same width with it.
+                let bar_reserve = match entry.bar {
+                    Some(_) => CAPTION_GAP + BAR_W,
+                    None => 0.0,
+                };
+                let (text, value_w) =
+                    fit_caption(ctx, &glued, item, budget - prefix_w - bar_reserve);
                 if text.is_empty() {
                     continue;
                 }
@@ -855,9 +941,45 @@ impl RenderState {
                     value_color,
                 )?;
                 crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
-                let w = metrics.width.as_f32() + prefix_w;
+                let mut w = metrics.width.as_f32() + prefix_w;
+                // The proportion bar, placed from the SAME measurement the text was drawn at, so it
+                // cannot drift from the figure it belongs to. It extends the caption's own width,
+                // which is what keeps the module beside it from being drawn over the track.
+                if let Some(bar) = entry.bar {
+                    let line_h = metrics.line_height.as_f32();
+                    let bar_h = (line_h * BAR_H_RATIO).max(BAR_H_MIN);
+                    let bar_y = y + (line_h - bar_h) * 0.5;
+                    // Away from the text in whichever direction the line runs: a right-aligned band
+                    // fills leftwards, so its bar sits to the LEFT of the figure and the block still
+                    // reads as one column.
+                    let bar_x = match rightwards {
+                        true => item_x + w + CAPTION_GAP,
+                        false => item_x - w - CAPTION_GAP - BAR_W,
+                    };
+                    bars.push(CaptionBar {
+                        dst: [bar_x, bar_y, BAR_W, bar_h],
+                        fill: bar.fill.clamp(0.0, 1.0),
+                        sell: bar.sell,
+                    });
+                    w += CAPTION_GAP + BAR_W;
+                }
                 drawn_w = drawn_w.max(w);
                 let box_left = if rightwards { item_x } else { item_x - w };
+                // The module's right-click target grows with every line of it — the heading, the
+                // figures and the bars beside them — so the menu opens from anywhere on the block.
+                // Independent of the plate: a module with its backing switched off is still a
+                // target, and tying the two would make the menu unreachable for it.
+                if entry.volume_menu {
+                    let line_h = metrics.line_height.as_f32();
+                    match vol_hits.iter_mut().find(|(row, _)| *row == item.row) {
+                        Some((_, box_)) => box_.add(box_left, w, y, line_h),
+                        None => {
+                            let mut box_ = CaptionBox::default();
+                            box_.add(box_left, w, y, line_h);
+                            vol_hits.push((item.row, box_));
+                        }
+                    }
+                }
                 // Grown into the box of the MODULE this caption belongs to. A module whose
                 // plate is switched off never opens one, so its captions grow nothing.
                 if item.plate {
@@ -931,9 +1053,15 @@ impl RenderState {
                 // A wrapped caption is as wide as its WIDEST line, not as wide as its first: the
                 // column it sits in is what centres the captions above and below it. Read from the
                 // plan rather than wrapped again — measuring is what the plan exists to do once.
+                // A proportion bar is drawn beside the figure and is part of the column's width:
+                // measured without it, the module beside this one would be placed over the track.
+                let bar_reserve = match entry.bar {
+                    Some(_) => CAPTION_GAP + BAR_W,
+                    None => 0.0,
+                };
                 match self.wrapped(item) {
                     Some(lines) => Some(lines.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)),
-                    None => Some(fit_caption(ctx, &glued, item, budget).1),
+                    None => Some(fit_caption(ctx, &glued, item, budget - bar_reserve).1 + bar_reserve),
                 }
             })
             .fold(0.0_f32, f32::max)
@@ -1078,6 +1206,7 @@ impl RenderState {
             context: pr.label_context,
             figures: pr.label_figures.clone(),
             windows: pr.label_windows,
+            volumes: pr.label_volumes.clone(),
             arb: pr.label_arb.clone(),
             arb_reachable: pr.label_arb_reachable.clone(),
             now_ms: pr.label_now_ms,
