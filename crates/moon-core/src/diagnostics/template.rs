@@ -217,6 +217,30 @@ ENV: MOON_ORDER_DIAG=GateF/BTC",
     },
     KeyDoc {
         section: "channels",
+        key: "coin_naming",
+        default: "\"\"",
+        doc: "Coin spellings -> `logs/coin_naming.log`: how each core's catalog names one coin — its market name,
+`market_currency`, `market_currency_canonic`, the long name, the quote currency, and the two fields
+nothing else reads, `leading1000` and `k1000`.
+
+Answers \"is `1kBONK` on one exchange the same coin as `1000BONK` on another, and by how much do
+their prices differ in scale\" — the question the arbitrage column and the comparison tab both have
+to settle, and the one thing no rule over a market NAME can answer, because `1000SATS` is a real
+ticker while `1kBONKPERP` is BONK with a multiplier.
+
+A SELECTOR, and a list: the interesting coins are few and named up front.
+  \"\"                        off
+  \"BONK\"                    every core, markets whose spellings contain BONK
+  \"BONK,PEPE,1000SATS,BTC\"  several at once
+Entries match as case-insensitive substrings against the market name and every catalog spelling, so
+\"BONK\" finds both `1000BONKUSDT` and `1kBONKPERP`.
+Each market is written ONCE per selector — this is a property of the catalog, not an event — so the
+file stays a short table. Editing the selector starts a fresh sweep.
+COST: negligible; a catalog search per core on the reconciliation tick, and nothing once written.
+ENV: MOON_COIN_NAMING=BONK,PEPE",
+    },
+    KeyDoc {
+        section: "channels",
         key: "assets",
         default: "false",
         doc: "\
