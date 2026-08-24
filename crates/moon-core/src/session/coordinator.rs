@@ -38,6 +38,7 @@ impl SessionManager {
     ) {
         let now = Instant::now();
         self.reconcile_providers();
+        self.sweep_coin_naming();
 
         // 1. A provider's desired markets are the union of open charts for cores assigned to that
         //    provider. The input is a list of pairs because one core may have several open markets
@@ -150,6 +151,32 @@ impl SessionManager {
                     orderbook_markets,
                 });
             }
+        }
+    }
+
+    /// Write each core's spelling of the coins the naming channel follows.
+    ///
+    /// Here rather than in the market source because the line needs the SERVER's name and its
+    /// venue, which the source does not hold — and here rather than on a timer of its own because
+    /// this tick already runs whenever the market state moves, and the channel costs one atomic
+    /// load while it is off.
+    fn sweep_coin_naming(&self) {
+        if !crate::coin_naming::enabled() {
+            return;
+        }
+        for sess in &self.sessions {
+            // The directory's caption where it knows the platform, the core's own where it does
+            // not: an unnamed venue must still identify its row.
+            let venue = self
+                .core_venue
+                .get(&sess.id)
+                .map(|venue| match venue.resolved() {
+                    Some(v) => v.brand.display().to_string(),
+                    None => venue.reported.clone(),
+                })
+                .unwrap_or_default();
+            self.market_source
+                .dump_coin_naming(sess.id, &sess.name, &venue);
         }
     }
 

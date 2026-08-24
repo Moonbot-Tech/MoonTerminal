@@ -44,6 +44,8 @@ static MARKETS: AtomicBool = AtomicBool::new(false);
 /// on every order of every core would be the one diagnostic that costs something while OFF.
 static ORDERS_ON: AtomicBool = AtomicBool::new(false);
 static ORDERS_SELECTOR: RwLock<String> = RwLock::new(String::new());
+static COIN_NAMING_ON: AtomicBool = AtomicBool::new(false);
+static COIN_NAMING_SELECTOR: RwLock<String> = RwLock::new(String::new());
 
 static RING_LINES: AtomicUsize = AtomicUsize::new(config::DEFAULT_RING_LINES);
 static BALANCE_WINDOW_SEC: AtomicU64 = AtomicU64::new(config::DEFAULT_BALANCE_WINDOW_SEC);
@@ -109,6 +111,27 @@ pub fn with_orders_selector<R>(f: impl FnOnce(&str) -> R) -> Option<R> {
     Some(f(guard.as_str()))
 }
 
+/// Whether the coin-spelling channel is following anything at all.
+#[inline]
+pub fn coin_naming_on() -> bool {
+    COIN_NAMING_ON.load(Ordering::Relaxed)
+}
+
+/// Run `f` on the coin-spelling selector, or return `None` when the channel is off.
+///
+/// Borrowed rather than cloned for the same reason the order selector is: this is asked once per
+/// market per sweep, and the off case must cost one atomic load. `f` must not log — it runs under
+/// a read lock this module also takes for writing.
+pub fn with_coin_naming_selector<R>(f: impl FnOnce(&str) -> R) -> Option<R> {
+    if !coin_naming_on() {
+        return None;
+    }
+    let guard = COIN_NAMING_SELECTOR
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    Some(f(guard.as_str()))
+}
+
 /// Lines the Log panel keeps in memory.
 #[inline]
 pub fn ring_lines() -> usize {
@@ -150,6 +173,16 @@ fn channel_dir() -> &'static std::path::PathBuf {
 /// the name, which channel files do not carry. They grow until deleted by hand, exactly as they did
 /// in the working directory — being in `logs/` makes them findable, not self-limiting.
 pub fn channel_line(file: &str, line: &str) {
+    channel_lines(file, std::slice::from_ref(&line.to_string()));
+}
+
+/// Append several lines to a channel's file under ONE open, reporting whether they landed.
+///
+/// A channel that writes a table rather than an event uses this: one open per row put thousands of
+/// blocking syscalls on the main thread the moment a switch was saved. The boolean exists for the
+/// same kind of channel — one that must know whether to try again, rather than mark the subject
+/// written and never return to it.
+pub fn channel_lines(file: &str, lines: &[String]) -> bool {
     use std::io::Write;
     let path = channel_dir().join(file);
     let open = || {
@@ -164,9 +197,15 @@ pub fn channel_line(file: &str, line: &str) {
         let _ = std::fs::create_dir_all(channel_dir());
         open()
     });
-    if let Ok(mut f) = handle {
-        let _ = writeln!(f, "{line}");
+    let Ok(mut f) = handle else {
+        return false;
+    };
+    let mut body = String::new();
+    for line in lines {
+        body.push_str(line);
+        body.push('\n');
     }
+    f.write_all(body.as_bytes()).is_ok()
 }
 
 /// Read the file and the environment, publish the result, and return it.
@@ -271,6 +310,25 @@ fn apply(cfg: &DiagCfg) {
     }
     if on {
         ORDERS_ON.store(true, Ordering::Relaxed);
+    }
+
+    // Same order as the selector above, and for the same reason: the flag falls before the value
+    // is cleared and rises after it is set, so the channel is never on with a selector that does
+    // not belong to it. `record` re-checks the flag before writing, which is what makes the
+    // remaining window harmless.
+    let coins = cfg.channels.coin_naming.trim().to_string();
+    let coins_on = !coins.is_empty();
+    if !coins_on {
+        COIN_NAMING_ON.store(false, Ordering::Relaxed);
+    }
+    {
+        let mut guard = COIN_NAMING_SELECTOR
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = coins;
+    }
+    if coins_on {
+        COIN_NAMING_ON.store(true, Ordering::Relaxed);
     }
 
     // Poison recovered, like the selector above: a skipped store here would leave `active()`

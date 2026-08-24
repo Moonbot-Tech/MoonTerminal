@@ -997,6 +997,61 @@ impl MarketDataSource {
         out
     }
 
+    /// Write one core's catalog spellings for the coins the naming channel follows.
+    ///
+    /// Reads the core's OWN snapshot rather than its provider's: the question is how THIS core
+    /// spells a coin, and under deduplication two cores of one exchange share a provider while
+    /// their catalogs are what the terminal reads names from.
+    ///
+    /// Costs one atomic load when the channel is off and a set lookup once the core has been
+    /// written, so it can sit on the reconciliation tick without scanning a market universe
+    /// several times a second — see [`crate::coin_naming`].
+    ///
+    /// Args:
+    ///     core: Core whose catalog is being read.
+    ///     core_name: Server name as the user sees it.
+    ///     venue: Exchange caption, for reading the table without resolving core ids.
+    pub fn dump_coin_naming(&self, core: CoreId, core_name: &str, venue: &str) {
+        let Some(queries) = crate::coin_naming::queries_for(core) else {
+            return;
+        };
+        let Some(snapshot) = self
+            .core_client(core)
+            .and_then(|client| client.snapshot_versioned())
+        else {
+            return;
+        };
+        // Copied out of the market lock before anything is written: the channel appends to a file,
+        // and doing that with a market held would put disk I/O inside a lock the feed threads take.
+        let mut rows: Vec<crate::coin_naming::CatalogNaming> = Vec::new();
+        for query in &queries {
+            for handle in snapshot
+                .markets()
+                .search(query, crate::coin_naming::MARKETS_PER_CORE)
+            {
+                let key = handle.name().to_string();
+                if rows.iter().any(|row| row.key == key) {
+                    continue;
+                }
+                rows.push(handle.with(|m| crate::coin_naming::CatalogNaming {
+                    key: key.clone(),
+                    // A DIFFERENT field from the key above, which is `bn_market_name`. On a
+                    // multiplier coin these two are exactly where the disagreement can show, so
+                    // both are printed.
+                    name: m.market_name.clone(),
+                    classic: m.market_name_mb_classic.clone(),
+                    currency: m.market_currency.clone(),
+                    canonic: m.market_currency_canonic.clone(),
+                    long: m.market_currency_long.clone(),
+                    base: m.base_currency.clone(),
+                    leading1000: m.leading1000.clone(),
+                    k1000: m.k1000,
+                }));
+            }
+        }
+        crate::coin_naming::record_core(core, core_name, venue, &rows);
+    }
+
     /// Search the provider's market universe for a terminal coin-search box.
     ///
     /// Returns canonical market names (e.g. `"BTCUSDT"`) ranked by MoonProto's

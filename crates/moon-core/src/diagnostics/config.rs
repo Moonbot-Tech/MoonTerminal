@@ -52,6 +52,10 @@ pub struct Channels {
     pub orders: String,
     pub assets: bool,
     pub markets: bool,
+    /// Coin-spelling SELECTOR, not a flag: `""` off, or a comma-separated list of coins
+    /// (`"BONK,1000SATS"`) whose catalog spellings are dumped once per core. See
+    /// `crate::coin_naming`.
+    pub coin_naming: String,
 }
 
 /// `[limits]` — sizes and collapse windows, in effect whether or not anything above is on.
@@ -102,6 +106,7 @@ impl DiagCfg {
             || c.assets
             || c.markets
             || !c.orders.trim().is_empty()
+            || !c.coin_naming.trim().is_empty()
     }
 
     /// Human-readable list of active switches for the warning line, or `None` when all are off.
@@ -126,8 +131,12 @@ impl DiagCfg {
         flag("channels.detect", self.channels.detect);
         flag("channels.assets", self.channels.assets);
         flag("channels.markets", self.channels.markets);
-        // The two string-valued switches carry their value: "orders" alone would not say which
+        // The string-valued switches carry their value: "orders" alone would not say which
         // market is being followed, and that is the whole content of the setting.
+        let coin_naming = self.channels.coin_naming.trim();
+        if !coin_naming.is_empty() {
+            on.push(format!("channels.coin_naming={coin_naming}"));
+        }
         let orders = self.channels.orders.trim();
         if !orders.is_empty() {
             on.push(format!("channels.orders={orders}"));
@@ -182,6 +191,13 @@ pub fn apply_env(cfg: &mut DiagCfg, get: impl Fn(&str) -> Option<String>) {
     // everything" in the existing selector, so it must not be confused with the unset case.
     if let Some(v) = get("MOON_ORDER_DIAG") {
         cfg.channels.orders = if v.is_empty() { "1".to_string() } else { v };
+    }
+    // A list of coins, so an empty value cannot mean "everything" the way the order selector's
+    // does: dumping every market of every core is not an answer anyone can read.
+    if let Some(v) = get("MOON_COIN_NAMING") {
+        if !v.trim().is_empty() {
+            cfg.channels.coin_naming = v;
+        }
     }
 }
 
