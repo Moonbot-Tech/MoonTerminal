@@ -344,6 +344,8 @@ pub struct ChartTabs {
     layout_scroll_input: Entity<MoonInputState>,
     /// Detect-cap field, shown in the layout popup on tabs detects actually reach.
     layout_max_charts_input: Entity<MoonInputState>,
+    /// Minimum-slot field of the screen divider, shown only in FIT-stretch.
+    layout_min_slot_input: Entity<MoonInputState>,
     /// Custom-tab name field, shown only for `Custom` in the layout popup.
     custom_name_input: Entity<MoonInputState>,
     /// Per-window market-search input in the tab strip; available markets depend on the active
@@ -418,6 +420,7 @@ impl ChartTabs {
             main_candle_view,
             main_chart_graphics,
             main_chart_labels,
+            main_grid,
             restore_pending,
         ): (
             Option<f32>,
@@ -437,6 +440,7 @@ impl ChartTabs {
             Option<moon_core::market::CandleViewCfg>,
             Option<moon_core::config::ChartGraphicsCfg>,
             Option<moon_core::config::ChartLabelsCfg>,
+            (Option<u8>, Option<bool>, Option<u16>),
             Vec<_>,
         ) = {
             let specs = &backend.read(cx).chart_specs;
@@ -458,6 +462,9 @@ impl ChartTabs {
             let main_candle_view = main_spec.and_then(|s| s.candle_view);
             let main_chart_graphics = main_spec.and_then(|s| s.chart_graphics);
             let main_chart_labels = main_spec.and_then(|s| s.chart_labels.clone());
+            let main_grid = main_spec.map_or((None, None, None), |s| {
+                (s.layout_columns, s.layout_columns_exact, s.layout_min_slot)
+            });
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -478,6 +485,7 @@ impl ChartTabs {
                 main_candle_view,
                 main_chart_graphics,
                 main_chart_labels,
+                main_grid,
                 pending,
             )
         };
@@ -487,6 +495,11 @@ impl ChartTabs {
         if main_layout.0.is_some() || main_layout.1.is_some() || main_layout.2.is_some() {
             main.update(cx, |p, pcx| {
                 p.set_layout(main_layout.0, main_layout.1, main_layout.2, pcx)
+            });
+        }
+        if main_grid.0.is_some() || main_grid.1.is_some() || main_grid.2.is_some() {
+            main.update(cx, |p, pcx| {
+                p.set_layout_columns(main_grid.0, main_grid.1, main_grid.2, pcx)
             });
         }
         if main_orderbook.is_some() {
@@ -665,10 +678,12 @@ impl ChartTabs {
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_max_charts_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let layout_min_slot_input = cx.new(|cx| MoonInputState::new(window, cx));
         for input in [
             &layout_fit_input,
             &layout_scroll_input,
             &layout_max_charts_input,
+            &layout_min_slot_input,
         ] {
             common::subscribe_layout_commit(input, cx);
         }
@@ -725,6 +740,7 @@ impl ChartTabs {
             layout_fit_input,
             layout_scroll_input,
             layout_max_charts_input,
+            layout_min_slot_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),

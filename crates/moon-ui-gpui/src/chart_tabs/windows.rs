@@ -461,6 +461,7 @@ impl ChartTabs {
                         Option<moon_core::config::ChartGraphicsCfg>,
                         Option<moon_core::config::ChartLabelsCfg>,
                         Option<bool>,
+                        (Option<u8>, Option<bool>, Option<u16>),
                     )> = {
                         let specs = &this.backend.read(cx).chart_specs;
                         specs
@@ -487,6 +488,11 @@ impl ChartTabs {
                                         s.chart_graphics,
                                         s.chart_labels.clone(),
                                         s.arrival_flash,
+                                        (
+                                            s.layout_columns,
+                                            s.layout_columns_exact,
+                                            s.layout_min_slot,
+                                        ),
                                     )
                                 })
                             })
@@ -506,6 +512,7 @@ impl ChartTabs {
                         chart_graphics,
                         chart_labels,
                         arrival_flash,
+                        grid,
                     )) = custom
                     {
                         panel.update(cx, |s, c| {
@@ -545,6 +552,9 @@ impl ChartTabs {
                             // restored window from flashing its whole set once on startup.
                             if arrival_flash.is_some() {
                                 s.set_arrival_flash(arrival_flash, c);
+                            }
+                            if grid.0.is_some() || grid.1.is_some() || grid.2.is_some() {
+                                s.set_layout_columns(grid.0, grid.1, grid.2, c);
                             }
                             for (core, market) in &coins {
                                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

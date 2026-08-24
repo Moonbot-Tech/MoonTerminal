@@ -75,6 +75,8 @@ pub(super) struct DetachedChartHost {
     layout_scroll_input: Entity<MoonInputState>,
     /// Detect-cap input in the ⚙ popup, on windows detects actually reach.
     layout_max_charts_input: Entity<MoonInputState>,
+    /// Minimum-slot input of the screen divider, shown only in FIT-stretch.
+    layout_min_slot_input: Entity<MoonInputState>,
     /// Custom-tab name input in the ⚙ popup, only when this window holds a detached Custom tab.
     custom_name_input: Entity<MoonInputState>,
     /// Window-header market-search input; its universe depends on this window bucket's cores.
@@ -221,6 +223,7 @@ impl DetachedChartHost {
                     s.x_ppm,
                     s.arrival_flash,
                     (s.max_charts, s.max_charts_evict),
+                    (s.layout_columns, s.layout_columns_exact, s.layout_min_slot),
                 )
             })
         });
@@ -242,6 +245,7 @@ impl DetachedChartHost {
             saved_x_ppm,
             saved_arrival_flash,
             saved_max_charts,
+            saved_grid,
         )) = saved
         {
             if m.is_some() || hf.is_some() || hs.is_some() {
@@ -305,14 +309,21 @@ impl DetachedChartHost {
                     p.set_max_charts(saved_max_charts.0, saved_max_charts.1, pcx)
                 });
             }
+            if saved_grid.0.is_some() || saved_grid.1.is_some() || saved_grid.2.is_some() {
+                panel.update(cx, |p, pcx| {
+                    p.set_layout_columns(saved_grid.0, saved_grid.1, saved_grid.2, pcx)
+                });
+            }
         }
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_max_charts_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let layout_min_slot_input = cx.new(|cx| MoonInputState::new(window, cx));
         for input in [
             &layout_fit_input,
             &layout_scroll_input,
             &layout_max_charts_input,
+            &layout_min_slot_input,
         ] {
             super::common::subscribe_layout_commit(input, cx);
         }
@@ -378,6 +389,7 @@ impl DetachedChartHost {
             layout_fit_input,
             layout_scroll_input,
             layout_max_charts_input,
+            layout_min_slot_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),
@@ -756,6 +768,9 @@ impl LayoutPopupHost for DetachedChartHost {
     fn max_charts_input(&self) -> &Entity<MoonInputState> {
         &self.layout_max_charts_input
     }
+    fn min_slot_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_min_slot_input
+    }
     fn rename_input(&self) -> &Entity<MoonInputState> {
         &self.custom_name_input
     }
@@ -777,6 +792,13 @@ impl LayoutPopupHost for DetachedChartHost {
     fn current_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>) {
         let p = self.panel.read(cx);
         (p.max_charts(), p.max_charts_evict())
+    }
+    fn current_grid(&self, cx: &App) -> (Option<u8>, Option<bool>, Option<u16>) {
+        self.panel.read(cx).layout_columns()
+    }
+    /// Broom mode lays the stack out as one row, so the divider has nothing to say there.
+    fn divider_applies(&self, cx: &App) -> bool {
+        !self.panel.read(cx).compare_orderbook_only()
     }
     /// Never: a detached window holds an AddToChart or Custom tab, never the Main one.
     fn target_is_main(&self, _cx: &App) -> bool {
@@ -841,6 +863,10 @@ impl LayoutPopupHost for DetachedChartHost {
             scale,
             orientation,
             self.read_max_charts(cx),
+            {
+                let (columns, exact, _) = self.current_grid(cx);
+                (columns, exact, self.read_min_slot(cx))
+            },
         );
         self.applicable_here(values, cx)
     }

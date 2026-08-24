@@ -171,6 +171,16 @@ pub struct ChartTabSpec {
     /// Per-window/tab stack orientation. None defaults to Vertical.
     #[serde(default)]
     pub layout_orientation: Option<StackOrientation>,
+    /// Screen divider: how many columns this tab lays its charts out in. None or 1 is the single
+    /// column every stack was before the setting existed.
+    #[serde(default)]
+    pub layout_columns: Option<u8>,
+    /// Whether the divider is exact. None works up to it as the charts stop fitting.
+    #[serde(default)]
+    pub layout_columns_exact: Option<bool>,
+    /// Smallest slot the divider works to in FIT-stretch, which names no slot size of its own.
+    #[serde(default)]
+    pub layout_min_slot: Option<u16>,
     /// Whether a chart arriving in this tab's stack flashes its accent border. None defaults to
     /// enabled, which is what every file written before this field existed says.
     #[serde(default)]
@@ -268,6 +278,9 @@ impl ChartTabSpec {
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
+            layout_columns: None,
+            layout_columns_exact: None,
+            layout_min_slot: None,
             arrival_flash: None,
             max_charts: None,
             max_charts_evict: None,

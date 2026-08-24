@@ -372,6 +372,9 @@ impl LayoutPopupHost for ChartTabs {
     fn max_charts_input(&self) -> &Entity<MoonInputState> {
         &self.layout_max_charts_input
     }
+    fn min_slot_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_min_slot_input
+    }
     fn rename_input(&self) -> &Entity<MoonInputState> {
         &self.custom_name_input
     }
@@ -397,8 +400,28 @@ impl LayoutPopupHost for ChartTabs {
     fn current_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>) {
         self.active_max_charts(cx)
     }
+    fn current_grid(&self, cx: &App) -> (Option<u8>, Option<bool>, Option<u16>) {
+        match &self.active {
+            Tab::Main => self.main.read(cx).layout_columns(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .map_or((None, None, None), |p| p.read(cx).layout_columns()),
+        }
+    }
     fn target_is_main(&self, _cx: &App) -> bool {
         matches!(self.active, Tab::Main)
+    }
+    /// Broom mode lays the stack out as one row, so the divider has nothing to say there.
+    fn divider_applies(&self, cx: &App) -> bool {
+        let broom = match &self.active {
+            // Main has a broom mode of its own, and `active_stack()` is `None` there — asking it
+            // would have quietly answered "not in broom" for the one tab that can be.
+            Tab::Main => self.main.read(cx).compare_orderbook_only(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .is_some_and(|p| p.read(cx).compare_orderbook_only()),
+        };
+        !broom
     }
     fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
         self.active_action_btn_pos_opt(cx)
@@ -461,6 +484,10 @@ impl LayoutPopupHost for ChartTabs {
             self.active_scale_value(cx),
             self.active_layout_orientation(cx),
             self.read_max_charts(cx),
+            {
+                let (columns, exact, _) = self.current_grid(cx);
+                (columns, exact, self.read_min_slot(cx))
+            },
         );
         self.applicable_here(values, cx)
     }

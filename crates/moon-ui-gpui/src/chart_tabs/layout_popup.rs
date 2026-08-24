@@ -13,6 +13,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::stack::grid;
 use crate::design;
 use crate::panels::{
     popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
@@ -157,6 +158,23 @@ pub(super) const MAX_H: u16 = 4000;
 /// GPU canvas.
 pub(super) const MAX_CHARTS_MAX: u16 = 999;
 
+/// The screen divider: the number, whether it is exact, and the minimum slot it works to.
+///
+/// Bundled like [`DetectFlow`], and for the same reason: the three belong to one frame.
+pub(super) struct GridControls<'a> {
+    /// Whether to draw the divider at all. Comparison's broom mode lays out one row by
+    /// construction, so a number there would be one the layout does not follow.
+    pub shown: bool,
+    /// The divider as it stands, already clamped to the supported range.
+    pub columns: u8,
+    /// Whether the divider is exact rather than a ceiling worked up to.
+    pub exact: bool,
+    /// The minimum-slot field, or `None` in a mode that states a slot size of its own.
+    pub min_slot_input: Option<&'a Entity<MoonInputState>>,
+    pub on_pick_columns: DividerPick,
+    pub on_toggle_exact: DetectFlowToggle,
+}
+
 /// The arrival/detect controls, or `None` on a tab that draws no arrival flash at all.
 ///
 /// Bundled rather than passed as four more parameters: this function already carries fifteen
@@ -183,6 +201,9 @@ pub(super) struct DetectCap<'a> {
 
 /// One detect-flow checkbox handler, named so the fields above stay readable.
 type DetectFlowToggle = Box<dyn Fn(bool, &mut App)>;
+
+/// Receives the column count picked in the divider's segmented control.
+type DividerPick = Box<dyn Fn(u8, &mut App)>;
 
 /// Popup CONTENT width in rendered pixels: the two 110-unit FIT/SCROLL segments plus the group
 /// frame around them. `MoonPopover` adds its own padding and border outside this.
@@ -219,6 +240,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2, S2>(
     time_axis_visible: bool,
     line_labels: bool,
     cursor_labels: bool,
+    grid: GridControls<'_>,
     detect_flow: Option<DetectFlow<'_>>,
     p: MoonPalette,
     cx: &App,
@@ -321,6 +343,89 @@ where
             .text_color(rgb(p.text_muted))
             .child(line.to_string())
     }));
+
+    // Screen divider: how many columns the stack lays its charts out in, whether that number is
+    // exact, and — only where the mode names no slot size of its own — the smallest slot the
+    // divider works to. In a horizontal stack the same number divides ROWS, so the caption flips.
+    let GridControls {
+        shown: divider_shown,
+        columns: divider,
+        exact: divider_exact,
+        min_slot_input,
+        on_pick_columns,
+        on_toggle_exact,
+    } = grid;
+    let divider_items: Vec<MoonSegmentItem> = (1..=grid::MAX_COLUMNS)
+        .map(|n| {
+            let mut it = MoonSegmentItem::new("", n.to_string()).width(30.0);
+            if n == divider {
+                it = it.selected(true);
+            }
+            it
+        })
+        .collect();
+    let divider_seg = MoonSegmentedControl::new(format!("{id}-divider"))
+        .accent(MoonAccent::Blue)
+        .items(divider_items)
+        .on_click(move |ix, _, _, cx| on_pick_columns(ix as u8 + 1, cx))
+        .render();
+    let divider_row = h_flex()
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .child(
+            div()
+                .flex_1()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text))
+                .child(match horizontal {
+                    true => t!("chart.layout.divider_rows").to_string(),
+                    false => t!("chart.layout.divider_columns").to_string(),
+                }),
+        )
+        .child(divider_seg);
+    let exact_cb = MoonCheckbox::new(SharedString::from(format!("{id}-divider-exact")))
+        .label(t!("chart.layout.divider_exact").to_string())
+        .checked(divider_exact)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| on_toggle_exact(*ch, app));
+    // Shown only where it can act: FIT-stretch, whose slots share the space and so state no size
+    // that could say when the charts have stopped fitting.
+    let min_slot_row = min_slot_input.map(|input| {
+        v_flex()
+            .gap(design::ui_px(cx, 2.0))
+            .child(
+                h_flex()
+                    .gap(design::ui_px(cx, 6.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(design::t_caption(cx))
+                            .text_color(rgb(p.text))
+                            .child(match horizontal {
+                                true => t!("chart.layout.min_slot_width").to_string(),
+                                false => t!("chart.layout.min_slot_height").to_string(),
+                            }),
+                    )
+                    .child(
+                        div().w(px(64.0)).child(
+                            MoonInput::new(SharedString::from(format!("{id}-min-slot")))
+                                .state(input)
+                                .small(),
+                        ),
+                    )
+                    .child(div().text_color(rgb(p.text_muted)).child("px")),
+            )
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(match horizontal {
+                        true => t!("chart.layout.min_slot_hint_width").to_string(),
+                        false => t!("chart.layout.min_slot_hint").to_string(),
+                    }),
+            )
+    });
 
     // "Order book" toggles the order book on this tab's charts.
     let orderbook_cb = MoonCheckbox::new(SharedString::from(format!("{id}-orderbook")))
@@ -523,7 +628,10 @@ where
                     .gap(design::ui_px(cx, 6.0))
                     .child(seg)
                     .child(height_line)
-                    .child(hint_block),
+                    .child(hint_block)
+                    .children(divider_shown.then_some(divider_row))
+                    .children(divider_shown.then_some(exact_cb))
+                    .children(min_slot_row.filter(|_| divider_shown)),
             ),
         )
         // "Display" frame: order book, liquidations, control zone, time axis, line labels, and

@@ -2,6 +2,7 @@
 //! fullscreen, and right-clicking its chart plot expands the whole stack. The shared stack
 //! renderer lives in [`super::stack`].
 
+use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -11,6 +12,7 @@ use moon_ui::{
     MoonPalette, MoonRect, MoonTabItem, MoonTabStrip, MoonVirtualListScrollHandle, v_flex,
 };
 
+use super::stack::grid;
 use super::stack::{
     ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
@@ -87,6 +89,14 @@ pub(crate) struct MainChartStack {
     /// Whether the one-shot inactivity auto-close timer is armed.
     /// It ticks at about 1 Hz while configured and charts exist, then rearms itself.
     idle_timer_armed: bool,
+    /// Screen divider for the expanded stack: columns, whether the number is exact, and the
+    /// smallest slot the divider works to in FIT-stretch. Fullscreen ignores all three — one chart
+    /// full bleed is not a grid.
+    layout_columns: Option<u8>,
+    layout_columns_exact: Option<bool>,
+    layout_min_slot: Option<u16>,
+    /// Size the stack was last painted at, written by the render probe. See `AddChartStack`.
+    measured: Rc<Cell<Size<Pixels>>>,
     scroll: MoonVirtualListScrollHandle,
 }
 
@@ -214,6 +224,10 @@ impl MainChartStack {
             compare_y: None,
             compare_orderbook_only: false,
             idle_timer_armed: false,
+            layout_columns: None,
+            layout_columns_exact: None,
+            layout_min_slot: None,
+            measured: Rc::new(Cell::new(Size::default())),
             scroll: MoonVirtualListScrollHandle::new(),
         };
         if let Some((core, market)) = focus_open {
@@ -1018,6 +1032,65 @@ impl MainChartStack {
         });
     }
 
+    /// Whether comparison is in broom mode here, where the stack is one row by construction.
+    pub(crate) fn compare_orderbook_only(&self) -> bool {
+        self.compare_orderbook_only
+    }
+
+    pub(crate) fn layout_columns(&self) -> (Option<u8>, Option<bool>, Option<u16>) {
+        (
+            self.layout_columns,
+            self.layout_columns_exact,
+            self.layout_min_slot,
+        )
+    }
+
+    /// Set the screen divider for the expanded stack; see `AddChartStack::set_layout_columns`.
+    pub(crate) fn set_layout_columns(
+        &mut self,
+        columns: Option<u8>,
+        exact: Option<bool>,
+        min_slot: Option<u16>,
+        cx: &mut Context<Self>,
+    ) {
+        let columns = columns.map(|c| c.clamp(1, super::stack::grid::MAX_COLUMNS));
+        let min_slot =
+            min_slot.map(|m| m.clamp(super::layout_popup::MIN_H, super::layout_popup::MAX_H));
+        if self.layout_columns == columns
+            && self.layout_columns_exact == exact
+            && self.layout_min_slot == min_slot
+        {
+            return;
+        }
+        self.layout_columns = columns;
+        self.layout_columns_exact = exact;
+        self.layout_min_slot = min_slot;
+        cx.notify();
+    }
+
+    /// This stack's divider settings, as one `Copy` value the size probe can carry into paint.
+    fn grid_cfg(&self) -> grid::GridCfg {
+        grid::GridCfg {
+            columns: self.layout_columns,
+            exact: self.layout_columns_exact,
+            min_slot: self.layout_min_slot,
+            broom: self.compare_orderbook_only,
+            orderbook: self.orderbook_enabled.unwrap_or(true),
+        }
+    }
+
+    /// How many columns the expanded stack lays out in right now; see the AddToChart twin.
+    fn effective_columns(&self, count: usize, horizontal: bool, cfg_h: f32) -> usize {
+        let measured = self.measured.get();
+        grid::columns_for(
+            self.grid_cfg(),
+            (f32::from(measured.width), f32::from(measured.height)),
+            count,
+            horizontal,
+            cfg_h,
+        )
+    }
+
     // --- The two settings Main does not have ---
     //
     // Main draws no arrival flash — it has no `flash_arrival` — and detects never reach it: ingest
@@ -1533,7 +1606,7 @@ impl Render for MainChartStack {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
-            return div()
+            let empty = div()
                 .relative()
                 .size_full()
                 .bg(rgb(palette.chart_bg))
@@ -1542,6 +1615,17 @@ impl Render for MainChartStack {
                 .justify_center()
                 .child(crate::design::logo_glow_sized(cx, 220.0))
                 .into_any_element();
+            // Measured here too, for the reason the fullscreen branch keeps its probe: a resize
+            // taken while the stack is empty must not leave a size the first divided frame uses.
+            // An empty stack divides nothing, so the probe only RECORDS here: the number it would
+            // derive is 1 either way, and the charts that arrive later notify on their own.
+            return super::stack::with_size_probe(
+                empty,
+                self.measured.clone(),
+                cx.entity(),
+                1,
+                |_| 1,
+            );
         }
 
         // The row is built first but composed last: it must know the active chart before the body
@@ -1568,7 +1652,12 @@ impl MainChartStack {
         if !self.show_stack {
             let panel = self.charts[active].panel.clone();
             let entity = cx.entity();
-            return self
+            // The probe rides along in fullscreen too, although nothing is divided there: a window
+            // resized or maximised while one chart is full-bleed would otherwise leave the measured
+            // size stale, and the first frame back in the stack would divide by the old number and
+            // re-lay out — re-baking every chart's own-pass texture — a frame later.
+            let measured = self.measured.clone();
+            let tile = self
                 .render_tile(
                     active,
                     panel,
@@ -1584,6 +1673,9 @@ impl MainChartStack {
                 )
                 .size_full()
                 .into_any_element();
+            // Fullscreen divides nothing, but it must still RECORD: a resize taken here is the size
+            // the first divided frame back in the stack will use.
+            return super::stack::with_size_probe(tile, measured, cx.entity(), 1, |_| 1);
         }
 
         // Stack mode uses the per-tab FIT/SCROLL/COMPRESS layout and height, or the global default.
@@ -1605,7 +1697,9 @@ impl MainChartStack {
         let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
             this.sync_stack_visible_range(range, cx);
         });
-        render_chart_stack(
+        let columns = self.effective_columns(count, horizontal, cfg_h);
+        let measured = self.measured.clone();
+        let stack = render_chart_stack(
             &base_id,
             self,
             entity,
@@ -1614,6 +1708,7 @@ impl MainChartStack {
             compress,
             horizontal,
             cfg_h,
+            columns,
             &self.scroll,
             border,
             |s, ix| s.charts.get(ix).map(|e| e.panel.clone()),
@@ -1625,6 +1720,16 @@ impl MainChartStack {
             },
             |s, ix| compare_role(&s.charts, &s.compare_anchor, s.compare_orderbook_only, ix),
             Some(Box::new(on_visible_range)),
-        )
+        );
+        let probe_cfg = self.grid_cfg();
+        super::stack::with_size_probe(stack, measured, cx.entity(), columns, move |size| {
+            grid::columns_for(
+                probe_cfg,
+                (f32::from(size.width), f32::from(size.height)),
+                count,
+                horizontal,
+                cfg_h,
+            )
+        })
     }
 }

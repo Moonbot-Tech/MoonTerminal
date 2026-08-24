@@ -2,7 +2,11 @@
 //! a three-mode FIT/SCROLL/COMPRESS layout parameterized by a tile factory. Main-specific behavior
 //! such as fullscreen, active selection, and right-click return remains in `MainChartStack`.
 
+pub(super) mod grid;
+
+use std::cell::Cell;
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
@@ -14,6 +18,7 @@ use moon_ui::{
 
 use crate::panels::ChartPanel;
 use crate::persistence::chart_persist::{StackLayoutMode, StackOrientation};
+use grid::render::grid_row;
 use moon_core::session::CoreId;
 
 /// One stack entry or slot containing a core market and its dedicated `ChartPanel`.
@@ -652,6 +657,69 @@ pub(super) fn retain_nonempty_panels(entries: &mut Vec<ChartStackEntry>, cx: &Ap
     entries.len() != before
 }
 
+/// Report the rendered size of a stack back to the stack itself, and repaint when it changes.
+///
+/// The divider needs one runtime number the layout cannot supply on its own — how much room the
+/// stack actually got — and a GPUI element only learns that during paint, AFTER the render that
+/// laid it out. So the size is recorded and, when it differs from what the last layout used, one
+/// repaint is asked for: without it a resize would leave the stack divided for the old size until
+/// something unrelated happened to notify.
+///
+/// The notify is bounded by the comparison, and there is no feedback loop behind it: the size
+/// measured here is the space the stack was GIVEN, and how many columns it divides that space into
+/// cannot change it. A steady window therefore notifies exactly zero times.
+///
+/// Args:
+///     element: The stack as rendered.
+///     measured: Cell holding the size the last layout used; updated here on every change.
+///     entity: The stack to repaint.
+///     columns_now: The division the frame being painted was laid out with.
+///     columns_for: Re-derives the division from a size, so the repaint can be asked for on the
+///         number the layout consumes rather than on the pixels behind it — a window drag moves the
+///         size continuously and the division almost never.
+///
+/// Returns:
+///     The stack with the probe layered over it.
+pub(super) fn with_size_probe<S: Render + 'static>(
+    element: AnyElement,
+    measured: Rc<Cell<Size<Pixels>>>,
+    entity: Entity<S>,
+    columns_now: usize,
+    columns_for: impl Fn(Size<Pixels>) -> usize + 'static,
+) -> AnyElement {
+    div()
+        .relative()
+        .size_full()
+        .child(element)
+        .child(
+            canvas(
+                move |bounds, _, _| bounds,
+                move |bounds, _, _window, cx| {
+                    if measured.get() == bounds.size {
+                        return;
+                    }
+                    measured.set(bounds.size);
+                    // Repaint on the DERIVED number, not on the pixels: dragging a window edge
+                    // changes the size continuously while the division it produces almost never
+                    // moves, and each repaint re-renders every chart in the stack and re-bakes its
+                    // own-pass texture. Recording the size is free; asking for a frame is not.
+                    if columns_for(bounds.size) == columns_now {
+                        return;
+                    }
+                    // DEFERRED, not notified here: this runs inside a draw phase, and the fork
+                    // DROPS a notify raised there — `WindowInvalidator::invalidate_view` returns
+                    // early while `draw_phase != None`, leaving the window clean and scheduling no
+                    // frame. The repaint has to be asked for once the frame is over.
+                    let entity = entity.clone();
+                    cx.defer(move |app| entity.update(app, |_, cx| cx.notify()));
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
+        .into_any_element()
+}
+
 /// Render the three-mode stack layout selected in Settings, with orientation from `horizontal`.
 ///
 /// - `scroll=false` selects FIT: panels share window height vertically or width horizontally.
@@ -675,6 +743,7 @@ pub(super) fn render_chart_stack<S, P, T, R>(
     compress: bool,
     horizontal: bool,
     cfg_h: f32,
+    columns: usize,
     scroll_handle: &MoonVirtualListScrollHandle,
     border: Rgba,
     panel_at: P,
@@ -704,7 +773,92 @@ where
     // Broom-mode slot role: Anchor gets its own width, Follower gets order-book width, and Normal is ordinary.
     R: Fn(&S, usize) -> CompareRole + Clone + 'static,
 {
+    // One column is the stack as it always was, and it stays on the paths that were measured and
+    // tuned for it — the grid below is entered only when the reader asked for a divider.
+    let columns = columns.max(1);
+    let rows = grid::row_count(columns, count);
     if scroll && !compress {
+        if horizontal && columns > 1 {
+            // Horizontal SCROLL with a divider: each scrolled item is a COLUMN of `columns` rows,
+            // fixed at `cfg_h` wide and not shrinking, so the row overflows and scrolls.
+            let mut items: Vec<AnyElement> = Vec::with_capacity(rows);
+            for row in 0..rows {
+                items.push(
+                    grid_row(
+                        s, &entity, row, columns, count, horizontal, border, &panel_at, &tile,
+                    )
+                    .w(px(cfg_h))
+                    .min_w(px(cfg_h))
+                    .into_any_element(),
+                );
+            }
+            return div()
+                .relative()
+                .size_full()
+                .child(h_flex().h_full().items_stretch().children(items))
+                .overflow_x_scrollbar()
+                .into_any_element();
+        }
+        if !horizontal && columns > 1 {
+            // Vertical SCROLL with a divider: the virtual list's ITEM becomes a row of `columns`
+            // charts, still `cfg_h` tall. Virtualization is kept — a grid multiplies how many
+            // charts a tall stack holds, and every one of them is a live GPU canvas.
+            let weak = entity.downgrade();
+            let panel_at_v = panel_at.clone();
+            let tile_v = tile.clone();
+            let list = MoonVirtualList::new(
+                // The divider is part of the list's IDENTITY: an item is a ROW here, so changing the
+                // number of columns changes what item N holds, and reusing the id would let GPUI
+                // carry element state across that change.
+                //
+                // It does NOT reset the scroll position: the offset lives in the externally-owned
+                // `scroll_handle` and is in pixels, so a divider that moves on its own — a chart
+                // arriving in a non-exact division — leaves the view at the same pixel and thus on
+                // a different set of charts. Known and deliberate for now; the alternative is
+                // mutating the handle from render.
+                format!("{base_id}-vlist-{columns}"),
+                rows,
+                cfg_h,
+                move |row, _window, app| {
+                    let Some(ent) = weak.upgrade() else {
+                        return div().into_any_element();
+                    };
+                    let s = ent.read(app);
+                    grid_row(
+                        s,
+                        &ent,
+                        row,
+                        columns,
+                        count,
+                        horizontal,
+                        border,
+                        &panel_at_v,
+                        &tile_v,
+                    )
+                    .h(px(cfg_h))
+                    .into_any_element()
+                },
+            )
+            .track_scroll(scroll_handle)
+            .surface(false)
+            .border(false)
+            .radius(0.0)
+            .scrollbar_visibility(MoonScrollbarVisibility::Hover);
+            // The list reports visible ROWS; the stack expects slots. Handing row numbers on as
+            // slot numbers would wake the wrong charts' own pass and leave the visible ones dark.
+            let list = match on_visible_range {
+                Some(on_visible_range) => list.on_visible_range(move |rows, window, app| {
+                    on_visible_range(grid::slots_of_rows(rows, columns, count), window, app)
+                }),
+                None => list,
+            };
+            return div()
+                .id(format!("{base_id}-scroll"))
+                .relative()
+                .size_full()
+                .child(list)
+                .into_any_element();
+        }
         if horizontal {
             // Horizontal SCROLL: `MoonVirtualList` only supports vertical layout through GPUI's
             // `uniform_list`, so build a non-virtualized fixed-width row in `overflow_x_scroll`.
@@ -786,6 +940,44 @@ where
             .relative()
             .size_full()
             .child(list)
+            .into_any_element();
+    }
+
+    if columns > 1 {
+        // FIT and COMPRESS with a divider: rows of `columns` charts filling the stack, no scroll.
+        // The ROW carries what a slot used to carry along the axis — a `cfg_h` cap in COMPRESS,
+        // plain flex in FIT-stretch — so few charts leave a tail below and many shrink together.
+        let mut row_els: Vec<AnyElement> = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let mut el = grid_row(
+                s, &entity, row, columns, count, horizontal, border, &panel_at, &tile,
+            )
+            .flex_1();
+            // Explicit zero minimum, as the single-column tile sets: a flex item's automatic
+            // minimum is its content, and a row that refuses to go below that would push the last
+            // rows out of the stack instead of every row sharing the squeeze.
+            el = match horizontal {
+                true => el.min_w(px(0.0)),
+                false => el.min_h(px(0.0)),
+            };
+            if compress {
+                el = match horizontal {
+                    true => el.max_w(px(cfg_h)),
+                    false => el.max_h(px(cfg_h)),
+                };
+            }
+            row_els.push(el.into_any_element());
+        }
+        let inner = match horizontal {
+            true => h_flex().size_full().items_stretch(),
+            false => v_flex().size_full(),
+        };
+        return div()
+            .id(format!("{base_id}-grid"))
+            .relative()
+            .size_full()
+            .overflow_hidden()
+            .child(inner.children(row_els))
             .into_any_element();
     }
 

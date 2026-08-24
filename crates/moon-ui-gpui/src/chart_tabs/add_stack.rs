@@ -2,7 +2,9 @@
 //! Extracted from `chart_tabs` as an independent view model; shared stack rendering lives in
 //! [`super::stack`]. Used by both the tab strip and detached windows ([`super::windows`]).
 
+use std::cell::Cell;
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -10,6 +12,7 @@ use moon_ui::MoonVirtualListScrollHandle;
 
 mod detect_cap;
 
+use super::stack::grid;
 use super::stack::{
     COMPACT_STABLE, ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role,
     render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
@@ -64,6 +67,20 @@ pub(crate) struct AddChartStack {
     auto_pin: Option<bool>,
     /// Stack orientation (per window). `None` = default Vertical.
     layout_orientation: Option<StackOrientation>,
+    /// Screen divider: how many columns this tab's stack lays its charts out in (per window).
+    /// `None` or 1 is the single column the stack always was.
+    layout_columns: Option<u8>,
+    /// Whether the divider is exact. `None` works up to it as the charts stop fitting.
+    layout_columns_exact: Option<bool>,
+    /// Smallest slot the divider works to in FIT-stretch, where the mode names no slot size of its
+    /// own. `None` uses `grid::DEFAULT_MIN_SLOT`.
+    layout_min_slot: Option<u16>,
+    /// Size this stack was last PAINTED at, written by the render probe.
+    ///
+    /// The divider needs to know how much room there is, and only paint knows. A cell rather than
+    /// stack state because paint cannot mutate the stack; `with_size_probe` writes it and asks for
+    /// ONE repaint when the number actually moved.
+    measured: Rc<Cell<Size<Pixels>>>,
     /// Whether an arriving chart flashes its accent border (per window). `None` = enabled.
     arrival_flash: Option<bool>,
     /// Cap on charts a DETECT may open here (per window). `None` or zero = uncapped.
@@ -160,6 +177,10 @@ impl AddChartStack {
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
+            layout_columns: None,
+            layout_columns_exact: None,
+            layout_min_slot: None,
+            measured: Rc::new(Cell::new(Size::default())),
             arrival_flash: None,
             max_charts: None,
             max_charts_evict: None,
@@ -285,6 +306,66 @@ impl AddChartStack {
         self.max_charts = max;
         self.max_charts_evict = evict;
         cx.notify();
+    }
+
+    pub(crate) fn layout_columns(&self) -> (Option<u8>, Option<bool>, Option<u16>) {
+        (
+            self.layout_columns,
+            self.layout_columns_exact,
+            self.layout_min_slot,
+        )
+    }
+
+    /// Set the screen divider, whether it is exact, and the minimum slot it works to.
+    ///
+    /// The three travel together because none of them means anything alone: a divider with no
+    /// policy has no layout, and a minimum with no divider has nothing to divide.
+    pub(crate) fn set_layout_columns(
+        &mut self,
+        columns: Option<u8>,
+        exact: Option<bool>,
+        min_slot: Option<u16>,
+        cx: &mut Context<Self>,
+    ) {
+        let columns = columns.map(|c| c.clamp(1, super::stack::grid::MAX_COLUMNS));
+        // Clamped HERE and not only where the field is typed: a value can also arrive from a
+        // hand-edited `charts.json`, and a minimum outside the size fields' own range would divide
+        // the stack by a number nothing on screen could have asked for.
+        let min_slot =
+            min_slot.map(|m| m.clamp(super::layout_popup::MIN_H, super::layout_popup::MAX_H));
+        if self.layout_columns == columns
+            && self.layout_columns_exact == exact
+            && self.layout_min_slot == min_slot
+        {
+            return;
+        }
+        self.layout_columns = columns;
+        self.layout_columns_exact = exact;
+        self.layout_min_slot = min_slot;
+        cx.notify();
+    }
+
+    /// This stack's divider settings, as one `Copy` value the size probe can carry into paint.
+    fn grid_cfg(&self) -> grid::GridCfg {
+        grid::GridCfg {
+            columns: self.layout_columns,
+            exact: self.layout_columns_exact,
+            min_slot: self.layout_min_slot,
+            broom: self.compare_orderbook_only,
+            orderbook: self.effective_orderbook(),
+        }
+    }
+
+    /// How many columns this stack lays out in right now, at the size it was last painted.
+    fn effective_columns(&self, count: usize, horizontal: bool, cfg_h: f32) -> usize {
+        let measured = self.measured.get();
+        grid::columns_for(
+            self.grid_cfg(),
+            (f32::from(measured.width), f32::from(measured.height)),
+            count,
+            horizontal,
+            cfg_h,
+        )
     }
 
     /// Arm the roughly 1 Hz COMPRESS-compaction debounce timer if needed. It ticks while charts
@@ -1023,7 +1104,7 @@ impl Render for AddChartStack {
         if self.charts.is_empty() {
             // Use an opaque background: a detached window has `Root=NoFill` and no own pass, so
             // without this background the white window backing would show through the logo.
-            return div()
+            let empty = div()
                 .size_full()
                 .bg(rgb(palette.chart_bg))
                 .flex()
@@ -1031,6 +1112,17 @@ impl Render for AddChartStack {
                 .justify_center()
                 .child(crate::design::logo_glow_sized(cx, 220.0))
                 .into_any_element();
+            // Measured here too: a window resized while the tab holds no charts would otherwise
+            // leave a stale size behind, and the first frame WITH charts would divide by it.
+            // An empty stack divides nothing, so the probe only RECORDS here: the number it would
+            // derive is 1 either way, and the charts that arrive later notify on their own.
+            return super::stack::with_size_probe(
+                empty,
+                self.measured.clone(),
+                cx.entity(),
+                1,
+                |_| 1,
+            );
         }
 
         // Stack layout comes from the tab (FIT/SCROLL/COMPRESS plus height), otherwise the global
@@ -1065,7 +1157,9 @@ impl Render for AddChartStack {
         let on_visible_range = cx.processor(move |this, range: Range<usize>, _window, cx| {
             this.sync_stack_visible_ordered(range, &visible_order, cx);
         });
-        render_chart_stack(
+        let columns = self.effective_columns(count, horizontal, cfg_h);
+        let measured = self.measured.clone();
+        let stack = render_chart_stack(
             &base_id,
             self,
             entity,
@@ -1074,6 +1168,7 @@ impl Render for AddChartStack {
             compress,
             horizontal,
             cfg_h,
+            columns,
             &self.scroll,
             border,
             // An empty retained COMPRESS slot maps to `None`, so render shows a transparent tile.
@@ -1160,6 +1255,18 @@ impl Render for AddChartStack {
                 )
             },
             Some(Box::new(on_visible_range)),
-        )
+        );
+        // The divider is the only thing here that needs a measured size, so the probe rides along
+        // with the stack rather than being wired through every caller.
+        let probe_cfg = self.grid_cfg();
+        super::stack::with_size_probe(stack, measured, cx.entity(), columns, move |size| {
+            grid::columns_for(
+                probe_cfg,
+                (f32::from(size.width), f32::from(size.height)),
+                count,
+                horizontal,
+                cfg_h,
+            )
+        })
     }
 }
