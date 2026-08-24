@@ -101,6 +101,14 @@ diag_counters!(
     // burst or a report generation turned into a read storm. Read it against the number of open
     // charts: one read per newly shown market is expected, a multiple of that is not.
     CHART_TRADE_HISTORY_READS => "trade_history_reads",
+    // Volume-caption reads started per second, and what they cost in microseconds. One read per
+    // distinct PERIOD per charted market, throttled to the arbitrage column's clock — so a stack of
+    // eight panes on one coin printing one volume block should show about four a second, not
+    // thirty-two. `volume_read_us` is the answer to "is the block what made the chart hitch": a
+    // period the protocol's own buckets serve costs a struct copy, one the track serves costs a
+    // walk over its buckets, and anything longer is walked out of retained aggregates.
+    CHART_VOLUME_READS => "volume_reads",
+    CHART_VOLUME_READ_US => "volume_read_us",
     CHART_COMBO_UPLOAD_LEN => "combo_upload_len",
     CHART_PRICE_LINE_UPLOAD_LEN => "price_line_upload_len",
     CHART_BOOK_DRAW   => "orderbook_draw",

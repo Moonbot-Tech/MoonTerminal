@@ -516,6 +516,42 @@ impl RenderState {
                 }
             }
 
+            // Buy/sell proportion bars, published by the caption pass with the geometry it drew
+            // the figures at. Two instances each — the track, then the filled part — in the SAME
+            // batch as everything above: no new layer and no new draw call, which is what makes a
+            // bar beside every volume caption affordable.
+            //
+            // The colours are the ORDER BOOK's own bid and ask: buying and selling already mean
+            // those two colours everywhere else on this chart, and a third pair would make the
+            // reader learn a second vocabulary for the same two facts.
+            for bar in &pr.caption_bars {
+                if bar.dst[2] <= 0.0 || bar.dst[3] <= 0.0 {
+                    continue;
+                }
+                pr.readout_rects.push(ReadoutRect {
+                    dst: bar.dst,
+                    bg: self.readout_soft_bg,
+                    border,
+                    m,
+                });
+                let filled = bar.dst[2] * bar.fill.clamp(0.0, 1.0);
+                if filled <= 0.0 {
+                    continue;
+                }
+                let fill_color = match bar.sell {
+                    true => pr.book_style.ask,
+                    false => pr.book_style.bid,
+                };
+                pr.readout_rects.push(ReadoutRect {
+                    dst: [bar.dst[0], bar.dst[1], filled, bar.dst[3]],
+                    bg: fill_color,
+                    // No border on the filled part: it sits INSIDE the track, whose own border is
+                    // already drawn, and a second stroke on top of it reads as a second bar.
+                    border: [0.0, 0.0, 0.0, 0.0],
+                    m: [0.0, 1.0, 1.0, 0.0],
+                });
+            }
+
             // Backing plates for order and cursor labels laid out by `prepare_text`. Order labels use
             // a light alpha-0.2 plate like the market corner label; priority foreground cursor labels
             // use a dense alpha-0.96 plate. Build them BEFORE the cursor gate because order labels are

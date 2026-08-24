@@ -1561,6 +1561,22 @@ chart_labels.field.window_buy_share:
   ru: "Доля покупок, %"
   en: "Buy share, %"
   es: "Cuota de compras, %"
+chart_labels.field.window_buy_volume:
+  ru: "Куплено за период"
+  en: "Bought over a window"
+  es: "Comprado por periodo"
+chart_labels.field.window_sell_volume:
+  ru: "Продано за период"
+  en: "Sold over a window"
+  es: "Vendido por periodo"
+chart_labels.field.window_trades:
+  ru: "Сделок за период"
+  en: "Trades over a window"
+  es: "Operaciones por periodo"
+chart_labels.field.window_span_name:
+  ru: "Период объёмов"
+  en: "Volume period"
+  es: "Periodo de volumen"
 chart_labels.field.max_leverage:
   ru: "Макс. плечо биржи"
   en: "Venue max leverage"
@@ -1633,6 +1649,54 @@ chart_labels.short.window_buy_share:
   ru: "Buy "
   en: "Buy "
   es: "Buy "
+chart_labels.short.window_buy_volume:
+  ru: "Bv "
+  en: "Bv "
+  es: "Bv "
+chart_labels.short.window_sell_volume:
+  ru: "Sv "
+  en: "Sv "
+  es: "Sv "
+chart_labels.short.window_trades:
+  ru: "Сд "
+  en: "Trd "
+  es: "Ope "
+chart_labels.span.minutes:
+  ru: "%{n}м"
+  en: "%{n}m"
+  es: "%{n}m"
+chart_labels.span.trades:
+  ru: "%{n} сд"
+  en: "%{n} trd"
+  es: "%{n} ope"
+chart_labels.span_clear:
+  ru: "Сбросить"
+  en: "Clear"
+  es: "Restablecer"
+chart_labels.menu.period:
+  ru: "Период"
+  en: "Period"
+  es: "Periodo"
+chart_labels.menu.trades:
+  ru: "По сделкам"
+  en: "By trades"
+  es: "Por operaciones"
+chart_labels.menu.bars:
+  ru: "Полоски"
+  en: "Bars"
+  es: "Barras"
+chart_labels.units:
+  ru: "Единицы"
+  en: "Units"
+  es: "Unidades"
+chart_labels.units.quote:
+  ru: "В деньгах"
+  en: "In money"
+  es: "En dinero"
+chart_labels.units.base:
+  ru: "В монете"
+  en: "In coin"
+  es: "En moneda"
 chart_labels.short.max_leverage:
   ru: "Макс. плечо"
   en: "Max lev"
@@ -1665,6 +1729,10 @@ chart_labels.field.arb_column:
   ru: "Арбитраж (колонка)"
   en: "Arbitrage (column)"
   es: "Arbitraje (columna)"
+chart_labels.preset.volumes:
+  ru: "Объёмы"
+  en: "Volumes"
+  es: "Volúmenes"
 chart_labels.preset.arbitrage:
   ru: "Арбитраж"
   en: "Arbitrage"
@@ -1805,6 +1873,10 @@ chart_labels.window.m1:
   ru: "1м"
   en: "1m"
   es: "1m"
+chart_labels.window.m3:
+  ru: "3м"
+  en: "3m"
+  es: "3m"
 chart_labels.window.m5:
   ru: "5м"
   en: "5m"
@@ -1821,6 +1893,10 @@ chart_labels.window.h1:
   ru: "1ч"
   en: "1h"
   es: "1h"
+chart_labels.window.h2:
+  ru: "2ч"
+  en: "2h"
+  es: "2h"
 chart_labels.window.h3:
   ru: "3ч"
   en: "3h"

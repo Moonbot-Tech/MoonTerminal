@@ -733,6 +733,30 @@ impl ChartEngine {
         Some((hit.code, hit.dex.clone()))
     }
 
+    /// Which VOLUME module a point lands on, if any.
+    ///
+    /// The same measurement the caption pass drew from, in the pane's own logical pixels: a
+    /// right-click has to hit what the last frame actually put on screen.
+    ///
+    /// Args:
+    ///     pane: Pane index the point was resolved to.
+    ///     x: Point in the pane's logical pixels.
+    ///     y: The same, vertically.
+    ///
+    /// Returns:
+    ///     Index of the caption module, for the menu that edits its period.
+    pub fn volume_module_at(&self, pane: usize, x: f32, y: f32) -> Option<usize> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let hit = render
+            .panes
+            .get(pane)?
+            .volume_hits
+            .iter()
+            .find(|hit| hit.contains(x, y))?;
+        Some(hit.row)
+    }
+
     /// Rectangles of the arbitrage venue names a pane drew, in the pane's own logical pixels.
     ///
     /// For the cursor overlay: a native cursor can only be set during PAINT, so the panel lays

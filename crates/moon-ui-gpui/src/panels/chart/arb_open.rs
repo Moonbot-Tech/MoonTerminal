@@ -23,7 +23,7 @@ impl ChartPanel {
     /// THE one place the two coordinate systems meet: the caption pass works in window logical
     /// pixels, the panel's own input and layout in slot ones. Both the press and the cursor zones
     /// go through this, so they cannot drift apart again.
-    fn chart_origin_logical(&self) -> Option<((f32, f32), f32)> {
+    pub(super) fn chart_origin_logical(&self) -> Option<((f32, f32), f32)> {
         let (bounds, sf, _) = self.chart.slot_geometry()?;
         let sf = sf.max(0.1);
         Some(((f32::from(bounds.origin.x), f32::from(bounds.origin.y)), sf))

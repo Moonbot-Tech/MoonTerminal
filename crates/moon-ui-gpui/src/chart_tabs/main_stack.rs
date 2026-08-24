@@ -58,6 +58,9 @@ pub(crate) struct MainChartStack {
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Chart captions for the tab; `None` uses the global `layout.chart_labels` default.
     chart_labels: Option<moon_core::config::ChartLabelsCfg>,
+    /// Captions a panel's own right-click menu produced, on their way to the host that persists
+    /// them. See `panels::chart::volume_menu` for why they travel rather than being written here.
+    pending_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Window X scale in px/ms, synchronized with Shift+middle-click; `None` uses the built-in default.
     /// New charts inherit it, and synchronization applies it to every chart.
     x_ppm: Option<f32>,
@@ -209,6 +212,7 @@ impl MainChartStack {
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
+            pending_labels: None,
             x_ppm: None,
             show_zone: None,
             auto_pin: None,
@@ -272,14 +276,27 @@ impl MainChartStack {
             )
         });
         panel.update(cx, |p, pcx| p.set_default_kind(kind, pcx));
-        cx.observe(&panel, |this, _, cx| {
+        cx.observe(&panel, |this, panel, cx| {
+            // Captions a panel's own menu edited: carried one link further, to the host that owns
+            // the tab spec. Taken from the panel that notified, so a stack of eight costs one
+            // `Option` read per notification.
+            // Kept APART from `dirty`: an edit has to wake the host, but it changes no chart's
+            // visibility and opens no market, and folding it into `dirty` would run both of those
+            // sweeps for a caption setting.
+            let edited = match panel.update(cx, |panel, _| panel.take_pending_labels()) {
+                Some(cfg) => {
+                    this.pending_labels = Some(cfg);
+                    true
+                }
+                None => false,
+            };
             let mut dirty = this.prune_empty(cx);
             if dirty {
                 this.sync_visibility(cx);
                 this.sync_backend_open_markets(cx);
             }
             dirty |= this.sync_compare(cx);
-            if dirty {
+            if dirty || edited {
                 cx.notify();
             }
         })
@@ -905,6 +922,11 @@ impl MainChartStack {
 
     pub(crate) fn chart_graphics(&self) -> Option<moon_core::config::ChartGraphicsCfg> {
         self.chart_graphics
+    }
+
+    /// Take the captions a panel's right-click menu produced, for the host to persist.
+    pub(crate) fn take_pending_labels(&mut self) -> Option<moon_core::config::ChartLabelsCfg> {
+        self.pending_labels.take()
     }
 
     pub(crate) fn chart_labels(&self) -> Option<moon_core::config::ChartLabelsCfg> {

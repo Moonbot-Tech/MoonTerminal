@@ -268,12 +268,16 @@ impl LabelFlow {
 #[serde(rename_all = "snake_case")]
 pub enum LabelWindow {
     M1,
+    /// Three minutes, which MoonProto's own rolling buckets keep beside the one and the five.
+    M3,
     M5,
     M15,
     M30,
     /// The hour, which is what a glance at a chart is usually read against.
     #[default]
     H1,
+    /// Two hours, which the retained candles state outright — both its movement and its volume.
+    H2,
     H3,
     H24,
     H72,
@@ -281,24 +285,42 @@ pub enum LabelWindow {
 
 /// How many windows a caption can choose from. The readout that fills them is indexed by
 /// [`LabelWindow::ALL`]'s order, so the two must not drift.
-pub const LABEL_WINDOW_COUNT: usize = 8;
+pub const LABEL_WINDOW_COUNT: usize = 10;
 
 impl LabelWindow {
     /// Every window, shortest first. THIS order indexes the market readout.
     pub const ALL: [LabelWindow; LABEL_WINDOW_COUNT] = [
         LabelWindow::M1,
+        LabelWindow::M3,
         LabelWindow::M5,
         LabelWindow::M15,
         LabelWindow::M30,
         LabelWindow::H1,
+        LabelWindow::H2,
         LabelWindow::H3,
         LabelWindow::H24,
         LabelWindow::H72,
     ];
 
-    /// Windows the retained TRADE buckets cover, and therefore the only ones carrying a buy/sell
-    /// split. Five minutes is the whole span those buckets hold.
-    pub const TRADE_WINDOWS: &'static [LabelWindow] = &[LabelWindow::M1, LabelWindow::M5];
+    /// How long this window is, in milliseconds.
+    ///
+    /// The figure a raw scan needs: the readout serves the fixed windows off pre-aggregated
+    /// buckets, but the completeness check compares this span against what the retained history
+    /// actually reaches back to.
+    pub fn millis(self) -> i64 {
+        match self {
+            LabelWindow::M1 => 60_000,
+            LabelWindow::M3 => 3 * 60_000,
+            LabelWindow::M5 => 5 * 60_000,
+            LabelWindow::M15 => 15 * 60_000,
+            LabelWindow::M30 => 30 * 60_000,
+            LabelWindow::H1 => 3_600_000,
+            LabelWindow::H2 => 2 * 3_600_000,
+            LabelWindow::H3 => 3 * 3_600_000,
+            LabelWindow::H24 => 24 * 3_600_000,
+            LabelWindow::H72 => 72 * 3_600_000,
+        }
+    }
 
     /// Position in [`Self::ALL`], which is the index the readout is addressed by.
     pub fn index(self) -> usize {
@@ -313,10 +335,12 @@ impl LabelWindow {
     pub fn locale_key(self) -> &'static str {
         match self {
             LabelWindow::M1 => "chart_labels.window.m1",
+            LabelWindow::M3 => "chart_labels.window.m3",
             LabelWindow::M5 => "chart_labels.window.m5",
             LabelWindow::M15 => "chart_labels.window.m15",
             LabelWindow::M30 => "chart_labels.window.m30",
             LabelWindow::H1 => "chart_labels.window.h1",
+            LabelWindow::H2 => "chart_labels.window.h2",
             LabelWindow::H3 => "chart_labels.window.h3",
             LabelWindow::H24 => "chart_labels.window.h24",
             LabelWindow::H72 => "chart_labels.window.h72",
@@ -327,6 +351,83 @@ impl LabelWindow {
     /// not state it.
     fn is_default(&self) -> bool {
         *self == LabelWindow::H1
+    }
+}
+
+/// Smallest and largest custom span a caption may ask for.
+///
+/// A minute span is bounded by what the retained history can ever cover — three days is already
+/// past every ring — and a trade span by the deepest trade ring MoonProto allocates (98 000 rows on
+/// the busiest venue). Past either the caption would state a figure the terminal cannot have.
+pub const LABEL_SPAN_MINUTES_MAX: u16 = 4320;
+pub const LABEL_SPAN_TRADES_MAX: u32 = 100_000;
+
+/// The period a volume caption is read over.
+///
+/// A LAYER over [`LabelWindow`] rather than a replacement for it: the fixed windows are what every
+/// other caption uses, they are served from readouts that are already aggregated, and they stay the
+/// default. This adds the two spans the reference terminal offers beside them — an arbitrary number
+/// of minutes, and an arbitrary number of TRADES, which is not a period at all and cannot be
+/// expressed as one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSpan {
+    /// Read over the caption's own [`ChartLabelPart::window`].
+    #[default]
+    Window,
+    /// Read over this many minutes, whatever the window says.
+    Minutes(u16),
+    /// Read over the last this many trades — the reference terminal's `N Trades`.
+    Trades(u32),
+}
+
+impl LabelSpan {
+    /// Whether this is the span a part carries when it says nothing, for the file that then does
+    /// not state it.
+    fn is_default(&self) -> bool {
+        *self == LabelSpan::Window
+    }
+
+    /// Repair a hand-edited span: a zero count is no span at all, and an unbounded one is a scan
+    /// with no end.
+    fn sanitize(&mut self) {
+        match self {
+            LabelSpan::Window => {}
+            LabelSpan::Minutes(n) => *n = (*n).clamp(1, LABEL_SPAN_MINUTES_MAX),
+            LabelSpan::Trades(n) => *n = (*n).clamp(1, LABEL_SPAN_TRADES_MAX),
+        }
+    }
+}
+
+/// Which currency a volume caption states its amount in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeUnits {
+    /// The market's quote money — what the reference terminal prints, and what compares across
+    /// coins.
+    #[default]
+    Quote,
+    /// The base coin itself.
+    ///
+    /// Available only as far back as the raw trade ring reaches: the mini-candles that serve the
+    /// long windows carry `price × quantity` and no quantity of their own, so a coin figure over a
+    /// window they cover would be an estimate. It is reported as incomplete instead.
+    Base,
+}
+
+impl VolumeUnits {
+    pub const ALL: [VolumeUnits; 2] = [VolumeUnits::Quote, VolumeUnits::Base];
+
+    /// Whether this is the unit a part carries when it says nothing.
+    fn is_default(&self) -> bool {
+        *self == VolumeUnits::Quote
+    }
+
+    pub fn locale_key(self) -> &'static str {
+        match self {
+            VolumeUnits::Quote => "chart_labels.units.quote",
+            VolumeUnits::Base => "chart_labels.units.base",
+        }
     }
 }
 
@@ -451,6 +552,22 @@ pub struct ChartLabelPart {
     /// CHANGED, and a window on a caption that ignores one is noise in a diff.
     #[serde(skip_serializing_if = "LabelWindow::is_default")]
     pub window: LabelWindow,
+    /// A custom period that OVERRIDES [`Self::window`], for the volume captions that offer one.
+    ///
+    /// Beside the window rather than instead of it, so switching back to a fixed window returns to
+    /// the one that was set rather than to a default.
+    #[serde(skip_serializing_if = "LabelSpan::is_default")]
+    pub span: LabelSpan,
+    /// Which currency a volume figure is stated in; meaningless for other fields.
+    #[serde(skip_serializing_if = "VolumeUnits::is_default")]
+    pub units: VolumeUnits,
+    /// Whether a proportion bar is drawn beside a buy/sell figure.
+    ///
+    /// On by default, and only where [`ChartLabelField::uses_volume_bar`] allows one: the bar is
+    /// what makes the pair readable at a glance, which is the reason the block is printed as a pair
+    /// at all.
+    #[serde(skip_serializing_if = "is_true")]
+    pub bar: bool,
 }
 
 /// Whether a flag is at its default, for the fields a file only states when they are turned off.
@@ -484,6 +601,19 @@ impl ChartLabelPart {
             },
             pnl_basis: PnlBasis::All,
             window: LabelWindow::H1,
+            span: LabelSpan::Window,
+            units: VolumeUnits::Quote,
+            bar: true,
+        }
+    }
+
+    /// How far back this caption reaches, in milliseconds — `None` for a trade-count span, which
+    /// has no length until the trades are read.
+    pub fn span_millis(&self) -> Option<i64> {
+        match self.span {
+            LabelSpan::Window => Some(self.window.millis()),
+            LabelSpan::Minutes(n) => Some(i64::from(n) * 60_000),
+            LabelSpan::Trades(_) => None,
         }
     }
 
@@ -868,6 +998,16 @@ impl ChartLabelsCfg {
                 if !choices.contains(&part.window) {
                     part.window = choices.first().copied().unwrap_or_default();
                 }
+                // A zero or unbounded custom span is repaired rather than dropped: the reader asked
+                // for a custom period, and falling back to the window would silently answer a
+                // different question than the one on screen.
+                part.span.sanitize();
+                // A span on a caption that reads no period at all is dropped, like the window
+                // repair above: switching a caption's field must not leave a period behind that
+                // nothing reads but a later field would suddenly obey.
+                if !part.field.uses_window() {
+                    part.span = LabelSpan::Window;
+                }
                 // A hand-edited `nan` is dropped, not clamped: it would survive the clamp, and a
                 // configuration that does not equal ITSELF turns every comparison downstream — the
                 // panel's settings signature, the engine's change check — into a false change on
@@ -941,6 +1081,11 @@ impl ChartLabelsCfg {
                 break;
             }
         }
+        if let Some(window) = preset.window() {
+            for part in row.parts.iter_mut().filter(|p| p.field.uses_window()) {
+                part.window = window;
+            }
+        }
         self.rows[ix] = row;
         Some(ix)
     }
@@ -981,6 +1126,28 @@ impl ChartLabelsCfg {
             .filter(|r| r.visible)
             .flat_map(|r| r.parts[..r.used_parts()].iter())
             .filter(|p| p.is_drawn())
+    }
+
+    /// Every distinct PERIOD the drawn volume captions ask for, in first-seen order.
+    ///
+    /// The sync path turns each of these into one history read, so the deduplication is the point:
+    /// a module printing the buying, the selling and their total over one minute is one read, not
+    /// three. Returned as the configuration's own pair rather than the market layer's span so this
+    /// crate's model stays independent of what reads it.
+    pub fn volume_spans(&self) -> Vec<(LabelSpan, LabelWindow)> {
+        let mut out: Vec<(LabelSpan, LabelWindow)> = Vec::new();
+        for part in self.drawn_parts().filter(|p| p.field.reads_volume()) {
+            // A trade-count span ignores the window, so two captions asking for the same count must
+            // not read twice just because their unused windows differ.
+            let key = match part.span {
+                LabelSpan::Window => (LabelSpan::Window, part.window),
+                other => (other, LabelWindow::default()),
+            };
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+        out
     }
 
     /// Whether any part uses this field, for the "already added" mark in the add menu.

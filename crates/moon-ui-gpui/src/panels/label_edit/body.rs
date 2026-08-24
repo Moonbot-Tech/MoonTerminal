@@ -9,7 +9,7 @@
 use gpui::*;
 use moon_core::config::{
     CHART_LABEL_PARTS, ChartLabelField, ChartLabelPart, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    LabelColor, LabelFlow, LabelStyle, LabelWindow, PnlBasis,
+    LabelColor, LabelFlow, LabelSpan, LabelStyle, LabelWindow, PnlBasis, VolumeUnits,
 };
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{MoonWindowExt as _,
@@ -427,7 +427,46 @@ fn caption_settings(
     // Which retained-history window a movement or volume figure is read over. A dropdown rather
     // than a segmented row like the basis above: eight windows do not fit the narrower pane, and
     // this control is picked once and then read as a number in the caption itself.
-    if part.field.uses_window() {
+    // A CUSTOM period — set from the chart's own right-click menu — OVERRIDES the window, so the
+    // window control is replaced rather than left standing beside it: a dropdown that visibly does
+    // nothing is worse than none, and this is the only place such a period can be cleared.
+    if part.field.uses_window() && part.span != LabelSpan::Window {
+        let state = state.clone();
+        let label = match part.span {
+            LabelSpan::Minutes(n) => t!("chart_labels.span.minutes", n = n).to_string(),
+            LabelSpan::Trades(n) => t!("chart_labels.span.trades", n = n).to_string(),
+            LabelSpan::Window => String::new(),
+        };
+        col = col.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text))
+                        .child(t!("chart_labels.window").to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .child(label),
+                )
+                .child(
+                    MoonButton::new("le-span-clear")
+                        .label(t!("chart_labels.span_clear").to_string())
+                        .size(MoonButtonSize::Micro)
+                        .variant(MoonButtonVariant::Ghost)
+                        .on_click(move |_, _w, cx: &mut App| {
+                            write_row(&state, cx, |s| {
+                                s.row.parts[selected].span = LabelSpan::Window;
+                            });
+                        }),
+                ),
+        );
+    } else if part.field.uses_window() {
         let state = state.clone();
         let current = part.window;
         // The FIELD's windows, not every window: the buy/sell split lives only where the retained
@@ -468,6 +507,45 @@ fn caption_settings(
                         .menu_size(MoonMenuSize::Compact)
                         .items(items),
                 ),
+        );
+    }
+
+    // The two questions a volume caption answers beyond its period: which currency it states, and
+    // whether the pair of sides draws its proportion bar. Both are edited from the chart's own
+    // right-click menu as well — this is the same setting reached from the other side, which is why
+    // it writes through the same field rather than a copy of it.
+    if part.field.uses_volume_units() {
+        let state = state.clone();
+        let current = part.units;
+        col = col.child(seg_row(
+            "le-units".to_string(),
+            t!("chart_labels.units").to_string(),
+            VolumeUnits::ALL
+                .iter()
+                .map(|u| (t!(u.locale_key()).to_string(), *u == current))
+                .collect(),
+            72.0,
+            p,
+            cx,
+            move |pick, cx| {
+                if let Some(u) = VolumeUnits::ALL.get(pick).copied() {
+                    write_row(&state, cx, |s| s.row.parts[selected].units = u);
+                }
+            },
+        ));
+    }
+    if part.field.uses_volume_bar() {
+        let state = state.clone();
+        let on = part.bar;
+        col = col.child(
+            MoonCheckbox::new("le-bar")
+                .label(t!("chart_labels.menu.bars").to_string())
+                .checked(on)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |v: &bool, _w, cx| {
+                    let v = *v;
+                    write_row(&state, cx, |s| s.row.parts[selected].bar = v);
+                }),
         );
     }
 

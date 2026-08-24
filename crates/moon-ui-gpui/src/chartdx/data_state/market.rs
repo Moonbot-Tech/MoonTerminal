@@ -1,5 +1,7 @@
 //! Synchronizes market history, the order book, and automatic Y scaling.
 
+use moon_core::market::{VolumeSpan, VolumeSpanReadout};
+
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
 
@@ -1131,12 +1133,16 @@ impl ChartDataState {
         // Its own gate rather than a share of the one above: this readout walks the retained trade
         // buckets and the 5-minute candle ring, so a chart that prints a spread and no window
         // figure must not pay for that walk on every market revision.
-        let wants_windows = st.chart_labels.any_drawn(|f| {
-            matches!(
-                f,
-                LabelField::WindowDelta | LabelField::WindowVolume | LabelField::WindowBuyShare
-            )
-        });
+        let wants_windows = st.chart_labels.any_drawn(|f| f == LabelField::WindowDelta);
+        // Which PERIODS the volume captions ask for, deduplicated: two modules reading the same
+        // minute are one read, and a chart printing none of them collects nothing at all. The set
+        // is tiny — one or two spans — so it is a vector rather than a set.
+        let wanted_spans: Vec<VolumeSpan> = st
+            .chart_labels
+            .volume_spans()
+            .into_iter()
+            .map(|(span, window)| VolumeSpan::from_label(span, window))
+            .collect();
         // The arbitrage column, on its own gate AND its own clock. The readout asks the core venue
         // by venue — each call takes the market lock — so it is read a few times a second rather
         // than on every revision, which on a busy coin is several times that. A column of prices is
@@ -1164,7 +1170,11 @@ impl ChartDataState {
                 .flatten();
             // Resolved once for the three readouts below rather than per readout: each clones the
             // market name, and this loop runs per pane on every market revision.
-            let target = (wants_context || wants_figures || wants_windows || wants_arb)
+            let target = (wants_context
+                || wants_figures
+                || wants_windows
+                || wants_arb
+                || !wanted_spans.is_empty())
                 .then(|| {
                     st.panes
                         .get(*idx)
@@ -1183,6 +1193,40 @@ impl ChartDataState {
                 .as_ref()
                 .filter(|_| wants_windows)
                 .and_then(|(core, market)| source.market_windows(*core, market));
+            // On the arbitrage column's clock, and for the same reason: a span longer than the
+            // protocol's own rolling buckets is answered by walking retained rows, and nobody reads
+            // a volume figure faster than a few times a second. The whole SET is refreshed or none
+            // of it is, so the sides and their total on one chart always describe one instant.
+            let volumes = target
+                .as_ref()
+                .filter(|_| !wanted_spans.is_empty())
+                .filter(|(_, market)| {
+                    st.panes.get(*idx).is_none_or(|pr| {
+                        pr.label_volume_market != *market
+                            || pr.label_volume_spans != wanted_spans
+                            || arb_now_ms - pr.label_volume_read_ms >= ARB_READ_PERIOD_MS
+                    })
+                })
+                .map(|(core, market)| {
+                    // Measured rather than assumed: this is the one path in the caption sync that
+                    // can walk retained rows, and `volume_read_us` is what says whether it is what
+                    // a reader felt while dragging the chart.
+                    let started = std::time::Instant::now();
+                    let rows: Vec<(VolumeSpan, VolumeSpanReadout)> = wanted_spans
+                        .iter()
+                        .filter_map(|span| {
+                            source
+                                .market_volume_span(*core, market, *span)
+                                .map(|readout| (*span, readout))
+                        })
+                        .collect();
+                    crate::diag::bump(&crate::diag::CHART_VOLUME_READS);
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_VOLUME_READ_US,
+                        started.elapsed().as_micros() as u64,
+                    );
+                    (market.clone(), rows)
+                });
             let arb = target
                 .as_ref()
                 .filter(|_| wants_arb)
@@ -1212,6 +1256,20 @@ impl ChartDataState {
                     pr.label_arb.clear();
                     pr.label_arb_read_ms = 0;
                     pr.label_arb_market.clear();
+                }
+                if let Some((market, rows)) = volumes {
+                    pr.label_volumes = rows;
+                    pr.label_volume_read_ms = arb_now_ms;
+                    pr.label_volume_market = market;
+                    pr.label_volume_spans.clear();
+                    pr.label_volume_spans.extend_from_slice(&wanted_spans);
+                } else if wanted_spans.is_empty() && !pr.label_volumes.is_empty() {
+                    // Switched off, like the column above: held figures would come back stale the
+                    // moment a volume caption was switched on again.
+                    pr.label_volumes.clear();
+                    pr.label_volume_read_ms = 0;
+                    pr.label_volume_market.clear();
+                    pr.label_volume_spans.clear();
                 }
                 pr.delta_1h = readout.map(|r| r.delta_1h_pct);
                 pr.delta_24h = readout.map(|r| r.delta_24h_pct);

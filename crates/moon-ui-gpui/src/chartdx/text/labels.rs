@@ -13,10 +13,13 @@
 use std::rc::Rc;
 
 use moon_core::config::{
-    ChartLabelField, ChartLabelPart, ChartLabelsCfg, PnlBasis, ROW_NAME_PART,
+    ChartLabelField, ChartLabelPart, ChartLabelsCfg, LabelSpan, PnlBasis, ROW_NAME_PART,
+    VolumeUnits,
 };
 use moon_core::config::{ARB_PART_BASE, ArbViewCfg};
-use moon_core::market::{ArbQuote, CoinTag, MarketFiguresReadout, MarketWindowsReadout};
+use moon_core::market::{
+    ArbQuote, CoinTag, MarketFiguresReadout, MarketWindowsReadout, VolumeSpan, VolumeSpanReadout,
+};
 use moon_core::util::fmt::{self, DeltaSign};
 use rust_i18n::t;
 
@@ -70,9 +73,16 @@ pub(in crate::chartdx) struct LabelInputs {
     /// source lock and two versioned snapshots, and a pane that prints none of these figures must
     /// not pay for them on every market revision.
     pub figures: Option<MarketFiguresReadout>,
-    /// Retained-history movement and volume, per window. `None` on the same terms, and gated
-    /// separately because it costs more — it walks the trade buckets and the candle ring.
+    /// Retained-history MOVEMENT, per window. `None` on the same terms, and gated separately
+    /// because it costs more — it walks the trade buckets and the candle ring.
     pub windows: Option<MarketWindowsReadout>,
+    /// Traded amounts, one entry per distinct span the configuration asks for.
+    ///
+    /// A list rather than a per-window array, because a span is no longer one of eight: two volume
+    /// modules on one chart can read "the last minute" and "the last 500 trades", and the readouts
+    /// are keyed by what was actually asked. Short — a chart prints one or two of these — so it is
+    /// searched linearly rather than hashed.
+    pub volumes: Vec<(VolumeSpan, VolumeSpanReadout)>,
     /// Venues this terminal has a core connected to, as `(platform code, dex name)`.
     ///
     /// Collected on the SESSION sync, where the core list is in hand — the caption pass has neither
@@ -173,6 +183,34 @@ pub(in crate::chartdx) struct LabelText {
     /// cannot express — one caption prints a dozen lines and they are not all Gate. `None`
     /// everywhere else, where the style answers.
     pub color: Option<u32>,
+    /// The proportion bar drawn beside this caption, if it asked for one.
+    pub bar: Option<VolumeBar>,
+    /// Whether a right-click on this caption opens the VOLUME menu.
+    ///
+    /// Set on every caption of a volume block, its heading included, so the whole block is one
+    /// target: the reader aims at the figures, not at the one line that happens to name the period.
+    /// The menu edits the module the caption belongs to, which [`Self::row`] identifies.
+    pub volume_menu: bool,
+}
+
+/// A buy/sell proportion bar, before it has any geometry.
+///
+/// Carried as a SHARE rather than as a finished rectangle because the caption pass has no geometry
+/// yet: where a line lands is decided while it is drawn, and the bar is placed from the same
+/// measurement as the text beside it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::chartdx) struct VolumeBar {
+    /// Share of the period's whole traded value this side accounts for, `0.0..=1.0`.
+    ///
+    /// Always read from the QUOTE amounts, whatever unit the figures are printed in: a proportion
+    /// is the same proportion in either currency, and the quote halves are the pair that is exact
+    /// over every span.
+    pub fill: f32,
+    /// Whether this is the SELLING side, which decides the colour it is drawn in.
+    ///
+    /// The side rather than the colour itself: the caption layer has no theme, and the order book's
+    /// own bid/ask colours live where the rectangles are actually built.
+    pub sell: bool,
 }
 
 impl LabelText {
@@ -253,6 +291,11 @@ impl LabelState {
             if !row.is_drawn() {
                 continue;
             }
+            // Whether this module prints volume at all, which is what makes its whole block —
+            // heading included — a right-click target for the period menu.
+            let row_reads_volume = row.parts[..row.used_parts()]
+                .iter()
+                .any(|p| p.is_drawn() && p.field.in_volume_block());
             // The row's own name leads its captions, which is where a reader looks for what the
             // row IS before reading the figures on it.
             if let (true, Some(title)) = (row.show_name, crate::controls::row_title(row)) {
@@ -265,6 +308,9 @@ impl LabelState {
                     venue: None,
                     sign: None,
                     color: None,
+                    bar: None,
+                    // A module's own NAME is part of its block, so the menu opens from it too.
+                    volume_menu: row_reads_volume,
                 });
             }
             let mut column_drawn = false;
@@ -307,6 +353,8 @@ impl LabelState {
                     venue: None,
                     sign,
                     color: None,
+                    bar: volume_bar(part, &self.inputs),
+                    volume_menu: row_reads_volume && part.field.in_volume_block(),
                 });
             }
         }
@@ -474,11 +522,33 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .and_then(|w| w.delta_pct)
             .and_then(|v| fmt::pct(v, 2))
             .map(|(text, _)| (text, None)),
-        ChartLabelField::WindowVolume => window(inputs, part)
-            .and_then(|w| w.volume_quote)
-            .map(|v| (fmt::compact_si(v), None)),
-        ChartLabelField::WindowBuyShare => window(inputs, part)
-            .and_then(|w| w.buy_share_pct)
+        // Every traded amount comes from ONE readout, so the total a chart prints is always the sum
+        // of the two halves printed beside it.
+        // The total takes the deepest source that can answer it — see `total_quote_stated`, which
+        // is why this one caption can be whole over a day while the sides beside it are marked.
+        ChartLabelField::WindowVolume => volume(inputs, part).map(|v| {
+            let (quote, whole) = v.total_quote_stated();
+            match part.units {
+                VolumeUnits::Quote => (marked(fmt::compact_si(quote), whole), None),
+                // The coin total has no deep source — the candle ring carries value only — so it is
+                // stated on the sides' own terms.
+                VolumeUnits::Base => volume_amount(part, v, quote, v.total_base()),
+            }
+        }),
+        ChartLabelField::WindowBuyVolume => {
+            volume(inputs, part).map(|v| volume_amount(part, v, v.buy_quote, v.buy_base))
+        }
+        ChartLabelField::WindowSellVolume => {
+            volume(inputs, part).map(|v| volume_amount(part, v, v.sell_quote, v.sell_base))
+        }
+        ChartLabelField::WindowTrades => volume(inputs, part)
+            .map(|v| (marked(fmt::compact_si(f64::from(v.trades)), v.complete), None)),
+        // The block's own heading. It prints even before any history arrives — the period is a
+        // SETTING, not a reading, and a heading that vanished would take the right-click target
+        // with it.
+        ChartLabelField::WindowSpanName => Some((span_label(part), None)),
+        ChartLabelField::WindowBuyShare => volume(inputs, part)
+            .and_then(|v| v.buy_share_pct())
             .and_then(|v| fmt::pct(v, 1))
             .map(|(text, _)| (text, None)),
         ChartLabelField::MaxLeverage => inputs
@@ -641,6 +711,8 @@ fn push_arb_rows(
             // overrides whatever the sign would have picked.
             sign: cell.sign,
             color: cell.color,
+            bar: None,
+            volume_menu: false,
         });
     }
 }
@@ -683,6 +755,88 @@ fn window(
 ) -> Option<moon_core::market::WindowFigures> {
     let windows = inputs.windows.as_ref()?;
     windows.windows.get(part.window.index()).copied()
+}
+
+/// The traded amounts this caption is configured to read.
+fn volume(inputs: &LabelInputs, part: &ChartLabelPart) -> Option<VolumeSpanReadout> {
+    let want = VolumeSpan::from_label(part.span, part.window);
+    inputs
+        .volumes
+        .iter()
+        .find(|(span, _)| *span == want)
+        .map(|(_, readout)| *readout)
+}
+
+/// Share of the period's traded value this caption's side accounts for, for the bar beside it.
+///
+/// `None` whenever there is nothing to compare: a caption that is not a side, a bar switched off,
+/// or a market that did not trade — a full bar over a silent market would read as "all buying".
+fn volume_bar(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<VolumeBar> {
+    if !part.bar || !part.field.uses_volume_bar() {
+        return None;
+    }
+    let readout = volume(inputs, part)?;
+    // Finite AND positive: a market that did not trade has nothing to divide by, and a non-finite
+    // total would put a NaN share into the cache key — where a value that does not equal itself
+    // re-formats the whole corner on every revision.
+    let total = readout.total_quote();
+    if !total.is_finite() || total <= 0.0 {
+        return None;
+    }
+    let sell = part.field == ChartLabelField::WindowSellVolume;
+    let side = match sell {
+        true => readout.sell_quote,
+        false => readout.buy_quote,
+    };
+    Some(VolumeBar {
+        fill: (side / total).clamp(0.0, 1.0) as f32,
+        sell,
+    })
+}
+
+/// The period a volume caption names, as the chart spells it: `1м`, `500 сд`.
+///
+/// One spelling for three shapes, so the block's own heading and the prefix on the figures under it
+/// cannot disagree about what period is being shown.
+fn span_label(part: &ChartLabelPart) -> String {
+    match part.span {
+        LabelSpan::Window => t!(part.window.locale_key()).to_string(),
+        LabelSpan::Minutes(n) => t!("chart_labels.span.minutes", n = n).to_string(),
+        LabelSpan::Trades(n) => t!("chart_labels.span.trades", n = n).to_string(),
+    }
+}
+
+/// One traded amount, in the unit the caption asks for and marked when it is not whole.
+///
+/// The mark is the whole point of the pair of flags the readout carries: a period the retained
+/// history does not reach back over still has a real figure in it — it just covers less than the
+/// caption's own heading claims — and a coin figure over a stretch served by mini-candles is
+/// missing that stretch entirely. Neither is hidden and neither is presented as complete.
+fn volume_amount(
+    part: &ChartLabelPart,
+    readout: VolumeSpanReadout,
+    quote: f64,
+    base: f64,
+) -> (String, Option<DeltaSign>) {
+    let (value, exact) = match part.units {
+        VolumeUnits::Quote => (quote, true),
+        VolumeUnits::Base => (base, readout.base_exact),
+    };
+    (
+        marked(fmt::compact_si(value), readout.complete && exact),
+        None,
+    )
+}
+
+/// Mark a figure that covers less than the caption's own heading claims.
+///
+/// One spelling for every such figure, so a reader learns the mark once: `~` in front, the value
+/// unchanged behind it.
+fn marked(text: String, whole: bool) -> String {
+    match whole {
+        true => text,
+        false => format!("~{text}"),
+    }
 }
 
 /// The coin's tags as one caption: `Seed · Alpha`.
@@ -811,8 +965,10 @@ fn caption_prefix(part: &ChartLabelPart, on: bool) -> String {
     let Some(key) = part.field.caption_key().filter(|_| on) else {
         return String::new();
     };
+    // The PERIOD, not the window: a caption reading the last five hundred trades says so, and a
+    // prefix still naming its unused window would be a second, wrong answer beside the heading.
     let tail = match part.field.uses_window() {
-        true => t!(part.window.locale_key()).to_string(),
+        true => span_label(part),
         false => String::new(),
     };
     format!("{}{tail}: ", t!(key))
@@ -911,7 +1067,19 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
     if !row.is_drawn() {
         return Vec::new();
     }
-    let inputs = sample_inputs();
+    let mut inputs = sample_inputs();
+    // One sample reading under every span this module asks for. Without it a caption set to "the
+    // last 500 trades" would preview as blank — the editor would say the label is broken when it is
+    // merely custom.
+    for part in &row.parts[..row.used_parts()] {
+        if !part.field.reads_volume() {
+            continue;
+        }
+        let span = VolumeSpan::from_label(part.span, part.window);
+        if !inputs.volumes.iter().any(|(held, _)| *held == span) {
+            inputs.volumes.push((span, sample_volume()));
+        }
+    }
     let preview_roster = preview_roster();
     let mut out = Vec::new();
     if row.show_name {
@@ -973,6 +1141,22 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
 /// The roster the preview arranges its sample column by: the shipped one.
 fn preview_roster() -> ArbViewCfg {
     ArbViewCfg::default()
+}
+
+/// One period's traded amounts, for the editor's preview.
+///
+/// Lopsided on purpose: equal halves would draw two identical bars and hide what the bar is for.
+fn sample_volume() -> VolumeSpanReadout {
+    VolumeSpanReadout {
+        buy_quote: 12_700.0,
+        sell_quote: 3_500.0,
+        buy_base: 0.24,
+        sell_base: 0.07,
+        trades: 418,
+        complete: true,
+        base_exact: true,
+        total_quote_candles: None,
+    }
 }
 
 fn sample_inputs() -> LabelInputs {
@@ -1050,10 +1234,11 @@ fn sample_inputs() -> LabelInputs {
         windows: Some(moon_core::market::MarketWindowsReadout {
             windows: [moon_core::market::WindowFigures {
                 delta_pct: Some(0.58),
-                volume_quote: Some(1_240_000.0),
-                buy_share_pct: Some(56.0),
             }; moon_core::config::LABEL_WINDOW_COUNT],
         }),
+        // Filled per ROW by `preview_row`: a span can be any number of minutes or trades, so the
+        // sample cannot enumerate them — it answers whichever ones the module actually asks for.
+        volumes: Vec::new(),
         context: Some(moon_core::market::MarketContextReadout {
             exchange_1h_pct: 0.4,
             exchange_24h_pct: -1.1,

@@ -35,6 +35,7 @@ impl MarketDataSource {
                 provider_exchange: HashMap::new(),
                 core_venue: HashMap::new(),
                 arb_book: Default::default(),
+                volume_book: Default::default(),
                 native_backfill: Default::default(),
                 archive: Default::default(),
             })),
@@ -255,6 +256,12 @@ impl MarketDataSource {
             .lock()
             .expect("arb book poisoned")
             .forget_core(core);
+        // The traded amounts are about that same retained history, and it went away with the slot.
+        inner
+            .volume_book
+            .lock()
+            .expect("volume book poisoned")
+            .forget_core(core);
         bump_generation(&mut inner.provider_generations, core);
     }
 
@@ -277,6 +284,12 @@ impl MarketDataSource {
             .arb_book
             .lock()
             .expect("arb book poisoned")
+            .forget_core(core);
+        // The traded amounts are about that same retained history, and it went away with the slot.
+        inner
+            .volume_book
+            .lock()
+            .expect("volume book poisoned")
             .forget_core(core);
         bump_generation(&mut inner.provider_generations, core);
     }

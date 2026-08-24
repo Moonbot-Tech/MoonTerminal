@@ -304,8 +304,11 @@ fn migrate_slots(slots: Vec<LegacySlot>) -> ChartLabelsCfg {
             visible,
             style: slot.style,
             pnl_basis: slot.pnl_basis,
-            // The old shape had no window: none of the fields it could hold reads one.
+            // The old shape had no window: none of the fields it could hold reads one. The volume
+            // parameters below are the same story one shape later — they arrived with the fields
+            // that read them, so a migrated caption takes their defaults.
             window: LabelWindow::default(),
+            ..ChartLabelPart::default()
         };
         // Joining is only possible while such a row exists AND has room; otherwise the caption
         // opens a row of its own, in the band its chain was drawn in.

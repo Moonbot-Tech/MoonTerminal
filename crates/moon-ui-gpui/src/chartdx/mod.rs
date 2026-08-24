@@ -218,6 +218,29 @@ impl ArbHit {
     }
 }
 
+/// Where one VOLUME module was drawn, and which module it is.
+///
+/// The whole block, not one caption: the right-click menu edits the module's period, and a reader
+/// aiming at "the volumes" is aiming at the three lines together. Grown by the SAME box the backing
+/// plate is grown with — see `CaptionBox` — so a click cannot answer for a rectangle the plate
+/// never covered.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct VolumeHit {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Index of the module in the pane's caption configuration.
+    pub row: usize,
+}
+
+impl VolumeHit {
+    /// Whether a point in the pane's own logical pixels lands on this block.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.w && y >= self.y && y <= self.y + self.h
+    }
+}
+
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
 // STATIC grid density uses fixed width and height divisions. Like Moonbot, the grid stays still and
@@ -310,6 +333,28 @@ struct PaneRender {
     /// drift away from the text it sits under; a single plate spanning both columns would instead
     /// darken the candles lying between them.
     caption_plates: [[f32; 4]; text::CAPTION_PLATES],
+    /// Build buffer for the click boxes, taken and returned like the bars' scratch beside it: the
+    /// boxes are grown per line and converted once, and a fresh vector per pane per frame is churn
+    /// on the present path.
+    pub(super) volume_boxes: Vec<(usize, text::CaptionBox)>,
+    /// Build buffer for the bars above, so a pass that changes nothing costs no allocation.
+    ///
+    /// A SECOND buffer rather than taking the published one: the published bars have to survive the
+    /// pass to be compared against what it produced, and taking them left the comparison against an
+    /// empty vector — which reported a change on every frame and re-published the readout batch
+    /// forever.
+    pub(super) caption_bars_scratch: Vec<text::CaptionBar>,
+    /// Where each volume module was drawn, in the pane's own LOGICAL pixels.
+    ///
+    /// Rebuilt every frame beside [`Self::arb_hits`], and for the same reason: a right-click has to
+    /// hit what the last frame actually drew.
+    pub(super) volume_hits: Vec<VolumeHit>,
+    /// Buy/sell proportion bars this pane's captions published, in DEVICE pixels.
+    ///
+    /// Beside [`Self::caption_plates`] and drawn from the same batch: `prepare_text` owns the
+    /// geometry — a bar is placed from the same measurement as the figure beside it — and
+    /// `sync_readout_params` turns each into two rectangles. Empty on a chart printing no volume.
+    pub(super) caption_bars: Vec<text::CaptionBar>,
     /// Captions this pane resolved from the configuration, and the inputs they were built from.
     labels: text::LabelState,
     /// Venue label for the pane's core, resolved during order sync beside `core_name`.
@@ -340,8 +385,24 @@ struct PaneRender {
     /// Quote side, venue caps, coin tags and the exchange's own position, on the same terms as
     /// [`Self::label_context`]: refreshed with the market snapshot, and only while a caption asks.
     label_figures: Option<moon_core::market::MarketFiguresReadout>,
-    /// Retained-history movement and volume per window, gated separately because it costs more.
+    /// Retained-history movement per window, gated separately because it costs more.
     label_windows: Option<moon_core::market::MarketWindowsReadout>,
+    /// Traded amounts, one entry per distinct span this pane's captions ask for.
+    ///
+    /// Read on the same throttle as the arbitrage column beside it: a span longer than the
+    /// protocol's own rolling buckets is answered by walking retained rows, and a volume figure is
+    /// read by eye. Empty while no caption prints one.
+    label_volumes: Vec<(moon_core::market::VolumeSpan, moon_core::market::VolumeSpanReadout)>,
+    /// When they were last read, in Unix milliseconds. Zero means never.
+    label_volume_read_ms: i64,
+    /// Market those amounts were read for; a pane that just switched coins reads again at once.
+    label_volume_market: String,
+    /// Spans they were read for.
+    ///
+    /// Compared as well as the market, and for the same reason: the right-click menu changes the
+    /// period, and waiting out the throttle for the new one would blank the block for a quarter of
+    /// a second on every pick — the figures are addressed BY span, so the old set answers nothing.
+    label_volume_spans: Vec<moon_core::market::VolumeSpan>,
     /// Venues this terminal is connected to, refreshed with the session sync that fills the order
     /// figures beside it. Empty until a caption asks for the column.
     label_arb_reachable: Vec<(u8, String)>,
@@ -572,6 +633,10 @@ impl PaneRender {
             ticker_resolved: false,
             scale_badge: None,
             caption_plates: [[0.0; 4]; text::CAPTION_PLATES],
+            caption_bars: Vec::new(),
+            caption_bars_scratch: Vec::new(),
+            volume_boxes: Vec::new(),
+            volume_hits: Vec::new(),
             labels: text::LabelState::default(),
             venue: String::new(),
             quote: String::new(),
@@ -585,6 +650,10 @@ impl PaneRender {
             label_context: None,
             label_figures: None,
             label_windows: None,
+            label_volumes: Vec::new(),
+            label_volume_read_ms: 0,
+            label_volume_market: String::new(),
+            label_volume_spans: Vec::new(),
             arb_hits: Vec::new(),
             label_arb_reachable: Vec::new(),
             label_arb: Vec::new(),

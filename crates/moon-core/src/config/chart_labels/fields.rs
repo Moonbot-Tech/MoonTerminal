@@ -95,6 +95,23 @@ pub enum ChartLabelField {
     WindowVolume,
     /// Share of that volume that was buying, in percent. Only short windows carry the split.
     WindowBuyShare,
+    /// Buying half of that volume — the reference terminal's `Bv`.
+    ///
+    /// Its own field rather than a mode of [`Self::WindowVolume`] because a chart prints the two
+    /// halves TOGETHER, one under the other, and a reader compares them: two captions is what that
+    /// block is made of.
+    WindowBuyVolume,
+    /// Selling half of it — the reference terminal's `Sv`.
+    WindowSellVolume,
+    /// How many trades printed over the window.
+    WindowTrades,
+    /// The window itself, spelled out: `1 мин`, `500 сделок`.
+    ///
+    /// A caption that prints no figure at all, and the one thing that makes the volume block
+    /// readable: `Bv 12.7k` over `Sv 3.5k` says nothing about the period it covers, and the period
+    /// is exactly what the right-click menu changes. The reference terminal heads its own block
+    /// with the same line.
+    WindowSpanName,
     /// Maximum leverage the venue allows on this market.
     MaxLeverage,
     /// Largest order the venue accepts here, in the quote currency.
@@ -139,7 +156,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 44] = [
+    pub const ALL: [ChartLabelField; 48] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -171,8 +188,12 @@ impl ChartLabelField {
         ChartLabelField::PriceStep,
         ChartLabelField::Volume24h,
         ChartLabelField::WindowDelta,
+        ChartLabelField::WindowSpanName,
+        ChartLabelField::WindowBuyVolume,
+        ChartLabelField::WindowSellVolume,
         ChartLabelField::WindowVolume,
         ChartLabelField::WindowBuyShare,
+        ChartLabelField::WindowTrades,
         ChartLabelField::MaxLeverage,
         ChartLabelField::MaxOrder,
         ChartLabelField::ExchPosSize,
@@ -214,7 +235,11 @@ impl ChartLabelField {
             ChartLabelField::WindowDelta => ChartLabelGroup::Move,
             ChartLabelField::Volume24h
             | ChartLabelField::WindowVolume
-            | ChartLabelField::WindowBuyShare => ChartLabelGroup::Volume,
+            | ChartLabelField::WindowBuyShare
+            | ChartLabelField::WindowBuyVolume
+            | ChartLabelField::WindowSellVolume
+            | ChartLabelField::WindowTrades
+            | ChartLabelField::WindowSpanName => ChartLabelGroup::Volume,
             ChartLabelField::Funding
             | ChartLabelField::FundingIn
             | ChartLabelField::MaxLeverage
@@ -274,6 +299,10 @@ impl ChartLabelField {
             ChartLabelField::WindowDelta => "chart_labels.field.window_delta",
             ChartLabelField::WindowVolume => "chart_labels.field.window_volume",
             ChartLabelField::WindowBuyShare => "chart_labels.field.window_buy_share",
+            ChartLabelField::WindowBuyVolume => "chart_labels.field.window_buy_volume",
+            ChartLabelField::WindowSellVolume => "chart_labels.field.window_sell_volume",
+            ChartLabelField::WindowTrades => "chart_labels.field.window_trades",
+            ChartLabelField::WindowSpanName => "chart_labels.field.window_span_name",
             ChartLabelField::MaxLeverage => "chart_labels.field.max_leverage",
             ChartLabelField::MaxOrder => "chart_labels.field.max_order",
             ChartLabelField::ExchPosSize => "chart_labels.field.exch_pos_size",
@@ -322,6 +351,11 @@ impl ChartLabelField {
             ChartLabelField::WindowDelta => Some("chart_labels.short.window_delta"),
             ChartLabelField::WindowVolume => Some("chart_labels.short.window_volume"),
             ChartLabelField::WindowBuyShare => Some("chart_labels.short.window_buy_share"),
+            // `Bv`/`Sv` are the reference terminal's own spelling, and they are not translated:
+            // they are read as a pair of symbols beside two numbers, the way `Δ` is.
+            ChartLabelField::WindowBuyVolume => Some("chart_labels.short.window_buy_volume"),
+            ChartLabelField::WindowSellVolume => Some("chart_labels.short.window_sell_volume"),
+            ChartLabelField::WindowTrades => Some("chart_labels.short.window_trades"),
             ChartLabelField::MaxLeverage => Some("chart_labels.short.max_leverage"),
             ChartLabelField::MaxOrder => Some("chart_labels.short.max_order"),
             ChartLabelField::ExchPosSize => Some("chart_labels.short.exch_pos_size"),
@@ -398,15 +432,14 @@ impl ChartLabelField {
 
     /// Windows this field can actually be read over.
     ///
-    /// Not every figure exists over every window: the buy/sell split comes from the retained trade
-    /// buckets, which cover five minutes, while the longer windows are built from candles that
-    /// carry no split at all. Offering the day there would offer a caption that prints nothing and
-    /// reads as broken.
+    /// Every field takes every window now. The split figures used to stop at five minutes, which is
+    /// as far as MoonProto's own rolling trade buckets reach — but the retained MINI-CANDLES carry
+    /// a buy/sell split of their own at five-second resolution, and reading the long windows off
+    /// them is what removed that ceiling. What a window can still fail to be is COVERED: see
+    /// [`Self::splits_sides`] and the readout's own completeness flag.
     pub fn window_choices(self) -> &'static [super::LabelWindow] {
-        match self {
-            ChartLabelField::WindowBuyShare => super::LabelWindow::TRADE_WINDOWS,
-            _ => &super::LabelWindow::ALL,
-        }
+        let _ = self;
+        &super::LabelWindow::ALL
     }
 
     /// Whether this field reads a [`super::LabelWindow`], and therefore shows that control.
@@ -419,6 +452,71 @@ impl ChartLabelField {
             ChartLabelField::WindowDelta
                 | ChartLabelField::WindowVolume
                 | ChartLabelField::WindowBuyShare
+                | ChartLabelField::WindowBuyVolume
+                | ChartLabelField::WindowSellVolume
+                | ChartLabelField::WindowTrades
+                | ChartLabelField::WindowSpanName
+        )
+    }
+
+    /// Whether this field reads a traded AMOUNT, and therefore costs a history read.
+    ///
+    /// The block's own heading is deliberately not one: it prints the period, which is a setting
+    /// rather than a reading, so a chart showing only the heading asks the history for nothing.
+    pub fn reads_volume(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::WindowVolume
+                | ChartLabelField::WindowBuyVolume
+                | ChartLabelField::WindowSellVolume
+                | ChartLabelField::WindowBuyShare
+                | ChartLabelField::WindowTrades
+        )
+    }
+
+    /// Whether this field belongs to a VOLUME block, and so opens its right-click menu.
+    ///
+    /// Wider than [`Self::reads_volume`] by the block's heading, which prints the period and reads
+    /// nothing — and narrower than [`Self::uses_window`], which also covers the movement figure: a
+    /// module printing only `Δ15м` is not a volume block and must keep the plot's own right-click.
+    pub fn in_volume_block(self) -> bool {
+        self.reads_volume() || self == ChartLabelField::WindowSpanName
+    }
+
+    /// Whether this field reads one SIDE of the traded volume, and so needs the buy/sell split.
+    ///
+    /// The split is what limits where a figure can come from: the whole volume exists in the
+    /// 5-minute candle ring as well, a side does not.
+    pub fn splits_sides(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::WindowBuyVolume
+                | ChartLabelField::WindowSellVolume
+                | ChartLabelField::WindowBuyShare
+        )
+    }
+
+    /// Whether this field prints an AMOUNT that can be stated in either currency, and therefore
+    /// shows the money/coin control.
+    ///
+    /// A share and a trade count have no unit to choose; a volume does.
+    pub fn uses_volume_units(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::WindowVolume
+                | ChartLabelField::WindowBuyVolume
+                | ChartLabelField::WindowSellVolume
+        )
+    }
+
+    /// Whether this field can draw a proportion BAR beside its figure.
+    ///
+    /// Only the two sides: a bar states how the buying and the selling compare, and a bar beside a
+    /// figure that has nothing to be compared against would be a full bar, always.
+    pub fn uses_volume_bar(self) -> bool {
+        matches!(
+            self,
+            ChartLabelField::WindowBuyVolume | ChartLabelField::WindowSellVolume
         )
     }
 
@@ -488,6 +586,11 @@ impl ChartLabelField {
             | ChartLabelField::WindowDelta
             | ChartLabelField::WindowVolume
             | ChartLabelField::WindowBuyShare
+            // `Bv 12.7k` over `Sv 3.5k` is the whole point of the pair: two bare numbers under
+            // each other say nothing about which side is which.
+            | ChartLabelField::WindowBuyVolume
+            | ChartLabelField::WindowSellVolume
+            | ChartLabelField::WindowTrades
             | ChartLabelField::MaxLeverage
             | ChartLabelField::MaxOrder
             | ChartLabelField::ExchPosSize

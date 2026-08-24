@@ -450,6 +450,15 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
+    // A right-click on a volume block opens its own menu — the period it covers and what it prints.
+    // Before the figure and order menus for the same reason the arbitrage name is checked first:
+    // the block is a caption over the plot, not part of the plot it sits on.
+    if within && this.try_open_volume_menu(pos, e.position, window, cx) {
+        this.suppress_rmb_up = true;
+        cx.notify();
+        cx.stop_propagation();
+        return;
+    }
     // Right-clicking a drawn figure in drawing mode opens its Alert/Delete menu. This has highest
     // priority; suppress_rmb_up consumes the paired release so fullscreen remains intact.
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {

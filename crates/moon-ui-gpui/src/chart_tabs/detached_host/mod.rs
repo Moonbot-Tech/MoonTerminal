@@ -10,6 +10,7 @@ use rust_i18n::t;
 use std::time::Duration;
 
 use super::add_stack::detect_cap::resolved_max_charts_evict;
+use crate::chart_tabs::labels_popup::LabelsPopupHost as _;
 use super::apply_all::{self, ApplyAll, ApplyAllRequest};
 use super::common::{
     CoinPopupHost, LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting,
@@ -138,7 +139,12 @@ impl DetachedChartHost {
         .detach();
         // When panel composition changes by closing or adding a market, persist ticker changes if
         // this window holds a detached Custom tab. The helper diffs internally and no-ops otherwise.
-        cx.observe(&panel, |this, _panel, cx| {
+        cx.observe(&panel, |this, panel, cx| {
+            // Captions edited from this window's own chart menu; this host owns the tab spec they
+            // belong to. Same relay as the strip's — see `panels::chart::volume_menu`.
+            if let Some(cfg) = panel.update(cx, |stack, _| stack.take_pending_labels()) {
+                this.apply_labels(cfg, cx);
+            }
             this.persist_custom_coins_if_any(cx);
         })
         .detach();

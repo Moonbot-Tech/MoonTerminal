@@ -14,6 +14,7 @@
 //! [`render_input`].
 
 mod arb_open;
+mod volume_menu;
 mod click_series;
 mod figures;
 mod geom;
@@ -195,6 +196,11 @@ pub struct ChartPanel {
     /// follows the global `layout.chart_labels` default; the effective value is applied during
     /// rendering.
     chart_labels: Option<moon_core::config::ChartLabelsCfg>,
+    /// Captions edited by this panel's own right-click menu, waiting to be PERSISTED.
+    ///
+    /// The panel has already applied them to itself; this is the copy its stack hands to the host
+    /// that owns the tab spec. See `volume_menu` for why the write cannot happen here.
+    pending_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Whether to dim-fill the reserved control zone when zones are separate and the order book is
     /// hidden. This is per window/tab, applied during rendering, and enabled by default.
     show_zone: bool,
@@ -571,6 +577,7 @@ impl ChartPanel {
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
+            pending_labels: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -745,6 +752,7 @@ impl ChartPanel {
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
+            pending_labels: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),

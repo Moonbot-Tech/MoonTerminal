@@ -40,6 +40,8 @@ fn texts() -> Vec<LabelText> {
             venue: None,
             sign: None,
             color: None,
+            bar: None,
+            volume_menu: false,
         })
         .collect()
 }
@@ -108,6 +110,8 @@ fn the_first_module_of_a_band_always_opens_a_line() {
         venue: None,
         sign: None,
         color: None,
+        bar: None,
+        volume_menu: false,
     }];
     assert_eq!(
         group_lines(&cfg, &texts, LabelZone::ChartTop, LabelAlign::Right),
@@ -144,6 +148,8 @@ fn an_arbitrage_column_stacks_whatever_the_flow_says() {
             venue: None,
             sign: None,
             color: None,
+            bar: None,
+            volume_menu: false,
         })
         .collect();
 

@@ -11,7 +11,6 @@ use super::{
     MarketTickerReadout, MarketWindowsReadout,
 };
 use crate::market::candles::ChartCandle;
-use moonproto::state::TradeVolumeTotals;
 
 /// Why a core's exchange could not be addressed for a trade replay.
 ///
@@ -708,7 +707,7 @@ impl MarketDataSource {
         self.arb_quotes(core, market)
     }
 
-    /// Return the retained-history figures for every window a caption may ask for.
+    /// Return the retained-history MOVEMENT for every window a caption may ask for.
     ///
     /// Separate from [`Self::market_figures`] because it costs more: the derived snapshot walks the
     /// retained trade buckets and the 5-minute candle ring, while the figures above are field reads
@@ -716,9 +715,9 @@ impl MarketDataSource {
     /// spread.
     ///
     /// The delta is the COMBINED range magnitude — the same figure the Screener's columns show, so
-    /// a coin cannot read as moving 3% on the chart and 5% in the table. Volume comes from the
-    /// retained trade buckets for the windows they cover (five minutes) and from candles beyond
-    /// that; the buy share exists only where the trades do, because candles carry no split.
+    /// a coin cannot read as moving 3% on the chart and 5% in the table. Traded AMOUNTS are not
+    /// here; see [`Self::market_volume_span`] and [`WindowFigures`] for why they all come from one
+    /// place instead.
     ///
     /// Args:
     ///     core: Consumer core whose provider owns the history.
@@ -732,33 +731,34 @@ impl MarketDataSource {
         let derived = snapshot.market_history_derived_snapshot_now(market)?;
         let deltas = derived.deltas;
         let trades = derived.trade_volumes;
-        let candles = derived.candle_volumes;
         let mut out = MarketWindowsReadout::default();
         // Ordered exactly like `LabelWindow::ALL`, which is what the caption indexes by.
-        let rows: [(f64, f64, Option<TradeVolumeTotals>); crate::config::LABEL_WINDOW_COUNT] = [
-            (deltas.one_minute, 0.0, Some(trades.one_minute)),
-            (
-                deltas.five_minutes,
-                candles.five_minutes,
-                Some(trades.five_minutes),
-            ),
-            (deltas.fifteen_minutes, candles.fifteen_minutes, None),
-            (deltas.thirty_minutes, candles.thirty_minutes, None),
-            (deltas.one_hour, candles.one_hour, None),
-            (deltas.three_hours, candles.three_hours, None),
-            (deltas.twenty_four_hours, candles.twenty_four_hours, None),
-            (deltas.seventy_two_hours, candles.seventy_two_hours, None),
+        //
+        // Three minutes has no delta of its own in the derived snapshot — the core's own windows
+        // skip it — so it is the rolling trade buckets' own range, which is the same figure by
+        // another route: highest over lowest, as a percentage.
+        //
+        // Floored at the MINUTE's, because the minute is inside it: a three-minute range cannot be
+        // narrower than the one-minute range it contains, and the derived minute is a combination
+        // of three sources while this is a single one. Without the floor a coin that moved on a
+        // source the trade buckets do not see printed `Δ3м` blank beside a live `Δ1м`.
+        let rows: [f64; crate::config::LABEL_WINDOW_COUNT] = [
+            deltas.one_minute,
+            trades
+                .three_minutes
+                .price_delta_percent()
+                .max(deltas.one_minute),
+            deltas.five_minutes,
+            deltas.fifteen_minutes,
+            deltas.thirty_minutes,
+            deltas.one_hour,
+            deltas.two_hours,
+            deltas.three_hours,
+            deltas.twenty_four_hours,
+            deltas.seventy_two_hours,
         ];
-        for (slot, (delta, candle_volume, trade_totals)) in out.windows.iter_mut().zip(rows) {
+        for (slot, delta) in out.windows.iter_mut().zip(rows) {
             slot.delta_pct = positive(delta);
-            // Trades win where they exist: they are the live tail, while a candle window shorter
-            // than one 5-minute bar cannot be built at all.
-            let traded = trade_totals.map(|t| t.total_value()).and_then(positive);
-            slot.volume_quote = traded.or_else(|| positive(candle_volume));
-            slot.buy_share_pct = trade_totals.and_then(|t| {
-                let total = t.total_value();
-                (total > 0.0).then(|| t.buy_value / total * 100.0)
-            });
         }
         Some(out)
     }

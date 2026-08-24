@@ -58,6 +58,9 @@ pub(crate) struct AddChartStack {
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Tab chart captions (`None` = the global `layout.chart_labels` default).
     chart_labels: Option<moon_core::config::ChartLabelsCfg>,
+    /// Captions a panel's own right-click menu produced, on their way to the host that persists
+    /// them. See `panels::chart::volume_menu` for why they travel rather than being written here.
+    pending_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Window X scale (px/ms, synchronized with Shift+middle-click; `None` = built-in default).
     /// New charts inherit it, and synchronization applies it to all charts.
     x_ppm: Option<f32>,
@@ -174,6 +177,7 @@ impl AddChartStack {
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
+            pending_labels: None,
             x_ppm: None,
             show_zone: None,
             auto_pin: None,
@@ -621,7 +625,12 @@ impl AddChartStack {
         });
         // Repaint the stack after any panel change, including a pin toggle: empty-panel pruning and
         // sorting pinned charts to the top happen during render.
-        cx.observe(&panel, |this, _, cx| {
+        cx.observe(&panel, |this, panel, cx| {
+            // Captions a panel's own menu edited: carried one link further, to the host that owns
+            // the tab spec. See `panels::chart::volume_menu`.
+            if let Some(cfg) = panel.update(cx, |panel, _| panel.take_pending_labels()) {
+                this.pending_labels = Some(cfg);
+            }
             this.prune_or_hold(cx);
             this.sync_compare(cx);
             cx.notify();
@@ -942,6 +951,11 @@ impl AddChartStack {
         apply_setting(&mut self.chart_graphics, cfg, &self.charts, cx, |c, cx| {
             set_panels_chart_graphics(c, cfg, cx)
         });
+    }
+
+    /// Take the captions a panel's right-click menu produced, for the host to persist.
+    pub(crate) fn take_pending_labels(&mut self) -> Option<moon_core::config::ChartLabelsCfg> {
+        self.pending_labels.take()
     }
 
     /// Set chart captions for every stack chart (per window).
