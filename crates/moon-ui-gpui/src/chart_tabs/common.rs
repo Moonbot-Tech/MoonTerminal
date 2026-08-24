@@ -15,6 +15,7 @@ use moon_ui::{
     MoonSegmentItem, MoonSegmentedControl, v_flex,
 };
 
+use super::add_stack::detect_cap::{resolved_max_charts, resolved_max_charts_evict};
 use super::popup_slot::{ChartPopup, PopupSlot};
 use super::{layout_popup, stack};
 use crate::Backend;
@@ -125,9 +126,9 @@ pub(crate) enum StackSetting {
     Scale(Option<f32>),
     /// Whether an arriving chart flashes its accent border.
     ArrivalFlash(bool),
-    /// Detect cap and what a detect does at it: `(cap, replace the stalest)`. `None` — and zero —
-    /// leave the stack uncapped. The two travel together because neither says anything alone: a cap
-    /// with no policy has no behavior at the limit, and a policy with no cap never applies.
+    /// Detect cap and what a detect does at it: `(cap, replace the stalest)`. `None` copies "follow
+    /// the built-in default"; `Some(0)` copies "uncapped". The two travel together because a press
+    /// that moved only one of them would leave the other saying something the reader never chose.
     MaxCharts(Option<u16>, bool),
 }
 
@@ -587,9 +588,11 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         self.scroll_input()
             .clone()
             .update(cx, |input, c| input.set_value(scroll, window, c));
-        // Zero rather than blank for an unset cap, matching Fit's zero: both mean "no limit", and a
-        // blank field reads as a value the popup failed to load.
-        let cap = self.current_max_charts(cx).0.unwrap_or(0).to_string();
+        // The RESOLVED cap, not the raw one: an unconfigured tab is capped at the built-in default,
+        // and a field reading "0" beside a cap of eight in force would be the popup lying about
+        // what the feed is doing. Zero appears here only for a tab that asked to be uncapped, which
+        // is the one case the "0 — no limit" hint describes.
+        let cap = resolved_max_charts(self.current_max_charts(cx).0).to_string();
         self.max_charts_input()
             .clone()
             .update(cx, |input, c| input.set_value(cap, window, c));
@@ -621,9 +624,13 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             .collect()
     }
 
-    /// Read the detect cap from its field: ZERO means uncapped, a number is clamped to
-    /// `MAX_CHARTS_MAX`, and anything unreadable — including a momentarily EMPTY field — keeps the
-    /// target's current value.
+    /// Read the detect cap from its field: ZERO is the STORED "no cap" sentinel, a number is
+    /// clamped to `MAX_CHARTS_MAX`, and anything unreadable — including a momentarily EMPTY field —
+    /// keeps the target's current value.
+    ///
+    /// Zero returns `Some(0)` rather than `None`, because the two no longer mean the same thing:
+    /// `None` is "never configured", which resolves to the built-in cap, so collapsing a typed zero
+    /// to it would make the field the hint calls "no limit" turn the cap back ON.
     ///
     /// Blank deliberately does NOT mean uncapped, unlike the height fields: removing a cap is what
     /// the zero the hint names is for, while a blank field is what the user sees mid-edit, and a
@@ -636,15 +643,39 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         // value. Like the size fields, an out-of-range number stays on screen until the popup is
         // reopened, at which point it reads back as the clamped value that took effect.
         match value.trim().parse::<u32>() {
-            Ok(0) => None,
+            Ok(0) => Some(0),
             Ok(raw) => Some(raw.min(u32::from(layout_popup::MAX_CHARTS_MAX)) as u16),
             Err(_) => fallback,
         }
     }
 
+    /// The cap value to STORE, which is not always the one the field shows.
+    ///
+    /// The field is seeded with the RESOLVED cap, so an unconfigured tab displays the built-in
+    /// default as an ordinary number. Writing that number back would pin the tab to today's value
+    /// forever and dirty `charts.json` for a popup the reader only opened — and a ⧉ press about
+    /// heights would do the same to every tab it addresses. So while the typed number resolves to
+    /// the SAME effective cap the target already has, the target's own raw value travels instead;
+    /// a genuinely different number, zero included, travels as typed.
+    ///
+    /// Args:
+    ///     cx: App context used to read the target and popup field.
+    ///
+    /// Returns:
+    ///     The raw cap value to persist without materializing an unchanged default.
+    fn cap_to_persist(&self, cx: &App) -> Option<u16> {
+        let current = self.current_max_charts(cx).0;
+        let typed = self.read_max_charts(cx);
+        if resolved_max_charts(typed) == resolved_max_charts(current) {
+            current
+        } else {
+            typed
+        }
+    }
+
     /// Set whether a detect at the cap replaces the stalest chart, keeping the cap itself as typed.
     fn apply_max_charts_evict(&mut self, evict: bool, cx: &mut Context<Self>) {
-        let cap = self.read_max_charts(cx);
+        let cap = self.cap_to_persist(cx);
         self.apply_tab_setting(StackSetting::MaxCharts(cap, evict), cx);
     }
 
@@ -686,14 +717,17 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             return;
         }
         let (current_cap, current_evict) = self.current_max_charts(cx);
-        let cap = self.read_max_charts(cx);
+        let cap = self.cap_to_persist(cx);
         if cap == current_cap {
             // The checkbox writes its own half the moment it is clicked, so an unchanged number
-            // leaves nothing for this to do.
+            // leaves nothing for this to do. An unconfigured tab whose field still shows the
+            // resolved default lands here too, which is what keeps its spec unwritten.
             return;
         }
+        // The evict half is RESOLVED rather than `unwrap_or(false)`: on a tab that never configured
+        // it, writing false here would switch eviction off the moment the reader names a cap.
         self.apply_tab_setting(
-            StackSetting::MaxCharts(cap, current_evict.unwrap_or(false)),
+            StackSetting::MaxCharts(cap, resolved_max_charts_evict(current_evict)),
             cx,
         );
     }

@@ -1,7 +1,7 @@
 //! Regression coverage for the detect cap: who gets in, and who gives way when nobody can.
 
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
-use super::{Admission, admit};
+use super::{Admission, admit, resolved_max_charts, resolved_max_charts_evict};
 
 /// A live slot with a TTL deadline, as `admit_detect` collects it.
 fn ttl(ix: usize, deadline: f64) -> (usize, Option<f64>) {
@@ -18,6 +18,77 @@ fn no_cap_accepts_everything() {
     let full = [ttl(0, 1.0), ttl(1, 2.0), ttl(2, 3.0)];
     assert_eq!(admit(None, false, &full), Admission::Accept);
     assert_eq!(admit(None, true, &full), Admission::Accept);
+}
+
+/// `detect_cap.rs` must not restore a zero default cap, a zero fallback, or disabled default
+/// eviction; otherwise an unconfigured DETECT storm either opens unbounded charts or drops the
+/// next chart instead of replacing the stalest one.
+#[test]
+fn an_unconfigured_tab_evicts_the_stalest_slot_at_the_default_boundary() {
+    let full = [
+        ttl(0, 800.0),
+        ttl(1, 700.0),
+        ttl(2, 600.0),
+        ttl(3, 500.0),
+        ttl(4, 400.0),
+        ttl(5, 300.0),
+        ttl(6, 200.0),
+        ttl(7, 100.0),
+    ];
+
+    assert_eq!(
+        admit(
+            Some(resolved_max_charts(None)),
+            resolved_max_charts_evict(None),
+            &full,
+        ),
+        Admission::Evict(7)
+    );
+}
+
+/// `detect_cap.rs:resolved_max_charts` must preserve `Some(0)` instead of filtering it into the
+/// default; otherwise a reader who chose "0 - no limit" is silently re-capped despite the popup
+/// promise.
+#[test]
+fn an_explicit_zero_stays_uncapped_while_none_and_positive_caps_stay_distinct() {
+    let at_default_cap = [
+        ttl(0, 800.0),
+        ttl(1, 700.0),
+        ttl(2, 600.0),
+        ttl(3, 500.0),
+        ttl(4, 400.0),
+        ttl(5, 300.0),
+        ttl(6, 200.0),
+        ttl(7, 100.0),
+    ];
+    let beyond_default = [
+        ttl(0, 900.0),
+        ttl(1, 800.0),
+        ttl(2, 700.0),
+        ttl(3, 600.0),
+        ttl(4, 500.0),
+        ttl(5, 400.0),
+        ttl(6, 300.0),
+        ttl(7, 200.0),
+        ttl(8, 100.0),
+    ];
+
+    assert_eq!(
+        admit(Some(resolved_max_charts(None)), false, &at_default_cap),
+        Admission::Drop
+    );
+    assert_eq!(
+        admit(Some(resolved_max_charts(Some(0))), false, &beyond_default),
+        Admission::Accept
+    );
+    assert_eq!(
+        admit(
+            Some(resolved_max_charts(Some(3))),
+            false,
+            &at_default_cap[..3]
+        ),
+        Admission::Drop
+    );
 }
 
 /// Zero is what an emptied field reads as, and it must mean "no cap" rather than "show nothing".

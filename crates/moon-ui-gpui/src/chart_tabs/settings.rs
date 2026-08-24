@@ -7,6 +7,7 @@
 
 use gpui::*;
 
+use super::add_stack::detect_cap::resolved_max_charts_evict;
 use super::apply_all::{self, ApplyAll};
 use super::common::{LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting};
 use super::{AddChartStack, ChartTabs, Tab};
@@ -421,7 +422,7 @@ impl LayoutPopupHost for ChartTabs {
             line_labels: self.active_line_labels(cx),
             cursor_labels: self.active_cursor_labels(cx),
             arrival_flash: self.active_arrival_flash(cx),
-            max_charts_evict: self.active_max_charts(cx).1.unwrap_or(false),
+            max_charts_evict: resolved_max_charts_evict(self.active_max_charts(cx).1),
         }
     }
     fn popup_is_custom(&self, _cx: &App) -> bool {
@@ -460,7 +461,7 @@ impl LayoutPopupHost for ChartTabs {
             hs,
             self.active_scale_value(cx),
             self.active_layout_orientation(cx),
-            self.read_max_charts(cx),
+            self.cap_to_persist(cx),
         );
         self.applicable_here(values, cx)
     }

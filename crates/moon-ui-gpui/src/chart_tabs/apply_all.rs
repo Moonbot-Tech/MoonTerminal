@@ -465,7 +465,8 @@ pub(super) fn override_counts(specs: &[ChartTabSpec], values: &[StackSetting]) -
 ///     height_scroll: Scroll-mode slot extent, or `None` for the default.
 ///     scale: Price scale, or `None` for Auto.
 ///     orientation: Source orientation, unresolved: `None` copies "no orientation named".
-///     max_charts: Detect cap from the popup field, or `None` for uncapped.
+///     max_charts: Detect cap the press carries: `None` copies "follow the built-in default",
+///         `Some(0)` copies "uncapped", any other number copies that cap.
 ///
 /// Returns:
 ///     The values a ⧉ press on the layout popup copies, in application order. The caller keeps only

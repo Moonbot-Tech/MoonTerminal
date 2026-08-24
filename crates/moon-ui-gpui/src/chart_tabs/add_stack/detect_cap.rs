@@ -5,12 +5,60 @@
 //! half is only the entity work around it — reading each slot, freeing one, and logging what was
 //! decided. Manual paths do not come through here at all: the cap governs the feed, and a coin the
 //! reader typed is not the feed's to close.
+//!
+//! A tab that never touched the setting is CAPPED, at [`DEFAULT_MAX_CHARTS`] and replacing the
+//! stalest chart. [`resolved_max_charts`] and [`resolved_max_charts_evict`] are the one place that
+//! default is applied, so the runtime and the popup that shows it can never disagree.
 
 use gpui::*;
 
 use super::super::stack::{SlotOwner, resolve_layout};
 use super::AddChartStack;
 use moon_core::session::CoreId;
+
+/// How many charts the detect feed may keep on a tab that names no cap of its own.
+///
+/// Eight is the most a stack tab can still show as CHARTS rather than slivers — Fit splits a
+/// ~900 px tab into ~110 px rows, and Scroll's `DEFAULT_SCROLL_HEIGHT` of 300 px puts three on
+/// screen with one short scroll — while bounding a 1100-detect storm at eight GPU canvases, eight
+/// history requests and eight live subscriptions per tab instead of the low thousands.
+pub(in crate::chart_tabs) const DEFAULT_MAX_CHARTS: u16 = 8;
+
+/// What an unconfigured tab does once that cap is reached: take the stalest slot rather than let
+/// the detect go unshown. A cap that silently drops detects reads as the feed having stopped, and
+/// the victim is the chart the TTL would have taken first anyway.
+pub(in crate::chart_tabs) const DEFAULT_MAX_CHARTS_EVICT: bool = true;
+
+/// Resolve a tab's stored cap into the number actually in force.
+///
+/// `None` is "never configured" — every `charts.json` written before the setting existed — and
+/// takes [`DEFAULT_MAX_CHARTS`]. `Some(0)` is the EXPLICIT "no cap" the popup's hint names, and is
+/// returned as zero so it survives a save and reload unchanged.
+///
+/// This is the one place the default is applied. Every reader that must agree with the runtime —
+/// the popup's number field, the diag lines, the admission rule — goes through it, while the
+/// accessors and the persisted spec keep the raw `Option`, which is what lets "not configured"
+/// stay distinguishable from "configured to today's default".
+///
+/// Args:
+///     max: Raw cap stored for the tab.
+///
+/// Returns:
+///     The effective cap, including the built-in default for `None`.
+pub(in crate::chart_tabs) fn resolved_max_charts(max: Option<u16>) -> u16 {
+    max.unwrap_or(DEFAULT_MAX_CHARTS)
+}
+
+/// Resolve a tab's stored "replace the stalest" flag, `None` taking [`DEFAULT_MAX_CHARTS_EVICT`].
+///
+/// Args:
+///     evict: Raw eviction policy stored for the tab.
+///
+/// Returns:
+///     The effective policy, including the built-in default for `None`.
+pub(in crate::chart_tabs) fn resolved_max_charts_evict(evict: Option<bool>) -> bool {
+    evict.unwrap_or(DEFAULT_MAX_CHARTS_EVICT)
+}
 
 /// What a detect should do when it wants to put a NEW chart on this tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,8 +87,8 @@ pub(in crate::chart_tabs) fn admit(
     evict: bool,
     slots: &[(usize, Option<f64>)],
 ) -> Admission {
-    // No cap and a zero cap are the same thing, and both are what a tab that never touched the
-    // setting does: an unbounded stack, exactly as before the setting existed.
+    // No cap and a zero cap are the same thing: an unbounded stack. Callers resolve their tab's
+    // stored setting first, so an unconfigured tab arrives here already carrying the default.
     let Some(cap) = max.filter(|m| *m > 0) else {
         return Admission::Accept;
     };
@@ -80,7 +128,7 @@ impl AddChartStack {
                     moon_core::detect_diag::line(&format!(
                         "[limit] n={} {market}: at cap {} (live={}), detect NOT shown",
                         self.num,
-                        self.max_charts.unwrap_or(0),
+                        resolved_max_charts(self.max_charts),
                         self.pane_count(cx)
                     ));
                 }
@@ -92,7 +140,7 @@ impl AddChartStack {
                     moon_core::detect_diag::line(&format!(
                         "[limit] n={} {market}: at cap {}, replacing stalest {}/{}",
                         self.num,
-                        self.max_charts.unwrap_or(0),
+                        resolved_max_charts(self.max_charts),
                         victim.core,
                         victim.market
                     ));
@@ -105,9 +153,12 @@ impl AddChartStack {
 
     /// Decide a detect's fate against the cap, reading each live chart's eviction deadline.
     fn admit_detect(&self, core: CoreId, market: &str, cx: &App) -> Admission {
-        // Uncapped is the default and every existing `charts.json`, so it costs nothing: no walk of
-        // the stack, no entity reads, no allocation on the ingest path.
-        if self.max_charts.filter(|m| *m > 0).is_none() {
+        // Only a tab that ASKED to be uncapped skips the walk now. An unconfigured tab is capped,
+        // so the walk below is what an ordinary tab pays per NEW detect: a bounded number of slot
+        // reads and one small allocation, against the `ChartPanel` — GPU canvas, history request,
+        // live subscription — that a storm would otherwise open for every one of them.
+        let cap = resolved_max_charts(self.max_charts);
+        if cap == 0 {
             return Admission::Accept;
         }
         // A detect for a chart already ON SCREEN only extends its TTL — it opens nothing and can
@@ -129,8 +180,8 @@ impl AddChartStack {
             .map(|(ix, e)| (ix, e.evictable_deadline(cx)))
             .collect();
         admit(
-            self.max_charts,
-            self.max_charts_evict.unwrap_or(false),
+            Some(cap),
+            resolved_max_charts_evict(self.max_charts_evict),
             &slots,
         )
     }
