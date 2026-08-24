@@ -1950,3 +1950,32 @@ chart.layout.no_arrival_flash:
   ru: "Не мигать рамкой"
   en: "No arrival flash"
   es: "Sin parpadeo al llegar"
+# --- Screen divider: how many columns (or rows) a chart stack lays its charts out in ---
+chart.layout.divider_columns:
+  ru: "Колонок"
+  en: "Columns"
+  es: "Columnas"
+chart.layout.divider_rows:
+  ru: "Рядов"
+  en: "Rows"
+  es: "Filas"
+chart.layout.divider_exact:
+  ru: "Точно"
+  en: "Exactly"
+  es: "Exacto"
+chart.layout.min_slot_height:
+  ru: "Мин. высота"
+  en: "Min height"
+  es: "Altura mín."
+chart.layout.min_slot_width:
+  ru: "Мин. ширина"
+  en: "Min width"
+  es: "Ancho mín."
+chart.layout.min_slot_hint:
+  ru: "с какой высоты добавлять колонку"
+  en: "the height at which a column is added"
+  es: "altura a la que se añade una columna"
+chart.layout.min_slot_hint_width:
+  ru: "с какой ширины добавлять ряд"
+  en: "the width at which a row is added"
+  es: "ancho al que se añade una fila"

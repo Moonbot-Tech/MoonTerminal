@@ -125,6 +125,10 @@ pub(crate) enum StackSetting {
     Scale(Option<f32>),
     /// Whether an arriving chart flashes its accent border.
     ArrivalFlash(bool),
+    /// Screen divider: `(columns, exact, minimum slot)`. The three travel together because none of
+    /// them lays anything out alone — a divider with no policy has no layout, and a minimum with no
+    /// divider has nothing to divide.
+    Grid(Option<u8>, Option<bool>, Option<u16>),
     /// Detect cap and what a detect does at it: `(cap, replace the stalest)`. `None` — and zero —
     /// leave the stack uncapped. The two travel together because neither says anything alone: a cap
     /// with no policy has no behavior at the limit, and a policy with no cap never applies.
@@ -286,6 +290,11 @@ impl StackSetting {
             StackSetting::Labels(v) => s.chart_labels = Some(v),
             StackSetting::Scale(v) => s.scale = v,
             StackSetting::ArrivalFlash(v) => s.arrival_flash = Some(v),
+            StackSetting::Grid(columns, exact, min_slot) => {
+                s.layout_columns = columns;
+                s.layout_columns_exact = exact;
+                s.layout_min_slot = min_slot;
+            }
             StackSetting::MaxCharts(max, evict) => {
                 s.max_charts = max;
                 s.max_charts_evict = Some(evict);
@@ -337,6 +346,9 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::Scale(v) => $s.set_scale(v, $c),
             crate::chart_tabs::common::StackSetting::ArrivalFlash(v) => {
                 $s.set_arrival_flash(Some(v), $c)
+            }
+            crate::chart_tabs::common::StackSetting::Grid(columns, exact, min_slot) => {
+                $s.set_layout_columns(columns, exact, min_slot, $c)
             }
             crate::chart_tabs::common::StackSetting::MaxCharts(max, evict) => {
                 $s.set_max_charts(max, Some(evict), $c)
@@ -401,6 +413,8 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn rename_input(&self) -> &Entity<MoonInputState>;
     /// The detect-cap field, committed on the way out like the two size fields.
     fn max_charts_input(&self) -> &Entity<MoonInputState>;
+    /// The minimum-slot field of the screen divider, committed the same way.
+    fn min_slot_input(&self) -> &Entity<MoonInputState>;
 
     // --- Target tab ---
     /// Which of the three kinds the tab this popup edits IS.
@@ -419,6 +433,8 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn current_orientation(&self, cx: &App) -> Option<StackOrientation>;
     /// Target detect cap as raw `Option`s: `(cap, replace the stalest)`.
     fn current_max_charts(&self, cx: &App) -> (Option<u16>, Option<bool>);
+    /// Target screen divider as raw `Option`s: `(columns, exact, minimum slot)`.
+    fn current_grid(&self, cx: &App) -> (Option<u8>, Option<bool>, Option<u16>);
     /// Whether this popup edits the MAIN tab. A detached window is never Main.
     ///
     /// A fact about the target rather than a per-setting predicate: which settings that fact rules
@@ -593,7 +609,24 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         self.max_charts_input()
             .clone()
             .update(cx, |input, c| input.set_value(cap, window, c));
+        let min_slot = self
+            .current_grid(cx)
+            .2
+            .unwrap_or(stack::grid::DEFAULT_MIN_SLOT)
+            .to_string();
+        self.min_slot_input()
+            .clone()
+            .update(cx, |input, c| input.set_value(min_slot, window, c));
         self.seed_rename_input(window, cx);
+    }
+
+    /// Whether the screen divider belongs on this target's popup.
+    ///
+    /// Comparison's broom mode overrides the divider with one column — anchor plus order books is
+    /// one row by construction — so showing the control there would print a number the layout does
+    /// not follow. Hosts that cannot be in broom mode leave the default.
+    fn divider_applies(&self, _cx: &App) -> bool {
+        true
     }
 
     /// Whether the arrival-flash switch belongs on this target's popup.
@@ -615,9 +648,14 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     /// their caps and switching their flashes back on as a side effect of copying a height.
     fn applicable_here(&self, values: Vec<StackSetting>, cx: &App) -> Vec<StackSetting> {
         let (is_main, is_custom) = (self.target_is_main(cx), self.popup_is_custom(cx));
+        // The divider is filtered by a fact `applies_to` cannot express: broom mode is dynamic
+        // state, not a KIND of tab, and a press from a popup that hid the control would otherwise
+        // write this tab's unset divider over every addressed tab's own.
+        let divider = self.divider_applies(cx);
         values
             .into_iter()
             .filter(|v| v.applies_to(is_main, is_custom))
+            .filter(|v| divider || !matches!(v, StackSetting::Grid(..)))
             .collect()
     }
 
@@ -646,6 +684,63 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn apply_max_charts_evict(&mut self, evict: bool, cx: &mut Context<Self>) {
         let cap = self.read_max_charts(cx);
         self.apply_tab_setting(StackSetting::MaxCharts(cap, evict), cx);
+    }
+
+    /// Read the minimum-slot field the same way the cap is read: blank or unreadable keeps the
+    /// target's current value, and the number is held to the size fields' own range.
+    fn read_min_slot(&self, cx: &App) -> Option<u16> {
+        let fallback = self.current_grid(cx).2;
+        // Only FIT-stretch draws the field. Everywhere else there is nothing on screen to read, and
+        // reading the seeded default anyway would stamp a number the reader never chose into that
+        // tab's spec — on the first blur of ANY field in the popup.
+        if !self.min_slot_applies(cx) {
+            return fallback;
+        }
+        let value = self.min_slot_input().read(cx).value().to_string();
+        match value.trim().parse::<u32>() {
+            Ok(0) => None,
+            // The field is SEEDED with the effective default, so a tab that never set a minimum
+            // shows the same number one would type to mean "the default". Committing that as an
+            // override would write a value the reader never chose into the spec — on the first blur
+            // of any field in the popup — so an untouched default keeps meaning "unset".
+            Ok(raw) if fallback.is_none() && raw == u32::from(stack::grid::DEFAULT_MIN_SLOT) => {
+                None
+            }
+            Ok(raw) => {
+                Some((raw.min(u32::from(layout_popup::MAX_H)) as u16).max(layout_popup::MIN_H))
+            }
+            Err(_) => fallback,
+        }
+    }
+
+    /// Whether the minimum-slot field belongs on this target's popup.
+    ///
+    /// FIT-stretch alone: the other two modes state a slot size outright, and that size is what
+    /// says when the charts have stopped fitting.
+    fn min_slot_applies(&self, cx: &App) -> bool {
+        let (mode, height_fit, _) = self.current_layout(cx);
+        // Gated on the divider too: it is the divider's own minimum, so where the divider is not
+        // drawn there is nothing for it to qualify — and nothing on screen to read it from.
+        self.divider_applies(cx)
+            && mode.unwrap_or(StackLayoutMode::Fit) == StackLayoutMode::Fit
+            && height_fit.unwrap_or(0) == 0
+    }
+
+    /// Set the screen divider, keeping the other two parts of it as they STAND — the stored
+    /// minimum, not the field's current text.
+    ///
+    /// Pressing a segment or a checkbox does not blur `MoonInput`, so the field can hold "3" on its
+    /// way to "300"; committing that here would clamp it to `MIN_H` and store a number the reader
+    /// was in the middle of typing. The minimum has its own commit, on blur and on close.
+    fn apply_divider(&mut self, columns: u8, cx: &mut Context<Self>) {
+        let (_, exact, min_slot) = self.current_grid(cx);
+        self.apply_tab_setting(StackSetting::Grid(Some(columns), exact, min_slot), cx);
+    }
+
+    /// Set whether the divider is exact, keeping the number and the minimum as they stand.
+    fn apply_divider_exact(&mut self, exact: bool, cx: &mut Context<Self>) {
+        let (columns, _, min_slot) = self.current_grid(cx);
+        self.apply_tab_setting(StackSetting::Grid(columns, Some(exact), min_slot), cx);
     }
 
     /// Read a mode height from its field: blank → `None`, invalid → the target's current value.
@@ -679,6 +774,15 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         // The cap field commits on the way out for the same reason the size fields do: committing
         // per keystroke would apply "1" on the way to "12".
         //
+        // The minimum-slot field commits alongside the sizes, for the same reason — and BEFORE the
+        // cap's own gate below, because the two are shown on different sets of tabs: gating this on
+        // the cap's rule would drop a typed minimum on every Main and custom tab, which draw the
+        // field but no cap. `read_min_slot` carries its own "was it shown" check.
+        let (columns, exact, current_min) = self.current_grid(cx);
+        let min_slot = self.read_min_slot(cx);
+        if min_slot != current_min {
+            self.apply_tab_setting(StackSetting::Grid(columns, exact, min_slot), cx);
+        }
         // Only where the field was actually SHOWN, and only when it moved. A tab whose popup hides
         // the cap has no value to commit, and writing one anyway would put a number the user never
         // chose into its spec — and mark `charts.json` dirty on every blur of an unrelated field.
@@ -784,6 +888,8 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let tav_entity = entity.clone();
     let ll_entity = entity.clone();
     let ev_entity = entity.clone();
+    let dv_entity = entity.clone();
+    let ex_entity = entity.clone();
     let fl_entity = entity.clone();
     let cl_entity = entity;
     let row = super::apply_row::render_apply_row(
@@ -811,6 +917,24 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         snap.time_axis,
         snap.line_labels,
         snap.cursor_labels,
+        {
+            let (columns, exact, _) = this.current_grid(cx);
+            layout_popup::GridControls {
+                shown: this.divider_applies(cx),
+                columns: columns.unwrap_or(1),
+                exact: exact.unwrap_or(false),
+                // One definition of "the field is shown", shared with the code that READS it: two
+                // would be free to drift, and a field read where it is not drawn is exactly the
+                // sin `read_min_slot` guards against.
+                min_slot_input: this.min_slot_applies(cx).then(|| this.min_slot_input()),
+                on_pick_columns: Box::new(move |columns, app| {
+                    dv_entity.update(app, |this, cx| this.apply_divider(columns, cx));
+                }),
+                on_toggle_exact: Box::new(move |checked, app| {
+                    ex_entity.update(app, |this, cx| this.apply_divider_exact(checked, cx));
+                }),
+            }
+        },
         this.arrival_flash_applies(cx)
             .then(|| layout_popup::DetectFlow {
                 cap: this

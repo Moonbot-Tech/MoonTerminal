@@ -477,6 +477,7 @@ pub(super) fn layout_values(
     scale: Option<f32>,
     orientation: Option<StackOrientation>,
     max_charts: Option<u16>,
+    grid: (Option<u8>, Option<bool>, Option<u16>),
 ) -> Vec<StackSetting> {
     vec![
         StackSetting::Layout(Some(snap.mode), height_fit, height_scroll),
@@ -493,6 +494,7 @@ pub(super) fn layout_values(
         StackSetting::CursorLabels(snap.cursor_labels),
         StackSetting::ArrivalFlash(snap.arrival_flash),
         StackSetting::MaxCharts(max_charts, snap.max_charts_evict),
+        StackSetting::Grid(grid.0, grid.1, grid.2),
     ]
 }
 

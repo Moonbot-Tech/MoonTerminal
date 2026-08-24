@@ -135,6 +135,7 @@ impl ChartTabs {
                     saved_auto_pin,
                     saved_orientation,
                     saved_arrival_flash,
+                    saved_grid,
                     saved_max_charts,
                     saved_action_pos,
                     saved_axis_pos,
@@ -159,6 +160,9 @@ impl ChartTabs {
                         spec.and_then(|s| s.auto_pin),
                         spec.and_then(|s| s.layout_orientation),
                         spec.and_then(|s| s.arrival_flash),
+                        spec.map_or((None, None, None), |s| {
+                            (s.layout_columns, s.layout_columns_exact, s.layout_min_slot)
+                        }),
                         spec.map_or((None, None), |s| (s.max_charts, s.max_charts_evict)),
                         spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos)),
                         spec.and_then(|s| s.price_axis_pos),
@@ -201,6 +205,11 @@ impl ChartTabs {
                 }
                 if saved_arrival_flash.is_some() {
                     panel.update(cx, |p, pcx| p.set_arrival_flash(saved_arrival_flash, pcx));
+                }
+                if saved_grid.0.is_some() || saved_grid.1.is_some() || saved_grid.2.is_some() {
+                    panel.update(cx, |p, pcx| {
+                        p.set_layout_columns(saved_grid.0, saved_grid.1, saved_grid.2, pcx)
+                    });
                 }
                 // Restored BEFORE the first chart goes in, so a tab reopened at its cap does not
                 // spend one detect getting there.
