@@ -217,6 +217,15 @@ pub fn undated_closes(q: &Query) -> ReadResult<UndatedCloses> {
 ///     Safe per-quote undated totals or a classified read failure.
 fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> {
     const CTX: &str = "analytics: trades with no close date";
+    let mask = query::StrategyMask::resolve(conn, q).map_err(|e| read_fail_on(conn, CTX, e))?;
+    // Attribution follows the MASK, and nothing else. Unmasked, this banner consults no strategy
+    // predicate at all, so the expression stays off and the SQL is what it has always been. A
+    // mask IS a strategy predicate, and turning attribution off under one would test an undated
+    // LIQUIDATION row against its raw `strategyid = 0` while every dated surface tests it against
+    // the strategy named in the row — the banner would then report a different trade set from the
+    // period it is warning about.
+    let masked = !matches!(mask, query::StrategyMask::Off);
+    let has_names = masked && strategies_attached(conn);
     let mut groups = Vec::new();
     for src in super::read_sources_res(conn)? {
         // A source without these columns cannot hold such a row, and asking would fail the
@@ -224,13 +233,21 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue;
         }
-        // Attribution deliberately OFF here: the banner counts rows the PERIOD threw away,
-        // and which strategy they belong to changes nothing about that count. (The caller
-        // passes no strategy scope either, so the expression is never consulted.)
-        let sid = effective_sid_expr("r", &src.cols, false);
+        // Attribution is OFF for an unmasked banner: it counts rows the PERIOD threw away, and
+        // which strategy they belong to changes nothing about that count. A mask makes it matter
+        // again — see the comment above the probe.
+        let sid = effective_sid_expr("r", &src.cols, has_names);
+        let attribution = query::liquidation_attribution_available(&src.cols, has_names);
         let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
         let sql = q
-            .where_branches(WHERE_UNDATED, &src.cols, &sid, Some("r"), false)
+            .where_branches(
+                WHERE_UNDATED,
+                &src.cols,
+                &sid,
+                Some("r"),
+                attribution,
+                &mask,
+            )
             .iter()
             .map(|where_sql| {
                 format!(

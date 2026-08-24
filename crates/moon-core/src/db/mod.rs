@@ -22,6 +22,7 @@ mod dates;
 pub mod integrity;
 pub mod maint;
 pub mod metrics;
+mod name_fold;
 mod quote;
 mod read_cancel;
 pub(crate) mod read_fail;

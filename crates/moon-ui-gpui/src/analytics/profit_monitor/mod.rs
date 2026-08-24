@@ -532,6 +532,8 @@ impl ProfitMonitorView {
             side: SideFilter::All,
             emulator: Some(false),
             strategies: Vec::new(),
+            // No mask: this window has no Analytics toolbar, so there is no mask to inherit.
+            strategy_name_mask: String::new(),
             metric: ProfitMetric::Quote,
             valuation: self.valuation,
             // The monitor already renders one line per core, each in its own quote, so pinning the

@@ -1,6 +1,6 @@
 use super::{
     effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from, unified_from_mode,
-    ProjectionMode, Query,
+    ProjectionMode, Query, StrategyMask,
 };
 use std::collections::HashSet;
 
@@ -26,7 +26,7 @@ fn scope_covers_every_selected_strategy() {
         strategies: vec![(5, Some(7))],
         ..Default::default()
     };
-    let branches = one.where_branches(period, &c, "strategyid", None, false);
+    let branches = one.where_branches(period, &c, "strategyid", None, false, &StrategyMask::Off);
     assert_eq!(branches.len(), 1);
     assert!(branches[0].contains("strategyid = 5"), "{branches:#?}");
     assert!(branches[0].contains("core_uid = 7"), "{branches:#?}");
@@ -35,7 +35,7 @@ fn scope_covers_every_selected_strategy() {
         strategies: vec![(5, Some(7)), (9, Some(8)), (11, None)],
         ..Default::default()
     };
-    let branches = many.where_branches(period, &c, "strategyid", None, false);
+    let branches = many.where_branches(period, &c, "strategyid", None, false, &StrategyMask::Off);
     assert_eq!(branches.len(), 1);
     let sql = branches.join(" UNION ALL ");
     for sid in ["= 5", "= 9", "= 11"] {
@@ -49,7 +49,7 @@ fn scope_covers_every_selected_strategy() {
 
     // No selection = every strategy: no strategy predicate at all.
     let all = Query::default();
-    let branches = all.where_branches(period, &c, "strategyid", None, false);
+    let branches = all.where_branches(period, &c, "strategyid", None, false, &StrategyMask::Off);
     assert_eq!(branches.len(), 1);
     assert!(
         !branches[0].contains("strategyid"),
@@ -66,7 +66,14 @@ fn scope_excludes_a_source_that_cannot_attribute() {
         strategies: vec![(5, Some(7))],
         ..Default::default()
     };
-    let branches = q.where_branches("closedate > 0", &c, "strategyid", None, false);
+    let branches = q.where_branches(
+        "closedate > 0",
+        &c,
+        "strategyid",
+        None,
+        false,
+        &StrategyMask::Off,
+    );
     assert_eq!(branches.len(), 1);
     assert!(branches[0].contains("1=0"), "{branches:#?}");
     assert!(
@@ -224,6 +231,7 @@ fn q() -> Query {
         side: SideFilter::All,
         emulator: None,
         strategies: Vec::new(),
+        strategy_name_mask: String::new(),
         metric: Default::default(),
         valuation: Default::default(),
         prefer_usdt: false,
@@ -258,6 +266,69 @@ fn selected_count_and_profit(connection: &Connection, source: &str) -> (i64, f64
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("aggregate generated source")
+}
+
+/// `Query::where_branches` must apply the strategy-name mask before its empty exact-strategy
+/// early return.
+///
+/// Breakage: deleting the mask term inside `if self.strategies.is_empty()` leaves the ordinary
+/// Analytics view unfiltered. Consequence: Summary, the curve, Calendar, and group tables show
+/// totals for strategies the user did not ask to see.
+#[test]
+fn strategy_name_mask_covers_the_no_exact_selection_branch() {
+    let query = Query {
+        strategy_name_mask: "ema_".to_string(),
+        ..q()
+    };
+    let mask = StrategyMask::Match("'ema_'".to_string());
+    let branches = query.where_branches(
+        "closedate > 0",
+        &cols(&["closedate", "core_uid", "strategyid"]),
+        "strategyid",
+        None,
+        false,
+        &mask,
+    );
+
+    assert_eq!(branches.len(), 1);
+    assert!(
+        branches[0].contains("strat.strategies") && branches[0].contains("mt_unicode_casefold"),
+        "an unscoped name mask must retain its strategy predicate: {branches:#?}"
+    );
+}
+
+/// `StrategyMask::term` must correlate its strategy-id match with the trade's core.
+///
+/// Breakage: changing the row-value `(core_uid, strategy_id)` predicate into a strategy-id-only
+/// `IN` admits an identically numbered strategy from another core. Consequence: one core's money
+/// is silently folded into every masked Analytics figure for the other core.
+#[test]
+fn strategy_name_mask_keeps_same_ids_on_different_cores_separate() {
+    let connection = conn_with_orders();
+    attach_strategies(&connection);
+    connection
+        .execute_batch(
+            "INSERT INTO strat.strategies VALUES
+                 (1, 5, 'EMA_Fast', 0),
+                 (2, 5, 'Hook_M1', 0);
+             INSERT INTO orders_rep VALUES
+                 (1,'alpha','EMA-CORE',0,900,1000,3.5,5,0,100.0,'','',''),
+                 (2,'beta','HOOK-CORE',0,900,2000,9.0,5,0,100.0,'','','');",
+        )
+        .expect("cross-core mask fixture");
+    let query = Query {
+        strategy_name_mask: "ema_".to_string(),
+        ..q()
+    };
+    let source = unified_from(&connection, &query)
+        .expect("masked source")
+        .expect("orders source");
+
+    assert_eq!(
+        selected_count_and_profit(&connection, &source),
+        (1, 3.5),
+        "only core 1's EMA_Fast trade belongs in the masked result"
+    );
 }
 
 /// The assertion that matters: a liquidation really is re-attributed to the strategy

@@ -581,6 +581,15 @@ pub struct WindowLayout {
     /// from "Summary" (each tab has its own time window). None = default.
     #[serde(default)]
     pub analytics_strat_period: Option<String>,
+    /// "Analytics" strategy-name mask: a literal, case-insensitive part of the strategy name.
+    /// None or empty = no filter.
+    ///
+    /// A flat field rather than an entry in [`Self::report_filters`], because Analytics is a
+    /// singleton tool window with no host context to key one by: every other Analytics preference
+    /// beside it is flat for the same reason. Read leniently like its neighbours — this block is
+    /// hand-edited, and one wrongly typed value must not cost the user the rest of the file.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_strategy_mask: Option<String>,
     /// Bitmask of the visible columns in the Tuning strategy list (the ▦ selector).
     /// None = default (all columns).
     ///

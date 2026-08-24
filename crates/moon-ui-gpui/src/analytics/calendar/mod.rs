@@ -691,8 +691,8 @@ impl AnalyticsView {
 /// logic lives next to its page). The query builds its own window from the
 /// mode (month/year/day); the window's period bar plays no part here.
 impl AnalyticsView {
-    /// Calendar `[from,to)` range per mode plus the current core, side, emulator, metric, and
-    /// valuation filters.
+    /// Calendar `[from,to)` range per mode plus the current core, side, emulator, strategy-name
+    /// mask, metric, and valuation filters.
     fn cal_query(&self) -> Query {
         let (from, to) = match self.cal_mode {
             CalMode::Month => month_range(self.cal_ym, self.display_zone),
@@ -715,13 +715,15 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
+            strategy_name_mask: self.strategy_mask.clone(),
             metric: self.metric,
             valuation: self.valuation_mode,
             prefer_usdt: self.prefer_usdt,
         }
     }
 
-    /// Previous month's query under the same filters and valuation mode, for Month KPI deltas only.
+    /// Previous month's query under the same filters, including the strategy-name mask, and
+    /// valuation mode, for Month KPI deltas only.
     fn cal_query_prev(&self) -> Option<Query> {
         if self.cal_mode != CalMode::Month {
             return None;
@@ -736,6 +738,7 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
+            strategy_name_mask: self.strategy_mask.clone(),
             metric: self.metric,
             valuation: self.valuation_mode,
             prefer_usdt: self.prefer_usdt,

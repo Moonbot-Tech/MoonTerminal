@@ -1,10 +1,9 @@
 //! Read layer for the Reports window: filters, source projection, sort/merge, and aggregates.
 
-use rusqlite::functions::FunctionFlags;
 use rusqlite::types::Value;
 use rusqlite::Connection;
-use unicode_casefold::UnicodeCaseFold;
 
+use super::name_fold::{install_unicode_casefold, strategy_name_casefold};
 use super::read_fail::read_fail;
 use super::rep;
 use super::valuation::ValuationMode;
@@ -867,24 +866,8 @@ fn append_strategy_name_mask(
     params.push(Box::new(strategy_name_casefold(mask)));
 }
 
-/// Fold a strategy name for locale-independent Unicode caseless matching.
+/// Install the case folding for a Report read, only when its filter carries a mask.
 ///
-/// Full folding may expand one character into several, such as `ß` into `ss`, which ordinary
-/// lowercasing does not do.
-///
-/// Args:
-///     value: Strategy name or user mask to normalize.
-///
-/// Returns:
-///     Full non-Turkic Unicode case-folded text.
-fn strategy_name_casefold(value: &str) -> String {
-    value.case_fold().collect()
-}
-
-/// Install the Unicode case folding used by a non-empty strategy mask.
-///
-/// SQLite's built-in `lower` handles ASCII only, while strategy names and the Report UI are not
-/// restricted to ASCII. Full case folding also covers multi-character caseless equivalents.
 /// Registration is skipped when the query has no mask, keeping unrelated Report reads unchanged.
 ///
 /// Args:
@@ -903,10 +886,7 @@ fn install_strategy_name_mask_function(
     if filter.strategy_name_mask.trim().is_empty() {
         return Ok(());
     }
-    let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
-    conn.create_scalar_function("mt_unicode_casefold", 1, flags, |ctx| {
-        Ok(strategy_name_casefold(&ctx.get::<String>(0)?))
-    })
+    install_unicode_casefold(conn)
 }
 
 /// SQL projecting the rec id the soft-delete protocol addresses a row by.

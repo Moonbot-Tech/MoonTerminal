@@ -7,6 +7,10 @@ use rusqlite::Connection;
 use super::super::valuation::ValuationMode;
 use super::super::{ProfitMetric, QuoteBreakdown, ReadResult, SideFilter};
 
+mod mask;
+
+pub(in crate::db::analytics) use mask::StrategyMask;
+
 /// Basis used to place Summary's immediately preceding comparison window.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PreviousPeriodBasis {
@@ -42,6 +46,14 @@ pub struct Query {
     /// and that Save writes to. Scoping to the clicked row alone was the bug where
     /// "plan vs fact" compared one strategy while N were selected.
     pub strategies: Vec<(i64, Option<u64>)>,
+    /// Literal, case-insensitive substring matched against the effective strategy NAME.
+    ///
+    /// Empty or whitespace-only text adds no predicate and costs nothing. Independent of the exact
+    /// keys above, so setting both narrows by their CONJUNCTION — the same rule the Report states
+    /// on `ReportFilter::strategy_name_mask`, and the reason this is raw user text here: trimming,
+    /// folding and escaping happen once, in [`StrategyMask::resolve`], so Analytics and the Report
+    /// cannot disagree about what "matches" means.
+    pub strategy_name_mask: String,
     /// Which quantity every profit figure is measured in: absolute quote money (`Quote`) or
     /// return on spent capital (`Percent`, the report's `Profit` column). Applied once in
     /// [`unified_from`]'s projected `pnl` column, so every reader below shares the choice.
@@ -88,6 +100,13 @@ impl Query {
     ///     sid: Effective strategy-id expression used for liquidation candidates.
     ///     alias: Optional table alias used for every physical report column.
     ///     attribution: Whether the expression can reassign a zero/NULL liquidation row.
+    ///     mask: Strategy-NAME mask already resolved against this read's connection. It lands
+    ///         ABOVE the raw-strategy branching, so every branch carries it; a mask that reached
+    ///         only the `direct` branch would let liquidation-attributed rows through unmasked.
+    ///         With a mask set and no exact selection, the single branch now evaluates the
+    ///         attribution `CASE` per row where it previously did not — the price of matching by
+    ///         the same effective identity the rest of Analytics groups by, and paid only while a
+    ///         mask is typed.
     ///
     /// Returns:
     ///     One complete predicate per disjoint raw-strategy branch.
@@ -98,6 +117,7 @@ impl Query {
         sid: &str,
         alias: Option<&str>,
         attribution: bool,
+        mask: &StrategyMask,
     ) -> Vec<String> {
         let has = |n: &str| cols.contains(n);
         let column = |name: &str| match alias {
@@ -139,7 +159,40 @@ impl Query {
                 Some(true) => w.push_str(&format!(" AND COALESCE({},0) = 1", column("emulator"))),
             }
         }
+        // The strategy-NAME mask, before the raw-strategy branching below so every branch inherits
+        // it. A mask the source cannot answer fails CLOSED: matching nothing is the only honest
+        // answer, and it is what the Report already does (`report_read::append_strategy_name_mask`).
+        match mask {
+            StrategyMask::Off => {}
+            StrategyMask::Unavailable => {
+                w.push_str(" AND 1=0");
+                return vec![w];
+            }
+            StrategyMask::Match(_) if !has("core_uid") || !has("strategyid") => {
+                w.push_str(" AND 1=0");
+                return vec![w];
+            }
+            StrategyMask::Match(_) => {}
+        }
+        // Which id the mask is matched against. With attribution the effective expression, so a
+        // LIQUIDATION row booked under the strategy named in it matches that strategy's name;
+        // without it the physical column, which is what `sid` already reduces to there.
+        // `None` on an unmasked read, and NOTHING below it is built either: `term`'s own
+        // short-circuit would still have made the caller format both of its arguments first, so an
+        // empty mask has to stop here rather than inside the callee.
+        let masked_sid = (!matches!(mask, StrategyMask::Off)).then(|| {
+            if attribution {
+                format!("COALESCE({sid}, 0)")
+            } else {
+                format!("COALESCE({}, 0)", column("strategyid"))
+            }
+        });
         if self.strategies.is_empty() {
+            if let Some(masked_sid) = &masked_sid {
+                if let Some(term) = mask.term(masked_sid, &column("core_uid")) {
+                    w.push_str(&term);
+                }
+            }
             return vec![w];
         }
         if !has("strategyid") {
@@ -192,9 +245,21 @@ impl Query {
             }
         };
 
+        // The `direct` branch already constrains the RAW key to a non-zero id, where the effective
+        // expression cannot differ from it (the CASE only rewrites a zero), so the mask matches on
+        // the raw column there and the physical-key index seek survives.
+        let direct_mask = masked_sid
+            .as_ref()
+            .and_then(|_| mask.term(&format!("COALESCE({raw_sid}, 0)"), &core_uid));
+        let residual_mask = masked_sid
+            .as_ref()
+            .and_then(|masked_sid| mask.term(masked_sid, &core_uid));
         let mut branches = Vec::new();
         if let Some(direct) = scoped_predicate(&raw_sid, |want| want != 0) {
-            branches.push(format!("{w} AND {direct}"));
+            branches.push(format!(
+                "{w} AND {direct}{}",
+                direct_mask.as_deref().unwrap_or("")
+            ));
         }
         let residual = if attribution {
             scoped_predicate(&format!("COALESCE({sid}, 0)"), |_| true)
@@ -202,8 +267,11 @@ impl Query {
             scoped_predicate(&format!("COALESCE({raw_sid}, 0)"), |want| want == 0)
         };
         if let Some(residual) = residual {
-            branches.push(format!("{w} AND {raw_sid} = 0 AND {residual}"));
-            branches.push(format!("{w} AND {raw_sid} IS NULL AND {residual}"));
+            let mask_sql = residual_mask.as_deref().unwrap_or("");
+            branches.push(format!("{w} AND {raw_sid} = 0 AND {residual}{mask_sql}"));
+            branches.push(format!(
+                "{w} AND {raw_sid} IS NULL AND {residual}{mask_sql}"
+            ));
         }
         if branches.is_empty() {
             vec![format!("{w} AND 1=0")]
@@ -361,6 +429,10 @@ fn quote_breakdown_attempt(
     include_valuation: bool,
 ) -> rusqlite::Result<QuoteBreakdown> {
     let has_names = strategies_attached(conn);
+    // Resolved ONCE for this whole pass, above the source loop: the rows pass and this totals pass
+    // must narrow to the same trades, and re-resolving per source would put two chances to differ
+    // where there is currently one value.
+    let mask = StrategyMask::resolve(conn, q)?;
     let mut groups = Vec::new();
     let mut coverage = super::super::valuation::CoverageAggregate::default();
     // Loop-invariant: current-rate coverage is publishable without the cache; historical coverage
@@ -374,7 +446,8 @@ fn quote_breakdown_attempt(
         let sid = effective_sid_expr("r", &src.cols, has_names);
         let attribution = liquidation_attribution_available(&src.cols, has_names);
         let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
-        let where_branches = q.where_branches(period, &src.cols, &sid, Some("r"), attribution);
+        let where_branches =
+            q.where_branches(period, &src.cols, &sid, Some("r"), attribution, &mask);
         let (quote, group_by) = super::super::quote::trusted_quote_group("r", &src.cols);
         let source = super::super::report_read::source_partition(src);
         let valuation = super::super::valuation::projection(
@@ -437,7 +510,10 @@ fn quote_breakdown_attempt(
 ///
 /// Returns:
 ///     Whether every routing column and at least one owner-name column are available.
-fn liquidation_attribution_available(cols: &std::collections::HashSet<String>, on: bool) -> bool {
+pub(super) fn liquidation_attribution_available(
+    cols: &std::collections::HashSet<String>,
+    on: bool,
+) -> bool {
     const NEEDED: [&str; 3] = ["strategyid", "channelname", "core_uid"];
     on && NEEDED.iter().all(|column| cols.contains(*column))
         && ["signaltype", "comment"]
@@ -585,6 +661,11 @@ pub(in crate::db) fn unified_from_mode(
     // confused with `super::super::summary`'s own `has_strat_names`, which uses the same probe
     // independently to resolve strategy display names.
     let has_names = strategies_attached(conn);
+    // Resolved ONCE above the source loop, for the same reason the totals pass does it: this
+    // string is the rows half of a pair that must describe the same trades.
+    let mask = StrategyMask::resolve(conn, q).map_err(|error| {
+        super::super::read_fail::read_fail("analytics: strategy name mask", error)
+    })?;
     // Percent mode measures each trade as profit ÷ spent, so a trade without a positive
     // `spentbtc` has no percent at all.
     let pct = mode == ProjectionMode::Percent;
@@ -703,7 +784,9 @@ pub(in crate::db) fn unified_from_mode(
             .map(|parts| parts.joins.as_str())
             .unwrap_or("");
         let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
-        for mut where_sql in q.where_branches(period, &src.cols, &sid, Some("r"), attribution) {
+        for mut where_sql in
+            q.where_branches(period, &src.cols, &sid, Some("r"), attribution, &mask)
+        {
             if pct {
                 where_sql.push_str(" AND r.spentbtc > 0");
             }
