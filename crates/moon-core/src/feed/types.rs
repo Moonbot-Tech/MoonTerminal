@@ -4,8 +4,8 @@
 mod core_status;
 
 pub use core_status::{
-    ApiKeyExpiry, CoreEndpoint, CoreInitStep, CoreStartupState, CoreStartupStatus, CoreSysStatus,
-    INIT_STEPS_TOTAL,
+    ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,
+    CoreStartupState, CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
 };
 
 /// Side of a trade.
@@ -1031,6 +1031,14 @@ pub enum FeedMsg {
     /// core costs nothing. Moonproto-free — the projection lives in `feed::live::convert`, and the
     /// store gates the Core Status panel with `startup_rev` only when progress changes.
     StartupStatus(CoreStartupStatus),
+    /// Why the current connection attempt ended, TYPED, so the UI can localize it.
+    ///
+    /// Emitted exactly once per terminal failure, immediately BEFORE the `Status(Failed)` that
+    /// accompanies it, and never for a healthy core. It exists because the accompanying
+    /// `ConnStatus::Failed(String)` cannot survive the trip: the application-level reconnect loop
+    /// in `feed::run` overwrites that payload with its own text on every retry, and a string built
+    /// in this crate could not be translated anyway.
+    ConnFault(ConnFault),
     /// Core news snapshot: logical news items plus the tags catalog, rebuilt from the retained
     /// moonproto `NewsState` when any `Event::News` arrives. Moonproto-free — the reduction lives in
     /// `feed::news` and the projection in `feed::live::convert`. The store gates the News panel with

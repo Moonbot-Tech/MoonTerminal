@@ -159,6 +159,18 @@ pub struct CoreData {
     /// so after a successful startup `elapsed_ms` is how long that core took to come up, not a
     /// running clock.
     pub startup: crate::feed::CoreStartupStatus,
+    /// Why the LAST connection attempt ended, typed, or `None` while nothing has gone wrong.
+    ///
+    /// It deliberately has NO revision counter of its own. Every consumer is already invalidated
+    /// without one — the Core Status panel rebuilds on the backend observer rather than polling a
+    /// counter, the status bar renders through the same observer, the Connections tab polls a
+    /// signature hash that includes this value, and the workspace rail rebuilds with its roster —
+    /// and a fault never changes without the accompanying `status` changing too, so anything gated
+    /// on the connection already moves. A counter nothing reads is dead weight; add one only
+    /// together with the first consumer that genuinely polls.
+    ///
+    /// It also SURVIVES [`Self::begin_connection_attempt`] on purpose — see the note there.
+    pub fault: Option<crate::feed::ConnFault>,
     /// Endpoint decoded by the live feed from the exported key.
     ///
     /// It is stored beside health telemetry because the Core Status panel groups processes by the
@@ -247,6 +259,7 @@ impl CoreData {
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
             startup: crate::feed::CoreStartupStatus::default(),
+            fault: None,
             endpoint: None,
             news: NewsSnapshot::default(),
             news_seen_at: HashMap::new(),
@@ -344,6 +357,13 @@ impl CoreData {
             self.startup = crate::feed::CoreStartupStatus::default();
             self.startup_rev = self.startup_rev.wrapping_add(1);
         }
+        // The FAULT is deliberately NOT cleared here, and that asymmetry with `startup` above is
+        // the feature. A finished startup must not be shown beside a core that is starting again,
+        // but the reason the previous attempt died is the only explanation of the retry the user is
+        // watching — clearing it would blank the verdict once per backoff cycle and put the user
+        // back at a bare `Connection 0/1`. It is replaced by the next attempt's own fault, and
+        // erased only by reaching Ready (see the `FeedMsg::Status` arm).
+        //
         // The API key belongs to the MoonBot behind the endpoint, and a replacement feed may point
         // at a different one. Keeping the previous host's day count would warn — or stay silent —
         // about a key this core no longer uses.
@@ -404,6 +424,12 @@ impl CoreData {
                 // marker is documented on `assets_stale` — including what it does NOT prove.
                 if !matches!(s, ConnStatus::Ready) {
                     self.assets_stale = true;
+                }
+                // Reaching Ready is the ONLY thing that erases the retained reason. A core that is
+                // working has nothing to explain, and leaving the last failure behind would put a
+                // red verdict beside a healthy core for the rest of the session.
+                if matches!(s, ConnStatus::Ready) {
+                    self.fault = None;
                 }
                 self.status = s;
             }
@@ -511,6 +537,12 @@ impl CoreData {
                 if metrics_changed {
                     self.sys_rev = self.sys_rev.wrapping_add(1);
                 }
+            }
+            FeedMsg::ConnFault(fault) => {
+                // A plain overwrite: the newest attempt is the one being explained, and the feed
+                // emits this exactly once per terminal failure. No revision counter — see the
+                // field's own note for why none of the four consumers needs one.
+                self.fault = Some(fault);
             }
             FeedMsg::StartupStatus(startup) => {
                 // Same shape as `SysStatus` above and for the same reason: retain every snapshot so

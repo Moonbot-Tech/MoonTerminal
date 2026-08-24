@@ -50,6 +50,14 @@ use crate::{Backend, controls};
 /// `ChartTabs` manages detached chart windows through its own subsystem.
 pub(crate) struct Shell {
     backend: Entity<Backend>,
+    /// When the first-run hint on the toolbar Settings gear was armed, if it was.
+    ///
+    /// A newcomer sees a terminal with no cores and no clue which of two dozen chrome controls
+    /// leads to the key field. This points at that control once, for `pulse::ATTENTION`, and only
+    /// on an installation where no core has ever been saved.
+    settings_hint_at: Option<std::time::Instant>,
+    /// Whether the hint's repaint chain is already running, so arming twice cannot stack timers.
+    settings_hint_armed: bool,
     /// Process-wide updater observed separately from high-rate backend state.
     updater: Entity<crate::update::UpdateController>,
     group: String,

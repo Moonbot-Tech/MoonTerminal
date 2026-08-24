@@ -2,7 +2,8 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use super::{BalanceState, ConnStatus, CoreData};
 use crate::feed::{
-    ApiKeyExpiry, CoreEndpoint, CoreSysStatus, FeedMsg, OrderRow, OrderTrace, OrderTracePoint,
+    ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreStartupStatus,
+    CoreSysStatus, FeedMsg, OrderRow, OrderTrace, OrderTracePoint,
 };
 
 /// A core with the given freshness inputs; everything else stays at its default.
@@ -13,6 +14,41 @@ fn core(assets_rev: u64, rate_known: bool, stale: bool, status: ConnStatus) -> C
     cd.assets_stale = stale;
     cd.status = status;
     cd
+}
+
+/// Build a completed failure whose retention is visible while a retry is connecting.
+fn connection_fault() -> ConnFault {
+    ConnFault {
+        kind: ConnFaultKind::ConnectTimedOut { timeout_ms: 10_000 },
+        identity: CoreIdentityFacts::default(),
+        startup: CoreStartupStatus::default(),
+    }
+}
+
+/// `store.rs:CoreData::begin_connection_attempt` must not add `self.fault = None`; clearing the
+/// last failure during retry would return users to an unexplained Connection 0/1 state each backoff
+/// cycle.
+#[test]
+fn a_replacement_attempt_retains_the_last_fault_to_explain_the_retry() {
+    let fault = connection_fault();
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::ConnFault(fault.clone()));
+
+    core.begin_connection_attempt();
+
+    assert_eq!(core.fault, Some(fault));
+}
+
+/// `store.rs:CoreData::apply` must keep its `ConnStatus::Ready` fault clear; removing that clear
+/// would leave a red connection verdict on a healthy core and keep Settings repainting behind it.
+#[test]
+fn a_ready_status_erases_the_failure_that_preceded_it() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::ConnFault(connection_fault()));
+
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+
+    assert_eq!(core.fault, None);
 }
 
 /// No snapshot yet is UNKNOWN, never zero — the distinction the Assets panel exists to make.

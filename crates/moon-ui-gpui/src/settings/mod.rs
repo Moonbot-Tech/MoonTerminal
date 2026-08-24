@@ -142,6 +142,14 @@ pub struct SettingsView {
     lines: Lines,
     /// Detect-type badge editor for the Badges tab; rebuilt after additions and removals.
     badges: BadgesEd,
+    /// When the first-run hint on the Connections tab was armed, if it was.
+    ///
+    /// The Settings gear got the user here; this points at the next thing to do. It targets ONE
+    /// control at a time and which one depends on the draft: with no rows yet there is no key field
+    /// to point at, so the add button carries it.
+    conn_hint_at: Option<std::time::Instant>,
+    /// Whether the hint's repaint chain is already running, so arming twice cannot stack timers.
+    conn_hint_armed: bool,
     /// Per-server editor states for the Connections tab; rebuilt after additions and removals.
     conn: Vec<ConnRow>,
     /// UI-font slider for the personal `ui_font_delta` setting in `settings.toml`.
@@ -393,6 +401,11 @@ impl SettingsView {
         })
         .detach();
         Self {
+            // Armed at construction, never from `render`. Read from the SAVED config: a draft row
+            // the user is halfway through typing is not a configured core.
+            conn_hint_at: (!backend.read(cx).config.core_ever_configured())
+                .then(std::time::Instant::now),
+            conn_hint_armed: false,
             backend,
             active: Tab::Connections,
             status: None,
@@ -473,11 +486,32 @@ fn settings_sig(b: &Backend) -> u64 {
         g.icon.hash(&mut h);
     }
 
+    // The Connections tab renders a connection VERDICT, not just a status dot, so its repaint
+    // signature has to cover every input that verdict reads. Hashing the coarse status alone left
+    // the tooltip frozen at an earlier init step for as long as `Stage(..)` held the same value —
+    // which is most of a slow startup, exactly when someone is watching it.
+    let faults = b.session.fault_map();
+    let startups = b.session.startup_map();
     let mut statuses = b.session.status_map().into_iter().collect::<Vec<_>>();
     statuses.sort_by_key(|(id, _)| *id);
     for (id, status) in statuses {
         id.hash(&mut h);
         format!("{status:?}").hash(&mut h);
+        // The fault is hashed by the few fields the tooltip turns into words, not by Debug-
+        // serialising the whole record: a `ConnFault` carries an entire frozen startup snapshot,
+        // and formatting that per core per notify is a string built only to be thrown away.
+        if let Some(f) = faults.get(&id) {
+            std::mem::discriminant(&f.kind).hash(&mut h);
+            f.identity.hash_into(&mut h);
+        }
+        // Only the fields the tooltip actually shows: hashing the whole snapshot would churn the
+        // signature on byte counters that move every poll and change nothing a reader can see.
+        if let Some(s) = startups.get(&id) {
+            format!("{:?}", s.state).hash(&mut h);
+            format!("{:?}", s.current_step).hash(&mut h);
+            s.completed_mask.hash(&mut h);
+            (s.elapsed_ms / 1000).hash(&mut h);
+        }
     }
 
     h.finish()
@@ -541,6 +575,10 @@ pub fn open(
     match cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| SettingsView::new(b, window, cx));
+        // Arm the first-run repaint chain here rather than in `new`: `pulse::arm` needs the built
+        // view, and arming from `render` would let the window keep itself awake through its own
+        // repaints.
+        view.update(cx, |this, cx| this.arm_conn_hint(cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         Ok(handle) => {

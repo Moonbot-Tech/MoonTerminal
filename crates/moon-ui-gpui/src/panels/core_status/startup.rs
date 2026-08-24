@@ -10,7 +10,7 @@
 //! first.
 
 use moon_core::feed::ConnStatus;
-use moon_core::session::{CoreInitStep, CoreStartupState, CoreStartupStatus, INIT_STEPS_TOTAL};
+use moon_core::session::{CoreStartupState, CoreStartupStatus};
 use rust_i18n::t;
 
 #[cfg(test)]
@@ -29,25 +29,6 @@ pub(super) enum StartupCell {
     Done { elapsed_ms: u64 },
     /// Nothing meaningful to show for this row.
     Absent,
-}
-
-/// Completed steps and the total to show them against.
-///
-/// The total is clamped UP to what was actually observed. MoonProto exposes no readable step count
-/// — both `InitStep::COUNT` and `InitStep::ALL` are private to that crate — so [`INIT_STEPS_TOTAL`]
-/// is our own constant and a MoonProto that grows a ninth step would leave it stale with nothing to
-/// detect it. The clamp guarantees the cell can never render `9/8`, nor claim completion while work
-/// visibly continues. ONE owner, because the cell and the hover both show this pair and a rule
-/// re-derived in two places is a rule that drifts.
-///
-/// Args:
-///     s: The polled startup snapshot retained for this core.
-///
-/// Returns:
-///     `(done, total)`, with `done <= total` always.
-fn progress_pair(s: &CoreStartupStatus) -> (u8, u8) {
-    let done = s.completed_count().min(u8::MAX as u32) as u8;
-    (done, INIT_STEPS_TOTAL.max(done))
 }
 
 /// Decide what the startup column shows, from the connection state AND the polled snapshot.
@@ -76,7 +57,7 @@ pub(super) fn startup_cell(status: &ConnStatus, s: &CoreStartupStatus) -> Startu
         CoreStartupState::Connecting
         | CoreStartupState::Initializing
         | CoreStartupState::Reconnecting => {
-            let (done, total) = progress_pair(s);
+            let (done, total) = s.progress_pair();
             StartupCell::Progress {
                 done,
                 total,
@@ -87,11 +68,6 @@ pub(super) fn startup_cell(status: &ConnStatus, s: &CoreStartupStatus) -> Startu
             StartupCell::Absent
         }
     }
-}
-
-/// Format seconds with one decimal, e.g. `8.4`.
-fn secs(ms: u64) -> String {
-    format!("{:.1}", ms as f64 / 1000.0)
 }
 
 /// Render the startup cell as text.
@@ -115,11 +91,17 @@ pub(super) fn startup_cell_text(cell: StartupCell) -> String {
         } => format!(
             "{} · {}",
             t!("core_status.startup.progress", done = done, total = total),
-            t!("core_status.startup.secs", t = secs(elapsed_ms)),
+            t!(
+                "core_status.startup.secs",
+                t = crate::conn_diag::secs(elapsed_ms)
+            ),
         ),
         StartupCell::Done { elapsed_ms } => t!(
             "core_status.startup.took",
-            t = t!("core_status.startup.secs", t = secs(elapsed_ms))
+            t = t!(
+                "core_status.startup.secs",
+                t = crate::conn_diag::secs(elapsed_ms)
+            )
         )
         .to_string(),
         StartupCell::Absent => "-".to_string(),
@@ -131,21 +113,6 @@ pub(super) fn startup_cell_text(cell: StartupCell) -> String {
 pub(super) struct StartupFact {
     pub(super) label: String,
     pub(super) value: String,
-}
-
-/// Localized name of one startup step.
-pub(super) fn step_label(step: CoreInitStep) -> String {
-    match step {
-        CoreInitStep::BaseCheck => t!("core_status.startup.step.base_check"),
-        CoreInitStep::AuthCheck => t!("core_status.startup.step.auth_check"),
-        CoreInitStep::GetMarketsList => t!("core_status.startup.step.markets_list"),
-        CoreInitStep::UpdateMarketsList => t!("core_status.startup.step.markets_update"),
-        CoreInitStep::StrategySchema => t!("core_status.startup.step.strategy_schema"),
-        CoreInitStep::PostInitFlush => t!("core_status.startup.step.post_init_flush"),
-        CoreInitStep::StartupSnapshot => t!("core_status.startup.step.snapshot"),
-        CoreInitStep::StartupEvents => t!("core_status.startup.step.events"),
-    }
-    .to_string()
 }
 
 /// Localized name of one startup phase.
@@ -160,20 +127,6 @@ pub(super) fn state_label(state: CoreStartupState) -> String {
         CoreStartupState::Unknown => t!("core_status.startup.state.unknown"),
     }
     .to_string()
-}
-
-/// Format a byte count as a compact decimal figure, e.g. `4.2 MB`.
-fn bytes(value: u64) -> String {
-    const KB: f64 = 1000.0;
-    const MB: f64 = 1000.0 * KB;
-    let v = value as f64;
-    if v >= MB {
-        format!("{:.1} {}", v / MB, t!("core_status.startup.mb"))
-    } else if v >= KB {
-        format!("{:.0} {}", v / KB, t!("core_status.startup.kb"))
-    } else {
-        format!("{} {}", value, t!("core_status.startup.b"))
-    }
 }
 
 /// Assemble the hover's facts, in reading order.
@@ -196,24 +149,28 @@ pub(super) fn startup_facts(s: &CoreStartupStatus) -> Vec<StartupFact> {
         state_label(s.state),
     );
     if let Some(step) = s.current_step {
-        let (done, total) = progress_pair(s);
+        let (done, total) = s.progress_pair();
         push(
             t!("core_status.startup.f.step").to_string(),
-            format!("{} ({done}/{total})", step_label(step)),
+            format!("{} ({done}/{total})", crate::conn_diag::step_label(step)),
         );
     }
     push(
         t!("core_status.startup.f.elapsed").to_string(),
-        t!("core_status.startup.secs", t = secs(s.elapsed_ms)).to_string(),
+        t!(
+            "core_status.startup.secs",
+            t = crate::conn_diag::secs(s.elapsed_ms)
+        )
+        .to_string(),
     );
     push(
         t!("core_status.startup.f.received").to_string(),
         format!(
             "{} ({})",
-            bytes(s.received_sliced_bytes),
+            crate::conn_diag::bytes(s.received_sliced_bytes),
             t!(
                 "core_status.startup.rate",
-                v = bytes(s.receive_rate_bytes_per_sec)
+                v = crate::conn_diag::bytes(s.receive_rate_bytes_per_sec)
             )
         ),
     );
@@ -238,7 +195,7 @@ pub(super) fn startup_facts(s: &CoreStartupStatus) -> Vec<StartupFact> {
     if let Some(idle) = s.idle_for_ms {
         push(
             t!("core_status.startup.f.idle").to_string(),
-            t!("core_status.startup.secs", t = secs(idle)).to_string(),
+            t!("core_status.startup.secs", t = crate::conn_diag::secs(idle)).to_string(),
         );
     }
     if s.current_step_retries > 0 || s.total_init_retries > 0 {

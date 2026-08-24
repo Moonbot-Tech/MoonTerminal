@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use moon_core::feed::{ConnStatus, CoreEndpoint};
+use moon_core::feed::{ConnFault, ConnStatus, CoreEndpoint};
 use moon_core::session::{ApiKeyExpiry, CoreId, CoreStartupStatus, CoreSysStatus};
 
 use super::startup::{StartupCell, startup_cell};
@@ -26,6 +26,11 @@ pub(super) struct CoreStatusRow {
     /// Latest polled startup telemetry. It FREEZES once the core settles, so after a successful
     /// startup it describes how long that core took to come up rather than a running clock.
     pub(super) startup: CoreStartupStatus,
+    /// Why this core's last connection attempt ended, when one has ended.
+    ///
+    /// Retained across the backoff retry, so a row that is connecting again still explains WHY the
+    /// previous attempt failed instead of falling back to a bare progress figure.
+    pub(super) fault: Option<ConnFault>,
     /// Endpoint decoded by the feed without exposing the exported key.
     pub(super) endpoint: Option<CoreEndpoint>,
     /// Whether this specific core has a sustained above-baseline client↔core ping (the per-core ping

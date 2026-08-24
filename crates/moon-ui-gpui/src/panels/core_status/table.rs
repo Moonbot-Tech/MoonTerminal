@@ -7,8 +7,10 @@ use std::collections::HashMap;
 
 use super::model::ServerKey;
 use super::presentation::{api_expiry_text, connection_presentation, memory_u16, percent, ping};
-use super::startup::{startup_cell, startup_cell_text};
+use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
 use super::*;
+use crate::conn_diag::{fault_facts, fault_tooltip};
+use moon_core::feed::{Diagnosis, diagnose};
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
 /// Build the fixed set of sortable server, core, connection, and telemetry columns.
@@ -117,10 +119,13 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         .get(&ServerKey::for_row(r))
         .cloned()
         .unwrap_or_default();
+    // One verdict per row, derived once and shared by the status cell and its hover, so the two can
+    // never state different things about the same core.
+    let diag = diagnose(&r.status, r.fault.as_ref(), &r.startup);
     MoonDataRow::new([
         MoonDataCell::text(server),
         MoonDataCell::text(r.name.clone()),
-        MoonDataCell::text(connection_presentation(&r.status).label),
+        MoonDataCell::element(status_cell(r, diag.as_ref())),
         MoonDataCell::text(percent(sys.process_cpu_percent)),
         MoonDataCell::text(percent(sys.system_cpu_percent)),
         MoonDataCell::text(memory_u16(sys.used_memory_mb)),
@@ -129,8 +134,52 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
         MoonDataCell::text(count(sys.logical_cpu_count)),
         MoonDataCell::text(api_expiry_text(r.api_key)),
-        MoonDataCell::text(startup_cell_text(startup_cell(&r.status, &r.startup))),
+        MoonDataCell::element(startup_hover_cell(r)),
     ])
+}
+
+/// The status cell: the short verdict, with reason and next step behind a hover.
+///
+/// The cell text alone is two words, because the column is 110 px wide; the action a user needs is
+/// in the hover, which is where the rest of this panel already puts its detail. Without the hover
+/// the flat table would name a cause and withhold the fix.
+///
+/// Args:
+///     r: The row being rendered.
+///     diag: That row's verdict, when one was derived.
+///
+/// Returns:
+///     The cell element.
+fn status_cell(r: &CoreStatusRow, diag: Option<&Diagnosis>) -> Stateful<Div> {
+    let cell = div()
+        .id(SharedString::from(format!("cs-status-{}", r.id)))
+        .child(connection_presentation(&r.status, diag).label);
+    match diag {
+        Some(d) => cell.tooltip(crate::panels::common::text_tooltip(fault_tooltip(
+            &fault_facts(d),
+        ))),
+        None => cell,
+    }
+}
+
+/// The startup cell, with the same structured hover the by-IP tree already shows.
+///
+/// The flat table used to render this figure with no hover at all, so the channel measurements that
+/// explain a slow start were reachable from one presentation and not the other. Same facts, same
+/// helper, one fewer place the two views disagree.
+///
+/// Args:
+///     r: The row being rendered.
+///
+/// Returns:
+///     The cell element.
+fn startup_hover_cell(r: &CoreStatusRow) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("cs-startup-{}", r.id)))
+        .child(startup_cell_text(startup_cell(&r.status, &r.startup)))
+        .tooltip(crate::panels::common::text_tooltip(startup_tooltip(
+            &startup_facts(&r.startup),
+        )))
 }
 
 /// Format an optional logical-CPU count.

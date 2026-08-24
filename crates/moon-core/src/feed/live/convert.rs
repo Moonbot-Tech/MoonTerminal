@@ -9,10 +9,10 @@ use moonproto::{Event, MoonClient};
 use crate::config::TakeProfitMode;
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
-    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, CoreInitStep, CoreStartupState,
-    CoreStartupStatus, CoreSysStatus, EngineActionKind, EngineActionResult, LevManageEdit,
-    LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace, OrderTracePoint,
-    RuntimeState, WalletKind,
+    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, ConnFault, ConnFaultKind, CoreIdentityFacts,
+    CoreInitStep, CoreStartupState, CoreStartupStatus, CoreSysStatus, EngineActionKind,
+    EngineActionResult, LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow,
+    OrderTrace, OrderTracePoint, RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
@@ -46,11 +46,7 @@ fn valid_trace_tmp_point(p: OrderTraceChartPoint) -> Option<OrderTracePoint> {
 
 fn moon_time_to_unix_millis_f64(time: moonproto::MoonTime) -> f64 {
     let millis = time.unix_millis();
-    if millis > 0 {
-        millis as f64
-    } else {
-        0.0
-    }
+    if millis > 0 { millis as f64 } else { 0.0 }
 }
 
 pub(super) fn license_state_from_proto(
@@ -253,6 +249,145 @@ pub(super) fn startup_status_from_proto(s: moonproto::StartupStatus) -> CoreStar
         round_trip_ms: s.round_trip_ms,
         path_mtu_bytes: s.path_mtu_bytes,
         downlink_delivery_percent: s.downlink_delivery_percent,
+    }
+}
+
+/// Resolve MoonProto's own init-step NAME back to a step this build recognises.
+///
+/// `InitError` names the step as a `&'static str` rather than as the `InitStep` enum
+/// [`init_step_from_proto`] converts, so this is the only bridge between the two. The match is
+/// EXACT and total over the eight steps this build recognises; the strategy-schema step accepts its
+/// two wire spellings. Anything else returns `None` and the caller keeps the raw name. A step
+/// renamed upstream therefore degrades to "we cannot name this stage" rather than to a confidently
+/// wrong one — the same `#[non_exhaustive]` discipline [`init_step_from_proto`] applies, expressed
+/// over strings because that is what the error carries.
+///
+/// Args:
+///     raw: MoonProto's wire name for the init step.
+///
+/// Returns:
+///     The matching terminal step, or `None` for an upstream name this build does not know.
+fn init_step_by_name(raw: &str) -> Option<CoreInitStep> {
+    Some(match raw {
+        "BaseCheck" => CoreInitStep::BaseCheck,
+        "AuthCheck" => CoreInitStep::AuthCheck,
+        "GetMarketsList" => CoreInitStep::GetMarketsList,
+        "UpdateMarketsList" => CoreInitStep::UpdateMarketsList,
+        // The strategy-schema step reports itself by its WIRE command name, not by the enum
+        // variant's name — verified live in MoonProto `init/steps.rs`, outside any `cfg(test)`.
+        // Both spellings map here so a rename on either side degrades one of them, never both.
+        "StrategySchema" | "TStratSchemaRequest" => CoreInitStep::StrategySchema,
+        "PostInitFlush" => CoreInitStep::PostInitFlush,
+        "StartupSnapshot" => CoreInitStep::StartupSnapshot,
+        "StartupEvents" => CoreInitStep::StartupEvents,
+        _ => return None,
+    })
+}
+
+/// Project what `BaseCheck` reported into the moonproto-free identity facts.
+///
+/// A pure copy of what the payload held, with NO inference added. In particular nothing here
+/// derives "the core answered" from the startup step mask: the mask and the payload come from two
+/// different publication paths, and MoonProto refreshes the payload's snapshot only at Ready
+/// (`publish_snapshot_profiled` is gated on `startup.is_none()`, and a failed attempt publishes
+/// nothing at all), so on a failing attempt the mask can say `BaseCheck` completed while the payload
+/// is still the empty default. Combining the two manufactures "answered, and reported no version"
+/// out of a core that has merely not published yet, which is a confident lie about the user's core.
+/// [`CoreIdentityFacts`] carries the full argument.
+///
+/// Args:
+///     info: What `MoonClient::server_info` held at the failure site, if anything.
+///
+/// Returns:
+///     The identity facts a verdict may rest on.
+fn identity_facts(info: Option<moonproto::ServerInfo>) -> CoreIdentityFacts {
+    let info = info.unwrap_or_default();
+    CoreIdentityFacts {
+        has_identity: info.has_identity(),
+        server_version: info.server_version,
+        moonproto_version: info.moonproto_version,
+    }
+}
+
+/// Project MoonProto's typed startup failure into the moonproto-free [`ConnFault`].
+///
+/// This is the ONLY place the typed `ConnectError` is read. It is deliberately a projection rather
+/// than a classification: it renames the wire shape and nothing more, so the decision about WHICH
+/// user-facing cause a shape means — and the wording for it — stays in the layer that can localize.
+///
+/// Args:
+///     error: MoonProto's typed failure for this connection attempt.
+///     info: `BaseCheck` result, when the core got that far.
+///     startup: Startup snapshot polled AT the failure site.
+///
+/// Returns:
+///     The fault record retained for this core until it next reaches `Ready`.
+pub(super) fn conn_fault_from_proto(
+    error: moonproto::ConnectError,
+    info: Option<moonproto::ServerInfo>,
+    startup: moonproto::StartupStatus,
+) -> ConnFault {
+    let kind = match error {
+        // Both mean "the terminal stopped this attempt", never "the core is bad", so they carry no
+        // stage: there is nothing about the core to report.
+        moonproto::ConnectError::Canceled => ConnFaultKind::Aborted,
+        moonproto::ConnectError::Init(moonproto::InitError::SendChannelClosed) => {
+            ConnFaultKind::Aborted
+        }
+        moonproto::ConnectError::ConnectTimedOut { timeout } => ConnFaultKind::ConnectTimedOut {
+            timeout_ms: timeout.as_millis() as u64,
+        },
+        moonproto::ConnectError::Init(moonproto::InitError::NotAuthenticated) => {
+            ConnFaultKind::NotAuthenticated
+        }
+        moonproto::ConnectError::Init(moonproto::InitError::CriticalStepTimedOut(step)) => {
+            ConnFaultKind::InitStepTimedOut {
+                step: init_step_by_name(step),
+                raw_step: step.to_string(),
+            }
+        }
+        moonproto::ConnectError::Init(moonproto::InitError::CriticalStepFailed {
+            step,
+            message,
+        }) => ConnFaultKind::InitStepFailed {
+            step: init_step_by_name(step),
+            raw_step: step.to_string(),
+            message,
+        },
+    };
+    let startup = startup_status_from_proto(startup);
+    ConnFault {
+        identity: identity_facts(info),
+        kind,
+        startup,
+    }
+}
+
+/// Build the fault for `LifecycleEvent::BindFailed` — the terminal's OWN socket, not the core's.
+///
+/// It takes the same identity and startup arguments as [`conn_fault_from_proto`] so both faults are
+/// the same record whatever produced them; both are normally empty here, because a client that
+/// cannot bind never reached the core to learn anything about it.
+///
+/// Args:
+///     consecutive_failures: Complete 200-port bind sweeps that failed in a row.
+///     info: `BaseCheck` result, when an earlier connection on this client got that far.
+///     startup: Startup snapshot polled at the moment the bind failure was reported.
+///
+/// Returns:
+///     The fault record for a local bind failure.
+pub(super) fn bind_fault(
+    consecutive_failures: u32,
+    info: Option<moonproto::ServerInfo>,
+    startup: moonproto::StartupStatus,
+) -> ConnFault {
+    let startup = startup_status_from_proto(startup);
+    ConnFault {
+        kind: ConnFaultKind::LocalBindFailed {
+            consecutive_failures,
+        },
+        identity: identity_facts(info),
+        startup,
     }
 }
 
@@ -868,13 +1003,12 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // switching a working order's stop off would redraw as ON on the very next frame. The override
     // expires as soon as the wire disagrees, so a stop the core arms anyway comes back on its own.
     let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat_on: bool| -> bool {
-        crate::feed::trade::stop_override(server_id, o.uid, kind, wire)
-            .unwrap_or(
-                wire || crate::feed::stop_inherited_from_strategy(
-                    crate::feed::order_entry_filled(o),
-                    strat_on,
-                ),
-            )
+        crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(
+            wire || crate::feed::stop_inherited_from_strategy(
+                crate::feed::order_entry_filled(o),
+                strat_on,
+            ),
+        )
     };
     let eff_strat_id = crate::feed::strategies::effective_strat_id(snap, o.strat_id);
     let strat_snapshot = snap.strats().snapshot(eff_strat_id);

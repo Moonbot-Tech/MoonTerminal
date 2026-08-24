@@ -1,6 +1,7 @@
 //! Startup-column presentation: cell decisions, the progress denominator, and the hover facts.
 
 use super::*;
+use moon_core::session::INIT_STEPS_TOTAL;
 
 /// A minimal terminal snapshot, everything else default.
 fn status(state: CoreStartupState) -> CoreStartupStatus {
@@ -62,7 +63,7 @@ fn the_denominator_clamps_up_to_the_observed_completed_count() {
         completed_mask: 0b1_1111_1111, // 9 bits set
         ..Default::default()
     };
-    assert_eq!(progress_pair(&s), (9, 9));
+    assert_eq!(s.progress_pair(), (9, 9));
 }
 
 /// `progress_pair`: a normal in-progress count stays under the fixed total.
@@ -73,7 +74,7 @@ fn a_normal_completed_count_stays_under_the_fixed_total() {
         completed_mask: 0b0000_0111, // 3 bits set
         ..Default::default()
     };
-    assert_eq!(progress_pair(&s), (3, INIT_STEPS_TOTAL));
+    assert_eq!(s.progress_pair(), (3, INIT_STEPS_TOTAL));
 }
 
 /// `startup_facts`: an upstream `None` (e.g. `path_mtu_bytes`) contributes NO line, and the
@@ -89,9 +90,11 @@ fn an_absent_upstream_value_contributes_no_fact_line() {
     };
     let facts = startup_facts(&s);
     assert!(!facts.iter().any(|f| f.label.contains("MTU")));
-    assert!(facts
-        .iter()
-        .all(|f| !f.value.is_empty() || !f.label.is_empty()));
+    assert!(
+        facts
+            .iter()
+            .all(|f| !f.value.is_empty() || !f.label.is_empty())
+    );
 
     let tooltip = startup_tooltip(&facts);
     assert_eq!(tooltip.lines().count(), facts.len());

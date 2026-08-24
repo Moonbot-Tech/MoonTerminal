@@ -2,6 +2,7 @@
 //! to the UI. The UI never calls moonproto directly. Live mode is the only mode.
 
 pub(crate) mod assets;
+mod conn_verdict;
 mod core_label;
 pub mod live;
 pub mod news;
@@ -12,6 +13,7 @@ pub mod synth;
 mod trade;
 pub mod types;
 
+pub use conn_verdict::{Diagnosis, FailureClass, diagnose};
 pub use core_label::{clear_core_name, core_label, set_core_name};
 pub use news::{NewsItem, NewsSnapshot};
 pub use types::*;
@@ -700,10 +702,12 @@ pub fn spawn(
                             server.name,
                             wait
                         );
+                        // No "reconnecting" suffix here: this crate cannot localize. The UI derives
+                        // whether another attempt is active from the retained `ConnFault` and the
+                        // latest lifecycle status, then words that conditional fact through
+                        // `core_status.fault.retrying`.
                         if tx
-                            .send(FeedMsg::Status(ConnStatus::Failed(format!(
-                                "{e} · переподключение…"
-                            ))))
+                            .send(FeedMsg::Status(ConnStatus::Failed(format!("{e}"))))
                             .is_err()
                         {
                             break; // The UI is closed.

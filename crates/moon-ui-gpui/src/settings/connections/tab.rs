@@ -12,6 +12,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::SettingsView;
+use super::table::conn_diagnosis;
 use crate::design;
 use moon_core::config::GroupConfig;
 use moon_core::session::CoreId;
@@ -383,6 +384,10 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         // Snapshot live core status for the status dots.
         let status = self.backend.read(cx).session.status_map();
+        // The dot's COLOUR comes from the status; its tooltip comes from the verdict, which needs
+        // the retained fault and the startup snapshot beside it. Read all three in one borrow.
+        let faults = self.backend.read(cx).session.fault_map();
+        let startups = self.backend.read(cx).session.startup_map();
         // Snapshot server row metadata and groups as (name, active, icon).
         // Rank from the draft so a pending sort-mode change is visible before it is applied.
         let (order, servers, mut groups) = {
@@ -466,13 +471,14 @@ impl SettingsView {
                 let (id, _, srv_active, _, _) = &servers[i];
                 if let Some(row) = self.conn.get(i) {
                     let st = status.get(id).cloned();
+                    let diag = conn_diagnosis(&st, faults.get(id), startups.get(id));
                     list_col = list_col.child(
                         div()
                             .ml(px(8.0))
                             .pl(px(11.0))
                             .border_l_1()
                             .border_color(rgb(p.border))
-                            .child(self.server_row(cx, i, row, *id, *srv_active, st)),
+                            .child(self.server_row(cx, i, row, *id, *srv_active, st, diag)),
                     );
                 }
             }
@@ -525,13 +531,14 @@ impl SettingsView {
                     let (id, _, srv_active, _, _) = &servers[i];
                     if let Some(row) = self.conn.get(i) {
                         let st = status.get(id).cloned();
+                        let diag = conn_diagnosis(&st, faults.get(id), startups.get(id));
                         list_col = list_col.child(
                             div()
                                 .ml(px(8.0))
                                 .pl(px(11.0))
                                 .border_l_1()
                                 .border_color(rgb(p.border))
-                                .child(self.server_row(cx, i, row, *id, *srv_active, st)),
+                                .child(self.server_row(cx, i, row, *id, *srv_active, st, diag)),
                         );
                     }
                 }
@@ -557,16 +564,30 @@ impl SettingsView {
                     .child(div().flex_1().min_w_0().child(self.core_sort_selector(cx)))
                     // New rows remain in the pending section above every persisted group until Save.
                     .child(
-                        MoonButton::new("add-srv")
-                            .outline()
-                            .small()
-                            // Keep the localized label semantic; MoonButton owns the scaled inset.
-                            .label(format!("+ {}", t!("conn.add_core")))
-                            .padding_x(7.0)
-                            .on_click(cx.listener(|this, _, w, cx| {
-                                this.add_server("default".into(), w, cx)
-                            }))
-                            .render(),
+                        // The first-run hint starts HERE and only while the draft has no rows at
+                        // all: with nothing configured there is no key field on screen yet, so the
+                        // control that creates one is the only honest thing to point at. Adding a
+                        // row hands the ring to that field (`add_server` re-arms).
+                        div()
+                            .relative()
+                            .child(
+                                MoonButton::new("add-srv")
+                                    .outline()
+                                    .small()
+                                    // Keep the localized label semantic; MoonButton owns the
+                                    // scaled inset.
+                                    .label(format!("+ {}", t!("conn.add_core")))
+                                    .padding_x(7.0)
+                                    .on_click(cx.listener(|this, _, w, cx| {
+                                        this.add_server("default".into(), w, cx)
+                                    }))
+                                    .render(),
+                            )
+                            .children(
+                                self.conn_hint(cx)
+                                    .filter(|_| servers.is_empty())
+                                    .and_then(|at| crate::pulse::attention_ring(p.accent, at)),
+                            ),
                     ),
             )
             .child(list_col)

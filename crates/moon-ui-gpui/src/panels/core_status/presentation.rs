@@ -1,11 +1,12 @@
 //! Shared connection and metric presentation rules for both Core Status modes.
 
-use moon_core::feed::ConnStatus;
+use moon_core::feed::{ConnStatus, Diagnosis};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
 use super::model::ApiKeyState;
 use crate::backend::core_warn::LatencySeverity;
+use crate::conn_diag::fault_short;
 
 /// Visual metadata shared by Flat and By IP connection rows.
 pub(super) struct ConnectionPresentation {
@@ -15,40 +16,47 @@ pub(super) struct ConnectionPresentation {
 
 /// Resolve one connection state into its shared lifecycle label.
 ///
+/// The verdict, when there is one, REPLACES the raw payload the two in-progress states used to
+/// interpolate. Those payloads are built in `moon-core`, which cannot localize: `Stage` carried an
+/// English phrase such as "connected, init..." and `Failed` carried MoonProto's own error text, and
+/// both reached the screen untranslated. The verdict is the same fact, classified and worded here.
+///
 /// Args:
 ///     status: Latest core connection state.
+///     diag: The verdict for this core, when `moon_core::feed::diagnose` returned one.
 ///
 /// Returns:
 ///     A consistent label for either Core Status presentation.
-pub(super) fn connection_presentation(status: &ConnStatus) -> ConnectionPresentation {
-    match status {
-        ConnStatus::Ready => ConnectionPresentation {
-            label: t!("conn.status.ready").to_string(),
-        },
-        ConnStatus::Connecting => ConnectionPresentation {
-            label: t!("conn.status.connecting").to_string(),
-        },
-        ConnStatus::Stage(stage) => ConnectionPresentation {
-            label: t!("conn.status.stage", stage = stage.as_str()).to_string(),
-        },
-        ConnStatus::Failed(error) => ConnectionPresentation {
-            label: t!("conn.status.failed", err = error.as_str()).to_string(),
-        },
-        ConnStatus::Disconnected => ConnectionPresentation {
-            label: t!("conn.status.disconnected").to_string(),
-        },
-    }
+pub(super) fn connection_presentation(
+    status: &ConnStatus,
+    diag: Option<&Diagnosis>,
+) -> ConnectionPresentation {
+    let label = match (status, diag) {
+        (ConnStatus::Ready, _) => t!("conn.status.ready").to_string(),
+        (ConnStatus::Failed(_), Some(d)) => {
+            t!("conn.status.failed", err = fault_short(&d.class)).to_string()
+        }
+        (_, Some(d)) => t!("conn.status.stage", stage = fault_short(&d.class)).to_string(),
+        (ConnStatus::Connecting, None) => t!("conn.status.connecting").to_string(),
+        // No verdict behind an in-progress or failed state: there is nothing classified to show,
+        // so fall back to the coarse phase rather than to the untranslatable payload.
+        (ConnStatus::Stage(_), None) => t!("conn.status.connecting").to_string(),
+        (ConnStatus::Failed(_), None) => t!("conn.status.failed", err = "-").to_string(),
+        (ConnStatus::Disconnected, None) => t!("conn.status.disconnected").to_string(),
+    };
+    ConnectionPresentation { label }
 }
 
 /// Return the localized connection label for reuse outside the Core Status panel.
 ///
 /// Args:
-///     status: Latest core connection state, including any stage or failure detail.
+///     status: Latest core connection state.
+///     diag: The verdict for this core, when one was derived.
 ///
 /// Returns:
 ///     The same lifecycle label rendered by the Core Status status column.
-pub(crate) fn connection_status_text(status: &ConnStatus) -> String {
-    connection_presentation(status).label
+pub(crate) fn connection_status_text(status: &ConnStatus, diag: Option<&Diagnosis>) -> String {
+    connection_presentation(status, diag).label
 }
 
 /// Format an optional integer percentage.

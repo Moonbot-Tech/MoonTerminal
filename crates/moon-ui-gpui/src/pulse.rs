@@ -42,6 +42,55 @@ const FLASH_HOLD: f32 = 0.12;
 /// readable, so the colour reads as "this just lit up" rather than covering it.
 const FLASH_PEAK: f32 = 0.24;
 
+/// How long a first-run ATTENTION hint breathes before it erases itself.
+///
+/// Three times [`FLASH`], and the difference in duration follows a difference in job. An arrival
+/// tint says "this line is new" to someone already reading the list; an attention ring says "the
+/// control you are looking for is HERE" to someone who has never opened this window and does not
+/// yet know where to look. That reader needs long enough to finish scanning the chrome.
+pub const ATTENTION: Duration = Duration::from_millis(6000);
+
+/// How many full bright-to-dim cycles an attention hint completes over [`ATTENTION`].
+///
+/// A ring that fades once reads as a rendering artefact; one that breathes reads as deliberate.
+const ATTENTION_BREATHS: f32 = 3.0;
+
+/// Peak opacity of the attention ring. Higher than [`FLASH_PEAK`] because this is a BORDER around a
+/// control rather than a plate under text, so nothing has to stay readable through it.
+const ATTENTION_PEAK: f32 = 0.85;
+
+/// Build the attention ring for a control the user has not found yet.
+///
+/// Declared as an absolutely-positioned overlay, so the host must already be `relative()`, and it
+/// draws only a border: the control underneath keeps its own colours, its own hit area and its own
+/// hover state. Nothing about it is interactive.
+///
+/// `None` once [`ATTENTION`] has elapsed, and THAT absence is the teardown -- there is no flag to
+/// clear and no state to reset, exactly as [`arrival_tint`] works. A caller with a second condition
+/// (the hint has become irrelevant because the user finally configured something) simply stops
+/// calling this, and the ring is gone on the next frame rather than at the end of the timer.
+///
+/// Args:
+///     color: Packed theme colour the ring is drawn in, normally `palette.accent`.
+///     at: When the hint was armed.
+///
+/// Returns:
+///     The ring layer, or `None` once the hint is over.
+pub fn attention_ring(color: u32, at: Instant) -> Option<Div> {
+    let delta = phase(at, ATTENTION)?;
+    // A cosine breath rather than a linear ramp: it has no corners, so the eye reads one moving
+    // object instead of a series of steps, and it ends where it started with no visible cut.
+    let wave = (1.0 - (delta * ATTENTION_BREATHS * std::f32::consts::TAU).cos()) * 0.5;
+    Some(
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(gpui::px(6.0))
+            .border_2()
+            .border_color(crate::design::moon_alpha(color, wave * ATTENTION_PEAK)),
+    )
+}
+
 /// Build the full-bleed arrival tint for an item that arrived at `at`.
 ///
 /// Declared BEFORE the content it belongs to, so it paints underneath. `None` once the pulse is
