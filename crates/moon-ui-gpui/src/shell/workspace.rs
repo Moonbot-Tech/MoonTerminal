@@ -839,6 +839,7 @@ impl Shell {
                         startup: core
                             .map(|core| core.startup)
                             .unwrap_or_else(CoreStartupStatus::default),
+                        fault: core.and_then(|core| core.fault.clone()),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -1194,11 +1195,19 @@ fn workspace_core_tooltip(row: &WorkspaceRosterRow) -> String {
     if row.status == WorkspaceCoreStatus::Problem
         && let Some(connection) = row.connection.as_ref()
     {
+        let diag = moon_core::feed::diagnose(connection, row.fault.as_ref(), &row.startup);
         lines.push(format!(
             "{}: {}",
             t!("core_status.col.status"),
-            crate::panels::connection_status_text(connection)
+            crate::panels::connection_status_text(connection, diag.as_ref())
         ));
+        // The reason and its next step come BEFORE the channel telemetry: a rail row is a glance
+        // surface, and the actionable half must not sit under a dozen measurement lines.
+        if let Some(diag) = diag.as_ref() {
+            lines.push(crate::conn_diag::fault_tooltip(
+                &crate::conn_diag::fault_facts(diag),
+            ));
+        }
         lines.push(format!(
             "{}:\n{}",
             t!("core_status.col.startup"),

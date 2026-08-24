@@ -9,8 +9,8 @@ use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
 use crate::venue::CoreVenue;
 
 use super::{
-    conn_sig, orderbook_kind_for_exchange, ConnSummary, CoreId, CoreSession, CoreStore, DrainStats,
-    LicenseSummary, SessionManager,
+    ConnSummary, CoreId, CoreSession, CoreStore, DrainStats, LicenseSummary, SessionManager,
+    conn_sig, orderbook_kind_for_exchange,
 };
 
 #[cfg(test)]
@@ -417,6 +417,41 @@ impl SessionManager {
         self.store.statuses().collect()
     }
 
+    /// Return the retained connection FAULT of every core that has one, for the Settings badges.
+    ///
+    /// Separate from [`Self::status_map`] rather than folded into it: most cores never have a
+    /// fault, so the map stays small, and the two are consumed by different code paths — the badge
+    /// colour reads the status, only the tooltip reads the reason.
+    ///
+    /// Returns:
+    ///     A core-id-keyed snapshot containing only cores with a retained fault.
+    pub fn fault_map(&self) -> HashMap<CoreId, crate::feed::ConnFault> {
+        self.sessions
+            .iter()
+            .filter_map(|s| {
+                self.store
+                    .core(s.id)
+                    .and_then(|d| d.fault.clone())
+                    .map(|f| (s.id, f))
+            })
+            .collect()
+    }
+
+    /// Return the retained STARTUP snapshot of every core, for the Settings badges.
+    ///
+    /// The still-syncing verdict is derived from the startup snapshot rather than from a fault —
+    /// a core that merely never finished coming up produces no failure event at all — so the
+    /// tooltip needs both maps.
+    ///
+    /// Returns:
+    ///     A core-id-keyed startup snapshot for every core still retained by the session store.
+    pub fn startup_map(&self) -> HashMap<CoreId, crate::feed::CoreStartupStatus> {
+        self.sessions
+            .iter()
+            .filter_map(|s| self.store.core(s.id).map(|d| (s.id, d.startup)))
+            .collect()
+    }
+
     /// Summarize connections in one group as ready/total counts and non-ready core details.
     ///
     /// A group corresponds to an OS window, so each status bar reports only its own group. The
@@ -446,21 +481,37 @@ impl SessionManager {
             .count()
     }
 
+    /// Summarize one window group's connection state with the evidence needed for its status bar.
+    ///
+    /// A non-ready row carries its retained fault and startup snapshot as well as its coarse
+    /// status, because the bar must explain the current retry without reaching back into the store
+    /// after it has made the group-scoped snapshot.
+    ///
+    /// Args:
+    ///     group: Configured window group whose sessions are summarized.
+    ///
+    /// Returns:
+    ///     Ready and total counts plus canonically ordered non-ready core diagnostics.
     pub fn conn_summary_group(&self, group: &str) -> ConnSummary {
         let mut total = 0;
         let mut ready = 0;
         let mut down = Vec::new();
         for s in self.sessions.iter().filter(|s| s.group == group) {
             total += 1;
-            let st = self
-                .store
-                .core(s.id)
+            let core = self.store.core(s.id);
+            let st = core
                 .map(|d| d.status.clone())
                 .unwrap_or(ConnStatus::Connecting);
             if st == ConnStatus::Ready {
                 ready += 1;
             } else {
-                down.push((s.id, s.name.clone(), st));
+                down.push(crate::session::ConnDown {
+                    id: s.id,
+                    name: s.name.clone(),
+                    status: st,
+                    fault: core.and_then(|d| d.fault.clone()),
+                    startup: core.map(|d| d.startup).unwrap_or_default(),
+                });
             }
         }
         ConnSummary { ready, total, down }

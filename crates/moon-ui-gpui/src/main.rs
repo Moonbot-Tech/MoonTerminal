@@ -21,6 +21,7 @@ mod backend;
 mod chart_tabs;
 mod chartdx;
 mod chrome;
+mod conn_diag;
 mod controls;
 mod core_order;
 mod design;

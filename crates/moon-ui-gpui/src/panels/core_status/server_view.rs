@@ -8,11 +8,14 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_core::feed::diagnose;
 use moon_ui::{
     MoonButton, MoonDisclosure, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree,
     MoonTreeItem, MoonTreeState, h_flex, v_flex,
 };
 use rust_i18n::t;
+
+use crate::conn_diag::{fault_facts, fault_short, fault_tooltip};
 
 use crate::design;
 use moon_core::feed::ConnStatus;
@@ -544,11 +547,25 @@ fn core_row(
                 ))
                 // The per-core cell carries the full detail behind it; the server row above only
                 // summarises, so the hover lives here where there is one snapshot to describe.
+                //
+                // A core with a VERDICT gives up its progress figure for it. That figure explains
+                // nothing a stopped core needs explained, while the reason and its next step are
+                // the entire point of this column for such a row; the ordinary startup hover stays
+                // one row-hover away on every core that is actually starting.
                 .child(
-                    startup_text_cell(startup_cell(&core.status, &core.startup), w.startup, p)
+                    match diagnose(&core.status, core.fault.as_ref(), &core.startup) {
+                        Some(d) => startup_slot(fault_short(&d.class), w.startup, p.red).tooltip(
+                            crate::panels::common::text_tooltip(fault_tooltip(&fault_facts(&d))),
+                        ),
+                        None => startup_text_cell(
+                            startup_cell(&core.status, &core.startup),
+                            w.startup,
+                            p,
+                        )
                         .tooltip(crate::panels::common::text_tooltip(startup_tooltip(
                             &startup_facts(&core.startup),
                         ))),
+                    },
                 )
                 // Empty ratio, warning, dot and scrollbar slots, matching the server row's trailing
                 // width so `key` aligns.
@@ -788,6 +805,24 @@ fn startup_text_cell(cell: StartupCell, value_w: f32, p: MoonPalette) -> Statefu
         StartupCell::Done { .. } => p.text_soft,
         StartupCell::Absent => p.text_muted,
     };
+    startup_slot(startup_cell_text(cell), value_w, color)
+}
+
+/// The startup column's chrome, independent of what is written in it.
+///
+/// Extracted so the per-core row can put a connection VERDICT in the same slot without the group
+/// row above it changing at all: a group summarises several cores and has no single reason to
+/// state, so it keeps rendering its rolled-up figure through [`startup_text_cell`]. One owner for
+/// the width, clipping and no-wrap behaviour means the two can never drift apart.
+///
+/// Args:
+///     text: Already-composed cell text.
+///     value_w: Current column width from [`ByIpWidths`].
+///     color: Packed theme colour for the text.
+///
+/// Returns:
+///     A compact cell with a stable footprint.
+fn startup_slot(text: String, value_w: f32, color: u32) -> Stateful<Div> {
     div()
         .id("core-status-startup")
         .w(px(value_w))
@@ -795,7 +830,7 @@ fn startup_text_cell(cell: StartupCell, value_w: f32, p: MoonPalette) -> Statefu
         .overflow_hidden()
         .whitespace_nowrap()
         .text_color(rgb(color))
-        .child(startup_cell_text(cell))
+        .child(text)
 }
 
 fn metric_cell(

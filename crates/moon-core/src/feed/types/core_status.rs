@@ -293,6 +293,24 @@ impl CoreStartupStatus {
         self.completed_mask.count_ones()
     }
 
+    /// Completed steps and the total to show them against, as one pair.
+    ///
+    /// The total is clamped UP to what was actually observed. MoonProto exposes no readable step
+    /// count — both `InitStep::COUNT` and `InitStep::ALL` are private to that crate — so
+    /// [`INIT_STEPS_TOTAL`] is OUR constant, and a MoonProto that grows a ninth step would leave it
+    /// stale with nothing to detect it. The clamp guarantees the pair can never read `9/8`, nor
+    /// claim completion while work visibly continues.
+    ///
+    /// ONE owner on purpose: the Core Status startup cell, its hover, and the connection verdict all
+    /// show this pair, and a clamp re-derived in three places is a clamp that drifts.
+    ///
+    /// Returns:
+    ///     `(done, total)`, with `done <= total` always.
+    pub fn progress_pair(&self) -> (u8, u8) {
+        let done = self.completed_count().min(u8::MAX as u32) as u8;
+        (done, INIT_STEPS_TOTAL.max(done))
+    }
+
     /// Whether the two snapshots say the same thing about PROGRESS, ignoring churn a reader can
     /// neither see nor act on.
     ///
@@ -328,5 +346,140 @@ impl CoreStartupStatus {
             && self.round_trip_ms == other.round_trip_ms
             && self.path_mtu_bytes == other.path_mtu_bytes
             && self.downlink_delivery_percent == other.downlink_delivery_percent
+    }
+}
+
+/// Why one core's connection attempt ended, as FACTS rather than a sentence.
+///
+/// MoonProto reports the failure as a typed `ConnectError`, and until this type existed the feed
+/// stringified it on arrival — so the one place that knew WHICH stage failed threw that knowledge
+/// away, and the surface the user looks at could only show `Connection 0/1`. This carries the fact
+/// across the crate boundary instead, because `moon-core` structurally cannot localize
+/// (`rust_i18n::i18n!` is declared in the UI crate) and a pre-built String can never be translated.
+///
+/// It is a RECORD of one finished attempt, not live state: everything in it is captured at the
+/// failure site and never updated afterwards. [`crate::session::CoreData`] retains it ACROSS the
+/// backoff retry on purpose — the reason the previous attempt died is the only explanation of the
+/// retry the user is watching — and clears it only when the core reaches `ConnStatus::Ready`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnFault {
+    /// What ended the attempt.
+    pub kind: ConnFaultKind,
+    /// What the core managed to say about itself before the attempt died.
+    pub identity: CoreIdentityFacts,
+    /// Startup snapshot CAPTURED AT THE FAILURE SITE.
+    ///
+    /// Not read back from the store later: the feed polls `startup_status()` on its own cadence and
+    /// the retained snapshot can be up to a poll interval stale at the moment of failure, while
+    /// `CoreData::begin_connection_attempt` resets it outright on the next attempt. A fault that
+    /// pointed at the live snapshot would therefore describe a different attempt than the one it
+    /// explains.
+    pub startup: CoreStartupStatus,
+}
+
+/// The distinguishable ways a connection attempt can end, mirrored from MoonProto's `ConnectError`
+/// and `LifecycleEvent::BindFailed`.
+///
+/// Deliberately close to the wire shape rather than to the user-facing classes: turning these into
+/// causes is a decision with its own tests, and it belongs in the layer that can also word them.
+/// Anything this enum cannot name is carried raw rather than folded into a neighbouring variant —
+/// naming the stage honestly beats guessing the cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnFaultKind {
+    /// THIS machine could not bind its own UDP socket — repeated 200-port sweeps failed.
+    ///
+    /// From `LifecycleEvent::BindFailed`, so it says nothing about the core: the usual causes are a
+    /// VPN, a local firewall, or exhausted ephemeral ports on the terminal's own host.
+    LocalBindFailed {
+        /// Complete 200-port bind sweeps that failed in a row.
+        consecutive_failures: u32,
+    },
+    /// The terminal tore the attempt down itself.
+    ///
+    /// Merges `ConnectError::Canceled` (an explicit disconnect) and `InitError::SendChannelClosed`
+    /// (the client loop is gone). Both mean "we stopped it", never "the core is bad".
+    Aborted,
+    /// The transport handshake never completed within its deadline.
+    ConnectTimedOut {
+        /// The deadline that expired, ms.
+        timeout_ms: u64,
+    },
+    /// The transport was never authorized, so init could not start.
+    NotAuthenticated,
+    /// A mandatory init step exceeded its deadline.
+    InitStepTimedOut {
+        /// The step, when this build recognises its name.
+        step: Option<CoreInitStep>,
+        /// MoonProto's own step name, always kept: it is what an unrecognised step reports instead
+        /// of a guessed cause.
+        raw_step: String,
+    },
+    /// A mandatory init step returned a server-side error.
+    InitStepFailed {
+        /// The step, when this build recognises its name.
+        step: Option<CoreInitStep>,
+        /// MoonProto's own step name, always kept.
+        raw_step: String,
+        /// The CORE's own error text, passed through untouched.
+        message: String,
+    },
+}
+
+/// What the core told this terminal about itself during `BaseCheck`.
+///
+/// The only evidence a version verdict may rest on, and it is deliberately a WEAK one.
+///
+/// # Why every field here is positive evidence or nothing
+///
+/// MoonProto publishes the snapshot backing `MoonClient::server_info` only once the WHOLE init
+/// sequence reaches Ready: `publish_snapshot_profiled` is gated on `startup.is_none()`, and a
+/// FAILED attempt publishes nothing at all. So on the very attempt this struct describes, that
+/// accessor normally returns the all-empty default — which is byte-identical to the empty payload
+/// an OLD core legitimately answers `BaseCheck` with. "Nothing has been published yet" and "a core
+/// too old to say more" are therefore INDISTINGUISHABLE from the payload, and they demand opposite
+/// verdicts.
+///
+/// The consequence is stated here rather than worked around: a POPULATED field is proof the payload
+/// was really read, and an empty one proves nothing whatsoever. Nothing downstream may claim an age
+/// except from a field that is populated — `feed::conn_verdict` enforces that. There is no
+/// minimum-version constant anywhere in this workspace, and nothing here invents one.
+///
+/// Combining these fields with the startup step MASK to reconstruct "answered" is specifically
+/// wrong and was specifically tried: the two come from different publication paths, so on a failure
+/// after `BaseCheck` the mask says the step completed while the payload is still defaulted, and the
+/// pair reads as "answered, and reported no version" for a perfectly current core.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoreIdentityFacts {
+    /// Whether the answer carried the core's stable identity id (`ServerInfo::has_identity`).
+    ///
+    /// The cheapest proof that a real `BaseCheck` payload was read rather than defaulted.
+    pub has_identity: bool,
+    /// MoonBot version number the core reported.
+    pub server_version: Option<u32>,
+    /// MoonProto protocol version the core reported.
+    ///
+    /// `None` means EITHER a core older than the field OR a payload that never arrived; only the
+    /// other fields tell those apart.
+    pub moonproto_version: Option<u32>,
+}
+
+impl CoreIdentityFacts {
+    /// Fold these facts into a hasher without allocating.
+    ///
+    /// The Settings tab recomputes a repaint signature over every core on every backend notify, so
+    /// the obvious `format!("{self:?}").hash(..)` would build and discard one string per core per
+    /// notify — at two hundred cores, purely to produce a few bytes of hash. Everything here is a
+    /// primitive, so it folds in directly.
+    ///
+    /// Args:
+    ///     h: The hasher the caller is accumulating into.
+    ///
+    /// Returns:
+    ///     Nothing; the hasher advances in place.
+    pub fn hash_into<H: std::hash::Hasher>(&self, h: &mut H) {
+        use std::hash::Hash;
+        self.has_identity.hash(h);
+        self.server_version.hash(h);
+        self.moonproto_version.hash(h);
     }
 }

@@ -33,6 +33,7 @@ impl CoreStatusView {
             let core = store.core(id);
             let endpoint = core.and_then(|core| core.endpoint);
             let api_expiry = core.and_then(|core| core.api_expiry);
+            let fault = core.and_then(|core| core.fault.clone());
             let (status, mut sys, startup) = core
                 .map(|c| (c.status.clone(), c.sys, c.startup))
                 .unwrap_or((
@@ -54,6 +55,7 @@ impl CoreStatusView {
                 status,
                 sys,
                 startup,
+                fault,
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),
                 exch_warn: b.warn.core_exch_warn(id),

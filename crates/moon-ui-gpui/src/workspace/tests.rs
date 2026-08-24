@@ -510,6 +510,7 @@ fn roster_input(
         ConnStatus::Connecting
     });
     WorkspaceRosterInput {
+        fault: None,
         core,
         name: name.to_string(),
         group: group.to_string(),
@@ -552,6 +553,7 @@ fn availability(
 /// Build one selectable row without coupling the navigation oracle to roster derivation.
 fn selectable_row(core: u64, group: &str) -> super::WorkspaceRosterRow {
     super::WorkspaceRosterRow {
+        fault: None,
         core,
         name: format!("Core {core}"),
         group: group.to_string(),

@@ -121,7 +121,7 @@ impl Render for Shell {
             let mut conn = b.session.conn_summary_group(&self.group);
             // The disconnected-cores tooltip is a core list like any other — rank it the same
             // way, or it reads in a different order than the header pill right above it.
-            crate::core_order::CoreOrder::new(&b.config).sort_by(&mut conn.down, |(id, _, _)| *id);
+            crate::core_order::CoreOrder::new(&b.config).sort_by(&mut conn.down, |row| row.id);
             let license = b.session.license_summary_group(&self.group);
             let snap = b.snap;
             // The status bar needs only the order-book level count for the current Main chart.
@@ -209,11 +209,13 @@ impl Render for Shell {
         // Same hook, same reason.
         let modifier_hook = {
             let view = cx.entity();
-            window_mouse_hook(move |_e: &MouseDownEvent, phase, _window: &mut Window, cx| {
-                if phase == DispatchPhase::Capture {
-                    view.update(cx, |this, _| this.modifier_watch.interrupt());
-                }
-            })
+            window_mouse_hook(
+                move |_e: &MouseDownEvent, phase, _window: &mut Window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        view.update(cx, |this, _| this.modifier_watch.interrupt());
+                    }
+                },
+            )
         };
 
         v_flex()
@@ -268,6 +270,7 @@ impl Render for Shell {
                 self.sell_edit.clone(),
                 &self.sell_input,
                 &cx.entity(),
+                self.settings_hint_at(),
                 metric_popup,
                 toolbar_max_order,
                 &toolbar_quote,

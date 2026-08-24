@@ -53,6 +53,7 @@ impl DeferredAutoTopologyGuard for AutoGuardHarness {
 /// Build one rail row without coupling branch-shape expectations to roster derivation.
 fn rail_row(core: u64) -> WorkspaceRosterRow {
     WorkspaceRosterRow {
+        fault: None,
         core,
         name: format!("Core {core}"),
         group: "G1".to_string(),

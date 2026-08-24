@@ -529,3 +529,148 @@ core_status.startup.f.delivery:
   ru: "Доставка"
   en: "Delivery"
   es: "Entrega"
+
+# --- Connection verdict: why a core is not usable, and what to do about it. -------------------
+# `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
+# status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
+# names every possibility it cannot separate, and `unknown` names the raw stage instead of guessing.
+core_status.fault.short.local_port:
+  ru: "локальный порт"
+  en: "local port"
+  es: "puerto local"
+core_status.fault.short.no_response:
+  ru: "нет ответа"
+  en: "no answer"
+  es: "sin respuesta"
+core_status.fault.short.access:
+  ru: "ключ / доступ"
+  en: "key / access"
+  es: "clave / acceso"
+core_status.fault.short.unidentified:
+  ru: "ядро не представилось"
+  en: "core did not identify"
+  es: "el nucleo no se identifico"
+core_status.fault.short.syncing:
+  ru: "синхронизация"
+  en: "syncing"
+  es: "sincronizando"
+core_status.fault.short.stalled:
+  ru: "застряло на шаге"
+  en: "stalled at a step"
+  es: "detenido en un paso"
+core_status.fault.short.aborted:
+  ru: "остановлено"
+  en: "stopped"
+  es: "detenido"
+core_status.fault.short.unknown:
+  ru: "не удалось определить"
+  en: "undetermined"
+  es: "no determinado"
+core_status.fault.reason.local_port:
+  ru: "Терминал не смог занять свой UDP-порт (попыток: %{n})"
+  en: "The terminal could not bind its own UDP port (%{n} attempts)"
+  es: "El terminal no pudo abrir su propio puerto UDP (%{n} intentos)"
+core_status.fault.reason.silent:
+  ru: "За %{t} с от ядра не пришло ни байта"
+  en: "Not one byte arrived from the core in %{t} s"
+  es: "En %{t} s no llego ni un byte del nucleo"
+core_status.fault.reason.partial:
+  ru: "От ядра пришло %{bytes}, но за %{t} с соединение так и не установилось"
+  en: "%{bytes} arrived from the core, but the connection never completed within %{t} s"
+  es: "Llegaron %{bytes} del nucleo, pero la conexion no se completo en %{t} s"
+core_status.fault.reason.access_refused:
+  ru: "Ядро не приняло ключ"
+  en: "The core did not accept the key"
+  es: "El nucleo no acepto la clave"
+core_status.fault.reason.access_timeout:
+  ru: "Ядро ответило, но проверка доступа к аккаунту не завершилась"
+  en: "The core answered, but the account access check never completed"
+  es: "El nucleo respondio, pero la comprobacion de acceso a la cuenta no termino"
+core_status.fault.reason.access_failed:
+  ru: "Проверка доступа к аккаунту не прошла: %{msg}"
+  en: "The account access check failed: %{msg}"
+  es: "La comprobacion de acceso a la cuenta fallo: %{msg}"
+core_status.fault.reason.unidentified_timeout:
+  ru: "Ядро не ответило на проверку совместимости"
+  en: "The core did not answer the compatibility check"
+  es: "El nucleo no respondio a la comprobacion de compatibilidad"
+core_status.fault.reason.unidentified_failed:
+  ru: "Проверка совместимости не прошла: %{msg}"
+  en: "The compatibility check failed: %{msg}"
+  es: "La comprobacion de compatibilidad fallo: %{msg}"
+core_status.fault.reason.syncing:
+  ru: "Шаг %{step} (%{done}/%{total}), %{t} с, снимок ещё не пришёл"
+  en: "Step %{step} (%{done}/%{total}), %{t} s, no snapshot yet"
+  es: "Paso %{step} (%{done}/%{total}), %{t} s, aun sin instantanea"
+core_status.fault.reason.stalled:
+  ru: "Инициализация остановилась на шаге %{step} (%{done}/%{total}), %{t} с"
+  en: "Initialization stopped at step %{step} (%{done}/%{total}), %{t} s"
+  es: "La inicializacion se detuvo en el paso %{step} (%{done}/%{total}), %{t} s"
+core_status.fault.reason.aborted:
+  ru: "Терминал сам остановил попытку"
+  en: "The terminal stopped the attempt itself"
+  es: "El terminal detuvo el intento por si mismo"
+core_status.fault.reason.unknown:
+  ru: "Причину определить не удалось"
+  en: "The cause could not be determined"
+  es: "No se pudo determinar la causa"
+core_status.fault.next.local_port:
+  ru: "Порт держит что-то на ЭТОЙ машине: VPN или локальный фаервол"
+  en: "Something on THIS machine holds the port: a VPN or a local firewall"
+  es: "Algo en ESTA maquina retiene el puerto: una VPN o un firewall local"
+core_status.fault.next.no_response:
+  ru: "Открой UDP-порт ядра и в панели хостера, и в фаерволе самой машины. У ВМ, поднятой из снапшота, группа правил не переносится, а Windows метит новый адаптер как Общественный, и правило для Частной сети молчит"
+  en: "Open the core UDP port both in the hoster panel and in the firewall of the machine itself. A VM restored from a snapshot does not carry its rule group over, and Windows marks a new adapter Public while a Private-only rule stays silent"
+  es: "Abre el puerto UDP del nucleo tanto en el panel del hoster como en el firewall de la propia maquina. Una VM restaurada desde una instantanea no conserva su grupo de reglas, y Windows marca el adaptador nuevo como Publico mientras una regla solo para Privada permanece muda"
+core_status.fault.next.access:
+  ru: "Вставь ключ, экспортированный ИМЕННО этим ботом, и проверь, что на ядре включён режим Kernel (VPS). Он остаётся неактивным, пока биржевой аккаунт не заведён под реферала MoonBonus"
+  en: "Paste the key exported from THIS bot, and check that Kernel (VPS) mode is on at the core. It stays inactive while the exchange account is not under the MoonBonus referral"
+  es: "Pega la clave exportada por ESTE bot y comprueba que el modo Kernel (VPS) esta activo en el nucleo. Permanece inactivo mientras la cuenta de intercambio no este bajo el referido MoonBonus"
+core_status.fault.next.unidentified:
+  ru: "Ядро отвечает, но не проходит проверку совместимости. Проверь по порядку: включён ли режим Kernel (VPS), не перегружено ли ядро, и обнови MoonBot на его машине"
+  en: "The core replies but does not pass the compatibility check. Check, in order: whether Kernel (VPS) mode is on, whether the core is overloaded, and update MoonBot on its host"
+  es: "El nucleo responde pero no pasa la comprobacion de compatibilidad. Comprueba, en orden: si el modo Kernel (VPS) esta activo, si el nucleo esta sobrecargado, y actualiza MoonBot en su maquina"
+core_status.fault.next.syncing:
+  ru: "Подожди. Если цифра стоит на месте, наведись на колонку старта: там видны потери канала"
+  en: "Wait. If the figure stops moving, hover the startup column: it shows the channel loss"
+  es: "Espera. Si la cifra deja de avanzar, pasa el raton por la columna de arranque: alli se ve la perdida del canal"
+core_status.fault.next.stalled:
+  ru: "Попытка повторится сама. Если шаг повторяется, наведись на колонку старта и пришли лог"
+  en: "The attempt repeats by itself. If the same step keeps failing, hover the startup column and send the log"
+  es: "El intento se repite solo. Si el mismo paso sigue fallando, pasa el raton por la columna de arranque y envia el registro"
+core_status.fault.next.aborted:
+  ru: "Ничего делать не нужно"
+  en: "Nothing to do"
+  es: "No hay nada que hacer"
+core_status.fault.next.unknown:
+  ru: "Пришли эту строку и лог в поддержку"
+  en: "Send this line and the log to support"
+  es: "Envia esta linea y el registro al soporte"
+core_status.fault.core.legacy_named:
+  ru: "Ядро сообщает MoonBot %{server}, а версию протокола не сообщает: оно старее этого терминала"
+  en: "The core reports MoonBot %{server} and no protocol version: it predates this terminal"
+  es: "El nucleo informa MoonBot %{server} y ninguna version de protocolo: es anterior a este terminal"
+core_status.fault.core.legacy_silent:
+  ru: "Ядро не сообщает версию протокола: оно старее этого терминала"
+  en: "The core reports no protocol version: it predates this terminal"
+  es: "El nucleo no informa ninguna version de protocolo: es anterior a este terminal"
+core_status.fault.retrying:
+  ru: "переподключение"
+  en: "reconnecting"
+  es: "reconectando"
+core_status.fault.f.reason:
+  ru: "Причина"
+  en: "Reason"
+  es: "Causa"
+core_status.fault.f.next:
+  ru: "Что делать"
+  en: "What to do"
+  es: "Que hacer"
+core_status.fault.f.stage:
+  ru: "Стадия"
+  en: "Stage"
+  es: "Etapa"
+core_status.fault.f.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Nucleo"

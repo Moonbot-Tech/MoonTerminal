@@ -618,7 +618,13 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
+        // Armed HERE and never from `render`: a view that armed its own repaint chain while
+        // rendering would keep itself awake through its own repaints forever (`pulse::arm`).
+        let settings_hint_at =
+            (!backend.read(cx).config.core_ever_configured()).then(std::time::Instant::now);
         let mut shell = Self {
+            settings_hint_at,
+            settings_hint_armed: false,
             backend,
             updater,
             group,
@@ -683,7 +689,24 @@ impl Shell {
         // Every Shell is constructed from its saved/default Classic dock first. Persisted Auto then
         // captures that local named layout and applies the process-wide topology before first frame.
         shell.apply_workspace_mode(initial_workspace_mode, window, cx);
+        crate::pulse::arm(
+            &mut shell,
+            cx,
+            |s| &mut s.settings_hint_armed,
+            |s| {
+                s.settings_hint_at
+                    .is_some_and(|at| at.elapsed() < crate::pulse::ATTENTION)
+            },
+        );
         shell
+    }
+
+    /// When the first-run Settings-gear hint was armed, for the toolbar that draws it.
+    ///
+    /// Returns:
+    ///     The arming instant while a hint exists, else `None`.
+    pub(crate) fn settings_hint_at(&self) -> Option<std::time::Instant> {
+        self.settings_hint_at
     }
 
     /// Subscribe the TP/SL/leverage popup editors to guarded writes and live field updates.

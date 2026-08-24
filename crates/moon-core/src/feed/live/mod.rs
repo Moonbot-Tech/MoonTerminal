@@ -18,8 +18,8 @@ mod market_role;
 mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
@@ -100,10 +100,10 @@ fn apply_strategy_delivery_ack(
 }
 
 use account_reconciliation::{
-    balance_refresh_log_window, AccountReconciliation, BALANCE_TRACE_LEVEL,
+    AccountReconciliation, BALANCE_TRACE_LEVEL, balance_refresh_log_window,
 };
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
-use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
+use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
@@ -510,15 +510,42 @@ pub(super) fn run(
                 LifecycleEvent::Reconnecting => ConnStatus::Stage("reconnecting…".into()),
                 LifecycleEvent::ServerRestart => ConnStatus::Stage("server restart…".into()),
                 LifecycleEvent::ConnectFailed { error } => {
+                    // The typed failure is the whole point of this arm. `ConnStatus::Failed` keeps
+                    // only MoonProto's English `Display` text, which is a technical token for the
+                    // log and for the honest "could not determine" fallback — the reconnect loop in
+                    // `feed::run` overwrites that payload on every retry anyway, so nothing the user
+                    // must read may live in it. The fact travels typed instead.
                     let msg = error.to_string();
+                    let fault = convert::conn_fault_from_proto(
+                        error,
+                        client.server_info(),
+                        client.startup_status(),
+                    );
+                    // The panel's live snapshot is republished from the fault's own frozen copy, so
+                    // the progress figure beside a reason describes the attempt that reason
+                    // explains. The poll below runs on its own cadence and would otherwise leave the
+                    // two up to one interval apart.
+                    let snap = fault.startup;
+                    let _ = tx.send(FeedMsg::ConnFault(fault));
+                    startup_sent = Some(snap);
+                    let _ = tx.send(FeedMsg::StartupStatus(snap));
                     connect_failed = Some(msg.clone());
                     ConnStatus::Failed(msg)
                 }
                 LifecycleEvent::BindFailed {
                     consecutive_failures,
-                } => ConnStatus::Failed(format!(
-                    "UDP bind failed x{consecutive_failures} (VPN/firewall/порты?)"
-                )),
+                } => {
+                    // THIS machine could not bind its own UDP socket. The sentence that used to be
+                    // built here named a VPN and a firewall in Russian, inside a crate that cannot
+                    // localize; the same advice now lives in `locales/core_status.yml` behind the
+                    // typed kind, and only an English token stays on the status.
+                    let _ = tx.send(FeedMsg::ConnFault(convert::bind_fault(
+                        consecutive_failures,
+                        client.server_info(),
+                        client.startup_status(),
+                    )));
+                    ConnStatus::Failed(format!("udp bind failed x{consecutive_failures}"))
+                }
                 LifecycleEvent::Disconnected => ConnStatus::Disconnected,
             };
             // Tracked for the API-key poll below: an Engine API request sent to a core that is not

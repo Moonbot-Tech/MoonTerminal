@@ -13,7 +13,7 @@ use rust_i18n::t;
 use super::{ConnRow, SettingsView, build_conn, sync_groups_from_servers};
 use crate::design;
 use moon_core::config::{FeedFlags, Secret, ServerConfig};
-use moon_core::feed::ConnStatus;
+use moon_core::feed::{ConnFault, ConnStatus, CoreStartupStatus, Diagnosis, diagnose};
 use moon_core::session::CoreId;
 
 /// Eight flags controlling incoming core data, each with a label key, getter, and setter.
@@ -31,20 +31,65 @@ const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] 
     ("conn.tip.arb", |f| f.arb, |f, v| f.arb = v),
 ];
 
+/// Derive one core's connection verdict for the Connections tab.
+///
+/// A free function rather than a method so `tab.rs` can call it once per row while it already holds
+/// the three maps, instead of re-borrowing the backend inside the row builder.
+///
+/// Args:
+///     status: That core's live status, when the runtime knows it.
+///     fault: Its retained connection fault, when it has one.
+///     startup: Its retained startup snapshot, when it has one.
+///
+/// Returns:
+///     The verdict, or `None` when there is nothing to explain.
+pub(super) fn conn_diagnosis(
+    status: &Option<ConnStatus>,
+    fault: Option<&ConnFault>,
+    startup: Option<&CoreStartupStatus>,
+) -> Option<Diagnosis> {
+    let status = status.as_ref()?;
+    let default_startup = CoreStartupStatus::default();
+    diagnose(status, fault, startup.unwrap_or(&default_startup))
+}
+
 /// Render a connection-status dot with a localized tooltip, including failure details.
+///
+/// The dot's COLOUR still comes from the coarse status, because a glance down the column has to
+/// stay readable. Its tooltip comes from the verdict: this is where a user pastes the key, so it is
+/// also where "why did that not work, and what do I do" belongs. The two in-progress arms used to
+/// interpolate raw `moon-core` payloads that no locale could translate.
+///
 /// Inactive rows are always gray; live states use ready, connecting, and failure colors.
+///
+/// Args:
+///     i: Stable row position used to construct the dot element identity.
+///     active: Whether the configured core is enabled.
+///     status: Latest lifecycle state, when the runtime has reported one.
+///     diag: Localized-verdict input derived from retained fault and startup state.
+///     p: Active palette supplying status colours.
+///
+/// Returns:
+///     A status dot with a tooltip appropriate to the available connection evidence.
 fn status_dot(
     i: usize,
     active: bool,
     status: Option<&ConnStatus>,
+    diag: Option<&Diagnosis>,
     p: MoonPalette,
 ) -> impl IntoElement {
+    let verdict = diag.map(|d| crate::conn_diag::fault_tooltip(&crate::conn_diag::fault_facts(d)));
     let (color, tip) = match status {
         _ if !active => (p.text_soft, t!("conn.status.inactive").to_string()),
         Some(ConnStatus::Ready) => (p.green, t!("conn.status.ready").to_string()),
-        Some(ConnStatus::Connecting) => (p.amber, t!("conn.status.connecting").to_string()),
-        Some(ConnStatus::Stage(s)) => (p.amber, t!("conn.status.stage", stage = s).to_string()),
-        Some(ConnStatus::Failed(e)) => (p.red, t!("conn.status.failed", err = e).to_string()),
+        Some(ConnStatus::Failed(_)) => (
+            p.red,
+            verdict.unwrap_or_else(|| t!("conn.status.failed", err = "-").to_string()),
+        ),
+        Some(ConnStatus::Connecting | ConnStatus::Stage(_)) => (
+            p.amber,
+            verdict.unwrap_or_else(|| t!("conn.status.connecting").to_string()),
+        ),
         Some(ConnStatus::Disconnected) => (p.text_soft, t!("conn.status.disconnected").to_string()),
         None => (p.text_soft, t!("conn.status.none").to_string()),
     };
@@ -61,6 +106,50 @@ fn status_dot(
 }
 
 impl SettingsView {
+    /// Start (or restart) the first-run hint's repaint chain.
+    ///
+    /// Called once when the window opens and again after a row is added, because adding a row MOVES
+    /// the hint: with no rows there is no key field to point at, so the add button carries it, and
+    /// the moment a row exists the empty key field is the thing the user actually needs.
+    ///
+    /// Args:
+    ///     cx: The Settings view context.
+    ///
+    /// Returns:
+    ///     Nothing; the chain repaints this view until the hint expires.
+    pub(in crate::settings) fn arm_conn_hint(&mut self, cx: &mut Context<Self>) {
+        if self.backend.read(cx).config.core_ever_configured() {
+            return;
+        }
+        self.conn_hint_at = Some(std::time::Instant::now());
+        crate::pulse::arm(
+            self,
+            cx,
+            |this| &mut this.conn_hint_armed,
+            |this| {
+                this.conn_hint_at
+                    .is_some_and(|at| at.elapsed() < crate::pulse::ATTENTION)
+            },
+        );
+    }
+
+    /// The live first-run hint, or `None` when there is nothing to point at.
+    ///
+    /// Two conditions, deliberately: the timer bounds how long it breathes, and the SAVED config
+    /// decides whether it is still relevant. That second half is what makes a successful Save tear
+    /// the ring down on the next frame instead of at the end of the timer, on every control that
+    /// asks -- so the teardown lives in ONE place rather than at each call site.
+    ///
+    /// Args:
+    ///     cx: Any app context that can read the backend.
+    ///
+    /// Returns:
+    ///     The arming instant while the hint is live.
+    pub(super) fn conn_hint(&self, cx: &App) -> Option<std::time::Instant> {
+        self.conn_hint_at
+            .filter(|_| !self.backend.read(cx).config.core_ever_configured())
+    }
+
     /// Build a checkbox bound to a boolean field of draft server `servers[i]`.
     fn srv_check(
         &self,
@@ -183,6 +272,10 @@ impl SettingsView {
         });
         let rows = build_conn(&self.backend, window, cx);
         self.conn = rows;
+        // The hint MOVES with this row: it pointed at this button, and the thing the newcomer needs
+        // next is the empty key field that just appeared. Re-arming restarts the clock so the ring
+        // is at full strength on the control that now matters.
+        self.arm_conn_hint(cx);
         cx.notify();
     }
 
@@ -273,7 +366,10 @@ impl SettingsView {
         core_id: CoreId,
         active: bool,
         status: Option<ConnStatus>,
+        diag: Option<Diagnosis>,
     ) -> impl IntoElement {
+        // Whether this row's key field is still blank, for the first-run ring below.
+        let key_empty = row.key.read(cx).value().is_empty();
         // Show reconnect only when the draft server is active. Session status still comes from
         // the live saved runtime and may not yet match unsaved draft activity.
         let recon: AnyElement = if active {
@@ -339,16 +435,33 @@ impl SettingsView {
                         .gap_1()
                         .items_center()
                         .child(
-                            div().flex_grow_1().min_w_0().child(
-                                MoonInput::new(SharedString::from(format!("key-{i}")))
-                                    .state(&row.key)
-                                    .small()
-                                    // Indicate that this field expects a core key.
-                                    .placeholder(t!("conn.key_ph").to_string())
-                                    .mask_toggle()
-                                    // Allow the key to be cleared quickly before replacement.
-                                    .cleanable(true),
-                            ),
+                            div()
+                                .flex_grow_1()
+                                .min_w_0()
+                                // `relative()` hosts the first-run ring below; it changes no
+                                // layout, because the ring is an inset overlay.
+                                .relative()
+                                .child(
+                                    MoonInput::new(SharedString::from(format!("key-{i}")))
+                                        .state(&row.key)
+                                        .small()
+                                        // Indicate that this field expects a core key.
+                                        .placeholder(t!("conn.key_ph").to_string())
+                                        .mask_toggle()
+                                        // Allow the key to be cleared quickly before replacement.
+                                        .cleanable(true),
+                                )
+                                // Only an EMPTY key is worth pointing at: once the newcomer has
+                                // pasted something the field has done its job, and a ring around a
+                                // filled input reads as an error rather than as a hint.
+                                .children(self.conn_hint(cx).filter(|_| key_empty).and_then(
+                                    |at| {
+                                        crate::pulse::attention_ring(
+                                            MoonPalette::active(cx).accent,
+                                            at,
+                                        )
+                                    },
+                                )),
                         )
                         .child(self.paste_key_affix(i, row.key.clone(), cx)),
                 ),
@@ -385,6 +498,7 @@ impl SettingsView {
                 i,
                 active,
                 status.as_ref(),
+                diag.as_ref(),
                 MoonPalette::active(cx),
             )))
     }

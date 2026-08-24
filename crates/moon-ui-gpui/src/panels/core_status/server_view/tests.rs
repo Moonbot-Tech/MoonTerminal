@@ -11,6 +11,7 @@ use crate::panels::core_status::model::{CoreStatusRow, aggregate_servers};
 /// Build one ready core snapshot at an address.
 fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
     CoreStatusRow {
+        fault: None,
         id,
         name: format!("Core {id}"),
         status: ConnStatus::Ready,

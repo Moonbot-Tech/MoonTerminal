@@ -23,8 +23,8 @@ mod rec_ranges;
 /// Re-exported from `feed` (its producer): `CoreData::sys` is this type, so the
 /// session facade keeps `session::CoreSysStatus` valid for the "Core status" panel.
 pub use crate::feed::{
-    ApiKeyExpiry, CoreInitStep, CoreStartupState, CoreStartupStatus, CoreSysStatus,
-    INIT_STEPS_TOTAL,
+    ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
+    CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
 };
 pub use store::{BalanceState, CoreId, CoreStore};
 
@@ -73,13 +73,31 @@ fn conn_sig(server: &ServerConfig) -> u64 {
     h.finish()
 }
 
+/// One non-ready core, with everything a status bar needs to say WHY.
+///
+/// A named struct rather than the tuple this used to be: the tooltip no longer prints the raw
+/// status payload but a verdict derived from the status, the retained fault and the startup
+/// snapshot together, and a five-field tuple at the call site is unreadable.
+pub struct ConnDown {
+    /// Stable core identity, used to rank the list canonically.
+    pub id: CoreId,
+    /// Configured core display name.
+    pub name: String,
+    /// Latest connection lifecycle state.
+    pub status: ConnStatus,
+    /// Why the last attempt ended, when one has.
+    pub fault: Option<ConnFault>,
+    /// Latest retained startup snapshot, for the still-syncing verdict.
+    pub startup: CoreStartupStatus,
+}
+
 /// Connection summary for a status bar: ready and total counts plus non-ready core details for the
 /// tooltip.
 pub struct ConnSummary {
     pub ready: usize,
     pub total: usize,
-    /// Non-ready cores as `(id, name, status)` for canonically ordered status tooltips.
-    pub down: Vec<(CoreId, String, ConnStatus)>,
+    /// Non-ready cores, for canonically ordered status tooltips.
+    pub down: Vec<ConnDown>,
 }
 
 /// License summary for the cores in one window group.

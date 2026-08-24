@@ -46,7 +46,7 @@ impl Shell {
         let any_failed = conn
             .down
             .iter()
-            .any(|(_, _, s)| matches!(s, ConnStatus::Failed(_) | ConnStatus::Disconnected));
+            .any(|row| matches!(row.status, ConnStatus::Failed(_) | ConnStatus::Disconnected));
         let p = MoonPalette::active(cx);
         let badge_col = if all_ok {
             p.green
@@ -55,19 +55,29 @@ impl Shell {
         } else {
             p.amber
         };
-        // Include only non-ready cores in the tooltip, formatted as name and reason.
+        // Include only non-ready cores in the tooltip, each as name, reason and NEXT STEP.
+        //
+        // This is the surface a user who has opened no panel at all reads first, so it carries the
+        // action and not just the complaint. It used to print the raw `ConnStatus` payload: an
+        // English stage name such as "connected, init..." and a MoonProto error string, both built
+        // in a crate that cannot translate them. The verdict replaces both, and the two remaining
+        // arms are the states that genuinely carry no further evidence.
         let down_text: String = conn
             .down
             .iter()
-            .filter_map(|(_, name, st)| {
-                let reason = match st {
-                    ConnStatus::Connecting => t!("status.connecting").to_string(),
-                    ConnStatus::Stage(s) => s.clone(),
-                    ConnStatus::Failed(e) => e.clone(),
-                    ConnStatus::Disconnected => t!("status.disconnected").to_string(),
-                    ConnStatus::Ready => return None,
+            .map(|row| {
+                let reason = match moon_core::feed::diagnose(
+                    &row.status,
+                    row.fault.as_ref(),
+                    &row.startup,
+                ) {
+                    Some(d) => crate::conn_diag::fault_line(&d),
+                    None => match row.status {
+                        ConnStatus::Disconnected => t!("status.disconnected").to_string(),
+                        _ => t!("status.connecting").to_string(),
+                    },
                 };
-                Some(format!("{name}: {reason}"))
+                format!("{}: {reason}", row.name)
             })
             .collect::<Vec<_>>()
             .join("\n");
