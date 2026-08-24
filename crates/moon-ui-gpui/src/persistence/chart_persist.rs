@@ -185,12 +185,14 @@ pub struct ChartTabSpec {
     /// enabled, which is what every file written before this field existed says.
     #[serde(default)]
     pub arrival_flash: Option<bool>,
-    /// Cap on how many detect charts this tab's stack shows at once. None — and zero — mean no cap,
-    /// the behavior of every file written before this field existed.
+    /// Cap on how many detect charts this tab's stack shows at once. None means the tab named no
+    /// cap of its own and takes the built-in default, so a file written before this field existed
+    /// is capped rather than unbounded. ZERO alone means no cap, and is what a reader writes — or
+    /// types into the popup's field — to opt out.
     #[serde(default)]
     pub max_charts: Option<u16>,
     /// What a detect does once the cap is reached: replace the stalest chart when true, or go
-    /// unshown when false. None defaults to false, so a cap alone never closes a chart.
+    /// unshown when false. None takes the built-in default, which replaces the stalest chart.
     #[serde(default)]
     pub max_charts_evict: Option<bool>,
     /// Per-window/tab position of Cancel Buy in the chart area. None defaults to Right.
