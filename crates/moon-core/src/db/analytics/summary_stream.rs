@@ -367,11 +367,19 @@ pub(super) fn read(
     src: &str,
     raw_src: Option<&str>,
     q: &Query,
+    axis: &crate::db::ReportAxis,
     bucket: i64,
     include_kinds: bool,
     has_names: bool,
 ) -> ReadResult<SummaryParts> {
     const CTX: &str = "analytics: summary current stream";
+    // The axis arrives RESOLVED from the caller rather than being read here, for two reasons: it
+    // must be the one the rest of this Summary read already used, and resolving it costs two
+    // queries that `current_summary_rows_execute_one_statement` exists to keep out of this path.
+    // `q.axis` is deliberately NOT consulted — that field is the panel's copy from when the query
+    // was built.
+    // The ORDER BY below calls `mt_to_utc`, so the scalar has to exist on this connection.
+    super::time_zone::install(conn, axis).map_err(|error| read_fail_on(conn, CTX, error))?;
     let inline_raw = if raw_src.is_none() {
         "o.profitbtc, o.spentbtc, o.basecurrency"
     } else {
@@ -383,7 +391,7 @@ pub(super) fn read(
                 CAST(o.strategyid AS TEXT),
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), {inline_raw}
-         FROM {src} ORDER BY o.closedate"
+         FROM {src} ORDER BY mt_to_utc(o.closedate, o.core_uid)"
     );
     let mut statement = conn
         .prepare(&sql)
@@ -410,10 +418,10 @@ pub(super) fn read(
     for row in rows {
         let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
         accumulator
-            .push(row, bucket, raw_src.is_none(), &q.axis)
+            .push(row, bucket, raw_src.is_none(), axis)
             .map_err(|error| read_fail_on(conn, CTX, error))?;
     }
-    accumulator.finish_period(bucket, q.axis.zone());
+    accumulator.finish_period(bucket, axis.zone());
 
     let (raw_strategies, raw_coins) = match raw_src {
         Some(raw_src) => read_raw_groups(conn, raw_src, q)?,

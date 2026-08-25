@@ -245,8 +245,12 @@ pub(super) enum ReportPeriodBucket {
 /// — so it wins outright: someone who asked for closed trades gets closed trades whatever else is
 /// showing. `show_open` is the USER's own toolbar switch and comes next: with it off, the panel
 /// excludes still-running positions however far into the present the period reaches. Only when
-/// neither has excluded them does the PERIOD decide, and it decides on its upper bound alone
-/// ([`db::open_rows_for_bound`]).
+/// neither has excluded them does the PERIOD decide — and the period's verdict is no longer this
+/// layer's to give. `date_to` is compared against a CORE-LOCAL column, so one window can have
+/// ended for a core running behind UTC and still be current for one running ahead; the panel sees
+/// one period and cannot resolve that for a fleet. It therefore records the INTENT
+/// ([`db::RowScope::ClosedAndOpenIfCurrent`]) and `db::report_read` decides per offset group,
+/// where both the axis and the cores in play are known.
 ///
 /// The first two are written as ONE disjunction rather than a nesting because both roads lead to
 /// the same answer, and spelling it that way keeps "the period only decides when nobody asked"
@@ -260,21 +264,14 @@ pub(super) enum ReportPeriodBucket {
 /// Args:
 ///     closed_only: Whether the HOST deliberately excludes still-running positions.
 ///     show_open: Whether the USER's toolbar switch admits still-running positions.
-///     date_to: Inclusive upper bound the filter ended up with, preset or manual.
-///     now: Current Unix timestamp in seconds, read once for the whole filter.
 ///
 /// Returns:
 ///     The row scope the database filter carries.
-pub(super) fn row_scope_for(
-    closed_only: bool,
-    show_open: bool,
-    date_to: Option<i64>,
-    now: i64,
-) -> db::RowScope {
+pub(super) fn row_scope_for(closed_only: bool, show_open: bool) -> db::RowScope {
     if closed_only || !show_open {
         db::RowScope::Closed
     } else {
-        db::open_rows_for_bound(date_to, now)
+        db::RowScope::ClosedAndOpenIfCurrent
     }
 }
 
@@ -540,6 +537,13 @@ pub struct ReportPanel {
     pub(super) backend: Entity<Backend>,
     /// User-selected zone applied to every visible date and civil period boundary.
     pub(super) display_zone: Tz,
+    /// The measured time axis this panel reads replicated timestamps on, cached.
+    ///
+    /// Rebuilt from the retained core snapshots whenever the backend changes or the zone moves,
+    /// never inside `render`: it is read once per cell and once per filter, and rebuilding it
+    /// there would walk the whole core list on every paint. Starts as the identity, which is the
+    /// correct answer until something has actually been measured.
+    pub(super) axis: ReportAxis,
     /// Whether picker civil values must be rewritten from their preserved absolute bounds.
     display_zone_fields_dirty: bool,
     pub(super) group: String,
@@ -726,11 +730,13 @@ impl ReportPanel {
 
     /// The time axis every replicated report timestamp in this window is read through.
     ///
-    /// Phase 1 answers with the identity axis: a replicated `closedate` carries the CORE's own wall
-    /// clock, so it is displayed as stored, which reproduces MoonBot's own report. This is the ONE
-    /// place that changes when per-core offsets start being measured.
+    /// Answers from the CACHED axis rather than rebuilding one: this is called from the render
+    /// path and from every filter construction, and the value only moves when a core adopts a new
+    /// offset or the user picks a different zone — both of which refresh the field directly. A
+    /// core with no measurement contributes nothing, so it still reads exactly as stored, which is
+    /// what reproduces MoonBot's own report for an unmeasured fleet.
     pub(super) fn report_axis(&self) -> ReportAxis {
-        ReportAxis::identity_core_local()
+        self.axis.clone()
     }
 
     /// The zone a period BOUND and a calendar window resolve in.

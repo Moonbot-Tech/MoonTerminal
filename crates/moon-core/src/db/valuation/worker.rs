@@ -455,11 +455,14 @@ fn run_worker(
     initial_store: Option<Connection>,
 ) {
     let mut store = initial_store;
-    // The one axis every rate-minute derivation in this worker resolves against. It is the
-    // identity today, so a trade still values at the minute its raw `closedate` names and this
-    // worker behaves exactly as it did before the seam existed. Replacing this binding with the
-    // measured per-core axis is the whole of the offset fix on the valuation side.
-    let axis = ReportAxis::identity_core_local();
+    // The one axis every rate-minute derivation in this worker resolves against.
+    //
+    // Seeded as the identity and REFRESHED by the two stages that open a report reader of their
+    // own — see `refresh_axis`. It is not loaded once here because a measured offset arrives while
+    // this worker is already running: the writer that stores a segment also stages a rescan for
+    // that core, so the rows arrive at a stage that must already be on the new axis to value them
+    // at the right minute.
+    let mut axis = ReportAxis::identity_core_local();
     let mut deferred: BTreeMap<(i64, i64, i64), TradeInput> = BTreeMap::new();
     let mut reconciliation = Some(ReconcileState::new());
     let mut pending_ack = None;
@@ -549,7 +552,7 @@ fn run_worker(
                     reconcile_step(
                         store_ref,
                         source.as_ref(),
-                        &axis,
+                        &mut axis,
                         &generation,
                         &dirty,
                         &mut deferred,
@@ -574,7 +577,7 @@ fn run_worker(
                 consume_outbox(
                     store_ref,
                     source.as_ref(),
-                    &axis,
+                    &mut axis,
                     &report_tx,
                     &generation,
                     &dirty,
@@ -885,7 +888,7 @@ fn note_failure(
 fn reconcile_step(
     store: &Connection,
     source: &dyn SpotRateSource,
-    axis: &ReportAxis,
+    axis: &mut ReportAxis,
     generation: &AtomicU64,
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
@@ -899,6 +902,7 @@ fn reconcile_step(
             Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
             Err(error) => return Err(report_fault(error)),
         };
+        refresh_axis(&conn, axis)?;
         let inputs = reconciliation_batch(&conn, trade_source, state.after, RECONCILE_BATCH)
             .map_err(report_fault)?;
         if inputs.is_empty() {
@@ -975,7 +979,7 @@ fn reconcile_step(
 fn consume_outbox(
     store: &Connection,
     source: &dyn SpotRateSource,
-    axis: &ReportAxis,
+    axis: &mut ReportAxis,
     report_tx: &ReportTx,
     generation: &AtomicU64,
     dirty: &AtomicBool,
@@ -987,6 +991,7 @@ fn consume_outbox(
         Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
         Err(error) => return Err(report_fault(error)),
     };
+    refresh_axis(&conn, axis)?;
     let batch = super::read_outbox(&conn, OUTBOX_BATCH).map_err(report_fault)?;
     let batch_was_full = batch.len() == OUTBOX_BATCH;
     let events = unacknowledged_events(&batch, pending_ack);
@@ -2132,6 +2137,29 @@ fn trade_key(input: &TradeInput) -> (i64, i64, i64) {
 fn publish(generation: &AtomicU64, dirty: &AtomicBool) {
     generation.fetch_add(1, Ordering::AcqRel);
     dirty.store(true, Ordering::Release);
+}
+
+/// Refresh the worker's axis from a report reader it already has open.
+///
+/// FAILS the stage rather than falling back to the identity axis. On a core running behind UTC the
+/// identity axis picks the wrong hour's spot rate, so an unreadable measurement must stop the
+/// valuation pass, not quietly value the trades at a price they never traded at. A stage that
+/// cannot read the replica is already a stage that has nothing to reconcile.
+///
+/// Args:
+///     conn: Report reader this stage opened.
+///     axis: The worker's axis, replaced in place.
+///
+/// Returns:
+///     Nothing, or the classified read failure that must stop this stage.
+fn refresh_axis(conn: &Connection, axis: &mut ReportAxis) -> Result<(), FaultCause> {
+    // Loaded at UTC on purpose, and NOT at the axis's own current zone. A display zone is a
+    // rendering concern and this worker renders nothing: it needs the per-core OFFSETS and nothing
+    // else. Asking for the zone here would also put a second `axis.` call in this file, which the
+    // never-routed contract test counts — and it counts it precisely so that a new route through
+    // the axis has to be looked at rather than absorbed.
+    *axis = ReportAxis::load(conn, chrono_tz::Tz::UTC).map_err(report_fault)?;
+    Ok(())
 }
 
 /// Resolve the spot-rate minute one trade values at.

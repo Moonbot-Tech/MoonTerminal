@@ -672,6 +672,211 @@ fn report_row_scope_keeps_rows_and_open_totals_in_the_same_partition() {
     );
 }
 
+/// `report_read.rs::append_row_scope` -- resolving `RowScope::ClosedAndOpenIfCurrent` ONCE for the
+/// whole filter, instead of per offset group, makes a fleet spanning two clock offsets agree on a
+/// single verdict even though the same true-UTC window boundary has demonstrably ended on one
+/// core's own clock while still reaching the present on the other's.
+///
+/// Two cores share one `date_to` bound at exactly true-UTC `now`: `open_rows_for_bound`'s own
+/// contract (`ended = now + offset_secs`, closed when `date_to < ended`) makes the AHEAD-of-UTC
+/// core's window end at that instant (`now < now + 10_800` is false, so `date_to` is NOT before
+/// `ended`... `open_rows_for_bound` calls it closed exactly when `date_to < ended`; with
+/// `date_to == now` and `ended = now + 10_800`, `now < now + 10_800` holds, so the ahead core is
+/// CLOSED) while the BEHIND-of-UTC core's window (`ended = now - 14_400`) has already fallen
+/// behind `date_to == now`, so `now < now - 14_400` is false and it stays CURRENT. Each core's own
+/// open position must therefore be admitted or dropped independently of the other.
+#[test]
+fn mixed_offset_row_scope_resolves_open_positions_independently_per_core() {
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    const BEHIND_CORE: u64 = 41; // UTC-4
+    const BEHIND_OFFSET: i32 = -14_400;
+    const AHEAD_CORE: u64 = 43; // UTC+3
+    const AHEAD_OFFSET: i32 = 10_800;
+
+    let conn = Connection::open_in_memory().expect("open mixed-offset fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (41, 1, 0, 1, 5.0, 'BEHIND-OPEN'),
+             (43, 2, 0, 1, 6.0, 'AHEAD-OPEN');",
+    )
+    .expect("seed mixed-offset fixture");
+
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([
+            (
+                BEHIND_CORE,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: BEHIND_OFFSET,
+                }],
+            ),
+            (
+                AHEAD_CORE,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: AHEAD_OFFSET,
+                }],
+            ),
+        ]),
+        chrono_tz::UTC,
+    );
+    let filter = ReportFilter {
+        core_uids: vec![BEHIND_CORE, AHEAD_CORE],
+        date_to: Some(now),
+        rows: RowScope::ClosedAndOpenIfCurrent,
+        axis,
+        ..ReportFilter::default()
+    };
+
+    let table = query_reports(&conn, &filter, "closedate", false, 100)
+        .expect("query mixed-offset Report rows");
+
+    assert_eq!(
+        table.core_uids,
+        vec![BEHIND_CORE],
+        "only the still-current BEHIND-of-UTC core's open row may survive; the AHEAD core's \
+         window has already ended on its own clock and must contribute none"
+    );
+}
+
+/// `report_read.rs::append_row_scope` -- when every core in scope shares ONE measured offset, the
+/// per-group predicate must collapse to the same single branch an unmeasured (identity) fleet
+/// produces, and each core's window bound must still be shifted by exactly that shared offset. A
+/// forgotten per-core shift, or a shift applied to only one core of the collapsed group, would
+/// silently admit or drop rows exactly at the boundary.
+#[test]
+fn same_offset_group_shifts_every_cores_window_bound_identically() {
+    const CORE_A: u64 = 51;
+    const CORE_B: u64 = 52;
+    const SHARED_OFFSET: i32 = 3_600;
+    const FROM: i64 = 1_700_000_000;
+    const TO: i64 = 1_700_100_000;
+
+    let conn = Connection::open_in_memory().expect("open same-offset fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             -- exactly on the shifted lower bound: must be INCLUDED
+             (51, 1, 1_700_003_600, 1, 1.0, 'A-AT-FROM'),
+             -- one second before the shifted lower bound: must be EXCLUDED
+             (51, 2, 1_700_003_599, 1, 2.0, 'A-BEFORE-FROM'),
+             -- exactly on the shifted upper bound: must be INCLUDED
+             (52, 3, 1_700_103_600, 1, 3.0, 'B-AT-TO'),
+             -- one second after the shifted upper bound: must be EXCLUDED
+             (52, 4, 1_700_103_601, 1, 4.0, 'B-AFTER-TO');",
+    )
+    .expect("seed same-offset fixture");
+
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([
+            (
+                CORE_A,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: SHARED_OFFSET,
+                }],
+            ),
+            (
+                CORE_B,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: SHARED_OFFSET,
+                }],
+            ),
+        ]),
+        chrono_tz::UTC,
+    );
+    let filter = ReportFilter {
+        core_uids: vec![CORE_A, CORE_B],
+        date_from: Some(FROM),
+        date_to: Some(TO),
+        rows: RowScope::Closed,
+        axis,
+        ..ReportFilter::default()
+    };
+
+    let table = query_reports(&conn, &filter, "closedate", false, 100)
+        .expect("query same-offset Report rows");
+    let closedate_col = table
+        .cols
+        .iter()
+        .position(|c| c == "closedate")
+        .expect("closedate must be a projected column");
+
+    let mut seen: Vec<(u64, i64)> = table
+        .core_uids
+        .iter()
+        .copied()
+        .zip(table.rows.iter().map(|row| match &row[closedate_col] {
+            Value::Integer(closedate) => *closedate,
+            other => panic!("expected an integer closedate, got {other:?}"),
+        }))
+        .collect();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        vec![(51, 1_700_003_600), (52, 1_700_103_600)],
+        "both cores of the collapsed single-offset group must have their OWN window bound \
+         shifted by the shared offset, admitting the boundary row and excluding the one just \
+         past it on either side"
+    );
+}
+
+/// `report_read.rs::append_row_scope` -- the window bound must be shifted on the BOUND (via
+/// `ReportAxis::shift_bound`), never on the stored COLUMN. Wrapping `r."closedate"` in a
+/// conversion expression (e.g. `r."closedate" + ?`) would still be arithmetically correct, but it
+/// stops SQLite from opening `idx_rep_core_close` on that comparison, turning the period filter
+/// into a full scan of a half-million-row replica -- a correctness-preserving change that is a
+/// severe performance regression, invisible to any test that only checks row OUTPUT.
+///
+/// This is therefore a SOURCE-TEXT assertion on the exact SQL fragment `append_row_scope` builds,
+/// following the house pattern in `tests/valuation_never_routed_contract.rs`: it anchors on the
+/// literal, unwrapped `r."closedate" >= ?` / `r."closedate" <= ?` comparisons, called directly
+/// since `append_row_scope` is private to this module (an integration test could not reach it at
+/// all).
+#[test]
+fn window_bound_stays_on_a_bare_unwrapped_closedate_column() {
+    let mut sql = String::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let cols = std::collections::HashSet::from(["closedate".to_string()]);
+    let filter = ReportFilter {
+        core_uids: vec![7],
+        date_from: Some(100),
+        date_to: Some(200),
+        rows: RowScope::Closed,
+        axis: crate::db::ReportAxis::from_measured(
+            std::collections::HashMap::from([(
+                7,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: 3_600,
+                }],
+            )]),
+            chrono_tz::UTC,
+        ),
+        ..ReportFilter::default()
+    };
+
+    super::append_row_scope(&mut sql, &mut params, &filter, &cols);
+
+    assert!(
+        sql.contains("r.\"closedate\" >= ?") && sql.contains("r.\"closedate\" <= ?"),
+        "the window predicate must compare the bare, unwrapped stored column so the replica's \
+         index stays eligible; got: {sql}"
+    );
+    assert!(
+        !sql.contains("closedate\" +") && !sql.contains("closedate\" -"),
+        "the column itself must never be wrapped in an arithmetic conversion; got: {sql}"
+    );
+}
+
 /// An inverse-denominated row, an explicit liquidation, a missing reason and a source without the
 /// reason column must all stay OUT of the summed money while still being counted, so the published
 /// subtotal is dimensionally sound and its shortfall is recoverable. Widening the summed predicate
@@ -1082,6 +1287,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         emulator: Some(false),
         deleted_only: false,
         rows: RowScope::Closed,
+        axis: crate::db::ReportAxis::identity_core_local(),
         strategies: Some(vec![ReportStrategyKey {
             core_uid: 2,
             strategy_id: -7,

@@ -527,6 +527,7 @@ impl ReportPanel {
         let seeded_valuation_mode = backend.read(cx).valuation_mode();
         let display_zone =
             crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+        let seeded_axis = backend.read(cx).report_axis(display_zone);
         // The retained connection, schema, and preferences are loaded after construction so a
         // workspace transition never waits for SQLite open/schema work on the GPUI thread.
         let cores = Vec::new();
@@ -758,6 +759,16 @@ impl ReportPanel {
                 this.valuation_status = status;
                 cx.notify();
             }
+            // A newly adopted core offset moves every date this panel prints AND the bounds its
+            // period filter is built from, so it is compared and repainted here rather than polled
+            // by the render path. Compare-then-notify, like every other counter above: the
+            // backend wakes far more often than a core adopts an offset.
+            let axis = this.backend.read(cx).report_axis(this.display_zone);
+            if axis != this.axis {
+                this.axis = axis;
+                this.request_requery(cx);
+                cx.notify();
+            }
         })
         .detach();
 
@@ -803,6 +814,9 @@ impl ReportPanel {
                 return;
             }
             this.display_zone = zone;
+            // The axis carries the zone as well as the offsets, so a zone change invalidates the
+            // cached copy even though nothing was measured.
+            this.axis = this.backend.read(cx).report_axis(zone);
             this.display_zone_fields_dirty = true;
             this.natural_widths.clear();
             if this.period == Period::All {
@@ -822,6 +836,10 @@ impl ReportPanel {
         let mut this = Self {
             backend,
             display_zone,
+            // Seeded from the backend rather than left as the identity: a panel opened on a fleet
+            // whose offsets were measured in an earlier session must render corrected times on its
+            // FIRST paint, not on the first backend wake after it.
+            axis: seeded_axis,
             display_zone_fields_dirty: false,
             group,
             generation,

@@ -695,9 +695,10 @@ impl ReportPanel {
             &self.cols,
             &indices,
             &self.selection,
-            // Phase 1: replicated timestamps stay on the core's own clock, exactly as the grid
-            // renders them, so a copied row and a read row cannot disagree.
-            &moon_core::db::ReportAxis::identity_core_local(),
+            // The SAME axis the grid renders on: a copied row and the row it was copied from
+            // must not disagree, which they would the moment one of the two stopped being
+            // corrected.
+            &self.report_axis(),
             self.display_zone,
         );
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -884,7 +885,7 @@ impl ReportPanel {
             &suggested_filter,
             fmt,
             all_cols,
-            &moon_core::db::ReportAxis::identity_core_local(),
+            &self.report_axis(),
             self.display_zone,
         );
         let handle = window.window_handle();
@@ -929,7 +930,10 @@ impl ReportPanel {
                         &filter,
                         &sort_key,
                         sort_desc,
-                        &moon_core::db::ReportAxis::identity_core_local(),
+                        // Taken off the FILTER, not rebuilt: this runs on a background thread
+                        // after the panel was last read, and the export must be stamped on the
+                        // same axis the query that produced its rows was built on.
+                        &filter.axis,
                         zone,
                     )
                         .map(|n| (n, path))

@@ -103,7 +103,7 @@ pub(super) fn profit_monitor_on(
 
     let mut q = q.clone();
     if q.from < 0 {
-        q.from = min_closedate(conn)?;
+        q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
     let decision = match scope_decision_on(conn, &q)? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),

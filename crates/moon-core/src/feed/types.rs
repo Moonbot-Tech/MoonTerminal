@@ -936,9 +936,35 @@ impl MarketDirty {
 /// core. Market ticks, order books, and price lines do not travel through this channel: the feed
 /// thread publishes them to MoonProto/MarketStore and sends only a lightweight
 /// [`MarketDataChanged`] wake-up for consumer-side pulling.
+/// One core's measured clock offset, as the UI is allowed to see it.
+///
+/// `offset_secs` is `None` for a core nothing has ever been measured on, and that is deliberately
+/// NOT the same fact as `Some(0)`: a diagnosis surface must be able to say "never measured" rather
+/// than claim the core runs on UTC. Every field beside it exists so the surface can say WHY it
+/// believes the number — how many samples, how long ago, and from which source — because an
+/// unexplained four-hour correction on a trade list is indistinguishable from a bug.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoreTimeOffsetStatus {
+    /// Seconds east of UTC on the core's own clock, or `None` when nothing was ever adopted.
+    pub offset_secs: Option<i32>,
+    /// True-UTC instant of the observation that adopted it, in milliseconds.
+    pub observed_at_utc: i64,
+    /// Samples standing behind the adopted value.
+    pub samples: u32,
+    /// Which measurement produced it.
+    pub source: crate::session::core_time_offset::OffsetSource,
+}
+
 #[derive(Debug, Clone)]
 pub enum FeedMsg {
     Status(ConnStatus),
+    /// A core's clock offset was measured, and the durable write has ALREADY committed.
+    ///
+    /// Emission is durability-first on purpose: the estimator sends its adoption to the database
+    /// writer, and the writer sends this only after its transaction commits. The screen therefore
+    /// never shows an offset the numbers are not already computed on — the reverse order would put
+    /// a corrected timestamp in the panel while the report query still read the old axis.
+    TimeOffset(CoreTimeOffsetStatus),
     /// Network endpoint selected from the exported MoonBot key before the connection attempt.
     ///
     /// The live feed publishes this domain value after parsing the key so UI consumers never need

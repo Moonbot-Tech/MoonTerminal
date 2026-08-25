@@ -326,7 +326,10 @@ impl ReportPanel {
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
-            rows: super::row_scope_for(self.closed_only, self.show_open, date_to, now),
+            rows: super::row_scope_for(self.closed_only, self.show_open),
+            // The SAME axis the cells are rendered on, so a window can never be built on one axis
+            // while a timestamp inside it is printed on another.
+            axis: self.report_axis(),
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
             strategy_name_mask,
             // Read from the backend at build time rather than mirrored into the panel: the rows,

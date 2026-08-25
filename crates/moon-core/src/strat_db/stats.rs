@@ -76,6 +76,56 @@ fn attach_reports(conn: &Connection) -> bool {
     }
 }
 
+/// Load the attached replica's offset segments for ONE core, plus the axis generation they belong to.
+///
+/// A version window's boundaries are stamped by THIS machine in true-UTC milliseconds, while
+/// `buydate` is the CORE's own wall clock. Comparing them raw attributes every trade near a
+/// boundary to the wrong strategy version — by the width of the core's offset, so a UTC-4 core
+/// mis-attributes four hours of trades at every version change.
+///
+/// Reads through the `rep` attachment because that is where the replica lives from this database's
+/// point of view. An absent or unreadable table yields the identity axis, which reproduces exactly
+/// the behaviour this function had before offsets existed; the generation returned alongside is
+/// what makes a later measurement invalidate the cache written under it.
+///
+/// Args:
+///     conn: Strategies connection with the reports replica already attached as `rep`.
+///     core_uid: The core whose version windows are being converted.
+///
+/// Returns:
+///     The axis carrying only that core's segments, and the replica's current axis generation.
+fn core_axis(conn: &Connection, core_uid: u64) -> (crate::db::ReportAxis, i64) {
+    let generation: i64 = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM rep.app_meta WHERE key=?1",
+            [crate::db::AXIS_GENERATION_KEY],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let mut segments = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT from_utc, offset_secs FROM rep.core_time_offset
+         WHERE core_uid=?1 ORDER BY from_utc",
+    ) {
+        if let Ok(rows) = stmt.query_map([core_uid as i64], |row| {
+            Ok(crate::db::OffsetSegment {
+                from_utc: row.get(0)?,
+                offset_secs: row.get::<_, i64>(1)? as i32,
+            })
+        }) {
+            segments.extend(rows.flatten());
+        }
+    }
+    if segments.is_empty() {
+        return (crate::db::ReportAxis::default(), generation);
+    }
+    let measured = std::collections::HashMap::from([(core_uid, segments)]);
+    (
+        crate::db::ReportAxis::from_measured(measured, chrono_tz::UTC),
+        generation,
+    )
+}
+
 /// Freshness marker: the maximum `last_update_at` among the strategy's replica rows, or 0 when
 /// rows or the column are unavailable. It changes only when that maximum advances; partial upserts
 /// and removals do not guarantee a change.
@@ -107,15 +157,30 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
             open_left   INTEGER NOT NULL DEFAULT 0,
             as_of       INTEGER NOT NULL DEFAULT 0,
             computed_ms INTEGER NOT NULL DEFAULT 0,
+            axis_gen    INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (core_uid, strategy_id, valid_from))",
         [],
     );
+    // A cache written before offsets existed has no `axis_gen` column at all, and
+    // `CREATE TABLE IF NOT EXISTS` above will not add one. The default of 0 is what makes the
+    // migration self-correcting: every pre-existing row reads as generation 0, so the first read
+    // after any measurement finds it stale and recomputes. A duplicate-column error here means the
+    // column is already present, which is the other correct outcome.
+    let _ = conn.execute(
+        "ALTER TABLE version_stats ADD COLUMN axis_gen INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let (axis, axis_gen) = if has_rep {
+        core_axis(&conn, core_uid)
+    } else {
+        (crate::db::ReportAxis::default(), 0)
+    };
 
     let mut out: Vec<VersionInfo> = Vec::new();
     {
         let Ok(mut stmt) = conn.prepare(
             "SELECT v.valid_from, v.valid_to, v.change_kind, v.origin, v.n_changed,
-                    s.trades, s.profit, s.open_left, s.as_of
+                    s.trades, s.profit, s.open_left, s.as_of, s.axis_gen
              FROM strategy_versions v
              LEFT JOIN version_stats s
                ON s.core_uid=v.core_uid AND s.strategy_id=v.strategy_id
@@ -138,6 +203,7 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
                     open_left: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 },
                 r.get::<_, Option<i64>>(8)?, // Cached as_of value (None means no cache entry).
+                r.get::<_, Option<i64>>(9)?, // Axis generation the cached figures were computed under.
             ))
         });
         let Ok(rows) = rows else { return Vec::new() };
@@ -148,12 +214,21 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
             0
         };
         for row in rows.flatten() {
-            let (mut info, as_of) = row;
-            let stale = as_of != Some(max_lu) || info.open_left > 0 || info.valid_to.is_none();
+            let (mut info, as_of, cached_axis_gen) = row;
+            // An adopted offset changes no report row and no `last_update_at`, so without the
+            // generation in this test a CLOSED version's cached figures would stay "fresh" forever
+            // and the corrected attribution below would never run for it.
+            let stale = as_of != Some(max_lu)
+                || info.open_left > 0
+                || info.valid_to.is_none()
+                || cached_axis_gen != Some(axis_gen);
             if stale && has_rep {
                 // Replica buydate values use Unix seconds, while version boundaries use milliseconds.
-                let from_s = info.valid_from / 1000;
-                let to_s = info.valid_to.map(|t| t / 1000);
+                // The BOUNDARIES move onto the core's clock, never the column: `buydate` stays
+                // bare so the replica's index over it is still usable, and this query is already
+                // scoped to one core, so the conversion is a single offset rather than a group.
+                let from_s = axis.from_utc(info.valid_from / 1000, core_uid);
+                let to_s = info.valid_to.map(|t| axis.from_utc(t / 1000, core_uid));
                 let agg: Option<(i64, f64, i64)> = conn
                     .query_row(
                         "SELECT COUNT(*),
@@ -174,12 +249,12 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
                     let _ = conn.execute(
                         "INSERT INTO version_stats
                             (core_uid, strategy_id, valid_from, trades, profit,
-                             open_left, as_of, computed_ms)
-                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+                             open_left, as_of, computed_ms, axis_gen)
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
                          ON CONFLICT (core_uid, strategy_id, valid_from) DO UPDATE SET
                             trades=excluded.trades, profit=excluded.profit,
                             open_left=excluded.open_left, as_of=excluded.as_of,
-                            computed_ms=excluded.computed_ms",
+                            computed_ms=excluded.computed_ms, axis_gen=excluded.axis_gen",
                         rusqlite::params![
                             uid,
                             strategy_id,
@@ -189,6 +264,7 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
                             info.open_left,
                             max_lu,
                             now_ms(),
+                            axis_gen,
                         ],
                     );
                 }

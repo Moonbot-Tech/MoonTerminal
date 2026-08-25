@@ -1,7 +1,7 @@
 //! Summary, Strategies, and quote-scope analytics regression tests.
 
 use super::super::test_support::{
-    build_replica, corrupt_leaf_page, remove_db, spread_rows, temp_db,
+    build_replica, build_replica_multi_core, corrupt_leaf_page, remove_db, spread_rows, temp_db,
 };
 use super::super::{QuoteCurrency, SideFilter};
 use super::*;
@@ -1085,6 +1085,67 @@ fn corrupt_replica_surfaces_error_not_empty() {
         }
         Ok(_) => unreachable!("уже проверено выше"),
     }
+
+    remove_db(&path);
+}
+
+/// `min_closedate` -- MIN'ing the raw stored `closedate` per source instead of the per-core
+/// AXIS-CONVERTED value reopens the exact bug the per-core `GROUP BY` closed: a plain `MIN` picks
+/// whichever core's clock runs furthest WEST (the smallest raw number), not whichever trade is
+/// actually oldest, so "all time" would start at an instant no trade occupies.
+///
+/// Two cores' earliest trades share one TRUE-UTC instant but stamp different raw `closedate`
+/// values because their clocks differ: an UNMEASURED core (offset 0, identity) stamps the instant
+/// verbatim, while a core running four hours BEHIND UTC stamps a strictly smaller raw number for
+/// that same instant. The naive per-source `MIN(closedate)` would therefore report the behind
+/// core's smaller raw value as "the beginning of history" — four hours before any trade actually
+/// happened. The converted floor must instead be the shared true instant.
+#[test]
+fn min_closedate_uses_the_axis_converted_instant_not_the_smaller_raw_value() {
+    const UNMEASURED_CORE: u64 = 61;
+    const BEHIND_CORE: u64 = 62;
+    const BEHIND_OFFSET_SECS: i32 = -14_400; // UTC-4
+    const TRUE_INSTANT: i64 = 1_700_100_000;
+
+    let path = temp_db("min-closedate");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            // The unmeasured core's own clock is treated as identity, so it stamps the shared
+            // true instant verbatim.
+            (UNMEASURED_CORE, TRUE_INSTANT, 1.0, "BTCUSDT"),
+            // A later trade on the same core, so the test cannot pass by accident from reading
+            // only one row per core.
+            (UNMEASURED_CORE, TRUE_INSTANT + 50_000, 2.0, "BTCUSDT"),
+            // The behind core's clock reads 4h earlier, so the SAME true instant lands on a
+            // strictly SMALLER raw closedate than the unmeasured core's.
+            (BEHIND_CORE, TRUE_INSTANT + i64::from(BEHIND_OFFSET_SECS), 3.0, "ETHUSDT"),
+            (
+                BEHIND_CORE,
+                TRUE_INSTANT + 50_000 + i64::from(BEHIND_OFFSET_SECS),
+                4.0,
+                "ETHUSDT",
+            ),
+        ],
+    );
+
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([(
+            BEHIND_CORE,
+            vec![crate::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: BEHIND_OFFSET_SECS,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+
+    assert_eq!(
+        min_closedate(&conn, &axis).expect("min_closedate over a healthy multi-core replica"),
+        TRUE_INSTANT,
+        "the converted floor must be the shared true instant both cores' earliest trades occupy, \
+         not the behind core's smaller raw closedate"
+    );
 
     remove_db(&path);
 }

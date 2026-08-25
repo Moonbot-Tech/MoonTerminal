@@ -532,7 +532,7 @@ fn strategy_base_on(
 ) -> ReadResult<ProfitScope<StrategyBase>> {
     let mut q = q.clone();
     if q.from < 0 {
-        q.from = min_closedate(conn)?;
+        q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
     let decision = match scope_decision_on(conn, &q)? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
@@ -609,7 +609,7 @@ pub(super) fn summary_on(
 ) -> ReadResult<ProfitScope<Summary>> {
     let mut q = q.clone();
     if q.from < 0 {
-        q.from = min_closedate(conn)?;
+        q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
     let decision = match scope_decision_on(conn, &q)? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
@@ -644,11 +644,15 @@ pub(super) fn summary_on(
     // period; see `Summary::prev`.
     let prev = previous_stats(conn, &src, &q, len, bucket, &decision);
     let raw_src = groups::raw_source(conn, &q)?;
+    // ONE resolution for this whole Summary read: the period floor above, the ordering, the
+    // bucketing and the sequence metrics all have to describe the same measured world.
+    let axis = q.resolved_axis(conn)?;
     let parts = summary_stream::read(
         conn,
         &src,
         raw_src.as_deref(),
         &q,
+        &axis,
         bucket,
         one_day,
         has_strat_names,
@@ -759,22 +763,41 @@ fn previous_period_start(q: &Query, len: i64) -> i64 {
 /// Find the earliest `closedate` across both sources for the all-time period.
 ///
 /// A failed probe remains an error; `1` is reserved for a genuinely empty history.
-fn min_closedate(conn: &Connection) -> ReadResult<i64> {
+fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<i64> {
     const CTX: &str = "analytics: min_closedate";
     let mut min = i64::MAX;
     for src in super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") {
             continue;
         }
+        // Grouped by core, not one global MIN, because the values being compared are on DIFFERENT
+        // clocks. The earliest core-local second in the table is not the earliest instant: a core
+        // running behind UTC stamps a smaller number for the same moment, so a plain `MIN` would
+        // return whichever core is furthest west rather than whichever trade is oldest, and "all
+        // history" would start at an instant no trade actually occupies.
+        //
+        // A source without `core_uid` (the legacy table on an old replica) still answers, under
+        // core 0, and converts as the identity — which is the same answer it gave before offsets
+        // existed.
+        let has_core = src.cols.contains("core_uid");
+        let core_expr = if has_core { "core_uid" } else { "0" };
         let sql = format!(
-            "SELECT MIN(closedate) FROM {} WHERE closedate > 0",
+            "SELECT {core_expr}, MIN(closedate) FROM {} WHERE closedate > 0 GROUP BY {core_expr}",
             src.table
         );
-        let got: Option<i64> = conn
-            .query_row(&sql, [], |r| r.get::<_, Option<i64>>(0))
+        let mut statement = conn
+            .prepare(&sql)
             .map_err(|e| read_fail_on(conn, CTX, e))?;
-        if let Some(v) = got {
-            min = min.min(v);
+        let rows = statement
+            .query_map([], |r| {
+                Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?))
+            })
+            .map_err(|e| read_fail_on(conn, CTX, e))?;
+        for row in rows {
+            let (core_uid, closedate) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+            let Some(closedate) = closedate else { continue };
+            let core_uid = core_uid.unwrap_or(0) as u64;
+            min = min.min(axis.to_utc(closedate, core_uid));
         }
     }
     // No rows anywhere is a legitimate empty history, not a failure.

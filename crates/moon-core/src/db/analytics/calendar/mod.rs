@@ -144,7 +144,8 @@ fn funding_by_bucket(
     let Some(src) = unified_from_mode(conn, q, projection)? else {
         return Ok(out);
     };
-    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let axis = q.resolved_axis(conn)?;
+    super::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     // `profitbtc` rather than `pnl`: this is money, and the row is kept only when it is the first
     // copy of its accrual. Ordering by core_uid makes the survivor stable across reads.
     let sql = format!(
@@ -357,7 +358,7 @@ pub(super) fn calendar_period_from(
 ) -> ReadResult<ProfitScope<CalendarPeriod>> {
     let mut current_query = q.clone();
     if current_query.from < 0 {
-        current_query.from = min_closedate(conn)?;
+        current_query.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
     let decision = match scope_decision_on(conn, &current_query)? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
@@ -399,7 +400,7 @@ fn calendar_total_from(
     const CTX: &str = "analytics: calendar_total";
     let mut q = q.clone();
     if q.from < 0 {
-        q.from = min_closedate(conn)?;
+        q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Ok(CellTotals::default());
@@ -488,7 +489,7 @@ pub fn calendar_cells(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
     super::super::with_read_snapshot(&conn, |snapshot| {
         let mut q = q.clone();
         if q.from < 0 {
-            q.from = min_closedate(snapshot)?;
+            q.from = min_closedate(snapshot, &q.resolved_axis(snapshot)?)?;
         }
         let decision = match scope_decision_on(snapshot, &q)? {
             ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
@@ -523,14 +524,15 @@ fn calendar_cells_from(
     let mut q = q.clone();
     let all_history = q.from < 0;
     if all_history {
-        q.from = min_closedate(conn)?;
+        q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
         // Source schemas have not arrived yet, so return an empty calendar (as `summary`
         // returns its default), not an error; otherwise the tab would remain on Loading.
         return Ok(Vec::new());
     };
-    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let axis = q.resolved_axis(conn)?;
+    super::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     // Daily bucket: profit, trades, wins, turnover, fee and duration for the card's four lines.
     let agg = agg_for(conn, projection)?;
     let sql = format!(
@@ -636,7 +638,8 @@ fn calendar_hours_from(
         Some(s) => s,
         None => return Ok(Vec::new()), // The schema has not arrived yet.
     };
-    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let axis = q.resolved_axis(conn)?;
+    super::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     let agg = agg_for(conn, projection)?;
     let sql = format!(
         "SELECT mt_local_bucket(o.closedate, 3600, o.core_uid) AS h,
@@ -719,7 +722,7 @@ fn hour_profile_one(
 ) -> ReadResult<[HourStat; 24]> {
     const CTX: &str = "analytics: hour_profile";
     let mut q = base.clone();
-    q.from = if from < 0 { min_closedate(conn)? } else { from };
+    q.from = if from < 0 { min_closedate(conn, &q.resolved_axis(conn)?)? } else { from };
     q.to = to;
     let decision = scope_decision_on(conn, &q)?;
     let Some(projection) = decision.projection() else {
@@ -730,7 +733,8 @@ fn hour_profile_one(
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Ok(prof);
     };
-    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let axis = q.resolved_axis(conn)?;
+    super::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     // Hour of day comes from the trade OPEN time (`buydate`), matching the schedule and tuner
     // sliders that gate ENTRY. Fall back to `closedate` when the open time is absent (0/NULL).
     // The period itself still uses `closedate`, which defines the analysis window.

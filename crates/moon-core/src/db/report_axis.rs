@@ -88,7 +88,7 @@ pub struct OffsetSegment {
 /// Holds one append-only segment list per core uid plus the zone those corrected instants are
 /// finally displayed in. A core with no segments converts as the identity, which is what an
 /// honest UTC core needs and the only assumption that cannot make such a core worse.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReportAxis {
     segments: HashMap<u64, Vec<OffsetSegment>>,
     zone: Tz,
@@ -135,6 +135,27 @@ impl ReportAxis {
         Self { segments, zone }
     }
 
+    /// Load every measured offset from the replica and pair it with a display zone.
+    ///
+    /// FAILS CLOSED, and that is the whole reason this returns a [`ReadResult`] rather than an
+    /// axis: on a skewed core the identity axis is the WRONG-MONEY axis, so a measurement that
+    /// cannot be read must stop the read rather than quietly become "no measurement". An ABSENT
+    /// table is a different fact and is not a failure — a fresh install genuinely has nothing
+    /// measured — and [`crate::db::rep::core_offset::load_all`] is what keeps the two apart.
+    ///
+    /// Args:
+    ///     conn: Open report reader or pinned snapshot.
+    ///     zone: Display zone the corrected instants are finally rendered in.
+    ///
+    /// Returns:
+    ///     The axis in force, or a classified read failure.
+    pub fn load(conn: &rusqlite::Connection, zone: Tz) -> crate::db::ReadResult<Self> {
+        Ok(Self::from_measured(
+            crate::db::rep::core_offset::load_all(conn)?,
+            zone,
+        ))
+    }
+
     /// Return the display zone corrected instants are rendered in.
     ///
     /// Returns:
@@ -154,15 +175,7 @@ impl ReportAxis {
     ///     deliberately distinguishable from `Some(0)`: a diagnosis surface must be able to say
     ///     "never measured" rather than claiming the core runs on UTC.
     pub fn offset_secs(&self, core_uid: u64, at: i64) -> Option<i32> {
-        let list = self.segments.get(&core_uid)?;
-        let idx = match list.binary_search_by_key(&at, |s| s.from_utc) {
-            Ok(hit) => hit,
-            // The earliest segment applies backward without bound, so a value before every
-            // boundary still resolves rather than falling through to `None`.
-            Err(0) => 0,
-            Err(next) => next - 1,
-        };
-        list.get(idx).map(|s| s.offset_secs)
+        self.segment_at(core_uid, at).map(|s| s.offset_secs)
     }
 
     /// Convert one stored core-local timestamp to true UTC.
@@ -202,6 +215,49 @@ impl ReportAxis {
         }
     }
 
+    /// Return the whole segment applying to one core at one instant, not just its offset.
+    ///
+    /// [`offset_secs`](Self::offset_secs) answers "by how much", which is all a CONVERSION needs.
+    /// A diagnosis surface needs the other half — WHEN this offset was adopted — and inventing
+    /// that timestamp at the point of display is how a value measured last week comes to claim it
+    /// was measured just now.
+    ///
+    /// Args:
+    ///     core_uid: Stable uid of the core.
+    ///     at: Instant to resolve, in seconds.
+    ///
+    /// Returns:
+    ///     The segment in force, or `None` when this core has no measured offset at all.
+    pub fn segment_at(&self, core_uid: u64, at: i64) -> Option<OffsetSegment> {
+        let list = self.segments.get(&core_uid)?;
+        let idx = match list.binary_search_by_key(&at, |s| s.from_utc) {
+            Ok(hit) => hit,
+            // The earliest segment applies backward without bound, so a value before every
+            // boundary still resolves rather than falling through to `None`.
+            Err(0) => 0,
+            Err(next) => next - 1,
+        };
+        list.get(idx).copied()
+    }
+
+    /// Convert one true-UTC bound into the core-local value to compare a stored column against,
+    /// using an offset that is ALREADY resolved.
+    ///
+    /// The counterpart to [`from_utc`](Self::from_utc) for a caller that has grouped its cores:
+    /// the group IS the offset, so looking it up again per bound would only re-derive what the
+    /// grouping already decided, and would do it against the bound's own instant rather than the
+    /// instant the grouping used — two answers where the predicate needs one.
+    ///
+    /// Args:
+    ///     secs: True-UTC instant, in seconds.
+    ///     offset_secs: Seconds east of UTC on the clock of every core in the group.
+    ///
+    /// Returns:
+    ///     The value to compare against the raw stored column.
+    pub fn shift_bound(secs: i64, offset_secs: i32) -> i64 {
+        secs.saturating_add(i64::from(offset_secs))
+    }
+
     /// Group cores by the offset applying to them at one instant.
     ///
     /// A window predicate is built one branch per group, each branch naming its cores and the
@@ -216,6 +272,54 @@ impl ReportAxis {
     /// Returns:
     ///     One entry per distinct offset, each carrying its cores in the order given. Cores with
     ///     no measured offset group under `0`, matching [`to_utc`](Self::to_utc)'s identity.
+    /// Group every core that HAS a measured offset by the offset applying to it at one instant.
+    ///
+    /// This is the unbounded-scope counterpart to [`groups`](Self::groups). A read over "all
+    /// cores" cannot name its cores, so the predicate it needs is one branch per measured offset
+    /// naming those cores explicitly, plus a final catch-all for everything else — which converts
+    /// as the identity, exactly as [`to_utc`](Self::to_utc) does for a core with no segments.
+    /// [`measured_cores`](Self::measured_cores) supplies that catch-all's exclusion list.
+    ///
+    /// The result is ordered by offset, and each core list ascending, so the SQL a caller builds
+    /// from it is stable across runs rather than reshuffling with the map's iteration order.
+    ///
+    /// Args:
+    ///     at: Instant whose offsets decide the grouping, in seconds.
+    ///
+    /// Returns:
+    ///     One entry per distinct measured offset. Empty when nothing has been measured, which is
+    ///     the honest signal that the uncorrected single-branch predicate is still correct.
+    pub fn measured_groups(&self, at: i64) -> Vec<(i32, Vec<u64>)> {
+        let mut by_offset: HashMap<i32, Vec<u64>> = HashMap::new();
+        for (&core_uid, _) in self.segments.iter() {
+            if let Some(offset) = self.offset_secs(core_uid, at) {
+                by_offset.entry(offset).or_default().push(core_uid);
+            }
+        }
+        let mut grouped: Vec<(i32, Vec<u64>)> = by_offset
+            .into_iter()
+            .map(|(offset, mut cores)| {
+                cores.sort_unstable();
+                (offset, cores)
+            })
+            .collect();
+        grouped.sort_unstable_by_key(|(offset, _)| *offset);
+        grouped
+    }
+
+    /// Every core uid this axis holds a measurement for, ascending.
+    ///
+    /// The exclusion list for an unbounded read's catch-all branch: a core absent from it has no
+    /// measured offset and therefore converts as the identity.
+    ///
+    /// Returns:
+    ///     Measured core uids in ascending order.
+    pub fn measured_cores(&self) -> Vec<u64> {
+        let mut cores: Vec<u64> = self.segments.keys().copied().collect();
+        cores.sort_unstable();
+        cores
+    }
+
     pub fn groups(&self, cores: &[u64], at: i64) -> Vec<(i32, Vec<u64>)> {
         let mut order: Vec<i32> = Vec::new();
         let mut by_offset: HashMap<i32, Vec<u64>> = HashMap::new();

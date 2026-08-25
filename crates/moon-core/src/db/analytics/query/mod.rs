@@ -21,6 +21,26 @@ pub enum PreviousPeriodBasis {
     Elapsed,
 }
 
+/// Render core uids as an inline SQL list.
+///
+/// Inlined rather than bound because these are integers this process allocated itself
+/// (`AppConfig.next_uid`), never user text, and because the offset grouping produces a variable
+/// number of branches — binding them would make the parameter positions depend on how many time
+/// zones the fleet happens to span.
+///
+/// Args:
+///     cores: Core uids to render.
+///
+/// Returns:
+///     Comma-separated list ready to drop inside `IN (...)`.
+fn core_list(cores: &[u64]) -> String {
+    cores
+        .iter()
+        .map(|uid| (*uid as i64).to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Selection filters shared by all Analytics tabs.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
@@ -42,6 +62,9 @@ pub struct Query {
     pub to: i64,
     /// Selected cores (multi-select, as in Orders); empty means all cores.
     pub cores: Vec<u64>,
+    // NOTE: `period_predicate` below is the ONLY place `from`/`to` meet the replica's date column.
+    // Both bounds are true UTC while the column is core-local, so they cannot be compared without
+    // the axis, and adding a second comparison elsewhere would be a second axis decision.
     pub side: SideFilter,
     /// `None` means all, `Some(false)` means real, and `Some(true)` means emulated.
     /// A NULL column value counts as real, as it does in the Report window.
@@ -117,6 +140,129 @@ impl Query {
     ///         the same effective identity the rest of Analytics groups by, and paid only while a
     ///         mask is typed.
     ///
+    /// Build the period predicate that compares this query's bounds against the replica's own
+    /// date column.
+    ///
+    /// `from`/`to` are true-UTC instants; the column is CORE-LOCAL wall clock. The offset closes
+    /// that gap, and it goes on the BOUND rather than around the column — `r.closedate >= ?1 +
+    /// 10800` leaves the column bare, so `idx_rep_core_close` still opens the scan, while
+    /// `mt_to_utc(r.closedate) >= ?1` would force a full pass over a half-million-row table for
+    /// the same answer.
+    ///
+    /// Cores are grouped by the offset applying at this window's own upper bound rather than at
+    /// "now": there is no present-tense question here, only which instants the stored values
+    /// represent, so the window's own instant is the honest one to resolve against. A fleet with
+    /// nothing measured produces exactly the single ungrouped predicate this method replaced.
+    ///
+    /// `?1` and `?2` stay bound to the raw true-UTC bounds at every one of the two dozen call
+    /// sites that bind them, so nothing about the parameter plumbing moves.
+    ///
+    /// Args:
+    ///     alias: Table alias every physical report column is qualified with.
+    ///
+    /// Returns:
+    ///     A complete boolean expression, already parenthesised where it needs to be.
+    /// Refresh this query's axis from the connection it is about to read through.
+    ///
+    /// The zone is the USER's and travels down from the panel; the offsets are the MACHINE's and
+    /// must be as fresh as the rows they correct. Resolving them here rather than at the panel
+    /// keeps both inside the caller's pinned snapshot, so every branch of one read — the period
+    /// predicate, the bucketing scalars, the rows themselves — describes one state of the world.
+    ///
+    /// FAILS CLOSED through [`ReportAxis::load`]: an unreadable measurement stops the read instead
+    /// of quietly becoming the identity axis, which on a skewed core is the wrong-money axis.
+    ///
+    /// Args:
+    ///     conn: Open reader or pinned snapshot this read runs on.
+    ///
+    /// Returns:
+    ///     The axis to use for this read, or a classified read failure.
+    pub(in crate::db) fn resolved_axis(&self, conn: &Connection) -> ReadResult<ReportAxis> {
+        ReportAxis::load(conn, self.axis.zone())
+    }
+
+    /// [`resolved_axis`](Self::resolved_axis) for a caller that returns `rusqlite::Result`.
+    ///
+    /// The two SQL-building passes report `rusqlite::Error` and are re-classified by the retry
+    /// wrapper above them, so a [`crate::db::ReadFail`] cannot travel out of them intact. What
+    /// matters is preserved exactly: the read still ABORTS. Falling back to the identity axis is
+    /// the one outcome this seam exists to prevent, and mapping the error keeps that impossible;
+    /// only the failure's granularity is rebuilt one level up instead of carried.
+    ///
+    /// Args:
+    ///     conn: Open reader or pinned snapshot this read runs on.
+    ///
+    /// Returns:
+    ///     The axis to use, or a SQLite-shaped error carrying the original reason.
+    pub(in crate::db) fn resolved_axis_sql(&self, conn: &Connection) -> rusqlite::Result<ReportAxis> {
+        self.resolved_axis(conn)
+            .map_err(|fail| {
+                // Deliberately NOT `DatabaseCorrupt`: `writer_should_stop` treats that code as a
+                // reason to halt the writer, and an unreadable offset table is a READ-side refusal,
+                // not a corrupt database the process must stop for.
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ErrorCode::Unknown,
+                        extended_code: 1,
+                    },
+                    Some(format!("report time axis: {fail}")),
+                )
+            })
+    }
+
+    /// Build the period predicate against an already-resolved axis.
+    ///
+    /// Takes the axis rather than reading `self.axis` so the caller's ONE
+    /// [`resolved_axis`](Self::resolved_axis) result governs every part of the statement it is
+    /// building — a second read of the stale field here would put two axes in one query.
+    pub(in crate::db) fn period_predicate_on(&self, axis: &ReportAxis, alias: &str) -> String {
+        let column = format!("{alias}.closedate");
+        let window = |offset: i32| {
+            if offset == 0 {
+                format!("{column} >= ?1 AND {column} < ?2")
+            } else {
+                let offset = i64::from(offset);
+                format!("{column} >= ?1 + {offset} AND {column} < ?2 + {offset}")
+            }
+        };
+        let mut branches: Vec<String> = Vec::new();
+        if self.cores.is_empty() {
+            for (offset, cores) in axis.measured_groups(self.to) {
+                let list = core_list(&cores);
+                branches.push(format!(
+                    "({alias}.core_uid IN ({list}) AND {})",
+                    window(offset)
+                ));
+            }
+            let measured = axis.measured_cores();
+            if measured.is_empty() {
+                branches.push(window(0));
+            } else {
+                let list = core_list(&measured);
+                branches.push(format!(
+                    "({alias}.core_uid NOT IN ({list}) AND {})",
+                    window(0)
+                ));
+            }
+        } else {
+            for (offset, cores) in axis.groups(&self.cores, self.to) {
+                let list = core_list(&cores);
+                branches.push(format!(
+                    "({alias}.core_uid IN ({list}) AND {})",
+                    window(offset)
+                ));
+            }
+        }
+        let window = match branches.len() {
+            0 => window(0),
+            1 => branches.remove(0),
+            _ => format!("({})", branches.join(" OR ")),
+        };
+        // `closedate > 0` is a row-STATE test, not an instant: a zero or negative value means the
+        // trade never closed. It stays on the raw column on both sides of every offset group.
+        format!("{window} AND {column} > 0")
+    }
+
     /// Returns:
     ///     One complete predicate per disjoint raw-strategy branch.
     pub(super) fn where_branches(
@@ -448,15 +594,19 @@ fn quote_breakdown_attempt(
     // is publishable only while the derived cache is attached.
     let valuation_present =
         q.valuation == super::super::valuation::ValuationMode::Current || include_valuation;
+    // Hoisted above the loop for the same reason the mask is: every source in this pass must be
+    // narrowed on ONE axis, and re-resolving per source would put two chances to differ where
+    // there is currently one value.
+    let axis = q.resolved_axis_sql(conn)?;
+    let period = q.period_predicate_on(&axis, "r");
     for src in sources {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue;
         }
         let sid = effective_sid_expr("r", &src.cols, has_names);
         let attribution = liquidation_attribution_available(&src.cols, has_names);
-        let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
         let where_branches =
-            q.where_branches(period, &src.cols, &sid, Some("r"), attribution, &mask);
+            q.where_branches(&period, &src.cols, &sid, Some("r"), attribution, &mask);
         let (quote, group_by) = super::super::quote::trusted_quote_group("r", &src.cols);
         let source = super::super::report_read::source_partition(src);
         let valuation = super::super::valuation::projection(
@@ -792,9 +942,10 @@ pub(in crate::db) fn unified_from_mode(
             .as_ref()
             .map(|parts| parts.joins.as_str())
             .unwrap_or("");
-        let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
+        let axis = q.resolved_axis(conn)?;
+        let period = q.period_predicate_on(&axis, "r");
         for mut where_sql in
-            q.where_branches(period, &src.cols, &sid, Some("r"), attribution, &mask)
+            q.where_branches(&period, &src.cols, &sid, Some("r"), attribution, &mask)
         {
             if pct {
                 where_sql.push_str(" AND r.spentbtc > 0");

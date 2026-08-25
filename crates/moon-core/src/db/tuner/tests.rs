@@ -168,7 +168,20 @@ fn one_ordered_variant_statement_matches_independent_variant_scans() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
-    assert_eq!(statements.len(), 1, "variant statements: {statements:#?}");
+    // `resolved_axis` now issues its own cheap `core_time_offset` existence probe ahead of the
+    // variant scan (the time-axis seam every tuner read now funnels through). That probe is
+    // orthogonal to the claim this test defends -- it names no variant and scans no trade row --
+    // so it is filtered out before checking that the trade-scanning work itself still collapses
+    // into exactly ONE statement rather than one per variant.
+    let scan_statements: Vec<&String> = statements
+        .iter()
+        .filter(|sql| !sql.contains("sqlite_master"))
+        .collect();
+    assert_eq!(
+        scan_statements.len(),
+        1,
+        "variant scan statements: {scan_statements:#?} (all traced: {statements:#?})"
+    );
     let expected = vec![
         VarStats {
             n: 4,
@@ -392,50 +405,132 @@ fn variant_time_window_predicate() {
     assert!(w.contains("BETWEEN 1 AND 1430"));
 }
 
-/// Removing the query-zone UDF from `Variant::where_sql` would evaluate this 09:00 Warsaw
-/// schedule as 08:00 UTC and drop the trade the user sees inside the window.
+/// The tuner's schedule axis (`Variant::tod`, `week_span`, and the `WorkingTime`/`WorkingWeekTime`
+/// profile MoonBot reads back and applies on its own clock) is the CORE's own local time, never
+/// the user's display zone and never corrected by a core's adopted offset -- MoonBot would
+/// otherwise apply the schedule at a different hour than the trades the user built it from.
+/// Reverting either `mt_core_minute_of_day`/`mt_core_minute_of_week` call in `db/tuner/mod.rs`
+/// back to the zone-and-offset-aware `mt_minute_of_day`/`mt_minute_of_week`, or giving
+/// `mt_core_minute_of_day` a zone argument other than UTC in `db/analytics/time_zone.rs`, makes
+/// the schedule drift with the display zone or the offset and reddens the assertions below.
 #[test]
-fn time_variant_uses_the_selected_zone_for_open_time() {
+fn the_tuner_schedule_stays_on_the_cores_own_clock() {
     let conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
         "CREATE TABLE trades(
             closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, core_uid INTEGER
          );
-         INSERT INTO trades VALUES (1767258000, 1767256200, 5.0, 10.0, 1);",
+         -- 2026-01-01 09:30:00, Thursday, on the core's own clock.
+         INSERT INTO trades VALUES (1_767_259_900, 1_767_259_800, 5.0, 10.0, 1);",
     )
     .expect("seed trade");
     let source = "(SELECT closedate, buydate, pnl, spentbtc, core_uid FROM trades
                    WHERE closedate >= ?1 AND closedate < ?2) o";
-    let query = Query {
-        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
-        from: 1_767_200_000,
-        to: 1_767_300_000,
-        ..Default::default()
-    };
+
+    // Both axes the tuner writes back: a `tod` window over the day, and a `week_span` over the
+    // week -- both must keep matching regardless of display zone or adopted offset, since both
+    // read the core-local value untouched.
     let variants = [
         Variant::default(),
         Variant {
             tod: Some(TimeWindow::Day(9 * 60, 10 * 60)),
             ..Default::default()
         },
+        Variant {
+            week_span: Some((3 * 1440, 3 * 1440 + 1439)), // Thursday, whole day.
+            ..Default::default()
+        },
     ];
 
-    let stats = variant_stats_from_source(&conn, &query, source, &variants)
-        .expect("selected-zone variant evaluates");
+    let run = |axis: crate::db::ReportAxis| -> (i64, i64, i64, Vec<(i64, i64)>) {
+        let query = Query {
+            axis,
+            from: 1_767_200_000,
+            to: 1_767_300_000,
+            ..Default::default()
+        };
+        let stats = variant_stats_from_source(&conn, &query, source, &variants)
+            .expect("schedule variant evaluates");
+        let mut civil_rows = Vec::new();
+        visit_time_rows(
+            &conn,
+            &query,
+            source,
+            "test: core-local schedule",
+            |weekday, minute, _profit| civil_rows.push((weekday, minute)),
+        )
+        .expect("schedule profile evaluates");
+        (stats[0].n, stats[1].n, stats[2].n, civil_rows)
+    };
 
-    assert_eq!(stats[0].n, 1, "fact sees the seeded trade");
-    assert_eq!(stats[1].n, 1, "Warsaw 09:30 stays inside 09:00-10:00");
+    // Baseline: Warsaw display zone, no measured offset for the core.
+    let warsaw = run(crate::db::ReportAxis::from_measured(
+        Default::default(),
+        chrono_tz::Europe::Warsaw,
+    ));
+    assert_eq!(warsaw.0, 1, "fact sees the seeded trade");
+    assert_eq!(
+        warsaw.1, 1,
+        "core-local 09:30 stays inside the tod 09:00-10:00 window"
+    );
+    assert_eq!(
+        warsaw.2, 1,
+        "core-local 09:30 stays inside the Thursday week_span"
+    );
+    assert_eq!(
+        warsaw.3,
+        vec![(3, 570)],
+        "Thursday 09:30 on the core's own clock"
+    );
 
-    let mut civil_rows = Vec::new();
-    visit_time_rows(
-        &conn,
-        &query,
-        source,
-        "test: selected-zone time profile",
-        |weekday, minute, _profit| civil_rows.push((weekday, minute)),
-    )
-    .expect("selected-zone profile evaluates");
-    assert_eq!(civil_rows, vec![(3, 570)], "Thursday 09:30 in Warsaw");
+    // Same query, UTC display zone instead of Warsaw: the schedule must not move.
+    let utc = run(crate::db::ReportAxis::from_measured(
+        Default::default(),
+        chrono_tz::UTC,
+    ));
+    assert_eq!(
+        utc.0, warsaw.0,
+        "fact count must not depend on the display zone"
+    );
+    assert_eq!(
+        utc.1, warsaw.1,
+        "tod match must not depend on the display zone"
+    );
+    assert_eq!(
+        utc.2, warsaw.2,
+        "week_span match must not depend on the display zone"
+    );
+    assert_eq!(
+        utc.3, warsaw.3,
+        "the tuner's schedule must not move when the display zone changes"
+    );
+
+    // Same query and the same Warsaw display zone, but the core now has a REAL measured offset
+    // adopted -- the schedule must not move either, because a stored value is already core-local
+    // and its civil minute-of-day/week is read as-is.
+    crate::db::rep::core_offset::ensure_table(&conn).expect("offset table");
+    crate::db::rep::core_offset::store_segment(&conn, 1, 0, 7_200, 0, "test")
+        .expect("adopt a real offset for core 1");
+    let offset = run(crate::db::ReportAxis::from_measured(
+        Default::default(),
+        chrono_tz::Europe::Warsaw,
+    ));
+    assert_eq!(
+        offset.0, warsaw.0,
+        "fact count must not depend on an adopted offset"
+    );
+    assert_eq!(
+        offset.1, warsaw.1,
+        "tod match must not depend on an adopted offset"
+    );
+    assert_eq!(
+        offset.2, warsaw.2,
+        "week_span match must not depend on an adopted offset"
+    );
+    assert_eq!(
+        offset.3, warsaw.3,
+        "the tuner's schedule must not move when a core's offset is adopted"
+    );
 }
 
 #[test]

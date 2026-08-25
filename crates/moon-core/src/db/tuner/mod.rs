@@ -476,11 +476,12 @@ fn visit_time_rows(
     ctx: &'static str,
     mut visit: impl FnMut(i64, i64, f64),
 ) -> ReadResult<()> {
-    super::analytics::time_zone::install(conn, &q.axis)
+    let axis = q.resolved_axis(conn)?;
+    super::analytics::time_zone::install(conn, &axis)
         .map_err(|e| read_fail_on(conn, ctx, e))?;
     let sql = format!(
-        "SELECT mt_minute_of_week({OPEN_TS}, o.core_uid) / 1440 AS wd,
-                mt_minute_of_day({OPEN_TS}, o.core_uid) AS mn,
+        "SELECT mt_core_minute_of_week({OPEN_TS}) / 1440 AS wd,
+                mt_core_minute_of_day({OPEN_TS}) AS mn,
                 COALESCE(o.pnl, 0)
          FROM {src}"
     );
@@ -549,7 +550,8 @@ fn variant_stats_from_source(
     if variants.is_empty() {
         return Ok(Vec::new());
     }
-    super::analytics::time_zone::install(conn, &q.axis)
+    let axis = q.resolved_axis(conn)?;
+    super::analytics::time_zone::install(conn, &axis)
         .map_err(|e| read_fail_on(conn, CTX, e))?;
     let sql = variant_stats_sql(src, variants);
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -593,10 +595,10 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
     let needs_day = variants.iter().any(|variant| variant.tod.is_some());
     let mut projections = Vec::new();
     if needs_week {
-        projections.push(format!("mt_minute_of_week({OPEN_TS}, o.core_uid) AS __mt_week"));
+        projections.push(format!("mt_core_minute_of_week({OPEN_TS}) AS __mt_week"));
     }
     if needs_day {
-        projections.push(format!("mt_minute_of_day({OPEN_TS}, o.core_uid) AS __mt_day"));
+        projections.push(format!("mt_core_minute_of_day({OPEN_TS}) AS __mt_day"));
     }
     let (prefix, source) = if projections.is_empty() {
         (String::new(), src.to_string())

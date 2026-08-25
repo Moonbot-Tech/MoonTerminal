@@ -781,6 +781,34 @@ fn apply_msg(
             valuation::stage_delete(conn, valuation::TradeSource::Typed, *core_uid, *rec_id)?;
             Ok(ApplyEffect::immediate(false))
         }
+        DbMsg::CoreTimeOffset {
+            core_uid,
+            offset_secs,
+            observed_at_utc,
+            source,
+        } => {
+            rep::core_offset::ensure_table(conn)?;
+            // The segment STARTS at the observation, in seconds: everything the axis compares
+            // against it is a Unix second, and the earliest segment of a core reaches backward
+            // without bound anyway, so history before the first measurement is corrected too.
+            rep::core_offset::store_segment(
+                conn,
+                *core_uid,
+                observed_at_utc.div_euclid(1_000),
+                *offset_secs,
+                *observed_at_utc,
+                source,
+            )?;
+            bump_axis_generation(conn)?;
+            // The valuation cache is keyed on the RAW `closedate` and on `ALGORITHM_VERSION`,
+            // neither of which moves when an offset is adopted, so nothing in `coverage_sql` can
+            // notice on its own — already-valued rows would keep publishing a rate minute derived
+            // from the uncorrected axis forever. Staging a rescan of THIS core is the narrow
+            // lever: bumping the global algorithm version instead would re-value every honest
+            // UTC core in the fleet for a measurement that says nothing about them.
+            valuation::stage_rescan_core(conn, *core_uid)?;
+            Ok(ApplyEffect::immediate(true))
+        }
         DbMsg::SetDeleted { core_uid, change } => {
             rep::apply_set_deleted(conn, rep_state, *core_uid, change)?;
             Ok(ApplyEffect::immediate(false))
@@ -1012,6 +1040,31 @@ fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
         rusqlite::params![key, value],
     )?;
     Ok(())
+}
+
+/// `app_meta` key holding the time-axis generation counter.
+pub(crate) const AXIS_GENERATION_KEY: &str = "axis_gen";
+
+/// Advance the time-axis generation counter.
+///
+/// A single integer, and deliberately the ONLY thing `app_meta` carries about the axis: the
+/// segments themselves live in their own normalized table, because packing an append-only list
+/// into a scalar store means a hand-rolled parser, a cap policy and malformed-value recovery
+/// inside something whose whole contract is "one value". What a counter IS good for is exactly
+/// this — a cache anywhere in the process can hold the generation it computed under and compare.
+///
+/// A missing or unparseable value restarts at 1 rather than failing. The counter's only use is
+/// INEQUALITY, so a reset makes every cache recompute once, which is the safe direction; refusing
+/// to write would instead leave caches believing they were current.
+///
+/// Args:
+///     conn: Open writer connection, already inside the caller's transaction.
+///
+/// Returns:
+///     Nothing; the stored counter advances by one.
+pub(crate) fn bump_axis_generation(conn: &Connection) -> rusqlite::Result<()> {
+    let next = meta_get_i64(conn, AXIS_GENERATION_KEY).unwrap_or(0).wrapping_add(1);
+    meta_set(conn, AXIS_GENERATION_KEY, &next.to_string())
 }
 
 /// Read one `app_meta` value as an integer, returning `None` when lookup or parsing fails.

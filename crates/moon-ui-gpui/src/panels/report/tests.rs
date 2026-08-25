@@ -10,48 +10,39 @@ use super::{
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
 use moon_core::config::WorkspaceMode;
-use moon_core::db::{MAX_OFFSET_SECS, RowScope};
+use moon_core::db::RowScope;
 
 /// `mod.rs::row_scope_for` -- replacing its `closed_only || !show_open` guard with `&&`, dropping
 /// the `!`, or swapping its branch arms makes the Report table, totals, and CSV include active
-/// positions when a host or user explicitly excluded them.
+/// positions when a host or user explicitly excluded them, or defer a verdict the host/user
+/// predicates had already settled instead of handing it down to `db::append_row_scope`.
 ///
-/// The expected scopes come from the independent host/user precedence contract and the public
-/// period-bound rule: only an unexcluded period ending more than the widest real time-zone offset
-/// before `now` omits active rows.
+/// `row_scope_for` no longer resolves the period question at all -- that decision moved to
+/// `db::report_read::append_row_scope`, which resolves it per offset group. This test therefore
+/// pins only the PRECEDENCE this function still owns: a host's `closed_only` wins outright, then
+/// the user's `show_open` switch, and only when neither excluded active positions does the
+/// function hand down the still-undecided intent.
 #[test]
-fn row_scope_precedence_excludes_active_positions_before_consulting_the_period() {
-    const NOW: i64 = 1_000;
-
+fn row_scope_precedence_excludes_active_positions_before_deferring_to_the_period() {
     assert_eq!(
-        row_scope_for(true, true, None, NOW),
+        row_scope_for(true, true),
         RowScope::Closed,
-        "a host-owned closed-only scope must win even for an unbounded period"
+        "a host-owned closed-only scope must win even when the user's switch admits open rows"
     );
     assert_eq!(
-        row_scope_for(false, false, Some(NOW), NOW),
+        row_scope_for(true, false),
         RowScope::Closed,
-        "turning off active positions must win even when the period reaches now"
+        "a host-owned closed-only scope must win regardless of the user's switch"
     );
     assert_eq!(
-        row_scope_for(false, true, None, NOW),
-        RowScope::ClosedAndOpen,
-        "an unbounded period must include active positions after both exclusions are clear"
-    );
-    assert_eq!(
-        row_scope_for(false, true, Some(NOW), NOW),
-        RowScope::ClosedAndOpen,
-        "a bound at now still reaches the present"
-    );
-    assert_eq!(
-        row_scope_for(false, true, Some(NOW - i64::from(MAX_OFFSET_SECS) - 1), NOW),
+        row_scope_for(false, false),
         RowScope::Closed,
-        "a period demonstrably older than the clock-offset uncertainty delegates to closed history"
+        "turning off active positions must win when the host has not already excluded them"
     );
     assert_eq!(
-        row_scope_for(false, true, Some(NOW - i64::from(MAX_OFFSET_SECS)), NOW),
-        RowScope::ClosedAndOpen,
-        "a period ending within the clock-offset uncertainty must still include active positions"
+        row_scope_for(false, true),
+        RowScope::ClosedAndOpenIfCurrent,
+        "with neither exclusion set, the period question must be deferred to per-offset resolution"
     );
 }
 

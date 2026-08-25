@@ -253,6 +253,13 @@ pub struct AnalyticsView {
     backend: Entity<Backend>,
     /// User-selected zone applied to all civil Analytics periods and timestamps.
     display_zone: chrono_tz::Tz,
+    /// The measured time axis this window reads replicated timestamps on, cached.
+    ///
+    /// This window is ONE gpui entity with none of the shell's repaint throttles, so any work in
+    /// its render root runs on every notify. Rebuilding the axis there would walk the whole core
+    /// list per frame for a value that moves only when a core adopts an offset or the zone
+    /// changes — both of which write this field directly.
+    axis: ReportAxis,
     /// Whether custom-period pickers need redisplay after a zone identity change.
     display_zone_fields_dirty: bool,
     /// Report-writer generation observed only while this window exists.
@@ -533,11 +540,11 @@ impl AnalyticsView {
 
     /// The time axis every replicated report timestamp in this window is read through.
     ///
-    /// Phase 1 answers with the identity axis: a replicated `closedate` carries the CORE's own wall
-    /// clock, so it is displayed as stored, which reproduces MoonBot's own report. This is the ONE
-    /// place that changes when per-core offsets start being measured.
+    /// Answers from the CACHED axis rather than rebuilding one per call. A core with no
+    /// measurement contributes no segment and therefore still reads exactly as stored, which is
+    /// what reproduces MoonBot's own report for an unmeasured fleet.
     fn report_axis(&self) -> ReportAxis {
-        ReportAxis::identity_core_local()
+        self.axis.clone()
     }
 
     /// The zone a period BOUND and a calendar window resolve in.
@@ -619,6 +626,9 @@ impl AnalyticsView {
             // here is what used to slide the selected day sideways and change which trades the
             // period held. `rezone_day` returns once the axis carries the display zone itself.
             this.display_zone = zone;
+            // The axis carries the zone beside the offsets, so it is stale even though nothing
+            // new was measured.
+            this.axis = this.backend.read(cx).report_axis(zone);
             this.coin_lists.invalidate_display_time();
             this.cal_dirty = true;
             this.reload(cx);
@@ -793,9 +803,13 @@ impl AnalyticsView {
             }));
         }
         let saved_valuation_mode = backend.read(cx).valuation_mode();
+        // Seeded so a window opened on a fleet measured in an earlier session renders corrected
+        // times on its first paint, not on the first backend wake after it.
+        let seeded_axis = backend.read(cx).report_axis(display_zone);
         let mut this = Self {
             backend,
             display_zone,
+            axis: seeded_axis,
             display_zone_fields_dirty: false,
             report_generation,
             valuation_generation,
@@ -946,6 +960,26 @@ impl AnalyticsView {
         cx.notify();
     }
 
+    /// Adopt a newly measured core offset, reloading every surface that was computed on the old
+    /// one.
+    ///
+    /// Polled beside the valuation health rather than pushed, following this window's own idiom.
+    /// Unlike health, an adoption DOES change rows — every date bucket, every calendar cell and
+    /// every period bound moves — so it reloads rather than merely repainting.
+    ///
+    /// Args:
+    ///     cx: Analytics window context, reloaded only when the axis actually moved.
+    fn observe_report_axis(&mut self, cx: &mut Context<Self>) {
+        let axis = self.backend.read(cx).report_axis(self.display_zone);
+        if axis == self.axis {
+            return;
+        }
+        self.axis = axis;
+        self.cal_dirty = true;
+        self.reload(cx);
+        cx.notify();
+    }
+
     /// Adopt a valuation mode saved in Settings, and reload if it moved.
     ///
     /// The mode is application-wide and is edited nowhere in this window, so it can change under
@@ -974,6 +1008,7 @@ impl AnalyticsView {
     ///     cx: GPUI context used to schedule or start the refresh.
     fn observe_report_generation(&mut self, cx: &mut Context<Self>) {
         self.observe_valuation_health(cx);
+        self.observe_report_axis(cx);
         self.observe_valuation_mode(cx);
         let generation = self.current_report_generation();
         if !self

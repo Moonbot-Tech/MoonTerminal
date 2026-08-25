@@ -32,6 +32,21 @@ pub(crate) fn install(conn: &Connection, axis: &ReportAxis) -> rusqlite::Result<
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
     let zone = axis.zone();
 
+    // Correction ALONE, with no bucketing and no zone: the one thing a caller needs when it must
+    // ORDER rows that came from cores on different clocks. Sorting on the raw column puts a trade
+    // from a core running behind UTC after one that happened later on a core running ahead, and
+    // every sequence metric downstream — streaks, maximum drawdown — is defined over that order.
+    //
+    // Used in an `ORDER BY` rather than a `WHERE`, deliberately: a sort over a UNION source cannot
+    // use an index anyway, so this costs one call per row and no extra pass, whereas the same
+    // expression in a predicate would be the index-defeating wrap the whole design avoids.
+    let order_axis = axis.clone();
+    conn.create_scalar_function("mt_to_utc", 2, flags, move |ctx| {
+        let secs = ctx.get::<i64>(0)?;
+        let core_uid = core_of(ctx, 1)?;
+        Ok(order_axis.to_utc(secs, core_uid))
+    })?;
+
     let bucket_axis = axis.clone();
     conn.create_scalar_function("mt_local_bucket", 3, flags, move |ctx| {
         let secs = ctx.get::<i64>(0)?;
@@ -55,6 +70,27 @@ pub(crate) fn install(conn: &Connection, axis: &ReportAxis) -> rusqlite::Result<
         let core_uid = core_of(ctx, 1)?;
         let utc = week_axis.to_utc(secs, core_uid);
         Ok(crate::util::display_time::minute_of_week(utc, zone).unwrap_or(0) as i64)
+    })?;
+
+    // The tuner's two, which take NO axis and NO zone on purpose.
+    //
+    // `db/tuner`'s minute-of-day and minute-of-week feed `tuner::time::format_working_time` /
+    // `format_week_span`, whose output is WRITTEN BACK to MoonBot as `WorkingTime` /
+    // `WorkingWeekTime` — and MoonBot interprets those in the CORE's own local time. So this one
+    // axis stays core-local permanently: converting to UTC and rendering in the user's zone would
+    // suggest a schedule in one time zone and have it applied in another, which is a wrong trading
+    // window rather than a wrong label.
+    //
+    // A stored value is already core-local, so its civil minute-of-day is simply that value read
+    // in UTC — no conversion at all, which is what makes this correct by construction rather than
+    // by two conversions cancelling.
+    conn.create_scalar_function("mt_core_minute_of_day", 1, flags, move |ctx| {
+        let secs = ctx.get::<i64>(0)?;
+        Ok(crate::util::display_time::minute_of_day(secs, chrono_tz::UTC).unwrap_or(0) as i64)
+    })?;
+    conn.create_scalar_function("mt_core_minute_of_week", 1, flags, move |ctx| {
+        let secs = ctx.get::<i64>(0)?;
+        Ok(crate::util::display_time::minute_of_week(secs, chrono_tz::UTC).unwrap_or(0) as i64)
     })?;
 
     Ok(())

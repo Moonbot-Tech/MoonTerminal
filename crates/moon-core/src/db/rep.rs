@@ -27,6 +27,8 @@ use moonproto::{
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
+pub(crate) mod core_offset;
+
 #[cfg(test)]
 mod tests;
 
@@ -81,6 +83,22 @@ pub enum DbMsg {
     Delete {
         core_uid: u64,
         rec_id: i64,
+    },
+    /// One core's clock offset was measured and must become durable.
+    ///
+    /// Everything this adoption implies happens in ONE writer transaction, because the three
+    /// facts are one fact: the segment lands in `core_time_offset`, the `axis_gen` counter moves
+    /// so every cache keyed on the axis knows it is stale, and this core's already-valued rows are
+    /// staged for re-reconciliation. Committing the segment without the invalidation would leave
+    /// the report reading a NEW axis while the money beside it was still converted on the old one.
+    CoreTimeOffset {
+        core_uid: u64,
+        /// Seconds east of UTC on the core's own clock.
+        offset_secs: i32,
+        /// True-UTC instant of the observation that adopted it, in milliseconds.
+        observed_at_utc: i64,
+        /// Which measurement produced it, stored verbatim for diagnosis.
+        source: String,
     },
     /// Bulk soft-delete or restore broadcast by the core: set the `deleted` flag on every
     /// replica row of this core whose `newrecid` is in one of the ranges or the singles.

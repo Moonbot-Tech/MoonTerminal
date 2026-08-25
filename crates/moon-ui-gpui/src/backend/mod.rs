@@ -1789,6 +1789,49 @@ impl Backend {
         self.config.report_valuation_mode
     }
 
+    /// The time axis every replicated report timestamp is DISPLAYED on.
+    ///
+    /// Built from the retained per-core snapshots rather than by reading `reports.sqlite`, because
+    /// this is called while rendering: a database read per frame would put a file-system round trip
+    /// inside the paint path, and the numbers it would return are already in memory — the writer
+    /// publishes `FeedMsg::TimeOffset` only AFTER its transaction commits, so a core whose snapshot
+    /// carries an offset is a core whose segment is already durable.
+    ///
+    /// This axis carries ONE segment per core, the one in force. The read paths load the full
+    /// segment history from the table inside their own pinned snapshot; they need it because they
+    /// convert instants across all of history, while a panel only ever renders what is current.
+    /// The two therefore agree on exactly the thing they share, which is the CURRENT offset.
+    ///
+    /// A core with no measurement contributes no segment, so it converts as the identity — the
+    /// same answer the uncorrected terminal gave, which is the only assumption that cannot make an
+    /// honest UTC core worse.
+    ///
+    /// Args:
+    ///     zone: The user's selected display zone.
+    ///
+    /// Returns:
+    ///     The axis to render and to build period bounds on.
+    pub(crate) fn report_axis(&self, zone: chrono_tz::Tz) -> moon_core::db::ReportAxis {
+        let store = self.session.store();
+        let measured = self
+            .config
+            .servers
+            .iter()
+            .filter_map(|server| {
+                let core = store.core(server.id)?;
+                let offset_secs = core.time_offset.offset_secs?;
+                Some((
+                    server.uid,
+                    vec![moon_core::db::OffsetSegment {
+                        from_utc: core.time_offset.observed_at_utc.div_euclid(1_000),
+                        offset_secs,
+                    }],
+                ))
+            })
+            .collect();
+        moon_core::db::ReportAxis::from_measured(measured, zone)
+    }
+
     /// Activate the valuation mode a Settings save just committed.
     ///
     /// The value itself is already in `config`, written by the save. Two things do not follow from
