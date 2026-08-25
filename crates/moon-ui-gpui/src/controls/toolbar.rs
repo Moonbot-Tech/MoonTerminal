@@ -478,6 +478,7 @@ pub fn toolbar(
     let manual_core = effective_manual_strategy_core(backend, group, cx);
     let (
         follow,
+        overview,
         focus_core,
         size_values,
         size_sel,
@@ -491,9 +492,20 @@ pub fn toolbar(
         manual_on,
     ) = {
         let b = backend.read(cx);
-        // Group-local size and exit controls do not move with this selection. Only leverage and
-        // manual strategy read the active trade core.
-        let focus_core = b.active_trade_core(group);
+        // Whether the header scope names one account at all. Read ONCE here so the leverage
+        // button, the max-order readout and this row's own core cannot reach three different
+        // conclusions about the same scope; the leverage ADDRESS is gated one level down, in
+        // `TradeMetric`, so `Shell`'s open-popup guard shares the decision rather than copying it.
+        let overview = b.is_auto_overview_scope(group);
+        // Group-local size and exit controls do not move with this selection. Leverage reads a
+        // core only when the visible scope names one; manual strategy still uses the active trade
+        // core. In Overview, `active_trade_core` would answer with the group's first core and the
+        // row would present that server's leverage as the group's.
+        let focus_core = if overview {
+            None
+        } else {
+            b.active_trade_core(group)
+        };
         let (size_values, size_sel) = b.manual_order_size_state(group);
         let exit = b.group_exit_settings(group);
         // The TP button always shows its own `take_profit_pct`, even while an S slot is engaged;
@@ -520,6 +532,7 @@ pub fn toolbar(
             .unwrap_or(false);
         (
             b.follow,
+            overview,
             focus_core,
             size_values,
             size_sel,
@@ -562,6 +575,16 @@ pub fn toolbar(
     // open a popup to see is a cap you check after sizing rather than before. Compact here, exact in
     // the popover — one value from one read, at two precisions.
     let max_order_caption = t!("toolbar.max_order_short").to_string();
+    // A cap is one exchange account's rule. `Shell` resolved this readout through
+    // `TradeMetric::Lev.target`, which already answers `None` in Overview — but `None` there means
+    // `NoData`, whose hover text says the limits have not loaded yet. That is a false explanation
+    // for a dash the scope caused, so the state is named explicitly instead: value and tooltip then
+    // come from ONE value and cannot disagree about why the figure is absent.
+    let max_order = if overview {
+        MaxOrderReadout::OutOfScope
+    } else {
+        max_order
+    };
     let max_order_value = max_order.format_compact(fmt::compact_si, quote);
     let max_order_tip = t!(max_order.tooltip_key()).to_string();
     let analytics_label = t!("toolbar.analytics").to_string();

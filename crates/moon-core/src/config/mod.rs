@@ -114,14 +114,92 @@ pub struct PresentationPrefs {
     pub language: Language,
 }
 
+/// Whether this profile has ever been configured, decided from the FILES on disk.
+///
+/// The ONE provenance fact behind every first-run default. It exists because the alternatives all
+/// disagree with each other: an absent `ui_theme_mode` field, an empty `WindowLayout::groups` map
+/// and an unconfigured core each look like a first run from where they sit, while describing an
+/// established profile that merely never touched that particular setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileAge {
+    /// No file of a configured profile exists: nothing has ever been saved here.
+    FirstRun,
+    /// At least one file of a configured profile exists, however incomplete the set.
+    Established,
+}
+
+/// Decided ONCE per process and cached, because startup itself creates files.
+///
+/// `ChartThemeSet::load` writes `theme.toml` the moment it finds none, and later steps save
+/// settings and layout, so a profile that was demonstrably fresh at launch stops looking fresh
+/// part-way through startup. Re-deriving this at each default's own call site would therefore give
+/// different answers depending on call order — which is exactly the class of bug this fact removes.
+static PROFILE_AGE: std::sync::OnceLock<ProfileAge> = std::sync::OnceLock::new();
+
+/// Report whether this profile is brand new, from the state of the disk at the FIRST call.
+///
+/// Deliberately checks a file SET rather than any single file, and BOTH sides of the installation.
+/// The `cfg/` side alone is not enough: `settings.toml` can be absent beside a live `servers.enc`
+/// after a partial restore, `layout.toml` can be absent for a user who never moved a window, and a
+/// profile can lose its whole configuration while its REPORTS, STRATEGY HISTORY, chart specs and
+/// figures survive. None of those is a first run, and treating one as such would re-theme,
+/// re-lay-out or re-place the window of somebody who has been here for months. The durable stores
+/// are the same authorities `observed_uid_floor` already trusts to recover the uid high-water mark,
+/// so this asks exactly the question the brief asks: is there NEITHER `cfg/` NOR `data/` state here.
+///
+/// Runs both path migrations first. They only MOVE existing files and are documented idempotent, so
+/// this costs a handful of `exists` checks, but without them a profile whose files still sit at the
+/// pre-`cfg/` flat paths would read as brand new.
+///
+/// Deliberately NOT checked: `theme.toml`, which `ChartThemeSet::load` CREATES on a first run before
+/// anything else could observe it, and the kline cache, which is market data rather than evidence of
+/// a user.
+///
+/// # Call order
+///
+/// The answer is memoized, so the FIRST call decides it for the process, and that call must happen
+/// before anything can write one of the files above. Production has exactly one call site that can
+/// be first — `WindowLayout::load(profile_age())` in `startup.rs`, which runs strictly before
+/// `unlock::start` reaches `AppConfig::load`. Nothing enforces that at runtime, so the invariant is
+/// kept structurally instead: every consumer of this fact takes `ProfileAge` as a PARAMETER
+/// (`resolve_ui_theme_mode`, `first_run_workspace_mode`, `WindowLayout::load`), which is what lets
+/// a test exercise any of them without touching this function and without one test's timing
+/// deciding the answer for its siblings in the same process.
+///
+/// Returns:
+///     [`ProfileAge::FirstRun`] only when every one of those files is absent.
+pub fn profile_age() -> ProfileAge {
+    *PROFILE_AGE.get_or_init(|| {
+        paths::migrate_bundle_data();
+        paths::migrate_flat_to_cfg();
+        let established = paths::settings_path().exists()
+            || paths::servers_path().exists()
+            || paths::layout_path().exists()
+            || paths::legacy_enc_path().exists()
+            || paths::legacy_toml_path().exists()
+            // Durable state that OUTLIVES the configuration: a profile carrying any of it has been
+            // used before, whatever happened to its `cfg/` files.
+            || paths::docks_path().exists()
+            || paths::charts_path().exists()
+            || paths::figures_path().exists()
+            || paths::reports_db_path().exists()
+            || paths::strategies_db_path().exists();
+        if established {
+            ProfileAge::Established
+        } else {
+            ProfileAge::FirstRun
+        }
+    })
+}
+
 /// Read interface preferences from `settings.toml`, falling back to defaults.
 ///
 /// Uses the same repair helpers as a full load, so a hand-edited `nan` cannot reach layout through
 /// this shorter path.
 pub fn presentation_prefs() -> PresentationPrefs {
-    let (settings, _) = store::read_settings();
+    let (settings, load) = store::read_settings();
     PresentationPrefs {
-        ui_theme_mode: settings.ui_theme_mode,
+        ui_theme_mode: schema::resolve_ui_theme_mode(settings.ui_theme_mode, load, profile_age()),
         ui_font_delta: schema::repair_ui_font_delta(settings.ui_font_delta),
         ui_scale: schema::repair_ui_scale(settings.ui_scale),
         language: settings.language,
@@ -479,7 +557,18 @@ impl AppConfig {
             log_to_file: true,
             log_retention_days: 14,
             ui_font_delta: schema::default_ui_font_delta(),
-            ui_theme_mode: UiThemeMode::default(),
+            // A brand-new profile opens LIGHT; anyone else keeps exactly what they had. Reaching
+            // this branch already proves `servers.enc` and both legacy configs are absent, but NOT
+            // that `settings.toml` and `layout.toml` are — so the shared fact is asked rather than
+            // assumed, and it answers from the disk as it was at launch rather than as startup has
+            // since left it. The chart palette needs nothing here: `ChartThemeSet::default()`
+            // already carries a complete `default_light()`, and `chart_theme()` selects it from
+            // this value alone.
+            ui_theme_mode: schema::resolve_ui_theme_mode(
+                meta.ui_theme_mode,
+                meta_load,
+                profile_age(),
+            ),
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),

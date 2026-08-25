@@ -351,8 +351,9 @@ impl EffectiveCoreScope {
     /// Return whether Auto owns a single selected core rather than Overview.
     ///
     /// Returns:
-    ///     `true` only for the explicit `AutoCore` scope kind. The number of resolved IDs is not
-    ///     used because Classic and Auto Overview can each legitimately contain one core.
+    ///     `true` only for the explicit `AutoCore` scope kind. This complements
+    ///     [`is_auto_overview_scope`]: both use selection provenance rather than the number of
+    ///     resolved IDs, because Classic and Auto Overview can each legitimately contain one core.
     pub(crate) fn is_auto_core(&self) -> bool {
         self.kind == EffectiveScopeKind::AutoCore
     }
@@ -375,13 +376,13 @@ impl EffectiveCoreScope {
 ///
 /// Args:
 ///     mode: Persisted workspace mode for the owning group.
-///     selected_core: Persisted Auto core, if any.
+///     selected_core: Persisted Auto core, if any; it is valid only when present in `group_cores`.
 ///     group_cores: Live group cores in canonical display order.
 ///     retained: Panel-owned Classic all/subset filter.
 ///
 /// Returns:
-///     Concrete valid IDs plus origin semantics. A stale Auto core resolves to Overview while its
-///     durable UID remains untouched in the layout.
+///     Concrete valid IDs plus origin semantics. A missing or stale Auto core resolves to Overview
+///     while its durable UID remains untouched in the layout.
 pub(crate) fn resolve_group_scope(
     mode: WorkspaceMode,
     selected_core: Option<CoreId>,
@@ -393,6 +394,10 @@ pub(crate) fn resolve_group_scope(
     let valid = group_cores.to_vec();
 
     if mode == WorkspaceMode::AutoTrading {
+        // The Auto branch below and [`is_auto_overview_scope`] state ONE rule in two places, and
+        // they must move together: this one filters the selection against `valid` itself, while
+        // the predicate is handed an already-valid selection. Change either and the header's
+        // hidden figures and this scope's own label can start disagreeing about the same group.
         if let Some(core) = selected_core.filter(|core| valid.contains(core)) {
             return EffectiveCoreScope {
                 kind: EffectiveScopeKind::AutoCore,
@@ -744,6 +749,43 @@ pub(crate) fn should_persist_normal_dock(mode: WorkspaceMode) -> bool {
 ///     `true` only when Classic owns the header/manual selection.
 pub(crate) fn should_remember_classic_trade_core(mode: WorkspaceMode) -> bool {
     mode == WorkspaceMode::Classic
+}
+
+/// Return whether the group's VISIBLE scope names NO single core — the Auto workspace Overview.
+///
+/// Kept in step with [`resolve_group_scope`]'s Auto branch by hand: that function answers the same
+/// question as a full [`EffectiveCoreScope`], which a chrome row cannot pay for on every repaint,
+/// so this is the cheap form of the identical rule and the two are edited together.
+///
+/// This is the honest counterpart to [`crate::Backend::active_trade_core`], which never answers
+/// `None` while the group has any live core: in Overview it falls through to the group's FIRST
+/// core, so a per-core figure read through it belongs to one arbitrary server while the header
+/// pill reads "Полная сводка". Chrome that prints money, leverage, or an exchange limit asks THIS
+/// first and prints its own unknown mark when the answer is `true`.
+///
+/// The mode conjunct cannot be dropped: [`crate::Backend::valid_auto_workspace_core`] reads the
+/// persisted Auto map regardless of the current mode, so it answers `None` for a Classic group
+/// that never had an Auto selection — and without the mode check that group would lose its
+/// balance too.
+///
+/// Classic is deliberately `false` even with several cores in the group: its header selector is an
+/// interactive control that NAMES the single core every trading control is addressed to, and that
+/// core was chosen by the user. The condition is scope-shaped, not cardinality-shaped, so an Auto
+/// group holding exactly one live core still reads Overview and still hides — the same rule
+/// [`EffectiveCoreScope::is_auto_core`] already states for itself.
+///
+/// Args:
+///     mode: Persisted workspace preset for the group.
+///     valid_selected_core: The group's VALID Auto selection — `Backend::valid_auto_workspace_core`,
+///         which is `None` for Overview and for a stale persisted reference.
+///
+/// Returns:
+///     `true` only for Auto Overview, where no single core owns the visible scope.
+pub(crate) fn is_auto_overview_scope(
+    mode: WorkspaceMode,
+    valid_selected_core: Option<CoreId>,
+) -> bool {
+    mode == WorkspaceMode::AutoTrading && valid_selected_core.is_none()
 }
 
 #[cfg(test)]

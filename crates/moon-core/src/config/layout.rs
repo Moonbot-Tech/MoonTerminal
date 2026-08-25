@@ -26,6 +26,105 @@ pub const AUTO_WORKSPACE_RAIL_WIDTH_MAX: f32 = 560.0;
 /// First-run Auto-workspace rail width in logical pixels.
 pub const AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT: f32 = 340.0;
 
+/// Share of a display's WORK AREA the very first window of a brand-new profile occupies.
+///
+/// Proportional rather than a pixel size on purpose: monitors differ, and any fixed number is
+/// somebody's monitor and nobody else's.
+pub const FIRST_RUN_WINDOW_FRACTION: f32 = 0.75;
+
+/// Decide the workspace preset a layout should be seeded with, if any.
+///
+/// Split out of [`WindowLayout::load`] so the decision is a pure function with a mutation-sensitive
+/// test rather than an inline branch reachable only by running startup against a real filesystem.
+///
+/// Auto is chosen for a brand-new profile because the rail gives a user with no cores something
+/// coherent to look at, where Classic opens onto an empty chart. It is a SEED and not an override:
+/// once written it is an ordinary stored value, and any group's own entry outranks it.
+///
+/// Args:
+///     age: Whether any file of a configured profile existed at launch.
+///     stored: The preset already in the layout, if the file carried one.
+///
+/// Returns:
+///     `Some` preset to write into the layout, or `None` to leave it exactly as loaded — which is
+///     the answer for every established profile, and for a first run that somehow already has one.
+pub fn first_run_workspace_mode(
+    age: super::ProfileAge,
+    stored: Option<WorkspaceMode>,
+) -> Option<WorkspaceMode> {
+    match (age, stored) {
+        (super::ProfileAge::FirstRun, None) => Some(WorkspaceMode::AutoTrading),
+        (super::ProfileAge::FirstRun, Some(_)) | (super::ProfileAge::Established, _) => None,
+    }
+}
+
+/// A screen rectangle in logical pixels, free of any windowing toolkit.
+///
+/// Deliberately plain `f32` rather than a GPUI `Bounds`: this crate has no `gpui` dependency at
+/// all, so the geometry below is unit-testable without a display, and the compiler — not
+/// discipline — is what keeps it that way.
+///
+/// The coordinate SPACE is whatever the caller's is. Platforms disagree (Windows reports global
+/// desktop coordinates while macOS reports every display relative to its own origin), and
+/// [`first_run_window_rect`] never mixes spaces because it derives its result solely from the
+/// rectangle it is handed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Place the first window of a brand-new profile: [`FIRST_RUN_WINDOW_FRACTION`] of the work area,
+/// centred on it.
+///
+/// The minimum is enforced HERE rather than left to the window's min-size hint, because that hint
+/// governs live resizing and does not clamp the initial bounds a window is created with.
+///
+/// Ordering note, and it is the only real trade-off in this function: the minimum is applied
+/// first and the work-area clamp SECOND, so on a display too small to hold the minimum the clamp
+/// WINS. A window wider than the screen puts its title bar and controls out of reach, which the
+/// user cannot recover from; a window narrower than the minimum is merely cramped, and the OS
+/// min-size hint re-grows it as soon as there is room.
+///
+/// Args:
+///     work: The display's work area — the monitor minus its taskbar or dock.
+///     min_w: Narrowest the window may be created.
+///     min_h: Shortest the window may be created.
+///
+/// Returns:
+///     A rectangle wholly inside the sanitized work area. A non-finite ORIGIN falls back to zero
+///     and non-finite or non-positive DIMENSIONS collapse to zero — the two are sanitized
+///     separately — so a display the platform could not describe yields a degenerate rectangle
+///     rather than a `NaN` origin, and never a window nothing can place.
+pub fn first_run_window_rect(work: ScreenRect, min_w: f32, min_h: f32) -> ScreenRect {
+    let sane = |v: f32| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+    let (work_w, work_h) = (sane(work.w), sane(work.h));
+    let (min_w, min_h) = (sane(min_w), sane(min_h));
+    let (x0, y0) = (
+        if work.x.is_finite() { work.x } else { 0.0 },
+        if work.y.is_finite() { work.y } else { 0.0 },
+    );
+
+    let w = (work_w * FIRST_RUN_WINDOW_FRACTION)
+        .round()
+        .max(min_w)
+        .min(work_w);
+    let h = (work_h * FIRST_RUN_WINDOW_FRACTION)
+        .round()
+        .max(min_h)
+        .min(work_h);
+
+    // The clamp is not redundant with the centring: rounding a half-pixel can push the far edge one
+    // pixel past the work area, and that pixel is the difference between a window that opens flush
+    // against the screen edge and one the compositor may reposition.
+    let x = (x0 + ((work_w - w) * 0.5).round()).clamp(x0, x0 + work_w - w);
+    let y = (y0 + ((work_h - h) * 0.5).round()).clamp(y0, y0 + work_h - h);
+
+    ScreenRect { x, y, w, h }
+}
+
 /// Persisted terminal workspace preset.
 ///
 /// The serialized codes are an external layout contract. Unknown or wrong-typed values fall back
@@ -446,6 +545,23 @@ pub struct WindowLayout {
     /// preferences cannot reject the surrounding layout or produce an unusable rail.
     #[serde(default, deserialize_with = "de_auto_workspace_rail_width")]
     pub auto_workspace_rail_width: Option<f32>,
+    /// Workspace preset for any group that has never chosen one, seeded once on a brand-new profile.
+    ///
+    /// `None` — every layout written before this field existed — resolves to
+    /// [`WorkspaceMode::Classic`], so an established user is untouched. It is a persisted scalar
+    /// rather than a flipped `#[default]` on the enum because that `Default` is also what serde
+    /// substitutes for an absent FIELD in a layout that DOES exist, and rather than pre-seeded
+    /// per-group entries because those would forge a preference the user never expressed and would
+    /// still miss any group created later.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub default_workspace_mode: Option<WorkspaceMode>,
+    /// Whether this layout came from a brand-new profile. RUNTIME ONLY, never serialized.
+    ///
+    /// Placement of the first window is a per-launch decision, not a stored preference, so it must
+    /// not appear in `layout.toml`. Skipping it also means every construction path other than
+    /// [`WindowLayout::load`] — `default()` included — gets the conservative answer, `false`.
+    #[serde(skip)]
+    first_run_profile: bool,
     /// Legacy egui detached-tab records; the live detached-window list uses `detached.json`.
     #[serde(default)]
     pub detached: Vec<DetachedLayout>,
@@ -1416,8 +1532,48 @@ impl WindowLayout {
     }
 
     /// Loads layout.toml. A missing file yields the default; a corrupt file is logged and yields the default.
-    pub fn load() -> Self {
-        super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {})
+    ///
+    /// Takes the profile's age rather than probing the filesystem for it, so the result stays a
+    /// pure function of (bytes, age) and the seeding decision below is reachable from a test. The
+    /// age must come from [`super::profile_age`], which reads the disk as it was at launch —
+    /// asking `layout_path().exists()` here instead would answer a subtly different question and
+    /// would disagree with the theme default that shares the same fact.
+    ///
+    /// Args:
+    ///     age: Whether any file of a configured profile existed at launch.
+    ///
+    /// Returns:
+    ///     The stored layout, with the first-run workspace preset seeded when there is one.
+    pub fn load(age: super::ProfileAge) -> Self {
+        let mut layout: Self =
+            super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {});
+        layout.first_run_profile = age == super::ProfileAge::FirstRun;
+        if let Some(mode) = first_run_workspace_mode(age, layout.default_workspace_mode) {
+            layout.default_workspace_mode = Some(mode);
+        }
+        layout
+    }
+
+    /// Whether the profile this layout was loaded for had never been configured.
+    ///
+    /// Consumed by first-window placement. Deliberately NOT derived from `groups.is_empty()`:
+    /// that map is persistence data written by the bounds observer long after a window opens, so
+    /// an established profile that simply never had geometry recorded would read as brand new.
+    ///
+    /// Returns:
+    ///     `true` only for a layout loaded on a first run.
+    pub fn is_first_run_profile(&self) -> bool {
+        self.first_run_profile
+    }
+
+    /// Effective workspace preset for a group that has no entry of its own.
+    ///
+    /// Returns:
+    ///     The stored layout-wide default, whatever put it there — the first-run seed, or a value
+    ///     an earlier launch persisted — and [`WorkspaceMode::Classic`] when none was stored,
+    ///     which is every layout written before that preset existed.
+    pub fn default_workspace_mode(&self) -> WorkspaceMode {
+        self.default_workspace_mode.unwrap_or_default()
     }
 
     /// Return the effective global Auto rail width for legacy and current layouts.

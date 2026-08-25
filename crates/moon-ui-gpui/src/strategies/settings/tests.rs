@@ -2,7 +2,7 @@
 
 use moon_core::config::layout::WindowLayout;
 
-use super::{ACTIVE_ONLY, POPUP_ROWS, PREF_ROWS, StrategiesPrefs};
+use super::{ACTIVE_ONLY, GROUP_BY_VENUE, POPUP_ROWS, PREF_ROWS, StrategiesPrefs};
 
 /// `POPUP_ROWS` is a hand-written subset of `PREF_ROWS`, so nothing in the type system stops it
 /// from listing a row that is edited elsewhere — which would give one preference two controls — or
@@ -40,10 +40,8 @@ fn absent_preferences_keep_the_shipped_tree_defaults() {
 /// single checkbox silently freeze both defaults for future launches.
 #[test]
 fn saved_preferences_restore_independently() {
-    let grouped_only = WindowLayout {
-        strategies_group_by_venue: Some(false),
-        ..WindowLayout::default()
-    };
+    let mut grouped_only = WindowLayout::default();
+    (GROUP_BY_VENUE.store)(&mut grouped_only, false);
     let restored = StrategiesPrefs::restore(&grouped_only);
     assert!(!restored.group_by_venue);
     assert!(
@@ -51,10 +49,8 @@ fn saved_preferences_restore_independently() {
         "the absent active-only key keeps its default"
     );
 
-    let active_only = WindowLayout {
-        strategies_active_only: Some(true),
-        ..WindowLayout::default()
-    };
+    let mut active_only = WindowLayout::default();
+    (ACTIVE_ONLY.store)(&mut active_only, true);
     let restored = StrategiesPrefs::restore(&active_only);
     assert!(
         restored.group_by_venue,
@@ -62,11 +58,9 @@ fn saved_preferences_restore_independently() {
     );
     assert!(restored.active_only);
 
-    let explicit = WindowLayout {
-        strategies_group_by_venue: Some(false),
-        strategies_active_only: Some(true),
-        ..WindowLayout::default()
-    };
+    let mut explicit = WindowLayout::default();
+    (GROUP_BY_VENUE.store)(&mut explicit, false);
+    (ACTIVE_ONLY.store)(&mut explicit, true);
     assert_eq!(
         StrategiesPrefs::restore(&explicit),
         StrategiesPrefs {

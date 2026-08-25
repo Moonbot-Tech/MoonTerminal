@@ -1,5 +1,6 @@
 //! Toolbar trading metrics (TP/SL/Lev): anchored popup triggers, the SL toggle, popup content, and
-//! target identities that keep group exits local while leverage stays bound to one core and market.
+//! target identities that keep group exits local while leverage, when the scope names one core,
+//! stays bound to that core and market.
 
 use gpui::*;
 use rust_i18n::t;
@@ -18,6 +19,29 @@ use super::{DASH, LEV_PRESETS, MaxOrderReadout, TP_FINE_MAX, lev_preset_availabl
 use crate::shell::Shell;
 use crate::{Backend, design};
 use moon_core::util::fmt;
+
+/// The core a leverage read or edit is addressed to, or `None` while the visible scope names none.
+///
+/// [`Backend::active_trade_core`] deliberately never answers `None` for a group with live cores —
+/// order placement and the gear popover need a concrete address — so in the Auto workspace
+/// Overview it falls through to the group's FIRST core. Every leverage surface reads through HERE
+/// instead, so the button, the popup's open guard and `Shell::reconcile_metric_popup` all reach
+/// the same conclusion; a copy of this gate at only some of them is how a popup opened over one
+/// core survives a switch into Overview and then Applies to a server the user never chose.
+///
+/// Args:
+///     b: Backend providing the workspace scope and the active trade core.
+///     group: Group whose leverage control is being resolved.
+///
+/// Returns:
+///     The active trade core, or `None` in Auto Overview.
+fn scoped_lev_core(b: &Backend, group: &str) -> Option<CoreId> {
+    if b.is_auto_overview_scope(group) {
+        None
+    } else {
+        b.active_trade_core(group)
+    }
+}
 
 /// Toolbar trading metric with its own slider-and-input popup.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -86,8 +110,9 @@ impl TradeMetric {
     /// unclicked, holding stale slider values.
     ///
     /// `manual_on` is the manual strategy: the core then takes sell and stop levels from ITS
-    /// fields, so the toolbar's TP and SL would not reach a new order. Leverage requires an active
-    /// core; group-local TP and SL always have a complete neutral-or-user-edited generation.
+    /// fields, so the toolbar's TP and SL would not reach a new order. Leverage requires a core
+    /// named by the visible scope; group-local TP and SL always have a complete
+    /// neutral-or-user-edited generation.
     pub fn available_with(self, has_core: bool, sl_on: bool, manual_on: bool) -> bool {
         match self {
             TradeMetric::Lev => has_core,
@@ -96,9 +121,10 @@ impl TradeMetric {
         }
     }
 
-    /// [`Self::available_with`] for `Shell`, using the same hover-aware manual core as the toolbar.
+    /// [`Self::available_with`] for `Shell`, using the scope-gated leverage core and the same
+    /// hover-aware manual core as the toolbar.
     pub fn available(self, b: &Backend, group: &str, manual_core: Option<CoreId>) -> bool {
-        let core = b.active_trade_core(group);
+        let core = scoped_lev_core(b, group);
         let exit = b.group_exit_settings(group);
         let manual_on = manual_core
             .map(|core| b.manual_strat_state(core).0)
@@ -120,12 +146,14 @@ impl TradeMetric {
     }
 
     /// Where an edit from this metric's popup is addressed right now, or `None` if nowhere.
+    ///
+    /// Leverage uses the scope-gated core, so Auto Overview has no editable per-core target.
     pub fn target(self, b: &Backend, group: &str) -> Option<MetricTarget> {
         match self {
             // Leverage is stored per (core, MARKET) and applied per market, so the coin on the Main
             // chart is part of the address, not context.
             TradeMetric::Lev => {
-                let core = b.active_trade_core(group)?;
+                let core = scoped_lev_core(b, group)?;
                 b.main_chart_target(group).map(|(_, market)| MetricTarget {
                     core: Some(core),
                     market: Some(market),
@@ -140,11 +168,11 @@ impl TradeMetric {
 
     /// Return the current group or core value for seeding this metric's slider and input.
     ///
-    /// Leverage depends on both the core and the Main chart's current market and is read from the
-    /// active core's asset state.
+    /// Leverage depends on both the scope-gated core and the Main chart's current market and is
+    /// read from that core's asset state.
     ///
     /// Args:
-    ///     b: Backend providing group exits plus the active trading core and its state.
+    ///     b: Backend providing group exits plus the scope-gated leverage core and its state.
     ///     group: Window group used directly for exits and to resolve the leverage target.
     ///
     /// Returns:
@@ -154,7 +182,7 @@ impl TradeMetric {
             TradeMetric::Tp => Some(b.group_exit_settings(group).take_profit_pct as f32),
             TradeMetric::Sl => Some(b.group_exit_settings(group).stop_loss_pct),
             TradeMetric::Lev => {
-                let core = b.active_trade_core(group)?;
+                let core = scoped_lev_core(b, group)?;
                 // Read the Main chart market's leverage from the per-core map, which includes every
                 // tracked market rather than only open positions. Absence means unknown leverage and
                 // renders as a dash.

@@ -662,14 +662,15 @@ impl Backend {
             .main_idle_close_secs
     }
 
-    /// Return the group's active trading core for the header and toolbar.
+    /// Resolve one concrete trading address for commands and core-settings controls.
     ///
     /// A valid selected Auto workspace core takes precedence. Auto Overview and Classic then use
     /// the still-valid remembered header selection, followed by the visible chart target and the
-    /// group's first core. This keeps manual controls singular even while Overview shows all cores.
+    /// group's first core. This keeps writes singular even while Overview shows all cores; display
+    /// surfaces must gate per-core figures with [`Self::is_auto_overview_scope`] before reading it.
     ///
     /// Args:
-    ///     group: Window group whose trading controls need a core.
+    ///     group: Window group whose command or core-settings control needs a concrete core.
     ///
     /// Returns:
     ///     A live core belonging to the group, or `None` when the group has no live cores.
@@ -723,13 +724,16 @@ impl Backend {
     ///     group: Group window whose preset is requested.
     ///
     /// Returns:
-    ///     Saved mode or [`WorkspaceMode::Classic`] when the group has no entry.
+    ///     The group's own saved mode, else the layout-wide default. First-run loading is what
+    ///     seeds that default; a layout carrying none resolves to [`WorkspaceMode::Classic`],
+    ///     which is every layout written before the preset existed. The fallback lives here
+    ///     because this is the single read choke point every workspace-mode consumer goes through.
     pub(crate) fn workspace_mode(&self, group: &str) -> WorkspaceMode {
         self.layout
             .workspace_mode_by_group
             .get(group)
             .copied()
-            .unwrap_or_default()
+            .unwrap_or_else(|| self.layout.default_workspace_mode())
     }
 
     /// Return the raw persisted Auto top-tab preference for one group.
@@ -822,6 +826,25 @@ impl Backend {
                 self.workspace_core_availability(group, *core)
                     .is_available()
             })
+    }
+
+    /// Return whether the group's visible scope names NO single core — the Auto Overview state.
+    ///
+    /// The chrome that prints a per-core figure — the header balance, the toolbar's leverage and
+    /// the exchange max-order readout — asks THIS rather than [`Self::active_trade_core`], whose
+    /// Overview fallback silently answers with the group's first core. See
+    /// [`crate::workspace::is_auto_overview_scope`] for why the two must differ.
+    ///
+    /// Args:
+    ///     group: Group whose header and toolbar are being rendered.
+    ///
+    /// Returns:
+    ///     `true` only in Auto Overview, where no single core owns the visible scope.
+    pub(crate) fn is_auto_overview_scope(&self, group: &str) -> bool {
+        crate::workspace::is_auto_overview_scope(
+            self.workspace_mode(group),
+            self.valid_auto_workspace_core(group),
+        )
     }
 
     /// Resolve one group panel's effective scope without mutating its retained Classic filter.

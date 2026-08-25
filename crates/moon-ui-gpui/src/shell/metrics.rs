@@ -18,11 +18,13 @@ impl Shell {
     /// both are reconciled at render time like the state polled by the panels:
     ///
     /// * **the metric stopped being editable** (its SL toggle switched off, the manual strategy
-    ///   armed). `MoonPopover` then renders only a disabled trigger and fires no `on_open_change`,
+    ///   armed, or Auto scope switched to Overview and no longer names a leverage core).
+    ///   `MoonPopover` then renders only a disabled trigger and fires no `on_open_change`,
     ///   so the popup vanishes while the state stays `Some` — and pops back open, unclicked, the
     ///   moment the metric is available again, holding values seeded before the change.
-    /// * **the edit target changed underneath it.** A different active core or Main chart market
-    ///   moves leverage. Group-local TP and SL deliberately keep the same address across core
+    /// * **the edit target changed underneath it.** A different selected core or Main chart market
+    ///   moves leverage; Auto Overview removes its target altogether. Group-local TP and SL
+    ///   deliberately keep the same address across core
     ///   changes. Event handlers resolve the address when they fire, so availability alone cannot
     ///   distinguish a stale leverage popup from a live one.
     ///
