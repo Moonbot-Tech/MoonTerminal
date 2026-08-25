@@ -821,6 +821,14 @@ pub struct WindowLayout {
     /// answers "not collapsed".
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub analytics_hist_collapsed: bool,
+    /// Analytics Summary "Profit by core" card: `true` ranks EVERY core, `false` (the default)
+    /// shows the compact leaders/outsiders overview.
+    ///
+    /// A display lens like [`Self::analytics_hist_collapsed`], and persisted for the same reason:
+    /// a user who runs two hundred cores picks the full list once and expects it back after a
+    /// restart. Read leniently for the same reason as that flag.
+    #[serde(default, deserialize_with = "de_lenient_bool")]
+    pub analytics_cores_show_all: bool,
     /// Analytics tuner right-hand column ("Fact vs variants" plus the axis-specific tool):
     /// `true` folds the whole column away so the strategy list takes the freed width. One flag
     /// serves every axis (Filters / Coins / Time), because it is the same column

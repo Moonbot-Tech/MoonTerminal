@@ -328,6 +328,13 @@ impl AnalyticsView {
                                 view.update(app, |this, cx| {
                                     if this.show_all_core_ranks != next {
                                         this.show_all_core_ranks = next;
+                                        // A display lens that persists, like the tuner's collapse
+                                        // flags: the mode is chosen once and expected back after
+                                        // a restart.
+                                        this.backend.update(cx, |b, _| {
+                                            b.layout.analytics_cores_show_all = next;
+                                            b.layout_dirty = true;
+                                        });
                                         cx.notify();
                                     }
                                 });
