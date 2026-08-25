@@ -1207,6 +1207,8 @@ impl RenderState {
             figures: pr.label_figures.clone(),
             windows: pr.label_windows,
             volumes: pr.label_volumes.clone(),
+            liquidations: pr.label_liquidations.clone(),
+            cursor_ms: pr.label_cursor_ms,
             arb: pr.label_arb.clone(),
             arb_reachable: pr.label_arb_reachable.clone(),
             now_ms: pr.label_now_ms,

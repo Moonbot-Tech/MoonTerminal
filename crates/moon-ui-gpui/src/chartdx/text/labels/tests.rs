@@ -6,7 +6,8 @@
 use std::rc::Rc;
 
 use moon_core::config::{
-    ArbViewCfg, ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelZone, PnlBasis,
+    ArbViewCfg, ChartLabelField, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign,
+    LabelZone, PnlBasis,
 };
 use moon_core::feed::OrderRow;
 use moon_core::util::fmt::DeltaSign;
@@ -569,8 +570,21 @@ fn an_unresolved_field_occupies_no_row() {
     let texts = texts_of(&cfg, inputs);
     assert_eq!(
         texts,
-        vec!["BTCUSDT".to_string(), "Core-1".to_string()],
-        "no scale badge and no comparison delta means two captions, not four"
+        vec![
+            "BTCUSDT".to_string(),
+            "Core-1".to_string(),
+            // The two volume blocks head themselves whatever the market says: the period is a
+            // SETTING, and a heading that vanished would take the right-click target with it.
+            "1m".to_string(),
+            "Cursor 10s".to_string(),
+            // And the MEASURING block prints dashes rather than nothing, so it keeps its shape
+            // while the pointer is off the plot. The live block beside it simply has no figures
+            // yet and prints none.
+            "Bv: —".to_string(),
+            "Sv: —".to_string(),
+            "L: —".to_string(),
+        ],
+        "no scale badge and no comparison delta still means those two cost no captions"
     );
 }
 
@@ -594,7 +608,17 @@ fn the_caption_address_survives_a_skipped_neighbour() {
     let addresses: Vec<(usize, usize)> = state.texts.iter().map(|t| (t.row, t.part)).collect();
     assert_eq!(
         addresses,
-        vec![(0, 0), (0, 1), (2, 0)],
+        vec![
+            (0, 0),
+            (0, 1),
+            (2, 0),
+            // The volume headings, and the measuring block's four lines.
+            (3, 0),
+            (4, 0),
+            (4, 1),
+            (4, 2),
+            (4, 3)
+        ],
         "every caption keeps the address its CONFIGURATION gives it, whatever its neighbours          resolved to: the skipped venue does not renumber the deltas, and the skipped badge module          does not renumber the module after it"
     );
 }
@@ -1036,8 +1060,11 @@ fn a_zero_session_still_prints_but_an_absent_one_does_not() {
 fn volumes(readout: moon_core::market::VolumeSpanReadout) -> LabelInputs {
     LabelInputs {
         volumes: vec![(
-            moon_core::market::VolumeSpan::Millis(
-                moon_core::config::LabelWindow::default().millis(),
+            (
+                moon_core::market::VolumeSpan::Millis(
+                    moon_core::config::LabelWindow::default().millis(),
+                ),
+                moon_core::market::VolumeAt::Now,
             ),
             readout,
         )],
@@ -1169,4 +1196,38 @@ fn the_bar_is_the_side_s_share_and_a_silent_market_has_none() {
         state.texts.first().and_then(|t| t.bar).is_none(),
         "nothing traded, so there is nothing to compare"
     );
+}
+
+/// On a caption that reads a period, the prefix switch governs the PERIOD and nothing else.
+///
+/// Breakage: `Bv` is not decoration on that line — it says which side the figure is. Dropping it
+/// with the period leaves two bare numbers under one heading, and the reader cannot tell the buying
+/// half from the selling one. Switching the period off is what a reader asks for once the block's
+/// heading already states it.
+#[test]
+fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
+    let mut part = ChartLabelPart::new(ChartLabelField::WindowBuyVolume);
+    part.window = moon_core::config::LabelWindow::M5;
+
+    let with = super::caption_prefix(&part, true);
+    let without = super::caption_prefix(&part, false);
+
+    assert!(with.starts_with("Bv"), "the side is named either way: {with:?}");
+    assert!(with.contains('5'), "the period is spelled when it is on: {with:?}");
+    assert!(
+        without.starts_with("Bv"),
+        "the side survives the switch: {without:?}"
+    );
+    assert!(
+        !without.contains('5'),
+        "the period is what the switch removes: {without:?}"
+    );
+}
+
+/// A caption that reads NO period keeps the old meaning: the switch prints its caption or nothing.
+#[test]
+fn the_prefix_switch_still_removes_a_plain_caption() {
+    let part = ChartLabelPart::new(ChartLabelField::OpenOrders);
+    assert!(!super::caption_prefix(&part, true).is_empty());
+    assert!(super::caption_prefix(&part, false).is_empty());
 }

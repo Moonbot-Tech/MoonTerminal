@@ -262,6 +262,22 @@ impl ChartEngine {
         }
     }
 
+    /// Re-read what the measuring captions show after the pointer moved.
+    ///
+    /// Separate from [`Self::set_cursor`] because it needs the market source, which the cursor path
+    /// does not otherwise touch. Cheap to call on every mouse move: it returns immediately unless a
+    /// drawn caption is anchored to the pointer AND the moment under it actually changed.
+    ///
+    /// Returns:
+    ///     Whether anything changed, so the caller can repaint only when it did.
+    pub fn sync_cursor_volumes(&mut self, source: &moon_core::market::MarketDataSource) -> bool {
+        let changed = self.data.borrow_mut().sync_cursor_volumes(source);
+        if changed {
+            self.state.borrow_mut().needs_present = true;
+        }
+        changed
+    }
+
     pub fn set_cursor(&mut self, cursor: Option<(usize, f32, f32)>) -> bool {
         self.state
             .borrow_mut()

@@ -34,18 +34,28 @@ pub enum LabelPreset {
     Arbitrage,
     /// How much was bought and how much was sold over a period, with the period named above them.
     Volumes,
+    /// The same figures MEASURED: read around wherever the pointer is, with the liquidations that
+    /// landed there. The reference terminal's measuring tool, as a caption module.
+    CursorVolumes,
+    /// The Y-scale badge on its own, which is where a glance checks how far the pane reaches.
+    Scale,
+    /// What this core has made on this coin: its own counter and the one MoonBot prints.
+    Session,
     /// The last detect this core fired on this coin, and the strategy behind what is open.
     Detect,
 }
 
 impl LabelPreset {
     /// Every preset, in menu order: what the chart is, then how it moves, then what is at risk.
-    pub const ALL: [LabelPreset; 8] = [
+    pub const ALL: [LabelPreset; 11] = [
         LabelPreset::Instrument,
+        LabelPreset::Scale,
         LabelPreset::CoinDeltas,
         LabelPreset::MarketBackdrop,
         LabelPreset::Volumes,
+        LabelPreset::CursorVolumes,
         LabelPreset::Position,
+        LabelPreset::Session,
         LabelPreset::Funding,
         LabelPreset::Arbitrage,
         LabelPreset::Detect,
@@ -61,6 +71,9 @@ impl LabelPreset {
             LabelPreset::Funding => "chart_labels.preset.funding",
             LabelPreset::Arbitrage => "chart_labels.preset.arbitrage",
             LabelPreset::Volumes => "chart_labels.preset.volumes",
+            LabelPreset::CursorVolumes => "chart_labels.preset.cursor_volumes",
+            LabelPreset::Scale => "chart_labels.preset.scale",
+            LabelPreset::Session => "chart_labels.preset.session",
             LabelPreset::Detect => "chart_labels.preset.detect",
         }
     }
@@ -98,6 +111,19 @@ impl LabelPreset {
                 ChartLabelField::WindowBuyVolume,
                 ChartLabelField::WindowSellVolume,
             ],
+            // The measuring block carries the liquidations as well: what got blown out around a
+            // spike is half of what a reader points at one for.
+            LabelPreset::CursorVolumes => &[
+                ChartLabelField::WindowSpanName,
+                ChartLabelField::WindowBuyVolume,
+                ChartLabelField::WindowSellVolume,
+                ChartLabelField::WindowLiquidations,
+            ],
+            LabelPreset::Scale => &[ChartLabelField::ScaleBadge],
+            LabelPreset::Session => &[
+                ChartLabelField::SessionPnl,
+                ChartLabelField::SessionProfit,
+            ],
             LabelPreset::Detect => &[
                 ChartLabelField::DetectStrategy,
                 ChartLabelField::DetectMsg,
@@ -119,9 +145,12 @@ impl LabelPreset {
             LabelPreset::CoinDeltas
             | LabelPreset::MarketBackdrop
             | LabelPreset::Position
+            | LabelPreset::Session
+            | LabelPreset::Scale
             // Over the plot, where the reference terminal prints it: the block is three lines and
             // the control strip is only as wide as the order book.
             | LabelPreset::Volumes
+            | LabelPreset::CursorVolumes
             | LabelPreset::Detect => LabelZone::ChartTop,
         }
     }
@@ -136,8 +165,27 @@ impl LabelPreset {
     /// `None` leaves the caption's own default alone, which is what every other preset wants.
     pub fn window(self) -> Option<super::LabelWindow> {
         match self {
-            LabelPreset::Volumes => Some(super::LabelWindow::M1),
+            LabelPreset::Volumes | LabelPreset::CursorVolumes => Some(super::LabelWindow::M1),
             _ => None,
+        }
+    }
+
+    /// Where the created module MEASURES: at the live edge, or around the pointer.
+    pub fn anchor(self) -> super::SpanAnchor {
+        match self {
+            LabelPreset::CursorVolumes => super::SpanAnchor::Cursor,
+            _ => super::SpanAnchor::Now,
+        }
+    }
+
+    /// A custom period the created module reads over, when a fixed window is not what it is for.
+    ///
+    /// Ten seconds for the measuring block: it answers what happened right AT the point, and a
+    /// minute around a spike is mostly the calm on either side of it.
+    pub fn span(self) -> super::LabelSpan {
+        match self {
+            LabelPreset::CursorVolumes => super::LabelSpan::Seconds(10),
+            _ => super::LabelSpan::Window,
         }
     }
 
@@ -152,9 +200,10 @@ impl LabelPreset {
             // prose, a strategy name and another strategy name, and side by side they read as one
             // run-on sentence. The volume block stacks for the same reason its bars do: the two
             // sides are compared against each other, and a comparison reads down, not across.
-            LabelPreset::Arbitrage | LabelPreset::Volumes | LabelPreset::Detect => {
-                LabelFlow::Column
-            }
+            LabelPreset::Arbitrage
+            | LabelPreset::Volumes
+            | LabelPreset::CursorVolumes
+            | LabelPreset::Detect => LabelFlow::Column,
             _ => LabelFlow::Row,
         }
     }
@@ -167,7 +216,12 @@ impl LabelPreset {
             LabelPreset::CoinDeltas
             | LabelPreset::MarketBackdrop
             | LabelPreset::Position
-            | LabelPreset::Volumes => LabelAlign::Left,
+            | LabelPreset::Session => LabelAlign::Left,
+            // The volume blocks and the badge ride the plot's RIGHT edge, under the price scale,
+            // which is where the eye already is when it reads a figure off the axis.
+            LabelPreset::Volumes | LabelPreset::CursorVolumes | LabelPreset::Scale => {
+                LabelAlign::Right
+            }
             // Centred: a detect line is the widest thing the chart prints, and either edge would
             // put it under a module that is already there.
             LabelPreset::Detect => LabelAlign::Center,

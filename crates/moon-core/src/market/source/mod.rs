@@ -10,7 +10,7 @@ mod tests;
 mod volume;
 
 pub use read::{ReplayAddress, ReplayAddressError};
-pub use volume::{VolumeSpan, VolumeSpanReadout};
+pub use volume::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};

@@ -39,11 +39,11 @@ fn a_read_sums_only_the_buckets_the_period_covers() {
     track.add_trade(trade(now - 30_000, 100.0, 2.0)); // inside a minute
     track.add_trade(trade(now - 400_000, 100.0, 5.0)); // older than a minute
 
-    let minute = track.read(60_000, now);
+    let minute = track.read_range(now - 60_000, now);
     assert_eq!(minute.buy_quote, 300.0);
     assert_eq!(minute.trades, 2);
 
-    let ten_minutes = track.read(600_000, now);
+    let ten_minutes = track.read_range(now - 600_000, now);
     assert_eq!(ten_minutes.buy_quote, 800.0);
     assert_eq!(ten_minutes.trades, 3);
 }
@@ -60,7 +60,7 @@ fn a_slot_that_comes_round_again_starts_empty() {
     track.add_trade(trade(now - TRACK_SPAN_MS, 100.0, 7.0));
     track.add_trade(trade(now, 100.0, 1.0));
 
-    let minute = track.read(60_000, now);
+    let minute = track.read_range(now - 60_000, now);
     assert_eq!(minute.buy_quote, 100.0, "only the fresh trade counts");
     assert_eq!(minute.trades, 1);
 }
@@ -72,7 +72,7 @@ fn a_sale_lands_on_the_selling_side() {
     let mut track = seeded(now);
     track.add_trade(trade(now, 10.0, -3.0));
 
-    let minute = track.read(60_000, now);
+    let minute = track.read_range(now - 60_000, now);
     assert_eq!(minute.sell_quote, 30.0);
     assert_eq!(minute.sell_base, 3.0);
     assert_eq!(minute.buy_quote, 0.0);
@@ -89,14 +89,14 @@ fn an_aggregate_bucket_marks_the_coin_amount_inexact() {
     track.add_mini(mini(now - 20_000, 500.0, 250.0, 9));
     track.add_trade(trade(now, 10.0, 1.0));
 
-    let minute = track.read(60_000, now);
+    let minute = track.read_range(now - 60_000, now);
     assert_eq!(minute.buy_quote, 510.0);
     assert_eq!(minute.trades, 10);
     assert!(!minute.base_exact);
 
     // A period that touches no aggregate keeps its exact quantities: the bucket holding the mini is
     // twenty seconds back, so a five-second window ending now is clear of it.
-    let recent = track.read(5_000, now);
+    let recent = track.read_range(now - 5_000, now);
     assert!(recent.base_exact);
     assert_eq!(recent.buy_base, 1.0);
 }
@@ -112,6 +112,32 @@ fn the_track_reports_what_it_cannot_cover() {
     track.seeded = true;
     track.earliest_ms = now - 60_000;
 
-    assert!(track.read(60_000, now).complete);
-    assert!(!track.read(900_000, now).complete);
+    assert!(track.read_range(now - 60_000, now).complete);
+    assert!(!track.read_range(now - 900_000, now).complete);
+}
+
+/// A window reaching past the newest row is not covered, however far back it starts.
+///
+/// Breakage: the measuring anchor CENTRES its window on the pointer, so a pointer near the live edge
+/// asks for a stretch half of which has not happened. Reporting that as whole prints half a period's
+/// volume under a heading naming the whole one — and the reader has no way to see the difference.
+#[test]
+fn a_window_running_past_the_live_edge_is_marked() {
+    let now = 3_600_000_000;
+    let mut track = seeded(now);
+    track.newest_ms = now;
+    track.add_trade(trade(now - 10_000, 100.0, 1.0));
+
+    let settled = track.read_range(now - 60_000, now);
+    assert!(settled.complete, "a window that ends now is covered");
+
+    let ahead = track.read_range(now - 30_000, now + 30_000);
+    assert!(
+        !ahead.complete,
+        "half of this window is in the future and must say so"
+    );
+    assert_eq!(
+        ahead.buy_quote, 100.0,
+        "the half that did happen is still stated"
+    );
 }

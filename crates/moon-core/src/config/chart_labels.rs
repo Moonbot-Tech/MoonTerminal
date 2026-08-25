@@ -360,6 +360,9 @@ impl LabelWindow {
 /// past every ring — and a trade span by the deepest trade ring MoonProto allocates (98 000 rows on
 /// the busiest venue). Past either the caption would state a figure the terminal cannot have.
 pub const LABEL_SPAN_MINUTES_MAX: u16 = 4320;
+/// A second span past a few minutes is a minute span spelled the long way, and the raw scan it
+/// costs grows with it — the aggregates take over from there.
+pub const LABEL_SPAN_SECONDS_MAX: u16 = 600;
 pub const LABEL_SPAN_TRADES_MAX: u32 = 100_000;
 
 /// The period a volume caption is read over.
@@ -375,6 +378,11 @@ pub enum LabelSpan {
     /// Read over the caption's own [`ChartLabelPart::window`].
     #[default]
     Window,
+    /// Read over this many SECONDS.
+    ///
+    /// Below what the retained aggregates can express — they are five seconds wide — so a period
+    /// this short is answered from raw trades, which is cheap precisely because it is short.
+    Seconds(u16),
     /// Read over this many minutes, whatever the window says.
     Minutes(u16),
     /// Read over the last this many trades — the reference terminal's `N Trades`.
@@ -393,8 +401,48 @@ impl LabelSpan {
     fn sanitize(&mut self) {
         match self {
             LabelSpan::Window => {}
+            LabelSpan::Seconds(n) => *n = (*n).clamp(1, LABEL_SPAN_SECONDS_MAX),
             LabelSpan::Minutes(n) => *n = (*n).clamp(1, LABEL_SPAN_MINUTES_MAX),
             LabelSpan::Trades(n) => *n = (*n).clamp(1, LABEL_SPAN_TRADES_MAX),
+        }
+    }
+}
+
+/// WHERE a caption's period sits on the time axis.
+///
+/// The reference terminal has this as a measuring tool: the same figures, read around the point the
+/// pointer is on rather than at the live edge. It answers a different question — "what happened
+/// HERE" instead of "what is happening now" — and it is the same figure either way, so it is an
+/// axis of the caption rather than a second set of fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpanAnchor {
+    /// The live edge: the period ends now.
+    #[default]
+    Now,
+    /// CENTRED on the pointer: half the period before it, half after.
+    ///
+    /// Centred rather than trailing because the pointer is placed ON something — a spike, a wick —
+    /// and the question is what surrounded it. A trailing window would answer for the run-up and
+    /// leave out the move itself.
+    ///
+    /// A caption anchored here prints nothing while the pointer is off the plot: there is no point
+    /// to measure around, and holding the last one would keep stating a place the reader has left.
+    Cursor,
+}
+
+impl SpanAnchor {
+    pub const ALL: [SpanAnchor; 2] = [SpanAnchor::Now, SpanAnchor::Cursor];
+
+    /// Whether this is the anchor a part carries when it says nothing.
+    fn is_default(&self) -> bool {
+        *self == SpanAnchor::Now
+    }
+
+    pub fn locale_key(self) -> &'static str {
+        match self {
+            SpanAnchor::Now => "chart_labels.anchor.now",
+            SpanAnchor::Cursor => "chart_labels.anchor.cursor",
         }
     }
 }
@@ -561,6 +609,9 @@ pub struct ChartLabelPart {
     /// Which currency a volume figure is stated in; meaningless for other fields.
     #[serde(skip_serializing_if = "VolumeUnits::is_default")]
     pub units: VolumeUnits,
+    /// Where this caption's period sits: at the live edge, or around the pointer.
+    #[serde(skip_serializing_if = "SpanAnchor::is_default")]
+    pub anchor: SpanAnchor,
     /// Whether a proportion bar is drawn beside a buy/sell figure.
     ///
     /// On by default, and only where [`ChartLabelField::uses_volume_bar`] allows one: the bar is
@@ -603,6 +654,7 @@ impl ChartLabelPart {
             window: LabelWindow::H1,
             span: LabelSpan::Window,
             units: VolumeUnits::Quote,
+            anchor: SpanAnchor::Now,
             bar: true,
         }
     }
@@ -612,6 +664,7 @@ impl ChartLabelPart {
     pub fn span_millis(&self) -> Option<i64> {
         match self.span {
             LabelSpan::Window => Some(self.window.millis()),
+            LabelSpan::Seconds(n) => Some(i64::from(n) * 1_000),
             LabelSpan::Minutes(n) => Some(i64::from(n) * 60_000),
             LabelSpan::Trades(_) => None,
         }
@@ -861,16 +914,17 @@ impl Default for ChartLabelsCfg {
     /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
     /// Not a designer's guess: this is the developer's own Main tab, transcribed from its
-    /// `charts.json` entry on 2026-08-22 — seven modules, each placed and spaced by hand. Nothing
-    /// prints their names (`show_name` is off); they only name the rows in the settings popup.
+    /// `charts.json` entry on 2026-08-25 — ten modules, each placed, spaced and sized by hand, and
+    /// adopted as the shipped set so a fresh profile opens on a chart that has been USED rather
+    /// than assembled.
     ///
     /// Named through [`ChartLabelRow::preset`] rather than by a literal, so the popup speaks the
     /// reader's language: this set ships to everyone, and typed names would have shipped the
-    /// developer's Russian to every locale. The scale badge has no preset and is named by the
-    /// field it prints, which is translated the same way.
+    /// developer's Russian to every locale. Three modules needed presets of their own for that —
+    /// the badge, the measuring block and the session counters.
     ///
     /// Every optional figure disappears on its own when it has nothing to report, so a chart with
-    /// no position shows the instrument and the scale badge and nothing else.
+    /// no position shows the instrument, the badge and the volumes and nothing else.
     fn default() -> Self {
         let mut cfg = Self::empty();
 
@@ -884,8 +938,9 @@ impl Default for ChartLabelsCfg {
         instrument.parts[2].style.size_mult = Some(1.0);
         cfg.rows[0] = instrument;
 
-        // The Y-scale badge rides the plot's own top-right corner, one size up.
+        // The Y-scale badge on the plot's top-right corner, one size up.
         let mut scale = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
+        scale.preset = Some(LabelPreset::Scale);
         scale.push_part(ChartLabelField::ScaleBadge);
         scale.parts[0].style.size_mult = Some(1.7);
         cfg.rows[1] = scale;
@@ -901,6 +956,46 @@ impl Default for ChartLabelsCfg {
         deltas.push_part(ChartLabelField::Delta24h);
         cfg.rows[2] = deltas;
 
+        // What traded over the last minute, under the badge: the period, then the two sides. The
+        // sides print bare — the heading above already names the period, and repeating it on every
+        // line is the same word three times in a block three lines tall.
+        let mut volumes = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
+        volumes.preset = Some(LabelPreset::Volumes);
+        volumes.flow = LabelFlow::Column;
+        volumes.gap = 6;
+        volumes.push_part(ChartLabelField::WindowSpanName);
+        volumes.push_part(ChartLabelField::WindowBuyVolume);
+        volumes.push_part(ChartLabelField::WindowSellVolume);
+        for part in volumes.parts.iter_mut().filter(|p| p.is_used()) {
+            part.window = LabelWindow::M1;
+            part.style.size_mult = Some(1.25);
+        }
+        volumes.parts[1].style.caption = Some(false);
+        volumes.parts[2].style.caption = Some(false);
+        cfg.rows[3] = volumes;
+
+        // The same figures MEASURED around the pointer, over ten seconds, with the liquidations
+        // that landed there. No bars: this block answers "what happened right HERE", and a bar is
+        // read by comparing it against the line above it.
+        let mut cursor = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
+        cursor.preset = Some(LabelPreset::CursorVolumes);
+        cursor.flow = LabelFlow::Column;
+        cursor.gap = 6;
+        cursor.push_part(ChartLabelField::WindowSpanName);
+        cursor.push_part(ChartLabelField::WindowBuyVolume);
+        cursor.push_part(ChartLabelField::WindowSellVolume);
+        cursor.push_part(ChartLabelField::WindowLiquidations);
+        for part in cursor.parts.iter_mut().filter(|p| p.is_used()) {
+            part.span = LabelSpan::Seconds(10);
+            part.anchor = SpanAnchor::Cursor;
+            part.style.size_mult = Some(1.25);
+            part.bar = false;
+        }
+        cursor.parts[1].style.caption = Some(false);
+        cursor.parts[2].style.caption = Some(false);
+        cursor.parts[3].style.caption = Some(false);
+        cfg.rows[4] = cursor;
+
         // What is open, as one line along the plot's top-left edge.
         let mut orders = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
         orders.preset = Some(LabelPreset::Position);
@@ -909,21 +1004,35 @@ impl Default for ChartLabelsCfg {
         orders.push_part(ChartLabelField::OpenPnlMoney);
         orders.push_part(ChartLabelField::OpenPnlPct);
         orders.push_part(ChartLabelField::Exposure);
-        orders.push_part(ChartLabelField::SessionPnl);
-        cfg.rows[3] = orders;
+        for part in orders.parts.iter_mut().filter(|p| p.is_used()) {
+            part.style.size_mult = Some(1.25);
+        }
+        orders.parts[2].style.caption = Some(false);
+        cfg.rows[5] = orders;
 
-        // Funding under it, spaced off that line; the countdown prints bare, with no prefix.
+        // The two session counters under it: this core's own, and the one MoonBot prints.
+        let mut session = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        session.preset = Some(LabelPreset::Session);
+        session.gap = 4;
+        session.push_part(ChartLabelField::SessionPnl);
+        session.push_part(ChartLabelField::SessionProfit);
+        for part in session.parts.iter_mut().filter(|p| p.is_used()) {
+            part.style.size_mult = Some(1.25);
+        }
+        cfg.rows[6] = session;
+
+        // Funding under that, spaced off the line; the countdown prints bare, beside the rate that
+        // names itself.
         let mut funding = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
         funding.preset = Some(LabelPreset::Funding);
         funding.gap = 8;
         funding.push_part(ChartLabelField::Funding);
         funding.push_part(ChartLabelField::FundingIn);
         funding.parts[1].style.caption = Some(false);
-        cfg.rows[4] = funding;
+        cfg.rows[7] = funding;
 
-        // The venue roster down the plot's left edge, spaced off the funding line above it. Only a
-        // spread worth acting on is coloured; below half a percent the column would be a wall of
-        // green and red with nothing to find in it.
+        // The venue roster down the plot's left edge. Only a spread worth acting on is coloured;
+        // below half a percent the column would be a wall of green and red with nothing to find.
         let mut arbitrage = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
         arbitrage.preset = Some(LabelPreset::Arbitrage);
         arbitrage.flow = LabelFlow::Column;
@@ -931,7 +1040,7 @@ impl Default for ChartLabelsCfg {
         arbitrage.push_part(ChartLabelField::ArbColumn);
         arbitrage.parts[0].style.color = Some(LabelColor::BySign);
         arbitrage.parts[0].style.color_min_pct = Some(0.5);
-        cfg.rows[5] = arbitrage;
+        cfg.rows[8] = arbitrage;
 
         // What fired, and what is trading: centred over the plot, where a line of the core's own
         // prose has the width to be read. It is the only caption that WRAPS, so the modules beside
@@ -942,7 +1051,7 @@ impl Default for ChartLabelsCfg {
         detect.push_part(ChartLabelField::DetectStrategy);
         detect.push_part(ChartLabelField::DetectMsg);
         detect.push_part(ChartLabelField::OrderStrategy);
-        cfg.rows[6] = detect;
+        cfg.rows[9] = detect;
 
         cfg
     }
@@ -1007,6 +1116,9 @@ impl ChartLabelsCfg {
                 // nothing reads but a later field would suddenly obey.
                 if !part.field.uses_window() {
                     part.span = LabelSpan::Window;
+                    // Same repair as the span: an anchor left on a caption that reads no period is
+                    // a setting nothing honours, waiting to surprise a later field change.
+                    part.anchor = SpanAnchor::Now;
                 }
                 // A hand-edited `nan` is dropped, not clamped: it would survive the clamp, and a
                 // configuration that does not equal ITSELF turns every comparison downstream — the
@@ -1081,10 +1193,12 @@ impl ChartLabelsCfg {
                 break;
             }
         }
-        if let Some(window) = preset.window() {
-            for part in row.parts.iter_mut().filter(|p| p.field.uses_window()) {
+        for part in row.parts.iter_mut().filter(|p| p.field.uses_window()) {
+            if let Some(window) = preset.window() {
                 part.window = window;
             }
+            part.span = preset.span();
+            part.anchor = preset.anchor();
         }
         self.rows[ix] = row;
         Some(ix)
@@ -1134,20 +1248,40 @@ impl ChartLabelsCfg {
     /// a module printing the buying, the selling and their total over one minute is one read, not
     /// three. Returned as the configuration's own pair rather than the market layer's span so this
     /// crate's model stays independent of what reads it.
-    pub fn volume_spans(&self) -> Vec<(LabelSpan, LabelWindow)> {
-        let mut out: Vec<(LabelSpan, LabelWindow)> = Vec::new();
+    pub fn volume_spans(&self) -> Vec<VolumeSpanKey> {
+        let mut out: Vec<VolumeSpanKey> = Vec::new();
         for part in self.drawn_parts().filter(|p| p.field.reads_volume()) {
             // A trade-count span ignores the window, so two captions asking for the same count must
             // not read twice just because their unused windows differ.
-            let key = match part.span {
+            let (span, window) = match part.span {
                 LabelSpan::Window => (LabelSpan::Window, part.window),
                 other => (other, LabelWindow::default()),
             };
-            if !out.contains(&key) {
-                out.push(key);
+            let key = VolumeSpanKey {
+                span,
+                window,
+                anchor: part.anchor,
+                // Liquidations come off their own ring, so a period that nothing prints `L` over
+                // must not pay for reading it.
+                liquidations: part.field == ChartLabelField::WindowLiquidations,
+            };
+            match out.iter_mut().find(|held| held.same_period(&key)) {
+                // One read serves both figures over one period: the flags are unioned rather than
+                // the period being listed twice.
+                Some(held) => held.liquidations |= key.liquidations,
+                None => out.push(key),
             }
         }
         out
+    }
+
+    /// Whether anything drawn measures around the POINTER rather than at the live edge.
+    ///
+    /// The gate for the extra work a measuring caption costs: its figures move with the mouse, not
+    /// with the market, so they are refreshed on a path the ordinary captions never touch.
+    pub fn any_cursor_anchored(&self) -> bool {
+        self.drawn_parts()
+            .any(|p| p.anchor == SpanAnchor::Cursor && p.field.reads_volume())
     }
 
     /// Whether any part uses this field, for the "already added" mark in the add menu.
@@ -1156,6 +1290,29 @@ impl ChartLabelsCfg {
             .iter()
             .take_while(|r| !r.is_blank())
             .any(|r| r.parts[..r.used_parts()].iter().any(|p| p.field == field))
+    }
+}
+
+/// One PERIOD a configuration asks the retained history for, and what it wants out of it.
+///
+/// The sync path turns each of these into at most one read of the trades and one of the
+/// liquidations, so it is deduplicated by the period itself — the two figures over one minute are
+/// one entry with both flags, not two entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VolumeSpanKey {
+    pub span: LabelSpan,
+    /// The window the span defers to; meaningless unless `span` is [`LabelSpan::Window`].
+    pub window: LabelWindow,
+    /// Where the period sits: at the live edge, or around the pointer.
+    pub anchor: SpanAnchor,
+    /// Whether anything printed over this period reads the LIQUIDATION ring.
+    pub liquidations: bool,
+}
+
+impl VolumeSpanKey {
+    /// Whether two keys describe the same stretch of time, ignoring which figures want it.
+    fn same_period(&self, other: &Self) -> bool {
+        self.span == other.span && self.window == other.window && self.anchor == other.anchor
     }
 }
 

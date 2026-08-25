@@ -94,6 +94,12 @@ pub(super) struct MarketTrack {
     /// What a caption's "is this period covered" reads: a track seeded two minutes ago cannot speak
     /// for the quarter hour, however many buckets it has room for.
     earliest_ms: i64,
+    /// Newest moment folded in, in unix milliseconds.
+    ///
+    /// The other end of the same question, and it only matters to a range that does not end now: a
+    /// window centred on the pointer reaches into the FUTURE of the last trade, and a track cannot
+    /// speak for a stretch that has not happened.
+    newest_ms: i64,
     /// Reusable drain buffer, so an advance that folds in forty trades allocates nothing.
     rows: Vec<TradeHistoryRow>,
     /// When this track was last read, for the prune that drops markets nobody charts any more.
@@ -114,6 +120,7 @@ impl MarketTrack {
             cursor: SeqRingCursor::default(),
             seeded: false,
             earliest_ms: now,
+            newest_ms: now,
             rows: Vec::new(),
             used_ms: now,
         }
@@ -132,6 +139,10 @@ impl MarketTrack {
         now: i64,
     ) {
         self.used_ms = now;
+        // The live edge follows the CLOCK, not the last print: a market that has not traded for a
+        // minute is still fully covered up to now, and a caption asking for that minute must read
+        // "nothing traded", not "not covered".
+        self.newest_ms = self.newest_ms.max(now);
         if !self.seeded {
             self.seed(trades, minis, now);
             return;
@@ -220,6 +231,7 @@ impl MarketTrack {
     /// Fold one trade into its bucket.
     fn add_trade(&mut self, row: TradeHistoryRow) {
         let at = row.time.unix_millis();
+        self.newest_ms = self.newest_ms.max(at);
         let id = at.div_euclid(BUCKET_MS);
         let slot = self.slot_for(id);
         let qty = f64::from(row.quantity());
@@ -236,7 +248,9 @@ impl MarketTrack {
 
     /// Fold one five-second aggregate into its bucket.
     fn add_mini(&mut self, row: MiniCandle) {
-        let id = row.time.unix_millis().div_euclid(BUCKET_MS);
+        let at = row.time.unix_millis();
+        self.newest_ms = self.newest_ms.max(at);
+        let id = at.div_euclid(BUCKET_MS);
         let slot = self.slot_for(id);
         slot.buy_quote += f64::from(row.buy_vol);
         slot.sell_quote += f64::from(row.sell_vol);
@@ -255,21 +269,21 @@ impl MarketTrack {
         slot
     }
 
-    /// Sum the buckets covering the last `span_ms`.
+    /// Sum the buckets covering `[from_ms, to_ms]`.
     ///
-    /// Args:
-    ///     span_ms: Length of the period, which must not exceed [`TRACK_SPAN_MS`].
-    ///     now: Current unix time in milliseconds.
-    ///
-    /// Returns:
-    ///     The figures, with `complete` answering whether the track reaches back that far.
-    pub(super) fn read(&self, span_ms: i64, now: i64) -> VolumeSpanReadout {
-        let from_ms = now - span_ms;
+    /// The general form, for a period that does not end NOW: the measuring anchor puts one around
+    /// the pointer, which sits wherever the reader put it. Both ends must fall inside what the track
+    /// holds — the caller checks that before asking, since a range half outside it would silently
+    /// answer for its overlap alone.
+    pub(super) fn read_range(&self, from_ms: i64, to_ms: i64) -> VolumeSpanReadout {
         let first_id = from_ms.div_euclid(BUCKET_MS);
-        let last_id = now.div_euclid(BUCKET_MS);
+        let last_id = to_ms.div_euclid(BUCKET_MS);
         let mut out = VolumeSpanReadout {
             base_exact: true,
-            complete: self.earliest_ms <= from_ms,
+            // Covered at BOTH ends: a centred window may reach past the newest row the track has,
+            // and reporting that as whole would state a quiet stretch where there is simply no data
+            // yet.
+            complete: self.earliest_ms <= from_ms && to_ms <= self.newest_ms + BUCKET_MS,
             ..VolumeSpanReadout::default()
         };
         for slot in &self.buckets {

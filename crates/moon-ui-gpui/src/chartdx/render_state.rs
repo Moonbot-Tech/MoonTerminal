@@ -127,6 +127,13 @@ fn sync_readout_resolution(rects: &mut [ReadoutRect], res: [f32; 2]) {
 /// passes drawn on the current device with no recovery between them.
 const SHOT_CAPTION_MIN_FRAMES: u8 = 2;
 
+/// How finely the measuring anchor follows the pointer, in milliseconds.
+///
+/// A second is under the width of one aggregate bucket, so nothing the history can resolve is lost
+/// — and it is coarse enough that dragging the mouse across a chart asks for a handful of distinct
+/// periods rather than one per pixel. Both caches downstream are keyed by this value.
+const CURSOR_QUANTUM_MS: i64 = 1_000;
+
 impl RenderState {
     pub(super) fn set_target_present_rate_hz(&mut self, hz: f32) {
         let hz = hz.clamp(1.0, 240.0);
@@ -372,6 +379,45 @@ impl RenderState {
             self.needs_present = true;
         }
         true
+    }
+
+    /// The moment the pointer is on, in unix milliseconds, QUANTIZED.
+    ///
+    /// The measuring anchor's whole input. Quantized here rather than where it is read because it
+    /// becomes part of the caption cache key and of the readout cache key behind it: an unrounded
+    /// value would make every pixel of mouse travel a fresh key, missing both caches and formatting
+    /// the block again on each one.
+    ///
+    /// `None` when the pointer is not over THIS pane, or while the pane has no usable time
+    /// mapping — a collapsed chart has a zero scale, and dividing by it would place the pointer at
+    /// infinity.
+    ///
+    /// Args:
+    ///     idx: Pane index.
+    ///
+    /// Returns:
+    ///     The quantized moment under the pointer.
+    pub(in crate::chartdx) fn pane_cursor_unix_ms(&self, idx: usize) -> Option<i64> {
+        let cursor = self.cursor.filter(|c| c.pane == idx)?;
+        let pane = self.panes.get(idx)?;
+        let time_to_px = pane.view.time_to_px;
+        if !(time_to_px > 0.0) {
+            return None;
+        }
+        // TWO different origins meet here, and mixing them is a silent error worth stating: the
+        // cursor is stored SLOT-relative (`(position - slot_origin) * scale_factor`), while a
+        // view's bounds are WINDOW-global — `origin + chart_area`. Every other consumer of the pair
+        // adds the slot origin back before comparing them, and so does this. Skipping it shifts the
+        // measured moment by the whole left dock, which at normal zoom is minutes.
+        let cursor_x = self.slot_origin[0] + cursor.local[0];
+        let rel_ms = f64::from(pane.view.view_time0)
+            + f64::from(cursor_x - pane.view.bounds[0]) / f64::from(time_to_px);
+        let unix = pane.epoch_ms + rel_ms;
+        if !unix.is_finite() {
+            return None;
+        }
+        let unix = unix as i64;
+        Some(unix.div_euclid(CURSOR_QUANTUM_MS) * CURSOR_QUANTUM_MS)
     }
 
     pub(super) fn sync_cursor_params(&mut self) {

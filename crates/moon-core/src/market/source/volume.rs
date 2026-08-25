@@ -49,7 +49,10 @@ use crate::util::time::now_unix_ms_i64;
 
 use super::MarketDataSource;
 
+mod liq;
 mod track;
+
+pub use liq::LiqSpanReadout;
 
 use track::{MarketTrack, TRACK_SPAN_MS};
 
@@ -81,6 +84,13 @@ const DEEP_TTL_MS: i64 = 5_000;
 /// read anyway.
 const SPAN_KEEP_MS: i64 = SPAN_TTL_MS * 40;
 
+/// How many rows one drain of a windowed read takes at a time.
+///
+/// The overshoot a bounded window pays: the drain stops at the far end, but only after the chunk
+/// carrying it. Large enough that an ordinary window is one or two calls, small enough that the
+/// overshoot is not the read.
+const WINDOW_CHUNK: usize = 4_096;
+
 /// The period a volume figure covers.
 ///
 /// Normalized: the caption's own model knows fixed windows, custom minutes and trade counts, and
@@ -108,6 +118,7 @@ impl VolumeSpan {
     pub fn from_label(span: LabelSpan, window: LabelWindow) -> Self {
         match span {
             LabelSpan::Window => VolumeSpan::Millis(window.millis()),
+            LabelSpan::Seconds(n) => VolumeSpan::Millis(i64::from(n) * 1_000),
             LabelSpan::Minutes(n) => VolumeSpan::Millis(i64::from(n) * 60_000),
             LabelSpan::Trades(n) => VolumeSpan::Trades(n),
         }
@@ -121,6 +132,39 @@ impl VolumeSpan {
         match self {
             VolumeSpan::Millis(ms) => ms > 0,
             VolumeSpan::Trades(n) => n > 0,
+        }
+    }
+}
+
+/// WHERE the span sits on the time axis.
+///
+/// `Now` is the live edge, which is what a caption watching the market wants. `Around` is the
+/// measuring anchor: the same period CENTRED on a moment the reader pointed at, which answers what
+/// surrounded that moment rather than what is happening.
+///
+/// Part of the cache key, so the caller quantizes it before asking — a pointer moves with the mouse,
+/// and a key that followed it exactly would miss on every pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VolumeAt {
+    Now,
+    /// Centre of the window, in unix milliseconds.
+    Around(i64),
+}
+
+impl VolumeAt {
+    /// The window this anchor and span describe, as `[from, to]` in unix milliseconds.
+    ///
+    /// `None` for a TRADE COUNT read around a point: the retained rings are read forward from a
+    /// cursor, so "the N trades before this moment" is not a question they answer cheaply, and
+    /// answering a different one silently is worse than printing nothing.
+    fn bounds(self, span: VolumeSpan, now: i64) -> Option<(i64, i64)> {
+        match (self, span) {
+            (VolumeAt::Now, VolumeSpan::Millis(ms)) => Some((now.saturating_sub(ms), now)),
+            (VolumeAt::Around(at), VolumeSpan::Millis(ms)) => {
+                let half = ms / 2;
+                Some((at.saturating_sub(half), at.saturating_add(ms - half)))
+            }
+            (_, VolumeSpan::Trades(_)) => None,
         }
     }
 }
@@ -225,11 +269,21 @@ impl VolumeSpanReadout {
 
 /// How long one span's answer is reused: a tracked period on the chart's own clock, a walked one on
 /// a slower one.
-fn span_ttl(span: VolumeSpan) -> i64 {
-    match span {
-        VolumeSpan::Millis(ms) if ms > TRACK_SPAN_MS => DEEP_TTL_MS,
+fn span_ttl(span: VolumeSpan, at: VolumeAt) -> i64 {
+    match (span, at) {
+        // A window centred on a fixed moment stops changing once the market has moved past it — only
+        // its own edge is still filling. Re-reading it on the live clock would pay for an answer
+        // that cannot differ.
+        (_, VolumeAt::Around(_)) => DEEP_TTL_MS,
+        (VolumeSpan::Millis(ms), _) if ms > TRACK_SPAN_MS => DEEP_TTL_MS,
         _ => SPAN_TTL_MS,
     }
+}
+
+/// One market's liquidation figures for one span, and when they were read.
+struct LiqEntry {
+    read_ms: i64,
+    readout: liq::LiqSpanReadout,
 }
 
 /// One market's figures for one span, and when they were read.
@@ -243,7 +297,12 @@ struct SpanEntry {
 pub(super) struct VolumeBook {
     /// Keyed by the PROVIDER and the span; the inner map by market name, so a lookup borrows the
     /// name instead of allocating one.
-    spans: HashMap<(CoreId, VolumeSpan), HashMap<String, SpanEntry>>,
+    spans: HashMap<(CoreId, VolumeSpan, VolumeAt), HashMap<String, SpanEntry>>,
+    /// Liquidation figures by `(provider, span, anchor)` then market, mirroring `spans`.
+    ///
+    /// Its own map rather than a field on the traded readout: a block printing volume alone must not
+    /// order the liquidation read, and the two are gated separately for exactly that reason.
+    liqs: HashMap<(CoreId, VolumeSpan, VolumeAt), HashMap<String, LiqEntry>>,
     /// Five-second buckets per market, advanced by what arrived since the last read.
     ///
     /// One track serves every period a chart asks for — the buckets are summed per request — so a
@@ -253,11 +312,16 @@ pub(super) struct VolumeBook {
 
 impl VolumeBook {
     /// Drop entries nothing will read again; see [`SPAN_KEEP_MS`].
+    ///
     fn prune(&mut self, now: i64) {
         for markets in self.spans.values_mut() {
             markets.retain(|_, entry| now.saturating_sub(entry.read_ms) < SPAN_KEEP_MS);
         }
         self.spans.retain(|_, markets| !markets.is_empty());
+        for markets in self.liqs.values_mut() {
+            markets.retain(|_, entry| now.saturating_sub(entry.read_ms) < SPAN_KEEP_MS);
+        }
+        self.liqs.retain(|_, markets| !markets.is_empty());
         // A track is some forty kilobytes, so a terminal that walks a hundred coins an hour must
         // not keep one per coin for the session.
         self.tracks
@@ -269,7 +333,8 @@ impl VolumeBook {
     /// Called when its client is replaced or removed: the figures describe retained history that
     /// went away with it.
     pub(super) fn forget_core(&mut self, core: CoreId) {
-        self.spans.retain(|(provider, _), _| *provider != core);
+        self.spans.retain(|(provider, _, _), _| *provider != core);
+        self.liqs.retain(|(provider, _, _), _| *provider != core);
         // The buckets describe a stream this client no longer has a cursor into: a new slot starts
         // its sequence again, and a stale cursor would fold the wrong rows in.
         self.tracks.retain(|(provider, _), _| *provider != core);
@@ -296,13 +361,14 @@ impl MarketDataSource {
         core: CoreId,
         market: &str,
         span: VolumeSpan,
+        at: VolumeAt,
     ) -> Option<VolumeSpanReadout> {
         if !span.is_useful() {
             return None;
         }
         let provider = self.provider_of(core)?;
         let now = now_unix_ms_i64();
-        if let Some(hit) = self.volume_cached(provider, market, span, now) {
+        if let Some(hit) = self.volume_cached(provider, market, span, at, now) {
             return Some(hit);
         }
         let snapshot = self.core_client(provider)?.snapshot_versioned()?;
@@ -310,38 +376,53 @@ impl MarketDataSource {
         // The futures ring first, then spot: the same order every other retained read in this crate
         // uses, so a market cannot be captioned from one ring and charted from the other.
         let trades = readers.futures_trades.or(readers.spot_trades);
-        let readout = match span {
-            VolumeSpan::Trades(n) => read_trade_count(trades.as_ref(), n)?,
-            // The protocol's own buckets answer 1, 3 and 5 minutes for free — before anything here
-            // touches a ring.
-            VolumeSpan::Millis(ms) => match rolling_totals(&snapshot, market, ms) {
-                Some(totals) => VolumeSpanReadout {
-                    buy_quote: totals.buy_value,
-                    sell_quote: totals.sell_value,
-                    buy_base: totals.buy_qty,
-                    sell_base: totals.sell_qty,
-                    trades: totals.trade_count,
-                    complete: true,
-                    base_exact: true,
-                    total_quote_candles: None,
-                },
-                // Everything up to the track's hour is SUMMED from buckets it keeps up to date, so
-                // the cost is the bucket count and not the market's trade rate.
-                None if ms <= TRACK_SPAN_MS => {
-                    self.volume_tracked(provider, market, trades.as_ref(), readers.mini_candles.as_ref(), ms, now)
+        let readout = match (span, at) {
+            (VolumeSpan::Trades(n), VolumeAt::Now) => read_trade_count(trades.as_ref(), n)?,
+            // A trade COUNT around a point is not a question the rings answer; see `bounds`.
+            (VolumeSpan::Trades(_), VolumeAt::Around(_)) => return None,
+            (VolumeSpan::Millis(ms), at) => {
+                let (from, to) = at.bounds(span, now)?;
+                // The protocol's own buckets answer 1, 3 and 5 minutes for free — but only at the
+                // LIVE EDGE, which is the only period they maintain.
+                match rolling_totals(&snapshot, market, ms).filter(|_| at == VolumeAt::Now) {
+                    Some(totals) => VolumeSpanReadout {
+                        buy_quote: totals.buy_value,
+                        sell_quote: totals.sell_value,
+                        buy_base: totals.buy_qty,
+                        sell_base: totals.sell_qty,
+                        trades: totals.trade_count,
+                        complete: true,
+                        base_exact: true,
+                        total_quote_candles: None,
+                    },
+                    // Everything inside the track's own hour is SUMMED from buckets it keeps up to
+                    // date, so the cost is the bucket count and not the market's trade rate. Both
+                    // ends have to fall inside it — a window centred on a pointer an hour back
+                    // reaches further than the track holds.
+                    None if from >= now - TRACK_SPAN_MS && from <= now => self.volume_tracked(
+                        provider,
+                        market,
+                        trades.as_ref(),
+                        readers.mini_candles.as_ref(),
+                        (from, to),
+                        now,
+                    ),
+                    // Past that, the retained aggregates are walked — on the slower clock below.
+                    None => read_period(
+                        trades.as_ref(),
+                        readers.mini_candles.as_ref(),
+                        from,
+                        to,
+                        &snapshot,
+                        market,
+                        ms,
+                        at,
+                        now,
+                    )?,
                 }
-                // Past that, the retained aggregates are walked — on the slower clock below.
-                None => read_period(
-                    trades.as_ref(),
-                    readers.mini_candles.as_ref(),
-                    now.saturating_sub(ms),
-                    &snapshot,
-                    market,
-                    ms,
-                )?,
-            },
+            }
         };
-        self.volume_store(provider, market, span, now, readout);
+        self.volume_store(provider, market, span, at, now, readout);
         Some(readout)
     }
 
@@ -351,12 +432,13 @@ impl MarketDataSource {
         provider: CoreId,
         market: &str,
         span: VolumeSpan,
+        at: VolumeAt,
         now: i64,
     ) -> Option<VolumeSpanReadout> {
         let handle = self.volume_book();
         let book = handle.lock().ok()?;
-        let entry = book.spans.get(&(provider, span))?.get(market)?;
-        (now.saturating_sub(entry.read_ms) < span_ttl(span)).then_some(entry.readout)
+        let entry = book.spans.get(&(provider, span, at))?.get(market)?;
+        (now.saturating_sub(entry.read_ms) < span_ttl(span, at)).then_some(entry.readout)
     }
 
     /// Sum this market's buckets, bringing them up to date first.
@@ -366,7 +448,9 @@ impl MarketDataSource {
         market: &str,
         trades: Option<&moonproto::state::SeqRingReader<TradeHistoryRow>>,
         minis: Option<&moonproto::state::SeqRingReader<MiniCandle>>,
-        span_ms: i64,
+        // The window as ONE argument: its two ends are never chosen apart, and splitting them put
+        // this call past what a reader can hold at a glance.
+        window: (i64, i64),
         now: i64,
     ) -> VolumeSpanReadout {
         let handle = self.volume_book();
@@ -378,7 +462,7 @@ impl MarketDataSource {
             .entry((provider, market.to_string()))
             .or_insert_with(|| MarketTrack::new(now));
         track.advance(trades, minis, now);
-        track.read(span_ms, now)
+        track.read_range(window.0, window.1)
     }
 
     /// File a freshly read entry, pruning what nothing reads any more.
@@ -387,6 +471,7 @@ impl MarketDataSource {
         provider: CoreId,
         market: &str,
         span: VolumeSpan,
+        at: VolumeAt,
         now: i64,
         readout: VolumeSpanReadout,
     ) {
@@ -395,9 +480,48 @@ impl MarketDataSource {
             return;
         };
         book.prune(now);
-        book.spans.entry((provider, span)).or_default().insert(
+        book.spans.entry((provider, span, at)).or_default().insert(
             market.to_string(),
             SpanEntry {
+                read_ms: now,
+                readout,
+            },
+        );
+    }
+
+    /// A cached liquidation entry still inside its TTL.
+    pub(super) fn liq_cached(
+        &self,
+        provider: CoreId,
+        market: &str,
+        span: VolumeSpan,
+        at: VolumeAt,
+        now: i64,
+    ) -> Option<liq::LiqSpanReadout> {
+        let handle = self.volume_book();
+        let book = handle.lock().ok()?;
+        let entry = book.liqs.get(&(provider, span, at))?.get(market)?;
+        (now.saturating_sub(entry.read_ms) < span_ttl(span, at)).then_some(entry.readout)
+    }
+
+    /// File a freshly read liquidation entry.
+    pub(super) fn liq_store(
+        &self,
+        provider: CoreId,
+        market: &str,
+        span: VolumeSpan,
+        at: VolumeAt,
+        now: i64,
+        readout: liq::LiqSpanReadout,
+    ) {
+        let handle = self.volume_book();
+        let Ok(mut book) = handle.lock() else {
+            return;
+        };
+        book.prune(now);
+        book.liqs.entry((provider, span, at)).or_default().insert(
+            market.to_string(),
+            LiqEntry {
                 read_ms: now,
                 readout,
             },
@@ -411,6 +535,56 @@ impl MarketDataSource {
             .expect("market source poisoned")
             .volume_book
             .clone()
+    }
+}
+
+/// Copy exactly the rows of `[from, to)` out of a retained ring.
+///
+/// The obvious call — `copy_time_range_ms` — is bounded by the WINDOW in what it copies but not in
+/// what it WALKS: its fold runs to the ring head, testing every row past the far end. On the pointer
+/// path that is the whole retained tail per mouse move, under the ring's read lock.
+///
+/// So the window is drained in CHUNKS from its own start and stopped at its far end. The cost is the
+/// rows inside the window plus at most one chunk, whatever the ring holds behind them. The sequence
+/// arithmetic that would do it in one call is not available: the protocol keeps
+/// `first_seq_at_or_after_time` and `copy_from_seq` behind its diagnostics feature.
+///
+/// Args:
+///     reader: The ring to read.
+///     from: Start of the window, unix milliseconds, inclusive.
+///     to: End of the window, unix milliseconds, exclusive.
+///     out: Reused buffer; cleared by the copy.
+pub(super) fn copy_window<T>(
+    reader: &moonproto::state::SeqRingReader<T>,
+    from: i64,
+    to: i64,
+    out: &mut Vec<T>,
+) where
+    T: moonproto::state::SeqRingTimedRow,
+{
+    out.clear();
+    if to <= from {
+        return;
+    }
+    let mut cursor = reader.cursor_at_or_after_time(MoonTime::from_unix_millis(from));
+    let mut chunk: Vec<T> = Vec::new();
+    loop {
+        chunk.clear();
+        let meta = reader.drain_new_bounded(&mut cursor, WINDOW_CHUNK, &mut chunk);
+        if meta.copied == 0 {
+            return;
+        }
+        for row in &chunk {
+            if row.seq_ring_time_ms() >= to {
+                // Past the far end: rows are in sequence order, so nothing behind this one belongs
+                // to the window either.
+                return;
+            }
+            out.push(*row);
+        }
+        if meta.caught_up {
+            return;
+        }
     }
 }
 
@@ -449,13 +623,17 @@ fn read_trade_count(
 ///
 /// Returns:
 ///     The figures, or `None` when the market has no retained trade history at all.
+#[allow(clippy::too_many_arguments)]
 fn read_period(
     trades: Option<&moonproto::state::SeqRingReader<TradeHistoryRow>>,
     minis: Option<&moonproto::state::SeqRingReader<MiniCandle>>,
     from_ms: i64,
+    to_ms: i64,
     snapshot: &moonproto::MoonStateSnapshot,
     market: &str,
     span_ms: i64,
+    at: VolumeAt,
+    now_ms: i64,
 ) -> Option<VolumeSpanReadout> {
     // AGGREGATES FIRST, raw rows only for the tail they do not cover. The other way round — walk the
     // trades over the whole period, then patch the front from mini-candles — is what this did, and
@@ -472,20 +650,14 @@ fn read_period(
     // its trades were EVICTED, so starting strictly after it cannot count a trade twice.
     let mut newest_mini = i64::MIN;
     if let Some(reader) = minis {
-        let cursor = reader.cursor_at_or_after_time(MoonTime::from_unix_millis(from_ms));
-        let (acc, _) = reader.scan_from_cursor(
-            cursor,
-            reader.capacity(),
-            (out, earliest, newest_mini),
-            |(mut acc, oldest, newest), row| {
-                let at = row.time.unix_millis();
-                acc.add_mini(*row);
-                (acc, oldest.min(at), newest.max(at))
-            },
-        );
-        out = acc.0;
-        earliest = acc.1;
-        newest_mini = acc.2;
+        let mut rows: Vec<MiniCandle> = Vec::new();
+        copy_window(reader, from_ms, to_ms, &mut rows);
+        for row in &rows {
+            let at = row.time.unix_millis();
+            out.add_mini(*row);
+            earliest = earliest.min(at);
+            newest_mini = newest_mini.max(at);
+        }
     }
     // The live tail: the trades that have not been compacted yet.
     if let Some(reader) = trades {
@@ -493,28 +665,27 @@ fn read_period(
             true => newest_mini + 1,
             false => from_ms,
         };
-        let cursor = reader.cursor_at_or_after_time(MoonTime::from_unix_millis(tail_from));
-        let (acc, _) = reader.scan_from_cursor(
-            cursor,
-            reader.capacity(),
-            (out, earliest),
-            |(mut acc, oldest), row| {
-                acc.add_trade(*row);
-                (acc, oldest.min(row.time.unix_millis()))
-            },
-        );
-        out = acc.0;
-        earliest = acc.1;
+        let mut rows: Vec<TradeHistoryRow> = Vec::new();
+        copy_window(reader, tail_from, to_ms, &mut rows);
+        for row in &rows {
+            out.add_trade(*row);
+            earliest = earliest.min(row.time.unix_millis());
+        }
     }
     if earliest == i64::MAX {
         // Neither ring held anything inside the period. That is not the same as a quiet market —
         // this market has no retained history to speak of at all.
         return None;
     }
-    out.complete = earliest <= from_ms + BUCKET_SLACK_MS;
+    // Covered at BOTH ends. A window CENTRED on a point near the live edge reaches into the future,
+    // and half of it has simply not happened yet — reporting that as whole prints half a period's
+    // volume under a heading naming the whole one.
+    out.complete = earliest <= from_ms + BUCKET_SLACK_MS && to_ms <= now_ms + BUCKET_SLACK_MS;
     // The 5-minute candle ring, which reaches a day and more where the split-carrying sources do
-    // not. Read only when they fell short, and only for a period the ring states outright.
-    if !out.complete {
+    // not. Read only when they fell short, and only for a period the ring states outright — which
+    // is a period ending NOW. A window centred on a point in the past cannot borrow from it: those
+    // totals are counted back from the live edge.
+    if !out.complete && at == VolumeAt::Now {
         out.total_quote_candles = candle_total(snapshot, market, span_ms);
     }
     Some(out)

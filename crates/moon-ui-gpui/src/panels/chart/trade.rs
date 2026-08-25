@@ -1035,7 +1035,7 @@ impl ChartPanel {
         }
         self.input.cursor = Some(pos);
         self.input.hovered_pane = Some(pane);
-        self.sync_native_cursor()
+        self.sync_native_cursor(cx)
     }
 
     /// Finish a drag on the release of the button that started it.
@@ -1152,7 +1152,7 @@ impl ChartPanel {
         sent
     }
 
-    pub(super) fn sync_native_cursor(&mut self) -> bool {
+    pub(super) fn sync_native_cursor(&mut self, cx: &App) -> bool {
         let cursor = self
             .input
             .cursor
@@ -1167,7 +1167,13 @@ impl ChartPanel {
                 peer.set_price(price);
             }
         }
-        self.chart.set_cursor(cursor)
+        let moved = self.chart.set_cursor(cursor);
+        // A measuring caption reads the POINTER, not the market, so this is the only path that can
+        // refresh it — a still market would otherwise leave it stating the moment the mouse left.
+        // Costs one comparison on a chart that carries no such caption.
+        let source = self.backend.read(cx).session.market_source();
+        let measured = self.chart.sync_cursor_volumes(&source);
+        moved || measured
     }
 }
 

@@ -1,6 +1,7 @@
 //! Synchronizes market history, the order book, and automatic Y scaling.
 
-use moon_core::market::{VolumeSpan, VolumeSpanReadout};
+use moon_core::config::{SpanAnchor as LabelAnchor, VolumeSpanKey};
+use moon_core::market::{LiqSpanReadout, VolumeAt, VolumeSpan, VolumeSpanReadout};
 
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
@@ -55,6 +56,89 @@ fn chart_history_floor_ms(cfg: moon_core::market::CandleViewCfg) -> f32 {
 }
 
 impl ChartDataState {
+    /// Re-read what the MEASURING captions show, because the pointer moved.
+    ///
+    /// The ordinary captions are refreshed on a data revision — the market changing is what changes
+    /// them. A measuring caption is the other way round: its period is anchored to the pointer, so
+    /// the market can be perfectly still and the figure still has to move. This is that second path,
+    /// and it exists only for the panes that actually carry such a caption.
+    ///
+    /// Two guards keep it from becoming the cost the ordinary path avoids: nothing runs unless a
+    /// drawn caption is cursor-anchored, and a pane whose quantized moment has not changed is
+    /// skipped entirely — one comparison, no read.
+    ///
+    /// Args:
+    ///     source: Shared market source.
+    ///
+    /// Returns:
+    ///     Whether any caption changed, so the caller can repaint only when it did.
+    pub(in crate::chartdx) fn sync_cursor_volumes(
+        &mut self,
+        source: &moon_core::market::MarketDataSource,
+    ) -> bool {
+        let mut st = self.render.borrow_mut();
+        if !st.chart_labels.any_cursor_anchored() {
+            return false;
+        }
+        // Only the measuring periods. Passing the whole set would read every live-edge period as
+        // well — on the mouse-move path, at the pointer's rate — and then throw the results away in
+        // `merge_readouts`, which keeps them for the market revision that owns them.
+        let keys: Vec<VolumeSpanKey> = st
+            .chart_labels
+            .volume_spans()
+            .into_iter()
+            .filter(|key| key.anchor == LabelAnchor::Cursor)
+            .collect();
+        if keys.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for idx in 0..st.panes.len() {
+            let cursor_ms = st.pane_cursor_unix_ms(idx);
+            let Some(pr) = st.panes.get(idx) else {
+                continue;
+            };
+            // The pointer is still on the same moment, or was never on this pane: nothing a
+            // measuring caption prints can have changed.
+            if pr.label_cursor_ms == cursor_ms {
+                continue;
+            }
+            let target = pr.core.map(|core| (core, pr.market.clone()));
+            // Kept before the readings are handed over, so the pane can record WHICH periods it
+            // now holds without walking them again.
+            let (rows, liq) = match (&target, cursor_ms) {
+                (Some((core, market)), Some(_)) => {
+                    read_volume_sets(source, *core, market, &keys, cursor_ms)
+                }
+                // The pointer left the plot. The figures are dropped rather than kept: a measuring
+                // caption with nowhere to measure prints its dash, and holding the last reading
+                // would keep stating a place the reader has left.
+                _ => (Vec::new(), Vec::new()),
+            };
+            let rows_keys: Vec<(VolumeSpan, VolumeAt)> = rows.iter().map(|(key, _)| *key).collect();
+            if let Some(pr) = st.panes.get_mut(idx) {
+                pr.label_cursor_ms = cursor_ms;
+                // The set is kept ACCURATE rather than cleared: the live-edge half was not read
+                // here and keeps its own clock, while the measuring half just was. Dropping the
+                // measuring entries would make the next market revision see a changed set, skip its
+                // throttle and read everything again — at the pointer's rate.
+                pr.label_volume_spans
+                    .retain(|(_, at)| matches!(at, VolumeAt::Now));
+                pr.label_volume_spans
+                    .extend(rows_keys.iter().copied());
+                // The LIVE-EDGE entries are re-read on the ordinary path; replacing the whole set
+                // here would drop them until the next market revision, which on a quiet coin is a
+                // visible blank.
+                merge_readouts(&mut pr.label_volumes, rows);
+                merge_readouts(&mut pr.label_liquidations, liq);
+            }
+            if st.refresh_pane_labels(idx) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn sync_from_market_source(
         &mut self,
         source: &MarketDataSource,
@@ -1144,13 +1228,9 @@ impl ChartDataState {
         let wants_windows = st.chart_labels.any_drawn(|f| f == LabelField::WindowDelta);
         // Which PERIODS the volume captions ask for, deduplicated: two modules reading the same
         // minute are one read, and a chart printing none of them collects nothing at all. The set
-        // is tiny — one or two spans — so it is a vector rather than a set.
-        let wanted_spans: Vec<VolumeSpan> = st
-            .chart_labels
-            .volume_spans()
-            .into_iter()
-            .map(|(span, window)| VolumeSpan::from_label(span, window))
-            .collect();
+        // is tiny — one or two — so it is a vector rather than a set. The ANCHOR travels with each:
+        // the same minute measured at the live edge and around the pointer are two periods.
+        let wanted_keys = st.chart_labels.volume_spans();
         // The arbitrage column, on its own gate AND its own clock. The readout asks the core venue
         // by venue — each call takes the market lock — so it is read a few times a second rather
         // than on every revision, which on a busy coin is several times that. A column of prices is
@@ -1182,7 +1262,7 @@ impl ChartDataState {
                 || wants_figures
                 || wants_windows
                 || wants_arb
-                || !wanted_spans.is_empty())
+                || !wanted_keys.is_empty())
                 .then(|| {
                     st.panes
                         .get(*idx)
@@ -1201,6 +1281,15 @@ impl ChartDataState {
                 .as_ref()
                 .filter(|_| wants_windows)
                 .and_then(|(core, market)| source.market_windows(*core, market));
+            // The pointer's own moment on THIS pane, quantized so a pixel of mouse travel is not a
+            // new period. `None` on every pane the pointer is not over, which is what makes a
+            // measuring caption there print its dash.
+            let cursor_ms = wanted_keys
+                .iter()
+                .any(|key| key.anchor == LabelAnchor::Cursor)
+                .then(|| st.pane_cursor_unix_ms(*idx))
+                .flatten();
+            let wanted_spans = resolve_span_keys(&wanted_keys, cursor_ms);
             // On the arbitrage column's clock, and for the same reason: a span longer than the
             // protocol's own rolling buckets is answered by walking retained rows, and nobody reads
             // a volume figure faster than a few times a second. The whole SET is refreshed or none
@@ -1211,7 +1300,10 @@ impl ChartDataState {
                 .filter(|(_, market)| {
                     st.panes.get(*idx).is_none_or(|pr| {
                         pr.label_volume_market != *market
-                            || pr.label_volume_spans != wanted_spans
+                            // Compared as a SET: the pointer path files its own periods back
+                            // alongside the live-edge ones, and an order that happened to differ
+                            // would look like a changed configuration and skip the throttle.
+                            || !same_period_set(&pr.label_volume_spans, &wanted_spans)
                             || arb_now_ms - pr.label_volume_read_ms >= ARB_READ_PERIOD_MS
                     })
                 })
@@ -1219,21 +1311,9 @@ impl ChartDataState {
                     // Measured rather than assumed: this is the one path in the caption sync that
                     // can walk retained rows, and `volume_read_us` is what says whether it is what
                     // a reader felt while dragging the chart.
-                    let started = std::time::Instant::now();
-                    let rows: Vec<(VolumeSpan, VolumeSpanReadout)> = wanted_spans
-                        .iter()
-                        .filter_map(|span| {
-                            source
-                                .market_volume_span(*core, market, *span)
-                                .map(|readout| (*span, readout))
-                        })
-                        .collect();
-                    crate::diag::bump(&crate::diag::CHART_VOLUME_READS);
-                    crate::diag::bump_by(
-                        &crate::diag::CHART_VOLUME_READ_US,
-                        started.elapsed().as_micros() as u64,
-                    );
-                    (market.clone(), rows)
+                    let (rows, liq) =
+                        read_volume_sets(source, *core, market, &wanted_keys, cursor_ms);
+                    (market.clone(), rows, liq)
                 });
             let arb = target
                 .as_ref()
@@ -1265,8 +1345,10 @@ impl ChartDataState {
                     pr.label_arb_read_ms = 0;
                     pr.label_arb_market.clear();
                 }
-                if let Some((market, rows)) = volumes {
+                pr.label_cursor_ms = cursor_ms;
+                if let Some((market, rows, liq)) = volumes {
                     pr.label_volumes = rows;
+                    pr.label_liquidations = liq;
                     pr.label_volume_read_ms = arb_now_ms;
                     pr.label_volume_market = market;
                     pr.label_volume_spans.clear();
@@ -1275,6 +1357,7 @@ impl ChartDataState {
                     // Switched off, like the column above: held figures would come back stale the
                     // moment a volume caption was switched on again.
                     pr.label_volumes.clear();
+                    pr.label_liquidations.clear();
                     pr.label_volume_read_ms = 0;
                     pr.label_volume_market.clear();
                     pr.label_volume_spans.clear();
@@ -1321,3 +1404,106 @@ impl ChartDataState {
 
 #[cfg(test)]
 mod tests;
+
+/// Turn one configured period into the pair the history is asked for.
+///
+/// `None` when the caption measures around the pointer and there is no pointer on this pane: there
+/// is nothing to read, and reading the live edge instead would answer a different question under a
+/// heading that says "cursor".
+fn resolve_span_key(key: &VolumeSpanKey, cursor_ms: Option<i64>) -> Option<(VolumeSpan, VolumeAt)> {
+    let span = VolumeSpan::from_label(key.span, key.window);
+    let at = match key.anchor {
+        LabelAnchor::Now => VolumeAt::Now,
+        LabelAnchor::Cursor => VolumeAt::Around(cursor_ms?),
+    };
+    Some((span, at))
+}
+
+/// The same for a whole set, dropping the ones that cannot be read right now.
+fn resolve_span_keys(keys: &[VolumeSpanKey], cursor_ms: Option<i64>) -> Vec<(VolumeSpan, VolumeAt)> {
+    let mut out: Vec<(VolumeSpan, VolumeAt)> = Vec::new();
+    for key in keys {
+        let Some(resolved) = resolve_span_key(key, cursor_ms) else {
+            continue;
+        };
+        // One read per PERIOD: the traded figures and the liquidation one share it.
+        if !out.contains(&resolved) {
+            out.push(resolved);
+        }
+    }
+    out
+}
+
+/// Read every figure one pane's volume captions ask for, in one place.
+///
+/// Called from TWO paths that must not drift: the market revision, which refreshes a live-edge
+/// block as trades arrive, and the pointer moving, which is the only thing that changes a measuring
+/// one. Both cost the same and both are measured — `volume_read_us` is the counter that says whether
+/// this is what a reader felt.
+///
+/// Args:
+///     source: Shared market source; its own cache absorbs repeated asks.
+///     core: Consumer core the pane sits on.
+///     market: Data-key market name.
+///     keys: Periods the configuration asks for, already deduplicated.
+///     cursor_ms: Quantized moment under the pointer, or `None` when it is off this pane.
+///
+/// Returns:
+///     The traded figures and the liquidation ones, each keyed by the period it answers.
+pub(in crate::chartdx) fn read_volume_sets(
+    source: &moon_core::market::MarketDataSource,
+    core: moon_core::session::CoreId,
+    market: &str,
+    keys: &[VolumeSpanKey],
+    cursor_ms: Option<i64>,
+) -> (
+    Vec<((VolumeSpan, VolumeAt), VolumeSpanReadout)>,
+    Vec<((VolumeSpan, VolumeAt), LiqSpanReadout)>,
+) {
+    let started = std::time::Instant::now();
+    let rows: Vec<((VolumeSpan, VolumeAt), VolumeSpanReadout)> =
+        resolve_span_keys(keys, cursor_ms)
+            .into_iter()
+            .filter_map(|(span, at)| {
+                source
+                    .market_volume_span(core, market, span, at)
+                    .map(|readout| ((span, at), readout))
+            })
+            .collect();
+    // Only the periods something prints the liquidation figure over: that ring is its own read, and
+    // a block showing volume alone must not order it.
+    let liq: Vec<((VolumeSpan, VolumeAt), LiqSpanReadout)> = keys
+        .iter()
+        .filter(|key| key.liquidations)
+        .filter_map(|key| resolve_span_key(key, cursor_ms))
+        .filter_map(|(span, at)| {
+            source
+                .market_liq_span(core, market, span, at)
+                .map(|readout| ((span, at), readout))
+        })
+        .collect();
+    crate::diag::bump(&crate::diag::CHART_VOLUME_READS);
+    crate::diag::bump_by(
+        &crate::diag::CHART_VOLUME_READ_US,
+        started.elapsed().as_micros() as u64,
+    );
+    (rows, liq)
+}
+
+/// Replace the CURSOR-anchored entries of a readout set, leaving the live-edge ones alone.
+///
+/// The two anchors are refreshed on different clocks — the market's and the pointer's — so each
+/// path may only touch its own entries. Replacing the set wholesale is what would blank a live-edge
+/// caption every time the mouse moved.
+fn merge_readouts<T>(held: &mut Vec<((VolumeSpan, VolumeAt), T)>, fresh: Vec<((VolumeSpan, VolumeAt), T)>) {
+    held.retain(|((_, at), _)| matches!(at, VolumeAt::Now));
+    held.extend(fresh.into_iter().filter(|((_, at), _)| !matches!(at, VolumeAt::Now)));
+}
+
+/// Whether two period sets hold the same entries, whatever order they are in.
+///
+/// Both sides are a handful of entries, so this is a pair of linear passes rather than a hash: a
+/// chart prints one or two periods, and the comparison runs per pane per market revision.
+fn same_period_set(held: &[(VolumeSpan, VolumeAt)], want: &[(VolumeSpan, VolumeAt)]) -> bool {
+    held.len() == want.len() && want.iter().all(|key| held.contains(key))
+}

@@ -13,12 +13,13 @@
 use std::rc::Rc;
 
 use moon_core::config::{
-    ChartLabelField, ChartLabelPart, ChartLabelsCfg, LabelSpan, PnlBasis, ROW_NAME_PART,
+    ChartLabelField, ChartLabelPart, ChartLabelsCfg, LabelSpan, PnlBasis, ROW_NAME_PART, SpanAnchor,
     VolumeUnits,
 };
 use moon_core::config::{ARB_PART_BASE, ArbViewCfg};
 use moon_core::market::{
-    ArbQuote, CoinTag, MarketFiguresReadout, MarketWindowsReadout, VolumeSpan, VolumeSpanReadout,
+    ArbQuote, CoinTag, LiqSpanReadout, MarketFiguresReadout, MarketWindowsReadout, VolumeAt,
+    VolumeSpan, VolumeSpanReadout,
 };
 use moon_core::util::fmt::{self, DeltaSign};
 use rust_i18n::t;
@@ -76,13 +77,24 @@ pub(in crate::chartdx) struct LabelInputs {
     /// Retained-history MOVEMENT, per window. `None` on the same terms, and gated separately
     /// because it costs more — it walks the trade buckets and the candle ring.
     pub windows: Option<MarketWindowsReadout>,
-    /// Traded amounts, one entry per distinct span the configuration asks for.
+    /// Traded amounts, one entry per distinct period the configuration asks for.
     ///
-    /// A list rather than a per-window array, because a span is no longer one of eight: two volume
-    /// modules on one chart can read "the last minute" and "the last 500 trades", and the readouts
-    /// are keyed by what was actually asked. Short — a chart prints one or two of these — so it is
-    /// searched linearly rather than hashed.
-    pub volumes: Vec<(VolumeSpan, VolumeSpanReadout)>,
+    /// A list rather than a per-window array, because a period is no longer one of eight: two volume
+    /// modules on one chart can read "the last minute" and "the last 500 trades", and one of them
+    /// can be measuring around the pointer instead of at the live edge. Short — a chart prints one
+    /// or two — so it is searched linearly rather than hashed.
+    pub volumes: Vec<((VolumeSpan, VolumeAt), VolumeSpanReadout)>,
+    /// What was liquidated over those same periods, for the captions that print it.
+    ///
+    /// Its own list because it is its own ring with its own depth, and because a chart that never
+    /// prints `L` must not order the read at all.
+    pub liquidations: Vec<((VolumeSpan, VolumeAt), LiqSpanReadout)>,
+    /// The moment the pointer is on, in unix milliseconds, or `None` while it is off this pane.
+    ///
+    /// Carried as an INPUT so the caption cache sees it: a measuring caption re-formats when the
+    /// pointer moves to a different moment, and not on the revisions in between. Already QUANTIZED
+    /// by the sync — see `CURSOR_QUANTUM_MS` — so a pixel of mouse travel is not a new value.
+    pub cursor_ms: Option<i64>,
     /// Venues this terminal has a core connected to, as `(platform code, dex name)`.
     ///
     /// Collected on the SESSION sync, where the core list is in hand — the caption pass has neither
@@ -523,26 +535,44 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .and_then(|v| fmt::pct(v, 2))
             .map(|(text, _)| (text, None)),
         // Every traded amount comes from ONE readout, so the total a chart prints is always the sum
-        // of the two halves printed beside it.
+        // of the two halves printed beside it. A measuring caption with no pointer prints a dash —
+        // see `no_cursor_dash`, which is the same answer for every figure in the block.
         // The total takes the deepest source that can answer it — see `total_quote_stated`, which
         // is why this one caption can be whole over a day while the sides beside it are marked.
-        ChartLabelField::WindowVolume => volume(inputs, part).map(|v| {
-            let (quote, whole) = v.total_quote_stated();
-            match part.units {
-                VolumeUnits::Quote => (marked(fmt::compact_si(quote), whole), None),
-                // The coin total has no deep source — the candle ring carries value only — so it is
-                // stated on the sides' own terms.
-                VolumeUnits::Base => volume_amount(part, v, quote, v.total_base()),
-            }
-        }),
-        ChartLabelField::WindowBuyVolume => {
-            volume(inputs, part).map(|v| volume_amount(part, v, v.buy_quote, v.buy_base))
-        }
-        ChartLabelField::WindowSellVolume => {
-            volume(inputs, part).map(|v| volume_amount(part, v, v.sell_quote, v.sell_base))
-        }
+        ChartLabelField::WindowVolume => volume(inputs, part)
+            .map(|v| {
+                let (quote, whole) = v.total_quote_stated();
+                match part.units {
+                    VolumeUnits::Quote => (marked(fmt::compact_si(quote), whole), None),
+                    // The coin total has no deep source — the candle ring carries value only — so
+                    // it is stated on the sides' own terms.
+                    VolumeUnits::Base => volume_amount(part, v, quote, v.total_base()),
+                }
+            })
+            .or_else(|| no_cursor_dash(part)),
+        ChartLabelField::WindowBuyVolume => volume(inputs, part)
+            .map(|v| volume_amount(part, v, v.buy_quote, v.buy_base))
+            .or_else(|| no_cursor_dash(part)),
+        ChartLabelField::WindowSellVolume => volume(inputs, part)
+            .map(|v| volume_amount(part, v, v.sell_quote, v.sell_base))
+            .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowTrades => volume(inputs, part)
-            .map(|v| (marked(fmt::compact_si(f64::from(v.trades)), v.complete), None)),
+            .map(|v| (marked(fmt::compact_si(f64::from(v.trades)), v.complete), None))
+            .or_else(|| no_cursor_dash(part)),
+        ChartLabelField::WindowLiquidations => liquidations(inputs, part)
+            .map(|liq| {
+                let value = match part.units {
+                    VolumeUnits::Quote => liq.quote,
+                    VolumeUnits::Base => liq.base,
+                };
+                let text = fmt::compact_si(value);
+                let text = match liq.complete {
+                    true => text,
+                    false => format!("~{text}"),
+                };
+                (text, None)
+            })
+            .or_else(|| no_cursor_dash(part)),
         // The block's own heading. It prints even before any history arrives — the period is a
         // SETTING, not a reading, and a heading that vanished would take the right-click target
         // with it.
@@ -550,7 +580,8 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::WindowBuyShare => volume(inputs, part)
             .and_then(|v| v.buy_share_pct())
             .and_then(|v| fmt::pct(v, 1))
-            .map(|(text, _)| (text, None)),
+            .map(|(text, _)| (text, None))
+            .or_else(|| no_cursor_dash(part)),
         ChartLabelField::MaxLeverage => inputs
             .figures
             .as_ref()
@@ -772,13 +803,37 @@ fn window(
     windows.windows.get(part.window.index()).copied()
 }
 
+/// The period one caption reads: its span, and where that span sits on the time axis.
+///
+/// `None` when the caption measures around the pointer and the pointer is not on this pane. That is
+/// the whole reason it is an `Option`: a measuring caption with nothing to measure prints a dash,
+/// not the live edge's figure under a heading that says otherwise.
+fn volume_key(inputs: &LabelInputs, part: &ChartLabelPart) -> Option<(VolumeSpan, VolumeAt)> {
+    let span = VolumeSpan::from_label(part.span, part.window);
+    let at = match part.anchor {
+        SpanAnchor::Now => VolumeAt::Now,
+        SpanAnchor::Cursor => VolumeAt::Around(inputs.cursor_ms?),
+    };
+    Some((span, at))
+}
+
 /// The traded amounts this caption is configured to read.
 fn volume(inputs: &LabelInputs, part: &ChartLabelPart) -> Option<VolumeSpanReadout> {
-    let want = VolumeSpan::from_label(part.span, part.window);
+    let want = volume_key(inputs, part)?;
     inputs
         .volumes
         .iter()
-        .find(|(span, _)| *span == want)
+        .find(|(key, _)| *key == want)
+        .map(|(_, readout)| *readout)
+}
+
+/// What was liquidated over this caption's period.
+fn liquidations(inputs: &LabelInputs, part: &ChartLabelPart) -> Option<LiqSpanReadout> {
+    let want = volume_key(inputs, part)?;
+    inputs
+        .liquidations
+        .iter()
+        .find(|(key, _)| *key == want)
         .map(|(_, readout)| *readout)
 }
 
@@ -809,15 +864,41 @@ fn volume_bar(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<VolumeBar> 
     })
 }
 
+/// The dash a MEASURING caption prints while the pointer is off the plot, if this is one.
+///
+/// `None` for a caption anchored at the live edge, which is simply absent when its market has no
+/// history: the two look alike on screen and mean opposite things, so they are told apart here
+/// rather than by whichever branch happened to run.
+///
+/// Applied to every figure in the block, not just one: the dash is what keeps the module its SHAPE
+/// and its right-click target while there is nothing to measure. A block whose lines vanished one
+/// by one would leave the reader nothing to aim at to switch the anchor back.
+fn no_cursor_dash(part: &ChartLabelPart) -> Option<(String, Option<DeltaSign>)> {
+    (part.anchor == SpanAnchor::Cursor).then(|| (NO_CURSOR.to_string(), None))
+}
+
+/// What a measuring caption prints while the pointer is off the plot.
+///
+/// An em dash rather than nothing: the block keeps its shape and its right-click target, and the
+/// reader can see it is waiting for a place to measure rather than broken.
+const NO_CURSOR: &str = "—";
+
 /// The period a volume caption names, as the chart spells it: `1м`, `500 сд`.
 ///
 /// One spelling for three shapes, so the block's own heading and the prefix on the figures under it
 /// cannot disagree about what period is being shown.
 fn span_label(part: &ChartLabelPart) -> String {
-    match part.span {
+    let period = match part.span {
         LabelSpan::Window => t!(part.window.locale_key()).to_string(),
+        LabelSpan::Seconds(n) => t!("chart_labels.span.seconds", n = n).to_string(),
         LabelSpan::Minutes(n) => t!("chart_labels.span.minutes", n = n).to_string(),
         LabelSpan::Trades(n) => t!("chart_labels.span.trades", n = n).to_string(),
+    };
+    match part.anchor {
+        SpanAnchor::Now => period,
+        // Named on the caption, not only in the settings: the same `5м` means two different things
+        // depending on where it is measured, and the block is read at a glance.
+        SpanAnchor::Cursor => t!("chart_labels.span.at_cursor", period = period).to_string(),
     }
 }
 
@@ -977,16 +1058,26 @@ fn non_empty(s: &str) -> Option<String> {
 /// A window figure names itself with its window — two "Δ" captions on one line are unreadable
 /// unless each says whether it is the minute or the day — which is the only variation in the rule.
 fn caption_prefix(part: &ChartLabelPart, on: bool) -> String {
-    let Some(key) = part.field.caption_key().filter(|_| on) else {
+    let Some(key) = part.field.caption_key() else {
         return String::new();
     };
-    // The PERIOD, not the window: a caption reading the last five hundred trades says so, and a
-    // prefix still naming its unused window would be a second, wrong answer beside the heading.
-    let tail = match part.field.uses_window() {
-        true => span_label(part),
+    let name = t!(key);
+    // On a caption that reads a PERIOD the switch governs the period alone. `Bv` is not decoration
+    // there — it is which side the figure is, and a block whose lines lost their names would be two
+    // bare numbers under one heading. So switching the prefix off drops `1м` and keeps `Bv`, which
+    // is exactly what a reader asks for once the heading above already states the period.
+    if part.field.uses_window() {
+        let period = match on {
+            true => span_label(part),
+            false => String::new(),
+        };
+        return format!("{}{period}: ", name.trim_end());
+    }
+    // Everywhere else the switch is what it always was: print the caption, or print none.
+    match on {
+        true => format!("{name}: "),
         false => String::new(),
-    };
-    format!("{}{tail}: ", t!(key))
+    }
 }
 
 /// Collect the open-position figures for every basis in ONE pass over a market's orders.
@@ -1086,13 +1177,21 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
     // One sample reading under every span this module asks for. Without it a caption set to "the
     // last 500 trades" would preview as blank — the editor would say the label is broken when it is
     // merely custom.
-    for part in &row.parts[..row.used_parts()] {
-        if !part.field.reads_volume() {
-            continue;
-        }
-        let span = VolumeSpan::from_label(part.span, part.window);
-        if !inputs.volumes.iter().any(|(held, _)| *held == span) {
-            inputs.volumes.push((span, sample_volume()));
+    // The sample answers as if the pointer were on the plot, so a measuring caption previews its
+    // figure rather than its dash.
+    inputs.cursor_ms = Some(0);
+    let sample_keys: Vec<_> = row.parts[..row.used_parts()]
+        .iter()
+        .filter(|part| part.field.reads_volume())
+        .filter_map(|part| volume_key(&inputs, part))
+        .collect();
+    for key in sample_keys {
+        // Filed under the key this caption will actually LOOK UP — anchor included. Filing every
+        // sample at the live edge left a measuring caption previewing as the dash it prints with no
+        // pointer, which tells the reader nothing about what they just picked.
+        if !inputs.volumes.iter().any(|(held, _)| *held == key) {
+            inputs.volumes.push((key, sample_volume()));
+            inputs.liquidations.push((key, sample_liquidations()));
         }
     }
     let preview_roster = preview_roster();
@@ -1171,6 +1270,16 @@ fn sample_volume() -> VolumeSpanReadout {
         complete: true,
         base_exact: true,
         total_quote_candles: None,
+    }
+}
+
+/// One period's liquidations, for the editor's preview.
+fn sample_liquidations() -> LiqSpanReadout {
+    LiqSpanReadout {
+        quote: 4_200.0,
+        base: 0.08,
+        count: 3,
+        complete: true,
     }
 }
 
@@ -1255,6 +1364,9 @@ fn sample_inputs() -> LabelInputs {
         // Filled per ROW by `preview_row`: a span can be any number of minutes or trades, so the
         // sample cannot enumerate them — it answers whichever ones the module actually asks for.
         volumes: Vec::new(),
+        liquidations: Vec::new(),
+        // Filled by `preview_row` beside the volumes, for the same reason.
+        cursor_ms: None,
         context: Some(moon_core::market::MarketContextReadout {
             exchange_1h_pct: 0.4,
             exchange_24h_pct: -1.1,
