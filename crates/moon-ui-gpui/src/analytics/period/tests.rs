@@ -2,7 +2,7 @@
 
 use chrono::{NaiveDate, TimeZone as _, Utc};
 
-use super::{Period, custom_bounds as zoned_custom_bounds, exact_secs_of_day};
+use super::{Period, Tab, custom_bounds as zoned_custom_bounds, exact_secs_of_day, seed_period};
 use crate::controls::date_range::{Bound, MINUTE, field_of_exclusive, secs_of_dt};
 
 /// Build a UTC timestamp out of a day and a clock time, the way the pickers hold their value.
@@ -34,6 +34,23 @@ fn custom_bounds(
     tomorrow: i64,
 ) -> (i64, i64) {
     zoned_custom_bounds(from, to, tomorrow, chrono_tz::UTC)
+}
+
+/// Replacing `seed_period`'s `Tab::Strategies => strat` arm with `summary` restores the wrong
+/// picker range after reopening Strategy Tuning, hiding its active custom filter from the user.
+#[test]
+fn seed_period_uses_the_reopened_tabs_persisted_axis() {
+    let summary = Period::Custom(1_701_000_000, 1_701_086_400);
+    let strategy = Period::Custom(1_702_000_000, 1_702_172_800);
+
+    assert!(
+        seed_period(Tab::Strategies, Some(summary), Some(strategy)) == Some(strategy),
+        "Strategy Tuning must reopen with its own custom period"
+    );
+    assert!(seed_period(Tab::Summary, Some(summary), Some(strategy)) == Some(summary));
+    assert!(seed_period(Tab::Calendar, Some(summary), Some(strategy)) == Some(summary));
+    assert!(seed_period(Tab::Strategies, Some(summary), None).is_none());
+    assert!(seed_period(Tab::Summary, None, Some(strategy)).is_none());
 }
 
 /// Removing `exact_secs_of_day`'s civil-date identity check makes both cells resolve to December

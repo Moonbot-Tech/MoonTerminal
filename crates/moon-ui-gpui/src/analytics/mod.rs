@@ -34,7 +34,7 @@ mod tuner;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
 pub(in crate::analytics) use period::{
-    Period, Tab, custom_bounds, day_of_secs, exact_secs_of_day, fmt_day, secs_of_day,
+    Period, Tab, custom_bounds, day_of_secs, exact_secs_of_day, fmt_day, secs_of_day, seed_period,
 };
 pub(in crate::analytics) use profit_load::ProfitLoadState;
 
@@ -724,7 +724,13 @@ impl AnalyticsView {
         // reachable — that is the picker's own contract, not something the window drives.
         let cal_from = cx.new(|cx| date_range::bound_picker(Bound::From, window, cx));
         let cal_to = cx.new(|cx| date_range::bound_picker(Bound::To, window, cx));
-        if let Some(Period::Custom(f, t)) = saved_period {
+        // Armed probe → open straight on the surface under observation, so the channel
+        // reports the coin table rather than the summary nobody asked about.
+        let probe = probe_enabled();
+        let tab = if probe { Tab::Strategies } else { session.tab };
+        // Seed the fields from the period of the tab actually being opened, not from Summary's:
+        // each tab keeps its own, so a tuning session reopened on a custom range must SHOW it.
+        if let Some(Period::Custom(f, t)) = seed_period(tab, saved_period, saved_strat_period) {
             if let Some(d) = (f >= 0)
                 .then(|| date_range::dt_of_secs(f, display_zone))
                 .flatten()
@@ -761,9 +767,6 @@ impl AnalyticsView {
                 this.apply_custom_range(window, cx);
             }));
         }
-        // Armed probe → open straight on the surface under observation, so the channel
-        // reports the coin table rather than the summary nobody asked about.
-        let probe = probe_enabled();
         let saved_valuation_mode = backend.read(cx).valuation_mode();
         let mut this = Self {
             backend,
@@ -775,7 +778,7 @@ impl AnalyticsView {
             last_valuation_status_rev,
             report_refresh: RefreshGate::new(initial_report_generation, std::time::Instant::now()),
             report_busy_retries: BusyRetryBudget::default(),
-            tab: if probe { Tab::Strategies } else { session.tab },
+            tab,
             period: saved_period.unwrap_or(Period::CurMonth),
             strat_period: saved_strat_period.unwrap_or(Period::CurMonth),
             data_period: saved_period.unwrap_or(Period::CurMonth),

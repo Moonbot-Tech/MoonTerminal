@@ -1165,7 +1165,8 @@ fn analytics_metric_menu_fits_its_localized_labels() {
 ///
 /// The plausible edit is rebuilding `AnalyticsView` from hard-coded defaults or moving its
 /// snapshot into `WindowLayout`. Closing the tool window would then forget the tab/filter, or a
-/// full application restart would incorrectly retain them.
+/// full application restart would incorrectly retain them. Reversing the probe-first tab branch
+/// would make `MOON_ANALYTICS_PROBE` open the remembered normal tab instead of Strategy Tuning.
 #[test]
 fn analytics_reopen_state_is_process_lifetime_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1223,9 +1224,12 @@ fn analytics_reopen_state_is_process_lifetime_only() {
         "workspace changes must never overwrite the process-lifetime Classic core selection"
     );
     let tab_init = analytics
-        .find("tab: if probe {")
+        .find("let tab = if probe {")
         .expect("Analytics must retain the probe-first tab branch");
     let tab_init = &analytics[tab_init..];
+    let tab_init = &tab_init[..tab_init
+        .find(';')
+        .expect("the probe-first tab branch must remain a complete expression")];
     let probe_tab = tab_init
         .find("Tab::Strategies")
         .expect("probe mode must still open Strategy Tuning");
