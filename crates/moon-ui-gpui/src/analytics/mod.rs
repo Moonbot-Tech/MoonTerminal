@@ -540,9 +540,7 @@ impl AnalyticsView {
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Window geometry lives in the layout, as it does for Screener and Strategies.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                return;
-            };
+            let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |b, _| {
                 let geom = geom.keeping_display_of(b.layout.analytics_window);
                 if b.layout.analytics_window != Some(geom) {
@@ -2033,7 +2031,7 @@ pub fn open(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("analytics.window_title").to_string(),
-        WindowBounds::Windowed(bounds),
+        crate::window::windowing::restored_window_bounds(saved, bounds),
         Some(size(px(860.0), px(520.0))),
         owner,
     );

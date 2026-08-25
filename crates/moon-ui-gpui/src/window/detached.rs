@@ -63,6 +63,29 @@ pub struct DetachedSpec {
         skip_serializing_if = "Option::is_none"
     )]
     pub display_uuid: Option<uuid::Uuid>,
+    /// Whether the window was left MAXIMIZED, and its macOS FULLSCREEN counterpart.
+    ///
+    /// Detached panels reopen from this file rather than from `layout.detached_geom`, so the pair
+    /// `GeomRect` carries has to be mirrored here or a maximized panel would come back windowed.
+    /// `x`/`y`/`w`/`h` stay the RESTORE rectangle while either is set, exactly as they do there.
+    ///
+    /// Absent from older `detached.json` files and omitted when false, so an untouched file keeps
+    /// its previous shape, and decoded leniently exactly like [`Self::display_uuid`]: the whole
+    /// file is one `Vec`, so a single malformed value would otherwise cost the user every
+    /// detachment at once.
+    #[serde(
+        default,
+        deserialize_with = "moon_core::config::layout::de_lenient_bool",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub maximized: bool,
+    /// macOS fullscreen counterpart of [`Self::maximized`]; see `GeomRect::fullscreen`.
+    #[serde(
+        default,
+        deserialize_with = "moon_core::config::layout::de_lenient_bool",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub fullscreen: bool,
     /// Whether `x`/`y` are the first-detach cascade rather than a position this panel actually had.
     ///
     /// Not persisted, and false when read back from `detached.json`: a spec that reached the file
@@ -84,6 +107,8 @@ impl DetachedSpec {
             y: 160,
             w: 1100,
             h: 520,
+            maximized: false,
+            fullscreen: false,
             display_uuid: None,
             cascade_origin: true,
         }
@@ -109,6 +134,8 @@ impl DetachedSpec {
             spec.y = g.y;
             spec.w = g.w;
             spec.h = g.h;
+            spec.maximized = g.maximized;
+            spec.fullscreen = g.fullscreen;
             spec.display_uuid = g.display_uuid;
             spec.cascade_origin = false;
         }
@@ -426,9 +453,7 @@ impl DetachedWindow {
     }
 
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(mut geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-            return;
-        };
+        let mut geom = crate::window::windowing::window_geom_rect(window, cx);
         let key = (self.group.clone(), self.panel.clone());
         let window_id = self.window_id;
         self.backend.update(cx, |bk, _| {
@@ -464,13 +489,29 @@ impl DetachedWindow {
                 // origin is now a real position — including the first-detach case, where leaving the
                 // flag set would make the next reopen discard a position the user chose by dragging.
                 s.cascade_origin = false;
-                if (s.x, s.y, s.w, s.h, s.display_uuid)
-                    != (geom.x, geom.y, geom.w, geom.h, geom.display_uuid)
-                {
+                if (
+                    s.x,
+                    s.y,
+                    s.w,
+                    s.h,
+                    s.maximized,
+                    s.fullscreen,
+                    s.display_uuid,
+                ) != (
+                    geom.x,
+                    geom.y,
+                    geom.w,
+                    geom.h,
+                    geom.maximized,
+                    geom.fullscreen,
+                    geom.display_uuid,
+                ) {
                     s.x = geom.x;
                     s.y = geom.y;
                     s.w = geom.w;
                     s.h = geom.h;
+                    s.maximized = geom.maximized;
+                    s.fullscreen = geom.fullscreen;
                     s.display_uuid = geom.display_uuid;
                     bk.detached_dirty = true;
                 }
@@ -642,7 +683,7 @@ pub fn spawn(
             "{} — MoonTerminal",
             crate::persistence::panel_meta::panel_title(&spec.panel)
         ),
-        WindowBounds::Windowed(bounds),
+        crate::window::windowing::window_bounds_for(spec.maximized, spec.fullscreen, bounds),
         display_id,
         owner,
     );

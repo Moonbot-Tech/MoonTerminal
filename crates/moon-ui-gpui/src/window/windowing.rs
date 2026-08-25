@@ -602,21 +602,108 @@ pub(crate) fn display_identity(display: Option<DisplayId>, cx: &App) -> Option<u
 /// * `window` - Window whose placement should be captured.
 /// * `cx` - Application context used to enumerate displays.
 ///
+/// A MAXIMIZED or FULLSCREEN window is captured too, and that is the whole point: the platform
+/// reports the RESTORE rectangle for both, so the rectangle stays what the window returns to and
+/// the state rides beside it as a flag. Reading `window.bounds()` here instead would remember the
+/// screen-sized rectangle and the window would never un-maximize to anything else again.
+///
+/// One platform does not hold up its end: the X11 backend reports the CURRENT bounds inside
+/// `WindowBounds::Maximized`, keeping no restore rectangle of its own, so there a maximized window
+/// remembers its maximized size. Windows, macOS and Wayland all carry the restore rectangle. The
+/// X11 discrepancy belongs in the platform layer rather than here.
+///
 /// # Returns
 ///
-/// The persistable rectangle, or `None` for a fullscreen or maximized window.
-pub(crate) fn window_geom_rect(
-    window: &Window,
-    cx: &App,
-) -> Option<moon_core::config::layout::GeomRect> {
-    let (x, y, w, h) = window_geom(window)?;
-    Some(moon_core::config::layout::GeomRect {
+/// The persistable rectangle, for every window state.
+pub(crate) fn window_geom_rect(window: &Window, cx: &App) -> moon_core::config::layout::GeomRect {
+    let (bounds, maximized, fullscreen) = match window.window_bounds() {
+        WindowBounds::Windowed(bounds) => (bounds, false, false),
+        WindowBounds::Maximized(bounds) => (bounds, true, false),
+        WindowBounds::Fullscreen(bounds) => (bounds, false, true),
+    };
+    let (x, y, w, h) = int_rect(bounds);
+    moon_core::config::layout::GeomRect {
         x,
         y,
         w,
         h,
+        maximized,
+        fullscreen,
         display_uuid: window_display_uuid(window, cx),
-    })
+    }
+}
+
+/// The logical width a window currently OCCUPIES, for responsive chrome.
+///
+/// `bounds()`, not `window_bounds()`: the latter is the RESTORE rectangle, which for a maximized
+/// or fullscreen window names the size it will return to rather than the width being laid out.
+/// One home for that distinction, because five surfaces ask the same question and a window that
+/// now OPENS maximized would lay out against the wrong number from its very first frame.
+///
+/// # Arguments
+///
+/// * `window` - Window whose responsive width is required.
+///
+/// # Returns
+///
+/// The width in logical pixels.
+pub(crate) fn responsive_width(window: &Window) -> f32 {
+    f32::from(window.bounds().size.width)
+}
+
+/// Turn remembered window-state flags into the bounds a window should open with.
+///
+/// The ONE place that mapping lives for every tool, detached and trade window, mirroring what
+/// `group_window` does for the Main window. Fullscreen is tested FIRST for the reason stated on
+/// `GeomRect::fullscreen`: the green macOS button produces Fullscreen, and restoring it as
+/// Maximized would open an ordinary window.
+///
+/// # Arguments
+///
+/// * `maximized` - Whether the window was left maximized.
+/// * `fullscreen` - Whether the window was left fullscreen.
+/// * `bounds` - Restore rectangle the window occupies once it leaves that state.
+///
+/// # Returns
+///
+/// The matching `WindowBounds` variant, carrying the restore rectangle in every case.
+pub(crate) fn window_bounds_for(
+    maximized: bool,
+    fullscreen: bool,
+    bounds: Bounds<Pixels>,
+) -> WindowBounds {
+    if fullscreen {
+        WindowBounds::Fullscreen(bounds)
+    } else if maximized {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    }
+}
+
+/// [`window_bounds_for`], reading the flags off saved geometry.
+///
+/// The rectangle is passed separately because a caller may have replaced a saved one it judged
+/// unreachable, or offset it by a cascade: the state is remembered even when the coordinates are
+/// not, since a maximized window lands on a screen by construction whatever rectangle it carries.
+///
+/// # Arguments
+///
+/// * `saved` - Geometry remembered for this window, if any.
+/// * `bounds` - Rectangle the window will actually open with.
+///
+/// # Returns
+///
+/// The matching `WindowBounds` variant; windowed when nothing was saved.
+pub(crate) fn restored_window_bounds(
+    saved: Option<moon_core::config::layout::GeomRect>,
+    bounds: Bounds<Pixels>,
+) -> WindowBounds {
+    window_bounds_for(
+        saved.is_some_and(|geom| geom.maximized),
+        saved.is_some_and(|geom| geom.fullscreen),
+        bounds,
+    )
 }
 
 /// Activate a newly created window in response to an explicit user action.
@@ -644,8 +731,9 @@ pub(crate) fn activate_new_window(handle: AnyWindowHandle, cx: &mut App) {
 
 /// Read windowed geometry as logical pixels `(x, y, width, height)`.
 ///
-/// This centralizes the float-to-integer conversion used to persist detached panel and chart
-/// geometry.
+/// This centralizes the float-to-integer conversion used to persist detached CHART geometry, which
+/// is its one remaining caller. [`window_geom_rect`] deliberately no longer shares it: a tool
+/// window must remember a maximized state rather than decline to persist anything.
 ///
 /// # Arguments
 ///

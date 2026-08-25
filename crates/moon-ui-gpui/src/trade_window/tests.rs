@@ -7,6 +7,8 @@ fn rect(x: i32, y: i32, w: u32, h: u32, display_uuid: Option<uuid::Uuid>) -> Geo
         y,
         w,
         h,
+        maximized: false,
+        fullscreen: false,
         display_uuid,
     }
 }

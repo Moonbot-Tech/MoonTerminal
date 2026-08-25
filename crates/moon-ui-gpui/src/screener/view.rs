@@ -127,9 +127,7 @@ impl ScreenerView {
 
         // Persist window position and size in the layout so the window reopens in the same geometry.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                return;
-            };
+            let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |b, _| {
                 let geom = geom.keeping_display_of(b.layout.screener_window);
                 if b.layout.screener_window != Some(geom) {
@@ -580,11 +578,7 @@ impl Focusable for ScreenerView {
 impl Render for ScreenerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let chrome_width = match window.window_bounds() {
-            WindowBounds::Windowed(b)
-            | WindowBounds::Maximized(b)
-            | WindowBounds::Fullscreen(b) => f32::from(b.size.width),
-        };
+        let chrome_width = crate::window::windowing::responsive_width(window);
         v_flex()
             .size_full()
             .relative()
@@ -674,7 +668,7 @@ pub fn open(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("screener.window_title").to_string(),
-        WindowBounds::Windowed(bounds),
+        crate::window::windowing::restored_window_bounds(saved, bounds),
         Some(size(px(900.0), px(480.0))),
         owner,
     );

@@ -271,9 +271,7 @@ impl ProfitMonitorView {
         .detach();
 
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                return;
-            };
+            let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |backend, _| {
                 let geom = geom.keeping_display_of(backend.layout.profit_monitor_window);
                 if backend.layout.profit_monitor_window != Some(geom) {
@@ -1041,13 +1039,9 @@ fn arrivals(
 ///     window: Window whose responsive width is required.
 ///
 /// Returns:
-///     Logical width for windowed, maximized, or fullscreen bounds.
+///     Logical width the window currently occupies, in every window state.
 fn window_width(window: &Window) -> f32 {
-    match window.window_bounds() {
-        WindowBounds::Windowed(bounds)
-        | WindowBounds::Maximized(bounds)
-        | WindowBounds::Fullscreen(bounds) => f32::from(bounds.size.width),
-    }
+    crate::window::windowing::responsive_width(window)
 }
 
 /// Read live labels and canonical core order without touching report SQLite.

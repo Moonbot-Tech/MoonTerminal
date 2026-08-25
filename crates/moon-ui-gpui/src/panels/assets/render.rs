@@ -139,11 +139,7 @@ impl Render for AssetsView {
             cx,
         );
         // Supply the current width to the title-bar hit overlay for dragging, resizing, and controls.
-        let chrome_width = match window.window_bounds() {
-            WindowBounds::Windowed(bb)
-            | WindowBounds::Maximized(bb)
-            | WindowBounds::Fullscreen(bb) => f32::from(bb.size.width),
-        };
+        let chrome_width = crate::window::windowing::responsive_width(window);
 
         let mut root = v_flex()
             .id("assets-panel")

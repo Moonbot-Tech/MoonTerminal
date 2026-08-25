@@ -93,6 +93,14 @@ pub(crate) fn open_trade_window(
     // this open's cascade — not on the remembered one alone. A rectangle sitting just barely on the
     // edge of a screen passes on its own and is then pushed off it by the offset, which is exactly
     // the second window of the pair and exactly the case the check exists for.
+    // The remembered STATE is read before the reachability filter below, which throws the whole
+    // rectangle away when it lands off every monitor. A maximized window covers a screen by
+    // construction, so its state survives even when its restore coordinates do not.
+    let saved_state = backend
+        .read(cx)
+        .layout
+        .trade_window
+        .map_or((false, false), |geom| (geom.maximized, geom.fullscreen));
     let saved = backend.read(cx).layout.trade_window.filter(|geom| {
         let step = step as i32;
         let candidate = moon_core::config::layout::GeomRect {
@@ -137,10 +145,17 @@ pub(crate) fn open_trade_window(
     let title = format!("MoonTerminal - {} - {}", record.coin, stamps.1);
     let mut opts = crate::window::windowing::trade_window_options(
         title,
-        WindowBounds::Windowed(Bounds {
-            origin,
-            size: window_size,
-        }),
+        // The cascade offset is inert while maximized: every trade window then covers the same
+        // screen, which is exactly what maximizing asked for, and the offset returns with the
+        // restore rectangle underneath it.
+        crate::window::windowing::window_bounds_for(
+            saved_state.0,
+            saved_state.1,
+            Bounds {
+                origin,
+                size: window_size,
+            },
+        ),
         display_id,
         size(px(MIN_W), px(MIN_H)),
     );
@@ -240,12 +255,11 @@ pub(crate) fn open_trade_window(
             // THE GEOMETRY MEMORY. One rectangle for every trade window, written into the layout
             // authority that the 100 ms coordination loop and `on_app_quit` both snapshot WHOLE —
             // so it survives a clean exit as well as a crash, with nothing to register in either.
-            // `window_geom_rect` answers `None` for a maximized or fullscreen window, so those are
-            // not remembered, exactly as the Assets window already behaves.
+            // A maximized or fullscreen window is remembered too: `window_geom_rect` keeps the
+            // restore rectangle and carries the state beside it, exactly as the Assets window
+            // already behaves.
             vcx.observe_window_bounds(window, |this: &mut TradeWindowView, window, cx| {
-                let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                    return;
-                };
+                let geom = crate::window::windowing::window_geom_rect(window, cx);
                 let cascade_px = this.cascade_px;
                 this.backend.update(cx, |b, _| {
                     let geom = super::remembered_geometry(b.layout.trade_window, geom, cascade_px);

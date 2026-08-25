@@ -225,13 +225,11 @@ fn spawn_group_window_inner(
             })
             .map(|d| d.id())
     });
-    let window_bounds = if saved.map(|g| g.fullscreen).unwrap_or(false) {
-        WindowBounds::Fullscreen(win_bounds)
-    } else if saved.map(|g| g.maximized).unwrap_or(false) {
-        WindowBounds::Maximized(win_bounds)
-    } else {
-        WindowBounds::Windowed(win_bounds)
-    };
+    let window_bounds = windowing::window_bounds_for(
+        saved.map(|g| g.maximized).unwrap_or(false),
+        saved.map(|g| g.fullscreen).unwrap_or(false),
+        win_bounds,
+    );
     // Load the configured group-window icon from embedded `assets/icons/<id>.png`.
     let icon_id = cfg.group(&group).icon;
     let mut opts = windowing::trading_window_options(
