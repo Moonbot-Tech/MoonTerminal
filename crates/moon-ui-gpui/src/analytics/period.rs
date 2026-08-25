@@ -179,6 +179,31 @@ impl Period {
     }
 }
 
+/// The period whose bounds the shared "from"/"to" fields must show for one tab.
+///
+/// The window carries a period per tab under its own persisted key, so a reopened window must
+/// seed those fields from the tab it actually opens on — otherwise the tuner filters by a custom
+/// range while the fields sit empty, and the filter reads as absent. Mirrors
+/// `AnalyticsView::active_period`, which every LATER sync already goes through.
+///
+/// Args:
+///     tab: Tab the window opens on.
+///     summary: Period persisted for Summary (and Calendar), if any.
+///     strat: Period persisted for Strategy tuning, if any.
+///
+/// Returns:
+///     That tab's persisted period, or `None` when it was never persisted.
+pub(super) fn seed_period(
+    tab: Tab,
+    summary: Option<Period>,
+    strat: Option<Period>,
+) -> Option<Period> {
+    match tab {
+        Tab::Strategies => strat,
+        _ => summary,
+    }
+}
+
 /// Return the selected-zone civil date for an absolute instant.
 ///
 /// Args:
