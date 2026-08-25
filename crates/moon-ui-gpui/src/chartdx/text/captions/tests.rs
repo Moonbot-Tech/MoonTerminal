@@ -167,3 +167,66 @@ fn an_arbitrage_column_stacks_whatever_the_flow_says() {
     let lines = group_lines(&stacked, &texts, LabelZone::ChartTop, LabelAlign::Left);
     assert_eq!(lines, vec![vec![vec![0, 1], vec![2]]]);
 }
+
+/// A module reserves ONE bar track, however many of its lines draw one.
+///
+/// Breakage: charged per line, the reserve depended on which line happened to be widest — so `Bv`
+/// and `Sv`, being different widths, started their tracks in different places. A pair of bars that
+/// do not share a vertical cannot be compared, which is the only thing a bar is for.
+#[test]
+fn a_module_reserves_one_bar_track_for_the_whole_column() {
+    use super::{BAR_ZONE, Cell, Item, bar_zone};
+
+    let bar = crate::chartdx::text::labels::VolumeBar {
+        fill: 0.5,
+        sell: false,
+    };
+    let with_bar = LabelText {
+        row: 0,
+        part: 0,
+        text: "12.7K".into(),
+        prefix: "Bv: ".into(),
+        reachable: false,
+        venue: None,
+        sign: None,
+        color: None,
+        bar: Some(bar),
+        volume_menu: true,
+    };
+    let plain = LabelText {
+        part: 1,
+        bar: None,
+        ..with_bar.clone()
+    };
+    let item = |pos: usize| Item {
+        pos,
+        row: 0,
+        part: pos,
+        style: ChartLabelField::WindowBuyVolume.default_style(),
+        plate: true,
+        size: 11.0,
+        wraps: false,
+        lines: 1,
+        wrap_ix: usize::MAX,
+    };
+
+    let both = Cell {
+        gap: 0.0,
+        items: vec![item(0), item(1)],
+    };
+    assert_eq!(
+        bar_zone(&[with_bar.clone(), plain.clone()], &both),
+        BAR_ZONE,
+        "two lines, one of them barred: one track"
+    );
+
+    let barless = Cell {
+        gap: 0.0,
+        items: vec![item(1)],
+    };
+    assert_eq!(
+        bar_zone(&[with_bar, plain], &barless),
+        0.0,
+        "a module with no bars reserves nothing"
+    );
+}

@@ -49,7 +49,13 @@ const MIN_LEGIBLE_W: f32 = 12.0;
 ///
 /// Fixed rather than proportional to the figure beside it: the bar is read by comparing it with the
 /// bar on the line above, and two tracks of different lengths cannot be compared at a glance.
-const BAR_W: f32 = 30.0;
+const BAR_W: f32 = 42.0;
+
+/// What one bar costs its column: the track plus the gap that separates it from the figure.
+///
+/// Charged ONCE per module rather than per line — every bar in a module shares one vertical, so the
+/// column reserves one track's worth and every line draws into it.
+const BAR_ZONE: f32 = CAPTION_GAP + BAR_W;
 
 /// Height of that bar as a share of the caption's line height, and its floor in logical pixels.
 const BAR_H_RATIO: f32 = 0.34;
@@ -72,6 +78,24 @@ pub(in crate::chartdx) struct CaptionBar {
     /// Whether this is the selling side.
     pub sell: bool,
 }
+/// How much room this column reserves for proportion bars: one track, or none.
+///
+/// ONE per column, not one per line. Every bar in a module is drawn on the same vertical — that is
+/// what makes two of them comparable at a glance — so the column reserves a single track and each
+/// line draws into it. Charging it per line made the reserve depend on which line happened to be
+/// widest, and the tracks then sat wherever their own figure ended.
+fn bar_zone(texts: &[LabelText], cell: &Cell) -> f32 {
+    let any = cell
+        .items
+        .iter()
+        .filter_map(|item| texts.get(item.pos))
+        .any(|entry| entry.bar.is_some());
+    match any {
+        true => BAR_ZONE,
+        false => 0.0,
+    }
+}
+
 /// Number of backing plates a pane publishes: one per MODULE.
 ///
 /// Per module, because that is whose switch it is — see `ChartLabelRow::plate`. One plate for a
@@ -707,10 +731,36 @@ impl RenderState {
             // the same edge — which is what makes a block read as a block. A CENTRED band is the
             // exception: there each caption is centred inside that width.
             let cell_w = self.measure_cell(ctx, texts, cell, budget);
+            // The bar column, decided ONCE for the module: every track in it starts on the same
+            // vertical, which is what lets two of them be compared at a glance. Placed after the
+            // figures in reading order either way — a track before the number it belongs to reads
+            // as belonging to the line above.
+            let reserve = bar_zone(texts, cell);
+            let text_w = (cell_w - reserve).max(0.0);
             let anchor_x = if rightwards {
                 cursor + gap
             } else {
                 cursor - gap
+            };
+            // Where every bar of this module starts, and where its text ends.
+            //
+            // Filling rightwards the text runs from the anchor and the track follows it; filling
+            // leftwards the module is pinned by its RIGHT edge, so the track takes that edge and
+            // the text ends before it. Both put the figure first and the track second.
+            let (bar_x, text_anchor_x) = match (reserve > 0.0, rightwards) {
+                (false, _) => (0.0, anchor_x),
+                (true, true) => (anchor_x + text_w + CAPTION_GAP, anchor_x),
+                // Pinned by its RIGHT edge: the track takes that edge, and the text column starts a
+                // whole track and gap before it.
+                (true, false) => (anchor_x - BAR_W, anchor_x - reserve - text_w),
+            };
+            // Inside a module with bars the figures are LEFT-aligned against each other, whatever
+            // edge the module itself is pinned to. Right-aligning them would line up their last
+            // digits and leave `Bv` and `Sv` starting in different places — the block reads as a
+            // pair of labelled figures, and a label that moves is not one.
+            let cell_ax = match reserve > 0.0 {
+                true => 0.0,
+                false => ax,
             };
             // A CENTRED band centres its captions against each other too, not just the line as a
             // whole: a module whose captions stack — a detect line under its strategy — reads as a
@@ -860,28 +910,28 @@ impl RenderState {
                 // of the budget BEFORE the text is fitted to what is left. Added afterwards, the
                 // track would be drawn past the width the band actually allotted — over whatever
                 // the layout put beside it — and the plate grown from the same width with it.
-                let bar_reserve = match entry.bar {
-                    Some(_) => CAPTION_GAP + BAR_W,
-                    None => 0.0,
-                };
-                let (text, value_w) =
-                    fit_caption(ctx, &glued, item, budget - prefix_w - bar_reserve);
+                let (text, value_w) = fit_caption(ctx, &glued, item, budget - prefix_w - reserve);
                 if text.is_empty() {
                     continue;
                 }
                 // Where this caption sits inside its column. Only a centred band moves it: the
                 // other two anchor every caption to the same edge, which is what makes a block
-                // read as a block there.
-                let item_x = match centred {
-                    true => anchor_x + (cell_w - (prefix_w + value_w)).max(0.0) * 0.5,
-                    false => anchor_x,
+                // read as a block there. The bar column is excluded from that centring — it is a
+                // reserve, not text, and centring against it would push every figure off-centre by
+                // half a track.
+                let item_x = match (centred, reserve > 0.0) {
+                    // A module with bars is a column of its own: its figures start where its text
+                    // column starts, centred band or not.
+                    (_, true) => text_anchor_x,
+                    (true, false) => text_anchor_x + (text_w - (prefix_w + value_w)).max(0.0) * 0.5,
+                    (false, false) => text_anchor_x,
                 };
                 if split {
                     // A right-anchored caption ends at `anchor_x`, so BOTH runs are placed from
                     // that edge backwards: the value takes the last `value_w`, and the prefix the
                     // `prefix_w` before it. Placing the prefix at the value's own left edge — one
                     // subtraction short — draws the two on top of each other.
-                    let prefix_x = if rightwards {
+                    let prefix_x = if cell_ax < 0.5 {
                         item_x
                     } else {
                         item_x - value_w - prefix_w
@@ -923,7 +973,7 @@ impl RenderState {
                     )?;
                     crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
                 }
-                let value_x = match (split, rightwards) {
+                let value_x = match (split, cell_ax < 0.5) {
                     (true, true) => item_x + prefix_w,
                     _ => item_x,
                 };
@@ -937,11 +987,11 @@ impl RenderState {
                     item.size,
                     value_x,
                     y,
-                    ax,
+                    cell_ax,
                     value_color,
                 )?;
                 crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
-                let mut w = metrics.width.as_f32() + prefix_w;
+                let w = metrics.width.as_f32() + prefix_w;
                 // The proportion bar, placed from the SAME measurement the text was drawn at, so it
                 // cannot drift from the figure it belongs to. It extends the caption's own width,
                 // which is what keeps the module beside it from being drawn over the track.
@@ -949,22 +999,28 @@ impl RenderState {
                     let line_h = metrics.line_height.as_f32();
                     let bar_h = (line_h * BAR_H_RATIO).max(BAR_H_MIN);
                     let bar_y = y + (line_h - bar_h) * 0.5;
-                    // Away from the text in whichever direction the line runs: a right-aligned band
-                    // fills leftwards, so its bar sits to the LEFT of the figure and the block still
-                    // reads as one column.
-                    let bar_x = match rightwards {
-                        true => item_x + w + CAPTION_GAP,
-                        false => item_x - w - CAPTION_GAP - BAR_W,
-                    };
+                    // The module's OWN vertical, computed once above — not this line's right edge.
+                    // Following the figure is what made the tracks jump between lines: `Bv 1.36K`
+                    // and `Sv 917.36` are different widths, so their bars started in different
+                    // places and the pair stopped being comparable.
                     bars.push(CaptionBar {
                         dst: [bar_x, bar_y, BAR_W, bar_h],
                         fill: bar.fill.clamp(0.0, 1.0),
                         sell: bar.sell,
                     });
-                    w += CAPTION_GAP + BAR_W;
                 }
-                drawn_w = drawn_w.max(w);
-                let box_left = if rightwards { item_x } else { item_x - w };
+                // What this line OCCUPIES includes the module's bar column: the plate behind it and
+                // the right-click target are grown from this, and a module whose tracks fell
+                // outside both would be drawn over by its neighbour.
+                let occupied = w + reserve;
+                drawn_w = drawn_w.max(occupied);
+                let box_left = match (reserve > 0.0, rightwards) {
+                    // With bars the text column starts at `item_x` either way, and the track sits
+                    // after it — so the block runs from there.
+                    (true, _) => item_x,
+                    (false, true) => item_x,
+                    (false, false) => item_x - w,
+                };
                 // The module's right-click target grows with every line of it — the heading, the
                 // figures and the bars beside them — so the menu opens from anywhere on the block.
                 // Independent of the plate: a module with its backing switched off is still a
@@ -1039,7 +1095,9 @@ impl RenderState {
         cell: &Cell,
         budget: f32,
     ) -> f32 {
-        cell.items
+        let reserve = bar_zone(texts, cell);
+        let text_w = cell
+            .items
             .iter()
             .filter_map(|item| {
                 let entry = texts.get(item.pos)?;
@@ -1053,18 +1111,15 @@ impl RenderState {
                 // A wrapped caption is as wide as its WIDEST line, not as wide as its first: the
                 // column it sits in is what centres the captions above and below it. Read from the
                 // plan rather than wrapped again — measuring is what the plan exists to do once.
-                // A proportion bar is drawn beside the figure and is part of the column's width:
-                // measured without it, the module beside this one would be placed over the track.
-                let bar_reserve = match entry.bar {
-                    Some(_) => CAPTION_GAP + BAR_W,
-                    None => 0.0,
-                };
+                // Measured WITHOUT the bar: the track is a column-wide reserve, added once below.
+                let bar_reserve = reserve;
                 match self.wrapped(item) {
                     Some(lines) => Some(lines.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)),
-                    None => Some(fit_caption(ctx, &glued, item, budget - bar_reserve).1 + bar_reserve),
+                    None => Some(fit_caption(ctx, &glued, item, budget - bar_reserve).1),
                 }
             })
-            .fold(0.0_f32, f32::max)
+            .fold(0.0_f32, f32::max);
+        text_w + reserve
     }
 
     /// The lines `plan_wraps` broke this caption into, or `None` when it is not prose.
