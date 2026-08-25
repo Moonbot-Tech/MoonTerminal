@@ -17,6 +17,7 @@ mod support;
 mod analytics;
 mod chart;
 mod core_pick;
+mod core_status;
 mod naming;
 mod shell;
 mod shot;

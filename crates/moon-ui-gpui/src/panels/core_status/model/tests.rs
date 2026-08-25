@@ -5,7 +5,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use moon_core::feed::{ConnStatus, CoreEndpoint};
 use moon_core::session::{CoreStartupState, CoreStartupStatus, CoreSysStatus};
 
-use super::{CoreStatusRow, ServerConnectivity, ServerKey, aggregate_servers};
+use super::{
+    aggregate_servers, group_version, CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey,
+};
 
 /// Build one core snapshot for aggregation tests.
 fn row(
@@ -32,6 +34,7 @@ fn row(
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
         startup: CoreStartupStatus::default(),
+        server_version: None,
     }
 }
 
@@ -71,6 +74,28 @@ fn same_ip_with_different_ports_forms_one_server() {
             .collect::<Vec<_>>(),
         vec![11, 12]
     );
+}
+
+/// `model.rs:group_version` must treat a silent sibling as disagreement; changing that branch to
+/// `Uniform` would make a collapsed server row claim a build that one of its cores never reported.
+#[test]
+fn group_version_requires_every_core_to_report_the_same_build() {
+    let mut v734 = row(1, None, 0, ConnStatus::Ready, CoreSysStatus::default());
+    v734.server_version = Some(734);
+    let mut same_v734 = row(2, None, 0, ConnStatus::Ready, CoreSysStatus::default());
+    same_v734.server_version = Some(734);
+    let mut v735 = row(3, None, 0, ConnStatus::Ready, CoreSysStatus::default());
+    v735.server_version = Some(735);
+    let silent = row(4, None, 0, ConnStatus::Connecting, CoreSysStatus::default());
+
+    assert_eq!(
+        group_version(&[v734.clone(), same_v734]),
+        GroupVersion::Uniform(734)
+    );
+    assert_eq!(group_version(&[v734.clone(), v735]), GroupVersion::Mixed);
+    assert_eq!(group_version(&[v734, silent.clone()]), GroupVersion::Mixed);
+    assert_eq!(group_version(&[silent]), GroupVersion::Absent);
+    assert_eq!(group_version(&[]), GroupVersion::Absent);
 }
 
 /// `model.rs:finish_group` must use the newest sample independently per machine metric and a `u64`
@@ -434,6 +459,7 @@ fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow 
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
         startup,
+        server_version: None,
     }
 }
 

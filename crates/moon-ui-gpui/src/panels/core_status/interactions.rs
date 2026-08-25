@@ -7,11 +7,98 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState};
 
+use super::by_ip_header::ByIpDragAnchor;
+use super::by_ip_widths::{ByIpCol, MAX_COL_W, MIN_COL_W};
 use super::model::ServerKey;
 use super::{ChartWindow, CoreStatusMode, CoreStatusView};
 use moon_core::session::CoreId;
 
 impl CoreStatusView {
+    /// Record where a By IP header divider drag began.
+    ///
+    /// Called once per drag, from the handle's `on_drag` constructor, which GPUI runs a single time
+    /// after the drag threshold is crossed. The anchor is in LOGICAL (pre-shrink) width space — see
+    /// [`Self::drag_by_ip_col`] for why that matters.
+    ///
+    /// Args:
+    ///     anchor: The column, the pointer x, and the column's logical width at the grab.
+    ///
+    /// Returns:
+    ///     Nothing; no repaint, because nothing has moved yet.
+    pub(super) fn begin_by_ip_resize(&mut self, anchor: ByIpDragAnchor) {
+        self.by_ip_drag = Some(anchor);
+    }
+
+    /// Apply a live By IP divider drag: the anchored width plus the pointer's travel since the grab.
+    ///
+    /// Deliberately NOT `pointer_x - cell_origin_x`, which is how MoonUI's data table does it. The
+    /// By IP header puts a `flex_1` spacer between IP and CPU, so every column right of it is
+    /// right-anchored: widening one moves its OWN left edge left by the same amount, and the next
+    /// event measures against the moved origin. That loop triples the sensitivity per frame. An
+    /// anchor captured once at the grab is immune to relayout.
+    ///
+    /// The anchor is the LOGICAL width, so on a shrunk panel the column tracks the pointer at the
+    /// shrink factor's speed rather than 1:1. That is the correct trade: anchoring on the PAINTED
+    /// width would write back an already-scaled value, the resolver would scale it a second time,
+    /// and the column would jump narrower on the first pixel of the drag.
+    ///
+    /// Args:
+    ///     col: Column whose divider is being dragged.
+    ///     pointer_x: Current pointer x, in window pixels.
+    ///     cx: View context; the width bag's observer persists and repaints.
+    ///
+    /// Returns:
+    ///     Nothing. A drag for a different column than the live anchor, or with no anchor at all, is
+    ///     ignored rather than guessed at.
+    pub(super) fn drag_by_ip_col(&mut self, col: ByIpCol, pointer_x: f32, cx: &mut Context<Self>) {
+        let Some(anchor) = self.by_ip_drag else {
+            return;
+        };
+        if anchor.col != col {
+            return;
+        }
+        let width = (anchor.width + (pointer_x - anchor.mouse_x)).clamp(MIN_COL_W, MAX_COL_W);
+        self.by_ip_col_widths.update(cx, |state, cx| {
+            if state.column_widths.get(col.key()).copied() == Some(width) {
+                return;
+            }
+            state.set_column_width(col.key(), width);
+            cx.notify();
+        });
+    }
+
+    /// Restore automatic width for one By IP column, or for every one of them.
+    ///
+    /// Mirrors the `MoonDataTable` divider gesture so the two views answer the same input: a plain
+    /// double-click drops this column back to its design width, Shift+double-click drops all of them
+    /// (the toolbar button's equivalent, and the only route to it in a detached window — see
+    /// `toolbar_buttons`).
+    ///
+    /// An already-clear bag changes nothing and must NOT notify: the observer would otherwise arm
+    /// `layout_dirty` and schedule a layout write for a double-click that did nothing.
+    ///
+    /// Args:
+    ///     col: Column to reset when `all` is false.
+    ///     all: Reset every column instead of just `col`.
+    ///     cx: View context; the width bag's observer persists and repaints.
+    ///
+    /// Returns:
+    ///     Nothing.
+    pub(super) fn reset_by_ip_col(&mut self, col: ByIpCol, all: bool, cx: &mut Context<Self>) {
+        self.by_ip_col_widths.update(cx, |state, cx| {
+            let changed = if all {
+                let had_any = !state.column_widths.is_empty();
+                state.column_widths.clear();
+                had_any
+            } else {
+                state.column_widths.remove(col.key()).is_some()
+            };
+            if changed {
+                cx.notify();
+            }
+        });
+    }
+
     /// Switch the detached-window chart span and repaint.
     ///
     /// Args:
@@ -246,28 +333,23 @@ impl CoreStatusView {
         }
     }
 
-    /// Toggle the momentary IP reveal for one server.
+    /// Hide or show the whole By-IP address column.
     ///
-    /// Revealing focuses the panel so the [`Context::on_blur`] handler re-masks the IP when focus
-    /// later leaves the panel. Hiding is immediate.
+    /// One state for the whole column, not one per server: a fleet of servers is masked or shown in
+    /// a single click, and the panel does not have to hold — or leak — which rows a user happened to
+    /// open. The state is transient and never persisted, so it lasts only as long as this panel.
+    ///
+    /// Deliberately NOT tied to focus. An earlier per-row reveal was cleared by the panel's blur,
+    /// and a docked panel loses focus on nearly any click, so an address vanished as fast as it
+    /// appeared.
     ///
     /// Args:
-    ///     key: Server identity whose IP should be shown or hidden.
-    ///     window: Host window used to move focus to the panel on reveal.
     ///     cx: View context used to repaint.
     ///
     /// Returns:
-    ///     Nothing; the reveal set is transient and never persisted.
-    pub(super) fn toggle_reveal(
-        &mut self,
-        key: ServerKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.revealed_ips.remove(&key) {
-            self.revealed_ips.insert(key);
-            window.focus(&self.focus, cx);
-        }
+    ///     Nothing; the mask flag is transient and never persisted.
+    pub(super) fn toggle_ip_mask(&mut self, cx: &mut Context<Self>) {
+        self.ip_masked = !self.ip_masked;
         cx.notify();
     }
 
@@ -343,17 +425,28 @@ impl CoreStatusView {
         cx.notify();
     }
 
-    /// Switch between grouped and flat presentations.
+    /// Switch the Core Status presentation.
+    ///
+    /// The choice is remembered per host context, so this panel reopens in the same mode after a
+    /// dock rebuild or a restart; a docked tab and a detached window keep their own selections.
     ///
     /// Args:
     ///     mode: Requested presentation.
     ///     cx: View context used to repaint.
     ///
     /// Returns:
-    ///     Nothing; data caches and visibility state are retained.
+    ///     Nothing; the changed mode is persisted while data caches and visibility state are retained.
     pub(super) fn set_mode(&mut self, mode: CoreStatusMode, cx: &mut Context<Self>) {
         if self.mode != mode {
             self.mode = mode;
+            // Inside the change gate on purpose: re-selecting the current mode writes nothing and
+            // cannot arm a layout flush, matching the width and sort maps beside it.
+            crate::persistence::table_persist::set_core_status_mode(
+                &self.backend,
+                &super::mode_ctx_id(self.detached),
+                mode.code(),
+                cx,
+            );
             cx.notify();
         }
     }

@@ -4,7 +4,7 @@ use moon_core::feed::{ConnStatus, Diagnosis};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
-use super::model::ApiKeyState;
+use super::model::{ApiKeyState, GroupVersion};
 use crate::backend::core_warn::LatencySeverity;
 use crate::conn_diag::fault_short;
 
@@ -129,6 +129,49 @@ pub(super) fn api_expiry_text(state: ApiKeyState) -> String {
         ApiKeyState::Perpetual => "\u{221e}".to_string(),
         ApiKeyState::Days(days) if days < 0 => t!("core_status.api_expired").to_string(),
         ApiKeyState::Days(days) => days.to_string(),
+    }
+}
+
+/// Format one core's reported MoonBot build for its column.
+///
+/// No noun — that lives in the column heading, exactly as [`api_expiry_text`] drops "дн" and
+/// [`ping_plain`] drops "ms"; the fault tooltip spells out "MoonBot %{server}" because that one is
+/// a sentence and a column is not.
+///
+/// The number ITSELF is dotted, through [`moon_core::util::fmt::core_build`]: the wire payload is a
+/// flat `u32`, but the product names its builds `7.69` and `7.70`, so printing the raw `769` makes
+/// the reader convert. That convention is the formatter's to state and is documented there — do not
+/// re-derive it here. The terminal's own `vX.Y.Z` release version is real SemVer and a different
+/// fact entirely.
+///
+/// Args:
+///     version: The build this core reported, when it reported one.
+///
+/// Returns:
+///     Decimal text, or the panel's ASCII unavailable marker.
+pub(super) fn version_text(version: Option<u32>) -> String {
+    version
+        .map(moon_core::util::fmt::core_build)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Format a server row's rolled-up build.
+///
+/// `Mixed` is an ellipsis rather than a number or a dash: it carries exactly one instruction to the
+/// user — expand the group — and neither a number nor a blank would. The glyph lives here rather
+/// than in the dictionaries, per `locales/README.md`, the same reason `∞` lives in
+/// [`api_expiry_text`].
+///
+/// Args:
+///     version: The group's agreement state.
+///
+/// Returns:
+///     The agreed build, an ellipsis, or the unavailable marker.
+pub(super) fn version_group_text(version: GroupVersion) -> String {
+    match version {
+        GroupVersion::Uniform(version) => moon_core::util::fmt::core_build(version),
+        GroupVersion::Mixed => "\u{2026}".to_string(),
+        GroupVersion::Absent => "-".to_string(),
     }
 }
 

@@ -1101,6 +1101,7 @@ fn core_status_table_binds_scoped_telemetry_columns() {
 
     for key in [
         "core_status.col.server",
+        "core_status.col.version",
         "core_status.col.cpu_proc",
         "core_status.col.cpu_sys",
         "core_status.col.cpus",
@@ -1130,7 +1131,7 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         "count(sys.logical_cpu_count)",
     ] {
         assert!(
-            flat_row.contains(binding),
+            code_only(flat_row).contains(binding),
             "the Flat Core Status row lost the scoped telemetry binding `{binding}`"
         );
     }
@@ -1139,7 +1140,7 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         "memory_free(group.process_memory_mb, group.free_physical_memory_mb)",
     ] {
         assert!(
-            server_row.contains(binding),
+            code_only(server_row).contains(binding),
             "the By IP server row lost the scoped telemetry binding `{binding}`"
         );
     }
@@ -1148,8 +1149,30 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         "memory_u16(core.sys.used_memory_mb)",
     ] {
         assert!(
-            process_row.contains(binding),
+            code_only(process_row).contains(binding),
             "the By IP process row lost the scoped telemetry binding `{binding}`"
+        );
+    }
+    for (body, binding, row) in [
+        (
+            flat_row,
+            "MoonDataCell::text(version_text(r.server_version))",
+            "Flat",
+        ),
+        (
+            server_row,
+            "version_group_text(group.version)",
+            "By IP server",
+        ),
+        (
+            process_row,
+            "version_text(core.server_version)",
+            "By IP core",
+        ),
+    ] {
+        assert!(
+            code_only(body).contains(binding),
+            "the {row} row lost the Core Status build binding `{binding}`"
         );
     }
 }

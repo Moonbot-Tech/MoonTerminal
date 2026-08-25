@@ -1,22 +1,28 @@
 //! Flat-mode Core Status table: one core per row with plain, sortable columns.
 //!
-//! A numeric metric renders as a dash until its `Event::KernelHealth` field has arrived at least
-//! once. Header clicks sort through the panel, like every other data table.
+//! Telemetry metrics render as a dash until their `Event::KernelHealth` fields have arrived at
+//! least once; the build column does the same until the core reports its build. Header clicks sort
+//! through the panel, like every other data table.
 
 use std::collections::HashMap;
 
 use super::model::ServerKey;
-use super::presentation::{api_expiry_text, connection_presentation, memory_u16, percent, ping};
+use super::ordering::{FlatLine, FlatSection};
+use super::presentation::{
+    api_expiry_text, connection_presentation, memory_u16, percent, ping, version_text,
+};
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
 use super::*;
 use crate::conn_diag::{fault_facts, fault_tooltip};
+use gpui::prelude::FluentBuilder;
 use moon_core::feed::{Diagnosis, diagnose};
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
 /// Build the fixed set of sortable server, core, connection, and telemetry columns.
 ///
 /// Returns:
-///     Left-aligned identity columns followed by right-aligned numeric metric columns.
+///     Left-aligned identity columns followed by the right-aligned build and numeric telemetry
+///     columns.
 fn columns() -> Vec<MoonDataTableColumn> {
     let numeric = |key: &'static str, title: String, w: f32| {
         MoonDataTableColumn::new(key, title, w)
@@ -30,6 +36,12 @@ fn columns() -> Vec<MoonDataTableColumn> {
             .sortable(true),
         MoonDataTableColumn::new("status", t!("core_status.col.status").to_string(), 110.0)
             .sortable(true),
+        // Right-aligned like the metrics: a column of 3-5 digit build numbers has to align on the
+        // digit, and the one word form ("-") is short enough to sit right. It follows `status`
+        // because it completes the identity block — what this core IS — rather than reporting how
+        // it is doing. Mid-list insertion costs nothing: persisted widths are keyed by column key,
+        // never by index.
+        numeric("version", t!("core_status.col.version").to_string(), 96.0),
         numeric("cpu_proc", t!("core_status.col.cpu_proc").to_string(), 90.0),
         numeric("cpu_sys", t!("core_status.col.cpu_sys").to_string(), 90.0),
         numeric(
@@ -60,29 +72,49 @@ fn columns() -> Vec<MoonDataTableColumn> {
     ]
 }
 
-/// Render the one-row-per-core telemetry table.
+/// Render the telemetry table: one row per core, under a heading per exchange.
+///
+/// `MoonDataTable` has no group-row concept — every line it draws is a row of one uniform height —
+/// so an exchange heading IS a row, and `lines` rather than `rows` is what indexes the table. That
+/// makes the row index address a LINE, not a core: `state.selected_row` and every
+/// `MoonDataTableEvent` index are line indices here. Nothing in this panel reads them today, but a
+/// row action added later must map back through `lines` instead of indexing `rows`.
 ///
 /// Args:
 ///     id: Stable table element identity.
 ///     rows: Immutable, already-sorted visible-core snapshot.
+///     lines: Headings and member rows in render order, addressing `rows` by index.
 ///     server_names: Server display name per server key, for the "server" column.
+///     logos_ready: Whether the off-thread logo prewarm has landed.
+///     sorted: Whether a column sort is active, which the headings explain.
 ///     state: Persisted table interaction state.
 ///     cx: Panel context used for palette, empty-state localization, and the sort callback.
 ///
 /// Returns:
 ///     Full-size data-table host with real, sortable columns.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn core_status_table(
     id: &'static str,
     rows: Rc<Vec<CoreStatusRow>>,
+    lines: Rc<Vec<FlatLine>>,
     server_names: Rc<HashMap<ServerKey, String>>,
+    logos_ready: bool,
+    sorted: bool,
     state: &Entity<MoonDataTableState>,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
+    // Keyed on the CORES, not the lines: a table holding nothing but headings is not representable
+    // (a section is emitted only when it has members), and the empty message must not appear
+    // beneath a heading.
     let empty = rows.is_empty();
-    let row_count = rows.len();
+    let row_count = lines.len();
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
     let view = cx.entity();
+    // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
+    // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
+    // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
+    let section_columns = columns();
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
@@ -90,8 +122,14 @@ pub(super) fn core_status_table(
         t!("core_status.empty").to_string(),
         p,
         cx,
-        MoonDataTable::new(id, row_count, move |ix, _window, _app| {
-            core_status_row(&table_rows[ix], &server_names)
+        MoonDataTable::new(id, row_count, move |ix, _window, app| match &lines[ix] {
+            FlatLine::Section(section) => {
+                // The column COUNT is all a heading needs now. It used to need the column
+                // ORDER too, to pick which cell hosted the caption; the banner spans the row,
+                // so which column sits leftmost stopped mattering.
+                section_row(section, logos_ready, sorted, section_columns.len(), p, app)
+            }
+            FlatLine::Core(row) => core_status_row(&table_rows[*row], &server_names),
         })
         .columns(columns())
         .state(state)
@@ -111,8 +149,7 @@ pub(super) fn core_status_table(
 ///     server_names: Server display name per server key.
 ///
 /// Returns:
-///     One row with server, core, connection, and the numeric metric cells (CPU, memory, both
-///     pings, logical CPUs).
+///     One row in column order, with server, core, connection, build, and telemetry cells.
 fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>) -> MoonDataRow {
     let sys = &r.sys;
     let server = server_names
@@ -126,6 +163,7 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(server),
         MoonDataCell::text(r.name.clone()),
         MoonDataCell::element(status_cell(r, diag.as_ref())),
+        MoonDataCell::text(version_text(r.server_version)),
         MoonDataCell::text(percent(sys.process_cpu_percent)),
         MoonDataCell::text(percent(sys.system_cpu_percent)),
         MoonDataCell::text(memory_u16(sys.used_memory_mb)),
@@ -136,6 +174,133 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(api_expiry_text(r.api_key)),
         MoonDataCell::element(startup_hover_cell(r)),
     ])
+}
+
+/// Left padding `MoonDataTable` puts inside every cell, mirrored from MoonUI's own
+/// `MoonTableColumn::cell_pad_left` default. Only the section band needs it: it has to paint the
+/// area the cell reserves for padding, which is the space between two columns.
+const CELL_PAD_LEFT: f32 = 12.0;
+
+/// Right padding `MoonDataTable` puts inside every cell, mirroring `cell_pad_right`.
+const CELL_PAD_RIGHT: f32 = 8.0;
+
+/// Render one exchange heading as a full-width band across the table.
+///
+/// Same tokens as the Assets panel's exchange heading, so the two read as one component — with one
+/// deliberate difference: the height is the TABLE ROW height rather than Assets' 23 px, because
+/// `MoonDataTable` draws a uniform-height virtual list and a heading here is one of its rows. Do
+/// not "fix" that to match Assets.
+///
+/// The band is an ABSOLUTELY POSITIONED child of each cell rather than a plain full-size one: a
+/// cell carries 12 px of left and 8 px of right padding and clips its overflow, so an in-flow child
+/// would paint the content box only and leave a 20 px gap at every column boundary — the band would
+/// read as dashes rather than as a stripe.
+///
+/// Args:
+///     section: The heading's identity, caption, brand and member count.
+///     logos_ready: Whether the off-thread logo prewarm has landed.
+///     sorted: Whether a column sort is active, which the hover explains.
+///     column_count: How many cells the row must emit; anything else disables cell ordering.
+///     p: Active palette.
+///     cx: Application context, for font-scaled geometry.
+///
+/// Returns:
+///     One row whose every cell paints the band, with the caption on a row-wide banner above them.
+fn section_row(
+    section: &FlatSection,
+    logos_ready: bool,
+    sorted: bool,
+    column_count: usize,
+    p: MoonPalette,
+    cx: &App,
+) -> MoonDataRow {
+    // Keyed on the venue IDENTITY, never on the caption: an element id built from rendered text
+    // changes with the interface language and with a core build's spelling, which makes GPUI treat
+    // one heading as a different element and drop its hover state.
+    let key = match section.section {
+        crate::core_order::ExchangeSection::Venue(id) => format!("{}-{}", id.code, id.dex),
+        crate::core_order::ExchangeSection::Unidentified => "unknown".to_string(),
+    };
+    let logo = logos_ready
+        .then_some(section.brand)
+        .flatten()
+        .and_then(crate::media::exchange_logos::exchange_logo);
+    let count = t!("core_status.cores_n", n = section.members).to_string();
+    // The sort arrow MoonUI draws says nothing about being section-scoped, so the hover says it.
+    // The caption itself no longer needs the hover to be readable — the banner gives it the row.
+    let mut hover = format!("{} - {}", section.label, count);
+    if sorted {
+        hover.push('\n');
+        hover.push_str(&t!("core_status.section_sort_hint"));
+    }
+
+    MoonDataRow::new((0..column_count).map(|_index| {
+        // Inset NEGATIVELY by the cell's own padding, which is what makes the band read as one
+        // stripe: a cell pads its content by 12 px left and 8 px right and clips its overflow, so a
+        // band bounded by that content box would leave 20 px unpainted at every column boundary and
+        // the heading would look like separated segments. Pulling the edges back out covers the
+        // padding, and the cell's `overflow_hidden` trims whatever overshoots -- so this lands
+        // correctly whether the absolute box resolves against the content box or the padding box.
+        //
+        // The band stays PER CELL for the SAME reason it always did, and for no reason involving
+        // scroll: a cell clips its own overflow, so painting the stripe inside each one is what
+        // covers the 20 px of padding at every column boundary. (An earlier version of this comment
+        // claimed the band had to stay per cell because a banner-wide stripe would sit still during
+        // horizontal scroll. That was WRONG and three independent reviews said so: the banner and
+        // the cells are children of the same natively-scrolled content subtree in
+        // `MoonDataTable`, so they move together. Collapsing the band into the banner is therefore
+        // an option, not a hazard — it is simply not this change.)
+        MoonDataCell::element(
+            div().relative().size_full().child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-CELL_PAD_LEFT))
+                    .right(px(-CELL_PAD_RIGHT))
+                    .bg(design::moon_alpha(p.panel_high, 0.72))
+                    .border_b_1()
+                    .border_color(rgb(p.border_soft)),
+            ),
+        )
+    }))
+    // The heading's own content spans the WHOLE row instead of living in one cell. It used to sit
+    // in whichever column the user had dragged leftmost, where "BitGet Futures" was cut to
+    // "BitGet Futu..." by a ~110 px column while the rest of the row sat empty -- a caption is the
+    // one thing on this line that has to be readable. `MoonDataRow::banner` is MoonUI's escape from
+    // the per-cell clipping that caused it, so the caption is bounded by the ROW now, and the count
+    // rides the same flex line at the far end rather than needing a cell of its own.
+    .banner(
+        h_flex()
+            .id(SharedString::from(format!("cs-exchange-{key}")))
+            .size_full()
+            .items_center()
+            .justify_between()
+            .pl(px(CELL_PAD_LEFT))
+            .pr(px(CELL_PAD_RIGHT))
+            .gap(design::ui_px(cx, 6.0))
+            .text_size(design::t_caption(cx))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(p.text_muted))
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .when_some(logo, |row, logo| {
+                        row.child(
+                            img(logo)
+                                .flex_none()
+                                .w(design::ui_px(cx, 13.0))
+                                .h(design::ui_px(cx, 13.0))
+                                .rounded(design::ui_px(cx, 2.0)),
+                        )
+                    })
+                    .child(div().min_w_0().truncate().child(section.label.clone())),
+            )
+            .child(div().flex_none().child(count))
+            .tooltip(crate::panels::common::text_tooltip(hover)),
+    )
 }
 
 /// The status cell: the short verdict, with reason and next step behind a hover.

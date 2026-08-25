@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gpui::*;
 
 use super::model::{self, CoreStatusRow, ServerKey, aggregate_servers};
-use super::ordering::{assign_server_names, compare_flat_rows, compare_groups, natural_cmp};
+use super::ordering::{self, assign_server_names, compare_flat_rows, compare_groups, natural_cmp};
 use super::{CoreStatusView, server_view};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
@@ -65,6 +65,10 @@ impl CoreStatusView {
                 // in this frame agrees about the same key.
                 api_key: model::ApiKeyState::of(api_expiry, now_ms),
                 api_warn: b.warn.core_api_warn(id),
+                // Straight off the same store record every other field above reads: the store
+                // drops it on any non-Ready status, so a row can never show a build the current
+                // connection did not report.
+                server_version: core.and_then(|core| core.server_version),
             });
         }
         out
@@ -189,5 +193,27 @@ impl CoreStatusView {
             }
         }
         out
+    }
+
+    /// Build the Flat presentation: rows in their final order, plus the exchange lines drawn over
+    /// them.
+    ///
+    /// Everything returned is OWNED. [`moon_ui::MoonDataTable`]'s row closure is `'static`, so it
+    /// cannot hold a `&CoreVenue` borrowed out of the session's venue map; resolving the sections
+    /// here rather than at the call site is what keeps that borrow from ever reaching the closure.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the session's venue map.
+    ///
+    /// Returns:
+    ///     The sorted rows, and the heading/member lines addressing them by index.
+    pub(super) fn flat_view(
+        &self,
+        cx: &App,
+    ) -> (Rc<Vec<CoreStatusRow>>, Rc<Vec<ordering::FlatLine>>) {
+        let rows = self.sorted_flat_rows(&self.cached_rows);
+        let venues = self.backend.read(cx).session.core_venues();
+        let lines = ordering::flat_lines(&rows, venues);
+        (Rc::new(rows), Rc::new(lines))
     }
 }

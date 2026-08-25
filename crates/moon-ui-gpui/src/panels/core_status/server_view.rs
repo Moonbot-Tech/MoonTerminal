@@ -3,7 +3,7 @@
 //! Servers start collapsed. `MoonTree` owns expansion, keyboard navigation, and virtual row
 //! layout; the renderer distinguishes a server header (root) from a core row (child) by item id.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -23,18 +23,26 @@ use moon_core::session::CoreId;
 
 use super::CoreStatusView;
 use super::by_ip_widths::{ByIpWidths, CELL_GAP_W, CHEVRON_W, ROW_GAP_W, TREE_SCROLLBAR_W};
-use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
+use super::ip_cell::{IpCell, ip_cell};
+use super::model::{CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::ordering::GroupSortField;
 use super::presentation::{
     LoadLevel, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level, lat_level,
-    level_color, memory_free, memory_u16, percent, ping_plain,
+    level_color, memory_free, memory_u16, percent, ping_plain, version_group_text, version_text,
 };
 use super::startup::{
     StartupCell, startup_cell, startup_cell_text, startup_facts, startup_tooltip,
 };
 
-/// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
+/// IP mask shown while the column is hidden; a fixed run avoids leaking the address length.
 const IP_MASK: &str = "************";
+
+/// Stand-in for a server whose address the terminal does not have.
+///
+/// The house glyph for an absent value (the calendar and summary cells use the same one), so a
+/// server the terminal cannot name reads like every other missing number instead of like a cell
+/// that failed to draw.
+const IP_ABSENT: &str = "\u{2014}";
 
 /// Build server roots, each with one collapsed folder of core children.
 ///
@@ -66,7 +74,8 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 ///
 /// Args:
 ///     groups: Immutable frame snapshot used by virtual row callbacks.
-///     revealed: Servers whose IP is momentarily shown by the eye control.
+///     ip_masked: Whether the whole IP column is hidden, one panel-wide state set from the
+///         column header.
 ///     editing: The server whose name is being renamed inline, if any.
 ///     edit_input: Shared input state backing the inline rename field.
 ///     chart_selected: The server highlighted by a body click (the chart target), if any.
@@ -74,7 +83,11 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 ///     sort: The active By-IP column sort, for the header arrows.
 ///     measured_width: Width the width probe recorded on the previous frame; `0` before the first.
 ///     rem_size: The window's rem size, which sets the row insets.
+///     overrides: The user's dragged column widths, keyed by `ByIpCol::key`; empty until one drag.
+///         Borrowed, not owned: both reads below are synchronous and yield `Copy` geometries, so
+///         nothing in the render tree outlives this call and a per-frame clone would be pure waste.
 ///     state: MoonTree state that owns scrolling and selection.
+///     window: Host window, for the header's divider drag listener.
 ///     cx: Panel context used to create a weak action callback.
 ///
 /// Returns:
@@ -82,7 +95,7 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn grouped_server_view(
     groups: Rc<Vec<ServerStatusGroup>>,
-    revealed: Rc<HashSet<ServerKey>>,
+    ip_masked: bool,
     editing: Option<ServerKey>,
     edit_input: Option<Entity<MoonInputState>>,
     chart_selected: Option<ServerKey>,
@@ -90,7 +103,9 @@ pub(super) fn grouped_server_view(
     sort: (GroupSortField, bool),
     measured_width: f32,
     rem_size: f32,
+    overrides: &HashMap<String, f32>,
     state: &Entity<MoonTreeState>,
+    window: &Window,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
     let groups_empty = groups.is_empty();
@@ -131,10 +146,17 @@ pub(super) fn grouped_server_view(
     // The right edge must stay clear of the status dot AND of the tree's scrollbar: MoonUI draws
     // that scrollbar as an OVERLAY, taking no layout width, so a row sized to the full measurement
     // would slide its last column underneath it.
+    //
+    // Two geometries, and the difference matters: `logical` is what the user's dragged widths say
+    // the columns are, and `widths` is what actually paints this frame after the shrink. The header
+    // needs both — it draws with `widths` but anchors each divider drag in `logical`, so a drag on a
+    // shrunk panel does not write back an already-scaled value for the resolver to scale again.
+    let logical = ByIpWidths::resolved(overrides);
     let widths = ByIpWidths::for_width(
         measured_width,
         crate::design::status_dot_w(cx) + TREE_SCROLLBAR_W,
         rem_size,
+        overrides,
     );
     // Headless tree: it installs no row click/expand handlers and does not override `.selected`, so
     // the panel drives selection (body click) and expansion (chevron click) itself.
@@ -151,7 +173,7 @@ pub(super) fn grouped_server_view(
                         .selected(chart_selected == Some(group.key))
                         .child(server_row(
                             group,
-                            revealed.contains(&group.key),
+                            ip_masked,
                             entry.is_expanded(),
                             editing_input,
                             widths,
@@ -239,8 +261,11 @@ pub(super) fn grouped_server_view(
             root.child(super::by_ip_header::server_header(
                 header_palette,
                 sort,
+                ip_masked,
                 widths,
+                logical,
                 &header_weak,
+                window,
                 cx,
             ))
             .child(tree.flex_1().min_h_0())
@@ -252,7 +277,7 @@ pub(super) fn grouped_server_view(
 ///
 /// Args:
 ///     group: Aggregated server snapshot.
-///     revealed: Whether the IP is currently shown.
+///     masked: Whether the IP column is currently hidden behind its mask.
 ///     edit_input: Present only while this server's name is being renamed inline.
 ///     w: Shared column widths for this frame, already shrunk to the measured row width.
 ///     weak_view: Non-owning panel handle for the row actions.
@@ -266,7 +291,7 @@ pub(super) fn grouped_server_view(
 #[allow(clippy::too_many_arguments)]
 fn server_row(
     group: &ServerStatusGroup,
-    revealed: bool,
+    masked: bool,
     expanded: bool,
     edit_input: Option<Entity<MoonInputState>>,
     w: ByIpWidths,
@@ -308,7 +333,7 @@ fn server_row(
                 .child(MoonDisclosure::glyph(expanded).size(design::DISCLOSURE_GLYPH_MARKER))
         })
         // Clicking the body selects this server for the chart AND blocks the row's expand toggle
-        // (only the chevron expands). Eye/pencil stop the event earlier, so they keep their own act.
+        // (only the chevron expands). The pencil stops propagation first, preserving the rename action.
         .child(
             h_flex()
                 .flex_1()
@@ -327,7 +352,7 @@ fn server_row(
                     }
                 })
                 .child(server_identity(group, edit_input, w, weak_view, p))
-                .child(ip_column(group, revealed, w, weak_view, p))
+                .child(ip_column(group, masked, w, p))
                 .child(div().flex_1())
                 .child(metric_cell(
                     cpu_load(group.system_cpu_percent, group.logical_cpu_count),
@@ -373,7 +398,7 @@ fn server_row(
                     });
                     metric_cell(
                         ping_plain(value),
-                        w.ping,
+                        w.exch,
                         w.icon,
                         level_color(level, p),
                         group.exch_warn,
@@ -388,6 +413,16 @@ fn server_row(
                     w.icon,
                     level_color(api_expiry_level(group.api_key, group.api_warn), p),
                     group.api_warn,
+                    p,
+                ))
+                // Rolled up from this server's cores so a COLLAPSED group still tells the truth: a
+                // build is shown only when EVERY core reported and all agree, because a silent
+                // sibling is a process this row cannot vouch for. Disagreement reads as an
+                // ellipsis, whose whole message is "expand me".
+                .child(version_slot(
+                    version_group_text(group.version),
+                    matches!(group.version, GroupVersion::Uniform(_)),
+                    w.version,
                     p,
                 ))
                 // Rolled up from this server's cores so a COLLAPSED group still tells the
@@ -530,7 +565,7 @@ fn core_row(
                 // This core's core→exchange order latency, also relative to its own baseline.
                 .child(metric_cell(
                     ping_plain(core.sys.order_api_latency_ms.map(u32::from)),
-                    w.ping,
+                    w.exch,
                     w.icon,
                     level_color(exch_lvl, p),
                     core.exch_warn,
@@ -545,6 +580,17 @@ fn core_row(
                     core.api_warn,
                     p,
                 ))
+                // This core's own reported build. No warning treatment and no colour ramp: a ramp
+                // needs a threshold, and this workspace defines no minimum version by explicit
+                // decision. The one age claim the terminal makes — `legacy_core`, about a missing
+                // PROTOCOL version — stays in the fault hover one cell to the right, where it can
+                // co-occur with this number instead of being duplicated by it.
+                .child(version_slot(
+                    version_text(core.server_version),
+                    core.server_version.is_some(),
+                    w.version,
+                    p,
+                ))
                 // The per-core cell carries the full detail behind it; the server row above only
                 // summarises, so the hover lives here where there is one snapshot to describe.
                 //
@@ -554,9 +600,15 @@ fn core_row(
                 // one row-hover away on every core that is actually starting.
                 .child(
                     match diagnose(&core.status, core.fault.as_ref(), &core.startup) {
-                        Some(d) => startup_slot(fault_short(&d.class), w.startup, p.red).tooltip(
-                            crate::panels::common::text_tooltip(fault_tooltip(&fault_facts(&d))),
-                        ),
+                        Some(d) => plain_slot(
+                            "core-status-startup",
+                            fault_short(&d.class),
+                            w.startup,
+                            p.red,
+                        )
+                        .tooltip(crate::panels::common::text_tooltip(fault_tooltip(
+                            &fault_facts(&d),
+                        ))),
                         None => startup_text_cell(
                             startup_cell(&core.status, &core.startup),
                             w.startup,
@@ -675,115 +727,54 @@ fn server_identity(
         .into_any_element()
 }
 
-/// Render the IP column: the masked (or revealed) address plus the eye toggle, in a fixed-width slot
-/// so every server's address lines up under the "IP" header. A server with no known endpoint gets an
-/// empty slot of the same width, so its metric columns still align.
+/// Render the IP column: the address, its fixed-length mask, or a visible "no address" glyph, in a
+/// fixed-width slot so every server's cell lines up under the "IP" header.
+///
+/// All THREE states draw something, which is the point. A server with no known endpoint used to get
+/// an EMPTY slot with no glyph and no control, so "the terminal does not have this address" was
+/// indistinguishable from a panel that had failed to render. The mask control itself now lives ONCE
+/// in the column header rather than once per row, so the row carries only the value: one click masks
+/// a fleet of servers instead of one click each, and the freed width goes back to the address.
 ///
 /// Args:
-///     group: Server snapshot supplying the address and identity key.
-///     revealed: Whether the IP is currently shown.
+///     group: Server snapshot supplying the address.
+///     masked: Whether the user has hidden the whole IP column.
 ///     w: Shared column widths, supplying the IP column.
-///     weak_view: Non-owning panel handle for the reveal callback.
 ///     p: Active Moon palette.
 ///
 /// Returns:
 ///     A fixed-width IP cell.
 fn ip_column(
     group: &ServerStatusGroup,
-    revealed: bool,
+    masked: bool,
     w: ByIpWidths,
-    weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
 ) -> impl IntoElement {
-    let has_ip = group.address.is_some();
-    let ip_text = if revealed {
-        group
-            .address
-            .map(|address| address.to_string())
-            .unwrap_or_default()
-    } else {
-        IP_MASK.to_string()
+    let cell = ip_cell(group.address, masked);
+    // Only the unknown state carries a tooltip: the other two are self-explanatory, and a tooltip on
+    // every row of a 56-server fleet is noise.
+    let unknown = matches!(cell, IpCell::Unknown);
+    let (text, color) = match cell {
+        IpCell::Shown(address) => (address.to_string(), p.text_soft),
+        IpCell::Masked => (IP_MASK.to_string(), p.text_muted),
+        IpCell::Unknown => (IP_ABSENT.to_string(), p.text_muted),
     };
-    h_flex()
+    // A constant id shared by every row, like `startup_slot`: the id exists to make the element
+    // stateful enough to carry a tooltip, not to identify the row.
+    div()
+        .id("core-status-ip")
         .w(px(w.ip))
         .flex_none()
-        .items_center()
-        .gap_1()
-        .overflow_hidden()
-        .when(has_ip, |row| {
-            row.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(if revealed { p.text_soft } else { p.text_muted }))
-                    .child(ip_text),
-            )
-            .child(eye_action(group.key, revealed, weak_view))
+        .truncate()
+        .text_color(rgb(color))
+        .when(unknown, |cell| {
+            cell.tooltip(crate::panels::common::text_tooltip(
+                t!("core_status.ip_unknown").to_string(),
+            ))
         })
+        .child(text)
 }
 
-/// Render the eye control that momentarily reveals a masked server IP.
-///
-/// Args:
-///     key: Server identity toggled by the control.
-///     revealed: Whether the IP is currently shown.
-///     w: Shared column widths, supplying the IP column.
-///     weak_view: Non-owning panel handle for the reveal callback.
-///
-/// Returns:
-///     A ghost icon button that stops the row's selection mouse-down.
-fn eye_action(
-    key: ServerKey,
-    revealed: bool,
-    weak_view: &WeakEntity<CoreStatusView>,
-) -> impl IntoElement {
-    let weak_view = weak_view.clone();
-    div()
-        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
-        .child(
-            MoonButton::new(SharedString::from(format!(
-                "core-status-eye-{}",
-                key.tree_id()
-            )))
-            .xsmall()
-            .ghost()
-            .icon(if revealed {
-                "icons/eye.svg"
-            } else {
-                "icons/eye-off.svg"
-            })
-            .tooltip(if revealed {
-                t!("core_status.hide_ip").to_string()
-            } else {
-                t!("core_status.show_ip").to_string()
-            })
-            .on_click(move |_, window, app| {
-                let Some(view) = weak_view.upgrade() else {
-                    return;
-                };
-                view.update(app, |this, cx| this.toggle_reveal(key, window, cx));
-            }),
-        )
-}
-
-/// Render one inline metric value in a fixed-width box, with a leading slot for its warning mark.
-///
-/// No decorative icon: the icon lead holds the SUSTAINED-warning triangle for THIS metric when set,
-/// so the mark sits directly left of its own value instead of trailing the fixed box into the next
-/// column (which read as the neighbour's warning). Empty otherwise, so every column stays aligned and
-/// matches the header caption's lead.
-///
-/// Args:
-///     value: Preformatted localized metric text.
-///     value_w: Width in pixels for the value box, from the frame's shared widths.
-///     icon_w: Width of the warning-icon lead, from the same widths.
-///     color: Threshold color of the number.
-///     warn: Whether this metric has an open sustained-warning episode.
-///     p: Active Moon palette.
-///
-/// Returns:
-///     A compact metric cell with a stable footprint.
 /// One startup cell: fixed width, clipped, never wrapping.
 ///
 /// Deliberately NOT a [`metric_cell`]: that helper reserves a warning-icon lead driven by a
@@ -805,26 +796,56 @@ fn startup_text_cell(cell: StartupCell, value_w: f32, p: MoonPalette) -> Statefu
         StartupCell::Done { .. } => p.text_soft,
         StartupCell::Absent => p.text_muted,
     };
-    startup_slot(startup_cell_text(cell), value_w, color)
+    plain_slot(
+        "core-status-startup",
+        startup_cell_text(cell),
+        value_w,
+        color,
+    )
 }
 
-/// The startup column's chrome, independent of what is written in it.
+/// One reported-build cell, in the same slot chrome the startup column uses.
 ///
-/// Extracted so the per-core row can put a connection VERDICT in the same slot without the group
-/// row above it changing at all: a group summarises several cores and has no single reason to
-/// state, so it keeps rendering its rolled-up figure through [`startup_text_cell`]. One owner for
-/// the width, clipping and no-wrap behaviour means the two can never drift apart.
+/// A reported build is a frozen identity fact rather than a live measurement, so it is subordinate
+/// to the metrics beside it — `text_soft`, the same treatment [`startup_text_cell`] gives a
+/// FINISHED startup. Absence and disagreement are `text_muted`: they mean "no answer", and painting
+/// them amber or red would turn a fact this terminal cannot establish into an accusation.
 ///
 /// Args:
+///     text: The already-composed cell text.
+///     reported: Whether there is a build to show, as opposed to absence or disagreement.
+///     value_w: Current column width from [`ByIpWidths`].
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A compact build cell with a stable footprint.
+fn version_slot(text: String, reported: bool, value_w: f32, p: MoonPalette) -> Stateful<Div> {
+    let color = if reported { p.text_soft } else { p.text_muted };
+    plain_slot("core-status-version", text, value_w, color)
+}
+
+/// A fixed-width text cell with NO warning-icon lead, for a column that has no `WarnAxis` behind
+/// it.
+///
+/// Deliberately NOT [`metric_cell`]: that helper reserves a lead driven by a `*_warn` bool, and a
+/// column with no warning source would reserve space that can never light. The startup column, the
+/// per-core connection VERDICT that replaces it, and the reported build all render through this one
+/// owner, so their width, clipping and no-wrap behaviour cannot drift apart.
+///
+/// The id is a PARAMETER because a row now draws more than one of these; two children sharing a
+/// stateful element id is a real GPUI hazard, not a style point.
+///
+/// Args:
+///     id: Stable element identity, unique among the cells of one row.
 ///     text: Already-composed cell text.
 ///     value_w: Current column width from [`ByIpWidths`].
 ///     color: Packed theme colour for the text.
 ///
 /// Returns:
 ///     A compact cell with a stable footprint.
-fn startup_slot(text: String, value_w: f32, color: u32) -> Stateful<Div> {
+fn plain_slot(id: &'static str, text: String, value_w: f32, color: u32) -> Stateful<Div> {
     div()
-        .id("core-status-startup")
+        .id(id)
         .w(px(value_w))
         .flex_none()
         .overflow_hidden()
@@ -833,6 +854,23 @@ fn startup_slot(text: String, value_w: f32, color: u32) -> Stateful<Div> {
         .child(text)
 }
 
+/// Render one inline metric value in a fixed-width box, with a leading slot for its warning mark.
+///
+/// No decorative icon: the icon lead holds the SUSTAINED-warning triangle for THIS metric when set,
+/// so the mark sits directly left of its own value instead of trailing the fixed box into the next
+/// column (which read as the neighbour's warning). Empty otherwise, so every column stays aligned and
+/// matches the header caption's lead.
+///
+/// Args:
+///     value: Preformatted localized metric text.
+///     value_w: Width in pixels for the value box, from the frame's shared widths.
+///     icon_w: Width of the warning-icon lead, from the same widths.
+///     color: Threshold color of the number.
+///     warn: Whether this metric has an open sustained-warning episode.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A compact metric cell with a stable footprint.
 fn metric_cell(
     value: String,
     value_w: f32,

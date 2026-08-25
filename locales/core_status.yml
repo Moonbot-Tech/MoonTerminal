@@ -11,6 +11,12 @@ core_status.cores_n:
   ru: "Ядер: %{n}"
   en: "Cores: %{n}"
   es: "Núcleos: %{n}"
+# Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
+# sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
+core_status.section_sort_hint:
+  ru: "Сортировка — внутри каждой биржи"
+  en: "Sorted within each exchange"
+  es: "Ordenado dentro de cada bolsa"
 core_status.cores:
   ru: "Ядра"
   en: "Cores"
@@ -74,6 +80,10 @@ core_status.hide_ip:
   ru: "Скрыть IP"
   en: "Hide IP"
   es: "Ocultar IP"
+core_status.ip_unknown:
+  ru: "Терминал ещё не получил адрес этого сервера"
+  en: "The terminal has no address for this server yet"
+  es: "El terminal aún no tiene la dirección de este servidor"
 core_status.cpu_load:
   ru: "%{value} (%{n})"
   en: "%{value} (%{n})"
@@ -174,6 +184,14 @@ core_status.col.updated:
   es: "Actualizado"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
+# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# a bare number; it is a proper name and is not translated. BOTH views read this one key --
+# they would never legitimately differ, and two identical values are one translator edit away
+# from disagreeing. `core_status.col.startup` is shared the same way.
+core_status.col.version:
+  ru: "MoonBot"
+  en: "MoonBot"
+  es: "MoonBot"
 core_status.col.api_key:
   ru: "АПИ (дн)"
   en: "API (d)"
@@ -195,6 +213,12 @@ core_status.hdr.ip:
   ru: "IP"
   en: "IP"
   es: "IP"
+# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
+# panel advertises them, and the Shift variant is the only reset a detached window offers.
+core_status.col_resize:
+  ru: "Потяните, чтобы изменить ширину. Двойной клик сбрасывает колонку, Shift+двойной клик — все"
+  en: "Drag to resize. Double-click resets this column, Shift+double-click resets all"
+  es: "Arrastre para redimensionar. Doble clic restablece esta columna, Shift+doble clic todas"
 # API-key column heading in the By-IP tree; carries the unit its cells omit.
 core_status.hdr.api_key:
   ru: "АПИ (дн)"

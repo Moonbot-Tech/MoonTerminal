@@ -20,29 +20,144 @@ use crate::design;
 use crate::panels::common::{RadioMark, popup_close_button, popup_title, radio_items};
 use moon_core::config::layout::{WarnAxesCfg, WarnParams};
 
-// Fixed column widths (UI px) so every control lines up in a table down the rows. The widest row
-// (a latency axis: 4 params) sets the total; shorter rows pad empty param slots so their sound column
-// still lines up. Gap between columns is `COL_GAP`.
+// Design-reference column widths, at UI scale 1.0 and Font-slider delta 0, so every control lines
+// up in a table down the rows. The widest row (a latency axis: 4 params) sets the total; shorter
+// rows pad empty param slots so their sound column still lines up. Gap between columns is
+// `COL_GAP`. Nothing here is a rendered pixel — every one of them goes through
+// [`WarnCfgMetrics`], which is the only place a scale is applied.
 const NAME_W: f32 = 138.0;
 const ON_W: f32 = 30.0;
 const CHART_W: f32 = 34.0;
 const PARAM_W: f32 = 66.0;
 const SOUND_W: f32 = 128.0;
 const COL_GAP: f32 = 6.0;
-/// Fixed caption-row and control-row heights, so every column's caption and control line up on the
-/// same two baselines down the whole table (the checkboxes, steppers and the sound row all centre in
-/// the control band).
+/// Design-reference caption-row and control-row heights, so every column's caption and control line
+/// up on the same two baselines down the whole table (the checkboxes, steppers and the sound row all
+/// centre in the control band).
 const CAP_H: f32 = 12.0;
 const CTRL_H: f32 = 28.0;
 /// The most threshold columns any row has (the latency axes: yellow, red, window, hold).
 const MAX_PARAMS: usize = 4;
-/// Popover CONTENT width: the eight columns (name, on, chart, four params, sound) plus the seven
-/// gaps between them plus a small margin, so nothing wraps to a second line.
+/// One ROW: the eight columns (name, on, chart, four params, sound) plus the seven gaps between
+/// them. Derived from the column constants, never restated as a literal — the trailing controls
+/// ended up outside the box the last time two numbers had to agree and only one of them changed.
+const WARN_CFG_ROW_W: f32 =
+    NAME_W + ON_W + CHART_W + MAX_PARAMS as f32 * PARAM_W + SOUND_W + 7.0 * COL_GAP;
+/// Slack over the row width.
 ///
-/// `MoonPopover::content_width_ui` adds its own padding and border around this, and the content no
-/// longer pads itself, so no term here accounts for popup chrome.
-const WARN_CFG_W: f32 =
-    NAME_W + ON_W + CHART_W + MAX_PARAMS as f32 * PARAM_W + SOUND_W + 7.0 * COL_GAP + 16.0;
+/// The sound column's `MoonDropdown` resolves its trigger and menu as `(width * text_scale).max(
+/// minimum readable)`, so its real width can exceed what was asked for on a long localized label.
+/// This is the margin that keeps the ▶ button inside the box when it does.
+const ROW_SLACK: f32 = 16.0;
+/// Ratio between a rendered font size and the line box GPUI lays it out in.
+///
+/// Raw GPUI text with no explicit line height gets its font's own, a little over 1.25x the size.
+/// A fixed band shorter than that clips the glyphs rather than overflowing visibly, which is why
+/// the two band heights below take it as a floor.
+const LINE_BOX: f32 = 1.3;
+/// MoonUI's own HEIGHT metrics for a `MoonButtonSize::Action` control — the size the sound column's
+/// `MoonDropdown` trigger runs at, and the TALLEST thing standing in the control band.
+///
+/// Copied from `MoonButtonMetrics::base_for_size(Size::Small)`, which is what a `MoonButton` of that
+/// size actually resolves through: `height: 26`, `line_height: 14`, and a vertical pad its `scaled()`
+/// derives as `(height - line_height) * 0.5`. Do NOT take these from `button_text_metrics(Action)`
+/// instead — that returns `(font_size, line_height, GAP)` for the label, whose third field is a
+/// HORIZONTAL icon gap, and its `(26, 16, 5)` only happens to give the same answer because
+/// `16 + 2*5 == 14 + 2*6`; it would stop agreeing the moment MoonUI retunes either function.
+///
+/// The height resolves as `fit_height(base, line, pad) = max(ui(base), line_height(line) +
+/// 2 * ui(pad))`, and `line_height` is ADDITIVE in the Font-slider delta — so the trigger is 26px at
+/// delta 0, 28px at the shipped +2 and 32px at +6, past `CTRL_H` exactly where the goal says nothing
+/// may clip. Deriving the floor from MoonUI's own contract rather than from a generic text ratio is
+/// what makes the band track the CONTROL instead of merely the text beside it.
+const ACTION_H: f32 = 26.0;
+const ACTION_LINE_H: f32 = 14.0;
+const ACTION_PAD_Y: f32 = (ACTION_H - ACTION_LINE_H) * 0.5;
+
+/// Every rendered dimension of the alert table, resolved once from the active scales.
+///
+/// The popup mixes two scales that MoonUI moves independently: its captions and values are raw
+/// GPUI text on the FONT scale (`design::t_caption` / `design::t_body`, which grow with the Font
+/// slider AND its `ui_font_delta`, +2 at the shipped default), while its `MoonCheckbox`,
+/// `MoonButton` steppers and the ▶ box are MoonUI widgets on the UI scale. A column sized on one
+/// of the two is wrong whenever the other is larger: on the UI scale the text outgrew its column
+/// at the stock config, and on the font scale a widened UI would push the widgets out.
+///
+/// So every HORIZONTAL length takes `max(ui, font_width)` — wide enough for whichever occupant is
+/// bigger — and the popover is told the result in ALREADY-RENDERED pixels
+/// (`MoonPopover::content_width`) rather than through `content_width_ui` or `content_width_font`,
+/// because neither single-scale policy can bound a row that holds both.
+///
+/// [`Self::resolve`] is pure and takes no context, so the geometry is testable without a window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WarnCfgMetrics {
+    /// The one scale every horizontal design-reference length is multiplied by.
+    w_scale: f32,
+    /// Rendered height of the caption band.
+    cap_h: f32,
+    /// Rendered height of the control band.
+    ctrl_h: f32,
+}
+
+impl WarnCfgMetrics {
+    /// Resolve the table's geometry for one pair of active scales.
+    ///
+    /// Args:
+    ///     ui: The UI geometry scale (`MoonThemeTokens::ui(1.0)`).
+    ///     font_w: The font WIDTH scale (`MoonThemeTokens::font_width_scale`), which is the pure
+    ///         multiply `MoonPopover` itself uses — not the ADDITIVE `font()` used for text sizes.
+    ///     cap_px: The rendered caption font size.
+    ///     body_px: The rendered body font size.
+    ///     action_h: The rendered height of a `MoonButtonSize::Action` control, from MoonUI's own
+    ///         fit-height rule — see [`ACTION_H`]. The control band can never be shorter than the
+    ///         tallest control standing in it.
+    ///
+    /// Returns:
+    ///     The resolved metrics.
+    fn resolve(ui: f32, font_w: f32, cap_px: f32, body_px: f32, action_h: f32) -> Self {
+        Self {
+            w_scale: ui.max(font_w).max(0.25),
+            cap_h: (CAP_H * ui).max(cap_px * LINE_BOX),
+            ctrl_h: (CTRL_H * ui).max(body_px * LINE_BOX).max(action_h),
+        }
+    }
+
+    /// Scale one design-reference horizontal length into rendered pixels.
+    fn w(self, base: f32) -> Pixels {
+        px(base * self.w_scale)
+    }
+
+    /// The rendered width one row occupies: its eight columns and the seven gaps between them.
+    fn row_w(self) -> f32 {
+        WARN_CFG_ROW_W * self.w_scale
+    }
+
+    /// The rendered CONTENT width the popover is told to paint: the row plus [`ROW_SLACK`].
+    ///
+    /// Built ON TOP of [`Self::row_w`] rather than beside it, so the box and the row it has to
+    /// hold cannot drift apart — `MoonPopover` adds its own padding and border around this, and the
+    /// content root pads itself with nothing.
+    fn content_w(self) -> f32 {
+        self.row_w() + ROW_SLACK * self.w_scale
+    }
+}
+
+/// Read the active scales and resolve [`WarnCfgMetrics`].
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The table geometry for the current theme, font slider and UI scale.
+fn warn_cfg_metrics(cx: &App) -> WarnCfgMetrics {
+    WarnCfgMetrics::resolve(
+        design::ui_value(cx, 1.0),
+        design::font_scale(cx),
+        f32::from(design::t_caption(cx)),
+        f32::from(design::t_body(cx)),
+        design::fit_h_value(cx, ACTION_H, ACTION_LINE_H, ACTION_PAD_Y),
+    )
+}
 
 /// One row's "show on chart" state and its writer, or `None` for an axis that cannot be drawn on a
 /// chart at all — which leaves that column EMPTY rather than showing a checkbox whose state would
@@ -95,10 +210,15 @@ impl CoreStatusView {
             .render();
 
         let mut popover = MoonPopover::new("core-status-warn-popover")
-            // Open ABOVE the gear (right edge aligned to it, growing left), so the wide panel sits
-            // over the content area and the gear stays visible below it.
-            .placement(MoonPopoverPlacement::TopEnd)
-            .content_width_ui(WARN_CFG_W)
+            // Open BELOW the gear, right edge aligned to it so the wide panel grows left into the
+            // strip rather than off the right edge of the window. Downward is what the gear's own
+            // position asks for: it sits on the tab strip at the TOP of the panel, so a popup above
+            // it covered the chrome and read as detached from the control that opened it.
+            .placement(MoonPopoverPlacement::BottomEnd)
+            // Already-rendered pixels, resolved from the same metrics the rows lay themselves out
+            // with — see `WarnCfgMetrics` for why neither `content_width_ui` nor
+            // `content_width_font` can bound this row on its own.
+            .content_width(warn_cfg_metrics(cx).content_w())
             .close_on_content_click(false)
             // A `MoonDropdown` menu inside this popover paints in its OWN deferred layer, outside
             // this popover's box, and `on_mouse_down_out` is bounds-based and runs in the CAPTURE
@@ -339,7 +459,7 @@ impl CoreStatusView {
         h_flex()
             .w_full()
             .items_start()
-            .gap(design::ui_px(cx, COL_GAP))
+            .gap(warn_cfg_metrics(cx).w(COL_GAP))
             .py(design::ui_px(cx, 5.0))
             // Only a separator BETWEEN rows — the first row has no line above it.
             .when(!first, |el| el.border_t_1().border_color(rgb(p.border)))
@@ -387,7 +507,7 @@ impl CoreStatusView {
             // Pad the missing threshold columns so the sound column lines up across every row.
             .children((n_params..MAX_PARAMS).map(|_| {
                 div()
-                    .w(design::ui_px(cx, PARAM_W))
+                    .w(warn_cfg_metrics(cx).w(PARAM_W))
                     .flex_none()
                     .into_any_element()
             }))
@@ -410,13 +530,14 @@ impl CoreStatusView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let m = warn_cfg_metrics(cx);
         v_flex()
-            .w(design::ui_px(cx, width))
+            .w(m.w(width))
             .flex_none()
             .gap(design::ui_px(cx, 3.0))
             .child(
                 div()
-                    .h(design::ui_px(cx, CAP_H))
+                    .h(px(m.cap_h))
                     .w_full()
                     .flex()
                     .items_center()
@@ -429,7 +550,7 @@ impl CoreStatusView {
             )
             .child(
                 div()
-                    .h(design::ui_px(cx, CTRL_H))
+                    .h(px(m.ctrl_h))
                     .w_full()
                     .flex()
                     .items_center()
@@ -539,10 +660,11 @@ impl CoreStatusView {
         let play_name = cur;
         let p = MoonPalette::active(cx);
         let enabled = play_name.is_some();
+        let m = warn_cfg_metrics(cx);
         h_flex()
             .w_full()
             .items_center()
-            .gap(design::ui_px(cx, 4.0))
+            .gap(m.w(4.0))
             .child(
                 MoonDropdown::new(SharedString::from(format!("cs-warn-{id}-snd")))
                     .label(label)
@@ -558,7 +680,9 @@ impl CoreStatusView {
             .child(
                 div()
                     .id(SharedString::from(format!("cs-warn-{id}-play")))
-                    .size(design::ui_px(cx, CTRL_H))
+                    // Square, and its side IS the control band, so it can never outgrow the row it
+                    // sits in nor leave a gap under it.
+                    .size(px(m.ctrl_h))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -712,3 +836,6 @@ fn chart_checkbox(
             });
         })
 }
+
+#[cfg(test)]
+mod tests;

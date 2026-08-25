@@ -13,9 +13,11 @@
 //! another table's columns or sort requires no table-specific storage code here.
 //!
 //! The module also owns the SIBLING per-context preferences of those tables — [`report_filters`]
-//! and [`set_report_filters`] — because they are keyed by the same [`ctx_id`] and written under the
-//! same compare-then-mark-dirty contract. Keeping every writer of that contract in one file is the
-//! point; a panel that reaches into `layout` directly is the drift this prevents.
+//! and [`set_report_filters`], [`core_status_mode`] and [`set_core_status_mode`] — because they are
+//! keyed by the same [`ctx_id`] and written under the same compare-then-mark-dirty contract. That
+//! last pair is not a table preference at all; it is here because it is keyed and written exactly
+//! like one. Keeping every writer of that contract in one file is the point; a panel that reaches
+//! into `layout` directly is the drift this prevents.
 
 use std::collections::HashMap;
 
@@ -181,6 +183,64 @@ pub fn set_report_filters(
             b.layout_dirty = true;
         }
     });
+}
+
+/// Returns the stored Core Status presentation code for `id`, borrowed from the live layout.
+///
+/// The code is OPAQUE here: this module never spells the panel's vocabulary, so a value written by
+/// a newer build, or by hand, comes back verbatim. `None` means nothing was ever stored for that
+/// context. The caller resolves the code and must fall back to its own default on anything it does
+/// not recognise. Pass the same context-qualified id used for widths.
+///
+/// Args:
+///     backend: Live backend whose layout holds the persisted code.
+///     id: Context-qualified Core Status mode key.
+///
+/// Returns:
+///     The stored opaque code, or `None` when that context has no entry.
+pub fn core_status_mode<'a>(backend: &'a Backend, id: &str) -> Option<&'a str> {
+    backend.layout.core_status_mode.get(id).map(String::as_str)
+}
+
+/// Stores the Core Status presentation code for `id` when it differs from what is already there.
+///
+/// The same compare-then-mark-dirty rule as [`set_visible`]: re-selecting the mode already stored
+/// writes nothing and leaves `layout_dirty` alone, so a repeated click cannot arm a layout flush.
+///
+/// Args:
+///     backend: Shared backend whose layout receives a changed code.
+///     id: Context-qualified Core Status mode key.
+///     code: Opaque stable code owned by the Core Status panel.
+///     cx: GPUI application context for the backend update.
+///
+/// Returns:
+///     Nothing; only a changed code marks the layout dirty.
+pub fn set_core_status_mode(backend: &Entity<Backend>, id: &str, code: &str, cx: &mut App) {
+    backend.update(cx, |b, _| {
+        if update_core_status_mode(&mut b.layout.core_status_mode, id, code) {
+            b.layout_dirty = true;
+        }
+    });
+}
+
+/// Apply one presentation code to the shared map and report whether it changed.
+///
+/// Kept pure for the same reason as [`update_sort_preferences`]: insert, switch and no-op then have
+/// a direct regression test without constructing a GPUI application context.
+///
+/// Args:
+///     modes: Shared per-context map to update.
+///     id: Context-qualified Core Status mode key.
+///     code: Opaque stable code to store for the context.
+///
+/// Returns:
+///     `true` when the map changed, otherwise `false`.
+fn update_core_status_mode(modes: &mut HashMap<String, String>, id: &str, code: &str) -> bool {
+    if modes.get(id).map(String::as_str) == Some(code) {
+        return false;
+    }
+    modes.insert(id.to_string(), code.to_string());
+    true
 }
 
 /// Stores the table's current column widths for `id` when they change.

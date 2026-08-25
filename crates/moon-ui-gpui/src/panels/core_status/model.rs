@@ -48,6 +48,15 @@ pub(super) struct CoreStatusRow {
     /// Whether this core's key is inside the configured warning horizon, decided by the engine so
     /// the cell mark and the episode agree.
     pub(super) api_warn: bool,
+    /// MoonBot build most recently reported for this core, or `None`.
+    ///
+    /// `None` is UNINTERPRETABLE and must be rendered as a plain absence: the store clears the
+    /// report after every non-Ready status, and it also covers both a core that has not reported
+    /// yet and one too old to report a build at all. Those report-absence cases are byte-identical
+    /// at the wire — see `moon_core::feed::CoreIdentityFacts`. Nothing here may turn absence into
+    /// an age claim; the one age claim the terminal makes is `Diagnosis::legacy_core`, which is
+    /// about a missing PROTOCOL version and lives in the fault tooltip.
+    pub(super) server_version: Option<u32>,
 }
 
 /// What is known about one core's exchange API key, as of a given moment.
@@ -140,6 +149,53 @@ impl ApiKeyState {
     }
 }
 
+/// What one server's cores agree on about their MoonBot build.
+///
+/// An AGREEMENT rollup, not an attention-first or urgency-min one like [`group_startup`] and
+/// [`soonest_key`]. Those need an ordering in which one value is WORSE; there is none here, because
+/// no minimum-version constant exists anywhere in this workspace and inventing one was specifically
+/// rejected (`moon_core::feed::conn_verdict`). A build number is a fact, not a severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GroupVersion {
+    /// Every core on the server reported, and all reported the same build.
+    Uniform(u32),
+    /// At least one core reported, but they do not all agree — INCLUDING the case where one
+    /// reported and a sibling is silent. A collapsed group must not assert a build on behalf of a
+    /// process nobody could ask, which is `soonest_key`'s own discipline applied here.
+    Mixed,
+    /// No core on the server reported anything.
+    Absent,
+}
+
+/// Roll one server's reported builds up into the value its collapsed row shows.
+///
+/// Args:
+///     cores: The group's core rows, already collected.
+///
+/// Returns:
+///     `Uniform` only when every core reported and all agree, `Mixed` on any disagreement or any
+///     silent sibling beside a reporting one, `Absent` when nothing was reported at all.
+pub(super) fn group_version(cores: &[CoreStatusRow]) -> GroupVersion {
+    let mut reported: Option<u32> = None;
+    let mut any_silent = false;
+    for core in cores {
+        match core.server_version {
+            None => any_silent = true,
+            Some(version) => match reported {
+                Some(seen) if seen != version => return GroupVersion::Mixed,
+                _ => reported = Some(version),
+            },
+        }
+    }
+    match (reported, any_silent) {
+        // Nothing was reported at all — including the empty group, which must not panic.
+        (None, _) => GroupVersion::Absent,
+        // A silent sibling beside a reporting core: the group agrees on nothing it can vouch for.
+        (Some(_), true) => GroupVersion::Mixed,
+        (Some(version), false) => GroupVersion::Uniform(version),
+    }
+}
+
 /// Stable grouping identity for a known host or one isolated unknown core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ServerKey {
@@ -216,6 +272,9 @@ pub(super) struct ServerStatusGroup {
     /// A real day count wins whenever any core has one; `Unknown` when none does and at least one
     /// core is unaccounted for; `Perpetual` only when every core is unlimited.
     pub(super) api_key: ApiKeyState,
+    /// What this server's cores agree on about their MoonBot build — see [`group_version`]. A
+    /// collapsed group shows this, so it must never speak for a core that reported nothing.
+    pub(super) version: GroupVersion,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -280,6 +339,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 exch_warn: false,
                 api_warn: false,
                 api_key: ApiKeyState::Unknown,
+                version: GroupVersion::Absent,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,
@@ -397,6 +457,7 @@ fn finish_group(group: &mut ServerStatusGroup) {
     group.api_key = soonest_key(&group.cores);
     group.api_warn = group.cores.iter().any(|core| core.api_warn);
     group.startup = group_startup(&group.cores);
+    group.version = group_version(&group.cores);
 
     let mut has_process_memory = false;
     let mut process_memory_mb = 0u64;
