@@ -29,12 +29,36 @@ use crate::panels::{
 
 mod rows;
 
+#[cfg(test)]
+mod tests;
+
 /// Width of one micro glyph button (↑ ↓ 👁 ⇤ ≡ ⇥ ×).
 pub(super) const MICRO_W: f32 = 20.0;
 /// Micro buttons on a module line: ↑ ↓ 👁, two placements, three edges, ×.
 const MICRO_COUNT: f32 = 9.0;
 /// Width of the module's name button, which is also what opens its editor.
-pub(super) const NAME_W: f32 = 132.0;
+///
+/// The widest control on the line, because it is the only one holding ARBITRARY text: a module
+/// with no title of its own is named by the captions it prints, which spells out localized figure
+/// names and their separators. At 132 the ordinary Russian pair — "Ордеров · Экспозиция" — was
+/// already over the edge before the used-parts count was appended. 150 carries that pair whole at
+/// a zero Font delta, and the eighteen pixels reach the popup by themselves through
+/// [`content_width`]; nothing else needs touching, which is the property that derivation buys.
+pub(super) const NAME_W: f32 = 150.0;
+/// Unscaled size the name button draws its label at.
+///
+/// `MoonButtonSize::Micro` resolves to the native `Size::XSmall`, whose label is 9.0. Named here
+/// because the FIT below measures against it: measuring a string at a narrower font underestimates
+/// its width and the label overflows the box anyway, which is exactly the bug this module is
+/// fixing. The SIZE is only half of that — the family matters just as much, and it is the
+/// MONOSPACED one the shell root imposes on the whole tree, not the theme's UI family.
+pub(super) const NAME_TEXT: f32 = 9.0;
+/// Unscaled padding a `Micro` button keeps on EACH side of its label.
+///
+/// `Size::XSmall` again. It is UI-scaled while the label is font-scaled, so the two terms of
+/// [`name_budget`] cannot share one scaler — at a raised Font delta with the UI slider left alone
+/// they move apart, and a budget built from a single scaler is wrong at every setting but one.
+pub(super) const NAME_PAD_X: f32 = 7.0;
 /// Width the "add" trigger borrows from the caption catalogue's own column.
 pub(super) const FIELD_W: f32 = 104.0;
 /// Width of the band dropdown's trigger. Sized on the longest localized band name.
@@ -67,6 +91,56 @@ pub(super) fn content_width(cx: &App) -> Pixels {
     let line =
         MICRO_COUNT * MICRO_W + NAME_W + ZONE_W + GAP_W + (MICRO_COUNT + 2.0) * ROW_GAP + ROW_SLACK;
     px(design::font_w(cx, line) + popup_group_inset_px(cx))
+}
+
+/// Rendered width the name button leaves to its own TEXT, once its padding is taken out.
+///
+/// The button itself is `flex_shrink_0` and its label is a `flex_none` child with no
+/// overflow-hidden and no ellipsis anywhere in MoonUI's renderer — verified in the sibling
+/// checkout — so a label wider than this simply PAINTS past the border, over the band dropdown
+/// beside it. Nothing downstream clips it. That is why the fit happens here, before the string
+/// ever reaches the widget.
+///
+/// Args:
+///     cx: Application context used to resolve the active Font and UI scales.
+///
+/// Returns:
+///     The rendered pixels available to the label, never negative.
+pub(super) fn name_budget(cx: &App) -> f32 {
+    (design::font_w(cx, NAME_W) - 2.0 * design::ui_value(cx, NAME_PAD_X)).max(0.0)
+}
+
+/// Fit a module's name into `budget` while keeping `suffix` whole.
+///
+/// The suffix is the used-parts count, and it is the one part of the label that must never be
+/// eaten: it is the only thing on the line saying HOW MUCH the module carries, so a row cut down
+/// to "Ордеров …" with the count gone reads as a module with one caption. So the head is fitted
+/// against what is left after the suffix is paid for, and the suffix is appended afterwards
+/// rather than being handed to [`design::fit_text`] as part of one string.
+///
+/// A budget too narrow for even the ellipsis yields the ellipsis plus the suffix, which is
+/// [`design::fit_text`]'s own floor and still says "there is a name here, and it has N parts".
+///
+/// Pure — `measure` is passed in rather than read from the theme, so this is unit-testable with no
+/// `App`, and so the caller measures at the size and weight it actually draws at.
+///
+/// Args:
+///     full: The whole composed name, untruncated.
+///     suffix: Text pinned to the end, never truncated.
+///     budget: Rendered width available to both together.
+///     measure: Rendered width of an arbitrary fragment, at the caller's own typography.
+///
+/// Returns:
+///     The fitted head with `suffix` appended.
+pub(super) fn fit_row_name(
+    full: &str,
+    suffix: &str,
+    budget: f32,
+    measure: impl Fn(&str) -> f32,
+) -> String {
+    let head_budget = (budget - measure(suffix)).max(0.0);
+    let (head, _) = design::fit_text(full, head_budget, &measure);
+    format!("{head}{suffix}")
 }
 
 /// Edit the target's configuration: load, mutate, sanitize, apply.

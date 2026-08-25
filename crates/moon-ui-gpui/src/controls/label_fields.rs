@@ -85,11 +85,19 @@ pub(crate) fn row_title(row: &ChartLabelRow) -> Option<String> {
     row.title_key().map(|key| t!(key).to_string())
 }
 
-/// What the module LIST calls this module: its title, or the captions it prints.
+/// What the module LIST calls this module: its title, or the captions it prints, WHOLE.
 ///
 /// A module is not required to have a title — most never get one — so the list falls back to
 /// naming it by what it does. An empty module with no title says so rather than showing a blank
 /// line.
+///
+/// The composition is returned COMPLETE, and that is the contract: this function no longer decides
+/// how much of it a reader sees. It used to keep two field names and append " · …", which was a
+/// truncation taken blind — it counted PARTS while the thing that runs out is PIXELS, so it threw
+/// away the third name on a line that had room for it and still overflowed on two long ones. What
+/// fits is a question about the box the text is drawn in, so the caller that owns that box answers
+/// it by measuring (`labels_popup::fit_row_name`), and a caller with no box — the editor's window
+/// title — simply prints the whole thing.
 pub(crate) fn row_display_name(row: &ChartLabelRow) -> String {
     if let Some(title) = row_title(row) {
         return title;
@@ -99,14 +107,11 @@ pub(crate) fn row_display_name(row: &ChartLabelRow) -> String {
         return t!("chart_labels.row_empty").to_string();
     }
     let mut out = String::new();
-    for part in &row.parts[..used.min(2)] {
+    for part in &row.parts[..used] {
         if !out.is_empty() {
             out.push_str(" · ");
         }
         out.push_str(&t!(part.field.locale_key()));
-    }
-    if used > 2 {
-        out.push_str(" · …");
     }
     out
 }

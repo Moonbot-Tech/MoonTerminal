@@ -16,7 +16,8 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{
-    FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_W, ROW_GAP, ZONE_W, write_cfg,
+    FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_TEXT, NAME_W, ROW_GAP, ZONE_W,
+    fit_row_name, name_budget, write_cfg,
 };
 use crate::controls::row_display_name;
 use crate::design;
@@ -95,8 +96,31 @@ fn row_line<T: LabelsPopupHost>(
     // how the reader already treats the line.
     let name_btn = {
         let entity = entity.clone();
+        // The label arrives ALREADY FITTED, because nothing downstream will clip it: MoonUI draws
+        // a button's label as a `flex_none` child of a `flex_shrink_0` root and its renderer has
+        // no overflow-hidden and no ellipsis anywhere, so a name wider than the box paints
+        // straight over the band dropdown beside it. Measured at the size, family and weight this
+        // button actually draws at — a fit against a narrower font underestimates the width and
+        // overflows anyway.
+        //
+        // MONO, and that argument is the whole fix: the SHELL's render root sets
+        // `font_family(design::mono())` for the entire tree, and `MoonButton` sets no family of
+        // its own, so this label draws in Geist Mono however proportional the theme's UI family
+        // is. Measuring it as UI text underestimates every Cyrillic name by roughly a tenth —
+        // enough for a fitted, already-ellipsised label to still paint over the band dropdown.
+        //
+        // What the fit CUTS stays reachable, and deliberately NOT through a tooltip: every
+        // tooltip inside this popover is invisible for the priority reason the legend line above
+        // records. The name opens the editor, and that window's title prints the composition
+        // whole — which is what `row_display_name` returning it untruncated is for.
+        let label = fit_row_name(
+            &row_display_name(row),
+            &format!("  ·{}", row.used_parts()),
+            name_budget(cx),
+            |text| design::ui_text_width(cx, text, NAME_TEXT, 400.0, true),
+        );
         MoonButton::new(SharedString::from(format!("cl-open-{ix}")))
-            .label(format!("{}  ·{}", row_display_name(row), row.used_parts()))
+            .label(label)
             .size(MoonButtonSize::Micro)
             .width(design::font_w(cx, NAME_W))
             .variant(MoonButtonVariant::Ghost)
