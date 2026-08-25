@@ -335,6 +335,9 @@ pub(super) fn run(
     }
 
     let mut identity_sent = false;
+    // Tracked separately from `identity_sent`: the two facts come from one payload but are gated
+    // on different fields, so one can be publishable while the other is not.
+    let mut version_sent = false;
     let mut last_orders = Instant::now();
     let mut orders_table_pending = false;
     let mut last_strats = Instant::now();
@@ -427,36 +430,65 @@ pub(super) fn run(
             }
         }
 
-        // Send the core's exchange from server_info after BaseCheck to the coordinator for grouping
-        // and provider election. Publish it once, as soon as the identity is known.
-        if !identity_sent {
+        // Publish what `server_info` reported after BaseCheck: the core's exchange (for grouping
+        // and provider election) and its MoonBot build. One snapshot read, TWO independent
+        // publications, each once.
+        //
+        // The build number deliberately does NOT ride the identity gate below. A venue is what
+        // `exchange_code` establishes; a build number is a fact about the core process itself, and
+        // a core that reports no exchange code — which lands it in the unidentified group, the
+        // rows an operator inspects most — would otherwise never report its build either.
+        if !identity_sent || (is_ready && !version_sent) {
             if let Some(info) = client.server_info() {
-                if let Some(code) = info.exchange_code {
-                    // dex_name is nonempty only for Hyperliquid HIP-3 futures. Include it in the
-                    // identity so cores from different DEXes are NOT deduplicated onto one provider
-                    // with an incomplete market list; see ExchangeId.
-                    let dex = info.dex_name.as_deref().unwrap_or("");
-                    let id = ExchangeId::with_dex(code.stable_id(), dex);
-                    log::info!(
-                        "core {} identity: exchange_code={} dex_name={:?} -> {:?}",
-                        crate::feed::core_label(server.id),
-                        code.stable_id(),
-                        dex,
-                        id
-                    );
-                    let _ = tx.send(FeedMsg::Identity {
-                        id,
-                        dex: dex.to_string(),
-                        // The core's own caption travels with the identity so no consumer has to
-                        // reach back into a client snapshot for it while rendering.
-                        reported: info.exchange_name.clone().unwrap_or_default(),
-                    });
-                    // The account base currency selects the USD conversion used for manual orders.
-                    let base = info.base_currency_name.unwrap_or_default();
-                    if !base.is_empty() {
-                        let _ = tx.send(FeedMsg::CoreBase { base });
+                // Read before the identity block below, which moves `base_currency_name` out.
+                //
+                // Gated on `is_ready`, which carries the last drained lifecycle batch's verdict.
+                // MoonProto sets the snapshot behind `server_info` ONCE, at the first Ready, and
+                // never clears it for an internal reconnect — so it keeps answering `Some` all
+                // through a `Reconnecting` episode. Without this gate the latch release below would
+                // republish the build on the very next pass and repopulate a store that had just
+                // cleared it, leaving a core displaying a build while it is visibly not connected.
+                //
+                // The flag itself latches on having EXAMINED the snapshot, not on having sent
+                // something: a core that honestly reports no build will not start reporting one
+                // later, and latching only inside the `Some` arm would re-clone `server_info` every
+                // iteration for the life of the connection — for exactly the absent case this
+                // column has to render.
+                if is_ready && !version_sent {
+                    if let Some(version) = info.server_version {
+                        let _ = tx.send(FeedMsg::CoreVersion { version });
                     }
-                    identity_sent = true;
+                    version_sent = true;
+                }
+                if !identity_sent {
+                    if let Some(code) = info.exchange_code {
+                        // dex_name is nonempty only for Hyperliquid HIP-3 futures. Include it in
+                        // the identity so cores from different DEXes are NOT deduplicated onto one
+                        // provider with an incomplete market list; see ExchangeId.
+                        let dex = info.dex_name.as_deref().unwrap_or("");
+                        let id = ExchangeId::with_dex(code.stable_id(), dex);
+                        log::info!(
+                            "core {} identity: exchange_code={} dex_name={:?} -> {:?}",
+                            crate::feed::core_label(server.id),
+                            code.stable_id(),
+                            dex,
+                            id
+                        );
+                        let _ = tx.send(FeedMsg::Identity {
+                            id,
+                            dex: dex.to_string(),
+                            // The core's own caption travels with the identity so no consumer has
+                            // to reach back into a client snapshot for it while rendering.
+                            reported: info.exchange_name.clone().unwrap_or_default(),
+                        });
+                        // The account base currency selects the USD conversion used for manual
+                        // orders.
+                        let base = info.base_currency_name.unwrap_or_default();
+                        if !base.is_empty() {
+                            let _ = tx.send(FeedMsg::CoreBase { base });
+                        }
+                        identity_sent = true;
+                    }
                 }
             }
         }
@@ -555,6 +587,16 @@ pub(super) fn run(
             is_ready = st == ConnStatus::Ready;
             if is_ready {
                 account_reconciliation.poll_api_expiry_on_ready(Instant::now());
+            }
+            // The store drops the reported BUILD on exactly this status, so the latch that stops us
+            // republishing it has to be released by exactly this status too. `Reconnecting` and
+            // `ServerRestart` are handled INSIDE this loop and never return from `run`, so a local
+            // flag that only resets on a fresh `run` would leave the column permanently blank after
+            // the first link blip of a session: the store would clear the build, `Connected {
+            // fresh: false }` would put the core back to Ready, and nothing would ever resend it.
+            // The two halves must move on the same event or they disagree.
+            if !is_ready {
+                version_sent = false;
             }
             let _ = tx.send(FeedMsg::Status(st));
             if request_license_state {

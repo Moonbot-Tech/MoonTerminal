@@ -6,7 +6,7 @@ use moon_core::feed::{ConnStatus, CoreEndpoint};
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 use super::tree_items;
-use crate::panels::core_status::model::{CoreStatusRow, aggregate_servers};
+use crate::panels::core_status::model::{aggregate_servers, CoreStatusRow};
 
 /// Build one ready core snapshot at an address.
 fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
@@ -24,6 +24,7 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
         startup: CoreStartupStatus::default(),
+        server_version: None,
     }
 }
 

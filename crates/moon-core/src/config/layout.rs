@@ -826,6 +826,16 @@ pub struct WindowLayout {
     /// filter preference must never discard the complete window layout.
     #[serde(default, deserialize_with = "de_lenient_map")]
     pub report_filters: HashMap<String, ReportFilterPrefs>,
+    /// Core Status presentation choice per host context: `core-status-mode:dock` /
+    /// `core-status-mode:win`.
+    ///
+    /// Keyed like its neighbours above, through `table_persist::ctx_id`, so a docked tab and a
+    /// detached window remember their own mode independently. The value is an OPAQUE stable code
+    /// owned by the panel in `moon-ui-gpui`; this crate deliberately does not hold the vocabulary,
+    /// exactly as it does not hold [`ReportFilterPrefs`]'s. No entry, or a code this build does not
+    /// know, leaves the panel's own first-run default standing rather than failing the load.
+    #[serde(default, deserialize_with = "de_lenient_map")]
+    pub core_status_mode: HashMap<String, String>,
     /// One-shot Report column migrations already applied to [`Self::table_visible_columns`].
     ///
     /// A saved visible-column set is an EXPLICIT list, so a column added later is simply absent

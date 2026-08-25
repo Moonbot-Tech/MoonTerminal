@@ -6,8 +6,8 @@
 //!
 //! Like the Assets panel, it is scoped to a window group and can live in a dock
 //! tab or a detached window. [`crate::persistence::table_persist`] stores separate column
-//! widths for `:dock` and `:win`. This module owns data and lifecycle; [`server_view`]
-//! and [`table`] own the two presentations.
+//! widths and a separate remembered mode choice for `:dock` and `:win`. This module owns data and
+//! lifecycle; [`server_view`] and [`table`] own the two presentations.
 
 mod by_ip_header;
 mod by_ip_widths;
@@ -15,6 +15,7 @@ mod cache;
 mod chart;
 mod config_popup;
 mod interactions;
+mod ip_cell;
 mod model;
 mod ordering;
 mod presentation;
@@ -34,14 +35,14 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonDataTableState, MoonInputState, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    h_flex, v_flex, DockArea, MoonDataTableState, MoonInputState, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState,
 };
 
-use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
+use crate::Backend;
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup};
 use moon_core::session::CoreId;
 use rust_i18n::t;
@@ -94,10 +95,63 @@ enum CoreStatusMode {
 const WARN_LIST_LIMIT: usize = 500;
 
 impl Default for CoreStatusMode {
-    /// Return the server-by-IP presentation used on every new panel instance.
+    /// Return the server-by-IP presentation a panel opens on when nothing was ever remembered.
     fn default() -> Self {
         Self::ByIp
     }
+}
+
+impl CoreStatusMode {
+    /// Stable machine code written to `layout.toml`.
+    ///
+    /// Never localized and never derived from the tab caption: the captions come from
+    /// `core_status.mode.*` and change with the locale, while this is the persistence contract and
+    /// must not. Kebab-case matches `WorkspaceMode::code` in `moon-core`.
+    ///
+    /// Returns:
+    ///     The stable, non-localized persistence code for this presentation.
+    const fn code(self) -> &'static str {
+        match self {
+            Self::ByIp => "by-ip",
+            Self::Flat => "flat",
+            Self::Warnings => "warnings",
+        }
+    }
+
+    /// Resolve a persisted code without letting a hand edit change what the panel does.
+    ///
+    /// Leading and trailing whitespace is ignored. Anything unknown — an empty value, a typo, or a
+    /// code a newer build wrote — yields the first-run default rather than an error, so a single bad
+    /// entry costs one remembered mode and never the window layout around it.
+    ///
+    /// Args:
+    ///     code: Persisted machine code, potentially hand-edited.
+    ///
+    /// Returns:
+    ///     The matching presentation, or By IP for an empty or unrecognized code.
+    fn from_code(code: &str) -> Self {
+        match code.trim() {
+            "flat" => Self::Flat,
+            "warnings" => Self::Warnings,
+            _ => Self::default(),
+        }
+    }
+}
+
+/// Context-qualified storage id for the Core Status presentation choice.
+///
+/// A panel-level choice rather than a property of a table, so it takes its own base and never
+/// shares `core-status-table`'s. The `:dock`/`:win` split is what lets a docked tab and a detached
+/// window remember different modes; a detached window therefore opens on whatever `:win` last held,
+/// and is deliberately NOT seeded from the docked panel it was torn off.
+///
+/// Args:
+///     detached: Whether this panel instance is hosted in a detached window.
+///
+/// Returns:
+///     The context-qualified persistence key for the panel's presentation mode.
+fn mode_ctx_id(detached: bool) -> String {
+    crate::persistence::table_persist::ctx_id("core-status-mode", detached)
 }
 
 /// Group-scoped Core Status panel for a dock tab or detached window.
@@ -124,9 +178,13 @@ pub struct CoreStatusView {
     chart_core: Option<CoreId>,
     cached_rows: Rc<Vec<CoreStatusRow>>,
     cached_groups: Rc<Vec<ServerStatusGroup>>,
-    /// Servers whose IP is momentarily revealed by the eye control. Transient: cleared on blur,
-    /// never persisted, so IPs return to masked when focus leaves the panel.
-    revealed_ips: HashSet<ServerKey>,
+    /// Whether the By-IP address column is hidden behind its mask.
+    ///
+    /// Panel-wide rather than per-server, and it starts FALSE: this view exists to show addresses,
+    /// so masking is a deliberate act before sharing a screen, not the resting state. One control
+    /// in the column header owns it, so a fleet of servers costs one click instead of one each.
+    /// Transient — never persisted, so a fresh panel always comes up showing addresses.
+    ip_masked: bool,
     /// Server whose name is being renamed inline, if any.
     editing: Option<ServerKey>,
     /// Input state backing the inline rename field while [`Self::editing`] is set.
@@ -134,9 +192,16 @@ pub struct CoreStatusView {
     /// Active flat-table sort as `(column key, ascending)`, or `None` for the default
     /// attention-first order.
     flat_sort: Option<(String, bool)>,
+    /// Whether the exchange logos have finished decoding off-thread.
+    ///
+    /// The Flat view's exchange headings gate on this: drawing before the prewarm lands would make
+    /// the first frame block on an SVG decode.
+    exchange_logos_ready: bool,
     /// Active By IP column sort as `(field, ascending)`. Default `(Name, ascending)` reproduces the
     /// former fixed order; warnings always pin to the top regardless of the field or direction.
     group_sort: (ordering::GroupSortField, bool),
+    /// Presentation the mode strip is on. Restored from and written back to `layout.toml` under
+    /// [`mode_ctx_id`], so this panel reopens in the mode the user last selected.
     mode: CoreStatusMode,
     tree_state: Entity<MoonTreeState>,
     table_state: Entity<MoonDataTableState>,
@@ -152,6 +217,22 @@ pub struct CoreStatusView {
     by_ip_width: f32,
     /// Context-qualified column-width persistence ID (`core-status-table:dock` or `:win`).
     widths_id: String,
+    /// User-dragged column widths for the By IP tree, keyed by [`by_ip_widths::ByIpCol::key`].
+    ///
+    /// A `MoonDataTableState` used purely as a persistence-shaped BAG, never as a table: By IP is a
+    /// tree, not a `MoonDataTable`. Reusing the type is what lets [`crate::persistence::table_persist`]
+    /// store, restore and reset these widths with no storage code of its own — including the
+    /// toolbar's existing reset button, which takes exactly this entity.
+    by_ip_col_widths: Entity<MoonDataTableState>,
+    /// Context-qualified persistence ID for [`Self::by_ip_col_widths`].
+    by_ip_widths_id: String,
+    /// Pointer x and LOGICAL column width captured when a header divider drag started.
+    ///
+    /// The drag cannot be computed from the live cell origin: the `flex_1` spacer in the header
+    /// right-anchors every column after IP, so growing one moves its own left edge and the delta
+    /// compounds every frame. Anchoring once, at the grab, makes the arithmetic independent of
+    /// relayout. `None` whenever no drag is in flight.
+    by_ip_drag: Option<by_ip_header::ByIpDragAnchor>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -181,17 +262,17 @@ impl CoreStatusView {
     /// Args:
     ///     backend: Shared terminal backend.
     ///     group: Window group that defines the core scope.
-    ///     detached: Whether column widths use the detached-window persistence key.
+    ///     detached: Whether widths and presentation mode use the detached-window persistence keys.
     ///     _window: Host window reserved for panel construction symmetry.
     ///     cx: View context used for observers and child entities.
     ///
     /// Returns:
-    ///     A panel whose default presentation is server-by-IP.
+    ///     A panel restored to its saved presentation, or By IP when no usable mode was stored.
     fn new(
         backend: Entity<Backend>,
         group: String,
         detached: bool,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but the
@@ -226,6 +307,20 @@ impl CoreStatusView {
         })
         .detach();
 
+        // Off-thread, like every other exchange-logo call site: `prewarm` decodes the shipped SVGs
+        // and would block the first frame if it ran on the render thread.
+        cx.spawn(async move |view, cx| {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .await;
+            cx.update(|cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.exchange_logos_ready = true;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+
         let widths_id = crate::persistence::table_persist::ctx_id("core-status-table", detached);
         let by_ip_sort_id =
             crate::persistence::table_persist::ctx_id("core-status-by-ip", detached);
@@ -236,6 +331,13 @@ impl CoreStatusView {
         let group_sort = ordering::restore_group_sort(
             crate::persistence::table_persist::saved_sort(backend.read(cx), &by_ip_sort_id),
         );
+        // Restore only: writing the resolved code back here would insert an entry for every context
+        // on first launch and arm a layout flush merely by opening the panel.
+        let mode = crate::persistence::table_persist::core_status_mode(
+            backend.read(cx),
+            &mode_ctx_id(detached),
+        )
+        .map_or_else(CoreStatusMode::default, CoreStatusMode::from_code);
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
@@ -249,19 +351,35 @@ impl CoreStatusView {
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
+        // The By IP width bag. Its own `ctx_id` base, so a docked tab and a detached window keep
+        // separate By-IP widths exactly as they already keep separate flat-table widths, and neither
+        // can collide with `core-status-table`.
+        let by_ip_widths_id =
+            crate::persistence::table_persist::ctx_id("core-status-by-ip-widths", detached);
+        let saved_by_ip =
+            crate::persistence::table_persist::saved(backend.read(cx), &by_ip_widths_id);
+        let by_ip_col_widths = cx.new(|_| {
+            let mut s = MoonDataTableState::new();
+            s.column_widths = saved_by_ip;
+            s
+        });
+        cx.observe(&by_ip_col_widths, |this, state, cx| {
+            crate::persistence::table_persist::persist(
+                &this.backend,
+                &this.by_ip_widths_id,
+                &state,
+                cx,
+            );
+            // Unlike `table_state`, NOTHING else observes this bag: a `MoonDataTable` observes its
+            // own state, but the By IP header and rows read these widths during THIS view's render.
+            // Without the notify the toolbar reset appears to do nothing until some unrelated
+            // repaint happens to arrive.
+            cx.notify();
+        })
+        .detach();
         let warn_table_state = cx.new(|_| MoonDataTableState::new());
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         let focus = cx.focus_handle();
-
-        // A revealed IP is momentary: when focus leaves the panel it re-masks. The eye control
-        // focuses this handle on reveal, so this blur fires when the user clicks away.
-        cx.on_blur(&focus, window, |this, _window, cx| {
-            if !this.revealed_ips.is_empty() {
-                this.revealed_ips.clear();
-                cx.notify();
-            }
-        })
-        .detach();
 
         let mut this = Self {
             backend,
@@ -275,18 +393,22 @@ impl CoreStatusView {
             chart_core: None,
             cached_rows: Rc::new(Vec::new()),
             cached_groups: Rc::new(Vec::new()),
-            revealed_ips: HashSet::new(),
+            ip_masked: false,
             editing: None,
             edit_input: None,
             flat_sort,
+            exchange_logos_ready: false,
             group_sort,
-            mode: CoreStatusMode::default(),
+            mode,
             tree_state,
             table_state,
             warn_table_state,
             warn_cfg_open: false,
             by_ip_width: 0.0,
             widths_id,
+            by_ip_col_widths,
+            by_ip_widths_id,
+            by_ip_drag: None,
             dock: None,
             focus,
         };
@@ -413,9 +535,27 @@ impl Panel for CoreStatusView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
+        // ONE button, pointed at whatever grid the panel is currently showing: a user sees one set
+        // of columns and expects one reset. By IP has its own width bag because it is a tree, not
+        // the flat table.
+        //
+        // The DETACHED window does not come through here. `panels/registry.rs` resolves
+        // `table_state()` ONCE at window construction into `DetachedContent.widths_reset`, so its
+        // header button keeps resetting the flat table whatever the mode; there, By-IP reset is
+        // reachable by double-clicking a divider (Shift+double-click for all of them). Fixing that
+        // means giving `widths_reset` a closure instead of an entity, which is a change to two
+        // files outside this panel.
+        let state = match self.mode {
+            CoreStatusMode::ByIp => &self.by_ip_col_widths,
+            CoreStatusMode::Flat => &self.table_state,
+            // Warnings is its OWN table with its own widths (`warnings_table` is handed
+            // `warn_table_state`), so it must not be folded in with Flat: doing that resets the
+            // hidden grid and leaves the visible one untouched.
+            CoreStatusMode::Warnings => &self.warn_table_state,
+        };
         Some(vec![crate::persistence::table_persist::reset_button(
             "core-status-reset-widths",
-            &self.table_state,
+            state,
         )])
     }
 }
@@ -441,7 +581,7 @@ impl Render for CoreStatusView {
         let content = match self.mode {
             CoreStatusMode::ByIp => server_view::grouped_server_view(
                 groups.clone(),
-                Rc::new(self.revealed_ips.clone()),
+                self.ip_masked,
                 self.editing,
                 self.edit_input.clone(),
                 self.chart_server,
@@ -451,7 +591,14 @@ impl Render for CoreStatusView {
                 // Row insets are `rems`, so the By-IP width budget needs the window's rem size —
                 // MoonUI's Root sets it from the theme font size, which the Font slider moves.
                 f32::from(window.rem_size()),
+                // The user's dragged widths, BORROWED: the callee resolves them into `Copy`
+                // geometries synchronously and nothing in the render tree holds the map, so a
+                // per-frame clone of it would buy nothing on a path that repaints on every hover.
+                &self.by_ip_col_widths.read(cx).column_widths,
                 &self.tree_state,
+                // `&Window` is enough: `Window::listener_for` takes `&self`, so the header's
+                // drag-move listener needs no mutable borrow.
+                window,
                 cx,
             ),
             CoreStatusMode::Flat => {
@@ -459,10 +606,14 @@ impl Render for CoreStatusView {
                     .iter()
                     .map(|group| (group.key, group.display_name.clone()))
                     .collect();
+                let (flat_rows, flat_lines) = self.flat_view(cx);
                 table::core_status_table(
                     "core-status-table",
-                    Rc::new(self.sorted_flat_rows(&rows)),
+                    flat_rows,
+                    flat_lines,
                     Rc::new(server_names),
+                    self.exchange_logos_ready,
+                    self.flat_sort.is_some(),
                     &self.table_state,
                     cx,
                 )

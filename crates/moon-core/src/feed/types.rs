@@ -969,6 +969,26 @@ pub enum FeedMsg {
     CoreBase {
         base: String,
     },
+    /// MoonBot build number the core reported in its `BaseCheck` payload, sent at most once per
+    /// connection independently of `Identity` and `CoreBase`.
+    ///
+    /// Unlike those venue-scoped messages, this is published even when the core reported no
+    /// exchange code: a build identifies the MoonBot process, not its venue.
+    ///
+    /// Sent ONLY when the core actually reported one, exactly like `CoreBase`: absence travels as
+    /// SILENCE — no message, so no entry — rather than as a `None` inside an otherwise-populated
+    /// payload. Nothing downstream may read that silence as a fault. MoonProto publishes the
+    /// snapshot behind it only once init reaches Ready, and an unpublished snapshot is
+    /// byte-identical to the empty payload a genuinely ancient core answers with, so the two are
+    /// indistinguishable here and neither may be claimed — see [`CoreIdentityFacts`].
+    ///
+    /// Deliberately its own message rather than a field on [`FeedMsg::Identity`]: that variant is
+    /// scoped to a core's VENUE and is published only when the core also reported an exchange
+    /// code, so riding it would silently withhold the build number from every core that reports no
+    /// venue.
+    CoreVersion {
+        version: u32,
+    },
     /// Notify that the market read model changed. This lightweight wake-up makes
     /// `SessionManager` mark particular markets dirty while visible charts pull the snapshots they
     /// need. The ticks and order book themselves do not travel through the UI channel.

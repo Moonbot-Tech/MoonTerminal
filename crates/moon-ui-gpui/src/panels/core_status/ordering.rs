@@ -7,10 +7,13 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use moon_core::feed::ConnStatus;
-use moon_core::session::CoreSysStatus;
+use moon_core::session::{CoreId, CoreSysStatus};
+use moon_core::venue::{Brand, CoreVenue};
 use rust_i18n::t;
 
-use super::model::{CoreStatusRow, ServerStatusGroup};
+use crate::core_order::ExchangeSection;
+
+use super::model::{CoreStatusRow, GroupVersion, ServerStatusGroup};
 use super::startup::{StartupCell, startup_cell};
 
 /// Which By IP column the server list is sorted on. Warnings always pin to the top regardless of the
@@ -35,6 +38,9 @@ pub(super) enum GroupSortField {
     /// Startup: still-coming-up servers first, then the ones that took longest. One header click
     /// answers "which machines are slow to come up", which is the question the column exists for.
     Startup,
+    /// The server's rolled-up MoonBot build, by [`version_group_rank`] — the agreed build, or
+    /// neither when its cores disagree or none reported.
+    Version,
 }
 
 impl GroupSortField {
@@ -49,6 +55,7 @@ impl GroupSortField {
             Self::Cores => "cores",
             Self::ApiKey => "api_key",
             Self::Startup => "startup",
+            Self::Version => "version",
         }
     }
 
@@ -63,6 +70,7 @@ impl GroupSortField {
             "cores" => Some(Self::Cores),
             "api_key" => Some(Self::ApiKey),
             "startup" => Some(Self::Startup),
+            "version" => Some(Self::Version),
             _ => None,
         }
     }
@@ -72,7 +80,7 @@ impl GroupSortField {
 pub(super) fn restore_flat_sort(
     preference: Option<moon_core::config::TableSortPreference>,
 ) -> Option<(String, bool)> {
-    const KEYS: [&str; 12] = [
+    const KEYS: [&str; 13] = [
         "server",
         "core",
         "status",
@@ -85,6 +93,7 @@ pub(super) fn restore_flat_sort(
         "cpus",
         "api_key",
         "startup",
+        "version",
     ];
     preference.and_then(|preference| {
         KEYS.contains(&preference.column.as_str())
@@ -167,6 +176,12 @@ pub(super) fn compare_groups(
         // show another. `startup_rank` puts unfinished startups first because they are the ones
         // still costing the user time.
         GroupSortField::Startup => startup_rank(a.startup).cmp(&startup_rank(b.startup)),
+        // Ranks the SAME rolled-up value the server row displays, by the same rule as every other
+        // heading here. Not Ready-gated: the store already drops a build the moment its core leaves
+        // Ready, so a stale one cannot reach this comparison.
+        GroupSortField::Version => {
+            version_group_rank(a.version).cmp(&version_group_rank(b.version))
+        }
     }
     .then_with(|| natural_cmp(&a.display_name, &b.display_name))
 }
@@ -189,6 +204,36 @@ fn startup_rank(cell: Option<StartupCell>) -> (u8, i64, i64) {
         }
         Some(StartupCell::Done { elapsed_ms }) => (1, -(elapsed_ms as i64), 0),
         Some(StartupCell::Absent) | None => (2, 0, 0),
+    }
+}
+
+/// Rank one core's reported build for sorting: reported builds first, ascending, then the rows
+/// with nothing to show.
+///
+/// A tagged tuple rather than the bare `Option`, for [`ApiKeyState::urgency`]'s stated reason:
+/// `None` sorts FIRST as an `Option`, which is the opposite of what this column is scanned for.
+/// The scan is "which cores run an odd or old build", so the numbers lead.
+///
+/// KNOWN AND ACCEPTED: `sorted_flat_rows` reverses the whole comparator, so descending leads with
+/// the blanks. `api_key` behaves identically for the same reason, and matching it keeps one rule in
+/// the panel rather than making this the single column that behaves differently.
+fn version_rank(version: Option<u32>) -> (u8, u32) {
+    match version {
+        Some(version) => (0, version),
+        None => (1, 0),
+    }
+}
+
+/// Rank a server's rolled-up build: an agreed build first, ascending, then disagreement, then
+/// nothing reported.
+///
+/// `Mixed` outranks `Absent` because a mixed group has something to look at — expanding it shows
+/// real numbers — while an absent one does not.
+fn version_group_rank(version: GroupVersion) -> (u8, u32) {
+    match version {
+        GroupVersion::Uniform(version) => (0, version),
+        GroupVersion::Mixed => (1, 0),
+        GroupVersion::Absent => (2, 0),
     }
 }
 
@@ -340,9 +385,141 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
         // disagree about which core is slower to come up.
         "startup" => startup_rank(Some(startup_cell(&a.status, &a.startup)))
             .cmp(&startup_rank(Some(startup_cell(&b.status, &b.startup)))),
+        // The reported build, numerically rather than lexically, with the blanks kept off the head
+        // of the ascending scan — see `version_rank`.
+        "version" => version_rank(a.server_version).cmp(&version_rank(b.server_version)),
         // "core" and any unknown key sort by name.
         _ => a.name.cmp(&b.name),
     }
+}
+
+/// One line of the Flat presentation, in render order.
+///
+/// The flat table draws cores AND the exchange headings that introduce them from one list, because
+/// [`MoonDataTable`] has no notion of a group row: every line it draws is a row of uniform height,
+/// so a heading has to BE a row. Keeping both in one enum makes a table index resolve to the line
+/// it draws, without a second list that could fall out of step with the core rows.
+///
+/// [`MoonDataTable`]: moon_ui::MoonDataTable
+pub(super) enum FlatLine {
+    /// An exchange heading, introducing the cores that follow it.
+    Section(FlatSection),
+    /// Index into the sorted row slice this line draws.
+    Core(usize),
+}
+
+/// What one exchange heading draws.
+///
+/// Owned rather than borrowed: the table's row closure is `'static`, so it cannot hold a
+/// `&CoreVenue` borrowed out of the session's venue map.
+pub(super) struct FlatSection {
+    /// The bucket's IDENTITY. The heading's element id is built from this and never from
+    /// [`Self::label`]: an id built from rendered text changes with the interface language and with
+    /// a core build's spelling, which makes GPUI treat one heading as a different element and drop
+    /// its hover and tooltip state.
+    pub(super) section: ExchangeSection,
+    /// Caption, from [`crate::controls::venue_section_label`].
+    pub(super) label: String,
+    /// Brand whose logo the heading shows, when the directory names one. `None` draws no logo and
+    /// deliberately no placeholder glyph.
+    pub(super) brand: Option<Brand>,
+    /// How many cores this section holds.
+    ///
+    /// Drawn right-aligned at the far end of the band, unless that is also the caption cell, where
+    /// it follows the caption. This makes a heading read unmistakably as a GROUP rather than as
+    /// another core: MoonUI's sort arrow cannot say that it orders rows WITHIN a section, so the
+    /// heading has to carry that meaning itself.
+    pub(super) members: usize,
+}
+
+/// Lay already-sorted flat rows out as exchange sections followed by their members.
+///
+/// Sorting orders rows; grouping PARTITIONS that order. The caller applies the active column sort
+/// (or the default attention-first order) to `rows` first, and this function only cuts the result
+/// into sections — so a descending click reverses rows WITHIN each section and never moves a
+/// section. Section order comes from the shared directory ordering in
+/// [`crate::core_order::exchange_sections`], the same one the left rail, the Strategies tree and
+/// the Assets panel already use, so a sort click here can never make this panel disagree with them
+/// about where an exchange sits.
+///
+/// Bucketing is by venue IDENTITY, not by the caption a core reported, so two cores of different
+/// vintage on one venue share a section however their builds spell its name.
+///
+/// Args:
+///     rows: Flat rows in their final display order.
+///     venues: What each core reported it is connected to, keyed by core.
+///
+/// Returns:
+///     Heading and member lines in render order; empty when `rows` is empty. A section is emitted
+///     only when it has members, so a heading with nothing under it is not representable.
+pub(super) fn flat_lines(
+    rows: &[CoreStatusRow],
+    venues: &HashMap<CoreId, CoreVenue>,
+) -> Vec<FlatLine> {
+    let sections =
+        crate::core_order::exchange_sections(rows.iter().enumerate().map(|(index, row)| {
+            let venue = venues.get(&row.id);
+            (index, venue)
+        }));
+    // One heading plus every member, so the exact final length is known up front.
+    let mut lines = Vec::with_capacity(rows.len() + sections.len());
+    for (venue, members) in sections {
+        lines.push(FlatLine::Section(FlatSection {
+            // Through the shared bucketing rule rather than re-deciding here what "unidentified"
+            // means, so the heading and the partition it heads cannot drift apart.
+            section: crate::core_order::section_of(venue),
+            label: stable_section_label(venue, &members, rows, venues),
+            // Identity, not caption: every member of one section shares an `ExchangeId`, so the
+            // brand is the same whichever member the partition handed back.
+            brand: venue.and_then(CoreVenue::brand),
+            members: members.len(),
+        }));
+        lines.extend(members.into_iter().map(FlatLine::Core));
+    }
+    lines
+}
+
+/// Caption a section so that the active row sort cannot rename it.
+///
+/// A venue the directory NAMES captions from the directory, so every member spells it identically.
+/// A venue nothing names falls back to the core's own wire text, and members of one ordinal can
+/// disagree about it — two cores on the same unknown platform can report two spellings.
+/// [`crate::core_order::exchange_sections`] hands back the FIRST member's venue, and "first" moves
+/// with the active column sort, so captioning from it would make such a heading rename itself when
+/// the user clicks a sort arrow.
+///
+/// The smallest RENDERED caption is stable under every row order. It is compared as the caption
+/// rather than as the underlying wire field on purpose: a core build's own spelling belongs to
+/// [`crate::controls::venue_label`] and is not this module's to read — a rule the theme contract
+/// enforces across the whole crate.
+///
+/// Args:
+///     venue: The section's representative venue, or `None` for the unidentified group.
+///     members: Row indices belonging to this section.
+///     rows: The rows those indices address.
+///     venues: What each core reported it is connected to, keyed by core.
+///
+/// Returns:
+///     The caption to draw, never empty.
+fn stable_section_label(
+    venue: Option<&CoreVenue>,
+    members: &[usize],
+    rows: &[CoreStatusRow],
+    venues: &HashMap<CoreId, CoreVenue>,
+) -> String {
+    let label = crate::controls::venue_section_label(venue);
+    // Only an unnameable ordinal can disagree between members; everything else is already stable,
+    // and formatting one caption per member would be waste.
+    if venue.is_none_or(|venue| venue.resolved().is_some()) {
+        return label;
+    }
+    members
+        .iter()
+        .filter_map(|index| rows.get(*index))
+        .filter_map(|row| venues.get(&row.id))
+        .map(|venue| crate::controls::venue_section_label(Some(venue)))
+        .min()
+        .unwrap_or(label)
 }
 
 #[cfg(test)]

@@ -4,17 +4,20 @@
 //! re-exports `gpui::*`, whose own `test` would shadow the built-in attribute.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use moon_core::config::TableSortPreference;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
+use moon_core::venue::CoreVenue;
 
 use super::{
-    GroupSortField, compare_flat_rows, compare_groups, restore_flat_sort, restore_group_sort,
+    FlatLine, GroupSortField, compare_flat_rows, compare_groups, flat_lines, restore_flat_sort,
+    restore_group_sort,
 };
 use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{
-    ApiKeyState, CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup,
+    ApiKeyState, CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, ServerStatusGroup,
 };
 
 /// Build one core row carrying only an API-key state: `Some(days)` is a dated key, `None` is a core
@@ -34,6 +37,7 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
         api_warn: false,
         startup: CoreStartupStatus::default(),
+        server_version: None,
     }
 }
 
@@ -70,6 +74,7 @@ fn group(
             api_key: ApiKeyState::Unknown,
             api_warn: false,
             startup: CoreStartupStatus::default(),
+            server_version: None,
         })
         .collect::<Vec<_>>();
     let ready_count = cores
@@ -86,6 +91,7 @@ fn group(
         exch_warn: false,
         api_warn: false,
         api_key: ApiKeyState::Unknown,
+        version: GroupVersion::Absent,
         address: None,
         cores,
         ready_count,
@@ -235,18 +241,19 @@ fn a_server_sorts_by_the_key_it_displays() {
     );
 }
 
-/// `ordering.rs:restore_flat_sort` must retain valid keys/directions and reject retired keys.
+/// `ordering.rs:restore_flat_sort` must retain the version key and direction, and reject retired
+/// keys. Removing `"version"` from `KEYS` silently discards a user's selected build sort at restart.
 ///
-/// Mutation: accept every string or force ascending. Flat mode would reopen with an invisible
-/// active key or the wrong arrow, and one of these assertions reddens.
+/// Mutation: drop `"version"` from `KEYS`. Flat mode would reopen in attention order, and the
+/// retained-version assertion reddens without relying on `KEYS`' implementation length.
 #[test]
 fn flat_sort_restore_validates_key_and_direction() {
     assert_eq!(
         restore_flat_sort(Some(TableSortPreference {
-            column: "ping_exch".to_string(),
+            column: "version".to_string(),
             ascending: false,
         })),
-        Some(("ping_exch".to_string(), false))
+        Some(("version".to_string(), false))
     );
     assert_eq!(
         restore_flat_sort(Some(TableSortPreference {
@@ -276,5 +283,56 @@ fn by_ip_sort_restore_keeps_valid_choice_and_historical_default() {
             ascending: false,
         })),
         (GroupSortField::Name, true)
+    );
+}
+
+/// `ordering.rs:flat_lines` must retain every source row once while partitioning by venue identity.
+///
+/// Mutation: remove `lines.extend(members.into_iter().map(FlatLine::Core));`. A core would silently
+/// vanish from the operator's fleet list, or a future broken partition could duplicate it.
+#[test]
+fn flat_lines_partitions_each_input_row_once_by_venue_identity() {
+    let rows = (0..6).map(|id| row_with_key(id, None)).collect::<Vec<_>>();
+    let venues = HashMap::from([
+        (1, CoreVenue::identify(200, "", None)),
+        (2, CoreVenue::identify(2, "", Some("Bybit legacy spelling"))),
+        (
+            3,
+            CoreVenue::identify(2, "", Some("Bybit current spelling")),
+        ),
+        (4, CoreVenue::identify(13, "dex-a", Some("Hyperliquid"))),
+        (5, CoreVenue::identify(13, "dex-b", Some("Hyperliquid"))),
+    ]);
+
+    let lines = flat_lines(&rows, &venues);
+    let core_indices = lines
+        .iter()
+        .filter_map(|line| match line {
+            FlatLine::Core(index) => Some(*index),
+            FlatLine::Section(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let sections = lines
+        .iter()
+        .filter_map(|line| match line {
+            FlatLine::Section(section) => Some((section.section, section.members)),
+            FlatLine::Core(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        core_indices,
+        (0..rows.len()).collect::<Vec<_>>(),
+        "the flattened member indices must cover each input row exactly once"
+    );
+    assert_eq!(
+        sections,
+        vec![
+            (crate::core_order::ExchangeSection::Unidentified, 2),
+            (crate::core_order::ExchangeSection::Venue(venues[&2].id), 2,),
+            (crate::core_order::ExchangeSection::Venue(venues[&4].id), 1,),
+            (crate::core_order::ExchangeSection::Venue(venues[&5].id), 1,),
+        ],
+        "unidentified cores lead, shared venue identities merge, and HIP-3 DEX identities stay distinct"
     );
 }

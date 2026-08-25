@@ -138,6 +138,24 @@ pub struct CoreData {
     /// does not clear it: the last successful answer is retained until the connection is replaced,
     /// so a core whose checks start failing keeps showing what it last reported.
     pub api_expiry: Option<crate::feed::ApiKeyExpiry>,
+    /// MoonBot build this core most recently reported, or `None`.
+    ///
+    /// The `FeedMsg::Status` arm drops it on any non-Ready status, so a replacement feed pointing
+    /// at a different MoonBot cannot retain the previous host's build. That hook rather than
+    /// `begin_connection_attempt`, which only the explicit respawn path calls: `live::run` is
+    /// retried IN PLACE after a failure, and each attempt announces itself with
+    /// `Status(Connecting)`, so the status arm is the one thing every attempt passes through.
+    /// `begin_connection_attempt` sends that same status itself, so the respawn path is covered by
+    /// the same line.
+    ///
+    /// `None` covers BOTH "not up, so nothing has been published" and "too old to report a build".
+    /// Those are indistinguishable at the wire — see [`crate::feed::CoreIdentityFacts`] — so a
+    /// consumer may render the absence but may never attribute a cause to it.
+    ///
+    /// It has NO revision counter, for the reason [`Self::fault`] states: the Core Status panel
+    /// rebuilds on the backend observer rather than polling one, and a counter nothing reads is
+    /// dead weight.
+    pub server_version: Option<u32>,
     /// Unshown Engine action results for toasts. The active window's shell drains them through
     /// [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
@@ -253,6 +271,7 @@ impl CoreData {
             runtime_state: None,
             hedge_mode: None,
             api_expiry: None,
+            server_version: None,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
             log: VecDeque::new(),
@@ -430,6 +449,14 @@ impl CoreData {
                 // red verdict beside a healthy core for the rest of the session.
                 if matches!(s, ConnStatus::Ready) {
                     self.fault = None;
+                }
+                // The reported BUILD describes the connection that reported it. MoonProto publishes
+                // the snapshot behind it only at Ready, so a core that has left Ready has no live
+                // claim to a build, and the replacement feed may reach a different MoonBot
+                // entirely. Dropping it here is the inverse of the fault rule above: the fault
+                // survives everything until Ready, the build survives nothing but Ready.
+                if !matches!(s, ConnStatus::Ready) {
+                    self.server_version = None;
                 }
                 self.status = s;
             }
@@ -630,7 +657,13 @@ impl CoreData {
                     self.news_rev = self.news_rev.wrapping_add(1);
                 }
             }
-            // Identity and market wake-up messages are not routed into this store.
+            FeedMsg::CoreVersion { version } => {
+                self.server_version = Some(version);
+            }
+            // Identity, base-currency, and market wake-up messages are not routed into this store.
+            // The build number above IS, which is why it sits in an arm of its own: it belongs to
+            // one core's retained state, while a venue and a base currency belong to the session
+            // manager's cross-core coordination.
             FeedMsg::Identity { .. } | FeedMsg::CoreBase { .. } | FeedMsg::MarketDataChanged(_) => {
             }
         }

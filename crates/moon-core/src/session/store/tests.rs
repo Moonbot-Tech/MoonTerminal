@@ -51,6 +51,37 @@ fn a_ready_status_erases_the_failure_that_preceded_it() {
     assert_eq!(core.fault, None);
 }
 
+/// `store.rs:CoreData::apply` must clear a reported build on every non-Ready status; removing
+/// that clear makes a reconnect to another MoonBot retain the previous host's build in Core Status.
+#[test]
+fn core_status_version_belongs_only_to_the_ready_connection_that_reported_it() {
+    let mut core = CoreData::new();
+
+    core.apply(FeedMsg::CoreVersion { version: 734 });
+    assert_eq!(core.server_version, Some(734));
+
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    assert_eq!(
+        core.server_version,
+        Some(734),
+        "Ready keeps the reported build"
+    );
+
+    for status in [
+        ConnStatus::Stage("reconnecting".to_string()),
+        ConnStatus::Connecting,
+        ConnStatus::Disconnected,
+        ConnStatus::Failed("replacement failed".to_string()),
+    ] {
+        core.apply(FeedMsg::CoreVersion { version: 735 });
+        core.apply(FeedMsg::Status(status));
+        assert_eq!(
+            core.server_version, None,
+            "a non-Ready state must not speak for the previous connection"
+        );
+    }
+}
+
 /// No snapshot yet is UNKNOWN, never zero — the distinction the Assets panel exists to make.
 #[test]
 fn without_a_snapshot_the_balance_is_awaiting() {

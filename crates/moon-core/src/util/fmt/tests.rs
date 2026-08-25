@@ -255,3 +255,14 @@ fn signed_fixed_rounds_before_choosing_the_sign() {
         "midpoints round away from zero, not to even"
     );
 }
+
+/// Regression guard: in `fmt.rs:core_build`, changing the minor formatter from `{:02}` to `{}`
+/// turns build `707` into `7.7`, so a reader can mistake it for older than a neighbouring `7.09`.
+///
+/// A one-digit minor is the boundary that needs the pad; `710` confirms that the product keeps
+/// the same two-digit wire convention immediately beyond it.
+#[test]
+fn core_build_zero_pads_single_digit_minor_versions() {
+    assert_eq!(core_build(707), "7.07");
+    assert_eq!(core_build(710), "7.10");
+}

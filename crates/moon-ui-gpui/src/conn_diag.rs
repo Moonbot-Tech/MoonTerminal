@@ -238,7 +238,13 @@ pub(crate) fn fault_facts(d: &Diagnosis) -> Vec<FaultFact> {
         push(
             t!("core_status.fault.f.core").to_string(),
             match d.server_version {
-                Some(v) => t!("core_status.fault.core.legacy_named", server = v).to_string(),
+                // Same dotted build the Core-Status column prints. A fault hover that said "769"
+                // beside a column saying "7.69" would read as two different facts about one core.
+                Some(v) => t!(
+                    "core_status.fault.core.legacy_named",
+                    server = moon_core::util::fmt::core_build(v)
+                )
+                .to_string(),
                 None => t!("core_status.fault.core.legacy_silent").to_string(),
             },
         );

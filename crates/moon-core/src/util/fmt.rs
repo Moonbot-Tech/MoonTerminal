@@ -293,5 +293,27 @@ pub fn signed_pct(v: f64, decimals: usize) -> Option<(String, DeltaSign)> {
     }
 }
 
+/// Render a Moonbot core's reported build the way the product names it: `769` -> `7.69`.
+///
+/// The wire payload is a flat `u32` with no separator in it, so the split has to come from
+/// somewhere. It comes from the PRODUCT: Moonbot builds are spoken and written as `7.69`, `7.70`,
+/// and the terminal printing a bare `769` beside them makes the reader do the conversion. The last
+/// two digits are the minor and everything above them is the major — which is why the minor is
+/// zero-padded: `770` is `7.70`, never `7.7`, and dropping that zero would sort and read as an
+/// EARLIER build than `7.69`.
+///
+/// This lives here rather than in the panel that shows the column because two surfaces print the
+/// same number — the Core-Status build column and the connection-fault hover — and one of them is
+/// in a different module. A second copy is how the two drift.
+///
+/// Args:
+///     build: The build number exactly as the core reported it.
+///
+/// Returns:
+///     The dotted build text.
+pub fn core_build(build: u32) -> String {
+    format!("{}.{:02}", build / 100, build % 100)
+}
+
 #[cfg(test)]
 mod tests;
