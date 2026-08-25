@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
-use moon_core::db::QuoteCurrency;
+use moon_core::db::{QuoteCurrency, ReportAxis};
 use rust_i18n::t;
 
 /// Report column that is redundant when a group-owned Auto workspace selects one core.
@@ -173,7 +173,9 @@ pub(super) fn report_columns(
 ///     view: Owning Report panel entity.
 ///     selected: Whether the controlled selection contains this row.
 ///     p: Active Moon palette.
-///     zone: User-selected display time zone.
+///     axis: Time axis for REPLICATED timestamp columns, whose stored seconds are the core's own
+///         wall clock rather than UTC.
+///     display_zone: User-selected zone for columns this terminal wrote itself.
 ///
 /// Returns:
 ///     A MoonDataTable row whose highlight mirrors the controlled selection.
@@ -187,7 +189,8 @@ pub(super) fn report_data_row(
     view: &Entity<ReportPanel>,
     selected: bool,
     p: MoonPalette,
-    zone: Tz,
+    axis: &ReportAxis,
+    display_zone: Tz,
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
@@ -221,7 +224,7 @@ pub(super) fn report_data_row(
             } else if cname == "deleted" {
                 cells.push(deleted_cell(ri, val));
             } else {
-                cells.push(report_data_cell(ri, cname, val, quote, p, zone));
+                cells.push(report_data_cell(ri, cname, val, quote, p, axis, core_uid, display_zone));
             }
         }
     }
@@ -575,9 +578,11 @@ fn report_data_cell(
     val: &Value,
     quote: Option<QuoteCurrency>,
     p: MoonPalette,
-    zone: Tz,
+    axis: &ReportAxis,
+    core_uid: u64,
+    display_zone: Tz,
 ) -> MoonDataCell {
-    let (text, color) = cell(col, val, quote, p, zone);
+    let (text, color) = cell(col, val, quote, p, axis, core_uid, display_zone);
     // Clip formatted content to the column's actual width. Alignment matches the column, while
     // MoonDataTable also protects cell boundaries at the container level. Every other column's
     // font styling comes from the cell style through MoonUI cascading.
@@ -672,7 +677,11 @@ fn is_numeric_report_column(col: &str) -> bool {
 ///     quote: The row's quote currency, which decides money precision; `None` when the row does not
 ///         name one, and the cell then falls back to two decimals.
 ///     p: Active palette used for signed coloring.
-///     zone: User-selected display time zone.
+///     axis: Time axis for REPLICATED columns, whose stored seconds are the core's own wall clock.
+///     core_uid: The row's owning core. The axis is per-core, so dropping this would silently
+///         convert every row by whatever the first core's offset happened to be.
+///     display_zone: User-selected zone for columns this terminal wrote itself, which are already
+///         true UTC and must not travel through the axis.
 ///
 /// Returns:
 ///     Display text and optional text color.
@@ -681,12 +690,27 @@ pub(super) fn cell(
     v: &Value,
     quote: Option<QuoteCurrency>,
     p: MoonPalette,
-    zone: Tz,
+    axis: &ReportAxis,
+    core_uid: u64,
+    display_zone: Tz,
 ) -> (String, Option<u32>) {
     match col {
-        "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (
+        // Replicated from the core, on the core's clock: the axis owns both halves of the
+        // projection, so the selected zone must NOT be applied on top of it.
+        "buydate" | "closedate" | "sellsetdate" => (
             as_i64(v)
-                .map(|secs| moon_core::util::display_time::format_minute(secs, zone))
+                .map(|secs| {
+                    let utc = axis.to_utc(secs, core_uid);
+                    moon_core::util::display_time::format_minute(utc, axis.zone())
+                })
+                .unwrap_or_default(),
+            None,
+        ),
+        // Written by THIS terminal as a freshness marker (see `strat_db::stats`), so it is genuine
+        // UTC and belongs in the user's selected zone like any other local timestamp.
+        "last_update_at" => (
+            as_i64(v)
+                .map(|secs| moon_core::util::display_time::format_minute(secs, display_zone))
                 .unwrap_or_default(),
             None,
         ),
@@ -749,6 +773,27 @@ pub(super) fn cell(
 pub(super) fn row_quote(cols: &[String], row: &[Value]) -> Option<QuoteCurrency> {
     let index = cols.iter().position(|column| column == "basecurrency")?;
     QuoteCurrency::from_report_value(row.get(index)?)
+}
+
+/// Resolve one row's owning core from the runtime schema.
+///
+/// Width measurement formats through the very same path the renderer does, so it must resolve the
+/// same core: measuring a row under a different offset would size the column for text that is
+/// never painted. A source that cannot name a core yields `0`, matching the axis's own treatment
+/// of an unidentifiable row.
+///
+/// Args:
+///     cols: Complete runtime Report schema.
+///     row: One result row in schema order.
+///
+/// Returns:
+///     The row's core uid, or `0` when the schema carries none.
+pub(super) fn row_core_uid(cols: &[String], row: &[Value]) -> u64 {
+    cols.iter()
+        .position(|column| column == "core_uid")
+        .and_then(|index| row.get(index))
+        .and_then(as_i64)
+        .unwrap_or(0) as u64
 }
 
 /// Format a persisted MoonBot base-currency ordinal as its exact quote ticker.

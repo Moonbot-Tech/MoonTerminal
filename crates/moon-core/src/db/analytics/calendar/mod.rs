@@ -144,12 +144,12 @@ fn funding_by_bucket(
     let Some(src) = unified_from_mode(conn, q, projection)? else {
         return Ok(out);
     };
-    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
+    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     // `profitbtc` rather than `pnl`: this is money, and the row is kept only when it is the first
     // copy of its accrual. Ordering by core_uid makes the survivor stable across reads.
     let sql = format!(
         "SELECT bucket, COALESCE(SUM(amount), 0) FROM (
-             SELECT mt_local_bucket(o.closedate, {bucket_secs}) AS bucket,
+             SELECT mt_local_bucket(o.closedate, {bucket_secs}, o.core_uid) AS bucket,
                     o.profitbtc AS amount,
                     ROW_NUMBER() OVER (
                         PARTITION BY o.coin, o.closedate / 60,
@@ -530,11 +530,11 @@ fn calendar_cells_from(
         // returns its default), not an error; otherwise the tab would remain on Loading.
         return Ok(Vec::new());
     };
-    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
+    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     // Daily bucket: profit, trades, wins, turnover, fee and duration for the card's four lines.
     let agg = agg_for(conn, projection)?;
     let sql = format!(
-        "SELECT mt_local_bucket(o.closedate, 86400) AS d,
+        "SELECT mt_local_bucket(o.closedate, 86400, o.core_uid) AS d,
                 {agg}
          FROM {src} GROUP BY d ORDER BY d"
     );
@@ -562,13 +562,13 @@ fn calendar_cells_from(
     // cells since the epoch), or at the requested period's start otherwise. Because `to` is
     // exclusive, the last day is day(to - 1); do not extend into the future.
     let now = crate::util::now_unix_ms_i64() / 1000;
-    let today0 = crate::util::display_time::bucket_start(now, 86_400, q.time_zone).unwrap_or(now);
+    let today0 = crate::util::display_time::bucket_start(now, 86_400, q.axis.zone()).unwrap_or(now);
     let day0 = if all_history {
         first
     } else {
-        crate::util::display_time::bucket_start(q.from, 86_400, q.time_zone).unwrap_or(q.from)
+        crate::util::display_time::bucket_start(q.from, 86_400, q.axis.zone()).unwrap_or(q.from)
     };
-    let last_grid = crate::util::display_time::bucket_start(q.to - 1, 86_400, q.time_zone)
+    let last_grid = crate::util::display_time::bucket_start(q.to - 1, 86_400, q.axis.zone())
         .unwrap_or(q.to - 1)
         .min(today0)
         .max(last);
@@ -581,7 +581,7 @@ fn calendar_cells_from(
             start: t,
             ..Default::default()
         }));
-        let Some(next) = crate::util::display_time::next_bucket(t, 86_400, q.time_zone) else {
+        let Some(next) = crate::util::display_time::next_bucket(t, 86_400, q.axis.zone()) else {
             break;
         };
         t = next;
@@ -636,10 +636,10 @@ fn calendar_hours_from(
         Some(s) => s,
         None => return Ok(Vec::new()), // The schema has not arrived yet.
     };
-    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
+    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     let agg = agg_for(conn, projection)?;
     let sql = format!(
-        "SELECT mt_local_bucket(o.closedate, 3600) AS h,
+        "SELECT mt_local_bucket(o.closedate, 3600, o.core_uid) AS h,
                 {agg}
          FROM {src} GROUP BY h ORDER BY h"
     );
@@ -730,13 +730,13 @@ fn hour_profile_one(
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Ok(prof);
     };
-    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
+    super::time_zone::install(conn, &q.axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     // Hour of day comes from the trade OPEN time (`buydate`), matching the schedule and tuner
     // sliders that gate ENTRY. Fall back to `closedate` when the open time is absent (0/NULL).
     // The period itself still uses `closedate`, which defines the analysis window.
     let agg = agg_for(conn, projection)?;
     let sql = format!(
-        "SELECT (mt_minute_of_day(COALESCE(NULLIF(o.buydate, 0), o.closedate)) / 60) AS h,
+        "SELECT (mt_minute_of_day(COALESCE(NULLIF(o.buydate, 0), o.closedate), o.core_uid) / 60) AS h,
                 {agg}
          FROM {src} GROUP BY h ORDER BY h"
     );

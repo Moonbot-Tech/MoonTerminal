@@ -1,9 +1,9 @@
 //! Selection filters and the unified report source (`Query`, `unified_from`).
 
-use chrono_tz::Tz;
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
+use super::super::report_axis::ReportAxis;
 use super::super::valuation::ValuationMode;
 use super::super::{ProfitMetric, QuoteBreakdown, ReadResult, SideFilter};
 
@@ -24,8 +24,17 @@ pub enum PreviousPeriodBasis {
 /// Selection filters shared by all Analytics tabs.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
-    /// User-selected time zone for civil periods, buckets, and schedule predicates.
-    pub time_zone: Tz,
+    /// The time axis every replicated report timestamp in this read passes through.
+    ///
+    /// Carries BOTH halves of the projection, and is the single authority for either: the per-core
+    /// correction from the core's own wall clock to true UTC, and the user-selected zone those
+    /// corrected instants are finally displayed in ([`ReportAxis::zone`]). A separate zone field
+    /// beside it would be a second authority that could silently disagree across the many places a
+    /// `Query` is built, which is exactly how a replica column ends up converted twice.
+    ///
+    /// A reader that genuinely holds an already-UTC value — `now`, or this query's own `from`/`to`
+    /// bounds — asks for the zone alone and must NOT route through the correction.
+    pub axis: ReportAxis,
     /// How Summary places the previous comparison window.
     pub previous_period_basis: PreviousPeriodBasis,
     /// UTC Unix seconds; `from < 0` means all history. `to` is exclusive.

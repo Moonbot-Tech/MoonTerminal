@@ -695,6 +695,9 @@ impl ReportPanel {
             &self.cols,
             &indices,
             &self.selection,
+            // Phase 1: replicated timestamps stay on the core's own clock, exactly as the grid
+            // renders them, so a copied row and a read row cannot disagree.
+            &moon_core::db::ReportAxis::identity_core_local(),
             self.display_zone,
         );
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -877,7 +880,13 @@ impl ReportPanel {
         }
         let requested_scope = self.export_scope_identity(cx);
         let suggested_filter = self.filter(cx);
-        let suggested = export::suggested_name(&suggested_filter, fmt, all_cols, self.display_zone);
+        let suggested = export::suggested_name(
+            &suggested_filter,
+            fmt,
+            all_cols,
+            &moon_core::db::ReportAxis::identity_core_local(),
+            self.display_zone,
+        );
         let handle = window.window_handle();
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
         cx.spawn(async move |this, cx| {
@@ -913,7 +922,16 @@ impl ReportPanel {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
                 .spawn(async move {
-                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc, zone)
+                    export::run(
+                        &path,
+                        fmt,
+                        &cols,
+                        &filter,
+                        &sort_key,
+                        sort_desc,
+                        &moon_core::db::ReportAxis::identity_core_local(),
+                        zone,
+                    )
                         .map(|n| (n, path))
                 })
                 .await;

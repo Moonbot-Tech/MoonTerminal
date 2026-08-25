@@ -302,7 +302,7 @@ impl ReportPanel {
         // that period still reaches the present must not straddle a second boundary, or a query can
         // ask for a window ending before the instant it just judged to be inside it.
         let now = moon_core::util::time::now_unix_secs() as i64;
-        let (pfrom, pto) = self.period.range_at(now, self.display_zone);
+        let (pfrom, pto) = self.period.range_at(now, self.bound_zone());
         let date_from = pfrom.or(self.from_query);
         // The upper field names a whole minute and the SQL bound is inclusive, so it reaches that
         // minute's last second: "from 04.08 00:00 to 04.08 23:59" is the whole day, and an equal

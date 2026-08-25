@@ -125,12 +125,13 @@ fn one_ordered_variant_statement_matches_independent_variant_scans() {
     let conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
         "CREATE TABLE trades(
-            closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, d1h REAL, coin TEXT
+            closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, d1h REAL, coin TEXT,
+            core_uid INTEGER
          );
-         INSERT INTO trades VALUES (300, 100,  4.0, 40.0,  3.0, 'BTC');
-         INSERT INTO trades VALUES (100,  50, -5.0, 25.0, -2.0, 'ETH');
-         INSERT INTO trades VALUES (200, 150,  2.0, 20.0,  1.0, 'BTC');
-         INSERT INTO trades VALUES (200, 150, -1.0, 10.0,  4.0, 'SOL');",
+         INSERT INTO trades VALUES (300, 100,  4.0, 40.0,  3.0, 'BTC', 1);
+         INSERT INTO trades VALUES (100,  50, -5.0, 25.0, -2.0, 'ETH', 1);
+         INSERT INTO trades VALUES (200, 150,  2.0, 20.0,  1.0, 'BTC', 1);
+         INSERT INTO trades VALUES (200, 150, -1.0, 10.0,  4.0, 'SOL', 1);",
     )
     .expect("variant fixture");
     let query = Query {
@@ -397,14 +398,16 @@ fn variant_time_window_predicate() {
 fn time_variant_uses_the_selected_zone_for_open_time() {
     let conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
-        "CREATE TABLE trades(closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL);
-         INSERT INTO trades VALUES (1767258000, 1767256200, 5.0, 10.0);",
+        "CREATE TABLE trades(
+            closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, core_uid INTEGER
+         );
+         INSERT INTO trades VALUES (1767258000, 1767256200, 5.0, 10.0, 1);",
     )
     .expect("seed trade");
-    let source = "(SELECT closedate, buydate, pnl, spentbtc FROM trades
+    let source = "(SELECT closedate, buydate, pnl, spentbtc, core_uid FROM trades
                    WHERE closedate >= ?1 AND closedate < ?2) o";
     let query = Query {
-        time_zone: chrono_tz::Europe::Warsaw,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
         from: 1_767_200_000,
         to: 1_767_300_000,
         ..Default::default()

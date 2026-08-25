@@ -37,7 +37,13 @@ pub(super) fn current_comment(
     let column = cols.iter().position(|name| name == "comment")?;
     let row_index = data.row_keys.iter().position(|key| *key == Some(current))?;
     let value = data.rows.get(row_index)?.get(column)?;
-    let text = super::export::field_text("comment", value, chrono_tz::UTC);
+    let text = super::export::field_text(
+        "comment",
+        value,
+        // Not a timestamp column, so neither argument is consulted.
+        &moon_core::db::ReportAxis::identity_core_local(),
+        chrono_tz::UTC,
+    );
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;

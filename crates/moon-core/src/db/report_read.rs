@@ -596,16 +596,32 @@ fn open_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String
 /// hold. The period's LOWER bound is deliberately not consulted — a position opened last week and
 /// still running belongs in "today" precisely because it is present state rather than history.
 ///
+/// # Why the comparison is deliberately slack
+///
+/// `date_to` is resolved on the axis of the column it filters — the CORE's own wall clock — while
+/// `now` is this machine's true UTC. Until every core's offset is measured the two are not
+/// directly comparable, and the error is bounded by the widest real time-zone offset.
+///
+/// The two ways to be wrong are NOT symmetric. Admitting open rows into a window that had already
+/// ended shows the user a position they can see is still running — visible, and self-explanatory.
+/// DROPPING them silently removes money from a report that still looks complete, and nothing on
+/// screen says a row is missing. So the comparison is widened by [`crate::db::MAX_OFFSET_SECS`],
+/// which can only ever err toward showing too much.
+///
+/// This is an approximation with a known end: once the axis carries per-core offsets, the bound is
+/// converted to true UTC per core and the slack goes away.
+///
 /// Args:
 ///     date_to: Inclusive upper bound of the period, or `None` for an unbounded one.
 ///     now: Current Unix timestamp in seconds.
 ///
 /// Returns:
 ///     [`RowScope::ClosedAndOpen`] for a period reaching the present, [`RowScope::Closed`] for one
-///     that has already ended.
+///     that has demonstrably already ended.
 pub fn open_rows_for_bound(date_to: Option<i64>, now: i64) -> RowScope {
+    let ended = now.saturating_sub(i64::from(crate::db::MAX_OFFSET_SECS));
     match date_to {
-        Some(to) if to < now => RowScope::Closed,
+        Some(to) if to < ended => RowScope::Closed,
         _ => RowScope::ClosedAndOpen,
     }
 }

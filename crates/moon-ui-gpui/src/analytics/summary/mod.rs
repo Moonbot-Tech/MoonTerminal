@@ -189,7 +189,7 @@ impl AnalyticsView {
                                 &core_colors,
                                 self.hover_cum_bucket,
                                 data.bucket_secs,
-                                self.display_zone,
+                                self.bound_zone(),
                                 p,
                                 cx,
                             ),
@@ -235,7 +235,7 @@ impl AnalyticsView {
                                     &core_colors,
                                     self.hover_daily_bucket,
                                     data.bucket_secs,
-                                    self.display_zone,
+                                    self.bound_zone(),
                                     p,
                                     cx,
                                 ),
@@ -252,14 +252,14 @@ impl AnalyticsView {
                     .child(top_card(
                         t!("analytics.best_trades").to_string(),
                         &data.best,
-                        self.display_zone,
+                        self.bound_zone(),
                         p,
                         cx,
                     ))
                     .child(top_card(
                         t!("analytics.worst_trades").to_string(),
                         &data.worst,
-                        self.display_zone,
+                        self.bound_zone(),
                         p,
                         cx,
                     ))
@@ -592,7 +592,8 @@ fn chart_card_ex(
 /// Args:
 ///     title: Localized card heading.
 ///     trades: Ranked trade rows.
-///     zone: Selected IANA display zone used by close timestamps.
+///     zone: Zone the REPORT AXIS renders in. A top trade's `closedate` is a replicated value on
+///         the core's own clock, so it must not travel through the user's display zone on top.
 ///     p: Active MoonUI palette.
 ///     cx: Analytics view context.
 ///
@@ -975,11 +976,12 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
         .child(list)
 }
 
-/// Format a top-table timestamp as selected-zone `DD.MM.YY HH:MM`.
+/// Format a top-table timestamp as `DD.MM.YY HH:MM` in the zone it is handed.
 ///
 /// Args:
 ///     secs: Absolute UTC Unix seconds.
-///     zone: Selected IANA display zone.
+///     zone: Zone to render in — the report axis's for a replicated value, never the display
+///         zone independently.
 ///
 /// Returns:
 ///     Civil date-time label, or the shared formatter's fallback text.

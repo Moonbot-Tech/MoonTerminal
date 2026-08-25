@@ -192,7 +192,8 @@ impl Accumulator {
     ///     row: Chronological report row shared by every projection.
     ///     bucket: Time-grid bucket width in seconds.
     ///     include_inline_raw: Whether this stream owns raw-money group aggregation.
-    ///     zone: Selected IANA zone used for civil buckets and hour profiles.
+    ///     axis: Per-core time axis. `closedate` is the CORE's own wall clock, so it reaches
+    ///         true UTC through the axis before any civil bucket or hour slot is derived.
     ///
     /// Returns:
     ///     Success after every projection accepts the row.
@@ -204,9 +205,14 @@ impl Accumulator {
         row: TradeRow,
         bucket: i64,
         include_inline_raw: bool,
-        zone: chrono_tz::Tz,
+        axis: &crate::db::ReportAxis,
     ) -> rusqlite::Result<()> {
         let profit = row.pnl.unwrap_or(0.0);
+        // `closedate` is the CORE's wall clock; it reaches true UTC before any civil bucket or
+        // hour slot is taken from it. The duration below is a DIFFERENCE on that one clock and
+        // cancels the offset, so it deliberately stays raw.
+        let core_uid = row.core_uid.unwrap_or(0) as u64;
+        let closedate_utc = axis.to_utc(row.closedate, core_uid);
         self.stats.n += 1;
         self.stats.profit += profit;
         self.duration_seconds += (row.closedate - row.buydate).max(0);
@@ -227,8 +233,9 @@ impl Accumulator {
         self.peak = self.peak.max(self.cumulative);
         self.stats.max_dd = self.stats.max_dd.max(self.peak - self.cumulative);
 
-        let bucket_start = crate::util::display_time::bucket_start(row.closedate, bucket, zone)
-            .unwrap_or(row.closedate);
+        let bucket_start =
+            crate::util::display_time::bucket_start(closedate_utc, bucket, axis.zone())
+                .unwrap_or(closedate_utc);
         match self.days.last_mut() {
             Some(day) if day.start == bucket_start => {
                 day.profit += profit;
@@ -240,13 +247,12 @@ impl Accumulator {
                 trades: 1,
             }),
         }
-        let hour = crate::util::display_time::minute_of_day(row.closedate, zone)
+        let hour = crate::util::display_time::minute_of_day(closedate_utc, axis.zone())
             .map(|minute| minute as usize / 60)
             .unwrap_or(0);
         self.hours[hour].0 += profit;
         self.hours[hour].1 += 1;
 
-        let core_uid = row.core_uid.unwrap_or(0) as u64;
         let core = self.cores.entry(core_uid).or_default();
         if core.name.is_empty() {
             core.name = row.core_name.clone().unwrap_or_default();
@@ -404,10 +410,10 @@ pub(super) fn read(
     for row in rows {
         let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
         accumulator
-            .push(row, bucket, raw_src.is_none(), q.time_zone)
+            .push(row, bucket, raw_src.is_none(), &q.axis)
             .map_err(|error| read_fail_on(conn, CTX, error))?;
     }
-    accumulator.finish_period(bucket, q.time_zone);
+    accumulator.finish_period(bucket, q.axis.zone());
 
     let (raw_strategies, raw_coins) = match raw_src {
         Some(raw_src) => read_raw_groups(conn, raw_src, q)?,

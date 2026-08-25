@@ -137,6 +137,11 @@ pub(super) fn date_of(secs: i64, zone: chrono_tz::Tz) -> NaiveDate {
 /// Returns:
 ///     The same civil date's first real instant in `new_zone`; when that zone skipped the complete
 ///     date, the next existing date is selected. Returns `day` only at chrono limits.
+// DORMANT for one phase, deliberately kept. The calendar day now lives on the report axis, so a
+// display-zone change must NOT move it and the zone-change handler no longer calls this. It
+// becomes live again once the axis carries the user's zone itself, at which point a zone
+// change genuinely does re-project the day. Its tests still pin the conversion meanwhile.
+#[allow(dead_code)]
 pub(super) fn rezone_day(day: i64, old_zone: chrono_tz::Tz, new_zone: chrono_tz::Tz) -> i64 {
     moon_core::util::display_time::date(day, old_zone)
         .and_then(|date| resolve_calendar_date(date, new_zone, 1))
@@ -447,7 +452,7 @@ impl AnalyticsView {
         match self.cal_mode {
             CalMode::Year => return,
             CalMode::Month => {
-                let (cy, cm) = now_ym(self.display_zone);
+                let (cy, cm) = now_ym(self.bound_zone());
                 let (y, m) = self.cal_ym;
                 if forward && (y, m) >= (cy, cm) {
                     return; // no paging into the future — no trades there
@@ -459,14 +464,14 @@ impl AnalyticsView {
                 };
             }
             CalMode::Day => {
-                if forward && self.cal_day >= today_start(self.display_zone) {
+                if forward && self.cal_day >= today_start(self.bound_zone()) {
                     return;
                 }
-                let date = date_of(self.cal_day, self.display_zone);
+                let date = date_of(self.cal_day, self.bound_zone());
                 let shifted =
                     moon_core::util::display_time::shift_date(date, if forward { 1 } else { -1 });
                 self.cal_day =
-                    resolve_calendar_date(shifted, self.display_zone, if forward { 1 } else { -1 })
+                    resolve_calendar_date(shifted, self.bound_zone(), if forward { 1 } else { -1 })
                         .unwrap_or(self.cal_day);
             }
         }
@@ -577,14 +582,14 @@ impl AnalyticsView {
         let label = match self.cal_mode {
             CalMode::Month => format!("{} {}", month_name(m), y),
             CalMode::Year => t!("analytics.cal.all_years").to_string(),
-            CalMode::Day => super::fmt_day(self.cal_day, self.display_zone),
+            CalMode::Day => super::fmt_day(self.cal_day, self.bound_zone()),
         };
         // "Next" greys out: both in "Year", on the current/future one otherwise.
-        let (cy, cm) = now_ym(self.display_zone);
+        let (cy, cm) = now_ym(self.bound_zone());
         let (prev_off, next_off) = match self.cal_mode {
             CalMode::Year => (true, true),
             CalMode::Month => (false, (y, m) >= (cy, cm)),
-            CalMode::Day => (false, self.cal_day >= today_start(self.display_zone)),
+            CalMode::Day => (false, self.cal_day >= today_start(self.bound_zone())),
         };
         let nav_btn = |id: &'static str, label: String, forward: bool, off: bool| {
             MoonButton::new(id)
@@ -695,19 +700,19 @@ impl AnalyticsView {
     /// mask, metric, and valuation filters.
     fn cal_query(&self) -> Query {
         let (from, to) = match self.cal_mode {
-            CalMode::Month => month_range(self.cal_ym, self.display_zone),
-            CalMode::Year => all_history_range(self.display_zone),
+            CalMode::Month => month_range(self.cal_ym, self.bound_zone()),
+            CalMode::Year => all_history_range(self.bound_zone()),
             // "Day" loads a 7-day window (selected day centered/at the bottom).
             CalMode::Day => {
-                let (top, bottom) = day_window(self.cal_day, self.display_zone);
+                let (top, bottom) = day_window(self.cal_day, self.bound_zone());
                 let to =
-                    moon_core::util::display_time::next_bucket(bottom, 86_400, self.display_zone)
+                    moon_core::util::display_time::next_bucket(bottom, 86_400, self.bound_zone())
                         .unwrap_or(bottom);
                 (top, to)
             }
         };
         Query {
-            time_zone: self.display_zone,
+            axis: self.report_axis(),
             previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,
@@ -728,9 +733,9 @@ impl AnalyticsView {
         if self.cal_mode != CalMode::Month {
             return None;
         }
-        let (from, to) = prev_month_range(self.cal_ym, self.display_zone);
+        let (from, to) = prev_month_range(self.cal_ym, self.bound_zone());
         Some(Query {
-            time_zone: self.display_zone,
+            axis: self.report_axis(),
             previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,

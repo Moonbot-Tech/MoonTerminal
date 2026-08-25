@@ -520,9 +520,14 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Quote-profit query for the selected period and global valuation mode.
     fn query(&self) -> Query {
-        let (from, to) = self.period.range_at(now_utc(), self.zone);
+        // The bounds below are compared against the raw replicated `closedate`, so they resolve on
+        // the axis the query carries. `self.zone` is this monitor's own independently selectable
+        // display zone and drives LABELS only; computing the window with it would slide the period
+        // sideways relative to the rows it filters.
+        let axis = moon_core::db::ReportAxis::identity_core_local();
+        let (from, to) = self.period.range_at(now_utc(), axis.zone());
         Query {
-            time_zone: self.zone,
+            axis,
             previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,

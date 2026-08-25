@@ -71,7 +71,7 @@ use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
-    self, ReadResult, ReportFilter, ReportStrategy, ReportStrategyKey, SideFilter,
+    self, ReadResult, ReportAxis, ReportFilter, ReportStrategy, ReportStrategyKey, SideFilter,
 };
 use moon_core::session::CoreId;
 
@@ -723,6 +723,25 @@ impl crate::controls::CoreComboHost for ReportPanel {
 }
 
 impl ReportPanel {
+
+    /// The time axis every replicated report timestamp in this window is read through.
+    ///
+    /// Phase 1 answers with the identity axis: a replicated `closedate` carries the CORE's own wall
+    /// clock, so it is displayed as stored, which reproduces MoonBot's own report. This is the ONE
+    /// place that changes when per-core offsets start being measured.
+    pub(super) fn report_axis(&self) -> ReportAxis {
+        ReportAxis::identity_core_local()
+    }
+
+    /// The zone a period BOUND and a calendar window resolve in.
+    ///
+    /// A bound is compared against the raw replicated column, so it must land on the SAME axis as
+    /// that column — never on the user's display zone independently, which is what made a picked
+    /// day select a different day's rows. Day labels follow it for the same reason: a caption that
+    /// disagreed with the window it selects is worse than either answer alone.
+    pub(super) fn bound_zone(&self) -> Tz {
+        self.report_axis().zone()
+    }
     /// Resolve workspace scope for group-owned Report instances.
     ///
     /// The Analytics-owned standalone window deliberately returns `None` and keeps its exact

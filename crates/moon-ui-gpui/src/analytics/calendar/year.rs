@@ -27,13 +27,13 @@ impl AnalyticsView {
         let mut agg: HashMap<(i32, u32), (f64, i64)> = HashMap::new();
         let mut min_year = i32::MAX;
         for d in days {
-            let dt = date_of(d.start, self.display_zone);
+            let dt = date_of(d.start, self.bound_zone());
             min_year = min_year.min(dt.year());
             let e = agg.entry((dt.year(), dt.month())).or_insert((0.0, 0));
             e.0 += d.totals.profit;
             e.1 += d.totals.trades;
         }
-        let (cy, cm) = now_ym(self.display_zone);
+        let (cy, cm) = now_ym(self.bound_zone());
         if min_year == i32::MAX {
             min_year = cy;
         }

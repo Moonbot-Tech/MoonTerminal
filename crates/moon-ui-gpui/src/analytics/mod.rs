@@ -51,6 +51,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::controls::date_range::{self, Bound};
+use moon_core::db::ReportAxis;
 use moon_core::db::analytics::{DayCell, PreviousPeriodBasis, Query, StrategyBase, Summary};
 use moon_core::db::valuation::{ValuationMode, ValuationStatus};
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
@@ -529,6 +530,25 @@ impl crate::controls::CoreComboHost for AnalyticsView {
 }
 
 impl AnalyticsView {
+
+    /// The time axis every replicated report timestamp in this window is read through.
+    ///
+    /// Phase 1 answers with the identity axis: a replicated `closedate` carries the CORE's own wall
+    /// clock, so it is displayed as stored, which reproduces MoonBot's own report. This is the ONE
+    /// place that changes when per-core offsets start being measured.
+    fn report_axis(&self) -> ReportAxis {
+        ReportAxis::identity_core_local()
+    }
+
+    /// The zone a period BOUND and a calendar window resolve in.
+    ///
+    /// A bound is compared against the raw replicated column, so it must land on the SAME axis as
+    /// that column — never on the user's display zone independently, which is what made a picked
+    /// day select a different day's rows. Day labels follow it for the same reason: a caption that
+    /// disagreed with the window it selects is worse than either answer alone.
+    fn bound_zone(&self) -> chrono_tz::Tz {
+        self.report_axis().zone()
+    }
     /// Build an Analytics view from durable layout preferences and process-lifetime UI choices.
     ///
     /// Args:
@@ -594,9 +614,11 @@ impl AnalyticsView {
             if zone == this.display_zone {
                 return;
             }
-            this.cal_day = calendar::rezone_day(this.cal_day, this.display_zone, zone);
+            // The calendar day and the period fields live on the REPORT AXIS, not on the display
+            // zone, so a zone change must leave them exactly where they are: re-projecting them
+            // here is what used to slide the selected day sideways and change which trades the
+            // period held. `rezone_day` returns once the axis carries the display zone itself.
             this.display_zone = zone;
-            this.display_zone_fields_dirty = true;
             this.coin_lists.invalidate_display_time();
             this.cal_dirty = true;
             this.reload(cx);
@@ -724,6 +746,9 @@ impl AnalyticsView {
         // reachable — that is the picker's own contract, not something the window drives.
         let cal_from = cx.new(|cx| date_range::bound_picker(Bound::From, window, cx));
         let cal_to = cx.new(|cx| date_range::bound_picker(Bound::To, window, cx));
+        // A seeded bound must be read on the axis it will be COMPARED on, not on the display zone;
+        // `self` does not exist yet, so the same answer is resolved from a fresh axis here.
+        let bound_zone = ReportAxis::identity_core_local().zone();
         // Armed probe → open straight on the surface under observation, so the channel
         // reports the coin table rather than the summary nobody asked about.
         let probe = probe_enabled();
@@ -732,12 +757,12 @@ impl AnalyticsView {
         // each tab keeps its own, so a tuning session reopened on a custom range must SHOW it.
         if let Some(Period::Custom(f, t)) = seed_period(tab, saved_period, saved_strat_period) {
             if let Some(d) = (f >= 0)
-                .then(|| date_range::dt_of_secs(f, display_zone))
+                .then(|| date_range::dt_of_secs(f, bound_zone))
                 .flatten()
             {
                 cal_from.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
-            if let Some(d) = date_range::field_of_exclusive(t, display_zone) {
+            if let Some(d) = date_range::field_of_exclusive(t, bound_zone) {
                 cal_to.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
         }
@@ -838,14 +863,14 @@ impl AnalyticsView {
             cal_mode: saved_mode,
             cal_ym: {
                 use chrono::Datelike;
-                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000, display_zone)
+                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000, bound_zone)
                     .unwrap_or_default();
                 (d.year(), d.month())
             },
             cal_day: moon_core::util::display_time::bucket_start(
                 moon_core::util::now_unix_ms_i64() / 1000,
                 86_400,
-                display_zone,
+                bound_zone,
             )
             .unwrap_or(0),
             cal_prev: LoadState::default(),
@@ -1177,9 +1202,9 @@ impl AnalyticsView {
     /// Returns:
     ///     Shared filters over that window.
     fn query_for(&self, period: Period) -> Query {
-        let (from, to) = period.range(self.display_zone);
+        let (from, to) = period.range(self.bound_zone());
         Query {
-            time_zone: self.display_zone,
+            axis: self.report_axis(),
             previous_period_basis: if matches!(period, Period::Custom(..)) {
                 PreviousPeriodBasis::Elapsed
             } else {
@@ -1675,11 +1700,11 @@ impl AnalyticsView {
         let (from, to) = match self.active_period() {
             Period::Custom(f, t) => (
                 if f >= 0 {
-                    date_range::dt_of_secs(f, self.display_zone)
+                    date_range::dt_of_secs(f, self.bound_zone())
                 } else {
                     None
                 },
-                date_range::field_of_exclusive(t, self.display_zone),
+                date_range::field_of_exclusive(t, self.bound_zone()),
             ),
             _ => (None, None),
         };
@@ -1750,9 +1775,9 @@ impl AnalyticsView {
         if f.is_none() && t.is_none() {
             return;
         }
-        let tomorrow = Period::Today.range(self.display_zone).1;
+        let tomorrow = Period::Today.range(self.bound_zone()).1;
         let next = {
-            let (from, to) = custom_bounds(f, t, tomorrow, self.display_zone);
+            let (from, to) = custom_bounds(f, t, tomorrow, self.bound_zone());
             Period::Custom(from, to)
         };
         // Programmatic writes (tab switch, preset reset, the swap above) emit `Change` too, so

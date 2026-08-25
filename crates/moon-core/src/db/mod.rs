@@ -27,6 +27,7 @@ mod quote;
 mod read_cancel;
 pub(crate) mod read_fail;
 mod rep;
+pub mod report_axis;
 mod report_read;
 pub mod report_recovery;
 #[cfg(test)]
@@ -43,6 +44,7 @@ pub use read_cancel::{with_read_cancellation, ReadCancellation};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
+pub use report_axis::{OffsetSegment, ReportAxis, MAX_OFFSET_SECS, MIN_OFFSET_SECS};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
     display_columns, distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,

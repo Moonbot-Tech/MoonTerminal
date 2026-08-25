@@ -41,7 +41,7 @@ impl AnalyticsView {
         // Daily aggregate (over the window's hourly cells), folded through the same accumulator
         // the Month KPI uses, so the two headers cannot disagree about what a day sums to.
         let day_agg = |d0: i64| -> CellTotals {
-            let end = next_day(d0, self.display_zone);
+            let end = next_day(d0, self.bound_zone());
             hours
                 .iter()
                 .filter(|c| c.start >= d0 && c.start < end)
@@ -52,7 +52,7 @@ impl AnalyticsView {
         };
         let sel = self.cal_day;
         let today = day_agg(sel);
-        let previous = day_agg(previous_day(sel, self.display_zone));
+        let previous = day_agg(previous_day(sel, self.bound_zone()));
         let has_prev = previous.trades > 0 || previous.profit != 0.0;
 
         v_flex()
@@ -179,7 +179,7 @@ impl AnalyticsView {
         let cell_gap = design::ui_px(cx, 4.0);
         let gutter_w = design::font_w_px(cx, 84.0);
         let wdays = split_i18n(t!("analytics.heat.weekdays").to_string());
-        let (top, bottom) = day_window(self.cal_day, self.display_zone);
+        let (top, bottom) = day_window(self.cal_day, self.bound_zone());
 
         // Largest hourly |PnL| (for the fill) + the average profit per hour
         // across the visible days (only days that traded in that hour) — shown
@@ -192,7 +192,7 @@ impl AnalyticsView {
             while d <= bottom {
                 for h in 0..24usize {
                     if let Some(c) =
-                        hour_start(d, h as u32, self.display_zone).and_then(|start| map.get(&start))
+                        hour_start(d, h as u32, self.bound_zone()).and_then(|start| map.get(&start))
                     {
                         if c.has_activity() {
                             hour_max = hour_max.max(c.totals.profit.abs());
@@ -201,7 +201,7 @@ impl AnalyticsView {
                         }
                     }
                 }
-                let next = next_day(d, self.display_zone);
+                let next = next_day(d, self.bound_zone());
                 if next == d {
                     break;
                 }
@@ -241,7 +241,7 @@ impl AnalyticsView {
         let mut d = top;
         while d <= bottom {
             let sel = d == self.cal_day;
-            let dt = date_of(d, self.display_zone);
+            let dt = date_of(d, self.bound_zone());
             let wd = wdays
                 .get(dt.weekday().num_days_from_monday() as usize)
                 .cloned()
@@ -291,7 +291,7 @@ impl AnalyticsView {
                 .gap(cell_gap)
                 .child(gutter);
             for h in 0..24i64 {
-                let start = hour_start(d, h as u32, self.display_zone);
+                let start = hour_start(d, h as u32, self.bound_zone());
                 let hsec = start.unwrap_or_else(|| d.saturating_add(h * 3_600));
                 rowel = rowel.child(hour_cell(
                     hsec,
@@ -303,7 +303,7 @@ impl AnalyticsView {
                 ));
             }
             rows = rows.child(rowel);
-            let next = next_day(d, self.display_zone);
+            let next = next_day(d, self.bound_zone());
             if next == d {
                 break;
             }

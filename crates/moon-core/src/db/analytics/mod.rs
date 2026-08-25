@@ -622,8 +622,8 @@ pub(super) fn summary_on(
         return Err(ReadFail::NotReady);
     };
     let len = (q.to - q.from).max(1);
-    let civil_len = crate::util::display_time::at(q.from, q.time_zone)
-        .zip(crate::util::display_time::at(q.to, q.time_zone))
+    let civil_len = crate::util::display_time::at(q.from, q.axis.zone())
+        .zip(crate::util::display_time::at(q.to, q.axis.zone()))
         .map(|(from, to)| (to.naive_local() - from.naive_local()).num_seconds().max(1))
         .unwrap_or(len);
     // A day or less: a daily series would be a single bar and a cumulative curve a single
@@ -727,7 +727,7 @@ fn previous_stats(
             return None;
         }
     }
-    scan_period(conn, src, previous_from, q.from, bucket, q.time_zone)
+    scan_period(conn, src, previous_from, q.from, bucket, &q.axis)
         .map(|(stats, _, _)| stats)
         .ok()
 }
@@ -743,13 +743,13 @@ fn previous_stats(
 fn previous_period_start(q: &Query, len: i64) -> i64 {
     match q.previous_period_basis {
         query::PreviousPeriodBasis::Elapsed => q.from.saturating_sub(len),
-        query::PreviousPeriodBasis::Civil => crate::util::display_time::at(q.from, q.time_zone)
-            .zip(crate::util::display_time::at(q.to, q.time_zone))
+        query::PreviousPeriodBasis::Civil => crate::util::display_time::at(q.from, q.axis.zone())
+            .zip(crate::util::display_time::at(q.to, q.axis.zone()))
             .and_then(|(from, to)| {
                 let civil_span = to.naive_local() - from.naive_local();
                 crate::util::display_time::unix_from_local(
                     from.naive_local() - civil_span,
-                    q.time_zone,
+                    q.axis.zone(),
                     crate::util::display_time::LocalBoundary::Lower,
                 )
             })
@@ -792,7 +792,8 @@ fn min_closedate(conn: &Connection) -> ReadResult<i64> {
 ///     from: Inclusive UTC lower bound.
 ///     to: Exclusive UTC upper bound.
 ///     bucket: Civil bucket width in seconds.
-///     zone: Selected IANA zone used for buckets and hour profiles.
+///     axis: Per-core time axis. `closedate` is the CORE's own wall clock, so it reaches true UTC
+///         through the axis before any civil bucket or hour slot is derived from it.
 ///
 /// Returns:
 ///     Sequence statistics, dense time buckets, and 24 selected-zone hour aggregates.
@@ -805,14 +806,14 @@ fn scan_period(
     from: i64,
     to: i64,
     bucket: i64,
-    zone: chrono_tz::Tz,
+    axis: &crate::db::ReportAxis,
 ) -> ReadResult<(PeriodStats, Vec<DayPoint>, [(f64, i64); 24])> {
     const CTX: &str = "analytics: scan_period";
     let mut st = PeriodStats::default();
     let mut days: Vec<DayPoint> = Vec::new();
     let mut hours = [(0.0f64, 0i64); 24];
     let sql = format!(
-        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0)
+        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0), o.core_uid
          FROM {src} ORDER BY o.closedate"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -822,6 +823,12 @@ fn scan_period(
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
                 r.get::<_, f64>(2)?,
+                // A non-integer core uid degrades to "no identifiable core" exactly as a NULL
+                // does, so one odd row cannot fail a scan covering the whole period.
+                match r.get_ref(3)? {
+                    rusqlite::types::ValueRef::Integer(uid) => uid as u64,
+                    _ => 0,
+                },
             ))
         })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -833,7 +840,10 @@ fn scan_period(
     for row in rows {
         // Every column here moves a number, so no row is skippable: dropping
         // one would silently understate n / profit / pf / max_dd.
-        let (close, buy, profit) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        let (close, buy, profit, core_uid) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        // Duration below is a DIFFERENCE on one clock and cancels the offset, so it stays raw;
+        // only the values that become civil buckets are corrected.
+        let close_utc = axis.to_utc(close, core_uid);
         st.n += 1;
         st.profit += profit;
         dur_ms_total += (close - buy).max(0);
@@ -854,7 +864,8 @@ fn scan_period(
         peak = peak.max(cum);
         st.max_dd = st.max_dd.max(peak - cum);
 
-        let start = crate::util::display_time::bucket_start(close, bucket, zone).unwrap_or(close);
+        let start =
+            crate::util::display_time::bucket_start(close_utc, bucket, axis.zone()).unwrap_or(close_utc);
         match days.last_mut() {
             Some(d) if d.start == start => {
                 d.profit += profit;
@@ -866,7 +877,7 @@ fn scan_period(
                 trades: 1,
             }),
         }
-        let h = crate::util::display_time::minute_of_day(close, zone)
+        let h = crate::util::display_time::minute_of_day(close_utc, axis.zone())
             .map(|minute| minute as usize / 60)
             .unwrap_or(0);
         let slot = &mut hours[h];
@@ -893,7 +904,8 @@ fn scan_period(
                     trades: 0,
                 });
             }
-            let Some(next) = crate::util::display_time::next_bucket(t, bucket, zone) else {
+            // `t` is already a converted bucket start, so stepping the grid is display-only.
+            let Some(next) = crate::util::display_time::next_bucket(t, bucket, axis.zone()) else {
                 break;
             };
             t = next;

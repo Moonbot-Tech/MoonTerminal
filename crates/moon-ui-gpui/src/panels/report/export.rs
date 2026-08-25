@@ -27,7 +27,7 @@ use chrono_tz::Tz;
 use rusqlite::types::Value;
 
 use super::columns;
-use moon_core::db::{self, ReportFilter};
+use moon_core::db::{self, ReportAxis, ReportFilter};
 
 /// Caps an otherwise complete filtered export to protect against enormous result sets; reaching the
 /// cap is logged because the database may accumulate hundreds of thousands of rows over the years.
@@ -58,7 +58,12 @@ impl Format {
 ///     filter: Report filter whose absolute bounds name the file.
 ///     fmt: Selected export format.
 ///     all_cols: Whether the complete runtime schema is exported.
-///     zone: Captured IANA display zone used by bound dates.
+///     axis: Time axis the filter's bounds live on. A window bound is compared against the raw
+///         replicated `closedate`, so the name must be read on the SAME axis as the rows inside
+///         the file; taking it from the display zone instead is how a file called `..._09-30`
+///         ends up holding a different day's trades.
+///     display_zone: Captured IANA display zone, unused by the bounds and kept for symmetry with
+///         the writers below.
 ///
 /// Returns:
 ///     Filesystem-safe suggested filename.
@@ -66,10 +71,11 @@ pub(super) fn suggested_name(
     filter: &ReportFilter,
     fmt: Format,
     all_cols: bool,
-    zone: Tz,
+    axis: &ReportAxis,
+    _display_zone: Tz,
 ) -> String {
     let day = |secs: i64| {
-        let full = moon_core::util::display_time::format_minute(secs, zone);
+        let full = moon_core::util::display_time::format_minute(secs, axis.zone());
         full.get(..10).unwrap_or(&full).to_string()
     };
     let range = match (filter.date_from, filter.date_to) {
@@ -104,7 +110,8 @@ pub(super) fn default_dir() -> PathBuf {
 ///     filter: Frozen report filter.
 ///     sort_key: Runtime column used for row ordering.
 ///     sort_desc: Whether rows are ordered descending.
-///     zone: Captured IANA display zone used by every timestamp.
+///     axis: Time axis for replicated timestamps.
+///     display_zone: Captured IANA display zone for terminal-written timestamps.
 ///
 /// Returns:
 ///     Number of data rows written.
@@ -118,7 +125,8 @@ pub(super) fn run(
     filter: &ReportFilter,
     sort_key: &str,
     sort_desc: bool,
-    zone: Tz,
+    axis: &ReportAxis,
+    display_zone: Tz,
 ) -> anyhow::Result<usize> {
     let conn = db::open_reader().map_err(|e| anyhow::anyhow!("БД отчётов недоступна: {e}"))?;
     let table = db::query_reports(&conn, filter, sort_key, sort_desc, EXPORT_MAX_ROWS)
@@ -141,8 +149,8 @@ pub(super) fn run(
         anyhow::bail!("нет колонок для экспорта");
     }
     match fmt {
-        Format::Csv => write_csv(path, &idx, &table.rows, zone)?,
-        Format::Xlsx => write_xlsx(path, &idx, &table.rows, zone)?,
+        Format::Csv => write_csv(path, &idx, &table.rows, axis, display_zone)?,
+        Format::Xlsx => write_xlsx(path, &idx, &table.rows, axis, display_zone)?,
     }
     Ok(table.rows.len())
 }
@@ -156,7 +164,8 @@ pub(super) fn run(
 ///     path: Destination CSV path.
 ///     idx: Ordered source-column indices and names.
 ///     rows: Raw SQLite report rows.
-///     zone: Captured IANA display zone used by timestamp fields.
+///     axis: Time axis for replicated timestamps.
+///     display_zone: Captured IANA display zone for terminal-written timestamps.
 ///
 /// Returns:
 ///     Success after the complete file is written.
@@ -167,7 +176,8 @@ fn write_csv(
     path: &Path,
     idx: &[(usize, &str)],
     rows: &[Vec<Value>],
-    zone: Tz,
+    axis: &ReportAxis,
+    display_zone: Tz,
 ) -> anyhow::Result<()> {
     let mut out = String::with_capacity(64 * (rows.len() + 1));
     out.push('\u{FEFF}');
@@ -185,7 +195,7 @@ fn write_csv(
             }
             first = false;
             let val = row.get(*i).unwrap_or(&Value::Null);
-            out.push_str(&csv_field(&field_text(name, val, zone)));
+            out.push_str(&csv_field(&field_text(name, val, axis, display_zone)));
         }
         out.push_str("\r\n");
     }
@@ -217,12 +227,22 @@ fn id_text_col(col: &str) -> bool {
 /// Args:
 ///     col: Runtime report column name.
 ///     v: SQLite value from that column.
-///     zone: User-selected display time zone.
+///     axis: Time axis for REPLICATED timestamp columns, whose stored seconds are the core's own
+///         wall clock rather than UTC.
+///     display_zone: User-selected zone for columns this terminal wrote itself.
 ///
 /// Returns:
 ///     Display-ready text shared by file export and clipboard TSV.
-pub(super) fn field_text(col: &str, v: &Value, zone: Tz) -> String {
+pub(super) fn field_text(col: &str, v: &Value, axis: &ReportAxis, display_zone: Tz) -> String {
     if date_col(col) {
+        // A replicated column renders on the core's own clock; `last_update_at` is written by this
+        // terminal and is genuine UTC, so it keeps the selected zone. Export must agree with the
+        // grid exactly, or the same trade reads as two different times.
+        let zone = if col == "last_update_at" {
+            display_zone
+        } else {
+            axis.zone()
+        };
         return match v {
             Value::Integer(i) => moon_core::util::display_time::format_minute(*i, zone),
             Value::Real(r) => moon_core::util::display_time::format_minute(*r as i64, zone),
@@ -255,7 +275,8 @@ fn csv_field(s: &str) -> String {
 ///     path: Destination XLSX path.
 ///     idx: Ordered source-column indices and names.
 ///     rows: Raw SQLite report rows.
-///     zone: Captured IANA display zone used by timestamp fields.
+///     axis: Time axis for replicated timestamps.
+///     display_zone: Captured IANA display zone for terminal-written timestamps.
 ///
 /// Returns:
 ///     Success after the workbook is saved.
@@ -266,7 +287,8 @@ fn write_xlsx(
     path: &Path,
     idx: &[(usize, &str)],
     rows: &[Vec<Value>],
-    zone: Tz,
+    axis: &ReportAxis,
+    display_zone: Tz,
 ) -> anyhow::Result<()> {
     use rust_xlsxwriter::{Format as XFormat, Workbook};
 
@@ -282,7 +304,7 @@ fn write_xlsx(
             let c = c as u16;
             let val = row.get(*i).unwrap_or(&Value::Null);
             if date_col(name) {
-                let text = field_text(name, val, zone);
+                let text = field_text(name, val, axis, display_zone);
                 if !text.is_empty() {
                     ws.write_string(r, c, text)?;
                 }

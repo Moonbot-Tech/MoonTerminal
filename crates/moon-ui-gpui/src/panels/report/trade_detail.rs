@@ -31,14 +31,15 @@ pub(super) struct RowTarget {
     filter: ReportFilter,
 }
 
-/// Render one Unix second in the Report's own display zone.
+/// Render one replicated Unix second on the Report's own time axis.
 ///
 /// The zone is the panel's, not a second clock of the window's own: the times beside the chart
 /// must read exactly as the row the user clicked.
 ///
 /// Args:
 ///     seconds: Unix seconds.
-///     zone: The Report's display zone.
+///     zone: Zone of the Report's axis. `buy_date`/`close_date` come straight off the replica and
+///         carry the CORE's wall clock, so the user's display zone must not be applied on top.
 ///
 /// Returns:
 ///     `YYYY-MM-DD HH:MM:SS`, or a dash for an unusable stamp.
@@ -75,7 +76,9 @@ impl ReportPanel {
     ///     cx: Panel context.
     pub(super) fn open_trade_detail_target(&mut self, target: RowTarget, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
-        let zone = self.display_zone;
+        // These stamps render replicated columns, so they follow the report axis rather than the
+        // header clock — the same split the Report grid makes for the very same two values.
+        let zone = self.bound_zone();
         let RowTarget {
             core,
             coin,

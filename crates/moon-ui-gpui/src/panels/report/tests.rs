@@ -10,14 +10,15 @@ use super::{
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
 use moon_core::config::WorkspaceMode;
-use moon_core::db::RowScope;
+use moon_core::db::{MAX_OFFSET_SECS, RowScope};
 
 /// `mod.rs::row_scope_for` -- replacing its `closed_only || !show_open` guard with `&&`, dropping
 /// the `!`, or swapping its branch arms makes the Report table, totals, and CSV include active
 /// positions when a host or user explicitly excluded them.
 ///
 /// The expected scopes come from the independent host/user precedence contract and the public
-/// period-bound rule: only an unexcluded period ending before `now` omits active rows.
+/// period-bound rule: only an unexcluded period ending more than the widest real time-zone offset
+/// before `now` omits active rows.
 #[test]
 fn row_scope_precedence_excludes_active_positions_before_consulting_the_period() {
     const NOW: i64 = 1_000;
@@ -43,9 +44,14 @@ fn row_scope_precedence_excludes_active_positions_before_consulting_the_period()
         "a bound at now still reaches the present"
     );
     assert_eq!(
-        row_scope_for(false, true, Some(NOW - 1), NOW),
+        row_scope_for(false, true, Some(NOW - i64::from(MAX_OFFSET_SECS) - 1), NOW),
         RowScope::Closed,
-        "a completed period delegates to the closed-history scope"
+        "a period demonstrably older than the clock-offset uncertainty delegates to closed history"
+    );
+    assert_eq!(
+        row_scope_for(false, true, Some(NOW - i64::from(MAX_OFFSET_SECS)), NOW),
+        RowScope::ClosedAndOpen,
+        "a period ending within the clock-offset uncertainty must still include active positions"
     );
 }
 
