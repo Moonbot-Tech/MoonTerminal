@@ -177,6 +177,35 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
     );
 }
 
+/// `terminal_chrome.rs::header` and `controls/toolbar.rs::toolbar` must keep their Overview gates
+/// around `active_trade_core`: restoring a raw read would present one arbitrary server's balance
+/// or leverage as the Auto Overview group's figure.
+#[test]
+fn overview_chrome_and_toolbar_do_not_read_an_arbitrary_trade_core() {
+    let header = code_only(braced_body(
+        &read_src("chrome/terminal_chrome.rs"),
+        "pub fn header(",
+    ));
+    assert!(
+        header.contains(
+            "let scoped_core = if b.is_auto_overview_scope(group) {\n            None\n        } else {\n            b.active_trade_core(group)\n        };"
+        ),
+        "header balance must use no core in Auto Overview before reading active_trade_core"
+    );
+
+    let toolbar = code_only(braced_body(
+        &read_src("controls/toolbar.rs"),
+        "pub fn toolbar(",
+    ));
+    assert!(
+        toolbar.contains("let overview = b.is_auto_overview_scope(group);")
+            && toolbar.contains(
+                "let focus_core = if overview {\n            None\n        } else {\n            b.active_trade_core(group)\n        };"
+            ),
+        "toolbar leverage must use no core in Auto Overview before reading active_trade_core"
+    );
+}
+
 #[test]
 fn status_bar_states_no_latency_it_did_not_measure() {
     // The banned "ping 32ms" readout is a literal: nothing in the code measures RTT, and in a

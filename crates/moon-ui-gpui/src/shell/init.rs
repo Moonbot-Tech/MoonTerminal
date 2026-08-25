@@ -689,6 +689,12 @@ impl Shell {
         // Every Shell is constructed from its saved/default Classic dock first. Persisted Auto then
         // captures that local named layout and applies the process-wide topology before first frame.
         shell.apply_workspace_mode(initial_workspace_mode, window, cx);
+        // Re-stamp the hint AFTER the workspace is applied. The stamp above has to happen during
+        // construction because it reads the config, but `pulse::ATTENTION` is measured from it, and
+        // on a fresh profile the layout, fonts and dock all settle between the two — spending the
+        // window before the user's eyes reach the screen. `map` preserves the `None` decision, so
+        // the `core_ever_configured` gate is untouched and a configured user still sees nothing.
+        shell.settings_hint_at = shell.settings_hint_at.map(|_| std::time::Instant::now());
         crate::pulse::arm(
             &mut shell,
             cx,

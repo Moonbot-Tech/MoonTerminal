@@ -206,6 +206,12 @@ toolbar.limits_unknown:
   ru: "Лимиты биржи ещё не загружены для этого рынка."
   en: "Exchange limits have not loaded for this market yet."
   es: "Los límites de la bolsa aún no se han cargado para este mercado."
+# Hover text when the header scope is the whole group: an order cap belongs to one exchange
+# account, so there is no single figure to state until a server is chosen.
+toolbar.max_order_no_core:
+  ru: "Сводка по всей группе: предел ордера задаёт биржа конкретного сервера — выберите сервер."
+  en: "Full summary: an order cap belongs to one exchange account - select a server to see it."
+  es: "Resumen completo: el límite de orden pertenece a una cuenta de la bolsa: elige un servidor para verlo."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip:
   ru: "Максимальное плечо этой монеты по данным биржи."

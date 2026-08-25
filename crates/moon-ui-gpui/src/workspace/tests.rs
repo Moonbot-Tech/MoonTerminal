@@ -9,10 +9,11 @@ use super::{
     WORKSPACE_RAIL_COMPACT_MIN_WIDTH, WORKSPACE_RAIL_FULL_MIN_WIDTH, WorkspaceCoreAvailability,
     WorkspaceCoreStatus, WorkspaceFocus, WorkspaceNavigationAction, WorkspaceRailDensity,
     WorkspaceRosterInput, WorkspaceWindowState, changed_auto_workspace_rail_width,
-    derive_workspace_roster, focus_workspace_owner, plan_workspace_navigation,
-    reconcile_workspace_focus, resolve_auto_workspace_surface, resolve_group_scope,
-    resolve_singleton_workspace, should_persist_normal_dock, should_remember_classic_trade_core,
-    should_return_to_report_after_main_close, workspace_rail_density,
+    derive_workspace_roster, focus_workspace_owner, is_auto_overview_scope,
+    plan_workspace_navigation, reconcile_workspace_focus, resolve_auto_workspace_surface,
+    resolve_group_scope, resolve_singleton_workspace, should_persist_normal_dock,
+    should_remember_classic_trade_core, should_return_to_report_after_main_close,
+    workspace_rail_density,
 };
 
 /// `workspace.rs:should_return_to_report_after_main_close` must require an actually closed last
@@ -206,6 +207,20 @@ fn auto_overview_and_core_override_without_mutating_local_filter() {
     assert_eq!(selected.label(), EffectiveScopeLabel::Core(22));
     assert_eq!(stale.ids(), &[11, 22, 33]);
     assert_eq!(retained, vec![33, 11]);
+}
+
+/// `workspace.rs::is_auto_overview_scope` must retain both its Auto-mode and no-selection
+/// conjuncts: dropping either would hide per-core money, leverage, and exchange caps in Classic,
+/// or show one arbitrary server's figures under the Auto Overview group label.
+#[test]
+fn auto_overview_scope_requires_auto_mode_and_no_selected_core() {
+    assert!(is_auto_overview_scope(WorkspaceMode::AutoTrading, None));
+    assert!(!is_auto_overview_scope(
+        WorkspaceMode::AutoTrading,
+        Some(11)
+    ));
+    assert!(!is_auto_overview_scope(WorkspaceMode::Classic, None));
+    assert!(!is_auto_overview_scope(WorkspaceMode::Classic, Some(11)));
 }
 
 /// `workspace.rs:EffectiveCoreScope::is_auto_core` must inspect the explicit scope kind. Replacing

@@ -74,10 +74,9 @@ impl PersistenceSink for RecordingSink {
 /// Returns:
 ///     Complete immutable layout snapshot.
 fn layout(width: f32) -> WindowLayout {
-    WindowLayout {
-        auto_workspace_rail_width: Some(width),
-        ..WindowLayout::default()
-    }
+    let mut layout = WindowLayout::default();
+    layout.auto_workspace_rail_width = Some(width);
+    layout
 }
 
 /// Build one detached specification identified by its panel name.

@@ -434,7 +434,11 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // Read the core-keyed stores BEFORE the config: `AppConfig::load` assigns uids to entries
     // that carry none and persists them, so the floor has to be known by then. These loads are
     // config-independent and their values are reused below rather than read twice.
-    let mut layout = WindowLayout::load();
+    // The age is asked here, before the chart-theme carry below and before `unlock::start` reaches
+    // `AppConfig::load` -> `ChartThemeSet::load`, which WRITES `theme.toml` when it finds none. It
+    // is memoized process-wide, so every later first-run default answers from the disk as it was at
+    // launch rather than as startup has since left it.
+    let mut layout = WindowLayout::load(moon_core::config::profile_age());
     let mut saved_chart_specs = chart_persist::load_all();
 
     // Carry the trade-mark and bottom-volume settings out of `theme.toml` into the per-tab chart

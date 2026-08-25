@@ -153,10 +153,11 @@ impl Render for Shell {
         //
         // Resolved through `TradeMetric::Lev.target`, NOT through `main_chart_target` directly.
         // That method is the one place that decides which (core, market) a leverage edit is
-        // addressed to, and its core comes from `active_trade_core` while only the MARKET comes
-        // from the chart — in Auto mode those can be different exchanges. Reading the row's cap
-        // from the chart's core would let the toolbar state exchange B's limit for an order that
-        // Apply then sends to core A. One identity for the readout, the popup and the command.
+        // addressed to: it supplies a scope-gated core and the chart supplies only the MARKET.
+        // In Auto mode those can be different exchanges, and in Overview the core is absent.
+        // Reading the row's cap from the chart's core would let the toolbar state exchange B's
+        // limit for an order that Apply then sends to core A. One identity for the readout, the
+        // popup, and the command.
         let row_target = controls::TradeMetric::Lev.target(self.backend.read(cx), &self.group);
         let (row_limits, toolbar_quote) = self.limits_for(row_target.as_ref(), cx);
         let toolbar_max_order = controls::MaxOrderReadout::of(row_limits);

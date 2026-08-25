@@ -145,7 +145,8 @@ pub fn lev_bounds_for(coin_max: i32) -> (f32, f32, f32) {
 /// cannot drift into different marks for the same absence.
 pub const DASH: &str = "—";
 
-/// What a max-order readout is actually stating, once the two kinds of "unknown" are separated.
+/// What a max-order readout is actually stating, once its three absent-or-unknown states are
+/// separated.
 ///
 /// The classification lives here, pure and in ONE place, because two surfaces render this figure at
 /// different precisions — the toolbar compactly, the popup in full — and only the PRECISION may
@@ -162,6 +163,13 @@ pub enum MaxOrderReadout {
     NoCap,
     /// Nothing has loaded yet: no provider, snapshot, or market.
     NoData,
+    /// The visible scope names no single account, so no ONE exchange's cap applies to this row.
+    ///
+    /// Distinct from [`Self::NoData`] on purpose: there the figure is on its way, here there is no
+    /// question to answer until the user picks a server. Saying "not loaded yet" in the Auto
+    /// workspace Overview would explain the dash with a fact that is not true, on a readout that
+    /// sizes real orders.
+    OutOfScope,
 }
 
 impl MaxOrderReadout {
@@ -251,7 +259,7 @@ impl MaxOrderReadout {
     pub fn value(self) -> Option<f64> {
         match self {
             Self::Stated(v) | Self::Derived(v) => Some(v),
-            Self::NoCap | Self::NoData => None,
+            Self::NoCap | Self::NoData | Self::OutOfScope => None,
         }
     }
 
@@ -266,6 +274,7 @@ impl MaxOrderReadout {
             Self::Derived(_) => "toolbar.max_order_derived",
             Self::NoCap => "toolbar.max_order_none",
             Self::NoData => "toolbar.limits_unknown",
+            Self::OutOfScope => "toolbar.max_order_no_core",
         }
     }
 }

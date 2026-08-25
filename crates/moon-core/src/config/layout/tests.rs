@@ -1,6 +1,29 @@
 //! Persistence, lenient-decoding, and UID high-water regressions for workspace layout fields.
 
+use crate::config::ProfileAge;
+
 use super::*;
+
+/// `config/layout.rs:first_run_workspace_mode` must not collapse to
+/// `stored.or(Some(WorkspaceMode::AutoTrading))`; otherwise an established profile with no
+/// workspace entry is silently moved from Classic to Auto on its next launch.
+#[test]
+fn only_a_new_profile_without_a_workspace_mode_is_seeded_auto() {
+    let cases = [
+        (ProfileAge::FirstRun, None, Some(WorkspaceMode::AutoTrading)),
+        (ProfileAge::FirstRun, Some(WorkspaceMode::Classic), None),
+        (ProfileAge::Established, None, None),
+        (ProfileAge::Established, Some(WorkspaceMode::Classic), None),
+    ];
+
+    for (age, stored, expected) in cases {
+        assert_eq!(
+            first_run_workspace_mode(age, stored),
+            expected,
+            "{age:?} with {stored:?} must not invent a workspace preference"
+        );
+    }
+}
 
 /// `layout.rs:ChartGraphicsCfg` must keep its shipped defaults and salvage a single malformed
 /// field; replacing its lenient reader can reset chart settings or discard the surrounding layout.

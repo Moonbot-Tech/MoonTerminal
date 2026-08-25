@@ -7,12 +7,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::ProfileAge;
 use super::core_groups::CoreGroup;
 use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
 use super::servers::{self, CoreSortMode, FeedFlags};
+use super::toml_io::ConfigLoad;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
 
@@ -104,6 +106,65 @@ pub enum UiThemeMode {
     Light,
     #[default]
     Dark,
+}
+
+/// Interface theme a profile receives when `settings.toml` has never been written.
+///
+/// Deliberately NOT the `Default` of [`UiThemeMode`]. `Default` is what serde substitutes for an
+/// absent FIELD in a settings file that DOES exist, so moving it would re-theme every long-time
+/// user whose file predates `ui_theme_mode`. First run is a property of the FILE, not the field,
+/// and [`resolve_ui_theme_mode`] is the only place the two are told apart.
+///
+/// Returns:
+///     The theme a brand-new profile opens in.
+pub const fn first_run_ui_theme_mode() -> UiThemeMode {
+    UiThemeMode::Light
+}
+
+/// Choose the interface theme from a settings read, keeping first run distinct from an old file.
+///
+/// Only [`ConfigLoad::Absent`] paired with an otherwise empty profile is a first run. The other
+/// three outcomes all mean the file EXISTED, and existence is proof of a profile someone already
+/// configured:
+///
+/// * `Present` — the user's own value, whether they chose it or inherited it from the field's
+///   `Default` because their file predates it.
+/// * `Unreadable` — a permissions error, a sharing violation or an unhydrated cloud placeholder.
+///   This repeats per launch, so treating it as first run would re-theme the user on every failed
+///   read and un-theme them on the next success — a flicker with no user act behind it.
+/// * `Corrupt` — the file was just quarantined to `.bak`. Re-theming on top of that reads as data
+///   loss rather than a fresh start.
+///
+/// The match is EXHAUSTIVE for the same reason [`ConfigLoad::permits_overwrite`] is: a fifth
+/// variant added later for some other partial read must not compile here until its author decides
+/// which side it belongs on.
+///
+/// Args:
+///     stored: Value the settings read produced, already defaulted by serde where the field was
+///         absent.
+///     load: How that read went. Kept SEPARATE from `age` because it is the only thing that can
+///         tell `Corrupt` and `Unreadable` apart from `Absent`, a distinction the age of the
+///         profile cannot express.
+///     age: The one shared provenance fact, taken from the disk as it was at launch. Required
+///         because `settings.toml` can be missing beside a live `servers.enc` after a partial
+///         restore, and the pre-login window resolves its theme from `settings.toml` ALONE while
+///         the shell resolves it from the merged config; without a shared fact the two disagree
+///         and an existing user gets a light login screen that flashes to dark.
+///
+/// Returns:
+///     The theme to install.
+pub(crate) fn resolve_ui_theme_mode(
+    stored: UiThemeMode,
+    load: ConfigLoad,
+    age: ProfileAge,
+) -> UiThemeMode {
+    match (age, load) {
+        (ProfileAge::FirstRun, ConfigLoad::Absent) => first_run_ui_theme_mode(),
+        (
+            _,
+            ConfigLoad::Absent | ConfigLoad::Present | ConfigLoad::Corrupt | ConfigLoad::Unreadable,
+        ) => stored,
+    }
 }
 
 /// Server entry in servers.enc (secret + stable uid).

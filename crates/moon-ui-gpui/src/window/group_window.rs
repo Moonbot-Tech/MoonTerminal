@@ -5,12 +5,32 @@ use gpui::*;
 
 use moon_ui::{MoonBackgroundPolicy, Root};
 
-use moon_core::config::{AppConfig, WindowLayout};
+use moon_core::config::{AppConfig, WindowLayout, layout};
 use moon_core::session::CoreId;
 
 use crate::Backend;
 use crate::shell::Shell;
 use crate::window::windowing;
+
+/// Narrowest a group window may be created or resized to, in logical pixels.
+///
+/// Shared by the min-size hint and by first-run placement ON PURPOSE. The hint governs live
+/// resizing only — it does NOT clamp the bounds a window is created with — so the two would
+/// silently disagree if placement carried its own copy, and a window created below the hint is
+/// resized out from under the user on its first frame.
+const GROUP_WINDOW_MIN_W: f32 = 520.0;
+/// Shortest a group window may be created or resized to. See [`GROUP_WINDOW_MIN_W`].
+const GROUP_WINDOW_MIN_H: f32 = 340.0;
+
+/// Whether the one deliberate first-run placement has already been spent this process.
+///
+/// `is_first_run_profile` stays true for the whole process — it describes the profile, not the
+/// window — and `offset == 0.0` does not mean "first window" either: the Settings Show Group route
+/// passes a literal zero every time it runs. Without a latch a brand-new user who adds a core to a
+/// new group mid-session and shows it would get a SECOND window centred exactly on top of the
+/// first, since `layout.toml` has not necessarily been written by then and nothing else has moved.
+static FIRST_RUN_WINDOW_PLACED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Returns unique active configuration groups in encounter order, or a single `default` fallback.
 pub(crate) fn groups(cfg: &AppConfig) -> Vec<String> {
@@ -119,36 +139,92 @@ fn spawn_group_window_inner(
     // one; the former behavior used server.market with BTCUSDT as fallback.
     let focus: Option<(CoreId, String)> = None;
     let saved = layout.groups.get(&group);
-    let win_bounds = match saved {
-        Some(g) => Bounds {
+    // A brand-new profile gets its FIRST window placed deliberately rather than cascaded from a
+    // corner at a size that fits nobody's monitor in particular. Four conditions, each carrying its
+    // own weight: no saved geometry (a restore always wins), `offset == 0.0` so ADDITIONAL windows
+    // of a batch keep cascading, the shared launch-time provenance fact — never `groups.is_empty()`,
+    // which is persistence data written long after a window opens and reads as "brand new" for any
+    // established profile that simply never had geometry recorded — and the one-shot latch, which
+    // is what makes this the FIRST window rather than merely A window of a first-run profile.
+    //
+    // The latch is spent inside `filter`, AFTER a display is actually in hand — deliberately NOT
+    // alongside the three cheap conditions. Spending it there would forfeit the placement
+    // permanently on a launch where BOTH display lookups happened to fail: the window would fall
+    // through to the cascade having placed nothing, and no later window of that session could take
+    // the branch either. `filter` runs its closure only on `Some`, which is exactly the moment the
+    // placement is about to happen.
+    //
+    // The display is resolved FIRST and its identity carried into the options below, instead of
+    // sizing from the primary display and re-deriving the identity by origin containment. Both
+    // halves matter: the pre-login window may sit on a secondary monitor, and on macOS every
+    // display reports its bounds relative to its own origin, so a containment lookup there can
+    // answer with a different display from the one whose work area produced the rectangle.
+    let first_run_display = if saved.is_none() && offset == 0.0 && layout.is_first_run_profile() {
+        cx.active_window()
+            .and_then(|owner| windowing::owner_display_id(Some(owner), cx))
+            .and_then(|id| cx.find_display(id))
+            .or_else(|| cx.primary_display())
+            .filter(|_| !FIRST_RUN_WINDOW_PLACED.swap(true, std::sync::atomic::Ordering::Relaxed))
+    } else {
+        None
+    };
+    let win_bounds = match (saved, first_run_display.as_ref()) {
+        (Some(g), _) => Bounds {
             origin: point(px(g.x as f32), px(g.y as f32)),
             size: size(px(g.w as f32), px(g.h as f32)),
         },
-        None => Bounds {
+        (None, Some(display)) => {
+            // `visible_bounds` is the work area — the monitor minus its taskbar or dock — on the
+            // platforms that can report one, and degrades to the full bounds on those that cannot.
+            let visible = display.visible_bounds();
+            let placed = layout::first_run_window_rect(
+                layout::ScreenRect {
+                    x: f32::from(visible.origin.x),
+                    y: f32::from(visible.origin.y),
+                    w: f32::from(visible.size.width),
+                    h: f32::from(visible.size.height),
+                },
+                GROUP_WINDOW_MIN_W,
+                GROUP_WINDOW_MIN_H,
+            );
+            Bounds {
+                origin: point(px(placed.x), px(placed.y)),
+                size: size(px(placed.w), px(placed.h)),
+            }
+        }
+        (None, None) => Bounds {
             origin: point(px(80.0 + offset), px(80.0 + offset)),
             size: size(px(1280.0), px(720.0)),
         },
     };
-    // Prefer the saved display UUID, which is stable across launches. If it is absent or unmatched,
-    // try saved-origin containment on every platform. This is reliable where origins use global
-    // coordinates; on macOS, display-relative x/y makes the fallback ambiguous but it still provides
-    // a best-effort match for legacy layouts. Without a display_id, GPUI restores using the primary
-    // display's scale, shifting or shrinking windows on displays with different DPI. MoonUI's GPUI
-    // uses the target scale only when display_id is set, matching the detached-window round trip.
+    // A first-run placement already CHOSE a display and sized the window from that display's own
+    // work area, so its identity is carried straight through rather than re-derived below: the
+    // containment pass would be answering a question that has already been answered, and on macOS
+    // it can answer it differently.
+    //
+    // Otherwise: prefer the saved display UUID, which is stable across launches. If it is absent or
+    // unmatched, try saved-origin containment on every platform. This is reliable where origins use
+    // global coordinates; on macOS, display-relative x/y makes the fallback ambiguous but it still
+    // provides a best-effort match for legacy layouts. Without a display_id, GPUI restores using the
+    // primary display's scale, shifting or shrinking windows on displays with different DPI.
+    // MoonUI's GPUI uses the target scale only when display_id is set, matching the detached-window
+    // round trip.
     let origin = win_bounds.origin;
     let saved_uuid = saved.and_then(|g| g.display_uuid.as_deref());
-    let display_id = saved_uuid
-        .and_then(|u| {
-            cx.displays()
-                .into_iter()
-                .find(|d| d.uuid().ok().is_some_and(|du| du.to_string() == u))
-        })
-        .or_else(|| {
-            cx.displays()
-                .into_iter()
-                .find(|d| d.bounds().contains(&origin))
-        })
-        .map(|d| d.id());
+    let display_id = first_run_display.map(|d| d.id()).or_else(|| {
+        saved_uuid
+            .and_then(|u| {
+                cx.displays()
+                    .into_iter()
+                    .find(|d| d.uuid().ok().is_some_and(|du| du.to_string() == u))
+            })
+            .or_else(|| {
+                cx.displays()
+                    .into_iter()
+                    .find(|d| d.bounds().contains(&origin))
+            })
+            .map(|d| d.id())
+    });
     let window_bounds = if saved.map(|g| g.fullscreen).unwrap_or(false) {
         WindowBounds::Fullscreen(win_bounds)
     } else if saved.map(|g| g.maximized).unwrap_or(false) {
@@ -164,7 +240,7 @@ fn spawn_group_window_inner(
         icon_id,
         window_bounds,
         display_id,
-        Some(size(px(520.0), px(340.0))),
+        Some(size(px(GROUP_WINDOW_MIN_W), px(GROUP_WINDOW_MIN_H))),
     );
     opts.window_background = WindowBackgroundAppearance::Opaque;
     // Clear with the theme's chart background. Otherwise scene-uncovered pixels use the renderer's

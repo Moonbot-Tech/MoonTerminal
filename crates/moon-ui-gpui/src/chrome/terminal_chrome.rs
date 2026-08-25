@@ -60,11 +60,23 @@ pub fn header(
     cx: &App,
 ) -> impl IntoElement {
     // Balance of the group's active trade core (server-side USDT figures). Rendered only when
-    // the store classifies it as usable: no core, no snapshot yet, or an invalid valuation all
-    // mean the amount is unknown, and printing 0.00 there would state an empty account as fact.
+    // the store classifies it as usable: no core, no snapshot yet, an invalid valuation, or a
+    // scope that names no single account all mean the amount is unknown, and printing 0.00 there
+    // would state an empty account as fact.
+    //
+    // The scope check comes FIRST and is not a privacy nicety: `active_trade_core` falls through
+    // to the group's first core in the Auto workspace Overview, so without it this row prints ONE
+    // arbitrary server's money directly beside a pill that reads "the whole group". The figure is
+    // HIDDEN rather than summed — the Assets panel owns the real cross-core total, on a surface
+    // that says so, and a double-click on this dash still opens it.
     let balance = {
         let b = backend.read(cx);
-        b.active_trade_core(group)
+        let scoped_core = if b.is_auto_overview_scope(group) {
+            None
+        } else {
+            b.active_trade_core(group)
+        };
+        scoped_core
             .and_then(|c| b.session.store().core(c))
             .map(|cd| {
                 (
@@ -477,7 +489,8 @@ fn fit_header_core_trigger(
 /// Auto instead reads only the rail-owned workspace selection, displays Overview when it is empty,
 /// and returns a disabled caret-free pill without building a popover.
 /// The trading target can come from Main's active fullscreen chart or a locked comparison anchor
-/// in an Add or Custom tab. All toolbar and header trading controls read the same active core.
+/// in an Add or Custom tab. Command controls use the same active core; per-core display figures
+/// suppress themselves first when Auto Overview names no single core.
 ///
 /// # Arguments
 ///
