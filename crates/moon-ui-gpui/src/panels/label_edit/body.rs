@@ -9,7 +9,7 @@
 use gpui::*;
 use moon_core::config::{
     CHART_LABEL_PARTS, ChartLabelField, ChartLabelPart, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    LabelColor, LabelFlow, LabelSpan, LabelStyle, LabelWindow, PnlBasis, VolumeUnits,
+    LabelColor, LabelFlow, LabelSpan, LabelStyle, LabelWindow, PnlBasis, SpanAnchor, VolumeUnits,
 };
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{MoonWindowExt as _,
@@ -424,65 +424,33 @@ fn caption_settings(
         ));
     }
 
-    // Which retained-history window a movement or volume figure is read over. A dropdown rather
-    // than a segmented row like the basis above: eight windows do not fit the narrower pane, and
-    // this control is picked once and then read as a number in the caption itself.
-    // A CUSTOM period — set from the chart's own right-click menu — OVERRIDES the window, so the
-    // window control is replaced rather than left standing beside it: a dropdown that visibly does
-    // nothing is worse than none, and this is the only place such a period can be cleared.
-    if part.field.uses_window() && part.span != LabelSpan::Window {
+    // The PERIOD this caption reads, as one list: seconds, the fixed windows, and counts of
+    // trades. One control rather than "a window dropdown, plus a custom value the chart's menu can
+    // set and only a Clear button can undo" — the reader picking a period here should see every
+    // period, and the one in force marked among them.
+    if part.field.uses_window() {
         let state = state.clone();
-        let label = match part.span {
-            LabelSpan::Minutes(n) => t!("chart_labels.span.minutes", n = n).to_string(),
-            LabelSpan::Trades(n) => t!("chart_labels.span.trades", n = n).to_string(),
-            LabelSpan::Window => String::new(),
-        };
-        col = col.child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(design::ui_px(cx, 6.0))
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text))
-                        .child(t!("chart_labels.window").to_string()),
-                )
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(label),
-                )
-                .child(
-                    MoonButton::new("le-span-clear")
-                        .label(t!("chart_labels.span_clear").to_string())
-                        .size(MoonButtonSize::Micro)
-                        .variant(MoonButtonVariant::Ghost)
-                        .on_click(move |_, _w, cx: &mut App| {
-                            write_row(&state, cx, |s| {
-                                s.row.parts[selected].span = LabelSpan::Window;
-                            });
-                        }),
-                ),
-        );
-    } else if part.field.uses_window() {
-        let state = state.clone();
-        let current = part.window;
-        // The FIELD's windows, not every window: the buy/sell split lives only where the retained
-        // trades do, and offering the day there offers a pick `sanitize` would take back.
+        let current = (part.span, part.window);
         let items = crate::panels::radio_items(
-            part.field.window_choices().iter().map(|w| {
+            period_choices().into_iter().map(|(span, window)| {
                 (
-                    *w,
-                    SharedString::from(format!("le-w-{w:?}")),
-                    SharedString::from(t!(w.locale_key()).to_string()),
+                    (span, window),
+                    SharedString::from(format!("le-p-{span:?}-{window:?}")),
+                    SharedString::from(period_label(span, window)),
                 )
             }),
             current,
             crate::panels::RadioMark::Check,
-            move |cx, w: LabelWindow| {
-                write_row(&state, cx, |s| s.row.parts[selected].window = w);
+            move |cx, (span, window): (LabelSpan, LabelWindow)| {
+                write_row(&state, cx, |s| {
+                    let part = &mut s.row.parts[selected];
+                    part.span = span;
+                    // The window is written even for a custom span, so switching back to a fixed
+                    // period lands on the one the reader last saw rather than on a stale default.
+                    if span == LabelSpan::Window {
+                        part.window = window;
+                    }
+                });
             },
         );
         col = col.child(
@@ -498,22 +466,40 @@ fn caption_settings(
                 )
                 .child(
                     MoonDropdown::new("le-window")
-                        .label(t!(current.locale_key()).to_string())
+                        .label(period_label(part.span, part.window))
                         .trigger_caret(true)
                         .trigger_variant(MoonButtonVariant::Soft)
                         .trigger_size(MoonButtonSize::Micro)
-                        .trigger_width_scaled(70.0)
-                        .menu_width_scaled(90.0)
+                        .trigger_width_scaled(84.0)
+                        .menu_width_scaled(104.0)
                         .menu_size(MoonMenuSize::Compact)
                         .items(items),
                 ),
         );
     }
 
-    // The two questions a volume caption answers beyond its period: which currency it states, and
-    // whether the pair of sides draws its proportion bar. Both are edited from the chart's own
-    // right-click menu as well — this is the same setting reached from the other side, which is why
-    // it writes through the same field rather than a copy of it.
+    // WHERE the period sits. Above the unit because it changes what the figure ANSWERS rather than
+    // how it is written, and it is the same setting the chart's own right-click menu offers.
+    if part.field.in_volume_block() {
+        let state = state.clone();
+        let current = part.anchor;
+        col = col.child(seg_row(
+            "le-anchor".to_string(),
+            t!("chart_labels.menu.anchor").to_string(),
+            SpanAnchor::ALL
+                .iter()
+                .map(|a| (t!(a.locale_key()).to_string(), *a == current))
+                .collect(),
+            72.0,
+            p,
+            cx,
+            move |pick, cx| {
+                if let Some(a) = SpanAnchor::ALL.get(pick).copied() {
+                    write_row(&state, cx, |s| s.row.parts[selected].anchor = a);
+                }
+            },
+        ));
+    }
     if part.field.uses_volume_units() {
         let state = state.clone();
         let current = part.units;
@@ -701,8 +687,14 @@ fn caption_settings(
     let caption_cb = {
         let state = state.clone();
         let on = resolved.caption;
+        // On a caption that reads a period the switch governs the PERIOD, not the whole prefix —
+        // `Bv` stays either way — so it is named for what it actually does there.
+        let label = match part.field.uses_window() {
+            true => t!("chart_labels.caption_period"),
+            false => t!("chart_labels.caption"),
+        };
         MoonCheckbox::new("le-caption")
-            .label(t!("chart_labels.caption").to_string())
+            .label(label.to_string())
             .checked(on)
             .size(MoonCheckboxSize::Compact)
             .on_change(move |v: &bool, _w, cx| {
@@ -833,4 +825,39 @@ fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> 
                 .child(line),
         )
         .into_any_element()
+}
+
+/// Every period a caption can be set to, in one list: seconds, the fixed windows, trade counts.
+///
+/// Longer than what the chart's own right-click menu offers, deliberately. That menu is the list a
+/// reader flips through while watching and holds the periods they switch between; this is the
+/// CATALOGUE, and a period reachable only from a menu that does not list it would be a setting the
+/// editor could show but never change.
+fn period_choices() -> Vec<(LabelSpan, LabelWindow)> {
+    let mut out: Vec<(LabelSpan, LabelWindow)> = vec![
+        (LabelSpan::Seconds(1), LabelWindow::default()),
+        (LabelSpan::Seconds(10), LabelWindow::default()),
+        (LabelSpan::Seconds(30), LabelWindow::default()),
+    ];
+    out.extend(
+        LabelWindow::ALL
+            .iter()
+            .map(|window| (LabelSpan::Window, *window)),
+    );
+    out.extend(
+        [100u32, 250, 500, 1000]
+            .iter()
+            .map(|n| (LabelSpan::Trades(*n), LabelWindow::default())),
+    );
+    out
+}
+
+/// How one period is spelled in that list, and on the control that opens it.
+fn period_label(span: LabelSpan, window: LabelWindow) -> String {
+    match span {
+        LabelSpan::Window => t!(window.locale_key()).to_string(),
+        LabelSpan::Seconds(n) => t!("chart_labels.span.seconds", n = n).to_string(),
+        LabelSpan::Minutes(n) => t!("chart_labels.span.minutes", n = n).to_string(),
+        LabelSpan::Trades(n) => t!("chart_labels.span.trades", n = n).to_string(),
+    }
 }

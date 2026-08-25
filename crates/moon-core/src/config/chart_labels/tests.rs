@@ -24,9 +24,9 @@ fn the_default_is_the_shipped_working_layout() {
         })
         .collect();
     use ChartLabelField as F;
-    use LabelPreset as P;
     use LabelAlign as A;
     use LabelFlow as Fl;
+    use LabelPreset as P;
     use LabelZone as Z;
     assert_eq!(
         rows,
@@ -43,7 +43,7 @@ fn the_default_is_the_shipped_working_layout() {
             ),
             // The badge on the plot's top-right, with the coin's deltas standing BESIDE it.
             (
-                None,
+                Some(P::Scale),
                 Z::ChartTop,
                 A::Right,
                 Fl::Row,
@@ -60,7 +60,31 @@ fn the_default_is_the_shipped_working_layout() {
                 24,
                 vec![F::Delta1h, F::Delta24h]
             ),
-            // What is open, along the top-left edge, with funding spaced under it.
+            // What traded over the last minute, and the same measured around the pointer.
+            (
+                Some(P::Volumes),
+                Z::ChartTop,
+                A::Right,
+                Fl::Column,
+                Fl::Column,
+                6,
+                vec![F::WindowSpanName, F::WindowBuyVolume, F::WindowSellVolume]
+            ),
+            (
+                Some(P::CursorVolumes),
+                Z::ChartTop,
+                A::Right,
+                Fl::Column,
+                Fl::Column,
+                6,
+                vec![
+                    F::WindowSpanName,
+                    F::WindowBuyVolume,
+                    F::WindowSellVolume,
+                    F::WindowLiquidations
+                ]
+            ),
+            // What is open, the session counters under it, funding under those.
             (
                 Some(P::Position),
                 Z::ChartTop,
@@ -68,13 +92,16 @@ fn the_default_is_the_shipped_working_layout() {
                 Fl::Row,
                 Fl::Row,
                 0,
-                vec![
-                    F::OpenOrders,
-                    F::OpenPnlMoney,
-                    F::OpenPnlPct,
-                    F::Exposure,
-                    F::SessionPnl
-                ]
+                vec![F::OpenOrders, F::OpenPnlMoney, F::OpenPnlPct, F::Exposure]
+            ),
+            (
+                Some(P::Session),
+                Z::ChartTop,
+                A::Left,
+                Fl::Row,
+                Fl::Column,
+                4,
+                vec![F::SessionPnl, F::SessionProfit]
             ),
             (
                 Some(P::Funding),
@@ -112,17 +139,35 @@ fn the_default_is_the_shipped_working_layout() {
         "the badge is set one step above its own default"
     );
     assert_eq!(
-        cfg.rows[4].parts[1].style.caption,
+        cfg.rows[3].parts[0].window,
+        LabelWindow::M1,
+        "the live volume block opens on the minute, which the cheap sources serve"
+    );
+    assert_eq!(
+        (
+            cfg.rows[4].parts[1].span,
+            cfg.rows[4].parts[1].anchor,
+            cfg.rows[4].parts[1].bar
+        ),
+        (LabelSpan::Seconds(10), SpanAnchor::Cursor, false),
+        "the measuring block reads ten seconds around the pointer, without bars"
+    );
+    assert_eq!(
+        cfg.rows[7].parts[1].style.caption,
         Some(false),
         "the funding countdown prints bare, beside the rate that names itself"
     );
     assert_eq!(
         (
-            cfg.rows[5].parts[0].style.color,
-            cfg.rows[5].parts[0].style.color_min_pct
+            cfg.rows[8].parts[0].style.color,
+            cfg.rows[8].parts[0].style.color_min_pct
         ),
         (Some(LabelColor::BySign), Some(0.5)),
         "the roster colours the spread by its sign, and only where the spread is worth acting on"
+    );
+    assert!(
+        cfg.rows[..cfg.used_rows()].iter().all(|r| r.name.is_empty()),
+        "every shipped module is named by its PRESET, so the popup speaks the reader's language"
     );
 }
 
@@ -214,6 +259,7 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
     for row in &mut cfg.rows {
         row.name.clear();
     }
+    // The badge module, whose single caption is what makes it blank once removed.
     cfg.rows[1].remove_part(0);
     cfg.sanitize();
     let fields: Vec<_> = cfg.rows[..cfg.used_rows()]
@@ -225,7 +271,10 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
         vec![
             ChartLabelField::Coin,
             ChartLabelField::Delta1h,
+            ChartLabelField::WindowSpanName,
+            ChartLabelField::WindowSpanName,
             ChartLabelField::OpenOrders,
+            ChartLabelField::SessionPnl,
             ChartLabelField::Funding,
             ChartLabelField::ArbColumn,
             ChartLabelField::DetectStrategy
@@ -286,8 +335,9 @@ fn an_unnamed_row_prints_no_name() {
 #[test]
 fn removing_a_caption_closes_the_gap() {
     let mut cfg = ChartLabelsCfg::default();
-    cfg.rows[3].remove_part(0);
-    let fields: Vec<_> = cfg.rows[3].parts[..cfg.rows[3].used_parts()]
+    // The open-order module; its index moved when the two volume blocks joined the shipped set.
+    cfg.rows[5].remove_part(0);
+    let fields: Vec<_> = cfg.rows[5].parts[..cfg.rows[5].used_parts()]
         .iter()
         .map(|p| p.field)
         .collect();
@@ -297,7 +347,6 @@ fn removing_a_caption_closes_the_gap() {
             ChartLabelField::OpenPnlMoney,
             ChartLabelField::OpenPnlPct,
             ChartLabelField::Exposure,
-            ChartLabelField::SessionPnl
         ]
     );
 }
@@ -324,7 +373,7 @@ fn moving_refuses_at_the_ends_and_swaps_in_the_middle() {
 #[test]
 fn moving_a_caption_refuses_at_the_ends_of_its_row() {
     let mut cfg = ChartLabelsCfg::default();
-    let row = &mut cfg.rows[3];
+    let row = &mut cfg.rows[5];
     assert!(!row.move_part(0, true));
     assert!(!row.move_part(row.used_parts() - 1, false));
     assert!(row.move_part(1, true));
@@ -507,8 +556,8 @@ fn the_configuration_round_trips_through_toml() {
     let mut cfg = ChartLabelsCfg::default();
     cfg.rows[0].name = "Инструмент".to_string();
     cfg.rows[0].show_name = true;
-    // Row 4 keeps its preset and no name: the pair a file has to state separately.
-    assert_eq!(cfg.rows[4].preset, Some(LabelPreset::Funding));
+    // A preset row with no name: the pair a file has to state separately.
+    assert_eq!(cfg.rows[7].preset, Some(LabelPreset::Funding));
     cfg.rows[0].parts[0].style.color = Some(LabelColor::Fixed(0x112233));
     cfg.rows[0].parts[0].style.size_mult = Some(1.5);
     cfg.rows[3].parts[1].pnl_basis = PnlBasis::Real;
@@ -804,10 +853,12 @@ fn a_whitespace_only_name_is_no_name() {
 #[test]
 fn a_hidden_row_draws_nothing_but_keeps_everything() {
     let mut cfg = ChartLabelsCfg::default();
-    cfg.rows[3].visible = false;
+    // The open-order module: its figures are the ones whose absence is measurable through the gate
+    // the sync paths read.
+    cfg.rows[5].visible = false;
     cfg.sanitize();
-    assert!(!cfg.rows[3].is_drawn());
-    assert_eq!(cfg.used_rows(), 7, "it is still a row");
+    assert!(!cfg.rows[5].is_drawn());
+    assert_eq!(cfg.used_rows(), 10, "it is still a row");
     assert!(
         !cfg.any_drawn(|f| f == ChartLabelField::OpenPnlPct),
         "and its captions stop costing the order walk"
@@ -997,13 +1048,53 @@ fn the_volume_spans_are_deduplicated() {
     cfg.rows[0] = row;
     cfg.sanitize();
 
-    assert_eq!(
-        cfg.volume_spans(),
-        vec![
-            (LabelSpan::Window, LabelWindow::M5),
-            (LabelSpan::Trades(500), LabelWindow::default()),
-        ]
+    let spans = cfg.volume_spans();
+    assert_eq!(spans.len(), 2, "one entry per distinct period");
+    assert_eq!(spans[0].span, LabelSpan::Window);
+    assert_eq!(spans[0].window, LabelWindow::M5);
+    assert_eq!(spans[1].span, LabelSpan::Trades(500));
+    assert!(
+        spans.iter().all(|key| !key.liquidations),
+        "nothing here prints the liquidation figure, so nothing may order that ring read"
     );
+}
+
+/// One period printing both a traded figure and the liquidation one is ONE entry, flagged.
+///
+/// Breakage: listing the period twice would read the trades twice; dropping the flag would read the
+/// liquidation ring for every caption block on the chart, including the ones that never print `L`.
+#[test]
+fn a_liquidation_caption_flags_its_period_without_splitting_it() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.parts[0].window = LabelWindow::M5;
+    row.push_part(ChartLabelField::WindowLiquidations);
+    row.parts[1].window = LabelWindow::M5;
+    cfg.rows[0] = row;
+    cfg.sanitize();
+
+    let spans = cfg.volume_spans();
+    assert_eq!(spans.len(), 1);
+    assert!(spans[0].liquidations);
+}
+
+/// The measuring anchor is a period of its own: the same minute at the live edge and around the
+/// pointer are two different windows.
+#[test]
+fn the_anchor_separates_two_otherwise_identical_periods() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.parts[0].window = LabelWindow::M1;
+    row.push_part(ChartLabelField::WindowSellVolume);
+    row.parts[1].window = LabelWindow::M1;
+    row.parts[1].anchor = SpanAnchor::Cursor;
+    cfg.rows[0] = row;
+    cfg.sanitize();
+
+    assert_eq!(cfg.volume_spans().len(), 2);
+    assert!(cfg.any_cursor_anchored());
 }
 
 /// A hidden module orders no history read.
@@ -1041,7 +1132,11 @@ fn a_broken_colour_threshold_falls_back_to_colouring_everything() {
 /// the figure has a sign.
 #[test]
 fn a_caption_colours_its_value_alone_by_default() {
-    assert!(ChartLabelPart::new(ChartLabelField::Funding).resolved_style().value_only);
+    assert!(
+        ChartLabelPart::new(ChartLabelField::Funding)
+            .resolved_style()
+            .value_only
+    );
     let mut part = ChartLabelPart::new(ChartLabelField::Funding);
     part.style.value_only = Some(false);
     assert!(!part.resolved_style().value_only);
@@ -1053,7 +1148,10 @@ fn a_caption_colours_its_value_alone_by_default() {
 #[test]
 fn the_plate_is_a_module_setting_and_defaults_to_drawn() {
     let row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
-    assert!(row.plate, "a module draws its backing unless told otherwise");
+    assert!(
+        row.plate,
+        "a module draws its backing unless told otherwise"
+    );
 
     let mut cfg = ChartLabelsCfg::empty();
     let mut named = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
@@ -1062,7 +1160,10 @@ fn the_plate_is_a_module_setting_and_defaults_to_drawn() {
     cfg.rows[0] = named;
 
     let text = toml::to_string_pretty(&cfg).expect("serializes");
-    assert!(text.contains("plate"), "a module that turned it OFF states so: {text}");
+    assert!(
+        text.contains("plate"),
+        "a module that turned it OFF states so: {text}"
+    );
     let back: ChartLabelsCfg = toml::from_str(&text).expect("parses");
     assert!(!back.rows[0].plate);
 
@@ -1096,7 +1197,10 @@ fn an_unknown_preset_costs_only_the_row_its_name() {
 
     let read: ChartLabelsCfg = toml::from_str(&forged).expect("an unknown preset still loads");
     assert_eq!(read.used_rows(), 1, "the row survives");
-    assert_eq!(read.rows[0].preset, None, "it just loses the name it cannot resolve");
+    assert_eq!(
+        read.rows[0].preset, None,
+        "it just loses the name it cannot resolve"
+    );
     assert_eq!(read.rows[0].parts[0].field, ChartLabelField::DetectMsg);
 }
 
@@ -1124,5 +1228,9 @@ fn an_unknown_field_costs_only_its_own_caption() {
         1,
         "the retired caption is dropped rather than failing the whole read"
     );
-    assert_eq!(read.rows[0].parts[0].field, ChartLabelField::Coin, "the sibling survives");
+    assert_eq!(
+        read.rows[0].parts[0].field,
+        ChartLabelField::Coin,
+        "the sibling survives"
+    );
 }

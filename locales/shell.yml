@@ -1334,7 +1334,7 @@ chart_labels.preset.market_backdrop:
   en: "Market backdrop"
   es: "Fondo del mercado"
 chart_labels.preset.position:
-  ru: "Позиция"
+  ru: "Открытые ордера"
   en: "Position"
   es: "Posición"
 chart_labels.preset.funding:
@@ -1397,6 +1397,10 @@ chart_labels.plate:
   ru: "Подложка"
   en: "Backing plate"
   es: "Fondo"
+chart_labels.caption_period:
+  ru: "Период в подписи"
+  en: "Period in caption"
+  es: "Periodo en la etiqueta"
 chart_labels.caption:
   ru: "Префикс"
   en: "Prefix"
@@ -1569,6 +1573,10 @@ chart_labels.field.window_sell_volume:
   ru: "Продано за период"
   en: "Sold over a window"
   es: "Vendido por periodo"
+chart_labels.field.window_liquidations:
+  ru: "Ликвидации за период"
+  en: "Liquidations over a window"
+  es: "Liquidaciones por periodo"
 chart_labels.field.window_trades:
   ru: "Сделок за период"
   en: "Trades over a window"
@@ -1661,10 +1669,18 @@ chart_labels.short.window_sell_volume:
   ru: "Sv "
   en: "Sv "
   es: "Sv "
+chart_labels.short.window_liquidations:
+  ru: "L "
+  en: "L "
+  es: "L "
 chart_labels.short.window_trades:
   ru: "Сд "
   en: "Trd "
   es: "Ope "
+chart_labels.span.seconds:
+  ru: "%{n}с"
+  en: "%{n}s"
+  es: "%{n}s"
 chart_labels.span.minutes:
   ru: "%{n}м"
   en: "%{n}m"
@@ -1673,10 +1689,22 @@ chart_labels.span.trades:
   ru: "%{n} сд"
   en: "%{n} trd"
   es: "%{n} ope"
-chart_labels.span_clear:
-  ru: "Сбросить"
-  en: "Clear"
-  es: "Restablecer"
+chart_labels.span.at_cursor:
+  ru: "Курсор %{period}"
+  en: "Cursor %{period}"
+  es: "Cursor %{period}"
+chart_labels.menu.anchor:
+  ru: "Где мерить"
+  en: "Measure at"
+  es: "Dónde medir"
+chart_labels.anchor.now:
+  ru: "Сейчас"
+  en: "Now"
+  es: "Ahora"
+chart_labels.anchor.cursor:
+  ru: "Под курсором"
+  en: "At the cursor"
+  es: "Bajo el cursor"
 chart_labels.menu.period:
   ru: "Период"
   en: "Period"
@@ -1737,6 +1765,18 @@ chart_labels.field.arb_column:
   ru: "Арбитраж (колонка)"
   en: "Arbitrage (column)"
   es: "Arbitraje (columna)"
+chart_labels.preset.scale:
+  ru: "Масштаб"
+  en: "Scale"
+  es: "Escala"
+chart_labels.preset.session:
+  ru: "История"
+  en: "History"
+  es: "Historial"
+chart_labels.preset.cursor_volumes:
+  ru: "Курсор"
+  en: "Cursor"
+  es: "Cursor"
 chart_labels.preset.volumes:
   ru: "Объёмы"
   en: "Volumes"

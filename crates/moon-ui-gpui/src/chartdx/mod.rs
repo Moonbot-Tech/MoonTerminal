@@ -387,12 +387,25 @@ struct PaneRender {
     label_figures: Option<moon_core::market::MarketFiguresReadout>,
     /// Retained-history movement per window, gated separately because it costs more.
     label_windows: Option<moon_core::market::MarketWindowsReadout>,
+    /// What was liquidated over the same periods, for the captions that print it.
+    label_liquidations: Vec<(
+        (moon_core::market::VolumeSpan, moon_core::market::VolumeAt),
+        moon_core::market::LiqSpanReadout,
+    )>,
+    /// The moment the pointer is on, QUANTIZED, or `None` while it is off this pane.
+    ///
+    /// Quantized where it is collected rather than where it is read: it is part of the caption
+    /// cache key, and an unrounded value would make every pixel of mouse travel a new one.
+    label_cursor_ms: Option<i64>,
     /// Traded amounts, one entry per distinct span this pane's captions ask for.
     ///
     /// Read on the same throttle as the arbitrage column beside it: a span longer than the
     /// protocol's own rolling buckets is answered by walking retained rows, and a volume figure is
     /// read by eye. Empty while no caption prints one.
-    label_volumes: Vec<(moon_core::market::VolumeSpan, moon_core::market::VolumeSpanReadout)>,
+    label_volumes: Vec<(
+        (moon_core::market::VolumeSpan, moon_core::market::VolumeAt),
+        moon_core::market::VolumeSpanReadout,
+    )>,
     /// When they were last read, in Unix milliseconds. Zero means never.
     label_volume_read_ms: i64,
     /// Market those amounts were read for; a pane that just switched coins reads again at once.
@@ -402,7 +415,7 @@ struct PaneRender {
     /// Compared as well as the market, and for the same reason: the right-click menu changes the
     /// period, and waiting out the throttle for the new one would blank the block for a quarter of
     /// a second on every pick — the figures are addressed BY span, so the old set answers nothing.
-    label_volume_spans: Vec<moon_core::market::VolumeSpan>,
+    label_volume_spans: Vec<(moon_core::market::VolumeSpan, moon_core::market::VolumeAt)>,
     /// Venues this terminal is connected to, refreshed with the session sync that fills the order
     /// figures beside it. Empty until a caption asks for the column.
     label_arb_reachable: Vec<(u8, String)>,
@@ -651,6 +664,8 @@ impl PaneRender {
             label_figures: None,
             label_windows: None,
             label_volumes: Vec::new(),
+            label_liquidations: Vec::new(),
+            label_cursor_ms: None,
             label_volume_read_ms: 0,
             label_volume_market: String::new(),
             label_volume_spans: Vec::new(),

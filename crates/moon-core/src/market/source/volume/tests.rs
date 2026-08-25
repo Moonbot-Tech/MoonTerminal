@@ -109,13 +109,16 @@ fn stale_entries_are_pruned_and_empty_spans_drop_out() {
         read_ms: ms,
         readout: VolumeSpanReadout::default(),
     };
-    let markets = book.spans.entry((1, span)).or_default();
+    let markets = book.spans.entry((1, span, VolumeAt::Now)).or_default();
     markets.insert("OLDUSDT".to_string(), entry(0));
     markets.insert("NEWUSDT".to_string(), entry(SPAN_KEEP_MS));
 
     book.prune(SPAN_KEEP_MS + 1);
 
-    let markets = book.spans.get(&(1, span)).expect("span kept");
+    let markets = book
+        .spans
+        .get(&(1, span, VolumeAt::Now))
+        .expect("span kept");
     assert!(!markets.contains_key("OLDUSDT"));
     assert!(markets.contains_key("NEWUSDT"));
 
@@ -133,19 +136,22 @@ fn forgetting_a_core_drops_only_its_own_entries() {
     let mut book = VolumeBook::default();
     let span = VolumeSpan::Trades(500);
     for core in [1, 2] {
-        book.spans.entry((core, span)).or_default().insert(
-            "BTCUSDT".to_string(),
-            SpanEntry {
-                read_ms: 0,
-                readout: VolumeSpanReadout::default(),
-            },
-        );
+        book.spans
+            .entry((core, span, VolumeAt::Now))
+            .or_default()
+            .insert(
+                "BTCUSDT".to_string(),
+                SpanEntry {
+                    read_ms: 0,
+                    readout: VolumeSpanReadout::default(),
+                },
+            );
     }
 
     book.forget_core(1);
 
-    assert!(!book.spans.contains_key(&(1, span)));
-    assert!(book.spans.contains_key(&(2, span)));
+    assert!(!book.spans.contains_key(&(1, span, VolumeAt::Now)));
+    assert!(book.spans.contains_key(&(2, span, VolumeAt::Now)));
 }
 
 /// A period the sides could not cover still prints a WHOLE total when the candle ring states one.

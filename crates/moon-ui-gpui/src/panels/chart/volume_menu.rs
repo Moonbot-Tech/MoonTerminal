@@ -19,7 +19,7 @@
 
 use gpui::*;
 use moon_core::config::{
-    ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelSpan, LabelWindow, VolumeUnits,
+    ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelSpan, LabelWindow, SpanAnchor, VolumeUnits,
 };
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem};
 use rust_i18n::t;
@@ -47,15 +47,22 @@ const QUICK_PERIODS: [LabelWindow; 7] = [
     LabelWindow::H2,
 ];
 
+/// Second-length periods, below what any aggregate can express.
+///
+/// Answered from raw trades, which is affordable precisely because the window is this short: a
+/// second of prints is a handful of rows even on the busiest market.
+const QUICK_SECONDS: [u16; 3] = [1, 10, 30];
+
 /// Trade counts the menu offers, for the reader who counts prints rather than minutes.
 const QUICK_TRADES: [u32; 4] = [100, 250, 500, 1000];
 
 /// Captions the menu can switch on and off, with the locale key naming each.
-const TOGGLE_FIELDS: [ChartLabelField; 4] = [
+const TOGGLE_FIELDS: [ChartLabelField; 5] = [
     ChartLabelField::WindowSpanName,
     ChartLabelField::WindowVolume,
     ChartLabelField::WindowTrades,
     ChartLabelField::WindowBuyShare,
+    ChartLabelField::WindowLiquidations,
 ];
 
 impl ChartPanel {
@@ -237,13 +244,25 @@ fn span_item(
 ) -> MoonMenuItem {
     let panel = panel.clone();
     MoonMenuItem::with_key(key, label)
-        .selected(current == want)
+        .selected(same_period(current, want))
         .on_click(move |_, window: &mut Window, app: &mut App| {
             edit_row(&panel, row_ix, app, |row| set_span(row, want.0, want.1));
             // Rebuilt like every other row here: the menu holds a finished snapshot, so without
             // this the chart moves to the new period while the list still marks the old one.
             open_menu(&panel, row_ix, pos, window, app);
         })
+}
+
+/// Whether two picks name the same period.
+///
+/// A custom span — seconds, minutes, a trade count — ignores the window entirely, and `set_span`
+/// leaves the block's window where it was. Comparing the pair verbatim therefore left every custom
+/// row unmarked unless the block happened to still carry the default window.
+fn same_period(a: (LabelSpan, LabelWindow), b: (LabelSpan, LabelWindow)) -> bool {
+    match (a.0, b.0) {
+        (LabelSpan::Window, LabelSpan::Window) => a.1 == b.1,
+        (left, right) => left == right,
+    }
 }
 
 /// Build the menu for one volume module.
@@ -267,6 +286,17 @@ fn build_items(
     // time it was assembled by hand it read `30м` then `2м`.
     let mut periods = QUICK_PERIODS;
     periods.sort_by_key(|window| window.millis());
+    for secs in QUICK_SECONDS {
+        items.push(span_item(
+            &panel,
+            row_ix,
+            t!("chart_labels.span.seconds", n = secs).to_string(),
+            format!("vol-s-{secs}"),
+            current,
+            (LabelSpan::Seconds(secs), LabelWindow::default()),
+            pos,
+        ));
+    }
     for window in periods {
         items.push(span_item(
             &panel,
@@ -290,6 +320,35 @@ fn build_items(
             (LabelSpan::Trades(trades), LabelWindow::default()),
             pos,
         ));
+    }
+    items.push(MoonMenuItem::separator());
+
+    // WHERE the period is measured. Its own section because it changes what every figure in the
+    // block ANSWERS rather than how one of them looks, and because it is the setting the reference
+    // terminal puts on this same menu.
+    items.push(MoonMenuItem::label(
+        t!("chart_labels.menu.anchor").to_string(),
+    ));
+    let anchor = row
+        .parts
+        .iter()
+        .find(|p| p.field.in_volume_block())
+        .map(|p| p.anchor)
+        .unwrap_or_default();
+    for want in SpanAnchor::ALL {
+        let panel = panel.clone();
+        items.push(
+            MoonMenuItem::with_key(format!("vol-a-{want:?}"), t!(want.locale_key()).to_string())
+                .selected(anchor == want)
+                .on_click(move |_, window: &mut Window, app: &mut App| {
+                    edit_row(&panel, row_ix, app, |row| {
+                        for part in volume_parts(row) {
+                            part.anchor = want;
+                        }
+                    });
+                    open_menu(&panel, row_ix, pos, window, app);
+                }),
+        );
     }
     items.push(MoonMenuItem::separator());
 
@@ -379,17 +438,20 @@ fn toggle_field(row: &mut ChartLabelRow, field: ChartLabelField) {
         .parts
         .iter()
         .find(|p| p.field.in_volume_block())
-        .map(|p| (p.span, p.window, p.units));
+        .map(|p| (p.span, p.window, p.units, p.anchor));
     if !row.push_part(field) {
         return;
     }
     let Some(ix) = row.parts.iter().position(|p| p.field == field) else {
         return;
     };
-    if let Some((span, window, units)) = inherited {
+    if let Some((span, window, units, anchor)) = inherited {
         row.parts[ix].span = span;
         row.parts[ix].window = window;
         row.parts[ix].units = units;
+        // The anchor as well: a caption switched on into a measuring block must measure with it,
+        // not quietly read the live edge under the same heading.
+        row.parts[ix].anchor = anchor;
     }
 }
 

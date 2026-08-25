@@ -105,6 +105,12 @@ pub enum ChartLabelField {
     WindowSellVolume,
     /// How many trades printed over the window.
     WindowTrades,
+    /// What was LIQUIDATED over the window — the reference terminal's `L`.
+    ///
+    /// A separate stream from the trades beside it, and a shallower one: liquidations are retained
+    /// as raw rows only. Nothing compacts them into aggregates the way trades become mini-candles,
+    /// so a period reaching past the ring is reported incomplete rather than filled in.
+    WindowLiquidations,
     /// The window itself, spelled out: `1 мин`, `500 сделок`.
     ///
     /// A caption that prints no figure at all, and the one thing that makes the volume block
@@ -162,7 +168,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 49] = [
+    pub const ALL: [ChartLabelField; 50] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -200,6 +206,7 @@ impl ChartLabelField {
         ChartLabelField::WindowVolume,
         ChartLabelField::WindowBuyShare,
         ChartLabelField::WindowTrades,
+        ChartLabelField::WindowLiquidations,
         ChartLabelField::MaxLeverage,
         ChartLabelField::MaxOrder,
         ChartLabelField::ExchPosSize,
@@ -246,6 +253,7 @@ impl ChartLabelField {
             | ChartLabelField::WindowBuyVolume
             | ChartLabelField::WindowSellVolume
             | ChartLabelField::WindowTrades
+            | ChartLabelField::WindowLiquidations
             | ChartLabelField::WindowSpanName => ChartLabelGroup::Volume,
             ChartLabelField::Funding
             | ChartLabelField::FundingIn
@@ -310,6 +318,7 @@ impl ChartLabelField {
             ChartLabelField::WindowBuyVolume => "chart_labels.field.window_buy_volume",
             ChartLabelField::WindowSellVolume => "chart_labels.field.window_sell_volume",
             ChartLabelField::WindowTrades => "chart_labels.field.window_trades",
+            ChartLabelField::WindowLiquidations => "chart_labels.field.window_liquidations",
             ChartLabelField::WindowSpanName => "chart_labels.field.window_span_name",
             ChartLabelField::MaxLeverage => "chart_labels.field.max_leverage",
             ChartLabelField::MaxOrder => "chart_labels.field.max_order",
@@ -365,6 +374,7 @@ impl ChartLabelField {
             ChartLabelField::WindowBuyVolume => Some("chart_labels.short.window_buy_volume"),
             ChartLabelField::WindowSellVolume => Some("chart_labels.short.window_sell_volume"),
             ChartLabelField::WindowTrades => Some("chart_labels.short.window_trades"),
+            ChartLabelField::WindowLiquidations => Some("chart_labels.short.window_liquidations"),
             ChartLabelField::MaxLeverage => Some("chart_labels.short.max_leverage"),
             ChartLabelField::MaxOrder => Some("chart_labels.short.max_order"),
             ChartLabelField::ExchPosSize => Some("chart_labels.short.exch_pos_size"),
@@ -465,6 +475,7 @@ impl ChartLabelField {
                 | ChartLabelField::WindowBuyVolume
                 | ChartLabelField::WindowSellVolume
                 | ChartLabelField::WindowTrades
+                | ChartLabelField::WindowLiquidations
                 | ChartLabelField::WindowSpanName
         )
     }
@@ -481,6 +492,7 @@ impl ChartLabelField {
                 | ChartLabelField::WindowSellVolume
                 | ChartLabelField::WindowBuyShare
                 | ChartLabelField::WindowTrades
+                | ChartLabelField::WindowLiquidations
         )
     }
 
@@ -516,6 +528,7 @@ impl ChartLabelField {
             ChartLabelField::WindowVolume
                 | ChartLabelField::WindowBuyVolume
                 | ChartLabelField::WindowSellVolume
+                | ChartLabelField::WindowLiquidations
         )
     }
 
@@ -602,6 +615,7 @@ impl ChartLabelField {
             | ChartLabelField::WindowBuyVolume
             | ChartLabelField::WindowSellVolume
             | ChartLabelField::WindowTrades
+            | ChartLabelField::WindowLiquidations
             | ChartLabelField::MaxLeverage
             | ChartLabelField::MaxOrder
             | ChartLabelField::ExchPosSize

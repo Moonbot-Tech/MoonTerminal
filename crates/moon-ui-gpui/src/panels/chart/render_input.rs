@@ -86,7 +86,7 @@ fn grab_order_line(
     let grabbed = clicks
         .is_some_and(|count| this.try_start_order_drag(button, count, e.click_count <= 1, pos, cx));
     if grabbed {
-        this.sync_native_cursor();
+        this.sync_native_cursor(cx);
         cx.notify();
         cx.stop_propagation();
     }
@@ -101,7 +101,7 @@ fn release_order_drag(
 ) -> bool {
     let released = this.finish_order_drag(button, cx);
     if released {
-        this.sync_native_cursor();
+        this.sync_native_cursor(cx);
         cx.notify();
         cx.stop_propagation();
     }
@@ -147,7 +147,7 @@ pub(super) fn scroll_wheel(
     this.input.last_ptr = pos;
     this.input.cursor = if within { Some(pos) } else { None };
     this.input.hovered_pane = this.input.pane_at(pos.0, pos.1);
-    this.sync_native_cursor();
+    this.sync_native_cursor(cx);
     let fb = this.chart.slot_dev_width();
     let changed = {
         let input = &mut this.input;
@@ -204,7 +204,7 @@ pub(super) fn mouse_down_left(
     } else {
         None
     };
-    this.sync_native_cursor();
+    this.sync_native_cursor(cx);
     // The figure layer reacts only in drawing mode and only to the secondary modifier when starting
     // or grabbing a figure. An ordinary unmodified left click makes try_fig_click return false and
     // continues to trading/navigation, matching Moonbot even while drawing mode is enabled. Outside
@@ -439,7 +439,7 @@ pub(super) fn mouse_down_right(
     } else {
         None
     };
-    this.sync_native_cursor();
+    this.sync_native_cursor(cx);
     // The same rectangle as the left button, opening the coin in a COMPARISON tab instead. Checked
     // before the menus for the same reason: the name is not part of the plot they act on.
     if within
@@ -576,7 +576,7 @@ pub(super) fn mouse_down_middle(
     } else {
         None
     };
-    this.sync_native_cursor();
+    this.sync_native_cursor(cx);
     if within
         && clicks.is_some_and(|count| {
             this.try_place_order_click(TradeMouseButton::Middle, e.modifiers, count, pos, cx)
@@ -619,7 +619,7 @@ pub(super) fn mouse_move(
     if e.pressed_button.is_none() {
         if this.order_drag.take().is_some() {
             this.apply_order_visual(cx);
-            this.sync_native_cursor();
+            this.sync_native_cursor(cx);
             cx.notify();
         }
         // Same for a figure drag whose mouse-up was lost (a window switch, a capture steal): a
@@ -657,7 +657,7 @@ pub(super) fn mouse_move(
         };
         let cursor_changed =
             prev_cursor != this.input.cursor || prev_hovered != this.input.hovered_pane;
-        if cursor_changed && this.sync_native_cursor() {
+        if cursor_changed && this.sync_native_cursor(cx) {
             crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
         }
         // Update figure-draft preview under the cursor and figure hover highlighting.
@@ -752,7 +752,7 @@ pub(super) fn mouse_move(
     let cursor_changed =
         prev_cursor != this.input.cursor || prev_hovered != this.input.hovered_pane;
     if cursor_changed {
-        if this.sync_native_cursor() {
+        if this.sync_native_cursor(cx) {
             crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
         }
     }
@@ -806,19 +806,19 @@ pub(super) fn hover(
     this: &mut ChartPanel,
     hovered: &bool,
     window: &mut Window,
-    _cx: &mut Context<ChartPanel>,
+    cx: &mut Context<ChartPanel>,
 ) {
     // Track the chart under the pointer for cursor-dependent new_long/new_short hotkeys. Enter/leave
     // is infrequent rather than per-pixel, and the backend update omits notify to avoid rendering.
-    let self_id = _cx.entity_id();
-    let weak = _cx.entity().downgrade();
+    let self_id = cx.entity_id();
+    let weak = cx.entity().downgrade();
     let hov = *hovered;
     // Recorded on ENTER only, under this panel's own OS window: the chart shot resolves through it
     // once the pointer has left, and it must not answer a keystroke that arrived at a DIFFERENT
     // window. Dead entries are dropped on the way past - a closed chart leaves a weak handle that
     // no longer upgrades, and a closed window leaves one nothing will ever ask for again.
     let window_handle = window.window_handle();
-    this.backend.update(_cx, |b, _| {
+    this.backend.update(cx, |b, _| {
         if hov {
             b.hovered_chart = Some(weak.clone());
             b.last_chart.retain(|_, chart| chart.upgrade().is_some());
@@ -831,28 +831,28 @@ pub(super) fn hover(
         // The pointer leaving is the last event this panel is guaranteed while a gesture may still
         // be owed a repaint: a release outside the slot reaches neither mouse-up nor mouse-move,
         // both of which are hitbox-gated. Settling here costs nothing when nothing is owed.
-        settle_paced_drag(this, _cx);
+        settle_paced_drag(this, cx);
         let had_order_drag = this.order_drag.take().is_some();
         let had_order_hover = this.order_hover.take().is_some();
         if had_order_drag || had_order_hover {
-            this.apply_order_visual(_cx);
-            _cx.notify();
+            this.apply_order_visual(cx);
+            cx.notify();
         }
         // Leaving the slot must also drop a news card: the pointer can exit without a final
         // mouse-move inside the chart.
-        if this.clear_news_hover(_cx) {
-            _cx.notify();
+        if this.clear_news_hover(cx) {
+            cx.notify();
         }
-        if this.clear_warn_hover(_cx) {
-            _cx.notify();
+        if this.clear_warn_hover(cx) {
+            cx.notify();
         }
-        if this.clear_trade_hover(_cx) {
-            _cx.notify();
+        if this.clear_trade_hover(cx) {
+            cx.notify();
         }
         let changed =
             this.input.cursor.take().is_some() || this.input.hovered_pane.take().is_some();
         if changed {
-            this.sync_native_cursor();
+            this.sync_native_cursor(cx);
         }
     }
 }

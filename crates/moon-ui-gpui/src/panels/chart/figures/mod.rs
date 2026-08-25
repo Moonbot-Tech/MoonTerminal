@@ -563,7 +563,7 @@ impl ChartPanel {
                 // Keep the crosshair under the pointer, matching order-line dragging.
                 self.input.cursor = Some(pos);
                 self.input.hovered_pane = Some(dpane);
-                self.sync_native_cursor();
+                self.sync_native_cursor(cx);
                 return true;
             }
             // No figure drag under the held button, but a draft may be mid-gesture: press, drag,
