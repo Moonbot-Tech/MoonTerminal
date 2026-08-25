@@ -388,7 +388,8 @@ pub struct AnalyticsView {
     /// cores behind that type.
     pub(super) hover_kind: Option<usize>,
     /// Whether the Summary's per-core card shows every ranked core instead of the compact
-    /// leaders/outsiders overview. This is a view-only choice and intentionally is not persisted.
+    /// leaders/outsiders overview. A display lens, persisted as `layout.analytics_cores_show_all`
+    /// so the choice survives a restart.
     pub(super) show_all_core_ranks: bool,
     /// Strategies tab: selected per-core row key (`strategyid@core_uid`), plus its name and
     /// details. Legacy bare strategy IDs remain parseable.
@@ -692,6 +693,8 @@ impl AnalyticsView {
         let saved_kpi_collapsed = backend.read(cx).layout.analytics_kpi_collapsed;
         // Distribution card collapse state from the previous run (default expanded).
         let saved_hist_collapsed = backend.read(cx).layout.analytics_hist_collapsed;
+        // "Profit by core" card mode from the previous run (default: the compact overview).
+        let saved_cores_show_all = backend.read(cx).layout.analytics_cores_show_all;
         // Right-column collapse state from the previous run (default expanded).
         let saved_side_collapsed = backend.read(cx).layout.analytics_tuner_side_collapsed;
         // Visible strategy-list columns from the previous run, one mask per axis. An older
@@ -813,7 +816,7 @@ impl AnalyticsView {
             hover_daily_bucket: None,
             hover_cum_bucket: None,
             hover_kind: None,
-            show_all_core_ranks: false,
+            show_all_core_ranks: saved_cores_show_all,
             sel_strategy: None,
             sel_extra: Vec::new(),
             strat_search: String::new(),
