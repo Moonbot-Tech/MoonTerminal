@@ -348,7 +348,7 @@ where
 /// `bool` field would answer it by discarding every window position and column width in the
 /// document. A quoted boolean is therefore read as that boolean, case-insensitively, and every
 /// other shape reads as `false`, matching the field's default when the key is absent.
-pub(super) fn de_lenient_bool<'de, D>(d: D) -> Result<bool, D::Error>
+pub fn de_lenient_bool<'de, D>(d: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

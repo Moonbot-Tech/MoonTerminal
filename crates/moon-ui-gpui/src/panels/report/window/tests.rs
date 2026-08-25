@@ -58,6 +58,8 @@ fn report_discards_geometry_from_a_disconnected_display() {
             y: 180,
             w: 1200,
             h: 800,
+            maximized: false,
+            fullscreen: false,
             display_uuid: None,
         }),
         Some(visible),
@@ -83,6 +85,8 @@ fn report_clamps_saved_geometry_after_display_changes() {
             y: 600,
             w: 1400,
             h: 900,
+            maximized: false,
+            fullscreen: false,
             display_uuid: None,
         }),
         Some(Bounds {
@@ -111,6 +115,8 @@ fn report_rejects_unusable_saved_dimensions() {
             y: 300,
             w: 1,
             h: 1,
+            maximized: false,
+            fullscreen: false,
             display_uuid: None,
         }),
         Some(Bounds {

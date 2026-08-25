@@ -1257,9 +1257,7 @@ impl ReportPanel {
         self.mark_table_detached(cx);
         self.standalone = true;
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                return;
-            };
+            let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |backend, _| {
                 let geom = geom.keeping_display_of(backend.layout.report_window);
                 if backend.layout.report_window != Some(geom) {

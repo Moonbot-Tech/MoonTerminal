@@ -312,11 +312,7 @@ impl Render for StrategiesView {
         let split_sections = self.panel_splitter(PanelSplit::Sections, cx);
 
         let p = MoonPalette::active(cx);
-        let chrome_width = match window.window_bounds() {
-            WindowBounds::Windowed(b)
-            | WindowBounds::Maximized(b)
-            | WindowBounds::Fullscreen(b) => f32::from(b.size.width),
-        };
+        let chrome_width = crate::window::windowing::responsive_width(window);
         let mut root = v_flex()
             .size_full()
             .relative()

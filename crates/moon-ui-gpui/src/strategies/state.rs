@@ -201,9 +201,7 @@ impl StrategiesView {
         // Persist Strategies-window geometry in layout. The debounced save loop drains
         // `layout_dirty`, matching group windows.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                return;
-            };
+            let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |b, _| {
                 let geom = geom.keeping_display_of(b.layout.strategies_window);
                 if b.layout.strategies_window != Some(geom) {

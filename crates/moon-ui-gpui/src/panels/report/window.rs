@@ -249,7 +249,7 @@ pub fn open_scoped(
     );
     let mut options = crate::window::windowing::tool_window_options(
         crate::persistence::panel_meta::panel_title("Report").to_string(),
-        WindowBounds::Windowed(bounds),
+        crate::window::windowing::restored_window_bounds(saved, bounds),
         Some(min_size),
         owner,
     );

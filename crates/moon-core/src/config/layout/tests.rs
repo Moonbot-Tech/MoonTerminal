@@ -691,6 +691,8 @@ fn report_window_geometry_survives_restart_without_endangering_layout() {
             y: 180,
             w: 1640,
             h: 1100,
+            maximized: false,
+            fullscreen: false,
             display_uuid: None,
         }),
         ..WindowLayout::default()
@@ -732,6 +734,8 @@ fn profit_monitor_preferences_round_trip_without_endangering_layout() {
             y: 160,
             w: 720,
             h: 520,
+            maximized: false,
+            fullscreen: false,
             display_uuid: None,
         }),
         profit_monitor_period: Some("m-week".to_string()),
@@ -1226,6 +1230,8 @@ fn window_geometry_without_a_display_identity_still_loads() {
             y: 20,
             w: 800,
             h: 600,
+            maximized: false,
+            fullscreen: false,
             display_uuid: Some(identity),
         }),
         ..WindowLayout::default()
@@ -1278,6 +1284,8 @@ fn saved_geometry_reachability_keeps_unknown_and_partially_visible_windows() {
         y,
         w,
         h,
+        maximized: false,
+        fullscreen: false,
         display_uuid: None,
     };
 
@@ -1315,6 +1323,8 @@ fn trade_window_geometry_round_trips_and_legacy_layouts_remain_readable() {
         y: 80,
         w: 1_200,
         h: 760,
+        maximized: false,
+        fullscreen: false,
         display_uuid: Some(uuid::Uuid::from_u128(
             0x0123_4567_89ab_cdef_0123_4567_89ab_cdef,
         )),
@@ -1338,4 +1348,82 @@ fn trade_window_geometry_round_trips_and_legacy_layouts_remain_readable() {
         .expect("a layout written before trade-window geometry must still deserialize");
     assert!(legacy.trade_window.is_none());
     assert_eq!(legacy.analytics_period.as_deref(), Some("p-cur-month"));
+}
+
+/// `layout.rs:GeomRect::{maximized, fullscreen}` must default missing flags, accept quoted
+/// booleans, and omit false flags; removing `default` or `de_lenient_bool` would reject an older
+/// layout and make upgrading silently discard every remembered window position and preference.
+#[test]
+fn window_geometry_state_flags_keep_legacy_layouts_readable_and_windowed_toml_unchanged() {
+    let legacy: WindowLayout = toml::from_str(
+        "analytics_period = \"p-cur-month\"\n\
+         [report_window]\n\
+         x = 120\n\
+         y = 180\n\
+         w = 1640\n\
+         h = 1100\n",
+    )
+    .expect("a pre-state-flag layout must still deserialize");
+    let legacy_geometry = legacy
+        .report_window
+        .expect("the legacy report geometry must survive the upgrade");
+    assert_eq!(
+        (
+            legacy_geometry.x,
+            legacy_geometry.y,
+            legacy_geometry.w,
+            legacy_geometry.h
+        ),
+        (120, 180, 1640, 1100),
+        "missing state flags must not cost the surrounding remembered rectangle"
+    );
+    assert!(
+        !legacy_geometry.maximized && !legacy_geometry.fullscreen,
+        "missing state flags must retain the windowed default"
+    );
+    assert_eq!(
+        legacy.analytics_period.as_deref(),
+        Some("p-cur-month"),
+        "missing geometry state flags must not discard neighbouring layout preferences"
+    );
+
+    let quoted: WindowLayout = toml::from_str(
+        "analytics_period = \"p-cur-month\"\n\
+         [report_window]\n\
+         x = 120\n\
+         y = 180\n\
+         w = 1640\n\
+         h = 1100\n\
+         maximized = \"true\"\n",
+    )
+    .expect("a quoted maximized flag must not reject the complete layout");
+    assert!(
+        quoted
+            .report_window
+            .is_some_and(|geometry| geometry.maximized),
+        "a quoted true maximized flag must restore the user's intended state"
+    );
+    assert_eq!(
+        quoted.analytics_period.as_deref(),
+        Some("p-cur-month"),
+        "a quoted geometry state flag must preserve neighbouring layout preferences"
+    );
+
+    let windowed = WindowLayout {
+        report_window: Some(GeomRect {
+            x: 120,
+            y: 180,
+            w: 1640,
+            h: 1100,
+            maximized: false,
+            fullscreen: false,
+            display_uuid: None,
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&windowed).expect("a windowed layout must serialize");
+    assert!(
+        !encoded.contains("maximized =") && !encoded.contains("fullscreen ="),
+        "an untouched windowed geometry must preserve the legacy TOML shape"
+    );
 }

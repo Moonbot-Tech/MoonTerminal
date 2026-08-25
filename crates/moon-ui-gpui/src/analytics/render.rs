@@ -36,11 +36,7 @@ impl Render for AnalyticsView {
         };
         // Arm shared formatters with the exact comparable unit published by the active tab.
         set_pnl_unit(unit);
-        let chrome_width = match window.window_bounds() {
-            WindowBounds::Windowed(b)
-            | WindowBounds::Maximized(b)
-            | WindowBounds::Fullscreen(b) => f32::from(b.size.width),
-        };
+        let chrome_width = crate::window::windowing::responsive_width(window);
         let body = match split {
             Some(totals) => {
                 quote_split_note(&totals, &self.valuation_status, self.valuation_mode, p, cx)

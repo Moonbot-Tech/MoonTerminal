@@ -183,7 +183,7 @@ fn open_window(
             );
             let options = crate::window::windowing::profit_monitor_window_options(
                 t!("profit_monitor.window_title").to_string(),
-                WindowBounds::Windowed(bounds),
+                crate::window::windowing::restored_window_bounds(saved, bounds),
                 display_id,
                 Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0))),
             );

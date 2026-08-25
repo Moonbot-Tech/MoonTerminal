@@ -237,9 +237,7 @@ impl SettingsView {
         // Persist the Settings window position and size in layout so it reopens in the same place.
         // The debounced persistence loop drains `layout_dirty`, as it does for Strategies/Assets.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                return;
-            };
+            let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |b, _| {
                 let geom = geom.keeping_display_of(b.layout.settings_window);
                 if b.layout.settings_window != Some(geom) {
@@ -566,7 +564,7 @@ pub fn open(
     );
     let mut opts = crate::window::windowing::tool_window_options(
         t!("settings.window_title").to_string(),
-        WindowBounds::Windowed(bounds),
+        crate::window::windowing::restored_window_bounds(saved, bounds),
         Some(size(px(620.0), px(420.0))),
         owner,
     );

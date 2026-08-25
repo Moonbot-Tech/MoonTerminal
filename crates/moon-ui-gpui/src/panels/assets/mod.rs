@@ -210,9 +210,7 @@ impl AssetsView {
         // Only the global standalone window owns persisted geometry; a dock panel uses its group window.
         if windowed {
             cx.observe_window_bounds(window, |this, window, cx| {
-                let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
-                    return;
-                };
+                let geom = crate::window::windowing::window_geom_rect(window, cx);
                 this.backend.update(cx, |b, _| {
                     let geom = geom.keeping_display_of(b.layout.assets_window);
                     if b.layout.assets_window != Some(geom) {

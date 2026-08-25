@@ -11,13 +11,13 @@ use super::paths;
 
 mod serde_compat;
 
-pub use serde_compat::de_lenient;
 use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
     de_candle_volume_scale, de_candle_volume_style, de_clock_zone, de_connector_thickness,
-    de_lenient_bool, de_lenient_chart_labels, de_lenient_graphics, de_lenient_map, de_lenient_seed,
-    de_lenient_true, de_lenient_u32, de_marker_scale, de_table_sort_map, de_trade_volume_alpha,
+    de_lenient_chart_labels, de_lenient_graphics, de_lenient_map, de_lenient_seed, de_lenient_true,
+    de_lenient_u32, de_marker_scale, de_table_sort_map, de_trade_volume_alpha,
 };
+pub use serde_compat::{de_lenient, de_lenient_bool};
 
 /// Narrowest persisted Auto-workspace rail width in logical pixels.
 pub const AUTO_WORKSPACE_RAIL_WIDTH_MIN: f32 = 52.0;
@@ -325,6 +325,31 @@ pub struct GeomRect {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Whether the window was left MAXIMIZED.
+    ///
+    /// The rectangle above stays the RESTORE rectangle while this is set: the platform reports
+    /// where a maximized window will go once it is un-maximized, and that is what has to survive
+    /// a restart. The flag rides beside it rather than replacing it.
+    ///
+    /// Absent from older config files, and not written out when false, so an untouched file keeps
+    /// its previous shape. Decoded leniently for the same reason [`Self::display_uuid`] is: one
+    /// mistyped value here would otherwise reject the WHOLE document and cost the user every
+    /// window position and column width in it.
+    #[serde(
+        default,
+        deserialize_with = "de_lenient_bool",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub maximized: bool,
+    /// macOS fullscreen state (`WindowBounds::Fullscreen`). Separate from [`Self::maximized`]:
+    /// the green macOS button produces Fullscreen rather than Maximized, and it must be restored
+    /// using its own variant or the window will open normally.
+    #[serde(
+        default,
+        deserialize_with = "de_lenient_bool",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub fullscreen: bool,
     /// Display this window was last seen on, when the platform could name one.
     ///
     /// `x`/`y` alone identify a monitor only where window coordinates are global — Windows and X11.
