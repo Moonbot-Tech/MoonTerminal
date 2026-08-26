@@ -34,6 +34,57 @@ pub fn now_unix_ms_i64() -> i64 {
         .unwrap_or(0)
 }
 
+/// How long an answer from [`local_utc_offset_ms`] is reused.
+///
+/// The read costs a zone lookup and a transition search, and it sits on the chart's market-revision
+/// path — several panes, several times a second. A minute of staleness is invisible: the value
+/// changes twice a year, and a daylight-saving jump is picked up within that minute.
+const LOCAL_OFFSET_TTL_MS: i64 = 60_000;
+
+/// This machine's offset from UTC right now, in milliseconds; `+2h` reads as `7_200_000`.
+///
+/// Exists for values that arrive already expressed in the CLIENT's local wall clock rather than in
+/// UTC — the protocol's funding time is one (`apply_delphi_local_funding_shift` adds this very
+/// offset while reading the wire). Subtracting it puts such a value back on the one scale
+/// everything else here uses, so a countdown against [`now_unix_ms_i64`] is not off by a zone.
+///
+/// Deliberately NOT `chrono::Local`, which is the obvious way to write this: its Windows path ends
+/// in an `unwrap` of an `Option` that the zone API can legitimately decline
+/// (`TzInfo::for_year` → `MappedLocalTime::None`), and this is read from the chart's update path,
+/// where a panic takes the whole application down. The system zone plus `chrono-tz` answers the
+/// same question and has no such edge.
+///
+/// Returns:
+///     Offset in milliseconds, or `0` when the platform states no usable zone — a terminal that
+///     cannot learn its own zone reads the wire value as UTC, which is what it did before.
+pub fn local_utc_offset_ms() -> i64 {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(i64, i64)>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    let now = now_unix_ms_i64();
+    if let Some((at, offset)) = *cache.lock().unwrap_or_else(|e| e.into_inner()) {
+        if now.saturating_sub(at) < LOCAL_OFFSET_TTL_MS {
+            return offset;
+        }
+    }
+    let offset = resolve_local_utc_offset_ms(now);
+    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, offset));
+    offset
+}
+
+/// The uncached reading behind [`local_utc_offset_ms`].
+fn resolve_local_utc_offset_ms(now_ms: i64) -> i64 {
+    use chrono::Offset as _;
+    let Some(utc) = chrono::DateTime::from_timestamp_millis(now_ms) else {
+        return 0;
+    };
+    iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|id| id.parse::<chrono_tz::Tz>().ok())
+        .map(|zone| i64::from(utc.with_timezone(&zone).offset().fix().local_minus_utc()) * 1000)
+        .unwrap_or(0)
+}
+
 /// Whole Unix milliseconds (`i64`) of an arbitrary `SystemTime`, for stamping a value whose clock
 /// reading the caller already holds. Returns `0` for a time before the epoch, like its siblings.
 pub fn unix_ms_i64_of(time: SystemTime) -> i64 {

@@ -526,22 +526,24 @@ impl MarketDataSource {
         let markets = snapshot.markets();
         let globals = markets.global_deltas();
         let price = markets.price(market);
-        // A rate of exactly zero is a real answer on a futures market between fundings, so the
-        // absence test is the TIME the core reports, not the rate.
-        let funding_at_ms = price
-            .map(|p| p.funding_time())
-            .map(|t| t.unix_millis())
-            .filter(|ms| *ms > 0);
+        // Both halves of the funding reading go through one shared function; see
+        // `super::funding_from_wire` for why each of them is not the obvious conversion.
+        let (funding_pct, funding_at_ms) = price
+            .map(|p| {
+                super::funding_from_wire(
+                    p.funding_rate,
+                    p.funding_time().unix_millis(),
+                    crate::util::time::local_utc_offset_ms(),
+                )
+            })
+            .unwrap_or((None, None));
         Some(MarketContextReadout {
             exchange_1h_pct: globals.exchange_1h_delta,
             exchange_24h_pct: globals.exchange_24h_delta,
             btc_1h_pct: globals.btc_1h_delta,
             btc_24h_pct: globals.btc_24h_delta,
             btc_72h_pct: globals.btc_72h_delta,
-            funding_pct: funding_at_ms
-                .and(price)
-                .map(|p| p.funding_rate * 100.0)
-                .filter(|v| v.is_finite()),
+            funding_pct: funding_at_ms.and(funding_pct),
             funding_at_ms,
         })
     }

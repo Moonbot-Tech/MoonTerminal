@@ -1,6 +1,6 @@
 //! Contract for compact UTC timestamps used in snapshot directory names.
 
-use super::{utc_stamp_compact, STAMP_MAX, STAMP_MIN};
+use super::{local_utc_offset_ms, utc_stamp_compact, STAMP_MAX, STAMP_MIN};
 
 /// The timestamp has fixed width and a separator at a fixed offset.
 ///
@@ -68,4 +68,21 @@ fn a_year_outside_the_supported_range_clamps_instead_of_changing_width() {
     assert_eq!(utc_stamp_compact(i64::MAX / 2), STAMP_MAX);
     assert_eq!(STAMP_MIN.len(), 15);
     assert_eq!(STAMP_MAX.len(), 15);
+}
+
+/// The offset must be a real zone offset, never a panic and never nonsense.
+///
+/// Breakage: the obvious `chrono::Local::now()` unwraps an `Option` the Windows zone API can
+/// decline, and this is read from the chart's update path — where a panic ends the process.
+#[test]
+fn the_local_offset_is_a_plausible_zone_offset() {
+    let offset = local_utc_offset_ms();
+    assert!(
+        offset.abs() <= 14 * 3_600_000,
+        "no zone is further than 14 hours from UTC: {offset}"
+    );
+    // Zones are whole minutes; anything else means the reading came from the wrong unit.
+    assert_eq!(offset % 60_000, 0, "offset must be whole minutes: {offset}");
+    // Cached and uncached must agree, or a caption would flicker between two answers.
+    assert_eq!(offset, local_utc_offset_ms());
 }

@@ -36,6 +36,10 @@ unicode-casefold = "0.2"
 # boundaries; chrono-tz supplies historical IANA transitions for user-selected civil time.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
+# The machine's OWN zone, for values that arrive on the client's wall clock rather than in UTC;
+# see `util::time::local_utc_offset_ms`. Deliberately not chrono's `clock` feature: its `Local`
+# panics when the Windows zone API declines, and this is read from the chart update path.
+iana-time-zone = "0.1"
 
 # The TeeLogger wrapper (applog.rs) delegates to env_logger and is installed in main.
 env_logger = "0.11"

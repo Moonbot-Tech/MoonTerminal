@@ -935,6 +935,42 @@ struct MarketDataSourceInner {
     archive: Arc<archive::ArchiveGate>,
 }
 
+/// Read the funding pair a caption prints, from the two raw wire values.
+///
+/// A free function, and pure, because both halves were wrong for a year in ways only a comparison
+/// with the reference terminal exposed — and neither is observable from a snapshot test:
+///
+/// - The RATE is already a percentage. `-0.2313` means −0.23 %, which is what Moonbot prints for
+///   the same market at the same moment (measured 2026-08-24, BICO on OKX Futures). Multiplying it
+///   by a hundred stated a −23 % funding, a figure no venue has ever charged. The protocol's own
+///   doc comment claims `0.0001 = 0.01%`; the two live screens say otherwise, and the screens win.
+/// - The TIME arrives on the CLIENT's local wall clock, not on UTC: moonproto adds this machine's
+///   zone offset while reading the wire (`apply_delphi_local_funding_shift`) and its field is
+///   documented as "Delphi client-local TDateTime after adding local TZShift". Read as UTC, it put
+///   the next funding one zone into the future — an operator at UTC+2 saw `9h 55m` where the
+///   reference terminal counted `7:53:37`.
+///
+/// Args:
+///     rate: `funding_rate` as the wire carries it, already in percent.
+///     client_local_ms: `funding_time` converted to milliseconds, still on the client's clock.
+///     local_offset_ms: This machine's offset from UTC, from `util::time::local_utc_offset_ms`.
+///
+/// Returns:
+///     `(percentage, unix milliseconds)`, both `None` where the venue charges no funding — the
+///     absence test is the TIME, since a rate of exactly zero is a real answer between charges.
+pub fn funding_from_wire(
+    rate: f64,
+    client_local_ms: i64,
+    local_offset_ms: i64,
+) -> (Option<f64>, Option<i64>) {
+    // Zero is how "this venue has no funding" arrives, and a spot market sends nothing at all.
+    if client_local_ms <= 0 {
+        return (None, None);
+    }
+    let at_ms = client_local_ms - local_offset_ms;
+    (rate.is_finite().then_some(rate), Some(at_ms))
+}
+
 /// How one market is named to the user.
 ///
 /// Built by [`MarketDataSource::market_label`]; see it for why both fields come from one place.
