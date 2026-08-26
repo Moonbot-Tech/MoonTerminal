@@ -543,6 +543,65 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         }
     }
 
+    /// Hand the keyboard back when the ⚙ popup closes with the focus inside one of ITS OWN fields.
+    ///
+    /// `MoonPopover` restores the holder it remembered when it opened, and otherwise blurs only if
+    /// it finds its own handle focused — a field INSIDE it answers to neither test. So when nothing
+    /// was remembered, the focus is left on an input that stops being rendered that same frame, and
+    /// a focus id with no node in the frame collapses the dispatch path: every hotkey dies silently
+    /// until something focusable is clicked. [`crate::hotkeys::restore_root_focus`] cannot repair
+    /// that one — these fields are permanent members of the host, so the handle still resolves and
+    /// the window reads as focused. Blurring here is what lets the root re-take it next frame.
+    ///
+    /// Reachable because ending a market search releases the keyboard rather than parking it
+    /// somewhere (see [`coin_toolbar_press_handler`]), which is what leaves a popover opened by
+    /// that same press with nothing to restore. The ⚙ popup is the only one of the four that has
+    /// text fields at all.
+    ///
+    /// Args:
+    ///     window: The window whose focus is being released.
+    ///     cx: Application context used to read the fields' handles.
+    fn release_layout_field_focus(&self, window: &mut Window, cx: &mut App) {
+        for field in self.layout_fields() {
+            crate::hotkeys::release_field_focus(field, window, cx);
+        }
+    }
+
+    /// Close the ⚙ popup, settling what it owes the KEYBOARD on the way out.
+    ///
+    /// The one funnel for closing it, and it has to be: `MoonPopover` reports a close through
+    /// `on_open_change` only when IT decided one — an outside click, Escape, the trigger. The ✕
+    /// inside the popup is none of those; it flips the controlled flag, which `render` later turns
+    /// into `set_open` + `sync_open_focus` with no report at all. A release hung off the report
+    /// alone would leave the ✕ as the one exit that still strands the focus. What the popup owes
+    /// the DATA — committing the size fields — travels the other way, through
+    /// [`Self::settle_closed_popup`], because that one needs no window and every displacement path
+    /// reaches it.
+    ///
+    /// Args:
+    ///     window: The window whose focus may need releasing.
+    ///     cx: Host context.
+    fn close_layout_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_chart_popup(ChartPopup::Layout, cx);
+        self.release_layout_field_focus(window, cx);
+    }
+
+    /// Every input this popup renders, as one list.
+    ///
+    /// Two things have to be done to ALL of them and to nothing else — releasing the keyboard on
+    /// the way out, and the count the contract test holds against the trait's own getters — so the
+    /// membership question is answered once, here, rather than re-enumerated at each. Seeding them
+    /// stays per-field because each takes a different value.
+    fn layout_fields(&self) -> [&Entity<MoonInputState>; 5] {
+        [
+            self.fit_input(),
+            self.scroll_input(),
+            self.rename_input(),
+            self.max_charts_input(),
+            self.min_slot_input(),
+        ]
+    }
+
     /// ARM the ⧉ press: the row that opens names which kinds of tab it reaches, and performs it
     /// with the values this popup holds AT THAT MOMENT — never a snapshot taken here.
     fn arm_apply_press(&mut self, cx: &mut Context<Self>) {
@@ -896,8 +955,14 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
                 }
                 // Closing COMMITS the size field; `settle_closed_popup` owns that, so every way out
                 // of this popup — ✕, outside click, Escape, the gear, or a press on a neighbouring
-                // button that displaces it — commits exactly once.
-                this.report_chart_popup(ChartPopup::Layout, open, cx);
+                // button that displaces it — commits exactly once. The keyboard travels through
+                // `close_layout_popup` instead, and only AFTER the popover has had its say about
+                // the focus: it may have restored a remembered holder, and only what is left on one
+                // of the popup's own fields afterwards is stranded.
+                match open {
+                    true => this.open_chart_popup(ChartPopup::Layout, cx),
+                    false => this.close_layout_popup(window, cx),
+                }
             });
         })
         .trigger(trigger);
@@ -1050,10 +1115,8 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
                 this.apply_tab_setting(StackSetting::CursorLabels(checked), cx)
             });
         },
-        move |_, _w, app| {
-            close_entity.update(app, |this, cx| {
-                this.close_chart_popup(ChartPopup::Layout, cx)
-            });
+        move |_, window, app| {
+            close_entity.update(app, |this, cx| this.close_layout_popup(window, cx));
         },
     );
     // The ⧉ row rides ABOVE the popup's own content, inline: see `apply_row`.
@@ -1062,14 +1125,16 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
 }
 
 /// Host of a coin-search field (tab strip/detached-window header), defining where to open the
-/// selected coin and how to clear the field/popup. [`coin_pick_handler`] and
-/// [`coin_dismiss_handler`] provide shared plumbing; [`super::coin_search::render_popup`] renders
-/// the list itself.
+/// selected coin and how to clear the field/popup. [`coin_pick_handler`], [`coin_dismiss_handler`]
+/// and [`coin_toolbar_press_handler`] provide shared plumbing;
+/// [`super::coin_search::render_popup`] renders the list itself.
 pub(super) trait CoinPopupHost: Sized + 'static {
     /// Clear the coin field and close the list after selection or an outside click.
     fn clear_coin_search(&mut self, cx: &mut Context<Self>);
     /// Open the selected coin on the host target (active tab/window stack).
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>);
+    /// The search field itself, for the plumbing that has to release its keyboard.
+    fn coin_field(&self) -> &Entity<MoonInputState>;
     /// The backend this host reads and writes, so shared plumbing can reach persisted state.
     fn coin_backend(&self) -> Entity<crate::Backend>;
 }
@@ -1103,15 +1168,62 @@ pub(super) fn coin_pick_handler<T: CoinPopupHost>(
     }
 }
 
-/// Handle a click on the coin list's dismiss layer; the caller defines the layer geometry.
-pub(super) fn coin_dismiss_handler<T: CoinPopupHost>(
+/// End the market search when a press lands on a NEIGHBOURING toolbar control, in the CAPTURE
+/// phase.
+///
+/// A `MoonDropdown` is the one neighbour that leaves the list STANDING, and there are two of them:
+/// the price scale and the drawing-tool picker. Its trigger stops the press in the bubble phase
+/// (`Popover`), so the dismiss layer painted under the toolbar row never sees it, and unlike the
+/// four settings popovers it holds no seat in [`super::popup_slot`] — opening it displaces nothing.
+/// The list simply stayed up under the menu that opened over it. The plain `MoonButton`s beside
+/// them stop nothing, so wherever the dismiss layer reaches them they already closed it; this
+/// handler only arrives first. In the detached header that layer starts BELOW the row, so there
+/// they needed it for the list half too.
+///
+/// The FOCUS half belongs to every control here, dropdowns and buttons alike, and capture is the
+/// only phase early enough for it: `MoonPopover` remembers the window's focus holder inside that
+/// same bubble handler and hands it back when it closes, so a blur any later is undone a moment
+/// after. The field takes the keyboard back — where Ctrl+Z is Undo and Ctrl+X is Cut rather than
+/// the hotkeys they are bound to — and its `Focus` reopens the list the user just left.
+///
+/// Deliberately does NOT stop propagation, unlike [`coin_dismiss_handler`]: the control that was
+/// pressed still has to do its own job. Left button only, matching that layer, and scoped to the
+/// sections FLANKING the field rather than to the toolbar row as a whole — a press on the field
+/// itself must keep focusing it.
+pub(super) fn coin_toolbar_press_handler<T: CoinPopupHost + LayoutPopupHost>(
     cx: &Context<T>,
-    input: Entity<MoonInputState>,
-) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + Clone + 'static {
     let entity = cx.entity();
-    move |_, window, app| {
-        entity.update(app, |this, cx| this.clear_coin_search(cx));
-        crate::controls::coin_search::release_focus(&input, window, app);
+    move |ev: &MouseDownEvent, window: &mut Window, app: &mut App| {
+        if ev.button != MouseButton::Left {
+            return;
+        }
+        let field = entity.update(app, |this, cx| {
+            // Gated because this body serves both exits: the dismiss layer runs it too, and a
+            // plain button's press reaches BOTH for the one press. `close_chart_popup` would
+            // already decline the second, but `clear_coin_search` notifies either way.
+            if this.popup_shows(ChartPopup::Coin) {
+                this.clear_coin_search(cx);
+            }
+            this.coin_field().clone()
+        });
+        // Outside that gate on purpose: the field can hold the keyboard with the list already
+        // closed, and a press on a neighbour ends its claim either way. It blurs only the field.
+        crate::controls::coin_search::release_focus(&field, window, app);
+    }
+}
+
+/// Handle a click on the coin list's dismiss layer; the caller defines the layer geometry.
+///
+/// The same end-of-search body as [`coin_toolbar_press_handler`] — one funnel, so a rule added to
+/// either exit reaches both — plus the one thing that is this layer's alone: swallowing the press,
+/// which is why a click that dismisses the list does not also land on the chart underneath.
+pub(super) fn coin_dismiss_handler<T: CoinPopupHost + LayoutPopupHost>(
+    cx: &Context<T>,
+) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    let end_search = coin_toolbar_press_handler(cx);
+    move |ev, window, app| {
+        end_search(ev, window, app);
         app.stop_propagation();
     }
 }

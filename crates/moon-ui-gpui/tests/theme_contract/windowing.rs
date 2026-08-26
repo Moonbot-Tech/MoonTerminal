@@ -870,7 +870,10 @@ fn every_coin_search_exit_releases_the_keyboard() {
         (
             "chart tab strip and detached window",
             "chart_tabs/common.rs",
-            2, // pick, and the dismiss layer
+            // Pick, and the shared end-of-search funnel — the dismiss layer and a press on a
+            // neighbouring toolbar control both run through `coin_toolbar_press_handler`, so they
+            // are two exits behind one call. A third exit added here needs its own.
+            2,
         ),
         ("open selection in a new tab", "chart_tabs/strip.rs", 1),
         ("report coin filter", "panels/report/render.rs", 2), // pick, dismiss
@@ -884,6 +887,105 @@ fn every_coin_search_exit_releases_the_keyboard() {
             "{name} ({path}) must release focus on each of its {exits} coin-search exit(s), \
              found {found} — an exit that keeps focus silently disables every hotkey bound to an \
              editing shortcut"
+        );
+    }
+}
+
+/// Both chart toolbars arm the press that ends a market search on the groups flanking the field.
+///
+/// The market list is not a popover: it is a plain element with a dismiss layer under the toolbar
+/// row, so the row itself is the one place that layer cannot reach — a dropdown trigger there stops
+/// the press before it arrives. Coverage is therefore geometric, wired per section by hand, and
+/// nothing about a fourth `chrome_section` or a control moved between them would fail to compile.
+/// This is what says the wiring is still there, in both hosts, on BOTH sides of the field.
+#[test]
+fn both_chart_toolbars_end_the_search_on_a_neighbouring_press() {
+    for (name, path) in [
+        ("chart tab strip", "chart_tabs/strip.rs"),
+        (
+            "detached chart window",
+            "chart_tabs/detached_host/render.rs",
+        ),
+    ] {
+        let raw = read_src(path);
+        let src = code_only(&raw);
+        assert!(
+            src.contains("coin_toolbar_press_handler(cx)"),
+            "{name} ({path}) must build the end-of-search press handler"
+        );
+        let armed = src.matches("capture_any_mouse_down(end)").count();
+        assert_eq!(
+            armed, 2,
+            "{name} ({path}) must arm that handler on BOTH control groups beside the market field, \
+             found {armed} — an unarmed group leaves the list standing under whatever opens over it"
+        );
+    }
+}
+
+/// The ⚙ popup's own fields are enumerated in exactly one place.
+///
+/// Its inputs belong to the HOST, so one left focused when the popup stops rendering keeps
+/// resolving: the window reads as focused while the dispatch path has already collapsed, and every
+/// hotkey dies with nothing anywhere to say so (`hotkeys::restore_root_focus` documents why it
+/// cannot repair that one). `release_layout_field_focus` walks `layout_fields()` to prevent it, so
+/// a sixth field reaching the popup and not that list would silently restore the defect.
+#[test]
+fn layout_popup_field_list_covers_every_input() {
+    let raw = read_src("chart_tabs/common.rs");
+    let src = code_only(&raw);
+    // Scoped to the ⚙ popup's own trait: `CoinPopupHost` lives in the same file and would otherwise
+    // have its field getters counted as inputs this popup owes a release to.
+    let trait_body = braced_body(&src, "trait LayoutPopupHost");
+    let getters: Vec<&str> = trait_body
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("fn ")?;
+            let (name, tail) = rest.split_once('(')?;
+            (name.ends_with("_input") && tail.contains("-> &Entity<MoonInputState>"))
+                .then_some(name)
+        })
+        .collect();
+    assert!(
+        getters.len() >= 5,
+        "expected the ⚙ popup's input getters on LayoutPopupHost, found {getters:?}"
+    );
+    let list = braced_body(&src, "fn layout_fields(");
+    for getter in &getters {
+        assert!(
+            list.contains(&format!("self.{getter}()")),
+            "layout_fields() omits {getter}() — a field left out keeps the keyboard when the popup \
+             closes and silently kills every hotkey"
+        );
+    }
+    // And the release has to sit on the ONE close funnel. `MoonPopover` reports a close only when
+    // it decided one, so the ✕ inside the popup — a plain flag flip — reaches no report at all;
+    // hanging the release off the report alone silently leaves that exit stranding the focus.
+    let funnel = braced_body(&src, "fn close_layout_popup(");
+    assert!(
+        funnel.contains("release_layout_field_focus("),
+        "close_layout_popup must release the popup's own fields as it closes"
+    );
+    let direct = src.matches("close_chart_popup(ChartPopup::Layout").count();
+    assert_eq!(
+        direct, 1,
+        "the ⚙ popup must be closed only through close_layout_popup, found {direct} direct \
+         close_chart_popup(Layout) call(s) — a close that skips the funnel keeps the keyboard on a \
+         field that has stopped rendering"
+    );
+    // `close_chart_popup` is a trait method, so either host could reach past the funnel from its
+    // own module; the one call above is only "the funnel is the only one HERE".
+    for host in [
+        "chart_tabs/mod.rs",
+        "chart_tabs/custom.rs",
+        "chart_tabs/detached_host/mod.rs",
+        "chart_tabs/settings.rs",
+    ] {
+        let host_src = code_only(&read_src(host));
+        assert!(
+            !host_src.contains("close_chart_popup(ChartPopup::Layout"),
+            "{host} closes the ⚙ popup directly — it must go through close_layout_popup so the \
+             popup's own fields hand the keyboard back"
         );
     }
 }

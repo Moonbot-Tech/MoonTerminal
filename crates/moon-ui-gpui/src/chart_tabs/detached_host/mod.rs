@@ -920,6 +920,11 @@ impl CoinPopupHost for DetachedChartHost {
         self.backend.clone()
     }
 
+    /// This window header's own market field.
+    fn coin_field(&self) -> &Entity<MoonInputState> {
+        &self.coin_input
+    }
+
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
         self.close_chart_popup(ChartPopup::Coin, cx);
