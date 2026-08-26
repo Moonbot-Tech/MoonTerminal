@@ -302,3 +302,15 @@ fn startup_poll_settles_once_both_signals_agree() {
 fn startup_poll_never_settles_before_any_snapshot_was_sent() {
     assert!(!startup_poll_settled(true, None));
 }
+
+/// The order table and the chart's order lines carry the SAME rows, and `session/store.rs` feeds the
+/// line store from either message — so a turn that published both would put the identical set on the
+/// channel twice. The table is the one that also runs the throttle, so it has to be the one that
+/// wins; swapping the two arms is the edit this catches.
+#[test]
+fn a_due_table_wins_over_the_order_lines() {
+    assert_eq!(
+        OrdersPublish::decide(true, true),
+        Some(OrdersPublish::Table)
+    );
+}

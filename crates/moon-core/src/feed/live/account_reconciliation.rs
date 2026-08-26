@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use super::deadline::{CoalescedDeadline, PollDeadline};
+
 use moonproto::state::{BalanceEvent, OrderEvent, TransferAssetsEvent};
 use moonproto::{Event, ExchangeCode, ExchangeKind, OrderWorkerStatus};
 
@@ -121,132 +123,12 @@ enum OrderChange {
     Removed,
 }
 
-/// One coalesced repair deadline with an immediate idle request and a fixed cooldown.
-#[derive(Clone, Copy, Debug)]
-struct RepairDeadline {
-    interval: Duration,
-    due_at: Option<Instant>,
-    last_attempt: Option<Instant>,
-}
-
-impl RepairDeadline {
-    /// Creates an idle repair deadline with the supplied request cooldown.
-    fn new(interval: Duration) -> Self {
-        Self {
-            interval,
-            due_at: None,
-            last_attempt: None,
-        }
-    }
-
-    /// Queues an immediate repair after idle or the earliest repair allowed by the cooldown.
-    fn queue(&mut self, now: Instant) {
-        if self.due_at.is_some() {
-            return;
-        }
-        self.due_at = Some(
-            self.last_attempt
-                .map(|last_attempt| (last_attempt + self.interval).max(now))
-                .unwrap_or(now),
-        );
-    }
-
-    /// Records an authoritative pushed response and clears pending repair.
-    fn satisfy(&mut self) {
-        self.due_at = None;
-    }
-
-    /// Records an explicit request attempt and starts the request cooldown.
-    fn mark_attempt(&mut self, now: Instant) {
-        self.due_at = None;
-        self.last_attempt = Some(now);
-    }
-
-    /// Returns whether the pending repair may run at `now`.
-    fn is_due(&self, now: Instant) -> bool {
-        self.due_at.is_some_and(|deadline| now >= deadline)
-    }
-
-    /// Returns the remaining wait for pending repair, preserving the original deadline.
-    fn wait(&self, now: Instant) -> Option<Duration> {
-        self.due_at
-            .map(|deadline| deadline.saturating_duration_since(now))
-    }
-}
-
-/// A plain recurring deadline: unlike [`RepairDeadline`] it needs no trigger, because nothing in
-/// the event stream announces that a value went stale.
-#[derive(Clone, Copy, Debug)]
-struct PollDeadline {
-    interval: Duration,
-    due_at: Instant,
-    last_attempt: Option<Instant>,
-}
-
-impl PollDeadline {
-    /// Creates a poll that is due immediately, so the first value arrives as soon as the core can
-    /// answer rather than one interval later.
-    fn new(interval: Duration, now: Instant) -> Self {
-        Self {
-            interval,
-            due_at: now,
-            last_attempt: None,
-        }
-    }
-
-    /// Brings the poll due at once, unless one ran within `min_gap`.
-    ///
-    /// For an event that means "this value may have changed" — a core reaching Ready. The gap is
-    /// what keeps a flapping core from asking on every reconnect.
-    fn poll_now_unless_recent(&mut self, now: Instant, min_gap: Duration) {
-        let recent = self
-            .last_attempt
-            .is_some_and(|last| now.saturating_duration_since(last) < min_gap);
-        if !recent {
-            self.due_at = now;
-        }
-    }
-
-    /// Brings the next poll forward to `delay` from now, for a retry after an unanswered check.
-    /// Never pushes it further out than it already is.
-    fn retry_in(&mut self, now: Instant, delay: Duration) {
-        let retry_at = now + delay;
-        if retry_at < self.due_at {
-            self.due_at = retry_at;
-        }
-    }
-
-    /// Pushes a due poll out by `delay`, for a caller that cannot act on it yet.
-    ///
-    /// Unconditional, unlike [`Self::retry_in`]: a deadline that stays due while its caller keeps
-    /// declining it leaves the loop with a zero-length wait, and the thread spins.
-    fn defer(&mut self, now: Instant, delay: Duration) {
-        self.due_at = now + delay;
-    }
-
-    /// Returns whether the next poll may run at `now`.
-    fn is_due(&self, now: Instant) -> bool {
-        now >= self.due_at
-    }
-
-    /// Records a poll and schedules the next one a full interval out.
-    fn mark_attempt(&mut self, now: Instant) {
-        self.due_at = now + self.interval;
-        self.last_attempt = Some(now);
-    }
-
-    /// Returns the remaining wait before the next poll.
-    fn wait(&self, now: Instant) -> Duration {
-        self.due_at.saturating_duration_since(now)
-    }
-}
-
 /// Tracks order-account stamps, the balance and Spot-wallet repair deadlines, and the recurring
 /// API-key expiration poll.
 pub(super) struct AccountReconciliation {
     orders: HashMap<u64, OrderAccountStamp>,
-    balance: RepairDeadline,
-    spot_wallet: RepairDeadline,
+    balance: CoalescedDeadline,
+    spot_wallet: CoalescedDeadline,
     api_expiry: PollDeadline,
 }
 
@@ -255,8 +137,8 @@ impl AccountReconciliation {
     pub(super) fn new(now: Instant) -> Self {
         Self {
             orders: HashMap::new(),
-            balance: RepairDeadline::new(BALANCE_REPAIR_INTERVAL),
-            spot_wallet: RepairDeadline::new(SPOT_WALLET_REPAIR_INTERVAL),
+            balance: CoalescedDeadline::new(BALANCE_REPAIR_INTERVAL),
+            spot_wallet: CoalescedDeadline::new(SPOT_WALLET_REPAIR_INTERVAL),
             api_expiry: PollDeadline::new(API_EXPIRY_POLL_INTERVAL, now),
         }
     }
@@ -366,7 +248,7 @@ impl AccountReconciliation {
     /// ask again, because the Ready transition arrives as a lifecycle event that wakes the loop and
     /// calls [`Self::poll_api_expiry_on_ready`] itself.
     pub(super) fn defer_api_expiry(&mut self, now: Instant) {
-        self.api_expiry.defer(now, API_EXPIRY_POLL_INTERVAL);
+        self.api_expiry.defer(now);
     }
 
     /// Brings the API-key poll due when a core reaches Ready, unless one was just attempted.
