@@ -58,7 +58,11 @@ pub struct ScreenerRow {
     pub d_15m: f64,
     pub d_1m: f64,
     pub d_72h: f64,
-    /// Funding percentage (`funding_rate * 100`).
+    /// Funding percentage, as the wire already states it.
+    ///
+    /// NOT `funding_rate * 100`, which this column printed until 2026-08-24: the value arrives in
+    /// percent, so the multiplication showed a −23 % funding where the reference terminal showed
+    /// −0.23 %. See `super::source::funding_from_wire`.
     pub funding_pct: f64,
     /// Mark-price deviation from the last price, in percent; `None` if no mark price arrived.
     pub mark_delta_pct: Option<f64>,
@@ -141,7 +145,7 @@ impl MarketDataSource {
                     m.contract_size(),
                 )
                 .value,
-                funding_pct: m.funding_rate * 100.0,
+                funding_pct: m.funding_rate,
                 mark_delta_pct: (m.price.mark_price_found
                     && m.price.p_last > 0.0
                     && m.price.mark_price > 0.0)

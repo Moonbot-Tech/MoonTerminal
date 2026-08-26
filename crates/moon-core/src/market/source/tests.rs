@@ -240,3 +240,58 @@ fn a_long_leg_stays_long_when_the_direction_flag_is_absent() {
     assert_eq!(price, 100.0);
     assert_eq!(liq, 70.0);
 }
+
+/// The reference terminal's own reading of one market, captured beside ours (BICO on OKX Futures,
+/// 2026-08-24): rate `-0.2313`, next charge `7:53:37` away, on a machine at UTC+2.
+///
+/// Breakage: multiplying the rate printed `-23.13 %`, a funding no venue has ever charged; reading
+/// the time as UTC printed `9h 55m`, exactly one zone too far.
+#[test]
+fn the_funding_reading_matches_the_reference_terminal() {
+    let offset_ms = 2 * 3_600_000;
+    // The instant the core reported, expressed on the client's clock: two hours ahead of the UTC
+    // instant it means.
+    let due_utc_ms = 1_756_000_000_000;
+    let (pct, at_ms) = funding_from_wire(-0.2313, due_utc_ms + offset_ms, offset_ms);
+    assert_eq!(pct, Some(-0.2313), "the wire value is already a percentage");
+    assert_eq!(at_ms, Some(due_utc_ms), "the countdown is measured in UTC");
+}
+
+/// A machine at UTC needs no correction at all.
+#[test]
+fn a_utc_machine_reads_the_time_unchanged() {
+    let (_, at_ms) = funding_from_wire(0.01, 1_756_000_000_000, 0);
+    assert_eq!(at_ms, Some(1_756_000_000_000));
+}
+
+/// West of Greenwich the offset is negative, so the correction adds rather than subtracts.
+#[test]
+fn a_negative_offset_moves_the_other_way() {
+    let offset_ms = -5 * 3_600_000;
+    let due_utc_ms = 1_756_000_000_000;
+    let (_, at_ms) = funding_from_wire(0.01, due_utc_ms + offset_ms, offset_ms);
+    assert_eq!(at_ms, Some(due_utc_ms));
+}
+
+/// A venue that charges no funding says so with a zero TIME, and both halves must go quiet.
+///
+/// Breakage: testing the RATE instead hides a real zero — a futures market between charges — and
+/// prints "0.00 %" for a spot market, which claims funding here is free rather than absent.
+#[test]
+fn a_market_without_funding_reports_neither_half() {
+    assert_eq!(funding_from_wire(0.0, 0, 0), (None, None));
+    assert_eq!(funding_from_wire(0.01, -1, 0), (None, None));
+    // A real zero rate on a market that DOES charge funding still prints.
+    assert_eq!(
+        funding_from_wire(0.0, 1_756_000_000_000, 0),
+        (Some(0.0), Some(1_756_000_000_000))
+    );
+}
+
+/// A non-finite rate is dropped while the time survives: the countdown is still known.
+#[test]
+fn a_broken_rate_does_not_take_the_countdown_with_it() {
+    let (pct, at_ms) = funding_from_wire(f64::NAN, 1_756_000_000_000, 0);
+    assert_eq!(pct, None);
+    assert_eq!(at_ms, Some(1_756_000_000_000));
+}
