@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono_tz::Tz;
+use moon_core::db::ReportAxis;
 use moon_ui::{MoonDataTable, MoonDataTableState};
 use rusqlite::types::Value;
 
@@ -302,7 +303,8 @@ pub(super) fn ordered_visible_indices(
 ///     cols: Runtime report schema.
 ///     indices: Visible column indices in visual order.
 ///     selection: Controlled selected row set.
-///     zone: User-selected display time zone.
+///     axis: Time axis for replicated timestamp columns.
+///     display_zone: User-selected zone for terminal-written timestamp columns.
 ///
 /// Returns:
 ///     Header plus selected rows. Tabs and hard line breaks inside cells are flattened.
@@ -311,7 +313,8 @@ pub(super) fn selected_tsv(
     cols: &[String],
     indices: &[usize],
     selection: &ReportSelection,
-    zone: Tz,
+    axis: &ReportAxis,
+    display_zone: Tz,
 ) -> String {
     let mut lines = Vec::with_capacity(selection.len() + 1);
     lines.push(
@@ -326,13 +329,25 @@ pub(super) fn selected_tsv(
         if !selection.contains(data.row_keys.get(row_index).copied().flatten()) {
             continue;
         }
+        // Resolved per ROW, not once per copy: a multi-row selection routinely spans cores on
+        // different clocks, and one shared uid would correct every row by whichever core happened
+        // to come first. It comes from the PARALLEL array rather than the row, because `core_uid`
+        // is a service column the report schema does not carry -- the grid resolves it the same
+        // way in `columns::data_row`.
+        let core_uid = data.core_uids.get(row_index).copied().unwrap_or(0);
         lines.push(
             indices
                 .iter()
                 .filter_map(|index| {
                     let column = cols.get(*index)?;
                     let value = row.get(*index).unwrap_or(&Value::Null);
-                    Some(tsv_cell(&export::field_text(column, value, zone)))
+                    Some(tsv_cell(&export::field_text(
+                        column,
+                        value,
+                        axis,
+                        core_uid,
+                        display_zone,
+                    )))
                 })
                 .collect::<Vec<_>>()
                 .join("\t"),

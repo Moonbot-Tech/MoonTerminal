@@ -892,7 +892,12 @@ pub(crate) struct TradeInput {
     pub core_uid: i64,
     /// `newrecid` for typed rows or `db_id` for legacy rows.
     pub row_id: i64,
-    /// Close timestamp in Unix seconds.
+    /// Close timestamp in Unix seconds — the RAW replica value, exactly as `db::rep` stored it:
+    /// CORE-LOCAL wall clock per `report_axis`'s three-axis model, never corrected. Every identity
+    /// or ordering read of this field (`reconciliation_batch`'s keyset query and cursor, the
+    /// `trade_values` coverage join and upsert key, `trade_key`) depends on it staying untouched
+    /// from the moment it is decoded off the row. Only `worker::valuation_minute` may convert a
+    /// COPY of it to a true-UTC rate minute, and it must floor after converting, never before.
     pub closedate: i64,
     /// Persisted quote ordinal.
     pub quote_ordinal: i64,

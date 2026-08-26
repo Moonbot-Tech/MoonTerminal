@@ -1,6 +1,7 @@
 //! Report column-width persistence helpers.
 
 use super::*;
+use moon_core::db::ReportAxis;
 
 /// Rendering identity for one content-derived Report width batch.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,9 +50,14 @@ impl NaturalWidthsCache {
     /// Args:
     ///     cols: Complete runtime Report schema.
     ///     rows: Current formatted-data source.
+    ///     core_uids: Each row's core, PARALLEL to `rows`. Measurement must correct a replicated
+    ///         timestamp exactly as the renderer does, and `core_uid` is a service column the
+    ///         report schema does not carry, so it has to travel beside the rows.
     ///     visible: Columns currently rendered; newly shown columns are measured lazily.
     ///     p: Active palette used by cell formatting.
-    ///     zone: User-selected display time zone.
+    ///     axis: Time axis for replicated timestamp columns. Measurement MUST format
+    ///         exactly as the renderer does, or a column is sized for text it never paints.
+    ///     display_zone: User-selected zone for terminal-written timestamp columns.
     ///     cx: Application context used for text measurement and scale.
     ///
     /// Returns:
@@ -60,9 +66,11 @@ impl NaturalWidthsCache {
         &mut self,
         cols: &[String],
         rows: &[Vec<Value>],
+        core_uids: &[u64],
         visible: &[usize],
         p: MoonPalette,
-        zone: Tz,
+        axis: &ReportAxis,
+        display_zone: Tz,
         cx: &App,
     ) {
         let mut measurer = design::MonoBodyTextMeasurer::new(cx);
@@ -79,8 +87,16 @@ impl NaturalWidthsCache {
                     .is_some_and(|column| !self.widths.contains_key(column))
             })
             .collect();
-        self.widths
-            .extend(natural_widths(cols, rows, &missing, p, zone, &mut measurer));
+        self.widths.extend(natural_widths(
+            cols,
+            rows,
+            core_uids,
+            &missing,
+            p,
+            axis,
+            display_zone,
+            &mut measurer,
+        ));
     }
 }
 
@@ -93,9 +109,11 @@ impl NaturalWidthsCache {
 /// Args:
 ///     cols: Complete runtime Report schema.
 ///     rows: Current query rows in schema order.
+///     core_uids: Each row's core, PARALLEL to `rows`.
 ///     visible: Source-column indices requiring measurement.
 ///     p: Active palette used by cell formatting.
-///     zone: User-selected display time zone.
+///     axis: Time axis for replicated timestamp columns, matching the renderer exactly.
+///     display_zone: User-selected zone for terminal-written timestamp columns.
 ///     measurer: Exact per-refresh text measurer shared across every visible column.
 ///
 /// Returns:
@@ -103,9 +121,11 @@ impl NaturalWidthsCache {
 fn natural_widths(
     cols: &[String],
     rows: &[Vec<Value>],
+    core_uids: &[u64],
     visible: &[usize],
     p: MoonPalette,
-    zone: Tz,
+    axis: &ReportAxis,
+    display_zone: Tz,
     measurer: &mut design::MonoBodyTextMeasurer<'_>,
 ) -> std::collections::HashMap<String, f32> {
     visible
@@ -118,12 +138,21 @@ fn natural_widths(
             // columns cannot be measured light and then clip the wider glyphs they paint. Resolve it
             // once per column because it does not depend on row values.
             let weight = columns::cell_weight(column);
-            for row in rows.iter().take(query::MAX_REPORT_ROWS) {
+            for (row_index, row) in rows.iter().take(query::MAX_REPORT_ROWS).enumerate() {
                 let value = row.get(column_index).unwrap_or(&Value::Null);
                 // Measured with the row's own quote, exactly as the renderer formats it: a
                 // BTC-denominated row prints eight decimals, and measuring it at two would size the
                 // column to clip them.
-                let text = columns::cell(column, value, columns::row_quote(cols, row), p, zone).0;
+                let text = columns::cell(
+                    column,
+                    value,
+                    columns::row_quote(cols, row),
+                    p,
+                    axis,
+                    core_uids.get(row_index).copied().unwrap_or(0),
+                    display_zone,
+                )
+                .0;
                 width = width.max(measurer.text_width(&text, weight));
             }
             let (floor, ceiling) = width_bounds(column);

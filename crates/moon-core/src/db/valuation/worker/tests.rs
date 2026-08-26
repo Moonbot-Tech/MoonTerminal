@@ -3,6 +3,14 @@
 use super::*;
 use crate::db::valuation::{RateOrientation, RatePriceBasis, ResolvedRate};
 
+/// Time axis every worker call below resolves its rate minutes against.
+///
+/// Returns:
+///     The identity axis, which leaves a stored `closedate` exactly as the core wrote it.
+fn axis() -> ReportAxis {
+    ReportAxis::identity_core_local()
+}
+
 /// Provider boundary that fails a test if an invalidation-only event touches the network.
 struct NoNetwork;
 
@@ -310,6 +318,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
     let reset = process_event(
         &store,
         &NoNetwork,
+        &axis(),
         &reports,
         OutboxEvent {
             seq: 1,
@@ -345,6 +354,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
     let purge = process_event(
         &store,
         &NoNetwork,
+        &axis(),
         &reports,
         OutboxEvent {
             seq: 2,
@@ -380,6 +390,7 @@ fn hard_delete_removes_one_exact_prepared_identity() {
     let deleted = process_event(
         &store,
         &NoNetwork,
+        &axis(),
         &reports,
         OutboxEvent {
             seq: 1,
@@ -433,6 +444,7 @@ fn row_event_replaces_a_stale_deferred_copy() {
     let result = process_event(
         &store,
         &NoNetwork,
+        &axis(),
         &reports,
         OutboxEvent {
             seq: 1,
@@ -487,7 +499,7 @@ fn deferred_processing_yields_after_one_bounded_batch() {
     let generation = AtomicU64::new(0);
     let dirty = AtomicBool::new(false);
 
-    let turn = process_deferred(&store, &NoNetwork, &generation, &dirty, &mut deferred)
+    let turn = process_deferred(&store, &NoNetwork, &axis(), &generation, &dirty, &mut deferred)
         .expect("process one deferred batch");
 
     assert!(matches!(turn, StageTurn::Ran { more: true }));
@@ -513,7 +525,7 @@ fn unresolved_rate_remains_retryable_without_a_terminal_cache_entry() {
         spent_quote: Some(100.0),
     };
 
-    let result = prepare_trade(&store, &MissingSource, &input, false);
+    let result = prepare_trade(&store, &MissingSource, &axis(), &input, false);
     assert!(matches!(result, PrepareResult::Deferred { changed: false }));
     assert_eq!(
         super::super::cached_rate(&store, 8, minute).expect("read unresolved rate"),
@@ -544,7 +556,7 @@ fn exact_prefetch_misses_are_not_requested_again_per_row() {
     };
     let source = CountingSource::new(&[]);
 
-    let prefetched = prefetch_rates(&store, &source, std::slice::from_ref(&input))
+    let prefetched = prefetch_rates(&store, &source, &axis(), std::slice::from_ref(&input))
         .expect("prefetch exact routes");
     assert!(prefetched
         .canonical_exact_missing
@@ -552,7 +564,7 @@ fn exact_prefetch_misses_are_not_requested_again_per_row() {
     source.calls.lock().expect("clear prefetch calls").clear();
 
     assert!(matches!(
-        prepare_trade(&store, &source, &input, true),
+        prepare_trade(&store, &source, &axis(), &input, true),
         PrepareResult::Deferred { .. }
     ));
     assert!(source
@@ -587,7 +599,7 @@ fn due_retry_values_the_row_when_a_successor_appears() {
         spent_quote: Some(100.0),
     };
     assert!(matches!(
-        prepare_trade(&store, &MissingSource, &input, false),
+        prepare_trade(&store, &MissingSource, &axis(), &input, false),
         PrepareResult::Deferred { changed: false }
     ));
     store
@@ -602,7 +614,7 @@ fn due_retry_values_the_row_when_a_successor_appears() {
     let key = trade_key(&input);
     let mut deferred = BTreeMap::from([(key, input)]);
 
-    process_deferred(&store, &source, &generation, &dirty, &mut deferred)
+    process_deferred(&store, &source, &axis(), &generation, &dirty, &mut deferred)
         .expect("process due successor");
 
     assert!(deferred.is_empty());
@@ -694,7 +706,7 @@ fn reconciliation_restores_pending_rows_without_bypassing_the_retry_boundary() {
     assert_eq!(pending.len(), 1);
     let store = super::super::open_store(&path).expect("reopen valuation fixture");
     let deferred = BTreeMap::from([(trade_key(&pending[0]), pending[0].clone())]);
-    assert!(!current_minute_closed_any(&store, &deferred));
+    assert!(!current_minute_closed_any(&store, &axis(), &deferred));
     drop(store);
     drop(reports);
     std::fs::remove_dir_all(&dir).expect("remove reconciliation fixture directory");
@@ -1521,5 +1533,101 @@ fn a_refresh_that_outlived_the_window_wakes_the_surfaces_at_an_unchanged_price()
         generation.load(Ordering::Relaxed),
         2,
         "a quote re-entering the freshness window changes what renders, price or no price"
+    );
+}
+
+/// Build a minimal trade input carrying only what `valuation_minute` reads.
+///
+/// Args:
+///     closedate: Core-local stored value to convert.
+///     core_uid: Core identity the axis resolves an offset for.
+///
+/// Returns:
+///     A trade input otherwise irrelevant to the funnel itself.
+fn minute_input(closedate: i64, core_uid: i64) -> TradeInput {
+    TradeInput {
+        source: TradeSource::Typed,
+        core_uid,
+        row_id: 1,
+        closedate,
+        quote_ordinal: 8,
+        profit_quote: 1.0,
+        spent_quote: None,
+    }
+}
+
+/// On the identity axis, `valuation_minute` must reproduce the raw floor exactly — including for a
+/// negative `closedate` and one that is not a whole minute, which is where a plain `/` would round
+/// toward zero instead of toward negative infinity and silently diverge from `div_euclid`.
+///
+/// The expected minute below is computed by hand for each case, independently of the
+/// implementation's own `div_euclid` call, rather than by re-running the same formula under test.
+#[test]
+fn identity_axis_reproduces_the_raw_div_euclid_floor() {
+    let axis = axis();
+    let cases = [
+        // A whole-minute closedate: the ordinary case.
+        (1_700_000_040_i64, 1_700_000_040_i64),
+        // Not a whole minute: 1_700_000_075 = 1_700_000_040 + 35.
+        (1_700_000_075_i64, 1_700_000_040_i64),
+        // Negative and not a whole minute: -125 = -180 + 55, so a truncating `/` would give -120.
+        (-125_i64, -180_i64),
+        // Negative and exactly on a minute boundary.
+        (-120_i64, -120_i64),
+    ];
+    for (closedate, expected_minute) in cases {
+        let input = minute_input(closedate, 1);
+        assert_eq!(
+            valuation_minute(&axis, &input),
+            expected_minute,
+            "identity axis must floor closedate={closedate} toward {expected_minute}"
+        );
+    }
+}
+
+/// On an axis carrying a real measured offset, `valuation_minute` must convert `closedate` to true
+/// UTC BEFORE flooring to the minute, not floor the core-local value and then translate it.
+///
+/// The two orders only disagree when the offset itself is not a whole number of minutes — an
+/// offset that IS minute-aligned cancels out of the floor either way. Real civil-time offsets are
+/// almost always minute-aligned, but not always: Liberia used UTC-00:44:30 (-2670 seconds) until
+/// 1972, and that shape is exactly what exposes a `floor(closedate) - offset` regression here.
+#[test]
+fn a_non_minute_aligned_offset_converts_before_it_floors() {
+    const CORE_UID: u64 = 7;
+    const OFFSET_SECS: i32 = -2_670; // UTC-00:44:30, historical Liberia Mean Time.
+    let mut measured = std::collections::HashMap::new();
+    measured.insert(
+        CORE_UID,
+        vec![crate::db::OffsetSegment {
+            from_utc: 0,
+            offset_secs: OFFSET_SECS,
+        }],
+    );
+    let offset_axis = ReportAxis::from_measured(measured, chrono_tz::Tz::UTC);
+
+    // Chosen so closedate.div_euclid(60)*60 != (closedate - OFFSET_SECS).div_euclid(60)*60 —
+    // the two candidate implementations must actually disagree here, or the assertion below would
+    // pass for the wrong reason.
+    let closedate = 1_700_000_050_i64;
+    let input = minute_input(closedate, CORE_UID as i64);
+
+    let true_utc = closedate - i64::from(OFFSET_SECS);
+    let convert_then_floor = true_utc.div_euclid(60) * 60;
+    let floor_then_convert = (closedate.div_euclid(60) * 60) - i64::from(OFFSET_SECS);
+    assert_ne!(
+        convert_then_floor, floor_then_convert,
+        "fixture must straddle a minute boundary under this offset, or it proves nothing"
+    );
+
+    assert_eq!(
+        valuation_minute(&offset_axis, &input),
+        convert_then_floor,
+        "valuation_minute must convert to true UTC before flooring to the minute"
+    );
+    assert_ne!(
+        valuation_minute(&offset_axis, &input),
+        closedate.div_euclid(60) * 60,
+        "a measured offset must actually move the rate-key minute away from the raw closedate"
     );
 }

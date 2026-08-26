@@ -302,7 +302,7 @@ impl ReportPanel {
         // that period still reaches the present must not straddle a second boundary, or a query can
         // ask for a window ending before the instant it just judged to be inside it.
         let now = moon_core::util::time::now_unix_secs() as i64;
-        let (pfrom, pto) = self.period.range_at(now, self.display_zone);
+        let (pfrom, pto) = self.period.range_at(now, self.bound_zone());
         let date_from = pfrom.or(self.from_query);
         // The upper field names a whole minute and the SQL bound is inclusive, so it reaches that
         // minute's last second: "from 04.08 00:00 to 04.08 23:59" is the whole day, and an equal
@@ -326,7 +326,10 @@ impl ReportPanel {
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
-            rows: super::row_scope_for(self.closed_only, self.show_open, date_to, now),
+            rows: super::row_scope_for(self.closed_only, self.show_open),
+            // The SAME axis the cells are rendered on, so a window can never be built on one axis
+            // while a timestamp inside it is printed on another.
+            axis: self.report_axis(),
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
             strategy_name_mask,
             // Read from the backend at build time rather than mirrored into the panel: the rows,

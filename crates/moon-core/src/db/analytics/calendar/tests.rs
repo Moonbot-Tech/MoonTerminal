@@ -108,7 +108,7 @@ fn calendar_bucket_uses_the_selected_civil_day() {
     let close = 1_774_740_600; // 2026-03-28 23:30 UTC = 2026-03-29 00:30 Warsaw.
     let c = seed(&[(close, 1, 7.0)]);
     let q = Query {
-        time_zone: chrono_tz::Europe::Warsaw,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
         from: 1_774_735_200,
         to: 1_774_828_800,
         ..Default::default()

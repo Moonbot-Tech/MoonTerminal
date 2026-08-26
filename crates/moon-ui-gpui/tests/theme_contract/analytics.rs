@@ -879,8 +879,7 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     }
     let filter = braced_body(&report_query, "pub(super) fn filter(");
     assert!(
-        filter
-            .contains("rows: super::row_scope_for(self.closed_only, self.show_open, date_to, now)")
+        filter.contains("rows: super::row_scope_for(self.closed_only, self.show_open)")
             && filter.contains("strategies: normalized_strategy_filter_keys(")
             && filter.contains("self.selected_strategies.as_ref()"),
         "rows, totals, and export must share the stale-safe exact multi-strategy filter"

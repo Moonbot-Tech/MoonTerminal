@@ -4,7 +4,8 @@ use moon_core::feed::{ConnStatus, Diagnosis};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
-use super::model::{ApiKeyState, GroupVersion};
+use super::model::{ApiKeyState, GroupVersion, TzOffsetGroup};
+use super::time_offset::{TzOffsetCell, tz_offset_cell_text};
 use crate::backend::core_warn::LatencySeverity;
 use crate::conn_diag::fault_short;
 
@@ -172,6 +173,28 @@ pub(super) fn version_group_text(version: GroupVersion) -> String {
         GroupVersion::Uniform(version) => moon_core::util::fmt::core_build(version),
         GroupVersion::Mixed => "\u{2026}".to_string(),
         GroupVersion::Absent => "-".to_string(),
+    }
+}
+
+/// Format a server row's rolled-up clock offset.
+///
+/// `Mixed` is the same ellipsis [`version_group_text`] uses for a disagreeing build: it carries
+/// exactly one instruction — expand the group — and neither a number nor the never-measured marker
+/// would say that. `Absent` reuses the never-measured cell text: no core on the server has ever
+/// measured an offset, which is exactly what a lone `Unknown` core also means.
+///
+/// Args:
+///     group: The server's rolled-up agreement state.
+///
+/// Returns:
+///     The text to show on the collapsed server row.
+pub(super) fn tz_offset_group_text(group: TzOffsetGroup) -> String {
+    match group {
+        TzOffsetGroup::Uniform(offset_secs) => {
+            tz_offset_cell_text(TzOffsetCell::Measured { offset_secs })
+        }
+        TzOffsetGroup::Mixed => "\u{2026}".to_string(),
+        TzOffsetGroup::Absent => tz_offset_cell_text(TzOffsetCell::Unknown),
     }
 }
 

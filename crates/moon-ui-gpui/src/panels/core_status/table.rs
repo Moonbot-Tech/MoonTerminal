@@ -12,6 +12,7 @@ use super::presentation::{
     api_expiry_text, connection_presentation, memory_u16, percent, ping, version_text,
 };
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
+use super::time_offset::{tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip};
 use super::*;
 use crate::conn_diag::{fault_facts, fault_tooltip};
 use gpui::prelude::FluentBuilder;
@@ -68,6 +69,10 @@ fn columns() -> Vec<MoonDataTableColumn> {
         // Left-aligned, unlike the metrics around it: the cell is a phrase ("за 8.4 с", "3/8 · 12.4 с"),
         // not a figure to align on the digit.
         MoonDataTableColumn::new("startup", t!("core_status.col.startup").to_string(), 110.0)
+            .sortable(true),
+        // Left-aligned like `startup`, right after it: the cell is a short phrase (`UTC+02:00`) or
+        // the localized never-measured marker, not a figure to align on the digit.
+        MoonDataTableColumn::new("tz_off", t!("core_status.col.tz_off").to_string(), 110.0)
             .sortable(true),
     ]
 }
@@ -173,6 +178,7 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(count(sys.logical_cpu_count)),
         MoonDataCell::text(api_expiry_text(r.api_key)),
         MoonDataCell::element(startup_hover_cell(r)),
+        MoonDataCell::element(tz_offset_hover_cell(r)),
     ])
 }
 
@@ -344,6 +350,22 @@ fn startup_hover_cell(r: &CoreStatusRow) -> Stateful<Div> {
         .child(startup_cell_text(startup_cell(&r.status, &r.startup)))
         .tooltip(crate::panels::common::text_tooltip(startup_tooltip(
             &startup_facts(&r.startup),
+        )))
+}
+
+/// The tz-offset cell, with the same structured hover the by-IP tree shows for a core row.
+///
+/// Args:
+///     r: The row being rendered.
+///
+/// Returns:
+///     The cell element.
+fn tz_offset_hover_cell(r: &CoreStatusRow) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("cs-tz-off-{}", r.id)))
+        .child(tz_offset_cell_text(tz_offset_cell(&r.time_offset)))
+        .tooltip(crate::panels::common::text_tooltip(tz_offset_tooltip(
+            &tz_offset_facts(&r.time_offset),
         )))
 }
 

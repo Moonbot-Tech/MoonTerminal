@@ -286,6 +286,29 @@ impl AnalyticsView {
         row.into_any_element()
     }
 
+    /// One-line caption above the schedule grid: the hour windows below are computed and applied
+    /// on the CORE's own clock, which the user decided must never be silently ambiguous — the
+    /// hours it shows may not match the clock on the user's screen. Reuses the compact-caption
+    /// chrome `time_ignore_row` already established rather than inventing a second one.
+    ///
+    /// Args:
+    ///     p: Active Moon palette used for the caption colour.
+    ///     cx: GPUI context used to resolve caption spacing and typography.
+    ///
+    /// Returns:
+    ///     The schedule-grid caption element.
+    fn core_clock_note(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        div()
+            .w_full()
+            .flex_none()
+            .px(design::ui_px(cx, 12.0))
+            .py(design::ui_px(cx, 3.0))
+            .text_size(design::t_caption(cx))
+            .text_color(moon(p.text_soft))
+            .child(t!("analytics.tuner.time.core_clock_note").to_string())
+            .into_any_element()
+    }
+
     /// Field-bound input with a lazy cache (the tuner's `bound_input` pattern).
     fn time_input(
         &mut self,
@@ -340,6 +363,7 @@ impl AnalyticsView {
         );
         let cfg_row = self.shell_config_row(TunerKind::Time, p, window, cx);
         let ignore_row = self.time_ignore_row(p, cx);
+        let clock_note = self.core_clock_note(p, cx);
 
         let head_cell = |label: String| {
             div()
@@ -461,6 +485,7 @@ impl AnalyticsView {
             .child(header)
             .child(cfg_row)
             .child(ignore_row)
+            .child(clock_note)
             .child(
                 div()
                     .id("tt-params-scroll")

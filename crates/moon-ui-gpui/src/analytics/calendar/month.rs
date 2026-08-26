@@ -63,7 +63,7 @@ impl AnalyticsView {
             .filter(|d| d.has_activity())
             .map(|d| d.totals.profit.abs())
             .fold(0.0f64, f64::max);
-        let today = today_start(self.display_zone);
+        let today = today_start(self.bound_zone());
 
         let map: HashMap<i64, &DayCell> = days.iter().map(|d| (d.start, d)).collect();
         v_flex()
@@ -226,8 +226,8 @@ impl AnalyticsView {
             );
         }
 
-        let first = month_start(y, m, self.display_zone);
-        let first_date = date_of(first, self.display_zone);
+        let first = month_start(y, m, self.bound_zone());
+        let first_date = date_of(first, self.bound_zone());
         let lead = first_date.weekday().num_days_from_monday() as i64;
         let anchor = moon_core::util::display_time::shift_date(first_date, -lead);
         let ndays = days_in_month(y, m) as usize;
@@ -238,7 +238,7 @@ impl AnalyticsView {
             let mut rowel = h_flex().flex_1().w_full().gap(cell_gap);
             for col in 0..7 {
                 let dt = moon_core::util::display_time::shift_date(anchor, (row * 7 + col) as i64);
-                let t = super::super::exact_secs_of_day(dt, self.display_zone);
+                let t = super::super::exact_secs_of_day(dt, self.bound_zone());
                 let dom = dt.day();
                 let in_month = dt.month() == m && dt.year() == y;
                 let is_future = t.is_some_and(|start| start > today);

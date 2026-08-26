@@ -24,6 +24,7 @@ mod startup;
 mod table;
 #[cfg(test)]
 mod tests;
+mod time_offset;
 mod warnings;
 
 pub(crate) use presentation::connection_status_text;

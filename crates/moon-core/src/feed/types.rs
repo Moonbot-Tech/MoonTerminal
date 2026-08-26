@@ -936,9 +936,42 @@ impl MarketDirty {
 /// core. Market ticks, order books, and price lines do not travel through this channel: the feed
 /// thread publishes them to MoonProto/MarketStore and sends only a lightweight
 /// [`MarketDataChanged`] wake-up for consumer-side pulling.
+/// One core's measured clock offset, as the UI is allowed to see it.
+///
+/// `offset_secs` is `None` for a core nothing has ever been measured on, and that is deliberately
+/// NOT the same fact as `Some(0)`: a diagnosis surface must be able to say "never measured" rather
+/// than claim the core runs on UTC. Every field beside it exists so the surface can say WHY it
+/// believes the number — how many samples, how long ago, and from which source — because an
+/// unexplained four-hour correction on a trade list is indistinguishable from a bug.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoreTimeOffsetStatus {
+    /// Seconds east of UTC on the core's own clock, or `None` when nothing was ever adopted.
+    pub offset_secs: Option<i32>,
+    /// True-UTC instant of the observation that adopted it, in milliseconds.
+    pub observed_at_utc: i64,
+    /// Samples standing behind the adopted value.
+    pub samples: u32,
+    /// Which measurement produced it.
+    pub source: crate::session::core_time_offset::OffsetSource,
+}
+
 #[derive(Debug, Clone)]
 pub enum FeedMsg {
     Status(ConnStatus),
+    /// A core's clock offset was measured and its durable write has already been HANDED to the
+    /// report writer.
+    ///
+    /// Emission is durability-ORDERED, which is a weaker promise than durability-confirmed and is
+    /// stated that way on purpose: no acknowledgement path back from the writer exists. The feed
+    /// sends `DbMsg::CoreTimeOffset` first and this message second, and it sends this one ONLY
+    /// when a report sink exists at all — a core replicating nothing would otherwise have the
+    /// panel claim a correction that reaches no table and vanishes on the next restart. The
+    /// writer applies its queue strictly in send order, so nothing sent afterwards can reach the
+    /// report table ahead of the segment. What remains is a window of the writer's own queue
+    /// latency in which the panel names an offset that is not yet on disk, and a failed writer
+    /// transaction leaves the panel briefly ahead of the data until the next restart re-seeds it
+    /// from that same table. Bounded and self-correcting; do not read this as a commit receipt.
+    TimeOffset(CoreTimeOffsetStatus),
     /// Network endpoint selected from the exported MoonBot key before the connection attempt.
     ///
     /// The live feed publishes this domain value after parsing the key so UI consumers never need

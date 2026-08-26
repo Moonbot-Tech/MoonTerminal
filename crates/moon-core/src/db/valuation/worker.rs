@@ -1,4 +1,30 @@
 //! Dedicated report reconciliation and historical-rate worker.
+//!
+//! # Which `closedate` reads pass through the time axis, and which never may
+//!
+//! A report row's `closedate` is CORE-LOCAL wall clock ([`crate::db::report_axis`]), while the
+//! spot-rate series this worker keys into is genuinely UTC. Every derivation of a RATE MINUTE
+//! therefore goes through the one seam [`valuation_minute`], against the single [`ReportAxis`]
+//! bound in [`run_worker`]. There is no second derivation: a new one is a new bug on a skewed
+//! core, which is why the funnel is a named function rather than a convention.
+//!
+//! The opposite half is just as load-bearing. Reads that use `closedate` as IDENTITY or ORDERING
+//! stay on the RAW column permanently and must never be routed through the axis:
+//!
+//! - [`reconciliation_batch`]'s keyset query and its `(closedate, core_uid, row_id)` descending
+//!   cursor. Its total monotonicity is what makes the walk terminate exactly once; correcting the
+//!   column would reorder rows under a cursor already past them, so a batch would be re-visited or
+//!   skipped outright — and a better offset estimate later would do it again to all of history.
+//! - The `v.closedate = r.closedate` coverage join and the `trade_values` upsert key
+//!   (`super::coverage_sql`, `super::store_trade_value`). Both sides of that comparison are the
+//!   stored value; converting one of them matches nothing.
+//! - [`trade_key`], the in-memory deferred-row identity.
+//!
+//! `moon-core/tests/valuation_never_routed_contract.rs` anchors on the exact source text of all
+//! four, so routing one of them through the axis reddens rather than silently costing a
+//! reconciliation pass. It is a source-text test because all four sit in private items an
+//! integration test cannot reach; the funnel's own behaviour — [`valuation_minute`] converting
+//! before it floors — is asserted properly in `worker/tests.rs`, which can see it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,7 +41,7 @@ use super::resolver::resolve_historical_rate;
 use super::{
     HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput, TradeSource,
 };
-use crate::db::{DbMsg, ReadFail, ReadResult, ReportTx};
+use crate::db::{DbMsg, ReadFail, ReadResult, ReportAxis, ReportTx};
 use crate::util::now_unix_ms_i64;
 
 /// Number of report rows reconciled before publishing progress and yielding to durable outbox work.
@@ -429,6 +455,14 @@ fn run_worker(
     initial_store: Option<Connection>,
 ) {
     let mut store = initial_store;
+    // The one axis every rate-minute derivation in this worker resolves against.
+    //
+    // Seeded as the identity and REFRESHED by the two stages that open a report reader of their
+    // own — see `refresh_axis`. It is not loaded once here because a measured offset arrives while
+    // this worker is already running: the writer that stores a segment also stages a rescan for
+    // that core, so the rows arrive at a stage that must already be on the new axis to value them
+    // at the right minute.
+    let mut axis = ReportAxis::identity_core_local();
     let mut deferred: BTreeMap<(i64, i64, i64), TradeInput> = BTreeMap::new();
     let mut reconciliation = Some(ReconcileState::new());
     let mut pending_ack = None;
@@ -518,6 +552,7 @@ fn run_worker(
                     reconcile_step(
                         store_ref,
                         source.as_ref(),
+                        &mut axis,
                         &generation,
                         &dirty,
                         &mut deferred,
@@ -542,6 +577,7 @@ fn run_worker(
                 consume_outbox(
                     store_ref,
                     source.as_ref(),
+                    &mut axis,
                     &report_tx,
                     &generation,
                     &dirty,
@@ -558,7 +594,7 @@ fn run_worker(
             Attempt::Done(StageTurn::Ran { more: true }) => continue,
             _ => {}
         }
-        if current_minute_closed_any(store_ref, &deferred) {
+        if current_minute_closed_any(store_ref, &axis, &deferred) {
             match attempt(
                 &mut status,
                 &mut sink,
@@ -569,6 +605,7 @@ fn run_worker(
                     process_deferred(
                         store_ref,
                         source.as_ref(),
+                        &axis,
                         &generation,
                         &dirty,
                         &mut deferred,
@@ -840,6 +877,7 @@ fn note_failure(
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
 ///     deferred: Current-minute rows retained until their candle closes.
@@ -850,6 +888,7 @@ fn note_failure(
 fn reconcile_step(
     store: &Connection,
     source: &dyn SpotRateSource,
+    axis: &mut ReportAxis,
     generation: &AtomicU64,
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
@@ -863,6 +902,7 @@ fn reconcile_step(
             Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
             Err(error) => return Err(report_fault(error)),
         };
+        refresh_axis(&conn, axis)?;
         let inputs = reconciliation_batch(&conn, trade_source, state.after, RECONCILE_BATCH)
             .map_err(report_fault)?;
         if inputs.is_empty() {
@@ -870,14 +910,18 @@ fn reconcile_step(
             state.after = None;
             continue;
         }
-        let prefetched =
-            settle_prefetch(prefetch_rates(store, source, &inputs), generation, dirty)?;
+        let prefetched = settle_prefetch(
+            prefetch_rates(store, source, axis, &inputs),
+            generation,
+            dirty,
+        )?;
         let mut changed = prefetched.changed;
         for input in &inputs {
-            let minute = input.closedate.div_euclid(60) * 60;
+            let minute = valuation_minute(axis, input);
             match prepare_trade(
                 store,
                 source,
+                axis,
                 input,
                 prefetched
                     .canonical_exact_missing
@@ -923,6 +967,7 @@ fn reconcile_step(
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     report_tx: Sole report writer used for acknowledgement.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
@@ -934,6 +979,7 @@ fn reconcile_step(
 fn consume_outbox(
     store: &Connection,
     source: &dyn SpotRateSource,
+    axis: &mut ReportAxis,
     report_tx: &ReportTx,
     generation: &AtomicU64,
     dirty: &AtomicBool,
@@ -945,6 +991,7 @@ fn consume_outbox(
         Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
         Err(error) => return Err(report_fault(error)),
     };
+    refresh_axis(&conn, axis)?;
     let batch = super::read_outbox(&conn, OUTBOX_BATCH).map_err(report_fault)?;
     let batch_was_full = batch.len() == OUTBOX_BATCH;
     let events = unacknowledged_events(&batch, pending_ack);
@@ -962,7 +1009,7 @@ fn consume_outbox(
         }
     }
     let prefetched = settle_prefetch(
-        prefetch_rates(store, source, &row_inputs),
+        prefetch_rates(store, source, axis, &row_inputs),
         generation,
         dirty,
     )?;
@@ -972,6 +1019,7 @@ fn consume_outbox(
         match process_event(
             store,
             source,
+            axis,
             &conn,
             *event,
             deferred,
@@ -1016,6 +1064,7 @@ fn consume_outbox(
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     reports: Report reader observing the committed event.
 ///     event: Ordered durable outbox event.
 ///     deferred: Current-minute rows retained until their candle closes.
@@ -1026,6 +1075,7 @@ fn consume_outbox(
 fn process_event(
     store: &Connection,
     source: &dyn SpotRateSource,
+    axis: &ReportAxis,
     reports: &Connection,
     event: OutboxEvent,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
@@ -1037,10 +1087,11 @@ fn process_event(
             deferred.remove(&key);
             match load_trade(reports, event.source, event.core_uid, event.row_id) {
                 Ok(Some(input)) => {
-                    let minute = input.closedate.div_euclid(60) * 60;
+                    let minute = valuation_minute(axis, &input);
                     match prepare_trade(
                         store,
                         source,
+                        axis,
                         &input,
                         canonical_exact_missing.contains(&(input.quote_ordinal, minute)),
                     ) {
@@ -1073,6 +1124,7 @@ fn process_event(
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     input: Complete current report inputs.
 ///     canonical_exact_prefetched: Whether canonical direct/inverse exact routes were absent.
 ///
@@ -1081,10 +1133,11 @@ fn process_event(
 fn prepare_trade(
     store: &Connection,
     source: &dyn SpotRateSource,
+    axis: &ReportAxis,
     input: &TradeInput,
     canonical_exact_prefetched: bool,
 ) -> PrepareResult {
-    let minute_utc = input.closedate.div_euclid(60) * 60;
+    let minute_utc = valuation_minute(axis, input);
     if minute_utc >= current_minute_utc() {
         return PrepareResult::Deferred { changed: false };
     }
@@ -1182,6 +1235,7 @@ fn prepare_trade(
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     inputs: Current report inputs about to be prepared.
 ///
 /// Returns:
@@ -1189,6 +1243,7 @@ fn prepare_trade(
 fn prefetch_rates(
     store: &Connection,
     source: &dyn SpotRateSource,
+    axis: &ReportAxis,
     inputs: &[TradeInput],
 ) -> Result<PrefetchOutcome, PrefetchError> {
     let current = current_minute_utc();
@@ -1196,7 +1251,7 @@ fn prefetch_rates(
     let mut seen = BTreeSet::new();
     let mut changed = false;
     for input in inputs {
-        let minute = input.closedate.div_euclid(60) * 60;
+        let minute = valuation_minute(axis, input);
         if !seen.insert((input.quote_ordinal, minute)) {
             continue;
         }
@@ -1966,6 +2021,7 @@ fn delete_partition(store: &Connection, source: TradeSource, core_uid: i64) -> P
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
 ///     deferred: Current-minute rows retained by identity.
@@ -1975,6 +2031,7 @@ fn delete_partition(store: &Connection, source: TradeSource, core_uid: i64) -> P
 fn process_deferred(
     store: &Connection,
     source: &dyn SpotRateSource,
+    axis: &ReportAxis,
     generation: &AtomicU64,
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
@@ -1984,7 +2041,7 @@ fn process_deferred(
     let keys = deferred
         .iter()
         .filter(|(_, input)| {
-            let minute = input.closedate.div_euclid(60) * 60;
+            let minute = valuation_minute(axis, input);
             minute < current && !blocked.contains(&(input.quote_ordinal, minute))
         })
         .map(|(key, _)| *key)
@@ -1994,16 +2051,21 @@ fn process_deferred(
         .iter()
         .filter_map(|key| deferred.get(key).cloned())
         .collect::<Vec<_>>();
-    let prefetched = settle_prefetch(prefetch_rates(store, source, &inputs), generation, dirty)?;
+    let prefetched = settle_prefetch(
+        prefetch_rates(store, source, axis, &inputs),
+        generation,
+        dirty,
+    )?;
     let mut changed = prefetched.changed;
     for key in &keys {
         let Some(input) = deferred.get(key).cloned() else {
             continue;
         };
-        let minute = input.closedate.div_euclid(60) * 60;
+        let minute = valuation_minute(axis, &input);
         match prepare_trade(
             store,
             source,
+            axis,
             &input,
             prefetched
                 .canonical_exact_missing
@@ -2030,7 +2092,7 @@ fn process_deferred(
         publish(generation, dirty);
     }
     Ok(StageTurn::Ran {
-        more: current_minute_closed_any(store, deferred),
+        more: current_minute_closed_any(store, axis, deferred),
     })
 }
 
@@ -2038,18 +2100,20 @@ fn process_deferred(
 ///
 /// Args:
 ///     store: Open valuation store carrying persisted retry boundaries.
+///     axis: Per-core time axis rate minutes are resolved against.
 ///     deferred: Current-minute and unresolved rows retained by identity.
 ///
 /// Returns:
 ///     `true` when at least one row can now be retried.
 fn current_minute_closed_any(
     store: &Connection,
+    axis: &ReportAxis,
     deferred: &BTreeMap<(i64, i64, i64), TradeInput>,
 ) -> bool {
     let current = current_minute_utc();
     let blocked = super::blocked_rate_searches(store, now_unix_ms_i64()).unwrap_or_default();
     deferred.values().any(|input| {
-        let minute = input.closedate.div_euclid(60) * 60;
+        let minute = valuation_minute(axis, input);
         minute < current && !blocked.contains(&(input.quote_ordinal, minute))
     })
 }
@@ -2073,6 +2137,48 @@ fn trade_key(input: &TradeInput) -> (i64, i64, i64) {
 fn publish(generation: &AtomicU64, dirty: &AtomicBool) {
     generation.fetch_add(1, Ordering::AcqRel);
     dirty.store(true, Ordering::Release);
+}
+
+/// Refresh the worker's axis from a report reader it already has open.
+///
+/// FAILS the stage rather than falling back to the identity axis. On a core running behind UTC the
+/// identity axis picks the wrong hour's spot rate, so an unreadable measurement must stop the
+/// valuation pass, not quietly value the trades at a price they never traded at. A stage that
+/// cannot read the replica is already a stage that has nothing to reconcile.
+///
+/// Args:
+///     conn: Report reader this stage opened.
+///     axis: The worker's axis, replaced in place.
+///
+/// Returns:
+///     Nothing, or the classified read failure that must stop this stage.
+fn refresh_axis(conn: &Connection, axis: &mut ReportAxis) -> Result<(), FaultCause> {
+    // Loaded at UTC on purpose, and NOT at the axis's own current zone. A display zone is a
+    // rendering concern and this worker renders nothing: it needs the per-core OFFSETS and nothing
+    // else. Asking for the zone here would also put a second `axis.` call in this file, which the
+    // never-routed contract test counts — and it counts it precisely so that a new route through
+    // the axis has to be looked at rather than absorbed.
+    *axis = ReportAxis::load(conn, chrono_tz::Tz::UTC).map_err(report_fault)?;
+    Ok(())
+}
+
+/// Resolve the spot-rate minute one trade values at.
+///
+/// The ONE place a report row's `closedate` becomes a rate key. The stored value is core-local
+/// wall clock while the rate series is true UTC, so the axis converts before the minute is
+/// floored — flooring first would round on the wrong side of the boundary for an offset that is
+/// not a whole number of minutes. On the identity axis this is exactly the raw floor it replaced.
+///
+/// Args:
+///     axis: Per-core time axis the stored timestamp is corrected by.
+///     input: Complete current report inputs for one trade.
+///
+/// Returns:
+///     Start of the trade's minute in true UTC seconds.
+fn valuation_minute(axis: &ReportAxis, input: &TradeInput) -> i64 {
+    axis.to_utc(input.closedate, input.core_uid as u64)
+        .div_euclid(60)
+        * 60
 }
 
 /// Current UTC minute start in Unix seconds.

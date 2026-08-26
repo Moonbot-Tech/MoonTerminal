@@ -695,6 +695,10 @@ impl ReportPanel {
             &self.cols,
             &indices,
             &self.selection,
+            // The SAME axis the grid renders on: a copied row and the row it was copied from
+            // must not disagree, which they would the moment one of the two stopped being
+            // corrected.
+            &self.report_axis(),
             self.display_zone,
         );
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -877,7 +881,13 @@ impl ReportPanel {
         }
         let requested_scope = self.export_scope_identity(cx);
         let suggested_filter = self.filter(cx);
-        let suggested = export::suggested_name(&suggested_filter, fmt, all_cols, self.display_zone);
+        let suggested = export::suggested_name(
+            &suggested_filter,
+            fmt,
+            all_cols,
+            &self.report_axis(),
+            self.display_zone,
+        );
         let handle = window.window_handle();
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
         cx.spawn(async move |this, cx| {
@@ -913,7 +923,19 @@ impl ReportPanel {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
                 .spawn(async move {
-                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc, zone)
+                    export::run(
+                        &path,
+                        fmt,
+                        &cols,
+                        &filter,
+                        &sort_key,
+                        sort_desc,
+                        // Taken off the FILTER, not rebuilt: this runs on a background thread
+                        // after the panel was last read, and the export must be stamped on the
+                        // same axis the query that produced its rows was built on.
+                        &filter.axis,
+                        zone,
+                    )
                         .map(|n| (n, path))
                 })
                 .await;

@@ -249,6 +249,18 @@ pub struct CoreData {
     /// Advances only when the reduced news snapshot changes, gating the News panel without
     /// repainting for duplicate frames that reduce to the same logical set.
     pub news_rev: u64,
+    /// This core's measured clock offset, as last committed to the replica.
+    ///
+    /// Deliberately NOT cleared by [`Self::begin_connection_attempt`], unlike `sys`, `startup` and
+    /// `clock_skew`. Those describe an EPISODE — how this connection came up, how far its clock
+    /// drifted while it ran — and a new episode invalidates them. This describes the MACHINE: the
+    /// time zone its wall clock is set to does not change because the socket dropped, and every
+    /// report row already on disk was written on it. Clearing it would make a fleet's trade times
+    /// jump back to the uncorrected axis on every reconnect and then quietly return, which is
+    /// exactly the flicker the durable table exists to prevent.
+    pub time_offset: crate::feed::CoreTimeOffsetStatus,
+    /// Advances when the offset above changes, gating the Core Status column that renders it.
+    pub time_offset_rev: u64,
 }
 
 impl CoreData {
@@ -304,6 +316,8 @@ impl CoreData {
             sys_rev: 0,
             startup_rev: 0,
             news_rev: 0,
+            time_offset: crate::feed::CoreTimeOffsetStatus::default(),
+            time_offset_rev: 0,
         }
     }
 
@@ -437,6 +451,16 @@ impl CoreData {
     ///     Nothing; retained state and the relevant revision counter update in place.
     pub fn apply(&mut self, msg: FeedMsg) {
         match msg {
+            FeedMsg::TimeOffset(status) => {
+                // Compare before bumping, the same way every other polled counter here does: this
+                // message arrives once per adoption, but a re-seed at startup can restate a value
+                // the store already holds, and a bump for an unchanged fact is a repaint nothing
+                // on screen could account for.
+                if self.time_offset != status {
+                    self.time_offset = status;
+                    self.time_offset_rev = self.time_offset_rev.wrapping_add(1);
+                }
+            }
             FeedMsg::Status(s) => {
                 // Any non-Ready status marks the retained snapshot stale, so a reconnect cannot
                 // promote pre-outage figures on the strength of the status alone. What clears the

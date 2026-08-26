@@ -278,6 +278,29 @@ pub enum RowScope {
     /// Reached through the Report's second row pass and its totals aggregate; a caller asking for
     /// the present state alone would set it too.
     Open,
+    /// Closed trades inside the window, plus open positions only where the window still reaches
+    /// the present ON THAT CORE'S OWN CLOCK.
+    ///
+    /// This is an INTENT, not a resolved answer, and it is a separate variant because the answer
+    /// is no longer single-valued. `date_to` is compared against a CORE-LOCAL column while "now"
+    /// is this machine's true UTC, so one window can have demonstrably ended for a core running
+    /// four hours behind and still be current for one running three ahead. Resolving it in the UI
+    /// — as this scope's predecessor did — forces one verdict onto a fleet that does not share
+    /// one, which is why the decision moved down to [`append_row_scope`], the one place that
+    /// knows both the axis and which cores are in play.
+    ///
+    /// The asymmetry that governs the per-group decision is unchanged: admitting an open row into
+    /// a window that had already ended shows a position the user can see is still running, while
+    /// DROPPING one silently removes money from a report that still looks complete.
+    ClosedAndOpenIfCurrent,
+    /// The OPEN half of [`Self::ClosedAndOpenIfCurrent`], for the two-pass row query alone.
+    ///
+    /// The row query runs open and closed as separate passes so the open block can carry its own
+    /// newest-first order and its own guaranteed slots. That split needs a scope meaning "open
+    /// rows, but only from the cores whose window still reaches the present" — which plain
+    /// [`Self::Open`] cannot say, since it deliberately ignores the window entirely. No caller
+    /// outside that splitter sets this.
+    OpenIfCurrent,
 }
 
 /// Complete filter shared by Report rows, totals, export, and strategy discovery.
@@ -303,6 +326,14 @@ pub struct ReportFilter {
     pub deleted_only: bool,
     /// Which trades this query returns — see [`RowScope`].
     pub rows: RowScope,
+    /// Time axis the replicated date columns are read on.
+    ///
+    /// Carried on the filter rather than loaded inside each query for the same reason
+    /// [`Self::valuation`] is: the rows, the totals, the export and the RENDERED cell all take
+    /// this one value, so a window built on one axis can never disagree with a timestamp printed
+    /// on another. A default-constructed axis is the identity, which is what every caller that
+    /// has not yet been given one already means.
+    pub axis: crate::db::ReportAxis,
     /// Exact strategy identities; `None` selects all strategies, while `Some` remains constrained.
     ///
     /// The core is part of every key because strategy ids repeat across cores. An explicit empty
@@ -596,16 +627,33 @@ fn open_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String
 /// hold. The period's LOWER bound is deliberately not consulted — a position opened last week and
 /// still running belongs in "today" precisely because it is present state rather than history.
 ///
+/// # Why the comparison is deliberately slack
+///
+/// `date_to` is resolved on the axis of the column it filters — the CORE's own wall clock — while
+/// `now` is this machine's true UTC. `offset_secs` is what makes them comparable: the group's
+/// cores read `now` as `now + offset_secs` on their own clocks, so that is the instant the bound
+/// is tested against. A group with no measured offset passes `0` and lands exactly on the naive
+/// comparison, which is correct for it.
+///
+/// This replaced a version that widened the comparison by the widest real time-zone offset in
+/// BOTH directions, because it could not tell which core a row came from. That was deliberately
+/// generous — the two ways to be wrong are not symmetric, since admitting an open row into a
+/// window that had already ended shows a position the user can see is still running, while
+/// DROPPING one silently removes money from a report that still looks complete. With the offset
+/// known per group the generosity is no longer needed, and the slack it cost goes away.
+///
 /// Args:
 ///     date_to: Inclusive upper bound of the period, or `None` for an unbounded one.
-///     now: Current Unix timestamp in seconds.
+///     now: Current Unix timestamp in seconds, on this machine's true UTC.
+///     offset_secs: Seconds east of UTC on the clock of every core in this group.
 ///
 /// Returns:
-///     [`RowScope::ClosedAndOpen`] for a period reaching the present, [`RowScope::Closed`] for one
-///     that has already ended.
-pub fn open_rows_for_bound(date_to: Option<i64>, now: i64) -> RowScope {
+///     [`RowScope::ClosedAndOpen`] for a period still reaching the present on that clock,
+///     [`RowScope::Closed`] for one that has demonstrably already ended there.
+pub fn open_rows_for_bound(date_to: Option<i64>, now: i64, offset_secs: i32) -> RowScope {
+    let ended = now.saturating_add(i64::from(offset_secs));
     match date_to {
-        Some(to) if to < now => RowScope::Closed,
+        Some(to) if to < ended => RowScope::Closed,
         _ => RowScope::ClosedAndOpen,
     }
 }
@@ -622,6 +670,19 @@ pub fn open_rows_for_bound(date_to: Option<i64>, now: i64) -> RowScope {
 /// assert it — while `ClosedAndOpen` emits nothing at all, which is exactly what an unset filter
 /// did before this predicate existed and keeps a pre-schema replica showing its rows.
 ///
+/// # The coarse range
+///
+/// With two or more offset groups and a bounded period on both sides, the closed branches share
+/// one leading `closedate` range spanning the union of their shifted windows. It is a strict
+/// SUPERSET of every branch's own window, so it admits no row those branches would not admit
+/// themselves; what it buys is one index seek for the whole disjunction instead of one per
+/// branch, measured at 1.94x over a 12-core half-million-row replica at four distinct zones.
+///
+/// It leads the CLOSED disjunct ALONE, never the whole predicate. An open position carries no
+/// `closedate` at all, so a range in front of everything would drop every open row -- money
+/// vanishing from a report that still looks complete, which is the exact failure the closed/open
+/// asymmetry above exists to prevent.
+///
 /// Args:
 ///     sql: Predicate buffer being built.
 ///     params: Ordered bound values being built.
@@ -633,41 +694,284 @@ fn append_row_scope(
     f: &ReportFilter,
     cols: &std::collections::HashSet<String>,
 ) {
-    // One buffer for the window so each arm decides whether it applies at all, instead of the
-    // bounds being appended before the arm that has no use for them.
-    let mut window = String::new();
-    let mut bounds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    if let Some(from) = f.date_from {
-        window.push_str(" AND r.\"closedate\" >= ?");
-        bounds.push(Box::new(from));
-    }
-    if let Some(to) = f.date_to {
-        window.push_str(" AND r.\"closedate\" <= ?");
-        bounds.push(Box::new(to));
-    }
-    match f.rows {
-        RowScope::Closed => match closed_row_predicate(cols) {
-            Some(closed) => {
-                sql.push_str(&format!(" AND {closed}{window}"));
-                params.append(&mut bounds);
-            }
-            None => sql.push_str(" AND 1=0"),
-        },
-        RowScope::Open => match open_row_predicate(cols) {
+    // Open rows carry no `closedate`, so neither the window nor the axis reaches them: this arm
+    // is offset-independent and stays exactly the single-branch shape it always was.
+    if f.rows == RowScope::Open {
+        match open_row_predicate(cols) {
             Some(open) => sql.push_str(&format!(" AND {open}")),
             None => sql.push_str(" AND 1=0"),
-        },
-        RowScope::ClosedAndOpen => {
-            match (closed_row_predicate(cols), open_row_predicate(cols)) {
-                (Some(closed), Some(open)) => {
-                    sql.push_str(&format!(" AND (({closed}{window}) OR {open})"));
-                    params.append(&mut bounds);
-                }
-                // Without the column there is no row state to test and no window to apply.
-                _ => {}
-            }
         }
+        return;
     }
+    // Read once for the whole predicate, the same way the UI used to read it once for the whole
+    // filter: two branches resolving "does this window still reach the present" against two
+    // different instants would be a difference nothing on screen could explain.
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    let groups = offset_groups(f, now);
+    let mut parts: Vec<GroupPredicate> = Vec::new();
+    for (offset, cores) in &groups {
+        let mut guard = String::new();
+        if let Some(cores) = cores {
+            if cores.is_empty() {
+                continue;
+            }
+            let ids = cores
+                .iter()
+                .map(|uid| (*uid as i64).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            // Leads with `core_uid` so this branch still opens `idx_rep_core_close` rather than
+            // scanning: that index is what keeps the period filter at tens of milliseconds over a
+            // half-million-row replica, and it is the whole reason the offset moves onto the
+            // BOUND instead of wrapping the column in a conversion.
+            guard.push_str(&format!("r.core_uid IN ({ids}) AND "));
+        } else if let Some(excluded) = catch_all_exclusion(f) {
+            guard.push_str(&format!("r.core_uid NOT IN ({excluded}) AND "));
+        }
+        // The bounds are true-UTC instants and the column is core-local, so the group's offset is
+        // added to the BOUND. Converting the column instead would be the same arithmetic and would
+        // cost the index.
+        let mut window = String::new();
+        let mut bounds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut shifted_from: Option<i64> = None;
+        let mut shifted_to: Option<i64> = None;
+        if let Some(from) = f.date_from {
+            let shifted = crate::db::ReportAxis::shift_bound(from, *offset);
+            window.push_str(" AND r.\"closedate\" >= ?");
+            bounds.push(Box::new(shifted));
+            shifted_from = Some(shifted);
+        }
+        if let Some(to) = f.date_to {
+            let shifted = crate::db::ReportAxis::shift_bound(to, *offset);
+            window.push_str(" AND r.\"closedate\" <= ?");
+            bounds.push(Box::new(shifted));
+            shifted_to = Some(shifted);
+        }
+        let current = open_rows_for_bound(f.date_to, now, *offset) == RowScope::ClosedAndOpen;
+        if f.rows == RowScope::OpenIfCurrent {
+            // A group whose window has already ended contributes NO open rows, so it contributes
+            // no branch at all. Dropping the branch rather than emitting a false one is what lets
+            // the empty case below fail closed.
+            if !current {
+                continue;
+            }
+            parts.push(GroupPredicate {
+                guard,
+                open: Some(open_row_predicate(cols).unwrap_or_else(|| "1=0".to_string())),
+                ..GroupPredicate::default()
+            });
+            continue;
+        }
+        let resolved = match f.rows {
+            RowScope::ClosedAndOpenIfCurrent if current => RowScope::ClosedAndOpen,
+            RowScope::ClosedAndOpenIfCurrent => RowScope::Closed,
+            other => other,
+        };
+        let mut part = GroupPredicate {
+            guard,
+            ..GroupPredicate::default()
+        };
+        match resolved {
+            RowScope::Closed => match closed_row_predicate(cols) {
+                Some(closed) => {
+                    part.closed = Some(format!("{closed}{window}"));
+                    part.bounds = bounds;
+                    part.shifted_from = shifted_from;
+                    part.shifted_to = shifted_to;
+                }
+                None => part.closed = Some("1=0".to_string()),
+            },
+            RowScope::ClosedAndOpen => {
+                match (closed_row_predicate(cols), open_row_predicate(cols)) {
+                    (Some(closed), Some(open)) => {
+                        part.closed = Some(format!("{closed}{window}"));
+                        part.bounds = bounds;
+                        part.shifted_from = shifted_from;
+                        part.shifted_to = shifted_to;
+                        part.open = Some(open);
+                    }
+                    // Without the column there is no row state to test and no window to apply.
+                    // Emitting nothing is what an unset filter always did and is what keeps a
+                    // pre-schema replica showing its rows. Nothing has been bound yet, so this
+                    // leaves both buffers exactly as it found them.
+                    _ => return,
+                }
+            }
+            // Every other variant was handled before this match: `Open` and `OpenIfCurrent`
+            // returned or continued above, and `ClosedAndOpenIfCurrent` resolved into one of the
+            // two arms here.
+            RowScope::Open | RowScope::OpenIfCurrent | RowScope::ClosedAndOpenIfCurrent => return,
+        }
+        parts.push(part);
+    }
+    if let Some((from, to)) = coarse_range(&parts) {
+        let closed = parts
+            .iter()
+            .filter_map(|p| p.closed.as_ref().map(|c| format!("{}{c}", p.guard)))
+            .collect::<Vec<_>>()
+            .join(") OR (");
+        let open = parts
+            .iter()
+            .filter_map(|p| p.open.as_ref().map(|o| format!("{}{o}", p.guard)))
+            .collect::<Vec<_>>()
+            .join(") OR (");
+        // The range is bound FIRST because it is emitted first, and the per-group bounds follow
+        // in group order exactly as they did before this shape existed.
+        params.push(Box::new(from));
+        params.push(Box::new(to));
+        for part in parts.iter_mut() {
+            params.append(&mut part.bounds);
+        }
+        let closed_side = format!("r.\"closedate\" >= ? AND r.\"closedate\" <= ? AND (({closed}))");
+        if open.is_empty() {
+            sql.push_str(&format!(" AND ({closed_side})"));
+        } else {
+            sql.push_str(&format!(" AND (({closed_side}) OR (({open})))"));
+        }
+        return;
+    }
+    let branches = parts.iter().map(GroupPredicate::branch).collect::<Vec<_>>();
+    for part in parts.iter_mut() {
+        params.append(&mut part.bounds);
+    }
+    match branches.len() {
+        // An open-only pass with no current group has nothing to show and must SAY so; every
+        // other scope reaching zero branches had no predicate to apply in the first place.
+        0 if f.rows == RowScope::OpenIfCurrent => sql.push_str(" AND 1=0"),
+        0 => {}
+        1 => sql.push_str(&format!(" AND {}", branches[0])),
+        _ => sql.push_str(&format!(" AND (({}))", branches.join(") OR ("))),
+    }
+}
+
+/// One offset group's contribution to the row-scope predicate, held apart so the closed and open
+/// sides can be composed either per group or factored under a shared coarse range.
+#[derive(Default)]
+struct GroupPredicate {
+    /// `core_uid` guard this group's branches lead with; empty for an unguarded single group.
+    guard: String,
+    /// Closed-side predicate including this group's own shifted window, or `None` when the scope
+    /// asks for open rows alone.
+    closed: Option<String>,
+    /// Values bound by `closed`, in the order they appear in it.
+    bounds: Vec<Box<dyn rusqlite::types::ToSql>>,
+    /// Open-side predicate, or `None` when this group contributes no open rows.
+    open: Option<String>,
+    /// This group's lower bound after the offset shift; `None` for an unbounded period.
+    shifted_from: Option<i64>,
+    /// This group's upper bound after the offset shift; `None` for an unbounded period.
+    shifted_to: Option<i64>,
+}
+
+impl GroupPredicate {
+    /// Compose this group as ONE self-contained branch, the shape used whenever the coarse range
+    /// does not apply.
+    ///
+    /// Returns:
+    ///     Branch text, guard included.
+    fn branch(&self) -> String {
+        let mut branch = self.guard.clone();
+        match (&self.closed, &self.open) {
+            (Some(closed), Some(open)) => branch.push_str(&format!("(({closed}) OR {open})")),
+            (Some(closed), None) => branch.push_str(closed),
+            (None, Some(open)) => branch.push_str(open),
+            // Every push site sets at least one side, so a part with neither is never built.
+            (None, None) => {}
+        }
+        branch
+    }
+}
+
+/// Widest window every closed branch fits inside, when factoring one out is worth doing.
+///
+/// Args:
+///     parts: Every group that contributed to this predicate.
+///
+/// Returns:
+///     Shifted lower and upper bound spanning all closed branches, or `None` when there is only
+///     one of them, when the period is unbounded on either side, or when any closed branch
+///     carries no window to widen.
+fn coarse_range(parts: &[GroupPredicate]) -> Option<(i64, i64)> {
+    let closed = parts
+        .iter()
+        .filter(|p| p.closed.is_some())
+        .collect::<Vec<_>>();
+    if closed.len() < 2 {
+        return None;
+    }
+    let mut from = i64::MAX;
+    let mut to = i64::MIN;
+    for part in closed {
+        from = from.min(part.shifted_from?);
+        to = to.max(part.shifted_to?);
+    }
+    Some((from, to))
+}
+
+/// Resolve which offset groups this filter's rows fall into.
+///
+/// A scoped read names its cores and groups exactly those. An UNBOUNDED read cannot name them, so
+/// it takes one branch per MEASURED offset plus a catch-all carrying `None` -- every core with no
+/// measurement, which converts as the identity.
+///
+/// # Known limitation: grouped at ONE instant
+///
+/// A core is placed in the group its offset occupies at `now`, and that single offset then shifts
+/// BOTH bounds. A period spanning an offset transition therefore has its far bound shifted by the
+/// wrong segment, so trades within one delta of that edge can be admitted or dropped. Bounded by
+/// the delta -- an hour across DST -- and only ever at the edge.
+///
+/// The alternative is a sub-branch per segment per core, which multiplies the disjunction the
+/// coarse range in [`append_row_scope`] exists to keep cheap. Left deliberately, recorded here so
+/// the next reader does not mistake it for an oversight.
+///
+/// Args:
+///     f: Complete Report filter.
+///     now: Current Unix timestamp in seconds, on this machine's true UTC.
+///
+/// Returns:
+///     Offset and the cores it applies to, or `None` for the unbounded catch-all. A fleet with no
+///     measurements at all collapses to a single identity group, which reproduces the predicate
+///     this function had before offsets existed.
+fn offset_groups(f: &ReportFilter, now: i64) -> Vec<(i32, Option<Vec<u64>>)> {
+    if !f.core_uids.is_empty() {
+        return f
+            .axis
+            .groups(&f.core_uids, now)
+            .into_iter()
+            .map(|(offset, cores)| (offset, Some(cores)))
+            .collect();
+    }
+    let mut groups: Vec<(i32, Option<Vec<u64>>)> = f
+        .axis
+        .measured_groups(now)
+        .into_iter()
+        .map(|(offset, cores)| (offset, Some(cores)))
+        .collect();
+    groups.push((0, None));
+    groups
+}
+
+/// Inline core-uid list a catch-all branch must exclude, or `None` when nothing is measured.
+///
+/// Args:
+///     f: Complete Report filter.
+///
+/// Returns:
+///     Comma-separated measured core uids, or `None` when the catch-all covers every core and
+///     needs no guard at all.
+fn catch_all_exclusion(f: &ReportFilter) -> Option<String> {
+    let measured = f.axis.measured_cores();
+    if measured.is_empty() {
+        return None;
+    }
+    Some(
+        measured
+            .iter()
+            .map(|uid| (*uid as i64).to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 /// Apply report predicates to one aliased source.
@@ -1383,8 +1687,18 @@ fn query_reports_attempt(
             run_row_pass(conn, pass, include_valuation, RowScope::Closed, pass.limit)
         }
         RowScope::Open => run_row_pass(conn, pass, include_valuation, RowScope::Open, pass.limit),
-        RowScope::ClosedAndOpen => {
-            let mut open = run_row_pass(conn, pass, include_valuation, RowScope::Open, pass.limit)?;
+        RowScope::OpenIfCurrent => {
+            run_row_pass(conn, pass, include_valuation, RowScope::OpenIfCurrent, pass.limit)
+        }
+        // Both combined scopes split into the same two passes; they differ only in whether the
+        // open half is filtered to the cores whose window still reaches the present.
+        RowScope::ClosedAndOpen | RowScope::ClosedAndOpenIfCurrent => {
+            let open_scope = if pass.filter.rows == RowScope::ClosedAndOpen {
+                RowScope::Open
+            } else {
+                RowScope::OpenIfCurrent
+            };
+            let mut open = run_row_pass(conn, pass, include_valuation, open_scope, pass.limit)?;
             // The open block SPENDS from the caller's budget rather than sitting outside it, so the
             // result is still at most `limit` rows and every consumer sized by that cap stays
             // correct. The second pass does not buy EXTRA rows, it buys GUARANTEED ones: a handful
@@ -1426,7 +1740,8 @@ fn run_row_pass(
     // position opened weeks ago at the top of the panel, which is the least interesting row in
     // the block. Falls back to the caller's own sort on a source too early in its schema to have
     // `buydate`.
-    let open_order = rows == RowScope::Open && pass.cols.iter().any(|col| col == "buydate");
+    let open_order = matches!(rows, RowScope::Open | RowScope::OpenIfCurrent)
+        && pass.cols.iter().any(|col| col == "buydate");
     let (sort_col, desc) = if open_order {
         ("buydate", true)
     } else {

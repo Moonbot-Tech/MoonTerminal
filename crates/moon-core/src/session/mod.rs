@@ -13,6 +13,7 @@
 
 pub mod clock_skew;
 pub mod coordinator;
+pub mod core_time_offset;
 pub mod order_lines;
 pub mod store;
 

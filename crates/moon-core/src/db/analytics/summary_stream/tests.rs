@@ -62,7 +62,7 @@ fn current_summary_rows_execute_one_statement() {
     let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
     conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
-    let result = read(&conn, source, None, &query, 3_600, true, false);
+    let result = read(&conn, source, None, &query, &query.axis, 3_600, true, false);
     conn.trace_v2(TraceEventCodes::empty(), None);
     result.expect("single current-period stream");
 
@@ -102,7 +102,7 @@ fn textual_strategy_storage_keeps_group_and_top_fallbacks() {
     };
     let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
-    let result = read(&conn, source, None, &query, 3_600, true, false)
+    let result = read(&conn, source, None, &query, &query.axis, 3_600, true, false)
         .expect("textual strategy remains readable");
 
     assert_eq!(result.strategies.len(), 1);

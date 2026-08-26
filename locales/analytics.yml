@@ -1148,6 +1148,12 @@ analytics.time.tip_pick:
   ru: "участвует в подборе"
   en: "included in the sweep"
   es: "incluido en la búsqueda"
+# Caption above the "By time" grid: WorkingTime/WorkingWeekTime are computed and applied on the
+# CORE's own clock, which may not match the clock on the user's screen.
+analytics.tuner.time.core_clock_note:
+  ru: "Часы указаны по времени ЯДРА, а не вашего компьютера"
+  en: "Hours are the CORE's clock, not yours"
+  es: "Las horas son el reloj del NÚCLEO, no el suyo"
 analytics.strat.hint:
   ru: "клик по строке — детализация · Ctrl — мультивыбор"
   en: "click a row for details · Ctrl to multi-select"

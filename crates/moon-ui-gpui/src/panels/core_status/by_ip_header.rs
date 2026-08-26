@@ -352,6 +352,20 @@ pub(super) fn server_header(
                     view,
                     window,
                 ))
+                // No icon lead: a clock offset has no `WarnAxis` behind it, same reasoning as
+                // `startup` and `version`.
+                .child(col_sort_header(
+                    t!("core_status.col.tz_off").to_string(),
+                    GroupSortField::TzOffset,
+                    ByIpCol::TzOffset,
+                    w.tz_off,
+                    ByIpCol::TzOffset.width_of(logical),
+                    sort,
+                    p,
+                    weak_view,
+                    view,
+                    window,
+                ))
                 .child(col_sort_header(
                     t!("core_status.cores").to_string(),
                     GroupSortField::Cores,

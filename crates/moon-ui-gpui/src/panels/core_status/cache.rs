@@ -41,6 +41,9 @@ impl CoreStatusView {
                     CoreSysStatus::default(),
                     CoreStartupStatus::default(),
                 ));
+            // `rebuild_cache` already runs on every telemetry tick, so a plain read here needs no
+            // separate `time_offset_rev` consumer: the next tick always picks up a fresh adoption.
+            let time_offset = core.map(|c| c.time_offset).unwrap_or_default();
             // Smooth the displayed CPU with the engine's rolling average (computed backend-side).
             let (proc, system) = b.warn.avg_cpu(id);
             if let Some(proc) = proc {
@@ -55,6 +58,7 @@ impl CoreStatusView {
                 status,
                 sys,
                 startup,
+                time_offset,
                 fault,
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),

@@ -50,7 +50,7 @@ fn time<T>(label: &str, repeats: usize, mut body: impl FnMut() -> T) {
 ///     The default-filter query every tab shares.
 fn query(from: i64, to: i64) -> Query {
     Query {
-        time_zone: chrono_tz::UTC,
+        axis: moon_core::db::ReportAxis::from_measured(Default::default(), chrono_tz::UTC),
         previous_period_basis: Default::default(),
         from,
         to,

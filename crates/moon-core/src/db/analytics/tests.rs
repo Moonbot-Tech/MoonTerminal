@@ -1,7 +1,7 @@
 //! Summary, Strategies, and quote-scope analytics regression tests.
 
 use super::super::test_support::{
-    build_replica, corrupt_leaf_page, remove_db, spread_rows, temp_db,
+    build_replica, build_replica_multi_core, corrupt_leaf_page, remove_db, spread_rows, temp_db,
 };
 use super::super::{QuoteCurrency, SideFilter};
 use super::*;
@@ -9,7 +9,7 @@ use super::*;
 /// Build the minimal real-trade query used by analytics regression tests.
 fn q(from: i64, to: i64) -> Query {
     Query {
-        time_zone: chrono_tz::UTC,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::UTC),
         previous_period_basis: Default::default(),
         from,
         to,
@@ -113,7 +113,7 @@ fn fall_back_civil_day_keeps_the_hourly_summary_grid() {
     );
     let conn = build_replica(&path, &[(from + 3_600, 5.0, "BTCUSDT")]);
     let mut query = q(from, to);
-    query.time_zone = zone;
+    query.axis = crate::db::ReportAxis::from_measured(Default::default(), zone);
 
     let scoped = summary_on(&conn, &query, false, false).expect("healthy DB reads");
     let summary = scoped.data().expect("single-quote summary is comparable");
@@ -132,7 +132,7 @@ fn fall_back_civil_day_keeps_the_hourly_summary_grid() {
 #[test]
 fn ambiguous_custom_range_keeps_an_equal_elapsed_comparison_window() {
     let query = Query {
-        time_zone: chrono_tz::Europe::Warsaw,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
         previous_period_basis: PreviousPeriodBasis::Elapsed,
         from: 1_792_888_200, // 2026-10-25 02:30 CEST, the first occurrence.
         to: 1_792_891_860,   // 2026-10-25 02:31 CET, after the selected later minute.
@@ -148,7 +148,7 @@ fn ambiguous_custom_range_keeps_an_equal_elapsed_comparison_window() {
 #[test]
 fn fall_back_day_comparison_still_starts_at_the_previous_civil_midnight() {
     let query = Query {
-        time_zone: chrono_tz::Europe::Warsaw,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
         previous_period_basis: PreviousPeriodBasis::Civil,
         from: 1_792_879_200, // 2026-10-25 00:00 CEST.
         to: 1_792_969_200,   // 2026-10-26 00:00 CET.
@@ -786,7 +786,14 @@ fn mixed_quote_summary_becomes_usdt_only_after_complete_coverage() {
         )
         .expect("count raw previous rows");
     assert_eq!(previous_rows, 1);
-    let direct_previous = scan_period(&conn, &source, day - 86_400, day, 3_600, chrono_tz::UTC)
+    let direct_previous = scan_period(
+        &conn,
+        &source,
+        day - 86_400,
+        day,
+        3_600,
+        &crate::db::ReportAxis::identity_core_local(),
+    )
         .expect("scan compatible previous period")
         .0;
     assert_eq!(
@@ -1046,7 +1053,14 @@ fn corrupt_replica_surfaces_error_not_empty() {
         .expect("схема читается")
         .expect("источник есть");
     assert!(
-        scan_period(&conn, &src, wide.from, wide.to, 86_400, chrono_tz::UTC).is_err(),
+        scan_period(
+            &conn,
+            &src,
+            wide.from,
+            wide.to,
+            86_400,
+            &crate::db::ReportAxis::identity_core_local(),
+        ).is_err(),
         "скан периода обязан вернуть ошибку, а не усечённую статистику"
     );
 
@@ -1071,6 +1085,67 @@ fn corrupt_replica_surfaces_error_not_empty() {
         }
         Ok(_) => unreachable!("уже проверено выше"),
     }
+
+    remove_db(&path);
+}
+
+/// `min_closedate` -- MIN'ing the raw stored `closedate` per source instead of the per-core
+/// AXIS-CONVERTED value reopens the exact bug the per-core `GROUP BY` closed: a plain `MIN` picks
+/// whichever core's clock runs furthest WEST (the smallest raw number), not whichever trade is
+/// actually oldest, so "all time" would start at an instant no trade occupies.
+///
+/// Two cores' earliest trades share one TRUE-UTC instant but stamp different raw `closedate`
+/// values because their clocks differ: an UNMEASURED core (offset 0, identity) stamps the instant
+/// verbatim, while a core running four hours BEHIND UTC stamps a strictly smaller raw number for
+/// that same instant. The naive per-source `MIN(closedate)` would therefore report the behind
+/// core's smaller raw value as "the beginning of history" — four hours before any trade actually
+/// happened. The converted floor must instead be the shared true instant.
+#[test]
+fn min_closedate_uses_the_axis_converted_instant_not_the_smaller_raw_value() {
+    const UNMEASURED_CORE: u64 = 61;
+    const BEHIND_CORE: u64 = 62;
+    const BEHIND_OFFSET_SECS: i32 = -14_400; // UTC-4
+    const TRUE_INSTANT: i64 = 1_700_100_000;
+
+    let path = temp_db("min-closedate");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            // The unmeasured core's own clock is treated as identity, so it stamps the shared
+            // true instant verbatim.
+            (UNMEASURED_CORE, TRUE_INSTANT, 1.0, "BTCUSDT"),
+            // A later trade on the same core, so the test cannot pass by accident from reading
+            // only one row per core.
+            (UNMEASURED_CORE, TRUE_INSTANT + 50_000, 2.0, "BTCUSDT"),
+            // The behind core's clock reads 4h earlier, so the SAME true instant lands on a
+            // strictly SMALLER raw closedate than the unmeasured core's.
+            (BEHIND_CORE, TRUE_INSTANT + i64::from(BEHIND_OFFSET_SECS), 3.0, "ETHUSDT"),
+            (
+                BEHIND_CORE,
+                TRUE_INSTANT + 50_000 + i64::from(BEHIND_OFFSET_SECS),
+                4.0,
+                "ETHUSDT",
+            ),
+        ],
+    );
+
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([(
+            BEHIND_CORE,
+            vec![crate::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: BEHIND_OFFSET_SECS,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+
+    assert_eq!(
+        min_closedate(&conn, &axis).expect("min_closedate over a healthy multi-core replica"),
+        TRUE_INSTANT,
+        "the converted floor must be the shared true instant both cores' earliest trades occupy, \
+         not the behind core's smaller raw closedate"
+    );
 
     remove_db(&path);
 }

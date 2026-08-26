@@ -527,6 +527,7 @@ impl ReportPanel {
         let seeded_valuation_mode = backend.read(cx).valuation_mode();
         let display_zone =
             crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+        let seeded_axis = backend.read(cx).report_axis(display_zone);
         // The retained connection, schema, and preferences are loaded after construction so a
         // workspace transition never waits for SQLite open/schema work on the GPUI thread.
         let cores = Vec::new();
@@ -599,10 +600,12 @@ impl ReportPanel {
                 .default_value(coin_query.clone())
                 .placeholder(t!("report.filter.coin_ph").to_string())
         });
+        // A restored bound is read on the axis it will be COMPARED on, not on the display zone.
+        let bound_zone = moon_core::db::ReportAxis::identity_core_local().zone();
         let from = cx.new(|cx| {
             let mut state = date_range::bound_picker(Bound::From, window, cx);
             if let Some(value) =
-                from_query.and_then(|secs| date_range::dt_of_secs(secs, display_zone))
+                from_query.and_then(|secs| date_range::dt_of_secs(secs, bound_zone))
             {
                 state.set_value(Some(value), window, cx);
             }
@@ -611,7 +614,7 @@ impl ReportPanel {
         let to = cx.new(|cx| {
             let mut state = date_range::bound_picker(Bound::To, window, cx);
             if let Some(value) =
-                to_query.and_then(|secs| date_range::dt_of_secs(secs, display_zone))
+                to_query.and_then(|secs| date_range::dt_of_secs(secs, bound_zone))
             {
                 state.set_value(Some(value), window, cx);
             }
@@ -756,6 +759,16 @@ impl ReportPanel {
                 this.valuation_status = status;
                 cx.notify();
             }
+            // A newly adopted core offset moves every date this panel prints AND the bounds its
+            // period filter is built from, so it is compared and repainted here rather than polled
+            // by the render path. Compare-then-notify, like every other counter above: the
+            // backend wakes far more often than a core adopts an offset.
+            let axis = this.backend.read(cx).report_axis(this.display_zone);
+            if axis != this.axis {
+                this.axis = axis;
+                this.request_requery(cx);
+                cx.notify();
+            }
         })
         .detach();
 
@@ -801,6 +814,9 @@ impl ReportPanel {
                 return;
             }
             this.display_zone = zone;
+            // The axis carries the zone as well as the offsets, so a zone change invalidates the
+            // cached copy even though nothing was measured.
+            this.axis = this.backend.read(cx).report_axis(zone);
             this.display_zone_fields_dirty = true;
             this.natural_widths.clear();
             if this.period == Period::All {
@@ -820,6 +836,10 @@ impl ReportPanel {
         let mut this = Self {
             backend,
             display_zone,
+            // Seeded from the backend rather than left as the identity: a panel opened on a fleet
+            // whose offsets were measured in an earlier session must render corrected times on its
+            // FIRST paint, not on the first backend wake after it.
+            axis: seeded_axis,
             display_zone_fields_dirty: false,
             group,
             generation,
@@ -953,10 +973,10 @@ impl ReportPanel {
             .map(|secs| secs.div_euclid(date_range::MINUTE) * date_range::MINUTE);
         let from_value = self
             .from_query
-            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+            .and_then(|secs| date_range::dt_of_secs(secs, self.bound_zone()));
         let to_value = self
             .to_query
-            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+            .and_then(|secs| date_range::dt_of_secs(secs, self.bound_zone()));
 
         self.coin.update(cx, |input, input_cx| {
             input.set_value(String::new(), window, input_cx)
@@ -1019,7 +1039,10 @@ impl ReportPanel {
         if self.bound_write_in_progress {
             return;
         }
-        let secs = value.and_then(|dt| date_range::secs_of_dt(dt, self.display_zone, bound));
+        // The picked civil value becomes a bound compared against the raw replicated column, so
+        // it is resolved on the report axis. Reading it back through the display zone instead is
+        // how a typed date filters a window several hours from the one it shows.
+        let secs = value.and_then(|dt| date_range::secs_of_dt(dt, self.bound_zone(), bound));
         let slot = match bound {
             Bound::From => &mut self.from_query,
             Bound::To => &mut self.to_query,
@@ -1063,12 +1086,15 @@ impl ReportPanel {
             return;
         }
         self.display_zone_fields_dirty = false;
+        // Re-rendered on the axis, not the display zone: the underlying bounds do not move when
+        // the header clock changes, so neither may the text. Analytics' sibling handler stopped
+        // re-projecting for the same reason.
         let from = self
             .from_query
-            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+            .and_then(|secs| date_range::dt_of_secs(secs, self.bound_zone()));
         let to = self
             .to_query
-            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+            .and_then(|secs| date_range::dt_of_secs(secs, self.bound_zone()));
         self.write_bound(Bound::From, from, window, cx);
         self.write_bound(Bound::To, to, window, cx);
     }

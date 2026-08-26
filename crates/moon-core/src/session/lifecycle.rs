@@ -4,8 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::{AppConfig, ServerConfig};
 use crate::db::ReportTx;
-use crate::feed::{self, ConnStatus, EngineActionResult, FeedHandle, FeedMsg, FeedWakeTx};
+use crate::feed::{
+    self, ConnStatus, CoreTimeOffsetStatus, EngineActionResult, FeedHandle, FeedMsg, FeedWakeTx,
+};
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
+use crate::session::core_time_offset::OffsetSource;
 use crate::venue::CoreVenue;
 
 use super::{
@@ -84,7 +87,56 @@ impl SessionManager {
         if mgr.sessions.is_empty() {
             log::warn!("нет серверов в конфиге — добавь ядра в Настройках");
         }
+        mgr.seed_time_offsets();
         mgr
+    }
+
+    /// Publish one `FeedMsg::TimeOffset` per core with a durable segment, so a restart does not
+    /// show a previously-measured core as "never measured" until its next live sample arrives.
+    ///
+    /// Reads through [`crate::db::ReportAxis::load`] — its module doc names it "the one seam
+    /// that leaves it" — rather than `db::rep::core_offset::load_all` directly: the latter sits
+    /// behind `db`'s private `rep` module and is not reachable from `session`. A read failure is
+    /// logged and skipped entirely rather than treated as "nothing measured": on a skewed core
+    /// the empty axis is the wrong-money axis.
+    ///
+    /// Returns:
+    ///     Nothing; each active core with a durable segment receives its seeded status.
+    fn seed_time_offsets(&mut self) {
+        let conn = match crate::db::open_reader() {
+            Ok(conn) => conn,
+            // A fresh install genuinely has no replica file yet — not a failure to seed from.
+            Err(crate::db::ReadFail::NotReady) => return,
+            Err(e) => {
+                log::error!("core_time_offset: читатель БД недоступен для сида при старте: {e:?}");
+                return;
+            }
+        };
+        let axis = match crate::db::ReportAxis::load(&conn, chrono_tz::Tz::UTC) {
+            Ok(axis) => axis,
+            Err(e) => {
+                log::error!("core_time_offset: не удалось прочитать сохранённые смещения: {e:?}");
+                return;
+            }
+        };
+        let now_ms = crate::util::now_unix_ms_i64();
+        for core_uid in axis.measured_cores() {
+            let Some(segment) = axis.segment_at(core_uid, now_ms.div_euclid(1_000)) else {
+                continue;
+            };
+            if let Some(core) = self.store.core_mut(core_uid) {
+                core.apply(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
+                    offset_secs: Some(segment.offset_secs),
+                    // The segment's OWN start, not the seed time: a value measured last week must
+                    // not come back from a restart claiming it was measured at boot. That is the
+                    // whole reason `segment_at` returns the segment rather than just its offset.
+                    observed_at_utc: segment.from_utc.saturating_mul(1_000),
+                    // A seeded value has no live samples behind it and must not claim any.
+                    samples: 0,
+                    source: OffsetSource::Log,
+                }));
+            }
+        }
     }
 
     /// Start a core feed thread with `feed::spawn` and register its market client.

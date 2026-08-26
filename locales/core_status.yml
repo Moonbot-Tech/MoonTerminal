@@ -554,6 +554,57 @@ core_status.startup.f.delivery:
   en: "Delivery"
   es: "Entrega"
 
+# --- Clock offset (measured core-vs-UTC skew) --------------------------------------------------
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.tz_off:
+  ru: "Смещ. UTC"
+  en: "UTC offset"
+  es: "Desfase UTC"
+# The never-measured cell, and the collapsed-group cell when no core on the server ever measured
+# an offset. Deliberately never "UTC": a core that runs on UTC and a core nobody has measured must
+# not read the same.
+core_status.tz_off.unknown:
+  ru: "—"
+  en: "—"
+  es: "—"
+core_status.tz_off.f.offset:
+  ru: "Смещение"
+  en: "Offset"
+  es: "Desfase"
+core_status.tz_off.f.samples:
+  ru: "Замеры"
+  en: "Samples"
+  es: "Muestras"
+core_status.tz_off.f.observed:
+  ru: "Замерено"
+  en: "Observed"
+  es: "Observado"
+core_status.tz_off.f.source:
+  ru: "Источник"
+  en: "Source"
+  es: "Fuente"
+# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+core_status.tz_off.f.unmeasured:
+  ru: "Ещё не измерено"
+  en: "Not measured yet"
+  es: "Aún no medido"
+core_status.tz_off.source.log:
+  ru: "Лог ядра"
+  en: "Core log"
+  es: "Registro del núcleo"
+core_status.tz_off.source.replica:
+  ru: "Данные реплики"
+  en: "Replica data"
+  es: "Datos de réplica"
+core_status.tz_off.source.skew:
+  ru: "Коррекция скью"
+  en: "Skew correction"
+  es: "Corrección de deriva"
+core_status.tz_off.source.none:
+  ru: "—"
+  en: "—"
+  es: "—"
+
 # --- Connection verdict: why a core is not usable, and what to do about it. -------------------
 # `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
 # status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`

@@ -192,7 +192,8 @@ impl Accumulator {
     ///     row: Chronological report row shared by every projection.
     ///     bucket: Time-grid bucket width in seconds.
     ///     include_inline_raw: Whether this stream owns raw-money group aggregation.
-    ///     zone: Selected IANA zone used for civil buckets and hour profiles.
+    ///     axis: Per-core time axis. `closedate` is the CORE's own wall clock, so it reaches
+    ///         true UTC through the axis before any civil bucket or hour slot is derived.
     ///
     /// Returns:
     ///     Success after every projection accepts the row.
@@ -204,9 +205,14 @@ impl Accumulator {
         row: TradeRow,
         bucket: i64,
         include_inline_raw: bool,
-        zone: chrono_tz::Tz,
+        axis: &crate::db::ReportAxis,
     ) -> rusqlite::Result<()> {
         let profit = row.pnl.unwrap_or(0.0);
+        // `closedate` is the CORE's wall clock; it reaches true UTC before any civil bucket or
+        // hour slot is taken from it. The duration below is a DIFFERENCE on that one clock and
+        // cancels the offset, so it deliberately stays raw.
+        let core_uid = row.core_uid.unwrap_or(0) as u64;
+        let closedate_utc = axis.to_utc(row.closedate, core_uid);
         self.stats.n += 1;
         self.stats.profit += profit;
         self.duration_seconds += (row.closedate - row.buydate).max(0);
@@ -227,8 +233,9 @@ impl Accumulator {
         self.peak = self.peak.max(self.cumulative);
         self.stats.max_dd = self.stats.max_dd.max(self.peak - self.cumulative);
 
-        let bucket_start = crate::util::display_time::bucket_start(row.closedate, bucket, zone)
-            .unwrap_or(row.closedate);
+        let bucket_start =
+            crate::util::display_time::bucket_start(closedate_utc, bucket, axis.zone())
+                .unwrap_or(closedate_utc);
         match self.days.last_mut() {
             Some(day) if day.start == bucket_start => {
                 day.profit += profit;
@@ -240,13 +247,12 @@ impl Accumulator {
                 trades: 1,
             }),
         }
-        let hour = crate::util::display_time::minute_of_day(row.closedate, zone)
+        let hour = crate::util::display_time::minute_of_day(closedate_utc, axis.zone())
             .map(|minute| minute as usize / 60)
             .unwrap_or(0);
         self.hours[hour].0 += profit;
         self.hours[hour].1 += 1;
 
-        let core_uid = row.core_uid.unwrap_or(0) as u64;
         let core = self.cores.entry(core_uid).or_default();
         if core.name.is_empty() {
             core.name = row.core_name.clone().unwrap_or_default();
@@ -361,11 +367,19 @@ pub(super) fn read(
     src: &str,
     raw_src: Option<&str>,
     q: &Query,
+    axis: &crate::db::ReportAxis,
     bucket: i64,
     include_kinds: bool,
     has_names: bool,
 ) -> ReadResult<SummaryParts> {
     const CTX: &str = "analytics: summary current stream";
+    // The axis arrives RESOLVED from the caller rather than being read here, for two reasons: it
+    // must be the one the rest of this Summary read already used, and resolving it costs two
+    // queries that `current_summary_rows_execute_one_statement` exists to keep out of this path.
+    // `q.axis` is deliberately NOT consulted — that field is the panel's copy from when the query
+    // was built.
+    // The ORDER BY below calls `mt_to_utc`, so the scalar has to exist on this connection.
+    super::time_zone::install(conn, axis).map_err(|error| read_fail_on(conn, CTX, error))?;
     let inline_raw = if raw_src.is_none() {
         "o.profitbtc, o.spentbtc, o.basecurrency"
     } else {
@@ -377,7 +391,7 @@ pub(super) fn read(
                 CAST(o.strategyid AS TEXT),
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), {inline_raw}
-         FROM {src} ORDER BY o.closedate"
+         FROM {src} ORDER BY mt_to_utc(o.closedate, o.core_uid)"
     );
     let mut statement = conn
         .prepare(&sql)
@@ -404,10 +418,10 @@ pub(super) fn read(
     for row in rows {
         let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
         accumulator
-            .push(row, bucket, raw_src.is_none(), q.time_zone)
+            .push(row, bucket, raw_src.is_none(), axis)
             .map_err(|error| read_fail_on(conn, CTX, error))?;
     }
-    accumulator.finish_period(bucket, q.time_zone);
+    accumulator.finish_period(bucket, axis.zone());
 
     let (raw_strategies, raw_coins) = match raw_src {
         Some(raw_src) => read_raw_groups(conn, raw_src, q)?,
@@ -461,6 +475,7 @@ pub(super) fn read(
         accumulator.best_rows,
         accumulator.worst_rows,
         Some(&metadata.heads),
+        axis,
     )?;
     Ok(SummaryParts {
         cur: accumulator.stats,
@@ -643,6 +658,11 @@ fn finish_groups(
 ///     best_rows: Bounded descending-profit candidates.
 ///     worst_rows: Bounded ascending-profit candidates.
 ///     metadata: Optional strategy-head names for numeric identities.
+///     axis: Per-core time axis. `closedate` is the CORE's own wall clock, so the RETAINED stamp
+///         reaches true UTC through the axis exactly as the ordering and bucketing stages already
+///         do. Converting here rather than in the UI is what keeps [`TopTrade`] free of a core
+///         uid: without one, a consumer holding the raw value could not convert it even in
+///         principle, so the card would render an uncorrected time beside a corrected grid.
 ///
 /// Returns:
 ///     Final best and worst trade rows, or one classified row-shape failure.
@@ -650,6 +670,7 @@ fn finish_top(
     best_rows: Vec<TradeRow>,
     worst_rows: Vec<TradeRow>,
     metadata: Option<&HashMap<(i64, i64), StrategyMetadata>>,
+    axis: &crate::db::ReportAxis,
 ) -> ReadResult<(Vec<TopTrade>, Vec<TopTrade>)> {
     let convert = |row: &TradeRow| -> rusqlite::Result<TopTrade> {
         let core_uid = row.core_uid.ok_or_else(|| {
@@ -668,7 +689,7 @@ fn finish_top(
         })?;
         let pair = row.strategy_id.map(|strategy_id| (strategy_id, core_uid));
         Ok(TopTrade {
-            closedate: row.closedate,
+            closedate: axis.to_utc(row.closedate, core_uid as u64),
             coin: row.coin.clone(),
             strategy: pair
                 .and_then(|pair| metadata.and_then(|all| all.get(&pair)))

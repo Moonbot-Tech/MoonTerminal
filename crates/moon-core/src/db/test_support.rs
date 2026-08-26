@@ -86,6 +86,62 @@ pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connectio
     conn
 }
 
+/// Build a replica whose rows are pinned to explicit cores, for tests that must distinguish
+/// per-core clock offsets rather than accepting [`build_replica`]'s single hard-coded core 1.
+///
+/// Each row is `(core_uid, closedate, profitbtc, coin)`; `buydate` trails `closedate` by five
+/// minutes and every row is strategy 7, non-emulator, matching [`build_replica`] otherwise.
+///
+/// Args:
+///     path: Temporary SQLite database path.
+///     rows: Independent core, close-time, profit, and market fixture rows.
+///
+/// Returns:
+///     Open seeded replica connection with quote identity set to USDT.
+pub(super) fn build_replica_multi_core(path: &Path, rows: &[(u64, i64, f64, &str)]) -> Connection {
+    let conn = Connection::open(path).unwrap();
+    super::init_db(&conn).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS orders_rep (core_uid INTEGER NOT NULL,
+                core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+                PRIMARY KEY (core_uid, newrecid));
+             ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN buydate INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN profitbtc REAL;
+             ALTER TABLE orders_rep ADD COLUMN spentbtc REAL;
+             ALTER TABLE orders_rep ADD COLUMN coin TEXT;
+             ALTER TABLE orders_rep ADD COLUMN strategyid INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN isshort INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN emulator INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;",
+    )
+    .unwrap();
+    rep_init(&conn);
+
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
+                    profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted,
+                    basecurrency)
+                 VALUES (?1, ?2, ?3, ?4, ?4 - 300, ?5, 100.0, ?6, 7, 0, 0, 0, 1)",
+        )
+        .unwrap();
+    for (i, (core_uid, close, profit, coin)) in rows.iter().enumerate() {
+        stmt.execute(rusqlite::params![
+            *core_uid as i64,
+            format!("CORE-{core_uid}"),
+            i as i64 + 1,
+            close,
+            profit,
+            coin
+        ])
+        .unwrap();
+    }
+    drop(stmt);
+    conn
+}
+
 /// Rows spread one minute apart from `day`, two of every three at a loss.
 ///
 /// The count matters: enough pages must exist for the damaged leaf to sit away

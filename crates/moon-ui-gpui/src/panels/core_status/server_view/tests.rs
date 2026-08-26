@@ -2,7 +2,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use moon_core::feed::{ConnStatus, CoreEndpoint};
+use moon_core::feed::{ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 use super::tree_items;
@@ -24,6 +24,7 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
         startup: CoreStartupStatus::default(),
+        time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
     }
 }

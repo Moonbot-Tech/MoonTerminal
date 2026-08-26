@@ -35,11 +35,12 @@ use super::strategies::{
     strat_db_dump, strat_display_name, strat_kind_name,
 };
 use super::{
-    ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, CoreStartupStatus, DetectRow, ExchangeId,
-    FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyRow,
+    ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, CoreStartupStatus, CoreTimeOffsetStatus,
+    DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyRow,
 };
 use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportStart, ReportTx};
+use crate::session::core_time_offset::{OffsetEstimator, OffsetSource};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
 /// How often a still-starting core's startup snapshot is read.
@@ -390,6 +391,9 @@ pub(super) fn run(
     // noise. The first failure is worth seeing; the rest are not.
     let mut is_ready = false;
     let mut api_expiry_failed_before = false;
+    // Per-connection clock-offset estimator, fed every `Event::ServerLog` this connection
+    // receives regardless of `feed.log`; see the sampling loop below and `note_ready` at Ready.
+    let mut offset_estimator = OffsetEstimator::new();
     // Startup telemetry is POLLED, not pushed: MoonProto publishes it as a passive snapshot behind
     // a lock at its own bounded rate, so nothing wakes us when it advances. `startup_sent` is the
     // last snapshot that actually left, so the send gate compares against what the store holds
@@ -527,6 +531,9 @@ pub(super) fn run(
                     if fresh {
                         ConnStatus::Stage("connected, init…".into())
                     } else {
+                        // A reconnect replays a backlog of old log lines under fresh receipt
+                        // times — exactly the burst the estimator's quarantine must discard.
+                        offset_estimator.note_ready(now_ms_i64());
                         ConnStatus::Ready
                     }
                 }
@@ -538,7 +545,10 @@ pub(super) fn run(
                 LifecycleEvent::InitStepCompleted { .. } => {
                     ConnStatus::Stage("connected, init…".into())
                 }
-                LifecycleEvent::Ready => ConnStatus::Ready,
+                LifecycleEvent::Ready => {
+                    offset_estimator.note_ready(now_ms_i64());
+                    ConnStatus::Ready
+                }
                 LifecycleEvent::Reconnecting => ConnStatus::Stage("reconnecting…".into()),
                 LifecycleEvent::ServerRestart => ConnStatus::Stage("server restart…".into()),
                 LifecycleEvent::ConnectFailed { error } => {
@@ -1152,6 +1162,47 @@ pub(super) fn run(
                     "[live] flags: feed.detects={} feed.reports={} feed.log={}",
                     server.feed.detects, server.feed.reports, want_log
                 ));
+            }
+        }
+        // `want_log` gates only UI/disk PUBLICATION further below — the core sends
+        // `Event::ServerLog` regardless, so a core with reports enabled and the log stream
+        // disabled still needs every sample to correct its report rows' times. Sample
+        // unconditionally, ahead of and independent from the publication-gated block below, so
+        // no flag combination can leave this core with reports to correct and no source to
+        // measure them from.
+        for ev in &events {
+            if let Event::ServerLog(l) = ev {
+                let core_time_ms = l.unix_millis();
+                let recv_ms = now_ms_i64();
+                if let Some(offset_secs) = offset_estimator.observe(core_time_ms, recv_ms) {
+                    // Durability-first ORDERING, not a durability GUARANTEE: this loop cannot
+                    // observe the writer thread's own commit, so the DbMsg is only QUEUED ahead
+                    // of the FeedMsg, on the writer's one ordered channel, rather than waited on
+                    // through an acknowledgement path that does not exist. The writer still
+                    // applies its messages strictly in send order, so nothing this loop sends
+                    // afterwards can reach the report table ahead of this segment.
+                    // The screen only ever learns about an offset the WRITER was told about. With
+                    // no report sink this core replicates nothing, so the segment would never
+                    // reach the table, the report reader would keep running on the uncorrected
+                    // axis, and Core Status would stand there claiming a correction nothing
+                    // applies — and it would vanish on the next restart, since the seed reads that
+                    // same table. Staying silent is the honest outcome: the core genuinely has no
+                    // measured offset as far as anything downstream is concerned.
+                    if let Some(sink) = reports {
+                        sink.send(DbMsg::CoreTimeOffset {
+                            core_uid: server.uid,
+                            offset_secs,
+                            observed_at_utc: recv_ms,
+                            source: "log".into(),
+                        });
+                        let _ = tx.send(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
+                            offset_secs: Some(offset_secs),
+                            observed_at_utc: recv_ms,
+                            samples: offset_estimator.samples(),
+                            source: OffsetSource::Log,
+                        }));
+                    }
+                }
             }
         }
         // Alert fires (`DETECT_KIND_ALERT`) arrive as Event::Detect. Also enter this path when

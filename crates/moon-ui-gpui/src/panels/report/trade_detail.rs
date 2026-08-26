@@ -31,14 +31,15 @@ pub(super) struct RowTarget {
     filter: ReportFilter,
 }
 
-/// Render one Unix second in the Report's own display zone.
+/// Render one replicated Unix second on the Report's own time axis.
 ///
 /// The zone is the panel's, not a second clock of the window's own: the times beside the chart
 /// must read exactly as the row the user clicked.
 ///
 /// Args:
 ///     seconds: Unix seconds.
-///     zone: The Report's display zone.
+///     zone: Zone of the Report's axis. `buy_date`/`close_date` come straight off the replica and
+///         carry the CORE's wall clock, so the user's display zone must not be applied on top.
 ///
 /// Returns:
 ///     `YYYY-MM-DD HH:MM:SS`, or a dash for an unusable stamp.
@@ -75,7 +76,12 @@ impl ReportPanel {
     ///     cx: Panel context.
     pub(super) fn open_trade_detail_target(&mut self, target: RowTarget, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
-        let zone = self.display_zone;
+        // These stamps render replicated columns, so they follow the report axis rather than the
+        // header clock -- the same split the Report grid makes for the very same two values. That
+        // means BOTH halves of the axis: the offset that lifts a core-local second to true UTC,
+        // and only then the zone it renders in. Taking the zone alone is what let this window
+        // disagree with the very row that opened it.
+        let axis = self.report_axis();
         let RowTarget {
             core,
             coin,
@@ -94,7 +100,10 @@ impl ReportPanel {
                 let Some(record) = found else {
                     return;
                 };
-                let stamps = (stamp(record.buy_date, zone), stamp(record.close_date, zone));
+                let stamps = (
+                    stamp(axis.to_utc(record.buy_date, core), axis.zone()),
+                    stamp(axis.to_utc(record.close_date, core), axis.zone()),
+                );
                 crate::trade_window::open_trade_window(&backend, record, core, market, stamps, cx);
             });
         })

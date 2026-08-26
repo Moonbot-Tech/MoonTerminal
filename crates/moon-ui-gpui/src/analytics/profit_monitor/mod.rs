@@ -520,9 +520,19 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Quote-profit query for the selected period and global valuation mode.
     fn query(&self) -> Query {
-        let (from, to) = self.period.range_at(now_utc(), self.zone);
+        // The window resolves in THIS monitor's own selected zone. Under Phase 1 it could not:
+        // the bounds went straight onto a core-local column, so computing "today" in the user's
+        // zone slid the period sideways relative to the rows it filtered, and UTC was the only
+        // self-consistent choice. Now the read side converts each bound onto the core's own clock
+        // per offset group, so a civil boundary means what it says — and leaving this on UTC would
+        // put a different "today" here than in the Report window beside it.
+        //
+        // Only the ZONE is carried: the offsets on this axis are replaced by the read path, which
+        // loads them inside its own pinned snapshot.
+        let axis = moon_core::db::ReportAxis::from_measured(Default::default(), self.zone);
+        let (from, to) = self.period.range_at(now_utc(), axis.zone());
         Query {
-            time_zone: self.zone,
+            axis,
             previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,

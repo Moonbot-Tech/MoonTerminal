@@ -51,6 +51,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::controls::date_range::{self, Bound};
+use moon_core::db::ReportAxis;
 use moon_core::db::analytics::{DayCell, PreviousPeriodBasis, Query, StrategyBase, Summary};
 use moon_core::db::valuation::{ValuationMode, ValuationStatus};
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
@@ -252,6 +253,13 @@ pub struct AnalyticsView {
     backend: Entity<Backend>,
     /// User-selected zone applied to all civil Analytics periods and timestamps.
     display_zone: chrono_tz::Tz,
+    /// The measured time axis this window reads replicated timestamps on, cached.
+    ///
+    /// This window is ONE gpui entity with none of the shell's repaint throttles, so any work in
+    /// its render root runs on every notify. Rebuilding the axis there would walk the whole core
+    /// list per frame for a value that moves only when a core adopts an offset or the zone
+    /// changes — both of which write this field directly.
+    axis: ReportAxis,
     /// Whether custom-period pickers need redisplay after a zone identity change.
     display_zone_fields_dirty: bool,
     /// Report-writer generation observed only while this window exists.
@@ -529,6 +537,31 @@ impl crate::controls::CoreComboHost for AnalyticsView {
 }
 
 impl AnalyticsView {
+
+    /// The time axis every replicated report timestamp in this window is read through.
+    ///
+    /// Answers from the CACHED axis rather than rebuilding one per call. A core with no
+    /// measurement contributes no segment and therefore still reads exactly as stored, which is
+    /// what reproduces MoonBot's own report for an unmeasured fleet.
+    ///
+    /// Returns:
+    ///     The cached time axis for replicated report timestamps.
+    fn report_axis(&self) -> ReportAxis {
+        self.axis.clone()
+    }
+
+    /// The zone a period BOUND and a calendar window resolve in.
+    ///
+    /// A bound is compared against the raw replicated column, so it must land on the SAME axis as
+    /// that column — never on the user's display zone independently, which is what made a picked
+    /// day select a different day's rows. Day labels follow it for the same reason: a caption that
+    /// disagreed with the window it selects is worse than either answer alone.
+    ///
+    /// Returns:
+    ///     The display zone carried by the cached report axis.
+    fn bound_zone(&self) -> chrono_tz::Tz {
+        self.report_axis().zone()
+    }
     /// Build an Analytics view from durable layout preferences and process-lifetime UI choices.
     ///
     /// Args:
@@ -594,9 +627,15 @@ impl AnalyticsView {
             if zone == this.display_zone {
                 return;
             }
-            this.cal_day = calendar::rezone_day(this.cal_day, this.display_zone, zone);
+            // The calendar day and the period fields live on the REPORT AXIS, not on the display
+            // zone, so a zone change must leave them exactly where they are: re-projecting them
+            // here is what used to slide the selected day sideways and change which trades the
+            // period held. The re-projection helper this used to call was deleted with the
+            // change: the axis carries the display zone now, so nothing re-projects a day.
             this.display_zone = zone;
-            this.display_zone_fields_dirty = true;
+            // The axis carries the zone beside the offsets, so it is stale even though nothing
+            // new was measured.
+            this.axis = this.backend.read(cx).report_axis(zone);
             this.coin_lists.invalidate_display_time();
             this.cal_dirty = true;
             this.reload(cx);
@@ -724,6 +763,9 @@ impl AnalyticsView {
         // reachable — that is the picker's own contract, not something the window drives.
         let cal_from = cx.new(|cx| date_range::bound_picker(Bound::From, window, cx));
         let cal_to = cx.new(|cx| date_range::bound_picker(Bound::To, window, cx));
+        // A seeded bound must be read on the axis it will be COMPARED on, not on the display zone;
+        // `self` does not exist yet, so the same answer is resolved from a fresh axis here.
+        let bound_zone = ReportAxis::identity_core_local().zone();
         // Armed probe → open straight on the surface under observation, so the channel
         // reports the coin table rather than the summary nobody asked about.
         let probe = probe_enabled();
@@ -732,12 +774,12 @@ impl AnalyticsView {
         // each tab keeps its own, so a tuning session reopened on a custom range must SHOW it.
         if let Some(Period::Custom(f, t)) = seed_period(tab, saved_period, saved_strat_period) {
             if let Some(d) = (f >= 0)
-                .then(|| date_range::dt_of_secs(f, display_zone))
+                .then(|| date_range::dt_of_secs(f, bound_zone))
                 .flatten()
             {
                 cal_from.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
-            if let Some(d) = date_range::field_of_exclusive(t, display_zone) {
+            if let Some(d) = date_range::field_of_exclusive(t, bound_zone) {
                 cal_to.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
         }
@@ -768,9 +810,13 @@ impl AnalyticsView {
             }));
         }
         let saved_valuation_mode = backend.read(cx).valuation_mode();
+        // Seeded so a window opened on a fleet measured in an earlier session renders corrected
+        // times on its first paint, not on the first backend wake after it.
+        let seeded_axis = backend.read(cx).report_axis(display_zone);
         let mut this = Self {
             backend,
             display_zone,
+            axis: seeded_axis,
             display_zone_fields_dirty: false,
             report_generation,
             valuation_generation,
@@ -838,14 +884,14 @@ impl AnalyticsView {
             cal_mode: saved_mode,
             cal_ym: {
                 use chrono::Datelike;
-                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000, display_zone)
+                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000, bound_zone)
                     .unwrap_or_default();
                 (d.year(), d.month())
             },
             cal_day: moon_core::util::display_time::bucket_start(
                 moon_core::util::now_unix_ms_i64() / 1000,
                 86_400,
-                display_zone,
+                bound_zone,
             )
             .unwrap_or(0),
             cal_prev: LoadState::default(),
@@ -921,6 +967,29 @@ impl AnalyticsView {
         cx.notify();
     }
 
+    /// Adopt a newly measured core offset, reloading every surface that was computed on the old
+    /// one.
+    ///
+    /// Polled beside the valuation health rather than pushed, following this window's own idiom.
+    /// Unlike health, an adoption DOES change rows — every date bucket, every calendar cell and
+    /// every period bound moves — so it reloads rather than merely repainting.
+    ///
+    /// Args:
+    ///     cx: Analytics window context, reloaded only when the axis actually moved.
+    ///
+    /// Returns:
+    ///     Nothing; an axis change marks calendar state dirty and reloads Analytics.
+    fn observe_report_axis(&mut self, cx: &mut Context<Self>) {
+        let axis = self.backend.read(cx).report_axis(self.display_zone);
+        if axis == self.axis {
+            return;
+        }
+        self.axis = axis;
+        self.cal_dirty = true;
+        self.reload(cx);
+        cx.notify();
+    }
+
     /// Adopt a valuation mode saved in Settings, and reload if it moved.
     ///
     /// The mode is application-wide and is edited nowhere in this window, so it can change under
@@ -949,6 +1018,7 @@ impl AnalyticsView {
     ///     cx: GPUI context used to schedule or start the refresh.
     fn observe_report_generation(&mut self, cx: &mut Context<Self>) {
         self.observe_valuation_health(cx);
+        self.observe_report_axis(cx);
         self.observe_valuation_mode(cx);
         let generation = self.current_report_generation();
         if !self
@@ -1177,9 +1247,9 @@ impl AnalyticsView {
     /// Returns:
     ///     Shared filters over that window.
     fn query_for(&self, period: Period) -> Query {
-        let (from, to) = period.range(self.display_zone);
+        let (from, to) = period.range(self.bound_zone());
         Query {
-            time_zone: self.display_zone,
+            axis: self.report_axis(),
             previous_period_basis: if matches!(period, Period::Custom(..)) {
                 PreviousPeriodBasis::Elapsed
             } else {
@@ -1675,11 +1745,11 @@ impl AnalyticsView {
         let (from, to) = match self.active_period() {
             Period::Custom(f, t) => (
                 if f >= 0 {
-                    date_range::dt_of_secs(f, self.display_zone)
+                    date_range::dt_of_secs(f, self.bound_zone())
                 } else {
                     None
                 },
-                date_range::field_of_exclusive(t, self.display_zone),
+                date_range::field_of_exclusive(t, self.bound_zone()),
             ),
             _ => (None, None),
         };
@@ -1750,9 +1820,9 @@ impl AnalyticsView {
         if f.is_none() && t.is_none() {
             return;
         }
-        let tomorrow = Period::Today.range(self.display_zone).1;
+        let tomorrow = Period::Today.range(self.bound_zone()).1;
         let next = {
-            let (from, to) = custom_bounds(f, t, tomorrow, self.display_zone);
+            let (from, to) = custom_bounds(f, t, tomorrow, self.bound_zone());
             Period::Custom(from, to)
         };
         // Programmatic writes (tab switch, preset reset, the swap above) emit `Change` too, so

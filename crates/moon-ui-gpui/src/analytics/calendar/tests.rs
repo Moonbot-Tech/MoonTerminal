@@ -7,7 +7,7 @@ use moon_core::db::{FailKind, ReadFail};
 
 use super::{
     apply_calendar_results, day_window, fmt_amount, fmt_duration_short, fmt_volume, hour_start,
-    next_day, previous_day, resolve_calendar_date, rezone_day, ProfitLoadState, DAY_ROWS,
+    next_day, previous_day, resolve_calendar_date, ProfitLoadState, DAY_ROWS,
 };
 use crate::load_state::{LoadState, Note};
 
@@ -55,24 +55,6 @@ fn spring_forward_gap_has_no_duplicate_calendar_hour() {
 
     assert_eq!(hour_start(day, 2, zone), None);
     assert_eq!(hour_start(day, 3, zone), Some(1_774_746_000));
-}
-
-/// Re-bucketing Warsaw midnight directly in New York turns August 8 into August 7; removing the
-/// old-zone date extraction makes Calendar Day jump backward after the user changes the city.
-#[test]
-fn zone_change_preserves_the_selected_calendar_date() {
-    let old_zone = chrono_tz::Europe::Warsaw;
-    let new_zone = chrono_tz::America::New_York;
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 8).expect("valid date");
-    let old_day = moon_core::util::display_time::day_start(date, old_zone).expect("Warsaw day");
-
-    let rezoned = rezone_day(old_day, old_zone, new_zone);
-
-    assert_eq!(
-        moon_core::util::display_time::date(rezoned, new_zone),
-        Some(date)
-    );
-    assert_eq!(rezoned, 1_786_161_600); // 2026-08-08 00:00 EDT.
 }
 
 /// Replacing `resolve_calendar_date` with the shared forward-clamping `day_start` makes backward

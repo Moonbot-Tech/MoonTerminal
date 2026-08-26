@@ -1,6 +1,7 @@
 // Explicit imports avoid pulling the parent's `gpui::*`, whose `test` shadows the built-in
 // attribute and recursively expands `#[test]`.
 use super::controls::selected_auto_core_name;
+use super::export::{Format, run as run_export};
 use super::state::{ReportFilterSet, applied_filters};
 use super::{
     Period, ReportKind, ReportPeriodBucket, SideFilter, apply_period_from_prefs,
@@ -9,43 +10,117 @@ use super::{
 };
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
-use moon_core::config::WorkspaceMode;
-use moon_core::db::RowScope;
+use moon_core::config::{WorkspaceMode, paths};
+use moon_core::db::{OffsetSegment, ReportAxis, ReportFilter, RowScope, report_recovery};
+use rusqlite::Connection;
+use std::path::PathBuf;
+
+/// Allocate one process-unique data root outside the working tree.
+fn export_fixture_root() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "moonterminal-report-export-core-uid-{}",
+        std::process::id()
+    ))
+}
+
+/// `panels/report/export.rs::run` must carry the ReportTable parallel core id into `field_text`:
+/// resolving through the display schema makes this nonzero core look like core zero and exports
+/// the uncorrected replicated timestamp. Treating `last_update_at` as replicated instead would
+/// also shift the terminal-written freshness stamp by the core's offset.
+#[test]
+fn csv_export_uses_parallel_core_uid_without_correcting_terminal_utc_stamps() {
+    const CORE_UID: u64 = 77;
+    const CORE_CLOCK_SECONDS: i64 = 1_700_000_000;
+    let root = export_fixture_root();
+    if root.exists() {
+        std::fs::remove_dir_all(&root).expect("remove stale CSV export fixture");
+    }
+    std::fs::create_dir_all(&root).expect("create CSV export fixture root");
+    assert!(
+        paths::set_data_dir_override(root.clone()),
+        "this test binary must install its isolated data root before resolving report paths"
+    );
+
+    let reports = Connection::open(paths::reports_db_path()).expect("open reports fixture");
+    reports
+        .execute_batch(&format!(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE core_time_offset (
+                 core_uid INTEGER NOT NULL, from_utc INTEGER NOT NULL, offset_secs INTEGER NOT NULL
+             );
+             CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL, closedate INTEGER, last_update_at INTEGER NOT NULL
+             );
+             INSERT INTO orders_rep VALUES ({CORE_UID}, {CORE_CLOCK_SECONDS}, {CORE_CLOCK_SECONDS});"
+        ))
+        .expect("seed one report row with a non-display core id");
+    drop(reports);
+    let _permit = report_recovery::prepare().expect("authorize the isolated reports fixture");
+
+    let axis = ReportAxis::from_measured(
+        std::collections::HashMap::from([(
+            CORE_UID,
+            vec![OffsetSegment {
+                from_utc: 0,
+                offset_secs: 14_400,
+            }],
+        )]),
+        chrono_tz::America::Los_Angeles,
+    );
+    let path = root.join("export.csv");
+    assert_eq!(
+        run_export(
+            &path,
+            Format::Csv,
+            &["closedate".to_string(), "last_update_at".to_string()],
+            &ReportFilter::default(),
+            "closedate",
+            false,
+            &axis,
+            chrono_tz::America::Los_Angeles,
+        )
+        .expect("export the report row"),
+        1
+    );
+
+    let rendered = std::fs::read_to_string(&path).expect("the CSV fixture must be readable");
+    assert_eq!(
+        rendered,
+        "\u{FEFF}closedate;last_update_at\r\n2023-11-14 10:13;2023-11-14 14:13\r\n"
+    );
+}
 
 /// `mod.rs::row_scope_for` -- replacing its `closed_only || !show_open` guard with `&&`, dropping
 /// the `!`, or swapping its branch arms makes the Report table, totals, and CSV include active
-/// positions when a host or user explicitly excluded them.
+/// positions when a host or user explicitly excluded them, or defer a verdict the host/user
+/// predicates had already settled instead of handing it down to `db::append_row_scope`.
 ///
-/// The expected scopes come from the independent host/user precedence contract and the public
-/// period-bound rule: only an unexcluded period ending before `now` omits active rows.
+/// `row_scope_for` no longer resolves the period question at all -- that decision moved to
+/// `db::report_read::append_row_scope`, which resolves it per offset group. This test therefore
+/// pins only the PRECEDENCE this function still owns: a host's `closed_only` wins outright, then
+/// the user's `show_open` switch, and only when neither excluded active positions does the
+/// function hand down the still-undecided intent.
 #[test]
-fn row_scope_precedence_excludes_active_positions_before_consulting_the_period() {
-    const NOW: i64 = 1_000;
-
+fn row_scope_precedence_excludes_active_positions_before_deferring_to_the_period() {
     assert_eq!(
-        row_scope_for(true, true, None, NOW),
+        row_scope_for(true, true),
         RowScope::Closed,
-        "a host-owned closed-only scope must win even for an unbounded period"
+        "a host-owned closed-only scope must win even when the user's switch admits open rows"
     );
     assert_eq!(
-        row_scope_for(false, false, Some(NOW), NOW),
+        row_scope_for(true, false),
         RowScope::Closed,
-        "turning off active positions must win even when the period reaches now"
+        "a host-owned closed-only scope must win regardless of the user's switch"
     );
     assert_eq!(
-        row_scope_for(false, true, None, NOW),
-        RowScope::ClosedAndOpen,
-        "an unbounded period must include active positions after both exclusions are clear"
-    );
-    assert_eq!(
-        row_scope_for(false, true, Some(NOW), NOW),
-        RowScope::ClosedAndOpen,
-        "a bound at now still reaches the present"
-    );
-    assert_eq!(
-        row_scope_for(false, true, Some(NOW - 1), NOW),
+        row_scope_for(false, false),
         RowScope::Closed,
-        "a completed period delegates to the closed-history scope"
+        "turning off active positions must win when the host has not already excluded them"
+    );
+    assert_eq!(
+        row_scope_for(false, true),
+        RowScope::ClosedAndOpenIfCurrent,
+        "with neither exclusion set, the period question must be deferred to per-offset resolution"
     );
 }
 
