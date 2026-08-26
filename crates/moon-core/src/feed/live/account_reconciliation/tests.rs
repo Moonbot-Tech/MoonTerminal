@@ -42,7 +42,7 @@ fn unchanged_order_stamp_does_not_requeue_repairs() {
     assert_eq!(reconciliation.next_wait(start), None);
 }
 
-/// `account_reconciliation.rs:RepairDeadline::queue` moving an already-pending deadline on every
+/// `deadline.rs:CoalescedDeadline::queue` moving an already-pending deadline on every
 /// order change would postpone repair forever on a busy core.
 #[test]
 fn repeated_account_changes_preserve_the_original_deadline() {
@@ -95,7 +95,7 @@ fn pushed_full_balance_satisfies_pending_repair_only() {
     assert!(reconciliation.spot_wallet_due(start + Duration::from_secs(10)));
 }
 
-/// `account_reconciliation.rs:RepairDeadline::queue` adding the full interval to every idle change
+/// `deadline.rs:CoalescedDeadline::queue` adding the full interval to every idle change
 /// would keep the header and Spot assets stale for 3/10 seconds after placing an order.
 #[test]
 fn first_change_after_idle_queues_balance_and_spot_repairs_immediately() {
@@ -115,7 +115,7 @@ fn first_change_after_idle_queues_balance_and_spot_repairs_immediately() {
     assert_eq!(reconciliation.next_wait(idle_change), Some(Duration::ZERO));
 }
 
-/// `account_reconciliation.rs:RepairDeadline::mark_attempt` failing to retain the last request time
+/// `deadline.rs:CoalescedDeadline::mark_attempt` failing to retain the last request time
 /// would restore one full balance and Spot-wallet request per genuine order transition.
 #[test]
 fn requests_inside_the_cooldown_are_coalesced_to_its_end() {

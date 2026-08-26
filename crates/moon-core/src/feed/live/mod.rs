@@ -12,6 +12,7 @@ mod archive_probe;
 mod client_settings;
 mod commands;
 mod convert;
+mod deadline;
 mod dirty;
 mod market_role;
 #[cfg(test)]
@@ -54,6 +55,58 @@ use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 /// slowly than this, the extra reads simply return the same snapshot and
 /// `CoreStartupStatus::progress_eq` suppresses the send — the cadence can be too fast, never wrong.
 const STARTUP_POLL: Duration = Duration::from_millis(500);
+
+/// Publication period for the retained order table, about 4 Hz.
+///
+/// Held by the table's `CoalescedDeadline`, which answers both "may I publish" and "how long until
+/// I may" from this one interval. The two answers used to be two expressions in two places, each
+/// free to be edited without the other.
+const ORDERS_TABLE_PERIOD: Duration = Duration::from_millis(250);
+
+/// What one orders turn publishes.
+///
+/// Only the two things a turn can actually send: "nothing" is the absence of one, spelled `None` by
+/// [`Self::decide`], so no site downstream has to carry a branch for a case the decision excluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OrdersPublish {
+    /// The whole retained table, on the [`ORDERS_TABLE_PERIOD`] throttle.
+    Table,
+    /// Only the chart's order lines, immediately on an order event.
+    Lines,
+}
+
+impl OrdersPublish {
+    /// Decide what an orders turn owes, if anything.
+    ///
+    /// The table WINS over the lines when both are due: it carries the same rows, so sending both
+    /// would put the identical set on the channel twice.
+    ///
+    /// Args:
+    ///     table_due: Whether the table's throttle says it may publish now — see
+    ///         `CoalescedDeadline::is_due`, which answers only for work actually queued.
+    ///     has_line_event: Whether this batch carried an event the chart's order lines must see at
+    ///         once.
+    ///
+    /// Returns:
+    ///     The publication, or `None` when this turn owes nothing.
+    fn decide(table_due: bool, has_line_event: bool) -> Option<Self> {
+        if table_due {
+            Some(Self::Table)
+        } else if has_line_event {
+            Some(Self::Lines)
+        } else {
+            None
+        }
+    }
+
+    /// The message this publication puts on the channel.
+    fn message(self, rows: Vec<crate::feed::OrderRow>) -> FeedMsg {
+        match self {
+            Self::Table => FeedMsg::Orders(rows),
+            Self::Lines => FeedMsg::OrderLines(rows),
+        }
+    }
+}
 
 /// Whether the startup poll may stop for this core.
 ///
@@ -162,6 +215,7 @@ use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
 };
+use deadline::CoalescedDeadline;
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
 
@@ -392,8 +446,16 @@ pub(super) fn run(
     // Tracked separately from `identity_sent`: the two facts come from one payload but are gated
     // on different fields, so one can be publishable while the other is not.
     let mut version_sent = false;
-    let mut last_orders = Instant::now();
-    let mut orders_table_pending = false;
+    // The order table's publication throttle. One value, not an `Instant` plus a `bool`: the
+    // loop below sleeps on the earliest of every deadline it owns, so "is it due" and "how long
+    // until it is" have to come from the same state, or the two answers drift. See `deadline.rs`.
+    // `idle_since`, not `new`: the table starts life up to date, and arming the cooldown here
+    // keeps the first publication of a connection where it has always been rather than one
+    // interval earlier.
+    let mut orders_table = CoalescedDeadline::idle_since(ORDERS_TABLE_PERIOD, Instant::now());
+    // Latched while the client has no state snapshot to build order rows from, so the condition is
+    // reported once per episode instead of on every turn.
+    let mut snapshotless_orders = false;
     let mut last_strats = Instant::now();
     // Assets snapshot rate cap: minimum 1 s between publishes while the Assets view is active,
     // otherwise 5 s. Publication still requires a domain event; this is not a periodic timer.
@@ -488,11 +550,13 @@ pub(super) fn run(
         // event gate and 250 ms throttle. Some retained-order edits may already be visible locally,
         // but queued work such as new-order creation may not be; this snapshot can precede the
         // asynchronous mutation, and later order events reconcile the rows.
+        // Without a snapshot this simply does not publish: queuing the table here would arm a
+        // wake for work that, in the only state where the snapshot is missing, can never run.
         if orders_mutated && server.feed.orders {
             if let Some(snap) = client.snapshot() {
+                snapshotless_orders = false;
                 let order_rows = build_order_rows(server.id, &snap, &[]);
-                last_orders = Instant::now();
-                orders_table_pending = false;
+                orders_table.mark_attempt(Instant::now());
                 if tx.send(FeedMsg::Orders(order_rows)).is_err() {
                     break;
                 }
@@ -1605,26 +1669,50 @@ pub(super) fn run(
         // the UI order table to about 4 Hz while updating the chart/order-line store immediately on
         // OrderEvent. Otherwise a short terminal status (Cancel/Fail with deferred-removal=0) can be
         // missed between two table ticks.
-        if server.feed.orders && has_orders_table_event && !orders_table_pending {
-            orders_table_pending = true;
+        let orders_now = Instant::now();
+        if server.feed.orders && has_orders_table_event {
+            orders_table.queue(orders_now);
         }
-        if server.feed.orders && (had_domain_event || orders_table_pending) {
-            let orders_due = last_orders.elapsed() >= Duration::from_millis(250);
-            let orders_table_due = orders_table_pending && orders_due;
-            let order_lines_due = has_order_line_event && !orders_table_due;
-            if orders_table_due || order_lines_due {
-                let Some(snap) = client.snapshot() else {
-                    continue;
-                };
-                let order_rows = build_order_rows(server.id, &snap, &events);
-                if orders_table_due {
-                    last_orders = Instant::now();
-                    orders_table_pending = false;
-                    if tx.send(FeedMsg::Orders(order_rows)).is_err() {
-                        break;
+        if server.feed.orders && (had_domain_event || orders_table.is_queued()) {
+            let publish =
+                OrdersPublish::decide(orders_table.is_due(orders_now), has_order_line_event);
+            // Read the snapshot only for a publication that is actually owed, as above.
+            if let Some(publish) = publish {
+                match client.snapshot() {
+                    Some(snap) => {
+                        snapshotless_orders = false;
+                        let rows = build_order_rows(server.id, &snap, &events);
+                        if publish == OrdersPublish::Table {
+                            // Not `orders_now`: that is when the turn DECIDED, and the cooldown
+                            // has to run from when the table actually went out, after the rows
+                            // were built. Stamping the earlier moment shortens every period by
+                            // the cost of building them.
+                            orders_table.mark_attempt(Instant::now());
+                        }
+                        if tx.send(publish.message(rows)).is_err() {
+                            break;
+                        }
                     }
-                } else if order_lines_due && tx.send(FeedMsg::OrderLines(order_rows)).is_err() {
-                    break;
+                    // No state to build rows from — reachable only once MoonProto's runtime is
+                    // gone for good, since it publishes the snapshot before the events that carry
+                    // it and clears it only at teardown. Both halves here are the TABLE's: it is
+                    // the only publication that carries a deadline and the only one that still owes
+                    // a send after being declined. `defer` keeps that debt while stopping `wait`
+                    // from answering zero every pass — the shape this replaced spun the thread at
+                    // 100%, and an unlogged version of it would publish nothing just as quietly,
+                    // which is what the once-per-episode warning is for.
+                    None if publish == OrdersPublish::Table => {
+                        orders_table.defer(orders_now);
+                        if !snapshotless_orders {
+                            snapshotless_orders = true;
+                            log::warn!(
+                                "core {} has no state snapshot while orders are due; the table \
+                                 waits for one",
+                                crate::feed::core_label(server.id)
+                            );
+                        }
+                    }
+                    None => {}
                 }
             }
         }
@@ -1748,11 +1836,11 @@ pub(super) fn run(
                     // The order table's Strat column resolves strat_id to kind through this same
                     // registry in `build_order_row`. The registry is populated AFTER orders, while
                     // the table normally rebuilds only on order events, so raw strat_id values are
-                    // visible until then. A strategy-set change must resolve the names again: set
-                    // orders_table_pending so the table rebuilds within about 250 ms even without a
-                    // new order event; order_wait below wakes the loop on its timer.
+                    // visible until then. A strategy-set change must resolve the names again:
+                    // queue the table so it rebuilds within its own period even without a new order
+                    // event, and `order_wait` below wakes the loop on that deadline.
                     if server.feed.orders {
-                        orders_table_pending = true;
+                        orders_table.queue(Instant::now());
                     }
                     let strategies: Vec<StrategyRow> = strats
                         .snapshots()
@@ -1881,19 +1969,20 @@ pub(super) fn run(
             continue;
         }
 
-        let order_wait = if server.feed.orders && orders_table_pending {
-            let elapsed = last_orders.elapsed();
-            Some(Duration::from_millis(250).saturating_sub(elapsed))
-        } else {
-            None
-        };
+        // The table's deadline is asked against the same reading as the account ones below, so
+        // the two describe one moment. The startup poll below still reads its own clock.
+        let wait_now = Instant::now();
+        let order_wait = server
+            .feed
+            .orders
+            .then(|| orders_table.wait(wait_now))
+            .flatten();
         // Without this a deferred strategy-edit publish would sleep until whichever unrelated
         // deadline fires next — the API-key poll, minutes out on a quiet core — instead of the
         // ~250 ms rate-limit window it is actually waiting on. The latch never loses the edit,
         // but a confirmed edit would keep rendering as pending long after the core answered.
         let strat_edit_wait = strat_edit_publish_pending
             .then(|| Duration::from_millis(250).saturating_sub(last_strat_edit_pub.elapsed()));
-        let wait_now = Instant::now();
         let account_wait = account_reconciliation.next_wait(wait_now);
         // The API-key poll is the one deadline that is ALWAYS pending, so the wait now always has a
         // ceiling — which is what makes the poll fire on a core whose event stream went quiet. The
