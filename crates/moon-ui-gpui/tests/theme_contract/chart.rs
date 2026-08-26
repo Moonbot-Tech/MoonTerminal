@@ -729,7 +729,10 @@ fn a_chart_host_shows_one_overlay_at_a_time() {
         "popup_slot.rs: hiding must be a no-op unless that popup is the one showing"
     );
     // Every popover on a host routes its open/close report through the slot rather than a setter of
-    // its own, which is what makes the exclusion hold for all of them at once.
+    // its own, which is what makes the exclusion hold for all of them at once. `report_chart_popup`
+    // is the two-way form; the ⚙ popover reports its halves separately because closing it also has
+    // to hand back the keyboard, which needs a window the shared form does not carry. Either way
+    // the slot is what hears it — a popover flipping a flag of its own is what fails here.
     for module in [
         "chart_tabs/common.rs",
         "chart_tabs/candle_popup.rs",
@@ -737,8 +740,10 @@ fn a_chart_host_shows_one_overlay_at_a_time() {
         "chart_tabs/labels_popup/mod.rs",
     ] {
         let source = code_only(&read_src(module));
+        let both_halves = source.contains("open_chart_popup(ChartPopup::")
+            && source.contains("close_chart_popup(ChartPopup::");
         assert!(
-            source.contains("report_chart_popup(ChartPopup::"),
+            source.contains("report_chart_popup(ChartPopup::") || both_halves,
             "{module}: the popover must report open and close to the shared slot"
         );
     }

@@ -21,14 +21,14 @@ mod layout;
 mod tests;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, KeyDownEvent, Keystroke, KeystrokeEvent, Modifiers,
-    ModifiersChangedEvent, Window,
+    App, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, KeystrokeEvent,
+    Modifiers, ModifiersChangedEvent, Window,
 };
 use moon_core::config::{HotkeysConfig, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
-use moon_ui::{MoonHotkeyCapture, MoonHotkeyModifierWatch};
+use moon_ui::{MoonHotkeyCapture, MoonHotkeyModifierWatch, MoonInputState};
 
 use crate::Backend;
 
@@ -173,6 +173,34 @@ fn pressed(raw: &str, event: &Keystroke) -> bool {
 pub fn restore_root_focus(root: &FocusHandle, window: &mut Window, cx: &mut App) {
     if window.focused(cx).is_none() {
         window.focus(root, cx);
+    }
+}
+
+/// Take the keyboard off `field`, and only off that field.
+///
+/// The one primitive behind every "this input is done" in the app: blur when it is the holder, do
+/// nothing when it is not. Both halves matter. A field that keeps the focus after the user has
+/// visibly moved on eats the editing shortcuts outright — Ctrl+Z is Undo inside a text field and
+/// Ctrl+X is Cut, both ordinary keys to bind an action to — and a field that stops being rendered
+/// while still focused is worse, because [`restore_root_focus`] cannot repair THAT one: the handle
+/// belongs to a permanent member of its host, so it still resolves and the window reads as focused
+/// while the dispatch path has already collapsed. The conditional half is what keeps a caller from
+/// reaching across the window and emptying the caret out of an unrelated field — some exits are not
+/// clicks on the field at all.
+///
+/// Blur rather than focus something else: each window root re-takes an unheld focus on its next
+/// frame, so this states the one thing that is true here and lets the window decide where it goes.
+///
+/// Args:
+///     field: The input being released.
+///     window: The window whose focus is being released.
+///     cx: Application context used to read the field's handle.
+pub fn release_field_focus(field: &Entity<MoonInputState>, window: &mut Window, cx: &App) {
+    let held = window
+        .focused(cx)
+        .is_some_and(|focused| focused == field.read(cx).focus_handle(cx));
+    if held {
+        window.blur();
     }
 }
 

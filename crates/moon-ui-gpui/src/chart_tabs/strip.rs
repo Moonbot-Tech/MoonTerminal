@@ -4,6 +4,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
@@ -368,7 +369,7 @@ impl Render for ChartTabs {
                 .id("tabs-coin-dismiss")
                 .absolute()
                 .inset_0()
-                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx, self.coin_input.clone()))
+                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
         });
 
         // Erased to `AnyElement` immediately: `render_fig_tools` returns `impl IntoElement`, which
@@ -381,6 +382,16 @@ impl Render for ChartTabs {
         // `chrome_divider` standing between them, so the boundary comes from the rule rather than
         // from wider spacing — the same block idiom the terminal header and the trading toolbar use.
         // Both settings buttons carry their own anchored popovers, so nothing here positions a popup.
+        //
+        // Both groups AROUND the market field end an open search on press; see
+        // `common::coin_toolbar_press_handler`. Built only while there IS a search to end, because
+        // the listener is not free: it makes each `chrome_section` carry a hitbox that every
+        // mouse-down in the window then walks. A frame always lands between the two states and the
+        // next press — opening the list notifies, and taking the focus refreshes past the view
+        // cache — so nothing a user can do slips through the gate.
+        let coin_search_live = self.popup_shows(ChartPopup::Coin)
+            || self.coin_input.read(cx).focus_handle(cx).is_focused(window);
+        let ends_search = coin_search_live.then(|| common::coin_toolbar_press_handler(cx));
         let right_cluster = div()
             .absolute()
             .right(design::ui_px(cx, 6.0))
@@ -389,12 +400,19 @@ impl Render for ChartTabs {
                 h_flex()
                     .items_center()
                     .gap(design::ui_px(cx, design::CHROME_GAP))
-                    .child(design::chrome_section(cx).child(fig_tools))
+                    .child(
+                        design::chrome_section(cx)
+                            .when_some(ends_search.clone(), |this, end| {
+                                this.capture_any_mouse_down(end)
+                            })
+                            .child(fig_tools),
+                    )
                     .child(design::chrome_divider(cx, p_strip))
                     .child(design::chrome_section(cx).child(coin_search_el))
                     .child(design::chrome_divider(cx, p_strip))
                     .child(
                         design::chrome_section(cx)
+                            .when_some(ends_search, |this, end| this.capture_any_mouse_down(end))
                             .child(scale_dropdown)
                             .children(gather_btn)
                             .child(candle_btn)

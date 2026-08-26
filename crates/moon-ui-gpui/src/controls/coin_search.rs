@@ -737,21 +737,17 @@ where
 /// editing shortcuts outright: Ctrl+Z is Undo there, Ctrl+X is Cut, and both are perfectly ordinary
 /// things to bind New Long and New Short to. The hotkey then does nothing with no symptom at all.
 ///
-/// Blur rather than focus something: each window root re-takes an unheld focus on its next frame
-/// (`hotkeys::restore_root_focus`), so this states the one thing that is true here — the field is
-/// done with the keyboard — and lets the window decide where it goes.
+/// The mechanism is [`crate::hotkeys::release_field_focus`], which is also why this is conditional
+/// on `field` actually holding the focus — not a nicety. Some exits are not clicks on the field at
+/// all: the header ticker's list closes when the pointer merely leaves it, which happens perfectly
+/// often while the user is typing somewhere else entirely. An unconditional blur there would reach
+/// across the window and empty the caret out of whatever field they were in.
 ///
-/// Conditional on `field` actually holding the focus, and that is not a nicety. Some exits are not
-/// clicks on the field at all: the header ticker's list closes when the pointer merely leaves it,
-/// which happens perfectly often while the user is typing somewhere else entirely. An unconditional
-/// blur there would reach across the window and empty the caret out of whatever field they were in.
+/// Kept as its own name rather than calling that one directly at every site: the contract test
+/// `every_coin_search_exit_releases_the_keyboard` counts these calls per host, so a coin search
+/// growing a new way out has to say so here.
 pub(crate) fn release_focus(field: &Entity<MoonInputState>, window: &mut Window, cx: &App) {
-    let held = window
-        .focused(cx)
-        .is_some_and(|focused| focused == field.read(cx).focus_handle(cx));
-    if held {
-        window.blur();
-    }
+    crate::hotkeys::release_field_focus(field, window, cx);
 }
 
 /// Renders the result dropdown: query matches, or the empty-field suggestions, with multi-selection

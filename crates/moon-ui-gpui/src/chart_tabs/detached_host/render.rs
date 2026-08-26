@@ -91,6 +91,30 @@ impl Render for DetachedChartHost {
                     .cleanable(true)
                     .small(),
             );
+        // A press on either control group beside the field ends an open search, and only while
+        // there is one to end; see `common::coin_toolbar_press_handler`. Coverage here is the
+        // groups themselves, so the row's own gaps are not in it — the dividers, the padding, and
+        // the band above and below the centred sections — and this window's dismiss layer starts
+        // BELOW the header, so a press there leaves the list up. The title cluster cannot be
+        // covered at all: it answers `WM_NCHITTEST` with `HTCAPTION`, so dragging the window never
+        // enters the element tree and no listener here can see the press.
+        let coin_search_live = self.popup_shows(ChartPopup::Coin)
+            || self.coin_input.read(cx).focus_handle(cx).is_focused(window);
+        let ends_search = coin_search_live.then(|| common::coin_toolbar_press_handler(cx));
+        // The one button in this row that keeps a glyph: MoonUI ships no bin icon (its `delete.svg`
+        // is a backspace key), and an X would read as "close the window" beside the real window
+        // controls. So it is squared the way the column selectors are — a rendered width equal to
+        // the size's own drawn height — instead of by the icon-only path.
+        let close_all_btn = MoonButton::new("detached-close-all")
+            .label("🗑")
+            .width(design::micro_control_h_value(cx))
+            .tooltip(t!("chartwin.clear").to_string())
+            .size(MoonButtonSize::Micro)
+            .variant(MoonButtonVariant::Ghost)
+            .on_click(move |_, _w, app| {
+                close_all_panel.update(app, |p, cx| p.close_all_panes(cx));
+            })
+            .render();
         // Both layers hang off the header's ACTUAL height rather than the 34 it is built from: that
         // height is scaled, so raw constants drift under a non-default UI or font scale and leave
         // the popup overlapping the header or the dismiss layer covering the input.
@@ -122,7 +146,7 @@ impl Render for DetachedChartHost {
                 .left(px(0.0))
                 .right(px(0.0))
                 .bottom(px(0.0))
-                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx, self.coin_input.clone()))
+                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
         });
         // A modifier held for a MOUSE gesture is a prefix too, and releasing it must not fire a
         // lone-modifier binding. Window-level and in the capture phase: the chart consumes its own
@@ -185,6 +209,9 @@ impl Render for DetachedChartHost {
                     .child(design::chrome_divider(cx, p))
                     .child(
                         design::chrome_section(cx)
+                            .when_some(ends_search.clone(), |this, end| {
+                                this.capture_any_mouse_down(end)
+                            })
                             .child(crate::controls::scale_dropdown_for_add_stack(
                                 cx,
                                 scale,
@@ -263,23 +290,9 @@ impl Render for DetachedChartHost {
                     )
                     .child(design::chrome_divider(cx, p))
                     .child(
-                        design::chrome_section(cx).child(
-                            // The one button in this row that keeps a glyph: MoonUI ships no bin
-                            // icon (its `delete.svg` is a backspace key), and an X would read as
-                            // "close the window" beside the real window controls. So it is squared
-                            // the way the column selectors are — a rendered width equal to the
-                            // size's own drawn height — instead of by the icon-only path.
-                            MoonButton::new("detached-close-all")
-                                .label("🗑")
-                                .width(design::micro_control_h_value(cx))
-                                .tooltip(t!("chartwin.clear").to_string())
-                                .size(MoonButtonSize::Micro)
-                                .variant(MoonButtonVariant::Ghost)
-                                .on_click(move |_, _w, app| {
-                                    close_all_panel.update(app, |p, cx| p.close_all_panes(cx));
-                                })
-                                .render(),
-                        ),
+                        design::chrome_section(cx)
+                            .when_some(ends_search, |this, end| this.capture_any_mouse_down(end))
+                            .child(close_all_btn),
                     )
                     .when(design::show_custom_window_controls(), |this| {
                         this.child(frame.visual_controls(cx))

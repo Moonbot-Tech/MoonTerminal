@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use gpui::*;
+use moon_ui::MoonInputState;
 use rust_i18n::t;
 
 use super::common::{CoinPopupHost, LayoutPopupHost};
@@ -750,6 +751,11 @@ impl CoinPopupHost for ChartTabs {
     /// Return the shared backend that supplies search state and persisted recents.
     fn coin_backend(&self) -> Entity<crate::Backend> {
         self.backend.clone()
+    }
+
+    /// The strip's own market field, shared by every tab kind.
+    fn coin_field(&self) -> &Entity<MoonInputState> {
+        &self.coin_input
     }
 
     /// Clear the coin field and close the list after selection or an outside click.
