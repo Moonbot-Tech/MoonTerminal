@@ -305,10 +305,11 @@ impl CoinsState {
     /// mid-flight?" flag is needed any more — the delta is the answer to that question.
     pub(in crate::analytics::tuner) fn adopt(&mut self, saved: CoinLists) {
         let work = saved.duplicate().with_delta(&self.saved, &self.work);
-        // Bumped only when something ACTUALLY moved. `send_bulk_changes` schedules echo
-        // re-reads 1500/3500 ms after every write, and an unconditional bump made those
-        // app-scheduled reloads look like a user edit — which silently dropped a second Save
-        // clicked inside that window, and rebuilt the field for nothing on every one of them.
+        // Bumped only when something ACTUALLY moved. `reload_active_tuner` fires both
+        // immediately after a bulk write and again once its edit-resolution watch settles, and
+        // an unconditional bump made those app-scheduled reloads look like a user edit — which
+        // silently dropped a second Save clicked inside that window, and rebuilt the field for
+        // nothing on every one of them.
         let moved = work.black != self.work.black
             || work.white != self.work.white
             || saved.black != self.saved.black

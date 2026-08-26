@@ -433,6 +433,88 @@ pub struct StrategyRow {
     pub fields: Vec<(String, String)>,
 }
 
+/// Phase of a strategy edit that has not yet reached a terminal outcome.
+///
+/// Pollable from `strategy_edits()`, unlike a resolution: moonproto keeps a `Pending`/`TimedOut`
+/// edit in its map until something else happens to it, so [`StrategyEditSnapshot::open`] can
+/// always be rebuilt from scratch and a dropped publish cannot strand a phantom pending marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyEditPhase {
+    Pending,
+    TimedOut,
+}
+
+/// Terminal outcome of a strategy edit, reached once and never revisited.
+///
+/// A separate enum from [`StrategyEditPhase`] rather than one five-arm enum: folding `Confirmed`
+/// in there would let `open` hold a row claiming that phase, and that state does not exist —
+/// moonproto removes an edit from its map in the same step that resolves it, so a resolution is a
+/// one-time fact carried by an event, never a phase a row sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyEditResult {
+    Confirmed,
+    Adjusted,
+    Superseded,
+}
+
+/// One strategy edit still awaiting a terminal outcome, with desired values formatted for UI consumers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategyEditRow {
+    pub id: u64,
+    pub phase: StrategyEditPhase,
+    pub submitted_at_ms: i64,
+    /// Desired field values formatted through the same `fmt_field` [`StrategyRow::fields`] uses,
+    /// so a pending value is string-comparable with a confirmed one. `moon-core` cannot localize
+    /// (`rust_i18n::i18n!` is declared in `moon-ui-gpui`), and `moon-ui-gpui` never sees a raw
+    /// `StrategySnapshot`, so the desired values must leave this crate already formatted.
+    pub fields: Vec<(String, String)>,
+}
+
+/// One resolved strategy edit: the core's final verdict on a submission this terminal made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategyEditNote {
+    /// Generated PER CORE, meaningful only within the `CoreData` that produced it. A consumer
+    /// carrying one scalar cursor across cores would suppress another core's lower-sequence notes.
+    pub seq: u64,
+    pub id: u64,
+    pub result: StrategyEditResult,
+    pub at_ms: i64,
+}
+
+/// Strategy-edit state published on its own cadence, faster than the heavy [`StrategyRow`]
+/// rebuild, so a button press gets feedback before a user concludes it did nothing.
+///
+/// `open` is a FULL REPLACE and `resolved` is a batch, travelling in the SAME message: a dropped
+/// `open` message costs nothing because the next one is self-healing, but `open` and `resolved`
+/// must apply atomically, or a poller observing between them sees either an edit still pending
+/// after its own resolution, or a resolution for a row that no longer exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategyEditSnapshot {
+    /// Absence means resolved: a strategy id with no row here has no open edit.
+    pub open: Vec<StrategyEditRow>,
+    pub resolved: Vec<(u64, StrategyEditResult)>,
+}
+
+/// Cap on resolved strategy-edit notes retained per core.
+pub const STRATEGY_EDIT_NOTE_CAP: usize = 64;
+
+/// Classification of one pending strategy edit against a core's resolved notes and open rows,
+/// returned by [`crate::session::store::CoreData::resolve_strategy_edit`].
+///
+/// Shared by every caller that watches a submitted edit for its terminal outcome, so the
+/// three-way rule -- a resolving note wins, else a `TimedOut` open row, else still pending --
+/// lives in exactly one place instead of being reimplemented per caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyEditOutcome {
+    /// A resolved note for this id was pushed since the caller's cursor.
+    Resolved(StrategyEditResult),
+    /// No resolving note, but the still-open row reports `TimedOut` -- marked in place on the
+    /// row, never carried by a note of its own.
+    TimedOut,
+    /// Neither a resolving note nor a `TimedOut` row: still awaiting a verdict.
+    Pending,
+}
+
 /// Schema-field widget kind from moonproto `StrategyFieldUiKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaFieldUi {
@@ -1046,6 +1128,11 @@ pub enum FeedMsg {
     /// `set_checked` is called — before a single byte is sent — so a `checked` flag read back from
     /// `Strategies` only proves the terminal asked, never that the core agreed.
     StrategiesAck,
+    /// In-flight strategy-edit state: open pending/timed-out edits plus newly resolved ones.
+    ///
+    /// Published on its own faster cadence than [`Self::Strategies`] — see [`StrategyEditSnapshot`]
+    /// for why `open` and `resolved` travel together.
+    StrategyEdits(StrategyEditSnapshot),
     /// Core strategy schema with sections and fields by kind, sent when its revision changes.
     StrategySchema(StrategySchemaModel),
     /// Core asset and position snapshot for the Assets window, sent after domain events at most

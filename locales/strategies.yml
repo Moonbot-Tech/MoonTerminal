@@ -94,6 +94,26 @@ strat.fields_revert:
   ru: "откатить"
   en: "revert"
   es: "revertir"
+strat.edit_pending:
+  ru: "отправлено"
+  en: "sent"
+  es: "enviado"
+strat.edit_timeout:
+  ru: "нет подтверждения от ядра"
+  en: "not confirmed by the core"
+  es: "sin confirmar por el núcleo"
+strat.edit_adjusted:
+  ru: "ядро сохранило другие значения"
+  en: "the core saved different values"
+  es: "el núcleo guardó valores distintos"
+strat.edit_superseded:
+  ru: "это изменение перекрыто другим, отправленным раньше"
+  en: "another change sent first overwrote this one"
+  es: "otro cambio enviado antes reemplazó a este"
+strat.edit_banner_dismiss:
+  ru: "понятно"
+  en: "dismiss"
+  es: "entendido"
 strat.help:
   ru: "Описание"
   en: "Description"

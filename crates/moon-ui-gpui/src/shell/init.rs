@@ -170,6 +170,7 @@ impl Shell {
             this.drain_repin_requests(cx);
             this.drain_panel_detach_requests(cx);
             this.drain_engine_action_toasts(cx);
+            this.drain_strategy_edit_toasts(cx);
             // Main-open requests live on Backend, while DockArea activation needs this native
             // window. Coalesce the bridge through the stored handle after this observer returns.
             this.defer_workspace_window_sync(cx);

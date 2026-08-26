@@ -66,6 +66,10 @@ fn strategies_sig(b: &Backend, workspace_cores: Option<&[CoreId]>) -> u64 {
                 .wrapping_add(c.strategies_rev)
                 .wrapping_mul(31)
                 .wrapping_add(c.schema_rev)
+                .wrapping_mul(31)
+                .wrapping_add(c.strategy_edit_rev)
+                .wrapping_mul(31)
+                .wrapping_add(c.strategy_edit_note_rev)
         })
 }
 
@@ -275,6 +279,7 @@ impl StrategiesView {
             selected_section: 0,
             staged: HashMap::new(),
             field_edits: HashMap::new(),
+            last_edit_note_seq: HashMap::new(),
             field_inputs: HashMap::new(),
             field_memos: HashMap::new(),
             field_colors: HashMap::new(),

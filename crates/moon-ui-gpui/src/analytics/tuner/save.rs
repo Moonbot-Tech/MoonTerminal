@@ -8,19 +8,27 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_core::feed::{StrategyEditOutcome, StrategyEditResult};
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonNotification, MoonPalette,
     MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
-use super::super::AnalyticsView;
+use super::super::{AnalyticsView, StrategyEditWatch};
 use super::shared::{SaveAuthority, SaveDialog, SaveTarget};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 
 #[cfg(test)]
 mod tests;
+
+/// Ceiling on how long a bulk-write watch waits for core evidence past `submitted`,
+/// well past the upstream confirmation window (45s) so a late-but-real echo still has time to
+/// land before this fires. Past it, any pair still unresolved -- no note and no core-reported
+/// `TimedOut` phase either -- is folded into the existing "not confirmed" wording and dropped,
+/// so [`AnalyticsView::drain_strategy_edit_watch`] can never leave a watch pending forever.
+const STRATEGY_EDIT_WATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Normalize an unordered concrete core set for stable authority comparison.
 fn normalized_cores(cores: impl IntoIterator<Item = u64>) -> Vec<u64> {
@@ -452,7 +460,7 @@ impl AnalyticsView {
                         .collect()
                 })
                 .await;
-            let wrote = cx.update(|cx| {
+            let _ = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     let changes = Arc::new(changes);
                     if !this.save_authority_is_current(&authority, &targets, cx) {
@@ -515,14 +523,38 @@ impl AnalyticsView {
                                 .push((t.sid as u64, mine.clone()));
                         }
                     }
+                    // Per-core resolved-note cursor, captured BEFORE the first send: installed
+                    // after dispatch, a fast resolution lands before the cursor exists and the
+                    // outcome is missed entirely. Fixed for the watch's whole life — each drain
+                    // rescans from it rather than advancing it, since the ring keeps every note
+                    // until eviction.
+                    let mut since: HashMap<u64, u64> = HashMap::new();
+                    {
+                        let store = this.backend.read(cx).session.store();
+                        for core in by_core.keys() {
+                            let cursor = store
+                                .core(*core)
+                                .and_then(|cd| {
+                                    cd.strategy_edit_notes_since(0).last().map(|n| n.seq)
+                                })
+                                .unwrap_or(0);
+                            since.insert(*core, cursor);
+                        }
+                    }
                     let mut sent_cores = 0usize;
                     let mut failed: Vec<String> = Vec::new();
+                    // Only successful queues enter the watch — a pair whose send failed would
+                    // hang there forever.
+                    let mut pending: Vec<(u64, u64)> = Vec::new();
                     {
                         let b = this.backend.read(cx);
                         for (core, edits) in &by_core {
                             let n = edits.len();
                             match b.session.edit_strategies(*core, edits.clone()) {
-                                Ok(()) => sent_cores += 1,
+                                Ok(()) => {
+                                    sent_cores += 1;
+                                    pending.extend(edits.iter().map(|(sid, _)| (*core, *sid)));
+                                }
                                 Err(e) => {
                                     log::warn!(
                                         "analytics: changes → core {core} ({n} strategies) \
@@ -577,38 +609,151 @@ impl AnalyticsView {
                         // on the core's channel (`session::commands::send_core_cmd`). It
                         // catches a core that is gone from the session set and a closed
                         // channel — not a connected core that receives the command and never
-                        // applies it. For that, the only real evidence is the echo the
-                        // reloads below re-read.
+                        // applies it. For that, the only real evidence is the edit-resolution
+                        // watch installed below.
                         //
                         // A clean write clears the previous complaint; leaving it up would
                         // outlive the problem it describes.
                         this.write_error = None;
                     }
-                    // The snapshot echo will refresh strategies.sqlite — re-read the ACTIVE
-                    // axis (filters, time, or the coin lists).
+                    // `pending` is never empty here (`sent_cores > 0` guaranteed at least one
+                    // entry). A bulk write is rare enough, and simple enough to reason about,
+                    // that replacing any still-open watch from an earlier write outright — rather
+                    // than merging — is the right trade here.
+                    this.strategy_edit_watch = Some(StrategyEditWatch {
+                        pending,
+                        since,
+                        submitted: std::time::Instant::now(),
+                    });
+                    // The snapshot echo will refresh strategies.sqlite — re-read the ACTIVE axis
+                    // (filters, time, or the coin lists). Honest for a different reason than
+                    // before: it re-reads whatever is already on disk, and the watch installed
+                    // above is what drives the LATER re-read once core evidence arrives — the
+                    // banner it raises covers the case where the core outcome disagrees with what
+                    // was asked.
                     this.reload_active_tuner(cx);
                     cx.notify();
                     true
                 })
                 .unwrap_or(false)
             });
-            // Nothing was sent, so there is no echo coming and nothing to re-read. Running
-            // the follow-up reloads anyway would erase the edit the failure just preserved.
-            if !wrote {
-                return;
-            }
-            // The core's echo arrives with a lag — re-read twice more so the
-            // chips/ignores show the state that was ACTUALLY applied.
-            for delay_ms in [1500u64, 3500] {
-                executor
-                    .timer(std::time::Duration::from_millis(delay_ms))
-                    .await;
-                let _ = cx.update(|cx| {
-                    let _ = this.update(cx, |this, cx| this.reload_active_tuner(cx));
-                });
-            }
         })
         .detach();
+    }
+
+    /// Drain core evidence for the active bulk-write watch, if any.
+    ///
+    /// Called from `AnalyticsView`'s general backend observer on every session update. A no-op
+    /// when no watch is active, and cheap otherwise — bounded by the small watched-pair set and
+    /// each core's capped resolved-note ring.
+    ///
+    /// Keys on BOTH `strategy_edit_rev` and `strategy_edit_note_rev`, by reading both the
+    /// resolved-note ring (`strategy_edit_notes_since`) and each still-open row's own phase
+    /// (`strategy_edit`): a `TimedOut` marks the edit IN PLACE and pushes no note, so it bumps
+    /// only `strategy_edit_rev` — reading notes alone would make that outcome unreachable.
+    ///
+    /// Args:
+    ///     window: Owning window, used only to push the clean-resolution success toast.
+    ///     cx: View context used to read session state and raise the write-error banner.
+    ///
+    /// Returns:
+    ///     Nothing; mutates `self.strategy_edit_watch`, `self.write_error`, and re-reads the
+    ///     active tuner axis after a core outcome or the watch timeout.
+    pub(in crate::analytics) fn drain_strategy_edit_watch(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(watch) = self.strategy_edit_watch.as_ref() else {
+            return;
+        };
+        let submitted = watch.submitted;
+        if watch.pending.is_empty() {
+            // Defensive only: a watch is always cleared the moment its last pair resolves.
+            self.strategy_edit_watch = None;
+            return;
+        }
+        let mut confirmed = 0u32;
+        let mut adjusted = 0u32;
+        let mut superseded = 0u32;
+        let mut timed_out = 0u32;
+        let mut still_open = Vec::with_capacity(watch.pending.len());
+        {
+            let store = self.backend.read(cx).session.store();
+            for (core, sid) in &watch.pending {
+                let Some(cd) = store.core(*core) else {
+                    // Core vanished from the session entirely; nothing more will ever arrive for
+                    // it, but there is no fresh resolution either — leave it open rather than
+                    // guessing at an outcome.
+                    still_open.push((*core, *sid));
+                    continue;
+                };
+                let cursor = watch.since.get(core).copied().unwrap_or(0);
+                match cd.resolve_strategy_edit(*sid, cursor) {
+                    StrategyEditOutcome::Resolved(StrategyEditResult::Confirmed) => confirmed += 1,
+                    StrategyEditOutcome::Resolved(StrategyEditResult::Adjusted) => adjusted += 1,
+                    StrategyEditOutcome::Resolved(StrategyEditResult::Superseded) => {
+                        superseded += 1
+                    }
+                    StrategyEditOutcome::TimedOut => timed_out += 1,
+                    StrategyEditOutcome::Pending => still_open.push((*core, *sid)),
+                }
+            }
+        }
+        // A watch must not be able to hang forever: past the ceiling, any pair still
+        // unresolved -- neither a note nor even a core-reported `TimedOut` phase -- is reported
+        // as not confirmed using the same wording, and dropped, rather than left open with no
+        // core evidence ever arriving.
+        if submitted.elapsed() >= STRATEGY_EDIT_WATCH_TIMEOUT && !still_open.is_empty() {
+            timed_out += still_open.len() as u32;
+            still_open.clear();
+        }
+        if confirmed == 0 && adjusted == 0 && superseded == 0 && timed_out == 0 {
+            // Nothing new resolved this tick — no state changed, so no repaint is owed beyond
+            // whatever else this backend-dirty notify already triggers elsewhere in the view.
+            return;
+        }
+        let bad = adjusted > 0 || superseded > 0 || timed_out > 0;
+        if bad {
+            let mut parts = Vec::new();
+            if adjusted > 0 {
+                parts.push(t!("analytics.edit_adjusted", n = adjusted).to_string());
+            }
+            if superseded > 0 {
+                parts.push(t!("analytics.edit_superseded", n = superseded).to_string());
+            }
+            if timed_out > 0 {
+                parts.push(t!("analytics.edit_timeout", n = timed_out).to_string());
+            }
+            let msg = parts.join(" · ");
+            // Append rather than replace: an earlier drain of the SAME watch, or an unrelated
+            // complaint already up, must not be silently overwritten by this one.
+            let combined = match self.write_error.take() {
+                Some(prev) => format!("{prev} · {msg}"),
+                None => msg,
+            };
+            self.set_write_error(combined, cx);
+        }
+        let done = still_open.is_empty();
+        if let Some(watch) = self.strategy_edit_watch.as_mut() {
+            watch.pending = still_open;
+        }
+        if done && !bad {
+            let msg = t!("analytics.edit_confirmed", n = confirmed).to_string();
+            window.push_notification(MoonNotification::success(msg), cx);
+        }
+        if done {
+            self.strategy_edit_watch = None;
+            log::info!(
+                "analytics: bulk-write watch settled after {:.1}s (confirmed {confirmed}, \
+                 adjusted {adjusted}, superseded {superseded}, timed out {timed_out})",
+                submitted.elapsed().as_secs_f32()
+            );
+        }
+        self.reload_active_tuner(cx);
+        if !bad {
+            cx.notify();
+        }
     }
 
     /// Return whether a concrete core remains inside the effective Analytics workspace.

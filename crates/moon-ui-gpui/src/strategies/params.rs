@@ -15,6 +15,18 @@ pub(super) enum ParamsPanelModel {
         multi: bool,
         common: Option<HashSet<String>>,
         differ: bool,
+        /// Still-open strategy edit per selected key, cloned while `store` is in scope so the
+        /// renderer (which needs `&mut self`/`cx.listener` and cannot hold a live store borrow)
+        /// can resolve the pending value tier and the row marker without it.
+        pending: HashMap<Key, StrategyEditRow>,
+        /// Resolved-edit notes not yet acknowledged by each note's OWN core cursor
+        /// (`StrategiesView::last_edit_note_seq`), for the `edit_state_banner` Adjusted/Superseded
+        /// tiers. Also cloned here for the same store-borrow reason as `pending`. Paired with the
+        /// core that produced each note: `StrategyEditNote` carries no core id of its own and
+        /// strategy ids are core-local and repeat across cores, so flattening notes from more
+        /// than one selected core without keeping this association would let a note from one
+        /// core match a row on another.
+        edit_notes: Vec<(CoreId, StrategyEditNote)>,
     },
 }
 
@@ -91,6 +103,33 @@ impl StrategiesView {
         let multi = row_pairs.len() > 1;
         let common = common_fields(self, store);
         let differ = kinds_differ(self, store);
+        let pending: HashMap<Key, StrategyEditRow> = row_pairs
+            .iter()
+            .filter_map(|(key, _)| {
+                store
+                    .core(key.0)?
+                    .strategy_edit(key.1)
+                    .cloned()
+                    .map(|edit| (*key, edit))
+            })
+            .collect();
+        // Each core's notes come off ITS OWN cursor: two selected cores must never share one
+        // watermark, or dismissing one core's notice would silently drop the other's.
+        let mut edit_notes: Vec<(CoreId, StrategyEditNote)> = Vec::new();
+        let mut cores_seen: HashSet<CoreId> = HashSet::new();
+        for (core, _) in row_pairs.iter().map(|(key, _)| *key) {
+            if !cores_seen.insert(core) {
+                continue;
+            }
+            if let Some(cd) = store.core(core) {
+                let since = self.last_edit_note_seq.get(&core).copied().unwrap_or(0);
+                edit_notes.extend(
+                    cd.strategy_edit_notes_since(since)
+                        .cloned()
+                        .map(|note| (core, note)),
+                );
+            }
+        }
         ParamsPanelModel::Content {
             section,
             values,
@@ -98,6 +137,8 @@ impl StrategiesView {
             multi,
             common,
             differ,
+            pending,
+            edit_notes,
         }
     }
 
@@ -138,6 +179,8 @@ impl StrategiesView {
             multi,
             common,
             differ,
+            pending,
+            edit_notes,
         } = model
         else {
             let text = match model {
@@ -240,6 +283,10 @@ impl StrategiesView {
             .child(header)
             .child(div().w_full().h(px(1.0)).bg(moon(p.border)));
 
+        if let Some(banner) = self.edit_state_banner(&row_pairs, &pending, &edit_notes, cx) {
+            col = col.child(banner);
+        }
+
         // Preserve schema field order and look up snapshot values by name.
         let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
         for f in &section.fields {
@@ -256,8 +303,9 @@ impl StrategiesView {
                 continue;
             }
             let active = self.rules.field_active(&f.name, &values);
-            let merged = merged_value_for_owned(self, &row_pairs, f);
-            list = list.child(self.field_row(f, &keys, merged, active, window, cx));
+            let merged = merged_value_for_owned(self, &row_pairs, f, &pending);
+            let pending_phase = field_pending_phase(&row_pairs, &pending, f);
+            list = list.child(self.field_row(f, &keys, merged, active, pending_phase, window, cx));
         }
         let scroll = div()
             .id("strat-params-scroll")
@@ -280,16 +328,118 @@ impl StrategiesView {
         col.into_any_element()
     }
 
+    /// EXACTLY ONE `MoonAlert` for the current selection, chosen by strict priority —
+    /// `Superseded > Adjusted > TimedOut`, `Pending` gets no banner at all (its badge alone is
+    /// enough, see `field_row`) — never a stack and never one per row.
+    ///
+    /// `edit_notes` already carries only what is unacknowledged for EACH note's own core cursor
+    /// (`params_model` reads `strategy_edit_notes_since` per core); dismissing here advances that
+    /// same core's `last_edit_note_seq`, never a shared scalar, so acknowledging one core's
+    /// notice can never suppress another core's still-unseen one.
+    fn edit_state_banner(
+        &mut self,
+        row_pairs: &[(Key, StrategyRow)],
+        pending: &HashMap<Key, StrategyEditRow>,
+        edit_notes: &[(CoreId, StrategyEditNote)],
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let mut note_banner: Option<(StrategyEditResult, CoreId, u64)> = None;
+        for (core, id) in row_pairs.iter().map(|(key, _)| *key) {
+            let Some(note) = edit_notes
+                .iter()
+                .filter(|(note_core, n)| *note_core == core && n.id == id)
+                .map(|(_, n)| n)
+                .max_by_key(|n| n.seq)
+            else {
+                continue;
+            };
+            if note.result == StrategyEditResult::Confirmed {
+                continue;
+            }
+            let outranks = match note_banner {
+                None => true,
+                Some((StrategyEditResult::Superseded, ..)) => false,
+                Some(_) => note.result == StrategyEditResult::Superseded,
+            };
+            if outranks {
+                note_banner = Some((note.result, core, note.seq));
+            }
+        }
+
+        if let Some((result, core, seq)) = note_banner {
+            let key = match result {
+                StrategyEditResult::Adjusted => "strat.edit_adjusted",
+                StrategyEditResult::Superseded => "strat.edit_superseded",
+                StrategyEditResult::Confirmed => unreachable!("filtered above"),
+            };
+            let message = t!(key).to_string();
+            return Some(
+                h_flex()
+                    .w_full()
+                    .gap(design::ui_px(cx, 6.0))
+                    .items_start()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(MoonAlert::error("strat-edit-note", message)),
+                    )
+                    .child(
+                        MoonButton::new("strat-edit-note-dismiss")
+                            .ghost()
+                            .size(MoonButtonSize::Micro)
+                            .label(t!("strat.edit_banner_dismiss").to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let entry = this.last_edit_note_seq.entry(core).or_insert(0);
+                                *entry = (*entry).max(seq);
+                                cx.notify();
+                            }))
+                            .render(),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        // A timeout is explicitly NOT a rejection in the upstream contract — the core may have
+        // applied the edit and lost the echo, and a late confirmation still resolves it. Blue
+        // (MoonAlert::info) reads as informational rather than a failure, matches the badge's
+        // Notice/yellow escalation from Pending's Info/blue, and is the only banner Pending ever
+        // produces, so it can never collide with anything else on screen.
+        let timed_out = row_pairs.iter().any(|(key, _)| {
+            pending
+                .get(key)
+                .is_some_and(|edit| edit.phase == StrategyEditPhase::TimedOut)
+        });
+        if timed_out {
+            return Some(
+                div()
+                    .w_full()
+                    .child(MoonAlert::info(
+                        "strat-edit-timeout",
+                        t!("strat.edit_timeout").to_string(),
+                    ))
+                    .into_any_element(),
+            );
+        }
+        None
+    }
+
     /// Render a field row with the name on the left and value on the right.
     ///
     /// `active=false` dims and disables the row. `merged=None` means the selected values differ,
     /// so the row displays `≠` without a value and remains editable only when active.
+    /// `pending_phase` marks a field touched by a still-open edit (see
+    /// `logic::field_pending_phase`). An unsent local draft remains the higher-priority displayed
+    /// value when present; this marker still records the edit beneath it. It never colours the row
+    /// itself, only the trailing badge, so it can never collide with the unsent-draft amber this
+    /// row already uses for `dirty`.
     fn field_row(
         &mut self,
         f: &SchemaField,
         keys: &[Key],
         merged: Option<String>,
         active: bool,
+        pending_phase: Option<StrategyEditPhase>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -617,6 +767,30 @@ impl StrategiesView {
                     .overflow_hidden()
                     .text_color(moon(val_col))
                     .child(value_el),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .pt(px(2.0))
+                    .when_some(pending_phase, |el, phase| {
+                        // Never MoonTone::Warning here: it resolves to palette.amber, the exact
+                        // colour this row already uses for `dirty`'s left border and background.
+                        let (label, tone) = match phase {
+                            StrategyEditPhase::Pending => {
+                                (t!("strat.edit_pending").to_string(), MoonTone::Info)
+                            }
+                            StrategyEditPhase::TimedOut => {
+                                (t!("strat.edit_timeout").to_string(), MoonTone::Notice)
+                            }
+                        };
+                        el.child(
+                            MoonBadge::new(label)
+                                .variant(MoonBadgeVariant::Soft)
+                                .size(MoonBadgeSize::Status)
+                                .tone(tone)
+                                .render(),
+                        )
+                    }),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.focused_field = Some(field_for_focus.clone());

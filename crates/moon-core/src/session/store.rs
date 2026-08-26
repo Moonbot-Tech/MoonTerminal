@@ -10,8 +10,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::applog::LogLine;
 use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, DetectRow, EngineActionResult,
-    FeedMsg, LevManageState, LicenseState, NewsSnapshot, OrderRow, RuntimeState, StrategyRow,
-    StrategySchemaModel, TransferAssetsSnapshot,
+    FeedMsg, LevManageState, LicenseState, NewsSnapshot, OrderRow, RuntimeState,
+    STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
+    StrategyEditRow, StrategyRow, StrategySchemaModel, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -105,6 +106,34 @@ pub struct CoreData {
     pub latest_detect: HashMap<String, DetectRow>,
     /// Latest core strategy snapshot for the Strategies window.
     pub strategies: Vec<StrategyRow>,
+    /// Open (pending or timed-out) strategy edits, FULL REPLACE on every `FeedMsg::StrategyEdits`.
+    pub strategy_edits: Vec<StrategyEditRow>,
+    /// Advances on every `FeedMsg::StrategyEdits`, gating a surface that renders open edits.
+    ///
+    /// Separate from `strategy_edit_note_rev`: a surface rendering only open state must not
+    /// repaint on every resolution note, and a surface draining only notes must not repaint on
+    /// every pending re-publish.
+    pub strategy_edit_rev: u64,
+    /// Retained ring of resolved strategy edits this core reported, trimmed to
+    /// [`STRATEGY_EDIT_NOTE_CAP`] in the steady state. A note pushed by the current apply is
+    /// never evicted by that same apply -- the trim floor is `max(STRATEGY_EDIT_NOTE_CAP,
+    /// notes pushed this apply)`, so a single bulk sync larger than the cap cannot self-evict
+    /// its own earliest notes before any consumer has a chance to read them.
+    ///
+    /// A ring rather than a pure event: this codebase's binding invariant is that panels never
+    /// subscribe, they poll revision counters, and a pure event is lost for any surface not
+    /// rendering at that instant — exactly the case for Adjusted/Superseded/TimedOut, the three
+    /// facts that must not be lost. Consumers keep a cursor and read
+    /// [`CoreData::strategy_edit_notes_since`].
+    strategy_edit_notes: VecDeque<StrategyEditNote>,
+    /// Generator for [`StrategyEditNote::seq`], monotonic per `CoreData` and never reset. A
+    /// consumer must not carry one scalar cursor across cores: `seq` is meaningful only within the
+    /// core that produced it, and a cursor from another core would suppress this core's
+    /// lower-sequence notes.
+    strategy_edit_note_seq: u64,
+    /// Advances only when at least one resolved note was pushed, gating a surface that drains
+    /// [`CoreData::strategy_edit_notes_since`].
+    pub strategy_edit_note_rev: u64,
     /// Core strategy schema with sections and per-kind fields, or `None` until it arrives.
     pub schema: Option<StrategySchemaModel>,
     /// Latest core assets and positions snapshot for the Assets window.
@@ -274,6 +303,11 @@ impl CoreData {
             detects: VecDeque::new(),
             latest_detect: HashMap::new(),
             strategies: Vec::new(),
+            strategy_edits: Vec::new(),
+            strategy_edit_rev: 0,
+            strategy_edit_notes: VecDeque::new(),
+            strategy_edit_note_seq: 0,
+            strategy_edit_note_rev: 0,
             schema: None,
             assets: AssetsSnapshot::default(),
             transfer_assets: TransferAssetsSnapshot::default(),
@@ -365,6 +399,49 @@ impl CoreData {
     pub fn raw_server_log_snapshot(&self, max: usize) -> Vec<crate::feed::CoreLogLine> {
         let start = self.server_log_raw.len().saturating_sub(max);
         self.server_log_raw.iter().skip(start).cloned().collect()
+    }
+
+    /// Return the open edit for one strategy, if any.
+    pub fn strategy_edit(&self, id: u64) -> Option<&StrategyEditRow> {
+        self.strategy_edits.iter().find(|row| row.id == id)
+    }
+
+    /// Return resolved strategy-edit notes pushed since `seq`, oldest first.
+    ///
+    /// `seq` is a value returned by [`StrategyEditNote::seq`] from a previous read, or `0` to read
+    /// the whole retained ring. It is generated per `CoreData`, so a cursor carried across cores
+    /// would suppress this core's lower-sequence notes — see the field's own note.
+    pub fn strategy_edit_notes_since(&self, seq: u64) -> impl Iterator<Item = &StrategyEditNote> {
+        self.strategy_edit_notes
+            .iter()
+            .filter(move |note| note.seq > seq)
+    }
+
+    /// Classify one pending strategy edit against notes pushed since `since` and this core's open
+    /// rows.
+    ///
+    /// The three-way rule this codifies -- a resolving note wins, else a `TimedOut` open row,
+    /// else still pending -- used to be reimplemented at every call site that watches a submitted
+    /// edit; keeping it here means the two watchers (the coin-menu toast queue and the tuner's
+    /// bulk-write banner) can never drift apart on what counts as resolved. `TimedOut` is derived
+    /// only from the open row's phase, never from the note ring: upstream marks a timeout in
+    /// place and emits no resolved note for it.
+    ///
+    /// Args:
+    ///     id: Strategy id the caller submitted an edit for.
+    ///     since: The caller's own per-core note cursor (`0` to scan the whole retained ring).
+    ///         Not read or mutated by this call -- callers own their own cursor bookkeeping.
+    ///
+    /// Returns:
+    ///     The classification; see [`StrategyEditOutcome`].
+    pub fn resolve_strategy_edit(&self, id: u64, since: u64) -> StrategyEditOutcome {
+        if let Some(note) = self.strategy_edit_notes_since(since).find(|n| n.id == id) {
+            return StrategyEditOutcome::Resolved(note.result);
+        }
+        if self.strategy_edit(id).map(|row| row.phase) == Some(StrategyEditPhase::TimedOut) {
+            return StrategyEditOutcome::TimedOut;
+        }
+        StrategyEditOutcome::Pending
     }
 
     /// Begin a replacement feed without carrying endpoint-scoped telemetry across connections.
@@ -533,6 +610,31 @@ impl CoreData {
             }
             FeedMsg::StrategiesAck => {
                 self.strategies_ack_rev = self.strategies_ack_rev.wrapping_add(1);
+            }
+            FeedMsg::StrategyEdits(snapshot) => {
+                self.strategy_edits = snapshot.open;
+                self.strategy_edit_rev = self.strategy_edit_rev.wrapping_add(1);
+                let at_ms = now_unix_ms_i64();
+                let mut notes_pushed_this_apply = 0usize;
+                for (id, result) in snapshot.resolved {
+                    self.strategy_edit_note_seq = self.strategy_edit_note_seq.wrapping_add(1);
+                    self.strategy_edit_notes.push_back(StrategyEditNote {
+                        seq: self.strategy_edit_note_seq,
+                        id,
+                        result,
+                        at_ms,
+                    });
+                    notes_pushed_this_apply += 1;
+                }
+                // A note pushed by this apply must never be evicted by this same apply, so the
+                // trim floor rises to cover a batch bigger than the steady-state cap.
+                let trim_floor = STRATEGY_EDIT_NOTE_CAP.max(notes_pushed_this_apply);
+                while self.strategy_edit_notes.len() > trim_floor {
+                    self.strategy_edit_notes.pop_front();
+                }
+                if notes_pushed_this_apply > 0 {
+                    self.strategy_edit_note_rev = self.strategy_edit_note_rev.wrapping_add(1);
+                }
             }
             FeedMsg::StrategySchema(schema) => {
                 self.schema = Some(schema);

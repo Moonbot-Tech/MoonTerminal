@@ -923,6 +923,24 @@ shell.engine_action.reload_order_book:
   en: "Order book reload"
   es: "Recarga del libro de órdenes"
 
+# --- Result toasts for a coin-menu strategy-blacklist edit (the menu has no window of its own) ---
+shell.strat_edit_sent:
+  ru: "Правка ЧС для %{coin} отправлена"
+  en: "Blacklist edit for %{coin} sent"
+  es: "Edición de lista negra para %{coin} enviada"
+shell.strat_edit_adjusted:
+  ru: "%{coin}: ядро сохранило другое значение"
+  en: "%{coin}: core saved a different value"
+  es: "%{coin}: el núcleo guardó un valor distinto"
+shell.strat_edit_superseded:
+  ru: "%{coin}: правку опередила другая"
+  en: "%{coin}: another edit changed it first"
+  es: "%{coin}: otra edición lo cambió primero"
+shell.strat_edit_timeout:
+  ru: "%{coin}: подтверждения пока нет, ждём ответ ядра"
+  en: "%{coin}: no confirmation yet, still waiting on the core"
+  es: "%{coin}: aún sin confirmación, esperando al núcleo"
+
 # --- Drawn-figure context menu (right-click in pencil mode) ---
 chart.fig_menu.alert_on:
   ru: "Alert: включить"

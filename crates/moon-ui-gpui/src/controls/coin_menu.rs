@@ -511,12 +511,19 @@ fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
 }
 
 /// Appends a token to the strategy's `CoinsBlackList` through the shared field editor.
-fn add_to_strategy_blacklist(b: &Backend, core: CoreId, sid: u64, coin: &str) {
+///
+/// The coin menu has no window of its own, so it cannot report a non-clean outcome directly: a
+/// successful submission registers a watch instead, and `Shell::drain_strategy_edit_toasts` is
+/// the only place that later becomes a toast.
+fn add_to_strategy_blacklist(b: &mut Backend, core: CoreId, sid: u64, coin: &str) {
     let cur = strategy_blacklist(b, core, sid);
     let new = blacklist_add(&cur, coin);
     let edits = vec![(sid, vec![(FIELD_COINS_BLACK_LIST.to_string(), new)])];
-    if let Err(err) = b.session.edit_strategies(core, edits) {
-        log::warn!("coin_menu: add {coin} to strategy {sid}@{core} blacklist failed: {err:#}");
+    match b.session.edit_strategies(core, edits) {
+        Ok(()) => b.watch_strategy_edit(core, sid, coin.to_string()),
+        Err(err) => {
+            log::warn!("coin_menu: add {coin} to strategy {sid}@{core} blacklist failed: {err:#}");
+        }
     }
 }
 

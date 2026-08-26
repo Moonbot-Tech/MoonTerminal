@@ -1290,6 +1290,31 @@ analytics.write_partial:
   ru: "Часть ядер не приняла запись: %{err}"
   en: "Some cores did not accept the write: %{err}"
   es: "Algunos núcleos no aceptaron la escritura: %{err}"
+# Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /
+# TimedOut), not merely that the terminal managed to send it.
+analytics.edit_pending:
+  ru: "Ожидаем подтверждения ядра: %{n} правок ещё в очереди"
+  en: "Waiting on the core to confirm: %{n} edits still queued"
+  es: "Esperando confirmación del núcleo: %{n} cambios en cola"
+analytics.edit_confirmed:
+  ru: "Ядро подтвердило запись: %{n} правок применено как задумано"
+  en: "The core confirmed the write: %{n} edits applied as requested"
+  es: "El núcleo confirmó la escritura: %{n} cambios aplicados según lo solicitado"
+# The core saved DIFFERENT values than what was sent — this is the user-visible symptom this
+# whole feature exists to surface; the wording must keep saying exactly that.
+analytics.edit_adjusted:
+  ru: "Ядро сохранило другие значения, чем было отправлено (%{n})"
+  en: "The core saved different values than what was sent (%{n})"
+  es: "El núcleo guardó valores distintos a los enviados (%{n})"
+analytics.edit_superseded:
+  ru: "Эти стратегии уже изменил кто-то другой раньше вашей записи (%{n})"
+  en: "Something else changed these strategies before your write landed (%{n})"
+  es: "Algo más cambió estas estrategias antes de que su escritura llegara (%{n})"
+# NOT a rejection — a late confirmation is still possible. Never "failed", never "rejected".
+analytics.edit_timeout:
+  ru: "Ядро не ответило вовремя — это НЕ отказ, подтверждение ещё может прийти позже (%{n})"
+  en: "The core did not answer in time — this is NOT a rejection, a late confirmation is still possible (%{n})"
+  es: "El núcleo no respondió a tiempo — esto NO es un rechazo, aún puede llegar una confirmación tardía (%{n})"
 analytics.tuner.save_clears:
   ru: "(поле будет очищено)"
   en: "(the field will be cleared)"

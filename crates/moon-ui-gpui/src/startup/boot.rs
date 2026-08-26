@@ -292,6 +292,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         quiet_last_min: 0,
         config_dirty: false,
         quitting: false,
+        strategy_edit_watches: Vec::new(),
+        strategy_edit_note_cursor: HashMap::new(),
     });
     backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
     // Settle the header clock fields once before any window reads them: detect an untouched

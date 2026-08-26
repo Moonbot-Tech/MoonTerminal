@@ -3,6 +3,7 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+use moonproto::state::StratsState;
 use moonproto::{MoonClient, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot};
 
 use super::account_reconciliation::BALANCE_TRACE_LEVEL;
@@ -274,6 +275,57 @@ impl LocalStratEdits {
     }
 }
 
+/// Start the outgoing full-list sync from CONFIRMED state with every still-open edit's
+/// DESIRED snapshot laid back over it, and every still-open create/restore appended.
+///
+/// Since MoonProto 9c7b3d73 `stage_local_strategies_owned` no longer overwrites local state,
+/// `strats.snapshots()` is strictly core-confirmed. This guards against TWO distinct failure
+/// modes, and a reader who has only seen the first must not "simplify" the second step away:
+///
+/// - **Reverted field.** Rebuilding from confirmed state alone would re-send the PRE-EDIT value
+///   for every strategy whose previous edit has not yet been echoed, silently reverting the
+///   user's change on the wire.
+/// - **Vanished create/restore.** A still-open create or restore has, by construction, no
+///   confirmed counterpart yet — it exists only as an entry in `strategy_edits()` — so it is
+///   absent from `strats.snapshots()` entirely. Omitting step 2 below would drop it from the
+///   NEXT unrelated outgoing sync altogether, since `stage_local_snapshot_batch` rebuilds its
+///   whole `strategy_edits` map from whatever list this sends: a strategy missing from that list
+///   is not merely reverted, it stops existing.
+///
+/// Applies to a `Pending` edit and a `TimedOut` one alike, in both steps: a timeout is
+/// explicitly not a rejection in the upstream contract (a late core echo still confirms), so
+/// dropping a timed-out desired value here would convert a lost echo into a real revert or a
+/// real disappearance.
+///
+/// Appended entries are sorted by `(submitted_at, strategy_id)` because `strategy_edits()` is a
+/// `HashMap` iterator with no stable order — an unsorted append would make the outgoing list
+/// order vary between runs.
+///
+/// One accepted side effect: re-staging resets `submitted_at` and `deadline` for every still-
+/// open edit, so an unrelated edit EXTENDS another's 45 s confirmation window. It can only ever
+/// extend, never cause a false `TimedOut`. It is not fixed here — the fix belongs upstream.
+fn overlay_pending_edits(strats: &StratsState) -> Vec<StrategySnapshot> {
+    let mut full: Vec<StrategySnapshot> = strats
+        .snapshots()
+        .map(
+            |confirmed| match strats.strategy_edit(confirmed.strategy_id) {
+                Some(edit) => edit.desired().clone(),
+                None => confirmed.clone(),
+            },
+        )
+        .collect();
+
+    let mut unconfirmed: Vec<_> = strats
+        .strategy_edits()
+        .filter(|(id, _)| strats.snapshot(*id).is_none())
+        .map(|(_, edit)| (edit.submitted_at(), edit.desired().clone()))
+        .collect();
+    unconfirmed.sort_by_key(|(submitted_at, snapshot)| (*submitted_at, snapshot.strategy_id));
+    full.extend(unconfirmed.into_iter().map(|(_, snapshot)| snapshot));
+
+    full
+}
+
 /// Shared strategy-sync path: load the COMPLETE current set, let `build` edit it (patch fields,
 /// change paths, or add entries), and send ONE `sync_local_strategies` plus a log entry if
 /// anything changed. `build` returns the number of affected entries and increments `last_date`
@@ -289,7 +341,7 @@ fn rebuild_sync(
         let strats = snap.strats();
         let schema = strats.strategy_schema();
         let now = now_ms() as u64;
-        let mut full: Vec<StrategySnapshot> = strats.snapshots().cloned().collect();
+        let mut full: Vec<StrategySnapshot> = overlay_pending_edits(strats);
         let changed = build(&mut full, schema, now);
         if changed > 0 {
             let placements = full
@@ -438,6 +490,16 @@ pub(super) fn drain_commands(
                                     }
                                 }
                             }
+                            // Deliberately not bumping `strategy_ver`: moonproto's `same_revision`
+                            // compares `last_date` AND `strategy_ver`. We send back the last
+                            // core-confirmed `strategy_ver` untouched, so if the core preserves it
+                            // the echo matches and the edit resolves to `Confirmed`. Bumping it
+                            // locally would be strictly worse — if the core does not preserve it,
+                            // the echo matches neither `same_revision` nor
+                            // `revision_strictly_dominates`, the edit resolves to nothing, and every
+                            // successful edit would sit `Pending` until it reported `TimedOut` at
+                            // 45 s. The Delphi rollback guard is `>=` on both fields, so bumping
+                            // `last_date` alone already wins it.
                             sc.last_date = now.max(sc.last_date + 1);
                             edited += 1;
                         }
