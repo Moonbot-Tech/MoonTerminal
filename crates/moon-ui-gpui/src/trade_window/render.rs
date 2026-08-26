@@ -64,6 +64,7 @@ pub(super) fn rail_wraps(viewport_w: f32) -> bool {
 
 impl Render for TradeWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         let p = MoonPalette::active(cx);
         let narrow = rail_wraps(f32::from(window.viewport_size().width));
         // The header's ACTUAL height, not the constant it is built from: that constant is scaled,

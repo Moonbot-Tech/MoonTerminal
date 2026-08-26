@@ -314,7 +314,15 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // actions: cancel the hovered order and stop the event when one exists; otherwise let it
     // through so Tab remains focus navigation.
     let tab_backend = backend.clone();
-    cx.intercept_keystrokes(move |ev, _window, cx| {
+    cx.intercept_keystrokes(move |ev, window, cx| {
+        // Interceptors run before ACTIONS and before element dispatch, so this is the only place
+        // that sees a keystroke no matter what the window's focus is doing. That makes it the probe
+        // for the one failure a root listener cannot report: GPUI routes a key event to the
+        // dispatch path of the FOCUSED node, and when the focus id no longer resolves to a node in
+        // the rendered frame it silently falls back to the tree's ROOT node — whose path carries no
+        // element listeners at all. Every window-root `on_key_down` is then skipped and the press
+        // vanishes without a trace. Pairing this line with the root's own says which happened.
+        crate::hotkeys::trace_key_intercepted(ev, window, cx);
         if ev.keystroke.key == "tab"
             && ev.keystroke.modifiers == Modifiers::default()
             && crate::hotkeys::cancel_hovered_order(&tab_backend, cx)

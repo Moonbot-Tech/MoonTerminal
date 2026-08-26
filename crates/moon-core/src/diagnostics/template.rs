@@ -147,11 +147,29 @@ ENV: MOON_DIAG_MARKET_SOURCES=1",
         key: "chart_input",
         default: "false",
         doc: "\
-Chart hit-testing: where a press landed and which rectangles it was tested against.
+Chart hit-testing: where a press landed and which rectangles it was tested against, plus the
+reason a manual order was refused.
 Answers \"why did clicking this label do something else\" — the chart draws in its own pass, in
-its own units, and a hit test that disagrees with the drawing cannot be seen by reading either.
-COST: one line per tested press; nothing while the pointer only moves.
+its own units, and a hit test that disagrees with the drawing cannot be seen by reading either —
+and \"why did my New Long hotkey do nothing\", which the terminal otherwise answers with silence.
+Press the key once per attempt: a HELD key's repeats are dropped before the trace runs, on
+purpose, so that a stuck key cannot queue an order per repeat.
+COST: one line per tested press and per refused order; nothing while the pointer only moves.
 ENV: MOON_DIAG_CHART_INPUT=1",
+    },
+    KeyDoc {
+        section: "log",
+        key: "hotkeys",
+        default: "false",
+        doc: "\
+Hotkey dispatch: every key the window root sees, and the action the bindings made of it.
+Answers \"my shortcut does nothing\", which otherwise has no symptom at all. The three outcomes
+read differently: NO line for a press means the key never reached the terminal — something with
+focus, or a control that binds it, consumed it first; a line saying it matched nothing means the
+key arrived and no binding claims it; a named action means dispatch worked and the failure is
+further down, in whatever that action does.
+COST: one line per key press. Typing in any field logs every character.
+ENV: MOON_DIAG_HOTKEYS=1",
     },
     KeyDoc {
         section: "log",

@@ -809,3 +809,81 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         "the opener must build a historical panel and pin one-minute candles before the first view fetch"
     );
 }
+
+/// Every window root must repair an empty focus on the way into its own frame.
+///
+/// GPUI dispatches a key event down the path of the FOCUSED node, and with the window blurred it
+/// falls back to the dispatch tree's bare ROOT node, whose path holds no element listeners: the
+/// root's `on_key_down` is skipped and EVERY hotkey dies until something focusable is clicked. The
+/// UI stack blurs on two ordinary paths and hands the focus nowhere — `MoonPopover` closing with no
+/// previous holder, and GPUI releasing a dropped focus handle — so a window that does not repair
+/// this loses its keyboard for the rest of the session. Measured 2026-08-26, at the cost of most of
+/// a day: four New Long presses in a row logged `window focus=NONE, dispatch depth=0` and did
+/// nothing whatever, with no other symptom anywhere.
+///
+/// Asserted per window rather than once: the repair is worthless in the window that forgot it, and
+/// the two roots are edited independently.
+#[test]
+fn every_window_root_restores_focus_when_nothing_holds_it() {
+    for (name, path) in [
+        ("group window", "shell/render.rs"),
+        ("detached chart window", "chart_tabs/detached_host/render.rs"),
+        ("strategies window", "strategies/mod.rs"),
+        ("trade window", "trade_window/render.rs"),
+        ("analytics window", "analytics/render.rs"),
+        ("profit monitor window", "analytics/profit_monitor/mod.rs"),
+        ("report panel and its own window", "panels/report/render.rs"),
+    ] {
+        let raw = read_src(path);
+        let src = code_only(&raw);
+        assert!(
+            src.contains("restore_root_focus(&self.focus, window, cx)"),
+            "{name} ({path}) must call hotkeys::restore_root_focus from its render, or a blurred \
+             window silently stops receiving every hotkey"
+        );
+    }
+    // And the repair itself must stay conditional: taking focus unconditionally would pull it out
+    // of whatever field the user is typing in, on every frame.
+    let raw = read_src("hotkeys.rs");
+    let hotkeys = code_only(&raw);
+    let body = braced_body(&hotkeys, "pub fn restore_root_focus(");
+    assert!(
+        body.contains("window.focused(cx).is_none()"),
+        "restore_root_focus must act only when NOTHING holds focus"
+    );
+}
+
+/// Every way out of a coin search must hand the keyboard back.
+///
+/// The field keeps focus after a pick — nothing takes it away, and an input here is deliberately not
+/// blurred just because something else was clicked. Visually the search is over; in fact every
+/// keystroke still belongs to a text field, and a text field eats the editing shortcuts outright:
+/// Ctrl+Z is Undo there and Ctrl+X is Cut, both perfectly ordinary keys to bind New Long and New
+/// Short to. The hotkey then does nothing, with no symptom anywhere.
+///
+/// Listed per EXIT rather than checked once: the reason a user is finished with the field differs
+/// by exit — picked a coin, clicked away, opened the selection in a new tab, chose a ticker, filtered
+/// a report column — and an exit added later inherits the defect rather than the fix.
+#[test]
+fn every_coin_search_exit_releases_the_keyboard() {
+    for (name, path, exits) in [
+        (
+            "chart tab strip and detached window",
+            "chart_tabs/common.rs",
+            2, // pick, and the dismiss layer
+        ),
+        ("open selection in a new tab", "chart_tabs/strip.rs", 1),
+        ("report coin filter", "panels/report/render.rs", 2), // pick, dismiss
+        ("header ticker picker", "shell/ticker.rs", 3), // pick, hover-out, dismiss
+    ] {
+        let raw = read_src(path);
+        let src = code_only(&raw);
+        let found = src.matches("coin_search::release_focus(&").count();
+        assert_eq!(
+            found, exits,
+            "{name} ({path}) must release focus on each of its {exits} coin-search exit(s), \
+             found {found} — an exit that keeps focus silently disables every hotkey bound to an \
+             editing shortcut"
+        );
+    }
+}

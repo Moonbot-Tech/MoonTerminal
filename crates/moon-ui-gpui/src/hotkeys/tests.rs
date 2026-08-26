@@ -118,3 +118,17 @@ fn typing_suppresses_a_modifier_binding_without_desynchronizing_it() {
         Some(HotkeyAction::PanicSell)
     );
 }
+
+#[test]
+fn the_hotkey_channel_prefix_still_matches_this_module() {
+    // Same guard as `panels::chart::trade::tests`, and for the same reason: moon-core names a
+    // prefix rooted at the BINARY, which it cannot verify from its own side. Left unchecked, a
+    // `[[bin]]` rename or a module move turns the switch inert while every gate stays green —
+    // which is exactly what happened to `log.chart_input` and went unnoticed for its whole life.
+    let prefix = moon_core::diagnostics::HOTKEYS_TARGET;
+    assert!(
+        module_path!().starts_with(prefix),
+        "log.hotkeys matches {prefix:?}, but this module logs as {:?}",
+        module_path!()
+    );
+}

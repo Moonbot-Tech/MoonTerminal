@@ -204,6 +204,7 @@ impl Render for ReportPanel {
     /// Returns:
     ///     The complete Report surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         self.sync_display_zone_fields(window, cx);
         // MoonUI renders only the selected tab or a visible tile, so reaching this method is the
         // visibility boundary. Hidden Report tabs retain their due edge, while a visible Report in
@@ -266,9 +267,12 @@ impl Render for ReportPanel {
                     });
                     coin_input.update(app, |inp, c| inp.set_value(base.clone(), window, c));
                     view.update(app, |this, cx| this.request_requery(cx));
+                    // The pick closed the list; holding the keyboard afterwards would eat the
+                    // editing shortcuts the hotkeys are bound to. See `release_focus`.
+                    crate::controls::coin_search::release_focus(&coin_input, window, app);
                 },
                 |_core, _market, _app| {},
-                |_app| {},
+                |_window, _app| {},
             )
             .absolute()
             .top_full()
@@ -284,8 +288,9 @@ impl Render for ReportPanel {
                 .inset_0()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                    cx.listener(|this, _ev: &MouseDownEvent, window, cx| {
                         this.close_coin_popup(cx);
+                        crate::controls::coin_search::release_focus(&this.coin, window, cx);
                         cx.stop_propagation();
                     }),
                 )

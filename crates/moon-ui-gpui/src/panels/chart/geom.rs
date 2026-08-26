@@ -269,7 +269,7 @@ impl ChartPanel {
     /// the local glass width is `(GLASS_ZONE_PX * 0.8).min(rect.w * 0.5)`. With the book hidden it
     /// reserves the full capped base width, `GLASS_ZONE_PX.min(rect.w * 0.5)`, over the chart's right
     /// edge so order interaction and the boundary marker remain available.
-    fn control_zone_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
+    pub(super) fn control_zone_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
         if self.orderbook_enabled {
             return self.local_glass_rect(pane).filter(|g| g.w > 0.0);
         }

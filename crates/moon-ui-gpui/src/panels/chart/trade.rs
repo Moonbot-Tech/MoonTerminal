@@ -279,7 +279,8 @@ impl ChartPanel {
             // a window that may not trade this core looks exactly like a gesture that missed.
             if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
                 log::warn!(
-                    "move orders to price: core={} market={market} is outside this window's                      workspace, nothing sent",
+                    "move orders to price: core={} market={market} is outside this window's \
+                     workspace, nothing sent",
                     moon_core::feed::core_label(core)
                 );
                 return;
@@ -333,11 +334,18 @@ impl ChartPanel {
     pub(crate) fn place_order_at_cursor(&mut self, short: bool, cx: &mut Context<Self>) -> bool {
         // Historical viewer: no orders. Rationale at `try_place_order_click`.
         if self.historical {
+            log::debug!("manual order refused: historical viewer places no orders");
             return false;
         }
         match self.input.cursor {
             Some(pos) => self.place_order_at_pos(pos, short, cx),
-            None => false,
+            None => {
+                log::debug!(
+                    "manual order refused: this chart holds no cursor position, so the hotkey has \
+                     no price to place at"
+                );
+                false
+            }
         }
     }
 
@@ -347,27 +355,69 @@ impl ChartPanel {
     /// price, and `(core, market)`, then converts the core group's visible USD-equivalent size.
     fn place_order_at_pos(&mut self, pos: (f32, f32), short: bool, cx: &mut Context<Self>) -> bool {
         // In separate-zone mode place only from the order-book zone; otherwise accept any pane area.
-        let pane = if self.separate_zones(cx) {
+        let separate = self.separate_zones(cx);
+        let pane = if separate {
             self.glass_pane_at(pos)
         } else {
             self.input.pane_at(pos.0, pos.1)
         };
         let Some(pane) = pane else {
+            // The likeliest refusal of the lot, and the one a user cannot see: with separate zones
+            // the pointer has to sit inside the order-book strip on the right, which a HOTKEY gives
+            // no reason to expect — nothing was clicked. The zone's own bounds go in the line, or
+            // the reader is left holding a coordinate and no idea how far off it was.
+            let zone = self
+                .input
+                .pane_at(pos.0, pos.1)
+                .and_then(|pane| self.control_zone_rect(pane));
+            log::debug!(
+                "manual order refused: ({:.1}, {:.1}) is outside {}",
+                pos.0,
+                pos.1,
+                match (separate, zone) {
+                    (true, Some(z)) => format!(
+                        "the order-book zone x={:.0}..{:.0}, y={:.0}..{:.0} (separate control \
+                         zones are on)",
+                        z.x,
+                        z.x + z.w,
+                        z.y,
+                        z.y + z.h
+                    ),
+                    // Either no pane holds the pointer, or the one that does reports no control
+                    // zone at all — a book enabled but measured to zero width. Stated as the one
+                    // fact both share: there was no zone to be inside of.
+                    (true, None) => "the order-book zone, which resolved to nothing here".to_string(),
+                    (false, _) => "every pane".to_string(),
+                }
+            );
             return false;
         };
         let Some(price) = self.price_at_pane_y(pane, pos.1) else {
+            log::debug!(
+                "manual order refused: pane {pane} maps y={:.1} to no finite positive price",
+                pos.1
+            );
             return false;
         };
         let Some((core, market)) = self
             .chart
             .with_container(|container| container.target(pane))
         else {
+            log::debug!("manual order refused: pane {pane} carries no core and market");
             return false;
         };
 
         let workspace_group = self.workspace_group.clone();
         let placed = self.backend.update(cx, |b, _| {
+            // Warn, not debug, and for the reason the identical guard on `move_orders_to_price`
+            // states: a window that may not trade this core looks exactly like a gesture that
+            // missed. The other refusals here really are "you aimed wrong" and stay on the channel.
             if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                log::warn!(
+                    "manual order refused: core={} market={market} is outside this window's \
+                     workspace, nothing sent",
+                    moon_core::feed::core_label(core)
+                );
                 return false;
             }
             let Some(terms) = b.manual_order_terms(core, None) else {
@@ -378,6 +428,11 @@ impl ChartPanel {
                 return false;
             };
             let Some(usd) = terms.size_usd else {
+                log::debug!(
+                    "manual order refused: core={} market={market} has no visible USD-equivalent \
+                     order size",
+                    moon_core::feed::core_label(core)
+                );
                 return false;
             };
             match b
@@ -393,11 +448,16 @@ impl ChartPanel {
                 )
             {
                 Ok(()) => {
+                    // The pointer position is in the SUCCESS line too, so a log holding both
+                    // outcomes shows where the accepting zone actually starts — a refusal alone
+                    // gives one side of the boundary and leaves the other to guesswork.
                     log::info!(
-                        "manual chart order: core={} market={market} side={} price={price:.8} size={} usd={usd}",
+                        "manual chart order: core={} market={market} side={} price={price:.8} size={} usd={usd} at ({:.1}, {:.1})",
                         moon_core::feed::core_label(core),
                         if short { "short" } else { "long" },
-                        terms.size_base
+                        terms.size_base,
+                        pos.0,
+                        pos.1
                     );
                     true
                 }

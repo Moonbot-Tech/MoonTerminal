@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
-    h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInputState,
+    MoonPalette, h_flex,
 };
 use rust_i18n::t;
 
@@ -729,6 +729,31 @@ where
     list
 }
 
+/// Hand the keyboard back to the window when the coin search is finished with.
+///
+/// The field keeps focus after a pick — nothing takes it away, and the terminal deliberately does
+/// not blur an input just because something else was clicked. Visually the search is over and the
+/// user is back on the chart; in fact every keystroke still belongs to a text field, which eats the
+/// editing shortcuts outright: Ctrl+Z is Undo there, Ctrl+X is Cut, and both are perfectly ordinary
+/// things to bind New Long and New Short to. The hotkey then does nothing with no symptom at all.
+///
+/// Blur rather than focus something: each window root re-takes an unheld focus on its next frame
+/// (`hotkeys::restore_root_focus`), so this states the one thing that is true here — the field is
+/// done with the keyboard — and lets the window decide where it goes.
+///
+/// Conditional on `field` actually holding the focus, and that is not a nicety. Some exits are not
+/// clicks on the field at all: the header ticker's list closes when the pointer merely leaves it,
+/// which happens perfectly often while the user is typing somewhere else entirely. An unconditional
+/// blur there would reach across the window and empty the caret out of whatever field they were in.
+pub(crate) fn release_focus(field: &Entity<MoonInputState>, window: &mut Window, cx: &App) {
+    let held = window
+        .focused(cx)
+        .is_some_and(|focused| focused == field.read(cx).focus_handle(cx));
+    if held {
+        window.blur();
+    }
+}
+
 /// Renders the result dropdown: query matches, or the empty-field suggestions, with multi-selection
 /// checkboxes and an Open in New Tab button when enabled. Clicking outside a checkbox calls the
 /// owner-defined `on_pick`; a checkbox calls `on_toggle`; the footer button calls `on_open_new` for
@@ -765,7 +790,7 @@ pub(crate) fn render_popup<F, G, H>(
 where
     F: Fn(CoreId, String, &mut Window, &mut App) + Clone + 'static,
     G: Fn(CoreId, String, &mut App) + Clone + 'static,
-    H: Fn(&mut App) + Clone + 'static,
+    H: Fn(&mut Window, &mut App) + Clone + 'static,
 {
     let selected_count = selected.len();
     let show_server_per_row = server_context.is_none();
@@ -914,8 +939,8 @@ where
                         MoonButtonVariant::Soft
                     })
                     .disabled(selected_count == 0)
-                    .on_click(move |_, _w, app| {
-                        on_open_new(app);
+                    .on_click(move |_, window, app| {
+                        on_open_new(window, app);
                         app.stop_propagation();
                     })
                     .render(),

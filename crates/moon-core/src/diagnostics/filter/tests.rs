@@ -204,3 +204,65 @@ fn an_empty_escape_hatch_adds_no_stray_separator() {
     assert_eq!(spec, DEFAULT_BASE_FILTER);
     assert!(!spec.ends_with(','), "a trailing comma parses as an empty directive");
 }
+
+#[test]
+fn every_directive_names_a_target_the_terminal_can_actually_emit() {
+    // The defect this guards: `moon-ui-gpui` builds ONE binary, `moonterminal`, and declares no
+    // `[lib]`, so `module_path!()` — the target `log` stamps on a record — roots every UI line at
+    // `moonterminal`. The shipped filter said `moon_ui_gpui=info`, which matched no record ever
+    // emitted; the whole UI sat at the baseline `warn` while the spec read as though it were
+    // traced, and the chart's own diagnostic switch was inert for the same reason. Nothing failed,
+    // which is exactly why it survived: a directive naming a target that does not exist is
+    // indistinguishable from one that is simply quiet.
+    let spec = compose(&DiagCfg::default(), None);
+    assert!(
+        allows(&spec, "moonterminal::panels::chart::trade", log::Level::Info),
+        "the manual-order trail must reach the log at info: {spec}"
+    );
+    assert!(
+        !allows(&spec, "moon_ui_gpui::panels::chart", log::Level::Info),
+        "the dead crate name must not come back: {spec}"
+    );
+    // The GPUI directive is narrower than it looks and is left that way on purpose: `moon-gpui`
+    // renames its lib to `gpui`, so this prefix reaches the sibling platform packages and not GPUI
+    // core. Asserted so the doc explaining it cannot drift away from what the spec does.
+    assert!(
+        allows(&spec, "moon_gpui_windows::platform", log::Level::Info),
+        "the platform layer's info records must survive: {spec}"
+    );
+    assert!(
+        !allows(&spec, "gpui::window", log::Level::Info),
+        "GPUI core is NOT covered by `moon_gpui`; widening it is a separate decision: {spec}"
+    );
+
+    let mut cfg = DiagCfg::default();
+    cfg.log.chart_input = true;
+    let spec = compose(&cfg, None);
+    assert!(
+        allows(&spec, "moonterminal::panels::chart::trade", log::Level::Debug),
+        "log.chart_input must raise the chart subtree it names: {spec}"
+    );
+    assert!(
+        !allows(&spec, "moonterminal::shell::actions", log::Level::Debug),
+        "and only that subtree: {spec}"
+    );
+}
+
+#[test]
+fn the_hotkey_area_raises_dispatch_tracing_and_nothing_else() {
+    let mut cfg = DiagCfg::default();
+    cfg.log.hotkeys = true;
+    let spec = compose(&cfg, None);
+    assert!(
+        allows(&spec, "moonterminal::hotkeys", log::Level::Debug),
+        "log.hotkeys must raise the module that resolves bindings: {spec}"
+    );
+    assert!(
+        !allows(&spec, "moonterminal::panels::chart", log::Level::Debug),
+        "and must not drag the chart channel on with it: {spec}"
+    );
+    assert!(
+        !allows(&compose(&DiagCfg::default(), None), "moonterminal::hotkeys", log::Level::Debug),
+        "off by default, like every other area"
+    );
+}

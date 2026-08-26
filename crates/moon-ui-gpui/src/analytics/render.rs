@@ -21,6 +21,7 @@ impl Render for AnalyticsView {
     /// Returns:
     ///     Complete Analytics surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         if self.display_zone_fields_dirty {
             self.display_zone_fields_dirty = false;
             self.sync_period_pickers(window, cx);

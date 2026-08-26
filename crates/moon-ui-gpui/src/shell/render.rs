@@ -105,6 +105,7 @@ impl Render for Shell {
     ///     The complete window element tree for the current frame.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SHELL_RENDER);
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
 
         // Collect frame and status diagnostics here; chart data, input, and axes stay in ChartPanel.
         // Smoothed render FPS is shown in the status bar, matching the egui host.
@@ -242,7 +243,10 @@ impl Render for Shell {
             // Capture phase, unlike the hotkey listener above: a key consumed by a focused field
             // never bubbles here, and a modifier held while it was typed must still lose its claim
             // to being a binding of its own.
-            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _window, _cx| {
+            // It is also the only place that sees a press unconditionally, which is what the
+            // `log.hotkeys` trace needs to tell a swallowed key from an unbound one.
+            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, _cx| {
+                crate::hotkeys::trace_key_arrived(ev);
                 this.modifier_watch.interrupt();
             }))
             // ── Header ──────────────────────────────────────────────
