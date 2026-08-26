@@ -13,18 +13,66 @@ use moon_core::config::quiet::{self, QuietCfg};
 
 use crate::Backend;
 
+/// Pick the zone a sleep schedule is read in.
+///
+/// A free function so the rule is testable without a clock, a backend or a machine in a particular
+/// zone — the three things that make the caller untestable.
+///
+/// Args:
+///     use_local: The configured preference.
+///     system: Resolves the machine's own zone. Lazy, because the query costs a platform call and
+///         is pointless for an operator who switched the flag off.
+///     header_zone_id: The zone id the header clock shows, if one was saved.
+///
+/// Returns:
+///     The zone to read the schedule in. A machine that cannot name its own zone falls back to the
+///     header clock rather than to UTC: the visible clock is at least an answer the operator can
+///     see and change.
+fn quiet_zone(
+    use_local: bool,
+    system: impl FnOnce() -> Option<chrono_tz::Tz>,
+    header_zone_id: Option<&str>,
+) -> chrono_tz::Tz {
+    use_local
+        .then(system)
+        .flatten()
+        .unwrap_or_else(|| crate::chrome::clock::resolved_header_clock_zone(header_zone_id))
+}
+
 impl Backend {
-    /// Current minute of day in the zone the header clock shows.
+    /// Current minute of day in the zone the sleep schedule is read in.
     ///
-    /// The same zone as the visible clock on purpose: a schedule that fires at a different "23:00"
-    /// than the one on screen is unexplainable to the operator.
+    /// THE one place that choice is made, so the schedule and the end of a hand-switched sleep
+    /// cannot land in two different zones — `toggle_quiet` resolves its deadline from this very
+    /// minute.
+    ///
+    /// By default the MACHINE's zone: "sleep from 23:00" means the operator's own 23:00, and a
+    /// header clock set to another city — or a zone that was never detected, which falls back to
+    /// UTC — must not move the night. With the flag off it follows the visible clock instead,
+    /// which is the older behaviour and the right one for someone deliberately keeping an
+    /// exchange's hours.
     pub(crate) fn quiet_now_min(&self) -> u16 {
-        let zone = crate::chrome::clock::resolved_header_clock_zone(self.header_clock_zone());
+        let zone = quiet_zone(
+            self.layout.quiet.use_local_time,
+            crate::chrome::clock::system_zone,
+            self.header_clock_zone(),
+        );
         let now = chrono::DateTime::from_timestamp_millis(moon_core::util::now_unix_ms_i64())
             .unwrap_or(chrono::DateTime::UNIX_EPOCH)
             .with_timezone(&zone);
         use chrono::Timelike as _;
         (now.hour() * 60 + now.minute()) as u16
+    }
+
+    /// The wall clock the sleep schedule is read on, as `HH:MM`.
+    ///
+    /// Printed beside the window in the settings popup, because the schedule may now run on a
+    /// different clock from the one in the header: without it, an operator watching another city
+    /// sees a window that fires hours away from the only time on screen and has no way to tell
+    /// why.
+    pub(crate) fn quiet_clock_hhmm(&self) -> String {
+        let now_min = self.quiet_now_min();
+        format!("{:02}:{:02}", now_min / 60, now_min % 60)
     }
 
     /// The persisted quiet-mode configuration.
@@ -174,3 +222,6 @@ impl Backend {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
