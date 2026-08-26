@@ -38,9 +38,9 @@ pub(super) struct ChartStackEntry {
     /// Who put the current market here.
     ///
     /// The detect cap evicts only its own: a coin typed into the search field is what the reader
-    /// asked for, and it carries a year-long TTL precisely so the detect feed cannot age it out —
-    /// letting the cap close it would take that back. The LAST arrival decides, so a manual open of
-    /// a detected market claims the slot, and a detect on a hand-opened one hands it back.
+    /// asked for, and it never ages out on its own — letting the cap close it would take that back.
+    /// The LAST arrival decides, so a manual open of a detected market claims the slot, and a
+    /// detect on a hand-opened one hands it back.
     pub owner: SlotOwner,
 }
 
@@ -87,14 +87,18 @@ impl ChartStackEntry {
         !self.vacated && self.panel.read(cx).pane_count() > 0
     }
 
-    /// This slot's eviction deadline, or `None` when it may not be evicted at all.
+    /// How stale this slot is, or `None` when it may not be evicted at all.
     ///
-    /// Two kinds of chart withhold it: a PINNED one, which has no TTL deadline, and one the reader
-    /// opened by hand, whose year-long TTL exists so the detect feed cannot age it out — the cap
-    /// must not do by the back door what that TTL was set to forbid.
-    pub(super) fn evictable_deadline(&self, cx: &App) -> Option<f64> {
+    /// Two kinds of chart withhold it: a PINNED one, and one the reader opened by hand — the cap
+    /// must not take by the back door what the reader put there on purpose.
+    ///
+    /// Deliberately NOT the TTL deadline. A strategy's `KeepInChart = 0` means "keep this chart
+    /// forever", so such a pane has no deadline at all; reading the deadline here would put every
+    /// chart on a default-configured tab into the "never evictable" class, and the tab would stop
+    /// showing new coins once it filled. Staleness exists either way.
+    pub(super) fn eviction_rank_ms(&self, cx: &App) -> Option<f64> {
         match self.owner {
-            SlotOwner::DetectFeed => self.panel.read(cx).ttl_deadline_ms(),
+            SlotOwner::DetectFeed => self.panel.read(cx).stalest_detect_ms(),
             SlotOwner::Reader => None,
         }
     }

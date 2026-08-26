@@ -295,7 +295,9 @@ impl AddChartStack {
     ///
     /// Deliberately closes NOTHING when the cap is lowered below what is already open: the cap
     /// governs what a detect may open, and trimming here would close charts the user is watching
-    /// the moment a digit is typed. The excess drains by itself as those charts reach their TTL.
+    /// the moment a digit is typed. The excess then leaves as those charts expire or are evicted
+    /// by later detects — which, for charts a strategy asked to keep forever, means it does not
+    /// leave on its own at all.
     /// Clamped HERE rather than only where the field is typed, because a value can also arrive from
     /// a hand-edited `charts.json`. Notifies for the reason `set_arrival_flash` does.
     pub(crate) fn set_max_charts(

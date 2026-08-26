@@ -90,7 +90,9 @@ pub struct ServerConfig {
     /// Server color (RGB), later used as the detect color.
     #[serde(default = "default_color")]
     pub color: [u8; 3],
-    /// Synthetic benchmark core (MOON_SYNTH): the feed runs synth::run instead of live::run.
+    /// Synthetic benchmark core: the feed runs `synth::run` instead of `live::run` — no network,
+    /// so no key either. Turned on locally without editing `servers.enc` through
+    /// `MOON_CONFIG_PLAINTEXT=1` + `MOON_CONFIG_PLAINTEXT_SYNTHETIC=1`.
     #[serde(default)]
     pub synthetic: bool,
     /// AddToChart chart-bundle name. Empty follows the global setting

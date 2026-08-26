@@ -109,20 +109,75 @@ fn schema_alert_defaults(
     (sound_alert, sound)
 }
 
-/// Reads an integer strategy field (AddToChart/KeepInChart/KeepAlert), accepting ANY numeric
-/// or Boolean moonproto type and returning `default` otherwise.
-fn field_secs_or(s: &StrategySnapshot, name: &str, default: u32) -> u32 {
+/// An integer out of one field value, accepting ANY numeric or boolean moonproto type.
+///
+/// Anything else — negative, NaN, past `u32`, a non-numeric type — is `None`, so the caller falls
+/// back to its default. Quietly folding a broken number to the EDGE of the range is wrong in both
+/// directions here: `0` in these fields is a MEANING ("do not add" / "keep forever"), and a
+/// saturated `u32::MAX` in `AddToChart` would open a real tab number 4294967295 and write it to
+/// `charts.json`.
+fn field_num(v: &FieldValue) -> Option<u32> {
+    // `as` on a float saturates silently (NaN becomes 0), so the range is checked here instead.
+    // Checking in f64 is required: `u32::MAX as f32` rounds UP, past the bound of the type.
+    fn float_num(v: f64) -> Option<u32> {
+        (0.0..=u32::MAX as f64).contains(&v).then_some(v as u32)
+    }
+    let n: i128 = match v {
+        FieldValue::Int32(v) => (*v).into(),
+        FieldValue::Int64(v) => (*v).into(),
+        FieldValue::UInt32(v) => (*v).into(),
+        FieldValue::UInt64(v) => (*v).into(),
+        FieldValue::Byte(v) => (*v).into(),
+        FieldValue::Word(v) => (*v).into(),
+        FieldValue::Bool(b) => (*b).into(),
+        FieldValue::Double(v) => return float_num(*v),
+        FieldValue::Single(v) => return float_num(*v as f64),
+        _ => return None,
+    };
+    u32::try_from(n).ok()
+}
+
+/// A numeric strategy field (AddToChart/KeepInChart/KeepAlert): a missing field, or garbage in it,
+/// yields `default` — except that a `schema` resolves a MISSING one first.
+///
+/// The server does not send fields equal to their schema default, and for `KeepInChart` a
+/// hardcoded constant then lies: a strategy left at the default `0` — "keep forever" — would
+/// arrive as "sixty seconds". No schema, or no such field in it, still yields `default`.
+///
+/// What matters about `default_value`: moonproto fills it only under its "default non-zero" flag,
+/// `FLAG_DEFAULT_NZ` in `commands/strategy_schema.rs`. A field that IS in the schema while its
+/// `default_value` is `None` therefore has a default of ZERO — and moonproto's own writer omits a
+/// zero value in exactly that case. Without this branch the fix would miss the case it exists for:
+/// `KeepInChart = 0` is the schema default, the server omits the field, the lookup is `None`, and
+/// we would answer 60 instead of "keep forever".
+///
+/// What this cannot do: a detect that arrives BEFORE the core has sent its schema has no schema to
+/// consult, so an omitted `KeepInChart` still resolves to `default` for that detect. It corrects
+/// itself on the next detect for the same market, which pushes the chart's TTL forward again.
+///
+/// The flat `sc.field()` rather than a walk of the editor sections: the walk filters by strategy
+/// kind and would quietly lose the default for a field that kind's editor does not show.
+fn field_secs_or(
+    s: &StrategySnapshot,
+    schema: Option<&StrategySchema>,
+    name: &str,
+    default: u32,
+) -> u32 {
     match s.fields.get(name) {
-        Some(FieldValue::Int32(v)) => (*v).max(0) as u32,
-        Some(FieldValue::Int64(v)) => (*v).max(0) as u32,
-        Some(FieldValue::UInt32(v)) => *v,
-        Some(FieldValue::UInt64(v)) => *v as u32,
-        Some(FieldValue::Byte(v)) => *v as u32,
-        Some(FieldValue::Word(v)) => *v as u32,
-        Some(FieldValue::Bool(b)) => *b as u32,
-        Some(FieldValue::Double(v)) => v.max(0.0) as u32,
-        Some(FieldValue::Single(v)) => v.max(0.0) as u32,
-        _ => default,
+        // PRESENT settles it. The server sends a field only when it DIFFERS from the schema
+        // default, so consulting the schema for a value we merely failed to read would answer with
+        // the one number this field's presence has already ruled out — and for `KeepInChart` that
+        // number is 0, "keep forever". Unreadable falls back to the caller's `default` instead.
+        Some(v) => field_num(v).unwrap_or(default),
+        None => schema
+            .and_then(|sc| sc.field(name))
+            .and_then(|f| match f.default_value.as_ref() {
+                // No NZ flag means the schema default IS zero — a value, not "no data".
+                None => Some(0),
+                // Garbage in the default value falls back to the caller's `default`, not 0.
+                Some(v) => field_num(v),
+            })
+            .unwrap_or(default),
     }
 }
 
@@ -152,9 +207,16 @@ pub(super) fn alert_params(s: &StrategySnapshot, schema: Option<&StrategySchema>
     };
     AlertParams {
         sound_alert,
-        keep_alert_secs: field_secs_or(s, "KeepAlert", 60),
-        add_to_chart: field_secs_or(s, "AddToChart", 0),
-        keep_in_chart_secs: field_secs_or(s, "KeepInChart", 60),
+        // No schema for these two on purpose. The same "the server omits a field equal to its
+        // schema default" rule applies to them, but what a zero MEANS there is a separate
+        // question: `AddToChart = 0` is "do not add", which the fallback already says, and
+        // `KeepAlert` governs the detects feed rather than a chart. Resolving them here would
+        // change what a default-configured strategy does on two more surfaces at once.
+        keep_alert_secs: field_secs_or(s, None, "KeepAlert", 60),
+        add_to_chart: field_secs_or(s, None, "AddToChart", 0),
+        // Through the schema: 0 here means keep the chart in the tab INDEFINITELY, Moonbot's
+        // meaning, not "zero seconds" — and 0 is the schema default, so the field never arrives.
+        keep_in_chart_secs: field_secs_or(s, schema, "KeepInChart", 60),
         sound_name,
     }
 }
@@ -489,3 +551,6 @@ pub(super) fn effective_strat_id(snap: &moonproto::MoonStateSnapshot, strat_id: 
         .map(|c| c.manual_strategy_id)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests;

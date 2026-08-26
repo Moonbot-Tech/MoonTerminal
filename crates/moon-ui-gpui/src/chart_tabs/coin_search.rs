@@ -19,7 +19,14 @@ pub(super) use crate::controls::coin_search::COIN_MATCH_LIMIT;
 /// `shell/ticker.rs` also reuses it).
 pub(crate) use crate::controls::coin_search::{render_popup, search};
 
-/// TTL of a manually added coin in an Add stack. It is effectively session-long (about one year),
-/// preventing a manually opened coin from expiring under the detections' automatic TTL. Main opens
-/// without a TTL (`open_or_focus`). This chart-specific policy does not belong in the shared widget.
-pub(super) const MANUAL_COIN_TTL_MS: f64 = 365.0 * 24.0 * 3600.0 * 1000.0;
+/// TTL of a manually added coin in an Add stack: none, so a coin opened by hand does not expire
+/// under the detections' automatic TTL. Main opens without a TTL (`open_or_focus`). This
+/// chart-specific policy does not belong in the shared widget.
+///
+/// It used to be "about a year" — the same eternity, but as a FINITE TTL, which armed a real
+/// background close timer a year out for every such pane.
+///
+/// Still an AddToChart pane with no deadline rather than a `PaneSource::Manual` one, which would
+/// say the same thing more directly: `Container::is_pinnable` accepts only AddToChart, so the swap
+/// would quietly make every hand-opened coin in an Add stack impossible to pin.
+pub(super) const MANUAL_COIN_TTL_MS: f64 = f64::INFINITY;

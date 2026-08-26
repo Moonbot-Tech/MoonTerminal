@@ -56,7 +56,10 @@ impl ChartTabs {
                     }
                     mx = mx.max(det.seq);
                     if det.add_to_chart > 0 {
-                        let ttl = (det.keep_in_chart_secs.max(1) as f64) * 1000.0;
+                        // `KeepInChart = 0` means Moonbot holds the chart INDEFINITELY, so the
+                        // TTL is infinite: `prune_ttl` never takes that pane and no close timer
+                        // is armed for it.
+                        let ttl = det.keep_in_chart_ttl_ms();
                         fresh.push((
                             det.add_to_chart,
                             id,

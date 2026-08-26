@@ -1140,9 +1140,8 @@ impl ChartEngine {
         removed
     }
 
-    #[allow(dead_code)]
-    pub fn has_ttl_panes(&self) -> bool {
-        self.container.borrow().has_ttl_panes()
+    pub fn stalest_detect_ms(&self) -> Option<f64> {
+        self.container.borrow().stalest_detect_ms()
     }
 
     pub fn next_ttl_deadline_ms(&self) -> Option<f64> {

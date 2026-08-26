@@ -3,9 +3,9 @@
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
 use super::{Admission, admit, resolved_max_charts, resolved_max_charts_evict};
 
-/// A live slot with a TTL deadline, as `admit_detect` collects it.
-fn ttl(ix: usize, deadline: f64) -> (usize, Option<f64>) {
-    (ix, Some(deadline))
+/// A live slot that may be evicted, carrying how stale it is, as `admit_detect` collects it.
+fn ttl(ix: usize, stale_ms: f64) -> (usize, Option<f64>) {
+    (ix, Some(stale_ms))
 }
 
 /// A live slot that may not be evicted: pinned, or opened by hand. Both reach `admit` as `None`.
@@ -112,8 +112,7 @@ fn at_the_cap_without_eviction_drops() {
     assert_eq!(admit(Some(2), false, &full), Admission::Drop);
 }
 
-/// The victim is the earliest deadline: the chart that has gone longest without a fresh detect,
-/// and the one the TTL would have taken first anyway.
+/// The victim is the stalest chart: the one that has gone longest without a fresh detect.
 #[test]
 fn eviction_takes_the_stalest_chart() {
     let full = [ttl(0, 900.0), ttl(1, 100.0), ttl(2, 500.0)];

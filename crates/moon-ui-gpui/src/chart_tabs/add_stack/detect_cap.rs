@@ -6,6 +6,12 @@
 //! decided. Manual paths do not come through here at all: the cap governs the feed, and a coin the
 //! reader typed is not the feed's to close.
 //!
+//! A chart whose strategy sets `KeepInChart = 0` never expires on its own, so on such a tab this
+//! cap is the ONLY thing bounding how many charts accumulate — which is why [`admit`] is handed
+//! each slot's STALENESS rather than its TTL deadline: a chart held forever has no deadline, but it
+//! is still more or less stale than its neighbours. A tab EXPLICITLY set to "no cap" keeps its old
+//! meaning and now has no bound at all, which is what asking for no cap means.
+//!
 //! A tab that never touched the setting is CAPPED, at [`DEFAULT_MAX_CHARTS`] and replacing the
 //! stalest chart. [`resolved_max_charts`] and [`resolved_max_charts_evict`] are the one place that
 //! default is applied, so the runtime and the popup that shows it can never disagree.
@@ -26,7 +32,7 @@ pub(in crate::chart_tabs) const DEFAULT_MAX_CHARTS: u16 = 8;
 
 /// What an unconfigured tab does once that cap is reached: take the stalest slot rather than let
 /// the detect go unshown. A cap that silently drops detects reads as the feed having stopped, and
-/// the victim is the chart the TTL would have taken first anyway.
+/// the chart longest without a detect is the one the reader is least likely to be watching.
 pub(in crate::chart_tabs) const DEFAULT_MAX_CHARTS_EVICT: bool = true;
 
 /// Resolve a tab's stored cap into the number actually in force.
@@ -73,15 +79,19 @@ pub(in crate::chart_tabs) enum Admission {
 
 /// Decide a detect's fate from the cap alone. Pure, so the rule is testable without a live stack.
 ///
-/// `slots` carries one entry per LIVE chart: its index and its deadline IF it may be evicted at
+/// `slots` carries one entry per LIVE chart: its index and how stale it is IF it may be evicted at
 /// all. `None` marks a chart that holds its place unconditionally — pinned, or opened by hand (see
-/// `ChartStackEntry::evictable_deadline`). Both still count toward the cap, because both still
-/// occupy the screen, but neither is ever the victim.
+/// `ChartStackEntry::eviction_rank_ms`). Both still count toward the cap, because both still occupy
+/// the screen, but neither is ever the victim.
 ///
-/// The victim is the EARLIEST deadline, which is the chart that has gone longest without a fresh
-/// detect — every repeat detect pushes its `born_ms` forward — and therefore the one that would
-/// have expired first anyway. That is what makes eviction feel like the TTL arriving early rather
-/// than like an arbitrary chart vanishing.
+/// The victim is the STALEST chart: the one that has gone longest without a fresh detect, since
+/// every repeat detect pushes its `born_ms` forward. Staleness rather than a TTL deadline, because
+/// a chart whose strategy says `KeepInChart = 0` has no deadline at all and would otherwise read as
+/// "never evictable" — on a tab where every chart is such a chart, nothing could ever give way and
+/// the tab would stop showing new coins once full.
+///
+/// Where the two ORDERS differ — a tab mixing `KeepInChart` values — this deliberately picks the
+/// least recently seen chart rather than the one closest to expiring.
 pub(in crate::chart_tabs) fn admit(
     max: Option<u16>,
     evict: bool,
@@ -100,7 +110,7 @@ pub(in crate::chart_tabs) fn admit(
     }
     slots
         .iter()
-        .filter_map(|(ix, deadline)| deadline.map(|d| (*ix, d)))
+        .filter_map(|(ix, stale_ms)| stale_ms.map(|s| (*ix, s)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map_or(Admission::Drop, |(ix, _)| Admission::Evict(ix))
 }
@@ -151,7 +161,7 @@ impl AddChartStack {
         self.open_coin(core, market, ttl_ms, SlotOwner::DetectFeed, cx);
     }
 
-    /// Decide a detect's fate against the cap, reading each live chart's eviction deadline.
+    /// Decide a detect's fate against the cap, reading how stale each live chart is.
     fn admit_detect(&self, core: CoreId, market: &str, cx: &App) -> Admission {
         // Only a tab that ASKED to be uncapped skips the walk now. An unconfigured tab is capped,
         // so the walk below is what an ordinary tab pays per NEW detect: a bounded number of slot
@@ -177,7 +187,7 @@ impl AddChartStack {
             .iter()
             .enumerate()
             .filter(|(_, e)| e.is_live(cx))
-            .map(|(ix, e)| (ix, e.evictable_deadline(cx)))
+            .map(|(ix, e)| (ix, e.eviction_rank_ms(cx)))
             .collect();
         admit(
             Some(cap),
