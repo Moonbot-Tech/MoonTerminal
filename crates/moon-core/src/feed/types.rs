@@ -1029,7 +1029,13 @@ impl MarketDirty {
 pub struct CoreTimeOffsetStatus {
     /// Seconds east of UTC on the core's own clock, or `None` when nothing was ever adopted.
     pub offset_secs: Option<i32>,
-    /// True-UTC instant of the observation that adopted it, in milliseconds.
+    /// True-UTC instant of the LATEST observation carrying this offset, in milliseconds — which is
+    /// not always the one that adopted it, and the field is named for what it holds. A reconnect
+    /// builds a fresh estimator that re-measures the unchanged value, so this advances while the
+    /// durable `core_time_offset.observed_at` deliberately stays at the adoption instant. The
+    /// surface reading it says «Замерено» / "Observed"
+    /// for exactly that reason: a fresh instant here means the measurement is still live, not that
+    /// the offset moved.
     pub observed_at_utc: i64,
     /// Samples standing behind the adopted value.
     pub samples: u32,

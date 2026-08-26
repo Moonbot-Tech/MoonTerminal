@@ -72,7 +72,10 @@ pub(super) struct TzOffsetFacts {
     pub(super) offset_secs: Option<i32>,
     /// Samples standing behind the adopted value (or behind the still-unmeasured state).
     pub(super) samples: u32,
-    /// True-UTC instant of the observation that adopted the current value, in milliseconds.
+    /// True-UTC instant of the LATEST observation carrying the current value, in milliseconds —
+    /// see `CoreTimeOffsetStatus::observed_at_utc`. Rendered under «Замерено» / "Observed", never
+    /// "adopted": a re-measurement that confirms an unchanged offset advances this while the
+    /// durable adoption instant stays put.
     pub(super) observed_at_utc: i64,
     /// Which measurement produced the adopted value.
     pub(super) source: OffsetSource,
