@@ -4,6 +4,8 @@
 //! and PDH is expensive, so the system is polled at most once per `REFRESH_EVERY`
 //! and the cached snapshot is returned between samples.
 
+mod cpu_watch;
+
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -38,22 +40,27 @@ pub struct Metrics {
     gpu: GpuProcessSampler,
     /// Timestamped process memory samples used to calculate change over `MEM_WINDOW`.
     mem_hist: VecDeque<(Instant, f32)>,
+    /// Reports a CPU spike of this process to the application log; see [`cpu_watch`].
+    ///
+    /// It lives here because this is the ONE place the process polls itself.
+    watch: cpu_watch::SpikeDetector,
 }
 
 impl Metrics {
     pub fn new() -> Self {
         let mut sys = System::new();
         sys.refresh_cpu_usage();
-        let ncpu = sys.cpus().len().max(1) as f32;
+        let logical_cpus = sys.cpus().len().max(1);
         let pid = sysinfo::get_current_pid().unwrap_or(Pid::from(0));
         Self {
             sys,
             pid,
-            ncpu,
+            ncpu: logical_cpus as f32,
             last_refresh: None,
             snap: MetricsSnapshot::default(),
             gpu: GpuProcessSampler::new(pid_as_u32(pid)),
             mem_hist: VecDeque::new(),
+            watch: cpu_watch::SpikeDetector::new(logical_cpus),
         }
     }
 
@@ -104,6 +111,14 @@ impl Metrics {
             mem_delta_mb,
             gpu_process,
         };
+        // Fed only on a real refresh, never on the cached return above: the detector counts samples
+        // as seconds, and the caller polls it far more often than it refreshes.
+        if let Some(event) = self
+            .watch
+            .observe(crate::util::now_unix_ms_i64(), &self.snap)
+        {
+            cpu_watch::report(event);
+        }
         self.snap
     }
 }
