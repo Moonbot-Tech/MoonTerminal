@@ -1,4 +1,5 @@
-//! Deterministic SYNTHETIC feed for render benchmarking (MOON_SYNTH environment variable).
+//! Deterministic SYNTHETIC feed for render benchmarking, selected by a core's `synthetic` flag
+//! (`MOON_CONFIG_PLAINTEXT_SYNTHETIC=1` turns a plaintext config's core into one).
 //! It does NOT access the network: it sends Ready + Identity + AddToChart detects (which create
 //! stress-window containers), plus fixed-frequency tick and order-book streams. The goal is an
 //! identical reproducible load in native and Tauri builds for a fair CPU/GPU comparison.
@@ -111,7 +112,16 @@ pub fn run(
     });
 
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
-    // The TTL is approximately one year.
+    //
+    // KeepInChart defaults to 0 here — "keep forever", see `DetectRow::keep_in_chart_ttl_ms` — so
+    // the bench holds its panes for the whole run. It used to be a year in seconds: the same
+    // eternity, but as a FINITE TTL, which meant no run ever reached the infinite-TTL branch. The
+    // environment keeps the other branch (a finite TTL, so pruning and its timer) reachable too,
+    // or runs would simply stop covering that one instead.
+    // Clamped, not cast: `as u32` wraps, so a number past the type asks for one TTL and gets an
+    // unrelated one — and a multiple of 2^32 wraps to 0, which here means "forever", the exact
+    // opposite of the long finite TTL such a number asks for.
+    let keep_in_chart = env_usize("MOON_SYNTH_KEEP_IN_CHART", 0).min(u32::MAX as usize) as u32;
     let mut dets = Vec::new();
     // Numbered from ONE. The ingest side skips everything with `seq <= last` and starts `last` at
     // zero, so a detect numbered zero is never taken. With fifty detects that lost one of them and
@@ -127,7 +137,7 @@ pub fn run(
                 sound_alert: false,
                 keep_alert_secs: 0,
                 add_to_chart: w as u32,
-                keep_in_chart_secs: 31_536_000,
+                keep_in_chart_secs: keep_in_chart,
                 sound_name: None,
                 is_alert: false,
                 kind: 0,

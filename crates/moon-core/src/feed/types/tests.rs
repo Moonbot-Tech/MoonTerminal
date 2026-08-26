@@ -1,4 +1,4 @@
-use super::{ApiKeyExpiry, CoreStartupState, CoreStartupStatus};
+use super::{ApiKeyExpiry, CoreStartupState, CoreStartupStatus, DetectRow};
 
 /// Milliseconds in a day, for readable fixtures.
 const DAY_MS: i64 = 86_400_000;
@@ -267,4 +267,40 @@ fn a_current_step_change_counts_as_different_progress() {
         ..Default::default()
     };
     assert!(!a.progress_eq(&b));
+}
+
+/// Build a detect row carrying `keep_in_chart_secs`; the rest is filler this test never reads.
+fn detect_row(keep_in_chart_secs: u32) -> DetectRow {
+    DetectRow {
+        seq: 1,
+        market: "BTCUSDT".to_string(),
+        time_ms: 0.0,
+        sound_alert: false,
+        keep_alert_secs: 60,
+        add_to_chart: 1,
+        keep_in_chart_secs,
+        sound_name: None,
+        is_alert: false,
+        kind: 0,
+        is_short: false,
+        msg: String::new(),
+        strat_name: String::new(),
+    }
+}
+
+/// `KeepInChart = 0` is Moonbot's "keep it forever", NOT "close it in a moment".
+///
+/// Breaks on: any caller reading `keep_in_chart_secs` directly. Multiplying the field by 1000 makes
+/// the chart live one millisecond; clamping it with `.max(1)` — which is what shipped — makes it
+/// live one second. Both read as "the tab closed by itself the instant it opened".
+#[test]
+fn zero_keep_in_chart_means_forever() {
+    assert_eq!(detect_row(0).keep_in_chart_ttl_ms(), f64::INFINITY);
+}
+
+/// Every other value is still plain seconds, so the fix cannot have made everything eternal.
+#[test]
+fn nonzero_keep_in_chart_is_seconds() {
+    assert_eq!(detect_row(60).keep_in_chart_ttl_ms(), 60_000.0);
+    assert_eq!(detect_row(1).keep_in_chart_ttl_ms(), 1_000.0);
 }

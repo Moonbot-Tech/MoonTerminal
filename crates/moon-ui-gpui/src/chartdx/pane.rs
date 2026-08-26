@@ -186,10 +186,13 @@ impl Container {
 
     /// Remove expired AddToChart panels and return their markets for owner refcount updates.
     pub fn prune_ttl(&mut self, now_ms: f64) -> Vec<(CoreId, String)> {
-        let remove = self.pane.as_ref().is_some_and(|p| match p.source {
-            PaneSource::AddToChart { born_ms, ttl_ms } => !p.pinned && now_ms - born_ms >= ttl_ms,
-            PaneSource::Manual => false,
-        });
+        // Through `deadline_ms`, like `next_ttl_deadline_ms`, rather than taking `ttl_ms` apart a
+        // second time here: an infinite TTL then reads as "no deadline" in ONE place instead of
+        // relying on every comparison against infinity happening to fall the right way.
+        let remove = self
+            .pane
+            .as_ref()
+            .is_some_and(|p| !p.pinned && p.source.deadline_ms().is_some_and(|d| now_ms >= d));
         if remove {
             if let Some(p) = self.pane.take() {
                 return vec![(p.core, p.market)];
@@ -198,24 +201,36 @@ impl Container {
         Vec::new()
     }
 
-    pub fn has_ttl_panes(&self) -> bool {
+    /// The smallest `key` over the panes a cap or a timer may act on.
+    ///
+    /// Pinned panes are excluded under requirement 2 — they answer neither question — so the two
+    /// public accessors below differ only in what they ask each pane.
+    fn min_unpinned(&self, key: impl Fn(&PaneSource) -> Option<f64>) -> Option<f64> {
         self.panes()
             .iter()
-            .any(|p| matches!(p.source, PaneSource::AddToChart { .. }) && !p.pinned)
-    }
-
-    pub fn next_ttl_deadline_ms(&self) -> Option<f64> {
-        self.panes()
-            .iter()
-            .filter_map(|p| match p.source {
-                // Pinned panels have no deadline under requirement 2.
-                PaneSource::AddToChart { born_ms, ttl_ms } if !p.pinned => Some(born_ms + ttl_ms),
-                _ => None,
-            })
+            .filter(|p| !p.pinned)
+            .filter_map(|p| key(&p.source))
             .min_by(|a, b| a.total_cmp(b))
     }
 
-    /// Return whether panel `idx` can be pinned: only AddToChart with TTL, not Manual or Main.
+    /// When the earliest pane closes itself, or `None` when none of them will.
+    ///
+    /// A pane held forever is filtered out by `deadline_ms`, which is what keeps the caller from
+    /// arming a timer for `u64::MAX` milliseconds and parking a task for the life of the process.
+    pub fn next_ttl_deadline_ms(&self) -> Option<f64> {
+        self.min_unpinned(PaneSource::deadline_ms)
+    }
+
+    /// The stalest auto-added pane's last detect, or `None` when no pane may give way to a cap.
+    ///
+    /// The eviction counterpart of [`Self::next_ttl_deadline_ms`]: same pinned exclusion, but it
+    /// answers for a pane held forever too, because such a pane still occupies a slot.
+    pub fn stalest_detect_ms(&self) -> Option<f64> {
+        self.min_unpinned(PaneSource::last_detect_ms)
+    }
+
+    /// Return whether panel `idx` can be pinned: an AddToChart pane, whether its TTL is finite or
+    /// not, but never a Manual one or Main.
     pub fn is_pinnable(&self, idx: usize) -> bool {
         self.pane(idx)
             .is_some_and(|p| matches!(p.source, PaneSource::AddToChart { .. }))
@@ -266,3 +281,6 @@ impl Container {
         vec![(0, content)]
     }
 }
+
+#[cfg(test)]
+mod tests;

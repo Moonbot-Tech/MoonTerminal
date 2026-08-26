@@ -289,7 +289,12 @@ pub struct DetectRow {
     /// `sound_alert` or `is_alert`.
     pub add_to_chart: u32,
     /// Strategy `KeepInChart` duration in seconds before closing the automatically added coin
-    /// chart while retaining the tab, defaulting to 60.
+    /// chart while retaining the tab.
+    ///
+    /// **Zero means keep it indefinitely**, as it does in Moonbot: the chart's TTL is then infinite
+    /// and only the user, or a tab's chart cap, closes it. Sixty is the fallback used when neither
+    /// the strategy nor its schema says anything. Read the value through
+    /// [`DetectRow::keep_in_chart_ttl_ms`] rather than multiplying this field by 1000.
     pub keep_in_chart_secs: u32,
     /// Strategy sound name as a WAV stem to play when the detect arrives; `None` is silent.
     pub sound_name: Option<String>,
@@ -320,6 +325,22 @@ pub struct DetectRow {
     /// TTL either, so it never becomes a detect card, and the chart caption that reads every row
     /// prints nothing for both.
     pub strat_name: String,
+}
+
+impl DetectRow {
+    /// This detection's auto-chart TTL, in milliseconds.
+    ///
+    /// `KeepInChart = 0` becomes `f64::INFINITY` — "keep it indefinitely", as Moonbot does — so
+    /// `prune_ttl` never takes such a pane and no close timer is armed for it. Every caller must
+    /// come through here: multiplying the field by 1000 turns "forever" into "one millisecond",
+    /// and clamping it to at least one turns it into "one second".
+    pub fn keep_in_chart_ttl_ms(&self) -> f64 {
+        if self.keep_in_chart_secs == 0 {
+            f64::INFINITY
+        } else {
+            (self.keep_in_chart_secs as f64) * 1000.0
+        }
+    }
 }
 
 /// Longest detect line retained, in characters.
