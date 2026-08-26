@@ -289,6 +289,74 @@ fn production_report_messages_stage_matching_valuation_outbox_actions() {
     );
 }
 
+/// `db/mod.rs:apply_msg` -- replacing `== Some(*offset_secs)` with `.is_some()` would swallow a
+/// genuinely changed core clock offset after its first segment. The Report would then retain
+/// USDT money values calculated for the wrong minute because neither the axis generation nor the
+/// core-wide valuation rescan would advance.
+#[test]
+fn changed_core_offset_appends_a_segment_advances_the_axis_and_rescans_valuation() {
+    let path = test_support::temp_db("changed-core-offset");
+    let conn = Connection::open(&path).expect("open core-offset writer fixture");
+    init_db(&conn).expect("initialize core-offset writer fixture");
+    let mut state = test_support::rep_init(&conn);
+    rep::core_offset::ensure_table(&conn).expect("create offset segment table");
+    rep::core_offset::store_segment(&conn, 7, 1_000, 0, 1_000_000, "fixture")
+        .expect("store the prior UTC offset segment");
+
+    apply_msg(
+        &conn,
+        &mut state,
+        &DbMsg::CoreTimeOffset {
+            core_uid: 7,
+            offset_secs: 3_600,
+            observed_at_utc: 2_000_000,
+            source: "fixture".to_owned(),
+        },
+    )
+    .expect("apply a genuinely changed core offset");
+
+    let segments: Vec<(i64, i64)> = conn
+        .prepare(
+            "SELECT from_utc, offset_secs FROM core_time_offset
+             WHERE core_uid=7 ORDER BY from_utc",
+        )
+        .expect("prepare direct offset-segment read")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("read direct offset segments")
+        .map(|row| row.expect("decode direct offset segment"))
+        .collect();
+    let axis_generation: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key='axis_gen'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let rescan_events: Vec<_> = valuation::read_outbox(&conn, 10)
+        .expect("read durable valuation outbox")
+        .into_iter()
+        .map(|event| (event.source, event.core_uid, event.row_id, event.action))
+        .collect();
+
+    assert_eq!(
+        (segments, axis_generation, rescan_events),
+        (
+            vec![(1_000, 0), (2_000, 3_600)],
+            Some("1".to_owned()),
+            vec![(
+                valuation::TradeSource::Typed,
+                7,
+                0,
+                valuation::OutboxAction::RescanCore,
+            )],
+        ),
+        "a changed offset must durably advance all three invalidation facts together"
+    );
+
+    drop(conn);
+    test_support::remove_db(&path);
+}
+
 /// `db/mod.rs:apply_msg` must classify `DbMsg::Page` as background; changing its constructor to
 /// `ApplyEffect::immediate(true)` restores the five-to-ten-second UI freeze throughout catch-up.
 #[test]

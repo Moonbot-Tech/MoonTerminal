@@ -42,6 +42,26 @@ fn load_all_round_trips_stored_segments_sorted_by_from_utc() {
     );
 }
 
+/// `db/rep/core_offset.rs:latest_offset` -- changing `ORDER BY from_utc DESC` to `ASC` would
+/// compare later observations against the first-ever offset. A re-confirmation of the current
+/// clock offset would then repeatedly rescan the core's USDT valuation cache after every restart.
+#[test]
+fn latest_offset_reads_the_newest_segment_even_when_inserted_first() {
+    let conn = rusqlite::Connection::open_in_memory().expect("open newest-segment fixture");
+    ensure_table(&conn).expect("create the offset table");
+    // Insert newest first so SQLite row order cannot accidentally satisfy the time-order oracle.
+    store_segment(&conn, 4, 9_000, 3_600, 9_000_000, "newest")
+        .expect("store the newer offset first");
+    store_segment(&conn, 4, 1_000, -3_600, 1_000_000, "oldest")
+        .expect("store the older offset second");
+
+    assert_eq!(
+        latest_offset(&conn, 4),
+        Some(3_600),
+        "the active offset is selected by the greatest from_utc, not insertion order"
+    );
+}
+
 /// `load_all` -- collapsing a self-inconsistent table's error into `Ok(empty)` instead of
 /// [`ReadFail::Failed`] would make a skewed core silently read as "never measured", which is the
 /// WRONG-MONEY axis: the identity conversion is applied to a core whose measured offset the
@@ -67,7 +87,11 @@ fn load_all_fails_closed_on_an_offset_outside_the_plausible_band() {
 
     match load_all(&conn) {
         Err(ReadFail::Failed { kind, .. }) => {
-            assert_eq!(kind, FailKind::Corrupt, "must classify as Corrupt, never NotReady")
+            assert_eq!(
+                kind,
+                FailKind::Corrupt,
+                "must classify as Corrupt, never NotReady"
+            )
         }
         other => panic!(
             "an offset outside the plausible band must fail closed as ReadFail::Failed, got \
@@ -106,7 +130,11 @@ fn load_all_fails_closed_on_a_duplicate_from_utc_for_one_core() {
 
     match load_all(&conn) {
         Err(ReadFail::Failed { kind, .. }) => {
-            assert_eq!(kind, FailKind::Corrupt, "must classify as Corrupt, never NotReady")
+            assert_eq!(
+                kind,
+                FailKind::Corrupt,
+                "must classify as Corrupt, never NotReady"
+            )
         }
         other => panic!(
             "a duplicate from_utc for one core must fail closed as ReadFail::Failed, got {other:?}"
@@ -144,10 +172,14 @@ fn load_all_fails_closed_on_a_typeof_mismatch_in_an_undecoded_column() {
 
     match load_all(&conn) {
         Err(ReadFail::Failed { kind, .. }) => {
-            assert_eq!(kind, FailKind::Corrupt, "must classify as Corrupt, never NotReady")
+            assert_eq!(
+                kind,
+                FailKind::Corrupt,
+                "must classify as Corrupt, never NotReady"
+            )
         }
-        other => panic!(
-            "a column typeof mismatch must fail closed as ReadFail::Failed, got {other:?}"
-        ),
+        other => {
+            panic!("a column typeof mismatch must fail closed as ReadFail::Failed, got {other:?}")
+        }
     }
 }

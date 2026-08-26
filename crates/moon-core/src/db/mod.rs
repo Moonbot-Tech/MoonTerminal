@@ -788,6 +788,17 @@ fn apply_msg(
             source,
         } => {
             rep::core_offset::ensure_table(conn)?;
+            // A RE-CONFIRMATION IS NOT AN ADOPTION, and only the durable segment can tell the two
+            // apart — `OffsetEstimator` holds its "already adopted" memory on the feed connection,
+            // so every restart re-adopts an unchanged offset from scratch. Everything below is an
+            // INVALIDATION, `stage_rescan_core` most of all: its worker arm deletes this core's
+            // entire `trade_values` partition. Skipping is honest as well as cheap — the segment
+            // it would write carries the offset the newest one already carries, so the axis is
+            // unmoved. Why this lives in the writer rather than the sender: `core_offset::
+            // latest_offset`.
+            if rep::core_offset::latest_offset(conn, *core_uid) == Some(*offset_secs) {
+                return Ok(ApplyEffect::maintenance());
+            }
             // The segment STARTS at the observation, in seconds: everything the axis compares
             // against it is a Unix second, and the earliest segment of a core reaches backward
             // without bound anyway, so history before the first measurement is corrected too.
@@ -1063,7 +1074,9 @@ pub(crate) const AXIS_GENERATION_KEY: &str = "axis_gen";
 /// Returns:
 ///     Nothing; the stored counter advances by one.
 pub(crate) fn bump_axis_generation(conn: &Connection) -> rusqlite::Result<()> {
-    let next = meta_get_i64(conn, AXIS_GENERATION_KEY).unwrap_or(0).wrapping_add(1);
+    let next = meta_get_i64(conn, AXIS_GENERATION_KEY)
+        .unwrap_or(0)
+        .wrapping_add(1);
     meta_set(conn, AXIS_GENERATION_KEY, &next.to_string())
 }
 
