@@ -24,14 +24,20 @@ use moon_core::session::CoreId;
 use super::CoreStatusView;
 use super::by_ip_widths::{ByIpWidths, CELL_GAP_W, CHEVRON_W, ROW_GAP_W, TREE_SCROLLBAR_W};
 use super::ip_cell::{IpCell, ip_cell};
-use super::model::{CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, ServerStatusGroup};
+use super::model::{
+    CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, ServerStatusGroup, TzOffsetGroup,
+};
 use super::ordering::GroupSortField;
 use super::presentation::{
     LoadLevel, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level, lat_level,
-    level_color, memory_free, memory_u16, percent, ping_plain, version_group_text, version_text,
+    level_color, memory_free, memory_u16, percent, ping_plain, tz_offset_group_text,
+    version_group_text, version_text,
 };
 use super::startup::{
     StartupCell, startup_cell, startup_cell_text, startup_facts, startup_tooltip,
+};
+use super::time_offset::{
+    TzOffsetCell, tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip,
 };
 
 /// IP mask shown while the column is hidden; a fixed run avoids leaking the address length.
@@ -432,6 +438,16 @@ fn server_row(
                     w.startup,
                     p,
                 ))
+                // Rolled up from this server's cores so a COLLAPSED group still tells the truth: a
+                // silent sibling beside a measured core reads as `Mixed`, never as the sibling's own
+                // offset. The hover names the representative core the text is drawn from.
+                .child(
+                    tz_offset_group_cell(group.tz_offset, w.tz_off, p)
+                        .tooltip(crate::panels::common::text_tooltip(tz_offset_group_tooltip(
+                            &group.cores,
+                            group.tz_offset,
+                        ))),
+                )
                 .child(
                     div()
                         .w(px(w.cores))
@@ -619,6 +635,15 @@ fn core_row(
                         ))),
                     },
                 )
+                // This core's own measured offset: the full facts live here, one snapshot away
+                // from the summarised server row above.
+                .child(
+                    tz_offset_text_cell(tz_offset_cell(&core.time_offset), w.tz_off, p).tooltip(
+                        crate::panels::common::text_tooltip(tz_offset_tooltip(&tz_offset_facts(
+                            &core.time_offset,
+                        ))),
+                    ),
+                )
                 // Empty ratio, warning, dot and scrollbar slots, matching the server row's trailing
                 // width so `key` aligns.
                 .child(div().w(px(w.cores)).flex_none())
@@ -802,6 +827,77 @@ fn startup_text_cell(cell: StartupCell, value_w: f32, p: MoonPalette) -> Statefu
         value_w,
         color,
     )
+}
+
+/// One rolled-up tz-offset cell for a collapsed server row: fixed width, clipped, never wrapping.
+///
+/// Deliberately NOT a [`metric_cell`], for the same reason [`startup_text_cell`] is not one: a
+/// clock offset has no `WarnAxis` behind it, so a warning-icon lead here would be space that can
+/// never light.
+///
+/// Args:
+///     group: The rollup from `model::group_tz_offset`.
+///     value_w: Current column width from [`ByIpWidths`].
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A compact tz-offset cell with a stable footprint.
+fn tz_offset_group_cell(group: TzOffsetGroup, value_w: f32, p: MoonPalette) -> Stateful<Div> {
+    let color = match group {
+        TzOffsetGroup::Uniform(_) => p.text_soft,
+        TzOffsetGroup::Mixed | TzOffsetGroup::Absent => p.text_muted,
+    };
+    plain_slot(
+        "core-status-tz-off",
+        tz_offset_group_text(group),
+        value_w,
+        color,
+    )
+}
+
+/// Hover for the collapsed server row's tz-offset cell.
+///
+/// A rollup carries no facts of its own (only the agreement state), so `Uniform` borrows the full
+/// facts of the FIRST measured core — every measured core already agrees on the offset, so any one
+/// of them is a true account of it. `Mixed` and `Absent` fall back to the same never-measured hover
+/// a lone `Unknown` core shows, because a collapsed group in either state has nothing it can vouch
+/// for.
+///
+/// Args:
+///     cores: The group's core rows, already collected.
+///     group: The rollup from `model::group_tz_offset`, over the SAME cores.
+///
+/// Returns:
+///     The hover body for the collapsed row.
+fn tz_offset_group_tooltip(cores: &[CoreStatusRow], group: TzOffsetGroup) -> String {
+    let representative = match group {
+        TzOffsetGroup::Uniform(_) => cores
+            .iter()
+            .find(|core| core.time_offset.offset_secs.is_some())
+            .map(|core| core.time_offset),
+        TzOffsetGroup::Mixed | TzOffsetGroup::Absent => None,
+    }
+    .unwrap_or_default();
+    tz_offset_tooltip(&tz_offset_facts(&representative))
+}
+
+/// One per-core tz-offset cell: fixed width, clipped, never wrapping.
+///
+/// Deliberately NOT a [`metric_cell`], for the same reason [`tz_offset_group_cell`] is not one.
+///
+/// Args:
+///     cell: The decision from `time_offset::tz_offset_cell`.
+///     value_w: Current column width from [`ByIpWidths`].
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A compact tz-offset cell with a stable footprint.
+fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stateful<Div> {
+    let color = match cell {
+        TzOffsetCell::Measured { .. } => p.text_soft,
+        TzOffsetCell::Unknown => p.text_muted,
+    };
+    plain_slot("core-status-tz-off", tz_offset_cell_text(cell), value_w, color)
 }
 
 /// One reported-build cell, in the same slot chrome the startup column uses.

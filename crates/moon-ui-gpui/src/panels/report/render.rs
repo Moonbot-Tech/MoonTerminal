@@ -41,8 +41,16 @@ impl ReportPanel {
         let row_cols = self.cols.clone();
         let display_zone = self.display_zone;
         let axis = self.report_axis();
-        self.natural_widths
-            .refresh(&self.cols, &data.rows, vis, p, &axis, self.display_zone, cx);
+        self.natural_widths.refresh(
+            &self.cols,
+            &data.rows,
+            &data.core_uids,
+            vis,
+            p,
+            &axis,
+            self.display_zone,
+            cx,
+        );
         let cols = columns::report_columns(&self.cols, vis, &self.natural_widths.widths);
         let selection = self.selection.clone();
         // Clip resized columns at the shared table host; an empty successful

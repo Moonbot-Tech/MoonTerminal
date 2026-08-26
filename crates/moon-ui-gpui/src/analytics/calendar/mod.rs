@@ -127,27 +127,6 @@ pub(super) fn date_of(secs: i64, zone: chrono_tz::Tz) -> NaiveDate {
     super::day_of_secs(secs, zone).unwrap_or_default()
 }
 
-/// Preserve Calendar Day's selected civil date while changing its display zone.
-///
-/// Args:
-///     day: Selected day start resolved in `old_zone`.
-///     old_zone: Zone in which the user chose the civil date.
-///     new_zone: Replacement display zone.
-///
-/// Returns:
-///     The same civil date's first real instant in `new_zone`; when that zone skipped the complete
-///     date, the next existing date is selected. Returns `day` only at chrono limits.
-// DORMANT for one phase, deliberately kept. The calendar day now lives on the report axis, so a
-// display-zone change must NOT move it and the zone-change handler no longer calls this. It
-// becomes live again once the axis carries the user's zone itself, at which point a zone
-// change genuinely does re-project the day. Its tests still pin the conversion meanwhile.
-#[allow(dead_code)]
-pub(super) fn rezone_day(day: i64, old_zone: chrono_tz::Tz, new_zone: chrono_tz::Tz) -> i64 {
-    moon_core::util::display_time::date(day, old_zone)
-        .and_then(|date| resolve_calendar_date(date, new_zone, 1))
-        .unwrap_or(day)
-}
-
 /// Resolve a Calendar date while stepping past a fully skipped historical date.
 ///
 /// Args:

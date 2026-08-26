@@ -13,6 +13,16 @@
 //! Sign convention matches [`crate::db::report_axis::OffsetSegment::offset_secs`]: seconds EAST of
 //! UTC on the core's clock, i.e. `core_clock - true_utc`.
 //!
+//! # Cost, and the part of it left standing
+//!
+//! [`OffsetEstimator::observe`] runs on the feed thread for EVERY log line of every connected
+//! core, and it re-summarizes the whole retained window each time. The per-bucket maximum is
+//! accumulated in the same single pass that buckets the samples, so the cost is one walk of the
+//! window rather than one walk per bucket -- but it is still a walk per line rather than
+//! incremental bookkeeping maintained on push and evict. Making it incremental is a real
+//! improvement at 200 cores and is deliberately NOT done here: it rewrites the adoption rule's
+//! own data structure, and that rule is the thing under proof. Left as a follow-up on purpose.
+//!
 //! # Why there is no deadband
 //!
 //! [`crate::session::clock_skew`] carries a 45-minute deadband because it only ever corrects a
@@ -85,11 +95,21 @@ pub struct OffsetEstimator {
 }
 
 impl OffsetEstimator {
+    /// Build an estimator with no retained samples or adopted offset.
+    ///
+    /// Returns:
+    ///     A fresh per-core offset estimator.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Called when the connection enters Ready; starts the quarantine window.
+    ///
+    /// Args:
+    ///     now_ms: Local receipt time at which the connection became ready, in milliseconds.
+    ///
+    /// Returns:
+    ///     Nothing; samples received before the quarantine expires are ignored.
     pub fn note_ready(&mut self, now_ms: i64) {
         self.ready_at = Some(now_ms);
     }
@@ -97,6 +117,13 @@ impl OffsetEstimator {
     /// Feed one observed pair. Returns Some(offset_secs) ONLY when this sample ADOPTS a value
     /// different from the currently adopted one; None every other time, including when the
     /// same offset is merely re-confirmed.
+    ///
+    /// Args:
+    ///     core_time_ms: Timestamp the core put on the log line, in milliseconds.
+    ///     recv_ms: Local receipt timestamp for the same line, in milliseconds.
+    ///
+    /// Returns:
+    ///     A newly adopted offset in seconds, or `None` when the window has no changed candidate.
     pub fn observe(&mut self, core_time_ms: i64, recv_ms: i64) -> Option<i32> {
         if let Some(ready_at) = self.ready_at {
             if recv_ms - ready_at < QUARANTINE_MS {
@@ -112,37 +139,37 @@ impl OffsetEstimator {
         }
 
         // Group every retained sample by its rounded bucket, so agreement (rule 3) can be
-        // measured, then keep only the buckets whose distinct arrivals clear rules 4.
-        let mut by_bucket: HashMap<i64, Vec<i64>> = HashMap::new();
+        // measured, then keep only the buckets whose distinct arrivals clear rule 4.
+        //
+        // Each bucket's own MAXIMUM raw value is accumulated in this SAME pass rather than
+        // rescanned per qualifying bucket afterwards. The result is identical by construction --
+        // it is the maximum over exactly the same samples -- but it costs one walk of the window
+        // instead of one walk per bucket, and this runs on the feed thread for every log line of
+        // every connected core.
+        let mut by_bucket: HashMap<i64, (Vec<i64>, i64)> = HashMap::new();
         for sample in &self.window {
-            by_bucket
+            let entry = by_bucket
                 .entry(bucket_key(sample.raw_ms))
-                .or_default()
-                .push(sample.recv_ms);
+                .or_insert_with(|| (Vec::new(), i64::MIN));
+            entry.0.push(sample.recv_ms);
+            entry.1 = entry.1.max(sample.raw_ms);
         }
 
         // Among every qualifying bucket, the winning raw sample is the algebraic maximum: lag
         // can only ever pull a sample below the true offset, so the highest surviving value is
         // the one least polluted by it (see the module docs).
         let mut best_raw: Option<i64> = None;
-        for (&bucket, recv_list) in &by_bucket {
-            let mut distinct = recv_list.clone();
-            distinct.sort_unstable();
-            distinct.dedup();
-            if distinct.len() < MIN_SAMPLES {
+        for (recv_list, bucket_max_raw) in by_bucket.values_mut() {
+            recv_list.sort_unstable();
+            recv_list.dedup();
+            if recv_list.len() < MIN_SAMPLES {
                 continue;
             }
-            let spread = distinct[distinct.len() - 1] - distinct[0];
+            let spread = recv_list[recv_list.len() - 1] - recv_list[0];
             if spread < MIN_SPREAD_MS {
                 continue;
             }
-            let bucket_max_raw = self
-                .window
-                .iter()
-                .filter(|s| bucket_key(s.raw_ms) == bucket)
-                .map(|s| s.raw_ms)
-                .max()
-                .expect("bucket populated by construction above");
+            let bucket_max_raw = *bucket_max_raw;
             best_raw = Some(best_raw.map_or(bucket_max_raw, |cur| cur.max(bucket_max_raw)));
         }
 
@@ -161,16 +188,25 @@ impl OffsetEstimator {
     }
 
     /// The offset in force, or None when nothing has ever been adopted.
+    ///
+    /// Returns:
+    ///     The adopted offset in seconds, or `None` before the first adoption.
     pub fn adopted(&self) -> Option<i32> {
         self.adopted
     }
 
     /// How many samples currently sit in the window.
+    ///
+    /// Returns:
+    ///     Count of retained samples.
     pub fn samples(&self) -> u32 {
         self.window.len() as u32
     }
 
     /// Discard the window WITHOUT discarding the adopted value.
+    ///
+    /// Returns:
+    ///     Nothing; the currently adopted offset remains in force.
     pub fn clear_window(&mut self) {
         self.window.clear();
     }

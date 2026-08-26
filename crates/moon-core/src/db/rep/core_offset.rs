@@ -18,6 +18,12 @@ use crate::db::{FailKind, ReadFail, ReadResult};
 const TABLE: &str = "core_time_offset";
 
 /// Create the offset-segment table if it does not already exist.
+///
+/// Args:
+///     conn: Open writer connection that owns the replica schema.
+///
+/// Returns:
+///     Nothing, or the SQLite failure from creating the table.
 pub fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS core_time_offset (
@@ -41,6 +47,9 @@ pub fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
 ///     offset_secs: Seconds east of UTC on the core's clock.
 ///     observed_at: True-UTC instant, in seconds, the adoption itself happened.
 ///     source: Label of the estimator that adopted this segment.
+///
+/// Returns:
+///     Nothing, or the SQLite failure from upserting the segment.
 pub fn store_segment(
     conn: &Connection,
     core_uid: u64,
@@ -69,6 +78,13 @@ pub fn store_segment(
 /// self-inconsistent table returns [`ReadFail::Failed`] rather than silently collapsing to the
 /// same empty result -- on a skewed core the empty (identity) axis is the wrong-money axis, and
 /// this is the one seam that must never confuse "never measured" with "measurement unreadable".
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///
+/// Returns:
+///     Every core's ordered segments, an empty map for an absent table, or a classified read
+///     failure.
 pub fn load_all(conn: &Connection) -> ReadResult<HashMap<u64, Vec<OffsetSegment>>> {
     const CTX: &str = "core_time_offset: load_all";
 
@@ -135,16 +151,13 @@ pub fn load_all(conn: &Connection) -> ReadResult<HashMap<u64, Vec<OffsetSegment>
     Ok(out)
 }
 
-/// Drop every stored segment for one core.
-pub fn clear_core(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
-    conn.execute(
-        &format!("DELETE FROM {TABLE} WHERE core_uid=?1"),
-        [core_uid as i64],
-    )?;
-    Ok(())
-}
-
 /// Build the self-inconsistency verdict [`load_all`] fails closed with, logging the detail once.
+///
+/// Args:
+///     detail: The violated table invariant.
+///
+/// Returns:
+///     A corruption-classified read failure carrying the invariant detail.
 fn inconsistent(detail: &str) -> ReadFail {
     log::warn!("отчёты(core_time_offset): реплика самопротиворечива ({detail})");
     ReadFail::Failed {

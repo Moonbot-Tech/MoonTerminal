@@ -117,51 +117,6 @@ impl Query {
         }
     }
 
-    /// Build mutually exclusive filters for one physical report source.
-    ///
-    /// A strategy selection becomes separate raw `strategyid = value`, `strategyid = 0`, and
-    /// `strategyid IS NULL` branches. This lets SQLite search the physical strategy key before
-    /// evaluating the effective-id expression for liquidation attribution. Duplicate scopes and
-    /// core-specific scopes shadowed by the same any-core key are removed before expansion. IDs
-    /// sharing a core are folded into one `IN` predicate, keeping each source at three branches
-    /// even when Ctrl/Shift selection contains hundreds of strategies.
-    ///
-    /// Args:
-    ///     period: Caller-supplied period predicate.
-    ///     cols: Columns available on the physical source.
-    ///     sid: Effective strategy-id expression used for liquidation candidates.
-    ///     alias: Optional table alias used for every physical report column.
-    ///     attribution: Whether the expression can reassign a zero/NULL liquidation row.
-    ///     mask: Strategy-NAME mask already resolved against this read's connection. It lands
-    ///         ABOVE the raw-strategy branching, so every branch carries it; a mask that reached
-    ///         only the `direct` branch would let liquidation-attributed rows through unmasked.
-    ///         With a mask set and no exact selection, the single branch now evaluates the
-    ///         attribution `CASE` per row where it previously did not — the price of matching by
-    ///         the same effective identity the rest of Analytics groups by, and paid only while a
-    ///         mask is typed.
-    ///
-    /// Build the period predicate that compares this query's bounds against the replica's own
-    /// date column.
-    ///
-    /// `from`/`to` are true-UTC instants; the column is CORE-LOCAL wall clock. The offset closes
-    /// that gap, and it goes on the BOUND rather than around the column — `r.closedate >= ?1 +
-    /// 10800` leaves the column bare, so `idx_rep_core_close` still opens the scan, while
-    /// `mt_to_utc(r.closedate) >= ?1` would force a full pass over a half-million-row table for
-    /// the same answer.
-    ///
-    /// Cores are grouped by the offset applying at this window's own upper bound rather than at
-    /// "now": there is no present-tense question here, only which instants the stored values
-    /// represent, so the window's own instant is the honest one to resolve against. A fleet with
-    /// nothing measured produces exactly the single ungrouped predicate this method replaced.
-    ///
-    /// `?1` and `?2` stay bound to the raw true-UTC bounds at every one of the two dozen call
-    /// sites that bind them, so nothing about the parameter plumbing moves.
-    ///
-    /// Args:
-    ///     alias: Table alias every physical report column is qualified with.
-    ///
-    /// Returns:
-    ///     A complete boolean expression, already parenthesised where it needs to be.
     /// Refresh this query's axis from the connection it is about to read through.
     ///
     /// The zone is the USER's and travels down from the panel; the offsets are the MACHINE's and
@@ -210,11 +165,33 @@ impl Query {
             })
     }
 
-    /// Build the period predicate against an already-resolved axis.
+    /// Build the period predicate that compares this query's bounds against the replica's own
+    /// date column.
+    ///
+    /// `from`/`to` are true-UTC instants; the column is CORE-LOCAL wall clock. The offset closes
+    /// that gap, and it goes on the BOUND rather than around the column — `r.closedate >= ?1 +
+    /// 10800` leaves the column bare, so `idx_rep_core_close` still opens the scan, while
+    /// `mt_to_utc(r.closedate) >= ?1` would force a full pass over a half-million-row table for
+    /// the same answer.
     ///
     /// Takes the axis rather than reading `self.axis` so the caller's ONE
     /// [`resolved_axis`](Self::resolved_axis) result governs every part of the statement it is
     /// building — a second read of the stale field here would put two axes in one query.
+    ///
+    /// Cores are grouped by the offset applying at this window's own upper bound rather than at
+    /// "now": there is no present-tense question here, only which instants the stored values
+    /// represent, so the window's own instant is the honest one to resolve against. A fleet with
+    /// nothing measured produces exactly the single ungrouped predicate this method replaced.
+    ///
+    /// `?1` and `?2` stay bound to the raw true-UTC bounds at every one of the two dozen call
+    /// sites that bind them, so nothing about the parameter plumbing moves.
+    ///
+    /// Args:
+    ///     axis: Time axis already resolved from the connection this query will read through.
+    ///     alias: Table alias every physical report column is qualified with.
+    ///
+    /// Returns:
+    ///     A complete boolean expression, already parenthesised where it needs to be.
     pub(in crate::db) fn period_predicate_on(&self, axis: &ReportAxis, alias: &str) -> String {
         let column = format!("{alias}.closedate");
         let window = |offset: i32| {
@@ -263,6 +240,29 @@ impl Query {
         format!("{window} AND {column} > 0")
     }
 
+    /// Build mutually exclusive filters for one physical report source.
+    ///
+    /// A strategy selection becomes separate raw `strategyid = value`, `strategyid = 0`, and
+    /// `strategyid IS NULL` branches. This lets SQLite search the physical strategy key before
+    /// evaluating the effective-id expression for liquidation attribution. Duplicate scopes and
+    /// core-specific scopes shadowed by the same any-core key are removed before expansion. IDs
+    /// sharing a core are folded into one `IN` predicate, keeping each source at three branches
+    /// even when Ctrl/Shift selection contains hundreds of strategies.
+    ///
+    /// Args:
+    ///     period: Caller-supplied period predicate.
+    ///     cols: Columns available on the physical source.
+    ///     sid: Effective strategy-id expression used for liquidation candidates.
+    ///     alias: Optional table alias used for every physical report column.
+    ///     attribution: Whether the expression can reassign a zero/NULL liquidation row.
+    ///     mask: Strategy-NAME mask already resolved against this read's connection. It lands
+    ///         ABOVE the raw-strategy branching, so every branch carries it; a mask that reached
+    ///         only the `direct` branch would let liquidation-attributed rows through unmasked.
+    ///         With a mask set and no exact selection, the single branch now evaluates the
+    ///         attribution `CASE` per row where it previously did not — the price of matching by
+    ///         the same effective identity the rest of Analytics groups by, and paid only while a
+    ///         mask is typed.
+    ///
     /// Returns:
     ///     One complete predicate per disjoint raw-strategy branch.
     pub(super) fn where_branches(

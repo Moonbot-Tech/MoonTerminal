@@ -62,6 +62,10 @@ pub(super) struct ByIpWidths {
     /// Startup-progress cell. Like `cores` it carries NO warning-icon lead: startup has no
     /// `WarnAxis` behind it, so reserving a lead here would be space that can never light.
     pub(super) startup: f32,
+    /// Measured clock-offset cell. Like `startup` and `version` it carries NO warning-icon lead:
+    /// nothing warns on a core's clock offset, so reserving a lead here would be space that can
+    /// never light.
+    pub(super) tz_off: f32,
     /// Warning-icon lead inside a metric cell; a header reserves the same lead.
     pub(super) icon: f32,
     /// Extra left indent of a core name under its server.
@@ -95,19 +99,20 @@ pub(super) const TREE_SCROLLBAR_W: f32 = 16.0;
 /// same unit — so the two stay aligned at every font setting instead of at exactly one of them.
 pub(super) const ROW_INSET_REMS: f32 = 0.75;
 
-/// Number of `ROW_GAP_W` gaps the row's BODY spends: the thirteen between its fourteen children
-/// (name · ip · spacer · cpu · mem · ping · exch · key · version · startup · cores · warning slot ·
-/// dot · scrollbar slot). The outer chevron↔body gap is NOT in here — [`Self::row_chrome`] adds it
-/// as its own trailing `ROW_GAP_W` term, so the budget covers fourteen gaps in total.
+/// Number of `ROW_GAP_W` gaps the row's BODY spends: the fourteen between its fifteen children
+/// (name · ip · spacer · cpu · mem · ping · exch · key · version · startup · tz_off · cores ·
+/// warning slot · dot · scrollbar slot). The outer chevron↔body gap is NOT in here —
+/// [`Self::row_chrome`] adds it as its own trailing `ROW_GAP_W` term, so the budget covers fifteen
+/// gaps in total.
 ///
 /// The trailing SCROLLBAR SLOT is a real flex child of the row (`server_view`'s
 /// `div().w(px(TREE_SCROLLBAR_W))`), so it brings a gap of its own. `reserved` covers that slot's
 /// WIDTH but no gap, and this constant read `11.0` while the row rendered more gaps than that once
 /// the warning slot `row_chrome` adds separately is counted — an eight-pixel undercount that made
 /// the shrink engage one gap too late and let the row overflow inside that band. The core-version
-/// column then added one more child, and therefore one more gap. Count the children in
-/// `server_row` before touching this.
-const ROW_GAPS: f32 = 13.0;
+/// column then added one more child, and therefore one more gap; the tz-off column added a
+/// fifteenth. Count the children in `server_row` before touching this.
+const ROW_GAPS: f32 = 14.0;
 
 /// Number of `CELL_GAP_W` gaps: one inside each of the five metric cells.
 const CELL_GAPS: f32 = 5.0;
@@ -134,12 +139,13 @@ pub(super) enum ByIpCol {
     Api,
     Version,
     Startup,
+    TzOffset,
     Cores,
 }
 
 impl ByIpCol {
     /// Every resizable column, in the order the header lays them out.
-    pub(super) const ALL: [Self; 10] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::Name,
         Self::Ip,
         Self::Cpu,
@@ -149,6 +155,7 @@ impl ByIpCol {
         Self::Api,
         Self::Version,
         Self::Startup,
+        Self::TzOffset,
         Self::Cores,
     ];
 
@@ -167,6 +174,7 @@ impl ByIpCol {
             Self::Api => "api",
             Self::Version => "version",
             Self::Startup => "startup",
+            Self::TzOffset => "tz_off",
             Self::Cores => "cores",
         }
     }
@@ -188,6 +196,7 @@ impl ByIpCol {
             Self::Api => "by-ip-resize-api",
             Self::Version => "by-ip-resize-version",
             Self::Startup => "by-ip-resize-startup",
+            Self::TzOffset => "by-ip-resize-tz-off",
             Self::Cores => "by-ip-resize-cores",
         }
     }
@@ -210,6 +219,7 @@ impl ByIpCol {
             Self::Api => w.api,
             Self::Version => w.version,
             Self::Startup => w.startup,
+            Self::TzOffset => w.tz_off,
             Self::Cores => w.cores,
         }
     }
@@ -233,6 +243,7 @@ impl ByIpCol {
             Self::Api => w.api = value,
             Self::Version => w.version = value,
             Self::Startup => w.startup = value,
+            Self::TzOffset => w.tz_off = value,
             Self::Cores => w.cores = value,
         }
     }
@@ -274,6 +285,7 @@ impl ByIpWidths {
         cores: 40.0,
         version: 72.0,
         startup: 84.0,
+        tz_off: 84.0,
         icon: 12.0,
         indent: 16.0,
     };
@@ -294,6 +306,7 @@ impl ByIpWidths {
             + self.cores
             + self.version
             + self.startup
+            + self.tz_off
             + self.icon * 5.0
     }
 
@@ -395,6 +408,7 @@ impl ByIpWidths {
             cores: self.cores * k,
             version: self.version * k,
             startup: self.startup * k,
+            tz_off: self.tz_off * k,
             icon: self.icon * k,
             indent: self.indent * k,
         }

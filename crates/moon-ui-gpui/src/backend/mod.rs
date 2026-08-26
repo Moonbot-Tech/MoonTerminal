@@ -1802,9 +1802,29 @@ impl Backend {
     /// convert instants across all of history, while a panel only ever renders what is current.
     /// The two therefore agree on exactly the thing they share, which is the CURRENT offset.
     ///
-    /// A core with no measurement contributes no segment, so it converts as the identity — the
+    /// A core with no measurement contributes no segment, so it converts as the identity -- the
     /// same answer the uncorrected terminal gave, which is the only assumption that cannot make an
     /// honest UTC core worse.
+    ///
+    /// # Known limitation: ONE segment, so no offset HISTORY
+    ///
+    /// The durable table keeps an append-only segment list and picks the segment covering each
+    /// row's own instant. This axis carries only the CURRENT segment per core, because it is built
+    /// from the retained live snapshot rather than from SQLite -- and `ReportAxis` extends its
+    /// earliest segment backward without bound, so every historical row is corrected by the offset
+    /// in force TODAY.
+    ///
+    /// For a core whose offset never moves -- which is every fixed-offset fleet, and every case
+    /// the reported bug was about -- that is exactly correct. It goes wrong only once a core's
+    /// offset actually CHANGES, i.e. across a DST transition or a machine that moved zone: rows
+    /// from before the change then render one delta out, and the Report's period bounds shift with
+    /// them, so the grid and the filter stay consistent with each other while both sit an hour off
+    /// for the older half of the year. The error is bounded by the offset delta and never
+    /// compounds.
+    ///
+    /// Fixing it means publishing the DURABLE axis as a backend-level artifact refreshed off the
+    /// database thread, since this function is called from render paths and must not read SQLite.
+    /// That is a deliberate follow-up, not an oversight.
     ///
     /// Args:
     ///     zone: The user's selected display zone.

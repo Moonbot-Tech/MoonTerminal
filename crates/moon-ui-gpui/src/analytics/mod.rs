@@ -543,6 +543,9 @@ impl AnalyticsView {
     /// Answers from the CACHED axis rather than rebuilding one per call. A core with no
     /// measurement contributes no segment and therefore still reads exactly as stored, which is
     /// what reproduces MoonBot's own report for an unmeasured fleet.
+    ///
+    /// Returns:
+    ///     The cached time axis for replicated report timestamps.
     fn report_axis(&self) -> ReportAxis {
         self.axis.clone()
     }
@@ -553,6 +556,9 @@ impl AnalyticsView {
     /// that column — never on the user's display zone independently, which is what made a picked
     /// day select a different day's rows. Day labels follow it for the same reason: a caption that
     /// disagreed with the window it selects is worse than either answer alone.
+    ///
+    /// Returns:
+    ///     The display zone carried by the cached report axis.
     fn bound_zone(&self) -> chrono_tz::Tz {
         self.report_axis().zone()
     }
@@ -624,7 +630,8 @@ impl AnalyticsView {
             // The calendar day and the period fields live on the REPORT AXIS, not on the display
             // zone, so a zone change must leave them exactly where they are: re-projecting them
             // here is what used to slide the selected day sideways and change which trades the
-            // period held. `rezone_day` returns once the axis carries the display zone itself.
+            // period held. The re-projection helper this used to call was deleted with the
+            // change: the axis carries the display zone now, so nothing re-projects a day.
             this.display_zone = zone;
             // The axis carries the zone beside the offsets, so it is stale even though nothing
             // new was measured.
@@ -969,6 +976,9 @@ impl AnalyticsView {
     ///
     /// Args:
     ///     cx: Analytics window context, reloaded only when the axis actually moved.
+    ///
+    /// Returns:
+    ///     Nothing; an axis change marks calendar state dirty and reloads Analytics.
     fn observe_report_axis(&mut self, cx: &mut Context<Self>) {
         let axis = self.backend.read(cx).report_axis(self.display_zone);
         if axis == self.axis {

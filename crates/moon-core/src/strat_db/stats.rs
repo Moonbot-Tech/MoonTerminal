@@ -93,8 +93,10 @@ fn attach_reports(conn: &Connection) -> bool {
 ///     core_uid: The core whose version windows are being converted.
 ///
 /// Returns:
-///     The axis carrying only that core's segments, and the replica's current axis generation.
-fn core_axis(conn: &Connection, core_uid: u64) -> (crate::db::ReportAxis, i64) {
+///     The axis carrying only that core's segments, the replica's current axis generation, and
+///     whether the read is TRUSTED. An untrusted axis is the identity one produced by a failed
+///     read rather than by an honestly unmeasured core, and its figures must never be cached.
+fn core_axis(conn: &Connection, core_uid: u64) -> (crate::db::ReportAxis, i64, bool) {
     let generation: i64 = conn
         .query_row(
             "SELECT CAST(value AS INTEGER) FROM rep.app_meta WHERE key=?1",
@@ -102,27 +104,56 @@ fn core_axis(conn: &Connection, core_uid: u64) -> (crate::db::ReportAxis, i64) {
             |row| row.get(0),
         )
         .unwrap_or(0);
-    let mut segments = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
+    // An ABSENT table is not a failure: it means no offset has ever been measured, and the
+    // identity axis is the correct answer. A table that is present but unreadable IS a failure,
+    // and the two must not collapse into the same return — the identity axis is also what a
+    // successful read of an honest UTC fleet produces, so an unreadable table would otherwise be
+    // indistinguishable from a correct answer and would be CACHED as one.
+    let present = conn
+        .query_row(
+            "SELECT COUNT(*) FROM rep.sqlite_master WHERE type='table' AND name='core_time_offset'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n > 0);
+    match present {
+        // Nothing has ever been measured on this replica: the identity axis is the right answer.
+        Ok(false) => return (crate::db::ReportAxis::default(), generation, true),
+        // The catalogue itself would not answer, so nothing below can be trusted either.
+        Err(_) => return (crate::db::ReportAxis::default(), generation, false),
+        Ok(true) => {}
+    }
+    let Ok(mut stmt) = conn.prepare(
         "SELECT from_utc, offset_secs FROM rep.core_time_offset
          WHERE core_uid=?1 ORDER BY from_utc",
-    ) {
-        if let Ok(rows) = stmt.query_map([core_uid as i64], |row| {
-            Ok(crate::db::OffsetSegment {
-                from_utc: row.get(0)?,
-                offset_secs: row.get::<_, i64>(1)? as i32,
-            })
-        }) {
-            segments.extend(rows.flatten());
-        }
+    ) else {
+        return (crate::db::ReportAxis::default(), generation, false);
+    };
+    let Ok(rows) = stmt.query_map([core_uid as i64], |row| {
+        Ok(crate::db::OffsetSegment {
+            from_utc: row.get(0)?,
+            offset_secs: row.get::<_, i64>(1)? as i32,
+        })
+    }) else {
+        return (crate::db::ReportAxis::default(), generation, false);
+    };
+    let mut segments = Vec::new();
+    for row in rows {
+        // A malformed row is a corrupt measurement, not a missing one. Dropping it silently would
+        // move a version boundary by that segment's offset and then cache the result as fresh.
+        let Ok(segment) = row else {
+            return (crate::db::ReportAxis::default(), generation, false);
+        };
+        segments.push(segment);
     }
     if segments.is_empty() {
-        return (crate::db::ReportAxis::default(), generation);
+        return (crate::db::ReportAxis::default(), generation, true);
     }
     let measured = std::collections::HashMap::from([(core_uid, segments)]);
     (
         crate::db::ReportAxis::from_measured(measured, chrono_tz::UTC),
         generation,
+        true,
     )
 }
 
@@ -170,10 +201,10 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
         "ALTER TABLE version_stats ADD COLUMN axis_gen INTEGER NOT NULL DEFAULT 0",
         [],
     );
-    let (axis, axis_gen) = if has_rep {
+    let (axis, axis_gen, axis_trusted) = if has_rep {
         core_axis(&conn, core_uid)
     } else {
-        (crate::db::ReportAxis::default(), 0)
+        (crate::db::ReportAxis::default(), 0, true)
     };
 
     let mut out: Vec<VersionInfo> = Vec::new();
@@ -246,6 +277,12 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
                     info.trades = trades;
                     info.profit = profit;
                     info.open_left = open_left;
+                }
+                // Figures computed on an untrusted axis are shown but never CACHED: caching them
+                // would stamp them with the current generation and freeze a wrong attribution in
+                // place, because adopting an offset moves no report row and no `last_update_at`,
+                // so nothing downstream would ever find them stale again.
+                if let (Some(_), true) = (agg, axis_trusted) {
                     let _ = conn.execute(
                         "INSERT INTO version_stats
                             (core_uid, strategy_id, valid_from, trades, profit,

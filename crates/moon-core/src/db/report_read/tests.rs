@@ -743,6 +743,82 @@ fn mixed_offset_row_scope_resolves_open_positions_independently_per_core() {
     );
 }
 
+/// `db/report_read.rs::append_row_scope` -- moving the shared coarse `closedate` range in front
+/// of the complete closed-or-open predicate drops every open row, so a bounded report that still
+/// reaches the present hides live money while retaining its in-window closed trades.
+#[test]
+fn coarse_closed_range_keeps_open_rows_outside_its_date_predicate() {
+    const BEHIND_CORE: u64 = 61;
+    const AHEAD_CORE: u64 = 62;
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    let from = now - 3_600;
+    let to = now + 21_600;
+    let conn = Connection::open_in_memory().expect("open coarse-range fixture");
+    conn.execute_batch(&format!(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             ({BEHIND_CORE}, 1, {}, 1, 1.0, 'BEHIND-CLOSED'),
+             ({BEHIND_CORE}, 2, 0, 1, 2.0, 'BEHIND-OPEN'),
+             ({AHEAD_CORE}, 3, {}, 1, 3.0, 'AHEAD-CLOSED'),
+             ({AHEAD_CORE}, 4, 0, 1, 4.0, 'AHEAD-OPEN');",
+        now - 14_400,
+        now + 10_800,
+    ))
+    .expect("seed two offset groups with open and closed rows");
+    let filter = ReportFilter {
+        core_uids: vec![BEHIND_CORE, AHEAD_CORE],
+        date_from: Some(from),
+        date_to: Some(to),
+        rows: RowScope::ClosedAndOpenIfCurrent,
+        axis: crate::db::ReportAxis::from_measured(
+            std::collections::HashMap::from([
+                (
+                    BEHIND_CORE,
+                    vec![crate::db::OffsetSegment {
+                        from_utc: 0,
+                        offset_secs: -14_400,
+                    }],
+                ),
+                (
+                    AHEAD_CORE,
+                    vec![crate::db::OffsetSegment {
+                        from_utc: 0,
+                        offset_secs: 10_800,
+                    }],
+                ),
+            ]),
+            chrono_tz::UTC,
+        ),
+        ..ReportFilter::default()
+    };
+    let cols = std::collections::HashSet::from(["closedate".to_string()]);
+    let mut sql = "SELECT coin FROM orders_rep r WHERE 1=1".to_string();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    super::append_row_scope(&mut sql, &mut params, &filter, &cols);
+    let refs = params.iter().map(|param| param.as_ref()).collect::<Vec<_>>();
+    let coins = conn
+        .prepare(&sql)
+        .expect("prepare coarse-range row predicate")
+        .query_map(refs.as_slice(), |row| row.get::<_, String>(0))
+        .expect("execute coarse-range row predicate")
+        .collect::<rusqlite::Result<std::collections::BTreeSet<_>>>()
+        .expect("read coarse-range row names");
+
+    assert_eq!(
+        coins,
+        std::collections::BTreeSet::from([
+            "AHEAD-CLOSED".to_string(),
+            "AHEAD-OPEN".to_string(),
+            "BEHIND-CLOSED".to_string(),
+            "BEHIND-OPEN".to_string(),
+        ]),
+        "the coarse range narrows only closed rows; every current core's open row must bypass it"
+    );
+}
+
 /// `report_read.rs::append_row_scope` -- when every core in scope shares ONE measured offset, the
 /// per-group predicate must collapse to the same single branch an unmeasured (identity) fleet
 /// produces, and each core's window bound must still be shifted by exactly that shared offset. A

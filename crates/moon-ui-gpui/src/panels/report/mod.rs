@@ -735,6 +735,9 @@ impl ReportPanel {
     /// offset or the user picks a different zone — both of which refresh the field directly. A
     /// core with no measurement contributes nothing, so it still reads exactly as stored, which is
     /// what reproduces MoonBot's own report for an unmeasured fleet.
+    ///
+    /// Returns:
+    ///     The cached time axis for replicated report timestamps.
     pub(super) fn report_axis(&self) -> ReportAxis {
         self.axis.clone()
     }
@@ -745,6 +748,9 @@ impl ReportPanel {
     /// that column — never on the user's display zone independently, which is what made a picked
     /// day select a different day's rows. Day labels follow it for the same reason: a caption that
     /// disagreed with the window it selects is worse than either answer alone.
+    ///
+    /// Returns:
+    ///     The display zone carried by the cached report axis.
     pub(super) fn bound_zone(&self) -> Tz {
         self.report_axis().zone()
     }

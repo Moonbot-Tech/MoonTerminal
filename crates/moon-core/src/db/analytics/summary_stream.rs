@@ -475,6 +475,7 @@ pub(super) fn read(
         accumulator.best_rows,
         accumulator.worst_rows,
         Some(&metadata.heads),
+        axis,
     )?;
     Ok(SummaryParts {
         cur: accumulator.stats,
@@ -657,6 +658,11 @@ fn finish_groups(
 ///     best_rows: Bounded descending-profit candidates.
 ///     worst_rows: Bounded ascending-profit candidates.
 ///     metadata: Optional strategy-head names for numeric identities.
+///     axis: Per-core time axis. `closedate` is the CORE's own wall clock, so the RETAINED stamp
+///         reaches true UTC through the axis exactly as the ordering and bucketing stages already
+///         do. Converting here rather than in the UI is what keeps [`TopTrade`] free of a core
+///         uid: without one, a consumer holding the raw value could not convert it even in
+///         principle, so the card would render an uncorrected time beside a corrected grid.
 ///
 /// Returns:
 ///     Final best and worst trade rows, or one classified row-shape failure.
@@ -664,6 +670,7 @@ fn finish_top(
     best_rows: Vec<TradeRow>,
     worst_rows: Vec<TradeRow>,
     metadata: Option<&HashMap<(i64, i64), StrategyMetadata>>,
+    axis: &crate::db::ReportAxis,
 ) -> ReadResult<(Vec<TopTrade>, Vec<TopTrade>)> {
     let convert = |row: &TradeRow| -> rusqlite::Result<TopTrade> {
         let core_uid = row.core_uid.ok_or_else(|| {
@@ -682,7 +689,7 @@ fn finish_top(
         })?;
         let pair = row.strategy_id.map(|strategy_id| (strategy_id, core_uid));
         Ok(TopTrade {
-            closedate: row.closedate,
+            closedate: axis.to_utc(row.closedate, core_uid as u64),
             coin: row.coin.clone(),
             strategy: pair
                 .and_then(|pair| metadata.and_then(|all| all.get(&pair)))

@@ -77,8 +77,11 @@ impl ReportPanel {
     pub(super) fn open_trade_detail_target(&mut self, target: RowTarget, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
         // These stamps render replicated columns, so they follow the report axis rather than the
-        // header clock — the same split the Report grid makes for the very same two values.
-        let zone = self.bound_zone();
+        // header clock -- the same split the Report grid makes for the very same two values. That
+        // means BOTH halves of the axis: the offset that lifts a core-local second to true UTC,
+        // and only then the zone it renders in. Taking the zone alone is what let this window
+        // disagree with the very row that opened it.
+        let axis = self.report_axis();
         let RowTarget {
             core,
             coin,
@@ -97,7 +100,10 @@ impl ReportPanel {
                 let Some(record) = found else {
                     return;
                 };
-                let stamps = (stamp(record.buy_date, zone), stamp(record.close_date, zone));
+                let stamps = (
+                    stamp(axis.to_utc(record.buy_date, core), axis.zone()),
+                    stamp(axis.to_utc(record.close_date, core), axis.zone()),
+                );
                 crate::trade_window::open_trade_window(&backend, record, core, market, stamps, cx);
             });
         })

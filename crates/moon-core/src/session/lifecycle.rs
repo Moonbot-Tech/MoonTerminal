@@ -99,6 +99,9 @@ impl SessionManager {
     /// behind `db`'s private `rep` module and is not reachable from `session`. A read failure is
     /// logged and skipped entirely rather than treated as "nothing measured": on a skewed core
     /// the empty axis is the wrong-money axis.
+    ///
+    /// Returns:
+    ///     Nothing; each active core with a durable segment receives its seeded status.
     fn seed_time_offsets(&mut self) {
         let conn = match crate::db::open_reader() {
             Ok(conn) => conn,

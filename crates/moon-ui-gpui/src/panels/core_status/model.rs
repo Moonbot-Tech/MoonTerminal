@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use moon_core::feed::{ConnFault, ConnStatus, CoreEndpoint};
+use moon_core::feed::{ConnFault, ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
 use moon_core::session::{ApiKeyExpiry, CoreId, CoreStartupStatus, CoreSysStatus};
 
 use super::startup::{StartupCell, startup_cell};
@@ -26,6 +26,9 @@ pub(super) struct CoreStatusRow {
     /// Latest polled startup telemetry. It FREEZES once the core settles, so after a successful
     /// startup it describes how long that core took to come up rather than a running clock.
     pub(super) startup: CoreStartupStatus,
+    /// This core's measured wall-clock offset from UTC. `offset_secs: None` means never measured,
+    /// which must stay distinguishable from a measured zero.
+    pub(super) time_offset: CoreTimeOffsetStatus,
     /// Why this core's last connection attempt ended, when one has ended.
     ///
     /// Retained across the backoff retry, so a row that is connecting again still explains WHY the
@@ -196,6 +199,49 @@ pub(super) fn group_version(cores: &[CoreStatusRow]) -> GroupVersion {
     }
 }
 
+/// What one server's cores agree on about their measured clock offset.
+///
+/// An AGREEMENT rollup, mirroring [`GroupVersion`] in shape and in reasoning: a collapsed group
+/// must not assert a clock on behalf of a core nobody measured, so a silent sibling beside a
+/// measured core is `Mixed`, never `Uniform`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TzOffsetGroup {
+    /// Every core on the server has a measured offset, and all agree.
+    Uniform(i32),
+    /// At least one core has a measured offset, but they do not all agree — INCLUDING the case
+    /// where one measured and a sibling never has.
+    Mixed,
+    /// No core on the server has ever measured an offset.
+    Absent,
+}
+
+/// Roll one server's measured offsets up into the value its collapsed row shows.
+///
+/// Args:
+///     cores: The group's core rows, already collected.
+///
+/// Returns:
+///     `Uniform` only when every core has measured and all agree, `Mixed` on any disagreement or
+///     any silent sibling beside a measured one, `Absent` when nothing was ever measured.
+pub(super) fn group_tz_offset(cores: &[CoreStatusRow]) -> TzOffsetGroup {
+    let mut reported: Option<i32> = None;
+    let mut any_silent = false;
+    for core in cores {
+        match core.time_offset.offset_secs {
+            None => any_silent = true,
+            Some(offset) => match reported {
+                Some(seen) if seen != offset => return TzOffsetGroup::Mixed,
+                _ => reported = Some(offset),
+            },
+        }
+    }
+    match (reported, any_silent) {
+        (None, _) => TzOffsetGroup::Absent,
+        (Some(_), true) => TzOffsetGroup::Mixed,
+        (Some(offset), false) => TzOffsetGroup::Uniform(offset),
+    }
+}
+
 /// Stable grouping identity for a known host or one isolated unknown core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ServerKey {
@@ -275,6 +321,10 @@ pub(super) struct ServerStatusGroup {
     /// What this server's cores agree on about their MoonBot build — see [`group_version`]. A
     /// collapsed group shows this, so it must never speak for a core that reported nothing.
     pub(super) version: GroupVersion,
+    /// What this server's cores agree on about their measured clock offset — see
+    /// [`group_tz_offset`]. A collapsed group shows this, so it must never assert a clock on
+    /// behalf of a core nobody measured.
+    pub(super) tz_offset: TzOffsetGroup,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -340,6 +390,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 api_warn: false,
                 api_key: ApiKeyState::Unknown,
                 version: GroupVersion::Absent,
+                tz_offset: TzOffsetGroup::Absent,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,
@@ -458,6 +509,7 @@ fn finish_group(group: &mut ServerStatusGroup) {
     group.api_warn = group.cores.iter().any(|core| core.api_warn);
     group.startup = group_startup(&group.cores);
     group.version = group_version(&group.cores);
+    group.tz_offset = group_tz_offset(&group.cores);
 
     let mut has_process_memory = false;
     let mut process_memory_mb = 0u64;

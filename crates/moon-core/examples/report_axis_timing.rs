@@ -247,9 +247,52 @@ fn main() {
     println!("unmeasured rows:      {}", base_keys.len());
     println!("all-cores-zero rows:  {}", zero_keys.len());
     if base_keys == zero_keys {
+        println!("limited read: identical row set");
+    } else {
+        println!(
+            "limited read: {} keys differ -- inconclusive on its own, see the unlimited pass",
+            symmetric_difference(&base_keys, &zero_keys)
+        );
+    }
+
+    // The comparison above runs under the panel's own LIMIT, and `closedate` is not a unique key:
+    // when the cut lands inside a run of equal timestamps, WHICH of the tied rows survives is the
+    // planner's choice, so a predicate that merely changes the plan can change the answer without
+    // changing what the predicate MEANS. The gate therefore re-runs it unlimited, where no tie can
+    // be cut and any difference is a real one.
+    let unlimited = |axis: ReportAxis| {
+        moon_core::db::query_reports(&conn, &filter_of(axis, from, end), sort, true, usize::MAX)
+    };
+    let (Ok(base_all), Ok(zero_all)) = (unlimited(identity.clone()), unlimited(axis_of(&all_zero)))
+    else {
+        eprintln!("unlimited parity query failed");
+        std::process::exit(1);
+    };
+    let base_all = row_keys(&base_all);
+    let zero_all = row_keys(&zero_all);
+    println!("unlimited unmeasured rows:      {}", base_all.len());
+    println!("unlimited all-cores-zero rows:  {}", zero_all.len());
+    if base_all == zero_all {
         println!("PARITY OK: measuring every core at zero returns the identical row set");
     } else {
-        println!("PARITY FAILED: the grouped predicate changed which rows come back");
+        println!(
+            "PARITY FAILED: {} keys differ with no limit in play",
+            symmetric_difference(&base_all, &zero_all)
+        );
         std::process::exit(1);
     }
+}
+
+/// Count the keys present in exactly one of two sorted key lists.
+///
+/// Args:
+///     a: First sorted key list.
+///     b: Second sorted key list.
+///
+/// Returns:
+///     How many keys appear in one list and not the other.
+fn symmetric_difference(a: &[(u64, i64)], b: &[(u64, i64)]) -> usize {
+    let left: std::collections::BTreeSet<_> = a.iter().copied().collect();
+    let right: std::collections::BTreeSet<_> = b.iter().copied().collect();
+    left.symmetric_difference(&right).count()
 }

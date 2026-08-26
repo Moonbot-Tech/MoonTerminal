@@ -763,6 +763,14 @@ fn previous_period_start(q: &Query, len: i64) -> i64 {
 /// Find the earliest `closedate` across both sources for the all-time period.
 ///
 /// A failed probe remains an error; `1` is reserved for a genuinely empty history.
+///
+/// Args:
+///     conn: Open report connection or pinned snapshot.
+///     axis: Per-core time axis used to compare the sources' core-local timestamps.
+///
+/// Returns:
+///     The earliest true-UTC closed timestamp, `1` for an empty history, or a classified read
+///     failure.
 fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<i64> {
     const CTX: &str = "analytics: min_closedate";
     let mut min = i64::MAX;

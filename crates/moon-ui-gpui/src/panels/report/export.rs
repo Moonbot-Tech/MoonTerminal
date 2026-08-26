@@ -149,8 +149,10 @@ pub(super) fn run(
         anyhow::bail!("нет колонок для экспорта");
     }
     match fmt {
-        Format::Csv => write_csv(path, &idx, &table.rows, axis, display_zone)?,
-        Format::Xlsx => write_xlsx(path, &idx, &table.rows, axis, display_zone)?,
+        Format::Csv => write_csv(path, &idx, &table.core_uids, &table.rows, axis, display_zone)?,
+        Format::Xlsx => {
+            write_xlsx(path, &idx, &table.core_uids, &table.rows, axis, display_zone)?
+        }
     }
     Ok(table.rows.len())
 }
@@ -163,6 +165,9 @@ pub(super) fn run(
 /// Args:
 ///     path: Destination CSV path.
 ///     idx: Ordered source-column indices and names.
+///     core_uids: Each row's core, PARALLEL to `rows`. It cannot come out of the row itself:
+///         `core_uid` is a SERVICE column that `db::report_read::display_columns` filters out of
+///         the schema entirely, so the query returns it in its own array beside the rows.
 ///     rows: Raw SQLite report rows.
 ///     axis: Time axis for replicated timestamps.
 ///     display_zone: Captured IANA display zone for terminal-written timestamps.
@@ -175,6 +180,7 @@ pub(super) fn run(
 fn write_csv(
     path: &Path,
     idx: &[(usize, &str)],
+    core_uids: &[u64],
     rows: &[Vec<Value>],
     axis: &ReportAxis,
     display_zone: Tz,
@@ -187,15 +193,16 @@ fn write_csv(
         .collect();
     out.push_str(&header.join(";"));
     out.push_str("\r\n");
-    for row in rows {
+    for (row_index, row) in rows.iter().enumerate() {
         let mut first = true;
+        let core_uid = core_uids.get(row_index).copied().unwrap_or(0);
         for (i, name) in idx {
             if !first {
                 out.push(';');
             }
             first = false;
             let val = row.get(*i).unwrap_or(&Value::Null);
-            out.push_str(&csv_field(&field_text(name, val, axis, display_zone)));
+            out.push_str(&csv_field(&field_text(name, val, axis, core_uid, display_zone)));
         }
         out.push_str("\r\n");
     }
@@ -229,23 +236,39 @@ fn id_text_col(col: &str) -> bool {
 ///     v: SQLite value from that column.
 ///     axis: Time axis for REPLICATED timestamp columns, whose stored seconds are the core's own
 ///         wall clock rather than UTC.
+///     core_uid: The ROW's core, which is what selects the offset a replicated timestamp is
+///         corrected by. Ignored for every non-replicated column, so a caller with no timestamp
+///         in play may pass `0`.
 ///     display_zone: User-selected zone for columns this terminal wrote itself.
 ///
 /// Returns:
 ///     Display-ready text shared by file export and clipboard TSV.
-pub(super) fn field_text(col: &str, v: &Value, axis: &ReportAxis, display_zone: Tz) -> String {
+pub(super) fn field_text(
+    col: &str,
+    v: &Value,
+    axis: &ReportAxis,
+    core_uid: u64,
+    display_zone: Tz,
+) -> String {
     if date_col(col) {
-        // A replicated column renders on the core's own clock; `last_update_at` is written by this
-        // terminal and is genuine UTC, so it keeps the selected zone. Export must agree with the
-        // grid exactly, or the same trade reads as two different times.
-        let zone = if col == "last_update_at" {
-            display_zone
-        } else {
-            axis.zone()
+        // A replicated column is stored on the CORE's own clock, so it reaches true UTC through
+        // the axis before any zone is applied -- exactly what `columns::cell` does for the grid.
+        // `last_update_at` is written by this terminal, is genuine UTC already, and therefore
+        // takes the selected zone with no correction. Export must agree with the grid exactly, or
+        // the same trade reads as two different times depending on where you looked at it.
+        let replicated = col != "last_update_at";
+        let zone = if replicated { axis.zone() } else { display_zone };
+        let project = |secs: i64| {
+            let secs = if replicated {
+                axis.to_utc(secs, core_uid)
+            } else {
+                secs
+            };
+            moon_core::util::display_time::format_minute(secs, zone)
         };
         return match v {
-            Value::Integer(i) => moon_core::util::display_time::format_minute(*i, zone),
-            Value::Real(r) => moon_core::util::display_time::format_minute(*r as i64, zone),
+            Value::Integer(i) => project(*i),
+            Value::Real(r) => project(*r as i64),
             _ => String::new(),
         };
     }
@@ -274,6 +297,8 @@ fn csv_field(s: &str) -> String {
 /// Args:
 ///     path: Destination XLSX path.
 ///     idx: Ordered source-column indices and names.
+///     core_uids: Each row's core, PARALLEL to `rows` -- see `write_csv` for why it cannot be
+///         read out of the row.
 ///     rows: Raw SQLite report rows.
 ///     axis: Time axis for replicated timestamps.
 ///     display_zone: Captured IANA display zone for terminal-written timestamps.
@@ -286,6 +311,7 @@ fn csv_field(s: &str) -> String {
 fn write_xlsx(
     path: &Path,
     idx: &[(usize, &str)],
+    core_uids: &[u64],
     rows: &[Vec<Value>],
     axis: &ReportAxis,
     display_zone: Tz,
@@ -299,12 +325,13 @@ fn write_xlsx(
         ws.write_string_with_format(0, c as u16, columns::header_for(name), &bold)?;
     }
     for (r, row) in rows.iter().enumerate() {
+        let core_uid = core_uids.get(r).copied().unwrap_or(0);
         let r = (r + 1) as u32;
         for (c, (i, name)) in idx.iter().enumerate() {
             let c = c as u16;
             let val = row.get(*i).unwrap_or(&Value::Null);
             if date_col(name) {
-                let text = field_text(name, val, axis, display_zone);
+                let text = field_text(name, val, axis, core_uid, display_zone);
                 if !text.is_empty() {
                     ws.write_string(r, c, text)?;
                 }

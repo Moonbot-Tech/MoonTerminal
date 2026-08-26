@@ -788,14 +788,6 @@ pub(super) fn row_quote(cols: &[String], row: &[Value]) -> Option<QuoteCurrency>
 ///
 /// Returns:
 ///     The row's core uid, or `0` when the schema carries none.
-pub(super) fn row_core_uid(cols: &[String], row: &[Value]) -> u64 {
-    cols.iter()
-        .position(|column| column == "core_uid")
-        .and_then(|index| row.get(index))
-        .and_then(as_i64)
-        .unwrap_or(0) as u64
-}
-
 /// Format a persisted MoonBot base-currency ordinal as its exact quote ticker.
 ///
 /// Args:

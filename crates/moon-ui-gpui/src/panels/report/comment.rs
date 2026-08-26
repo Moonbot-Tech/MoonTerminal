@@ -40,8 +40,9 @@ pub(super) fn current_comment(
     let text = super::export::field_text(
         "comment",
         value,
-        // Not a timestamp column, so neither argument is consulted.
+        // Not a timestamp column, so none of the three projection arguments is consulted.
         &moon_core::db::ReportAxis::identity_core_local(),
+        0,
         chrono_tz::UTC,
     );
     let trimmed = text.trim();

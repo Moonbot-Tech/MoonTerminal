@@ -258,20 +258,6 @@ impl ReportAxis {
         secs.saturating_add(i64::from(offset_secs))
     }
 
-    /// Group cores by the offset applying to them at one instant.
-    ///
-    /// A window predicate is built one branch per group, each branch naming its cores and the
-    /// bounds already converted for them, so every branch still leads with `core_uid, closedate`
-    /// and stays index-eligible. A fleet on one offset — the common case — collapses to a single
-    /// branch identical in shape to the uncorrected query.
-    ///
-    /// Args:
-    ///     cores: Core uids in scope for this read.
-    ///     at: Instant whose offsets decide the grouping, in seconds.
-    ///
-    /// Returns:
-    ///     One entry per distinct offset, each carrying its cores in the order given. Cores with
-    ///     no measured offset group under `0`, matching [`to_utc`](Self::to_utc)'s identity.
     /// Group every core that HAS a measured offset by the offset applying to it at one instant.
     ///
     /// This is the unbounded-scope counterpart to [`groups`](Self::groups). A read over "all
@@ -320,6 +306,20 @@ impl ReportAxis {
         cores
     }
 
+    /// Group cores by the offset applying to them at one instant.
+    ///
+    /// A window predicate is built one branch per group, each branch naming its cores and the
+    /// bounds already converted for them, so every branch still leads with `core_uid, closedate`
+    /// and stays index-eligible. A fleet on one offset — the common case — collapses to a single
+    /// branch identical in shape to the uncorrected query.
+    ///
+    /// Args:
+    ///     cores: Core uids in scope for this read.
+    ///     at: Instant whose offsets decide the grouping, in seconds.
+    ///
+    /// Returns:
+    ///     One entry per distinct offset, each carrying its cores in the order given. Cores with
+    ///     no measured offset group under `0`, matching [`to_utc`](Self::to_utc)'s identity.
     pub fn groups(&self, cores: &[u64], at: i64) -> Vec<(i32, Vec<u64>)> {
         let mut order: Vec<i32> = Vec::new();
         let mut by_offset: HashMap<i32, Vec<u64>> = HashMap::new();

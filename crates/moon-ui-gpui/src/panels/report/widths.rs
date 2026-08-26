@@ -50,6 +50,9 @@ impl NaturalWidthsCache {
     /// Args:
     ///     cols: Complete runtime Report schema.
     ///     rows: Current formatted-data source.
+    ///     core_uids: Each row's core, PARALLEL to `rows`. Measurement must correct a replicated
+    ///         timestamp exactly as the renderer does, and `core_uid` is a service column the
+    ///         report schema does not carry, so it has to travel beside the rows.
     ///     visible: Columns currently rendered; newly shown columns are measured lazily.
     ///     p: Active palette used by cell formatting.
     ///     axis: Time axis for replicated timestamp columns. Measurement MUST format
@@ -63,6 +66,7 @@ impl NaturalWidthsCache {
         &mut self,
         cols: &[String],
         rows: &[Vec<Value>],
+        core_uids: &[u64],
         visible: &[usize],
         p: MoonPalette,
         axis: &ReportAxis,
@@ -83,8 +87,16 @@ impl NaturalWidthsCache {
                     .is_some_and(|column| !self.widths.contains_key(column))
             })
             .collect();
-        self.widths
-            .extend(natural_widths(cols, rows, &missing, p, axis, display_zone, &mut measurer));
+        self.widths.extend(natural_widths(
+            cols,
+            rows,
+            core_uids,
+            &missing,
+            p,
+            axis,
+            display_zone,
+            &mut measurer,
+        ));
     }
 }
 
@@ -97,6 +109,7 @@ impl NaturalWidthsCache {
 /// Args:
 ///     cols: Complete runtime Report schema.
 ///     rows: Current query rows in schema order.
+///     core_uids: Each row's core, PARALLEL to `rows`.
 ///     visible: Source-column indices requiring measurement.
 ///     p: Active palette used by cell formatting.
 ///     axis: Time axis for replicated timestamp columns, matching the renderer exactly.
@@ -108,6 +121,7 @@ impl NaturalWidthsCache {
 fn natural_widths(
     cols: &[String],
     rows: &[Vec<Value>],
+    core_uids: &[u64],
     visible: &[usize],
     p: MoonPalette,
     axis: &ReportAxis,
@@ -124,7 +138,7 @@ fn natural_widths(
             // columns cannot be measured light and then clip the wider glyphs they paint. Resolve it
             // once per column because it does not depend on row values.
             let weight = columns::cell_weight(column);
-            for row in rows.iter().take(query::MAX_REPORT_ROWS) {
+            for (row_index, row) in rows.iter().take(query::MAX_REPORT_ROWS).enumerate() {
                 let value = row.get(column_index).unwrap_or(&Value::Null);
                 // Measured with the row's own quote, exactly as the renderer formats it: a
                 // BTC-denominated row prints eight decimals, and measuring it at two would size the
@@ -135,7 +149,7 @@ fn natural_widths(
                     columns::row_quote(cols, row),
                     p,
                     axis,
-                    columns::row_core_uid(cols, row),
+                    core_uids.get(row_index).copied().unwrap_or(0),
                     display_zone,
                 )
                 .0;

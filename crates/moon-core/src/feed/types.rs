@@ -958,12 +958,19 @@ pub struct CoreTimeOffsetStatus {
 #[derive(Debug, Clone)]
 pub enum FeedMsg {
     Status(ConnStatus),
-    /// A core's clock offset was measured, and the durable write has ALREADY committed.
+    /// A core's clock offset was measured and its durable write has already been HANDED to the
+    /// report writer.
     ///
-    /// Emission is durability-first on purpose: the estimator sends its adoption to the database
-    /// writer, and the writer sends this only after its transaction commits. The screen therefore
-    /// never shows an offset the numbers are not already computed on — the reverse order would put
-    /// a corrected timestamp in the panel while the report query still read the old axis.
+    /// Emission is durability-ORDERED, which is a weaker promise than durability-confirmed and is
+    /// stated that way on purpose: no acknowledgement path back from the writer exists. The feed
+    /// sends `DbMsg::CoreTimeOffset` first and this message second, and it sends this one ONLY
+    /// when a report sink exists at all — a core replicating nothing would otherwise have the
+    /// panel claim a correction that reaches no table and vanishes on the next restart. The
+    /// writer applies its queue strictly in send order, so nothing sent afterwards can reach the
+    /// report table ahead of the segment. What remains is a window of the writer's own queue
+    /// latency in which the panel names an offset that is not yet on disk, and a failed writer
+    /// transaction leaves the panel briefly ahead of the data until the next restart re-seeds it
+    /// from that same table. Bounded and self-correcting; do not read this as a commit receipt.
     TimeOffset(CoreTimeOffsetStatus),
     /// Network endpoint selected from the exported MoonBot key before the connection attempt.
     ///

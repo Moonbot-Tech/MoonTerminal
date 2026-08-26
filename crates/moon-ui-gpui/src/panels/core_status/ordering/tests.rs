@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use moon_core::config::TableSortPreference;
-use moon_core::feed::ConnStatus;
+use moon_core::feed::{ConnStatus, CoreTimeOffsetStatus};
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 use moon_core::venue::CoreVenue;
 
@@ -18,6 +18,7 @@ use super::{
 use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{
     ApiKeyState, CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, ServerStatusGroup,
+    TzOffsetGroup,
 };
 
 /// Build one core row carrying only an API-key state: `Some(days)` is a dated key, `None` is a core
@@ -37,6 +38,7 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
         api_warn: false,
         startup: CoreStartupStatus::default(),
+        time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
     }
 }
@@ -74,6 +76,7 @@ fn group(
             api_key: ApiKeyState::Unknown,
             api_warn: false,
             startup: CoreStartupStatus::default(),
+            time_offset: CoreTimeOffsetStatus::default(),
             server_version: None,
         })
         .collect::<Vec<_>>();
@@ -92,6 +95,7 @@ fn group(
         api_warn: false,
         api_key: ApiKeyState::Unknown,
         version: GroupVersion::Absent,
+        tz_offset: TzOffsetGroup::Absent,
         address: None,
         cores,
         ready_count,

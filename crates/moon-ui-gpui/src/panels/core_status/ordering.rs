@@ -13,8 +13,9 @@ use rust_i18n::t;
 
 use crate::core_order::ExchangeSection;
 
-use super::model::{CoreStatusRow, GroupVersion, ServerStatusGroup};
+use super::model::{CoreStatusRow, GroupVersion, ServerStatusGroup, TzOffsetGroup};
 use super::startup::{StartupCell, startup_cell};
+use super::time_offset::{tz_offset_cell, tz_offset_rank};
 
 /// Which By IP column the server list is sorted on. Warnings always pin to the top regardless of the
 /// field (handled by the caller), so this only orders within the warned and the quiet partitions.
@@ -41,6 +42,9 @@ pub(super) enum GroupSortField {
     /// The server's rolled-up MoonBot build, by [`version_group_rank`] — the agreed build, or
     /// neither when its cores disagree or none reported.
     Version,
+    /// The server's rolled-up clock offset, by [`tz_offset_group_rank`] — the agreed offset, or
+    /// neither when its cores disagree or none has ever measured one.
+    TzOffset,
 }
 
 impl GroupSortField {
@@ -56,6 +60,7 @@ impl GroupSortField {
             Self::ApiKey => "api_key",
             Self::Startup => "startup",
             Self::Version => "version",
+            Self::TzOffset => "tz_off",
         }
     }
 
@@ -71,6 +76,7 @@ impl GroupSortField {
             "api_key" => Some(Self::ApiKey),
             "startup" => Some(Self::Startup),
             "version" => Some(Self::Version),
+            "tz_off" => Some(Self::TzOffset),
             _ => None,
         }
     }
@@ -80,7 +86,7 @@ impl GroupSortField {
 pub(super) fn restore_flat_sort(
     preference: Option<moon_core::config::TableSortPreference>,
 ) -> Option<(String, bool)> {
-    const KEYS: [&str; 13] = [
+    const KEYS: [&str; 14] = [
         "server",
         "core",
         "status",
@@ -94,6 +100,7 @@ pub(super) fn restore_flat_sort(
         "api_key",
         "startup",
         "version",
+        "tz_off",
     ];
     preference.and_then(|preference| {
         KEYS.contains(&preference.column.as_str())
@@ -182,6 +189,11 @@ pub(super) fn compare_groups(
         GroupSortField::Version => {
             version_group_rank(a.version).cmp(&version_group_rank(b.version))
         }
+        // Ranks the SAME rolled-up value the server row displays, by the same rule the per-core
+        // column sorts by, so the two modes cannot disagree about which core sits where.
+        GroupSortField::TzOffset => {
+            tz_offset_group_rank(a.tz_offset).cmp(&tz_offset_group_rank(b.tz_offset))
+        }
     }
     .then_with(|| natural_cmp(&a.display_name, &b.display_name))
 }
@@ -234,6 +246,25 @@ fn version_group_rank(version: GroupVersion) -> (u8, u32) {
         GroupVersion::Uniform(version) => (0, version),
         GroupVersion::Mixed => (1, 0),
         GroupVersion::Absent => (2, 0),
+    }
+}
+
+/// Rank a server's rolled-up clock offset: an agreed offset first, ordered by the offset itself,
+/// then disagreement, then nothing ever measured.
+///
+    /// `Mixed` outranks `Absent` for the same reason [`version_group_rank`] orders them that way: a
+    /// mixed group has something to look at by expanding it, while an absent one does not.
+    ///
+    /// Args:
+    ///     group: Rollup state for one server's core clock offsets.
+///
+/// Returns:
+///     Sort category and offset within the uniform category.
+fn tz_offset_group_rank(group: TzOffsetGroup) -> (u8, i32) {
+    match group {
+        TzOffsetGroup::Uniform(offset_secs) => (0, offset_secs),
+        TzOffsetGroup::Mixed => (1, 0),
+        TzOffsetGroup::Absent => (2, 0),
     }
 }
 
@@ -388,6 +419,10 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
         // The reported build, numerically rather than lexically, with the blanks kept off the head
         // of the ascending scan — see `version_rank`.
         "version" => version_rank(a.server_version).cmp(&version_rank(b.server_version)),
+        // Same rank the By-IP column sorts by, over the per-core cell, so the two modes cannot
+        // disagree about which core is ahead of or behind UTC.
+        "tz_off" => tz_offset_rank(tz_offset_cell(&a.time_offset))
+            .cmp(&tz_offset_rank(tz_offset_cell(&b.time_offset))),
         // "core" and any unknown key sort by name.
         _ => a.name.cmp(&b.name),
     }
