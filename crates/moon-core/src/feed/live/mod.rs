@@ -22,11 +22,13 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
-use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
+use moonproto::state::{
+    AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent, StratEvent, StrategyEditStatus,
+};
 use moonproto::{
     ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
-    MoonEventSink, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent, ReportHistoryDepth,
-    ReportSyncCheckpoint, ReportSyncComplete, ReportSyncRequest, TransportMode,
+    MoonEventSink, MoonStateSnapshot, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent,
+    ReportHistoryDepth, ReportSyncCheckpoint, ReportSyncComplete, ReportSyncRequest, TransportMode,
 };
 
 use super::assets::{build_assets, build_transfer_assets};
@@ -36,7 +38,8 @@ use super::strategies::{
 };
 use super::{
     ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, CoreStartupStatus, CoreTimeOffsetStatus,
-    DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyRow,
+    DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyEditPhase,
+    StrategyEditResult, StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
 use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportStart, ReportTx};
@@ -97,6 +100,56 @@ fn apply_strategy_delivery_ack(
     if committed {
         *delivered = Some(generation);
         *initial = false;
+    }
+}
+
+/// Fold the currently open strategy-edit set into a change signature.
+///
+/// Kept SEPARATE from the confirmed-snapshot fold in the strategies block below: submitting or
+/// resolving an edit changes no core-confirmed `StrategySnapshot`, so folding this into that
+/// signature would make that signature the only thing keeping the strategy-edit carrier alive —
+/// a later refactor of the confirmed-snapshot fold would then kill this feature silently, with
+/// nothing left to notice.
+fn strategy_edit_sig<'a>(
+    edits: impl Iterator<Item = (u64, &'a moonproto::state::StrategyEdit)>,
+) -> u64 {
+    let mut sig = 0u64;
+    for (id, edit) in edits {
+        sig = sig
+            .wrapping_mul(1099511628211)
+            .wrapping_add(id)
+            .wrapping_add(edit.status() as u64)
+            .wrapping_add(edit.submitted_at().unix_millis() as u64);
+    }
+    sig
+}
+
+/// Log the desired-vs-echo revision for one resolved strategy edit, then queue it as a resolved
+/// note for the next `FeedMsg::StrategyEdits` publish.
+///
+/// The desired side comes from `desired_cache`, populated at `EditSubmitted` time, because
+/// moonproto removes the edit from its map in the same step that resolves it: by the time this
+/// runs, the live state has nothing left to read for the desired half. The log line exists to
+/// settle, on the first live run, whether the Delphi core renumbers `strategy_ver` when it
+/// adjusts or supersedes a submitted edit.
+fn record_strategy_edit_resolution(
+    echo_snap: Option<&MoonStateSnapshot>,
+    desired_cache: &mut std::collections::HashMap<u64, (i32, u64)>,
+    strategy_ids: &[u64],
+    result: StrategyEditResult,
+    core_id: u64,
+    notes: &mut Vec<(u64, StrategyEditResult)>,
+) {
+    for &id in strategy_ids {
+        let desired = desired_cache.remove(&id);
+        let echo = echo_snap
+            .and_then(|s| s.strats().snapshot(id))
+            .map(|s| (s.strategy_ver, s.last_date));
+        log::info!(
+            "core {} strategy {id} edit {result:?}: desired(ver,last_date)={desired:?} echo(ver,last_date)={echo:?}",
+            crate::feed::core_label(core_id)
+        );
+        notes.push((id, result));
     }
 }
 
@@ -356,6 +409,18 @@ pub(super) fn run(
     // changes because strategy fields are expensive and need not be sent every second.
     let mut last_schema_rev: u64 = u64::MAX;
     let mut last_strat_sig: u64 = u64::MAX;
+    // Strategy-edit publish cadence, independent of the 1 Hz strategies gate below. The retained
+    // latch is set on ANY edit event and cleared only once a publish actually goes out, so a
+    // resolution arriving inside the 250 ms shadow of the previous publish is delayed, never
+    // dropped, by the rate limit. `strat_edit_desired_cache` remembers each pending edit's desired
+    // (ver, last_date) from the moment it was submitted, because moonproto removes the edit from
+    // its map in the same step that resolves it.
+    let mut last_strat_edit_pub = Instant::now();
+    let mut last_strat_edit_sig: u64 = 0;
+    let mut strat_edit_publish_pending = false;
+    let mut pending_strat_edit_notes: Vec<(u64, StrategyEditResult)> = Vec::new();
+    let mut strat_edit_desired_cache: std::collections::HashMap<u64, (i32, u64)> =
+        std::collections::HashMap::new();
     let mut last_strat_db_generation: Option<(u64, u64)> = None;
     let mut pending_strat_db_delivery: Option<((u64, u64), Receiver<bool>)> = None;
     let mut strat_db_retry_due = false;
@@ -963,6 +1028,65 @@ pub(super) fn run(
                 // News/tags feed is consumed below via `news_snapshot_from_proto` reading the
                 // retained `client.snapshot().news()`, matching the license/KernelHealth idiom.
                 Event::News(_) => {}
+                // Strategy-edit lifecycle. The retained latch and note accumulator below are what
+                // make the ~250 ms publish block (further down) safe against the 1 Hz strategies
+                // gate's cadence; see `strategy_edit_sig` and `record_strategy_edit_resolution`.
+                Event::Strat(strat_ev) => match strat_ev {
+                    StratEvent::EditSubmitted { strategy_ids } => {
+                        strat_edit_publish_pending = true;
+                        if let Some(snap) = client.snapshot() {
+                            let strats = snap.strats();
+                            for &id in strategy_ids {
+                                if let Some(edit) = strats.strategy_edit(id) {
+                                    strat_edit_desired_cache.insert(
+                                        id,
+                                        (edit.desired().strategy_ver, edit.desired().last_date),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    StratEvent::EditTimedOut { .. } => {
+                        strat_edit_publish_pending = true;
+                    }
+                    StratEvent::EditConfirmed { strategy_ids } => {
+                        strat_edit_publish_pending = true;
+                        let echo_snap = client.snapshot();
+                        record_strategy_edit_resolution(
+                            echo_snap.as_deref(),
+                            &mut strat_edit_desired_cache,
+                            strategy_ids,
+                            StrategyEditResult::Confirmed,
+                            server.id,
+                            &mut pending_strat_edit_notes,
+                        );
+                    }
+                    StratEvent::EditAdjusted { strategy_ids } => {
+                        strat_edit_publish_pending = true;
+                        let echo_snap = client.snapshot();
+                        record_strategy_edit_resolution(
+                            echo_snap.as_deref(),
+                            &mut strat_edit_desired_cache,
+                            strategy_ids,
+                            StrategyEditResult::Adjusted,
+                            server.id,
+                            &mut pending_strat_edit_notes,
+                        );
+                    }
+                    StratEvent::EditSuperseded { strategy_ids } => {
+                        strat_edit_publish_pending = true;
+                        let echo_snap = client.snapshot();
+                        record_strategy_edit_resolution(
+                            echo_snap.as_deref(),
+                            &mut strat_edit_desired_cache,
+                            strategy_ids,
+                            StrategyEditResult::Superseded,
+                            server.id,
+                            &mut pending_strat_edit_notes,
+                        );
+                    }
+                    _ => {}
+                },
                 // `Event::KernelHealth` is consumed below via `settings_event_snapshot`
                 // reading the retained `kernel_health()` snapshot, not here.
                 _ => {}
@@ -1505,6 +1629,66 @@ pub(super) fn run(
             }
         }
 
+        // Strategy-edit carrier: publish `open`/`resolved` on their own ~250 ms cadence, well
+        // under the 1 Hz gate below, so a button press gets pending feedback before a user
+        // concludes it did nothing. Runs every tick, not only ones with a fresh domain event: the
+        // retained latch is what decides whether there is anything to send, so a publish delayed
+        // by the rate limit still goes out on the very next tick instead of waiting for another
+        // edit event that may never come.
+        if server.feed.strategies {
+            if let Some(snap) = client.snapshot() {
+                let strats = snap.strats();
+                let edit_sig = strategy_edit_sig(strats.strategy_edits());
+                if edit_sig != last_strat_edit_sig {
+                    strat_edit_publish_pending = true;
+                }
+                if strat_edit_publish_pending
+                    && last_strat_edit_pub.elapsed() >= Duration::from_millis(250)
+                {
+                    let open: Vec<StrategyEditRow> = strats
+                        .strategy_edits()
+                        .map(|(id, edit)| StrategyEditRow {
+                            id,
+                            phase: match edit.status() {
+                                StrategyEditStatus::Pending => StrategyEditPhase::Pending,
+                                StrategyEditStatus::TimedOut => StrategyEditPhase::TimedOut,
+                            },
+                            submitted_at_ms: edit.submitted_at().unix_millis(),
+                            fields: edit
+                                .desired()
+                                .fields
+                                .iter()
+                                .map(|(n, v)| (n.to_string(), fmt_field(v)))
+                                .collect(),
+                        })
+                        .collect();
+                    last_strat_edit_sig = edit_sig;
+                    last_strat_edit_pub = Instant::now();
+                    strat_edit_publish_pending = false;
+                    let resolved = std::mem::take(&mut pending_strat_edit_notes);
+                    let had_resolution = !resolved.is_empty();
+                    if tx
+                        .send(FeedMsg::StrategyEdits(StrategyEditSnapshot {
+                            open,
+                            resolved,
+                        }))
+                        .is_err()
+                    {
+                        break;
+                    }
+                    // A terminal resolution changes both the confirmed value and the pending
+                    // marker; force the StrategyRow rebuild into THIS drain so the two never
+                    // appear one publish apart. Do not hold the edit publish back instead — that
+                    // reintroduces the exact drop this block exists to prevent.
+                    if had_resolution {
+                        last_strats = Instant::now()
+                            .checked_sub(Duration::from_secs(1))
+                            .unwrap_or(last_strats);
+                    }
+                }
+            }
+        }
+
         // Core strategies for the Strategies window: check on domain events at no more than about
         // 1 Hz and publish only changes.
         if (had_domain_event || pending_strat_db_delivery.is_some() || strat_db_retry_due)
@@ -1703,6 +1887,12 @@ pub(super) fn run(
         } else {
             None
         };
+        // Without this a deferred strategy-edit publish would sleep until whichever unrelated
+        // deadline fires next — the API-key poll, minutes out on a quiet core — instead of the
+        // ~250 ms rate-limit window it is actually waiting on. The latch never loses the edit,
+        // but a confirmed edit would keep rendering as pending long after the core answered.
+        let strat_edit_wait = strat_edit_publish_pending
+            .then(|| Duration::from_millis(250).saturating_sub(last_strat_edit_pub.elapsed()));
         let wait_now = Instant::now();
         let account_wait = account_reconciliation.next_wait(wait_now);
         // The API-key poll is the one deadline that is ALWAYS pending, so the wait now always has a
@@ -1717,7 +1907,7 @@ pub(super) fn run(
         let startup_settled = startup_poll_settled(is_ready, startup_sent);
         let startup_wait =
             (!startup_settled).then(|| STARTUP_POLL.saturating_sub(last_startup.elapsed()));
-        let wake_wait = [order_wait, account_wait, startup_wait]
+        let wake_wait = [order_wait, account_wait, startup_wait, strat_edit_wait]
             .into_iter()
             .flatten()
             .fold(poll_wait, Duration::min);

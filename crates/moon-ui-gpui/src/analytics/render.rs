@@ -51,6 +51,10 @@ impl Render for AnalyticsView {
         // internally, so there is no outer scroll.
         let body_scrolls = false;
         let integrity = self.integrity_note(cx);
+        let edit_pending = self
+            .strategy_edit_watch
+            .as_ref()
+            .map(|watch| watch.pending.len());
         let write_error = self.write_error.clone();
         let busy_overlay = self.busy_overlay_due();
         v_flex()
@@ -81,6 +85,20 @@ impl Render for AnalyticsView {
                         .px(design::ui_px(cx, 10.0))
                         .pb(design::ui_px(cx, 6.0))
                         .child(MoonAlert::warning("an-integrity-banner", detail).title(title)),
+                )
+            })
+            // A bulk write whose queue succeeded but whose real outcome is still unknown. Above
+            // `write_error` deliberately: once any watched pair turns out bad it is reported
+            // there instead, and this banner should not sit below a complaint about itself.
+            .when_some(edit_pending, |el, n| {
+                el.child(
+                    div()
+                        .px(design::ui_px(cx, 10.0))
+                        .pb(design::ui_px(cx, 6.0))
+                        .child(MoonAlert::info(
+                            "an-edit-pending",
+                            t!("analytics.edit_pending", n = n).to_string(),
+                        )),
                 )
             })
             // A write that reached nobody. Above the undated-close notice deliberately: that one is

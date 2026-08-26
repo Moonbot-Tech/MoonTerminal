@@ -300,6 +300,11 @@ impl StrategiesView {
                 return;
             }
         }
+        // Clearing here is correct, not lossy: the value these keys displayed now arrives from
+        // `CoreData::strategy_edit`/`strategy_edit_notes_since` (the pending/adjusted/superseded
+        // tiers in `logic::edited_field_value`) instead of vanishing until the next echo. This
+        // function deliberately raises no notification and keeps no intent map of its own — GitHub
+        // issue #328 proposed re-adding one; that hand-rolled tracking is what this design replaces.
         self.field_edits
             .retain(|key, _| !plan.edit_keys.contains(key));
         self.clear_field_editor_cache();

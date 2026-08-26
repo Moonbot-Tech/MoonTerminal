@@ -94,6 +94,38 @@ impl Shell {
         });
     }
 
+    /// Drain coin-menu strategy-edit outcomes into toasts.
+    ///
+    /// The ownership split across this feature is deliberate, so nobody adds a second pump for
+    /// the same signal: the params panel reads `CoreData` directly and renders in place (no
+    /// toast); the Analytics window owns its own banner and toast, because `push_notification`
+    /// targets the ACTIVE window and Analytics is a separate one; THIS drain is the only toast
+    /// pump for edit outcomes in the shell's main window.
+    ///
+    /// Guarded the same way as [`Self::drain_engine_action_toasts`] and for the same reason: the
+    /// queue lives on the shared `Backend`, so every group window observing it would otherwise
+    /// show the same toast.
+    pub(super) fn drain_strategy_edit_toasts(&mut self, cx: &mut Context<Self>) {
+        if !self.window_active {
+            return;
+        }
+        let toasts = self
+            .backend
+            .update(cx, |b, _| b.take_strategy_edit_toasts());
+        if toasts.is_empty() {
+            return;
+        }
+        let handle = self.window_handle;
+        cx.defer(move |app| {
+            let _ = handle.update(app, move |_, window, app| {
+                use moon_ui::MoonWindowExt as _;
+                for toast in toasts {
+                    window.push_notification(strategy_edit_toast_notification(toast), app);
+                }
+            });
+        });
+    }
+
     /// Open and focus the inline editor after a fixed-sell S button is double-clicked.
     /// Seeds it with the group's current preset percentage, mirroring the order-size editor.
     pub(super) fn drain_sell_edit_request(&mut self, cx: &mut Context<Self>) {
@@ -315,6 +347,36 @@ impl Shell {
             }
         };
         handled
+    }
+}
+
+/// Build the toast for one coin-menu strategy-edit outcome.
+///
+/// The `Sent` receipt auto-hides, while `Adjusted`/`Superseded`/`TimedOut` must remain visible
+/// until dismissed (see [`Self::drain_engine_action_toasts`] and `panels/report/actions.rs`).
+/// `Confirmed` never reaches here -- the absence of a toast IS the success signal, so
+/// `Backend::take_strategy_edit_toasts` never emits an event for it.
+fn strategy_edit_toast_notification(
+    toast: crate::backend::StrategyEditToast,
+) -> moon_ui::MoonNotification {
+    use crate::backend::StrategyEditToast as T;
+    use rust_i18n::t;
+    match toast {
+        T::Sent { coin } => {
+            moon_ui::MoonNotification::info(t!("shell.strat_edit_sent", coin = coin).to_string())
+        }
+        T::Adjusted { coin } => moon_ui::MoonNotification::warning(
+            t!("shell.strat_edit_adjusted", coin = coin).to_string(),
+        )
+        .autohide(false),
+        T::Superseded { coin } => moon_ui::MoonNotification::warning(
+            t!("shell.strat_edit_superseded", coin = coin).to_string(),
+        )
+        .autohide(false),
+        T::TimedOut { coin } => moon_ui::MoonNotification::warning(
+            t!("shell.strat_edit_timeout", coin = coin).to_string(),
+        )
+        .autohide(false),
     }
 }
 

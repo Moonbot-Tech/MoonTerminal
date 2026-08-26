@@ -38,7 +38,7 @@ pub(in crate::analytics) use period::{
 };
 pub(in crate::analytics) use profit_load::ProfitLoadState;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -248,6 +248,32 @@ impl Default for AnalyticsSessionState {
     }
 }
 
+/// A bulk tuner write still awaiting core evidence: a resolution or a reported `TimedOut` phase.
+///
+/// A timeout is not a rejection; a late core echo can still produce a resolution upstream. This
+/// watch remains active until it observes either a resolution or the reported timeout phase, so a
+/// queued send is not shown as an applied one without core evidence.
+///
+/// Each field is load-bearing:
+/// - `pending` holds exact (core, strategy) PAIRS rather than two parallel lists — a strategy id
+///   repeating across cores is normal here, and two lists would form a false Cartesian product.
+/// - `since` is captured PER CORE rather than as one shared cursor, because
+///   [`moon_core::feed::StrategyEditNote::seq`] is generated per `CoreData`; one scalar cursor
+///   would suppress another core's lower-sequence notes.
+/// - `since` is captured BEFORE the send loop: installed after dispatch, a fast resolution lands
+///   before the cursor exists and the outcome is missed entirely.
+/// - `pending` admits only successful queues: `send_bulk_changes` can fail per core, and waiting
+///   on a pair whose send failed would hang that pair forever.
+pub(super) struct StrategyEditWatch {
+    /// Exact (core, strategy) pairs whose `edit_strategies` call SUCCEEDED.
+    pub(super) pending: Vec<(moon_core::session::CoreId, u64)>,
+    /// Per-core resolved-note cursor, captured before the first send and never advanced: each
+    /// drain rescans from it, since [`moon_core::session::CoreData::strategy_edit_notes_since`]
+    /// keeps its ring until eviction.
+    pub(super) since: HashMap<moon_core::session::CoreId, u64>,
+    pub(super) submitted: std::time::Instant,
+}
+
 /// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
@@ -363,6 +389,13 @@ pub struct AnalyticsView {
     /// reloaded and put the strategy's OLD values back — which is exactly what a successful
     /// write looks like. The edit was gone and the user had been told it was saved.
     pub(super) write_error: Option<String>,
+    /// A bulk write still awaiting core evidence about each edit it queued.
+    ///
+    /// `write_error` alone only ever reported a SEND failure; a write the core silently altered,
+    /// overrode, or never answered rendered as success. This tracks the still-open pairs of the
+    /// most recent bulk write until every pair resolves or reports `TimedOut`, so the panel can
+    /// say what actually happened instead of merely that a command was queued.
+    pub(super) strategy_edit_watch: Option<StrategyEditWatch>,
     /// The open "delete the strategy and its trades from the report" confirmation, if any.
     pub(in crate::analytics) strat_purge: Option<purge::PurgeOp>,
     /// Identity handed to each purge operation.
@@ -537,7 +570,6 @@ impl crate::controls::CoreComboHost for AnalyticsView {
 }
 
 impl AnalyticsView {
-
     /// The time axis every replicated report timestamp in this window is read through.
     ///
     /// Answers from the CACHED axis rather than rebuilding one per call. A core with no
@@ -657,6 +689,15 @@ impl AnalyticsView {
             // The retained `sel_cores` and process-lifetime session snapshot are never written.
             this.reload(cx);
             cx.notify();
+        })
+        .detach();
+
+        // Drain the active bulk-write watch on the same general signal every other panel already
+        // reacts to for session data — never a timer of its own. `observe_in` (not `observe`) is
+        // needed here, and only here among these three, because a clean resolution pushes a
+        // window-level toast.
+        cx.observe_in(&backend, window, |this, _backend, window, cx| {
+            this.drain_strategy_edit_watch(window, cx);
         })
         .detach();
 
@@ -855,6 +896,7 @@ impl AnalyticsView {
             undated_error: None,
             undated_expanded: session.undated_expanded,
             write_error: None,
+            strategy_edit_watch: None,
             strat_purge: None,
             purge_seq: 0,
             busy_ops: 0,

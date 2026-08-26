@@ -38,16 +38,20 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone, MoonTreeEvent, MoonTreeItem,
-    MoonTreeState, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonAlert, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonColorPicker,
+    MoonColorPickerEvent, MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTextArea, MoonTextAreaEvent,
+    MoonTextAreaState, MoonTone, MoonTreeEvent, MoonTreeItem, MoonTreeState, MoonWindowFrame, Root,
+    h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
-use moon_core::feed::{SchemaField, SchemaFieldUi, SchemaSection, StrategyRow};
+use moon_core::feed::{
+    SchemaField, SchemaFieldUi, SchemaSection, StrategyEditNote, StrategyEditPhase,
+    StrategyEditResult, StrategyEditRow, StrategyRow,
+};
 use moon_core::session::{CoreId, CoreStore};
 use rust_i18n::t;
 
@@ -113,6 +117,10 @@ pub struct StrategiesView {
     staged: HashMap<Key, bool>,
     /// Draft field edits mapping core, strategy id, and field name to the new UI string.
     field_edits: HashMap<FieldEditKey, String>,
+    /// Highest `StrategyEditNote::seq` acknowledged in the Adjusted/Superseded banner, per
+    /// core: the sequence is generated PER `CoreData`, so a single scalar cursor shared across
+    /// cores would suppress another core's lower-sequence notes.
+    last_edit_note_seq: HashMap<CoreId, u64>,
     /// Retained single-line editor states for visible or previously visited fields.
     field_inputs: HashMap<String, Entity<MoonInputState>>,
     /// Retained memo/formula editor states for visible or previously visited fields.

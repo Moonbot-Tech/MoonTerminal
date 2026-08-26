@@ -5,7 +5,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use moon_core::feed::{SchemaField, SchemaFieldUi, SchemaSection, StrategyRow};
+use moon_core::feed::{
+    SchemaField, SchemaFieldUi, SchemaSection, StrategyEditPhase, StrategyEditRow, StrategyRow,
+};
 use moon_core::session::{CoreId, CoreStore};
 
 use super::filter::PreparedFilter;
@@ -239,10 +241,11 @@ pub(super) fn merged_value_for_owned(
     st: &StrategiesView,
     rows: &[(Key, StrategyRow)],
     f: &SchemaField,
+    pending: &HashMap<Key, StrategyEditRow>,
 ) -> Option<String> {
     let mut it = rows
         .iter()
-        .map(|(key, row)| edited_field_value(st, *key, row, f));
+        .map(|(key, row)| edited_field_value(st, *key, row, f, pending.get(key)));
     let first = it.next()?;
     if it.all(|v| v == first) {
         Some(first)
@@ -251,24 +254,67 @@ pub(super) fn merged_value_for_owned(
     }
 }
 
+/// Resolve a field's displayed value, highest tier first: an unsent local draft, then a
+/// still-open edit's desired value (only when it actually changes this field, see
+/// [`pending_changed_fields`]), then the core-confirmed value.
 pub(super) fn edited_field_value(
     st: &StrategiesView,
     key: Key,
     row: &StrategyRow,
     f: &SchemaField,
+    pending: Option<&StrategyEditRow>,
 ) -> String {
     st.field_edits
         .get(&(key.0, key.1, f.name.clone()))
         .cloned()
+        .or_else(|| pending_field_value(pending, row, f))
         .unwrap_or_else(|| field_value(row, f))
+}
+
+/// Value this field takes from a still-open strategy edit, or `None` when there is no open edit
+/// or the edit's desired snapshot does not actually change this field (see
+/// [`pending_changed_fields`] for why raw presence in `pending.fields` is not the test).
+pub(super) fn pending_field_value(
+    pending: Option<&StrategyEditRow>,
+    row: &StrategyRow,
+    f: &SchemaField,
+) -> Option<String> {
+    let pending = pending?;
+    pending_changed_fields(pending, row, std::slice::from_ref(f))
+        .contains(&f.name.to_lowercase())
+        .then(|| resolved_field(&pending.fields, f))
+}
+
+/// Fields this open edit actually changed, compared through `field_value` on BOTH sides.
+///
+/// A core snapshot OMITS a field equal to its schema default (see `field_value`), so a raw
+/// presence or Vec diff between the desired snapshot and the confirmed row would mark every
+/// defaulted field as changed by this edit. MoonProto's own `strategy_effectively_equal` /
+/// `field_matches` already normalise this when deciding Confirmed vs Adjusted — that
+/// comparison is not ours. THIS one, which decides which rows get a marker, is.
+pub(super) fn pending_changed_fields(
+    pending: &StrategyEditRow,
+    row: &StrategyRow,
+    fields: &[SchemaField],
+) -> HashSet<String> {
+    fields
+        .iter()
+        .filter(|f| resolved_field(&pending.fields, f) != field_value(row, f))
+        .map(|f| f.name.to_lowercase())
+        .collect()
 }
 
 /// Return a named strategy field value or its schema default.
 /// A numeric edit field with neither value nor default displays `0`; Moonbot cores omit fields equal
 /// to their defaults, and an empty numeric input would otherwise be ambiguous.
 pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
-    let v = row
-        .fields
+    resolved_field(&row.fields, f)
+}
+
+/// Shared normalisation behind [`field_value`]: resolve a field from an explicit name/value list,
+/// falling back to the schema default the same way moon-core omits a field equal to it.
+fn resolved_field(fields: &[(String, String)], f: &SchemaField) -> String {
+    let v = fields
         .iter()
         .find(|(n, _)| n == &f.name)
         .map(|(_, v)| v.clone())
@@ -278,6 +324,30 @@ pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
         return "0".to_string();
     }
     v
+}
+
+/// Whether a field is part of a still-open edit that actually changes it, and its worst phase
+/// across the given rows (`TimedOut` outranks `Pending`) — used only to pick the marker's tone in
+/// `field_row`; value resolution goes through [`edited_field_value`] instead.
+pub(super) fn field_pending_phase(
+    rows: &[(Key, StrategyRow)],
+    pending: &HashMap<Key, StrategyEditRow>,
+    f: &SchemaField,
+) -> Option<StrategyEditPhase> {
+    let mut phase = None;
+    for (key, row) in rows {
+        let Some(edit) = pending.get(key) else {
+            continue;
+        };
+        if pending_field_value(Some(edit), row, f).is_none() {
+            continue;
+        }
+        phase = match phase {
+            Some(StrategyEditPhase::TimedOut) => phase,
+            _ => Some(edit.phase),
+        };
+    }
+    phase
 }
 
 /// Discard non-hexadecimal characters and parse the final six remaining digits as RGB.
