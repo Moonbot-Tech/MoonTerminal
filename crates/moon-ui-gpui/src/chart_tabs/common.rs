@@ -1099,16 +1099,19 @@ pub(super) fn coin_pick_handler<T: CoinPopupHost>(
             inp.set_value(SharedString::default(), window, c)
         });
         view.update(app, |this, cx| this.clear_coin_search(cx));
+        crate::controls::coin_search::release_focus(&input, window, app);
     }
 }
 
 /// Handle a click on the coin list's dismiss layer; the caller defines the layer geometry.
 pub(super) fn coin_dismiss_handler<T: CoinPopupHost>(
     cx: &Context<T>,
+    input: Entity<MoonInputState>,
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
     let entity = cx.entity();
-    move |_, _w, app| {
+    move |_, window, app| {
         entity.update(app, |this, cx| this.clear_coin_search(cx));
+        crate::controls::coin_search::release_focus(&input, window, app);
         app.stop_propagation();
     }
 }

@@ -148,3 +148,19 @@ fn hover_probe_threshold_matches_delphi() {
     assert!(hover_probe_due(Some((10.0, 10.0)), (9.0, 10.0)));
     assert!(hover_probe_due(Some((10.0, 10.0)), (10.0, 9.5)));
 }
+
+#[test]
+fn the_chart_input_channel_prefix_still_matches_this_module() {
+    // moon-core cannot check this itself: the prefix names modules that live in the BINARY, so
+    // over there the constant can only be compared with another copy of itself — which is how the
+    // switch spent its whole life inert, pointing at `moon_ui_gpui`, a name no record ever carried.
+    // `module_path!()` here is the ground truth, and it moves with a `[[bin]]` rename or a module
+    // move — the two edits that would silently mute the channel again.
+    let prefix = moon_core::diagnostics::CHART_INPUT_TARGET;
+    assert!(
+        module_path!().starts_with(prefix),
+        "log.chart_input matches {prefix:?}, but this module logs as {:?} — the channel would be \
+         inert and nothing else would say so",
+        module_path!()
+    );
+}

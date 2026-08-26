@@ -979,6 +979,7 @@ impl Render for ProfitMonitorView {
     /// Returns:
     ///     Window chrome, controls, and current report state.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         let palette = MoonPalette::active(cx);
         let width = window_width(window);
         v_flex()

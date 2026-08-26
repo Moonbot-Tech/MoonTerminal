@@ -27,6 +27,7 @@ impl Render for DetachedChartHost {
     /// The market dropdown and dismiss layer use the measured header height so scaling cannot move
     /// either layer across the search field.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         // Correct a restored window's size once it is on the target display with the correct scale:
         // force the saved logical size to override `WM_DPICHANGED` shrinkage.
         if let Some(sz) = self.restore_size.take() {
@@ -106,7 +107,7 @@ impl Render for DetachedChartHost {
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),
                 |_core, _market, _app| {},
-                |_app| {},
+                |_window, _app| {},
             )
             .absolute()
             .right(design::ui_px(cx, 6.0))
@@ -121,7 +122,7 @@ impl Render for DetachedChartHost {
                 .left(px(0.0))
                 .right(px(0.0))
                 .bottom(px(0.0))
-                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
+                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx, self.coin_input.clone()))
         });
         // A modifier held for a MOUSE gesture is a prefix too, and releasing it must not fire a
         // lone-modifier binding. Window-level and in the capture phase: the chart consumes its own
@@ -155,7 +156,9 @@ impl Render for DetachedChartHost {
             }))
             // Capture phase: a key a focused field consumes never bubbles to the listener above,
             // and a modifier held while it was typed must lose its claim to being a binding.
-            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _window, _cx| {
+            // It is also where the `log.hotkeys` trace notes the press, before anything can eat it.
+            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, _cx| {
+                crate::hotkeys::trace_key_arrived(ev);
                 this.modifier_watch.interrupt();
             }))
             .child(

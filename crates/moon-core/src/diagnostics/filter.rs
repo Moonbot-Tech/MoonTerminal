@@ -14,9 +14,26 @@
 
 use super::config::DiagCfg;
 
-/// Filter used when `RUST_LOG` says nothing. Must stay byte-identical to what the terminal shipped
-/// before diagnostics moved into a file, or a normal launch changes how much it logs.
-pub const DEFAULT_BASE_FILTER: &str = "warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info";
+/// Filter used when `RUST_LOG` says nothing.
+///
+/// The terminal's own directive names `moonterminal`, NOT the package. `moon-ui-gpui` declares no
+/// `[lib]` and one `[[bin]] name = "moonterminal"`, so `module_path!()` — which is what `log` uses
+/// as a record's target — roots every UI line at `moonterminal`. The directive shipped here read
+/// `moon_ui_gpui=info` and therefore matched nothing at all: from the day it was written until
+/// 2026-08-26 every `info!` in the terminal was dropped by the baseline `warn`, silently, while the
+/// filter read as though the UI were traced.
+///
+/// `moon_gpui` below has the same disease and is left alone deliberately. `moon-gpui` declares
+/// `[lib] name = "gpui"`, so GPUI's own records are targeted `gpui::…` and this directive misses
+/// them; it reaches only the sibling packages that kept a default lib name (`moon_gpui_windows::…`,
+/// which is where the window and present errors come from). Widening it would raise a crate whose
+/// volume at `info` nobody here has measured — a separate change, on purpose.
+///
+/// Raised for `panels::chart` alone rather than the whole binary: that subtree is where the money
+/// paths log — the manual order, its refusals, the shot — and it is a handful of event-driven
+/// lines, whereas the binary at large has never had its volume at `info` measured even once.
+pub const DEFAULT_BASE_FILTER: &str =
+    "warn,moonterminal::panels::chart=info,moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";
@@ -24,8 +41,22 @@ const BALANCES_TARGET: &str = "moon_core::feed::live";
 const KLINE_CACHE_TARGET: &str = "moon_core::market::kline_cache";
 /// Module prefix carrying market-source tracing, including cache-prefix reads and native backfill.
 const MARKET_SOURCES_TARGET: &str = "moon_core::market::source";
-/// Module prefix carrying chart hit-test tracing.
-const CHART_INPUT_TARGET: &str = "moon_ui_gpui::panels::chart";
+/// Module prefix carrying chart hit-test and manual-order tracing.
+///
+/// Rooted at the BINARY's name for the reason [`DEFAULT_BASE_FILTER`] explains; spelled
+/// `moon_ui_gpui` until 2026-08-26, which made this switch inert however it was set.
+///
+/// Public so the terminal can check this string against its own `module_path!()` instead of
+/// carrying a second copy of it. Nothing in THIS crate can verify the prefix — the modules it names
+/// live in the binary — so a test on the far side is the only thing that can catch the rename that
+/// would make it inert again.
+pub const CHART_INPUT_TARGET: &str = "moonterminal::panels::chart";
+
+/// Module prefix carrying hotkey dispatch tracing.
+///
+/// Public for the same reason as [`CHART_INPUT_TARGET`]: the modules it names live in the binary,
+/// so only a test over there can hold it against a real `module_path!()`.
+pub const HOTKEYS_TARGET: &str = "moonterminal::hotkeys";
 
 /// The directive string for `cfg`, taking the base from `RUST_LOG` when it is set.
 pub fn filter_string(cfg: &DiagCfg) -> String {
@@ -52,6 +83,7 @@ pub fn compose(cfg: &DiagCfg, base: Option<&str>) -> String {
     area(cfg.log.kline_cache, KLINE_CACHE_TARGET);
     area(cfg.log.market_sources, MARKET_SOURCES_TARGET);
     area(cfg.log.chart_input, CHART_INPUT_TARGET);
+    area(cfg.log.hotkeys, HOTKEYS_TARGET);
     // Appended last so a hand-written directive can raise something an area already covers; it is
     // the escape hatch, and an escape hatch that loses to the presets is not one.
     let extra = cfg.log.filter.trim();

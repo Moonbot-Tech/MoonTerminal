@@ -187,6 +187,7 @@ impl Render for StrategiesView {
     /// Renders the window and uses a structural signature to avoid redundant MoonTree pushes.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::STRAT_RENDER);
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         // Drain navigation from an order-line context menu or Orders Strat click before building
         // the tree so filter, expansion, and selection changes appear in this frame.
         // A reveal by name may precede the core echo that assigns its id. Both immediate and

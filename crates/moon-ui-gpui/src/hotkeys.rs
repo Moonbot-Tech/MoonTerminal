@@ -20,7 +20,10 @@ mod layout;
 #[cfg(test)]
 mod tests;
 
-use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent};
+use gpui::{
+    App, Context, Entity, FocusHandle, KeyDownEvent, Keystroke, KeystrokeEvent, Modifiers,
+    ModifiersChangedEvent, Window,
+};
 use moon_core::config::{HotkeysConfig, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
@@ -144,9 +147,86 @@ fn pressed(raw: &str, event: &Keystroke) -> bool {
             || layout::us_letter(&event.key).is_some_and(|physical| k.key == physical))
 }
 
+/// Give the window root its focus back when nothing at all holds it.
+///
+/// GPUI dispatches a key event down the path of the FOCUSED node, and with the window blurred
+/// `Window::focus_node_id_in_rendered_frame` falls back to the dispatch tree's bare ROOT node — a
+/// path carrying no element listeners. Every window root's `on_key_down` is then skipped and EVERY
+/// hotkey dies silently, with nothing anywhere to say so, until the user happens to click something
+/// focusable. Two paths in the UI stack leave the window in exactly that state and neither hands
+/// the focus on: `MoonPopover` blurs when it closes with no previous holder to restore, and GPUI
+/// blurs when the focused handle's owner is dropped (`App::release_dropped_focus_handles`).
+///
+/// Measured 2026-08-26: after an order was cancelled through a popover menu, four consecutive
+/// New Long presses logged `window focus=NONE, dispatch depth=0` and did nothing whatever; one
+/// click restored both the focus and the hotkey. Repaired HERE rather than in the fork, per the
+/// project's rule about editing MoonUI, and from `render` because that is the first thing to run
+/// after the frame that dropped the focus.
+///
+/// Acts only when NOTHING holds focus, so it can never take it from a field being typed in. That
+/// bound is also its limit, and worth knowing: a focus handle whose OWNER outlives the element —
+/// a popup's input parked in a permanent field of its host — still resolves, so the window reads as
+/// focused while the dispatch path has already collapsed, and this cannot tell. GPUI exposes no way
+/// to ask whether a focus id is in the rendered frame. Such a case has to be prevented where it is
+/// created, by whoever stops rendering a focused element; see
+/// [`crate::controls::coin_search::release_focus`].
+pub fn restore_root_focus(root: &FocusHandle, window: &mut Window, cx: &mut App) {
+    if window.focused(cx).is_none() {
+        window.focus(root, cx);
+    }
+}
+
+/// Note a keystroke at the app's interceptor, which sees it whatever the focus is doing.
+///
+/// The one measurement [`trace_key_arrived`] cannot make. GPUI dispatches a key event down the path
+/// of the FOCUSED node; when the focus id no longer resolves to a node in the rendered frame it
+/// falls back to the dispatch tree's ROOT node, whose path holds no element listeners — so every
+/// window-root handler is skipped and the press leaves no trace anywhere. `context_stack` is the
+/// tell: a real path is several contexts deep, a collapsed one is empty.
+///
+/// The event's own `action` is deliberately NOT reported: `dispatch_keystroke_interceptors` builds
+/// the event with `action: None` unconditionally, because interceptors run BEFORE action matching.
+/// Logging it would print a constant "nothing claimed this key" next to keys an action then eats.
+pub fn trace_key_intercepted(ev: &KeystrokeEvent, window: &Window, cx: &App) {
+    log::debug!(
+        target: HOTKEYS_TRACE,
+        "key {} intercepted: window focus={}, dispatch depth={}",
+        ev.keystroke,
+        if window.focused(cx).is_some() {
+            "set"
+        } else {
+            "NONE"
+        },
+        ev.context_stack.len()
+    );
+}
+
+/// Note that a key reached the window root at all, before anything can consume it.
+///
+/// Called from every window's CAPTURE-phase listener, which is the only place that sees a press
+/// unconditionally: an action binding or a focused field takes the event before the bubble-phase
+/// hotkey listener runs, and from there a swallowed key and an unbound one look identical — both
+/// are silence. Pairing this line with [`resolve`]'s tells them apart, which is the whole reason
+/// the `log.hotkeys` switch exists.
+pub fn trace_key_arrived(ev: &KeyDownEvent) {
+    log::debug!(
+        "key {} reached the window root{}",
+        ev.keystroke,
+        if ev.is_held { " (auto-repeat)" } else { "" }
+    );
+}
+
 /// Resolve a key-down event to the action bound to it.
 pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
-    resolve_binding(&ev.keystroke, hk)
+    let action = resolve_binding(&ev.keystroke, hk);
+    match &action {
+        Some(action) => log::debug!("key {} resolved to {action:?}", ev.keystroke),
+        // Reaching here means the key was NOT eaten upstream — it simply matches no binding. Worth
+        // a line of its own: it is the difference between "fix your shortcut" and "something else
+        // owns this key", and the two have nothing in common but the symptom.
+        None => log::debug!("key {} matches no binding", ev.keystroke),
+    }
+    action
 }
 
 /// Resolve a modifiers-changed event to the action bound to Caps Lock or to a lone modifier.
@@ -391,21 +471,60 @@ pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
     with_hovered_chart(backend, cx, |panel, pcx| panel.cancel_hovered_order(pcx))
 }
 
+/// Log target for the manual-order trace that this module contributes to.
+///
+/// Stated instead of taken from `module_path!()`: the trace belongs to the chart's
+/// `log.chart_input` diagnostic channel, and this router sits outside the subtree that channel
+/// matches. Built FROM the filter's own constant rather than beside it — a second spelling of the
+/// prefix is exactly how this channel came to be inert in the first place, and
+/// `panels::chart::trade::tests` holds the constant against the real `module_path!()`.
+const CHART_TRADE_TRACE: &str = moon_core::diagnostics::CHART_INPUT_TARGET;
+
+/// This module's own channel, stated for the one trace that fires from `startup::boot` — the app
+/// interceptor is registered there and would otherwise log outside `log.hotkeys` entirely.
+const HOTKEYS_TRACE: &str = moon_core::diagnostics::HOTKEYS_TARGET;
+
+/// Place a manual order at the cursor price through the chart under the pointer.
+///
+/// Shared by every window's `on_hotkey`, because the binding is addressed by the POINTER and not by
+/// focus: the chart the pointer rests on owns both the market and the pane-Y-to-price conversion,
+/// whichever window happens to hold the keyboard. This is the only refusal visible from HERE; the
+/// rest live in [`crate::panels::ChartPanel::place_order_at_cursor`] and trace themselves there.
+pub fn place_order_at_hovered_chart(backend: &Entity<Backend>, short: bool, cx: &mut App) -> bool {
+    let Some(chart) = hovered_chart(backend, cx) else {
+        log::debug!(
+            target: CHART_TRADE_TRACE,
+            "manual order refused: no chart under the pointer for the new-{} hotkey",
+            if short { "short" } else { "long" }
+        );
+        return false;
+    };
+    chart.update(cx, |panel, pcx| panel.place_order_at_cursor(short, pcx))
+}
+
+/// The chart under the pointer, whichever window holds it, or `None` when there is none.
+///
+/// One lookup for every cursor-addressed action. Placement needs the handle itself, to tell "no
+/// chart" from "the chart refused" and trace the difference; the rest go through
+/// [`with_hovered_chart`]. Both read it HERE so that a future refinement — a stale weak handle
+/// dropped, hover resolved differently — cannot send cancel and placement to different charts.
+fn hovered_chart(backend: &Entity<Backend>, cx: &App) -> Option<Entity<crate::panels::ChartPanel>> {
+    backend
+        .read(cx)
+        .hovered_chart
+        .clone()
+        .and_then(|w| w.upgrade())
+}
+
 /// Run `f` against the globally hovered chart panel, if there is one.
 ///
-/// Cursor-addressed actions all need the same lookup: the chart under the pointer, whichever window
-/// holds it, upgraded from the weak handle the backend keeps. `false` means no chart is hovered.
+/// `false` means no chart is hovered, which leaves the key event free to keep propagating.
 fn with_hovered_chart(
     backend: &Entity<Backend>,
     cx: &mut App,
     f: impl FnOnce(&mut crate::panels::ChartPanel, &mut Context<crate::panels::ChartPanel>) -> bool,
 ) -> bool {
-    let chart = backend
-        .read(cx)
-        .hovered_chart
-        .clone()
-        .and_then(|w| w.upgrade());
-    match chart {
+    match hovered_chart(backend, cx) {
         Some(chart) => chart.update(cx, f),
         None => false,
     }

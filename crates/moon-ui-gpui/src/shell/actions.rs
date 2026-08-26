@@ -269,17 +269,11 @@ impl Shell {
             // Place a manual order through the globally hovered chart, which alone can translate
             // the cursor position into a price. This is independent of which window has focus.
             HotkeyAction::NewLong | HotkeyAction::NewShort => {
-                let short = matches!(action, HotkeyAction::NewShort);
-                let chart = self
-                    .backend
-                    .read(cx)
-                    .hovered_chart
-                    .clone()
-                    .and_then(|w| w.upgrade());
-                match chart {
-                    Some(chart) => chart.update(cx, |p, pcx| p.place_order_at_cursor(short, pcx)),
-                    None => false,
-                }
+                crate::hotkeys::place_order_at_hovered_chart(
+                    &self.backend,
+                    matches!(action, HotkeyAction::NewShort),
+                    cx,
+                )
             }
             // The chart shot is scoped to THIS window: a group window has no single unambiguous
             // chart, so it resolves through the hover trail recorded for its own window rather

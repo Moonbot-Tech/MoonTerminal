@@ -32,7 +32,7 @@ use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 pub use config::DiagCfg;
-pub use filter::{filter_string, DEFAULT_BASE_FILTER};
+pub use filter::{filter_string, CHART_INPUT_TARGET, DEFAULT_BASE_FILTER, HOTKEYS_TARGET};
 
 use crate::config::paths;
 

@@ -63,6 +63,7 @@ impl Shell {
         };
         let backend = self.backend.clone();
         let view = cx.entity();
+        let ticker_field = self.ticker_input.clone();
         // Always a query list: this field picks a RATE to display in the header, so "recently
         // opened chart" and "biggest mover" would be the wrong universe to offer.
         let list = coin_search::render_popup(
@@ -73,15 +74,18 @@ impl Shell {
             None,
             p,
             cx,
-            move |core, market, _window, app| {
+            move |core, market, window, app| {
                 backend.update(app, |b, bcx| {
                     b.set_header_ticker(core, market);
                     bcx.notify();
                 });
                 view.update(app, |this, cx| this.close_ticker_popup(cx));
+                // The pick closed the list; holding the keyboard afterwards would eat the editing
+                // shortcuts the hotkeys are bound to. See `release_focus`.
+                crate::controls::coin_search::release_focus(&ticker_field, window, app);
             },
             |_, _, _| {},
-            |_| {},
+            |_, _| {},
         );
 
         // Anchored to the window's RIGHT edge and offset inward past everything that stands to the
@@ -138,11 +142,12 @@ impl Shell {
             // the caption and the query input — and that band would otherwise pass the wheel
             // straight through to whatever the header sits on.
             .occlude()
-            .on_hover(cx.listener(|this, hovered: &bool, _w, cx| {
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if *hovered {
                     this.ticker_popup_hovered = true;
                 } else if this.ticker_popup_hovered && !cx.has_active_drag() {
                     this.close_ticker_popup(cx);
+                    crate::controls::coin_search::release_focus(&this.ticker_input, window, cx);
                 }
             }))
             .child(
@@ -184,8 +189,9 @@ impl Shell {
             .inset_0()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _ev, _w, cx| {
+                cx.listener(|this, _ev, window, cx| {
                     this.close_ticker_popup(cx);
+                    crate::controls::coin_search::release_focus(&this.ticker_input, window, cx);
                     cx.stop_propagation();
                 }),
             )

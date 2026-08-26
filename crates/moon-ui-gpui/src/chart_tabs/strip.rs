@@ -303,6 +303,7 @@ impl Render for ChartTabs {
             let results = self.coin_results(cx);
             let view_toggle = cx.entity();
             let view_open = cx.entity();
+            let input_open = self.coin_input.clone();
             coin_search::render_popup(
                 "tabs-coin",
                 results,
@@ -315,8 +316,9 @@ impl Render for ChartTabs {
                 move |core, market, app| {
                     view_toggle.update(app, |this, cx| this.toggle_coin_selected(core, market, cx));
                 },
-                move |app| {
+                move |window, app| {
                     view_open.update(app, |this, cx| this.open_selected_in_new_tab(cx));
+                    crate::controls::coin_search::release_focus(&input_open, window, app);
                 },
             )
             .absolute()
@@ -366,7 +368,7 @@ impl Render for ChartTabs {
                 .id("tabs-coin-dismiss")
                 .absolute()
                 .inset_0()
-                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
+                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx, self.coin_input.clone()))
         });
 
         // Erased to `AnyElement` immediately: `render_fig_tools` returns `impl IntoElement`, which

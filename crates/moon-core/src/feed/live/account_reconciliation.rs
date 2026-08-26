@@ -41,7 +41,7 @@ pub(super) fn balance_refresh_log_window() -> Duration {
 /// at the cooldown around the clock on a trading core, and these lines were **271 201 of the day's
 /// 323 265 log records — 83.9%**. The ring the Log panel reads holds 5000 records, so that rate left
 /// under ten minutes of history in which every other message was drowned. The default filter is
-/// `warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info` (`moon-ui-gpui/src/startup.rs`), so
+/// [`crate::diagnostics::DEFAULT_BASE_FILTER`], whose `moon_core=info` covers this module, so
 /// `Debug` is dropped before it reaches the ring, the file, or the panel.
 ///
 /// Turning it back on is `log.balances = true` in `cfg/diagnostics.toml` — applied without a

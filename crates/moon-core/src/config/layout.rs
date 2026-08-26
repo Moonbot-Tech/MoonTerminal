@@ -1146,7 +1146,7 @@ fn def_candle_volume_scale() -> [u8; 3] {
 /// volume band. One consequence is deliberate and worth knowing — `ChartTheme::apply_light_defaults`
 /// used to give the light theme its own `candle_volume_alpha` and `candle_volume_scale`, and a
 /// per-tab value cannot vary by theme mode, so that pair no longer switches with the mode.
-/// `moon_ui_gpui::startup::graphics_migration` carries every existing user's values across.
+/// `moonterminal::startup::graphics_migration` carries every existing user's values across.
 ///
 /// The numeric fields are NOT clamped here, because `layout.toml` is hand-editable and the drawing
 /// path and the hit-test path must clamp IDENTICALLY or the glyph and the region that responds to

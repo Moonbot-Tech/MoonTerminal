@@ -545,17 +545,11 @@ impl DetachedChartHost {
             }
             // Place a manual order at the cursor price through the hovered chart.
             HotkeyAction::NewLong | HotkeyAction::NewShort => {
-                let short = matches!(action, HotkeyAction::NewShort);
-                let chart = self
-                    .backend
-                    .read(cx)
-                    .hovered_chart
-                    .clone()
-                    .and_then(|w| w.upgrade());
-                match chart {
-                    Some(chart) => chart.update(cx, |p, pcx| p.place_order_at_cursor(short, pcx)),
-                    None => false,
-                }
+                crate::hotkeys::place_order_at_hovered_chart(
+                    &self.backend,
+                    matches!(action, HotkeyAction::NewShort),
+                    cx,
+                )
             }
             other => {
                 let target = self.window_target(cx);
