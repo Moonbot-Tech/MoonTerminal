@@ -119,6 +119,7 @@ impl Render for Shell {
             // answer "is it jerky": it is an average, and an average hides exactly the
             // burst-and-gap pattern a stutter is made of. See `diag::SHELL_FRAME_SLOW`.
             let gap_ms = dt * 1000.0;
+            crate::diag::note_frame_gap_us((dt * 1_000_000.0) as u64);
             if gap_ms > 50.0 {
                 crate::diag::bump(&crate::diag::SHELL_FRAME_STALL);
             } else if gap_ms > 20.0 {

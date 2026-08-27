@@ -936,7 +936,11 @@ impl RenderState {
         }
 
         crate::diag::bump(&crate::diag::CHART_PRESENT);
-        let _present_us = crate::diag::scope(&crate::diag::CHART_PRESENT_US);
+        let _present_us = crate::diag::scope_slow(
+            &crate::diag::CHART_PRESENT_US,
+            &crate::diag::CHART_PRESENT_SLOW,
+            8_000,
+        );
         let present_ms = now_unix_ms();
 
         match gpu.backend() {

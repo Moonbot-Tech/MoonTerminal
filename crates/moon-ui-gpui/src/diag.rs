@@ -88,6 +88,43 @@ diag_counters!(
     // once a second; the two are only worth reading while something is driving the window.
     SHELL_FRAME_SLOW  => "shell_frame_slow",
     SHELL_FRAME_STALL => "shell_frame_stall",
+    // The main thread's non-rendering work, added 2026-08 to chase a stutter that survived halving
+    // the cost of a frame. A repaint costing 0.7 ms cannot open a 50 ms gap, so the gaps are not a
+    // throughput problem — something BLOCKS. These are the places where blocking work could be:
+    //
+    //   * `coord_tick_us` / `coord_tick_slow` — the 10 Hz coordination tick in `startup::boot`,
+    //     and how many of its runs took over 20 ms. It is the largest block of main-thread work
+    //     outside drawing: it samples process metrics, drains reconnects, ticks the warning and
+    //     quiet engines, and dispatches persistence. Ten runs a second, so a single slow one is
+    //     immediately visible as a gap in the frames around it.
+    //   * `metrics_sample_us` — `Metrics::sample` inside that tick. Throttled to once a second and
+    //     documented in `moon-core` as expensive: on Windows it refreshes CPU through PDH and
+    //     re-reads the process table. One second is also roughly the rate the stutter appears at.
+    //   * `persist_dispatch_us` — `dispatch_live_persistence`, the debounced write of dirty config
+    //     and layout. It runs ON the main thread, and the files sit beside the executable — which
+    //     may be a synchronised or network folder, where one write is a stall rather than a cost.
+    //   * `chart_present_slow` — chart own-pass draws that took over 8 ms. A base-texture rebake
+    //     paints a full-window texture per chart and has been seen at 9 ms; it happens on this
+    //     same thread, so a rebake in one window is a gap in every other window's frames.
+    // How late the coordination task actually resumed, past the 100 ms it asked to sleep, summed in
+    // microseconds and counted whenever one wake-up was over 20 ms late.
+    //
+    // This is a DIRECT probe of main-thread responsiveness and the counter the others exist to be
+    // read against. The timer is a background one, but the task runs on the foreground executor, so
+    // the delay between "the timer fired" and "the task ran again" is time the main thread refused
+    // to give it — and `coord_tick_us` cannot see any of that, because it only starts once the tick
+    // is already running. Ten samples a second, all of them free.
+    //
+    // At rest it should be a couple of milliseconds a second. It was suspected during a splitter
+    // drag because the diagnostic line's own interval stretched from 1050 ms to 1833 ms while the
+    // window kept repainting 75 times a second — frames were being served and tasks were not.
+    SCHED_LATE_US     => "sched_late_us",
+    SCHED_LATE_TICKS  => "sched_late_ticks",
+    COORD_TICK_US     => "coord_tick_us",
+    COORD_TICK_SLOW   => "coord_tick_slow",
+    METRICS_SAMPLE_US => "metrics_sample_us",
+    PERSIST_DISPATCH_US => "persist_dispatch_us",
+    CHART_PRESENT_SLOW => "chart_present_slow",
     // `shell_render_us` split four ways, because "the shell costs 1.4 ms" names nothing to fix.
     // Together these should account for nearly all of it; what is left over is the root flex, the
     // window frame and the input hooks.
@@ -522,6 +559,68 @@ impl Drop for Scope {
 /// Starts a [`Scope`] stopwatch on `counter`. Inert, and reads no clock, while diagnostics are off.
 pub fn scope(counter: &'static AtomicU64) -> Scope {
     Scope(counter, timer())
+}
+
+/// A [`Scope`] that also counts the runs which took longer than a threshold.
+///
+/// A sum answers "what does this cost per second" and hides the shape completely: ten runs of 2 ms
+/// and one run of 20 ms print the same total, and only the second one is a visible stutter. This
+/// counts the outliers so the two can be told apart.
+pub struct ScopeSlow {
+    total: &'static AtomicU64,
+    slow: &'static AtomicU64,
+    threshold_us: u64,
+    started: Option<std::time::Instant>,
+}
+
+impl Drop for ScopeSlow {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            let us = started.elapsed().as_micros() as u64;
+            bump_by(self.total, us);
+            if us >= self.threshold_us {
+                bump(self.slow);
+            }
+        }
+    }
+}
+
+/// Starts a [`ScopeSlow`] stopwatch. Inert, and reads no clock, while diagnostics are off.
+pub fn scope_slow(
+    total: &'static AtomicU64,
+    slow: &'static AtomicU64,
+    threshold_us: u64,
+) -> ScopeSlow {
+    ScopeSlow {
+        total,
+        slow,
+        threshold_us,
+        started: timer(),
+    }
+}
+
+/// Worst gap between two consecutive window repaints seen since the last sample, in microseconds.
+///
+/// Kept out of the counter table on purpose: [`take_sample`] converts every counter to a rate by
+/// dividing by the elapsed interval, which would turn a maximum into a meaningless number. It rides
+/// the diagnostic line's context string instead, beside CPU and the window count.
+static FRAME_GAP_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+/// Offer one repaint gap to the running maximum.
+pub fn note_frame_gap_us(us: u64) {
+    if enabled() {
+        FRAME_GAP_MAX_US.fetch_max(us, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Take and reset the worst repaint gap of the interval, in milliseconds.
+///
+/// Only means anything while something is DRIVING the window: an idle window repaints about once a
+/// second, so at rest this reports roughly a thousand and says nothing. Read it against
+/// `shell_render` — at fifty repaints a second, a maximum of eighty milliseconds is one visible
+/// hitch and names its size, which `shell_frame_stall` can only count.
+pub fn take_frame_gap_max_ms() -> f64 {
+    FRAME_GAP_MAX_US.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0
 }
 
 #[derive(Clone, Debug)]
