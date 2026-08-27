@@ -112,6 +112,9 @@ impl ChartEngine {
             caption_runs: Vec::new(),
             caption_wraps: Vec::new(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
+            // The same timeframe `ChartDataState` starts on, so an `Авто` countdown is right from
+            // the first frame rather than from the first `set_candle_view`.
+            chart_tf_ms: moon_core::market::CandleViewCfg::default().tf_ms(),
             arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::default()),
             firetest_text_labels: Vec::new(),
             firetest_text_runs: Vec::new(),
@@ -692,6 +695,10 @@ impl ChartEngine {
         }
         data.candle_view = cfg;
         data.last_order_sig = u64::MAX;
+        // Mirrored into the text pass for the same reason `chart_labels` is: a countdown caption
+        // set to `Авто` counts down to THIS timeframe, and the caption pass is handed what it
+        // prints rather than reaching back into the data state for it.
+        data.render.borrow_mut().chart_tf_ms = cfg.tf_ms();
         data.mark_view_dirty();
         drop(data);
         for pr in &mut self.state.borrow_mut().panes {
@@ -840,13 +847,14 @@ impl ChartEngine {
         // each time.
         let unchanged = *data.chart_labels == *cfg;
         data.chart_labels = cfg.clone();
+        // Mirrored into the text pass, which reads it every frame and must not borrow the data
+        // state to do so. The same allocation, not a second copy of it — and done before the early
+        // return, because an unchanged configuration still arrives as a NEW allocation on every
+        // render and the mirror has to adopt it too.
+        data.render.borrow_mut().chart_labels = cfg;
         if unchanged {
-            data.render.borrow_mut().chart_labels = cfg;
             return false;
         }
-        // Mirrored into the text pass, which reads it every frame and must not borrow the data
-        // state to do so. The same allocation, not a second copy of it.
-        data.render.borrow_mut().chart_labels = cfg;
         // The captions are re-resolved by the SYNC paths, and those short-circuit on an unchanged
         // signature. Invalidating it here is what makes a configuration change reach a chart whose
         // market and orders have not moved — the same reason `set_chart_graphics` resets it.

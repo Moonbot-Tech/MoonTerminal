@@ -1237,12 +1237,13 @@ impl ChartDataState {
         // read by eye; the reference terminal repaints it no faster either.
         let wants_arb = st.chart_labels.any_drawn(|f| f == LabelField::ArbColumn);
         let arb_now_ms = now as i64;
-        // The clock only advances while something counts down with it. Quantized to the minute so
-        // an idle chart re-formats its captions once a minute, not once per market revision.
+        // The clock only advances while something counts down with it, and it is quantized so an
+        // idle chart re-formats its captions when the printed figure moves rather than once per
+        // market revision. The rule lives on the configuration — see `countdown_clock_ms` — because
+        // the frame path ticks the same clock and the two must not drift.
         let countdown_now_ms = st
             .chart_labels
-            .any_drawn(|f| matches!(f, LabelField::FundingIn))
-            .then(|| now as i64 / 60_000 * 60_000)
+            .countdown_clock_ms(st.chart_tf_ms, now as i64)
             .unwrap_or(0);
         for (idx, _) in &layout {
             // The market name is cloned only when a caption is actually going to read the snapshot;
@@ -1369,7 +1370,9 @@ impl ChartDataState {
                 pr.label_windows = windows;
                 pr.label_now_ms = countdown_now_ms;
             }
-            // Captions are formatted HERE, on a revision, and never in the frame path.
+            // Captions are formatted HERE, on a revision. The frame path formats them too, but
+            // only for the countdown captions and only when their quantized clock moves — see
+            // `ChartDataState::tick_countdown_captions`.
             if st.refresh_pane_labels(*idx) {
                 text_changed = true;
             }
@@ -1420,7 +1423,10 @@ fn resolve_span_key(key: &VolumeSpanKey, cursor_ms: Option<i64>) -> Option<(Volu
 }
 
 /// The same for a whole set, dropping the ones that cannot be read right now.
-fn resolve_span_keys(keys: &[VolumeSpanKey], cursor_ms: Option<i64>) -> Vec<(VolumeSpan, VolumeAt)> {
+fn resolve_span_keys(
+    keys: &[VolumeSpanKey],
+    cursor_ms: Option<i64>,
+) -> Vec<(VolumeSpan, VolumeAt)> {
     let mut out: Vec<(VolumeSpan, VolumeAt)> = Vec::new();
     for key in keys {
         let Some(resolved) = resolve_span_key(key, cursor_ms) else {
@@ -1495,9 +1501,16 @@ pub(in crate::chartdx) fn read_volume_sets(
 /// The two anchors are refreshed on different clocks — the market's and the pointer's — so each
 /// path may only touch its own entries. Replacing the set wholesale is what would blank a live-edge
 /// caption every time the mouse moved.
-fn merge_readouts<T>(held: &mut Vec<((VolumeSpan, VolumeAt), T)>, fresh: Vec<((VolumeSpan, VolumeAt), T)>) {
+fn merge_readouts<T>(
+    held: &mut Vec<((VolumeSpan, VolumeAt), T)>,
+    fresh: Vec<((VolumeSpan, VolumeAt), T)>,
+) {
     held.retain(|((_, at), _)| matches!(at, VolumeAt::Now));
-    held.extend(fresh.into_iter().filter(|((_, at), _)| !matches!(at, VolumeAt::Now)));
+    held.extend(
+        fresh
+            .into_iter()
+            .filter(|((_, at), _)| !matches!(at, VolumeAt::Now)),
+    );
 }
 
 /// Whether two period sets hold the same entries, whatever order they are in.

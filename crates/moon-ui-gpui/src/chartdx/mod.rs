@@ -860,6 +860,10 @@ struct RenderState {
     /// pane: the configuration owns a name string per row, and cloning it by value would allocate
     /// sixteen strings in the frame loop for nothing.
     chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
+    /// The chart's own candle timeframe in milliseconds, mirrored from `ChartDataState` like the
+    /// captions above and for the same reason: a countdown caption set to `Авто` resolves against
+    /// it while the text pass is running, and must not borrow the data state to read it.
+    chart_tf_ms: i64,
     /// The arbitrage roster the caption column is arranged by, mirrored like `chart_labels` and for
     /// the same reason: the text pass reads it per pane on every rebuild and must not borrow the
     /// data state. GLOBAL — one roster for every chart — so every pane shares this handle.
@@ -1224,6 +1228,11 @@ struct ChartDataState {
     last_order_sig: u64,
     last_prepared_market_sig: u64,
     last_source_market_sig: u64,
+    /// When the countdown clock was last consulted, for the throttle in `tick_countdown_captions`.
+    ///
+    /// Monotonic rather than the wall clock this feature is about: it paces a CHECK, and a check
+    /// paced by a clock the user can move backwards would stop happening.
+    last_countdown_check: Option<Instant>,
     view_dirty: bool,
 }
 

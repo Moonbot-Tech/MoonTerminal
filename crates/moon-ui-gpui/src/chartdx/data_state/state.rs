@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// How often the countdown clock is consulted, at most.
+///
+/// A quarter of the finest quantum any countdown asks for, so a second-by-second caption is never
+/// more than a quarter second late — below what a reader can see on a clock — while the check
+/// itself runs four times a second instead of up to three hundred and sixty.
+const COUNTDOWN_CHECK: Duration = Duration::from_millis(250);
+
 impl ChartDataState {
     pub(crate) fn new(
         container: Rc<RefCell<Container>>,
@@ -52,6 +59,7 @@ impl ChartDataState {
             last_order_sig: u64::MAX,
             last_prepared_market_sig: u64::MAX,
             last_source_market_sig: u64::MAX,
+            last_countdown_check: None,
             view_dirty: true,
         }
     }
@@ -245,7 +253,8 @@ impl ChartDataState {
         if !info.presentable || info.bounds.is_empty() {
             return self.render.borrow_mut().frame(info);
         }
-        if self.observe_present_rate(Instant::now()) {
+        let now = Instant::now();
+        if self.observe_present_rate(now) {
             if let Some(source) = self.market_source.clone() {
                 crate::diag::bump(&crate::diag::CHART_PREPARE);
                 self.sync_from_market_source(&source, None);
@@ -256,7 +265,64 @@ impl ChartDataState {
         if self.pull_market_source_if_visible() {
             crate::diag::bump(&crate::diag::CHART_PREPARE);
         }
+        self.tick_countdown_captions(now);
         self.render.borrow_mut().frame(info)
+    }
+
+    /// Advance the countdown captions when their quantized clock moves, WITHOUT a market sync.
+    ///
+    /// A countdown is the one caption whose value changes with nothing but the clock, and the sync
+    /// that normally re-formats captions runs only when the view is dirty or a market revision
+    /// moved. On a quiet market neither happens for minutes, and the countdown would sit frozen —
+    /// which is the one failure a clock on screen must not have.
+    ///
+    /// Deliberately NOT done by marking the view dirty: that would drag a full
+    /// `sync_from_market_source` — per-pane history reads, readouts, geometry — through the frame
+    /// loop once a second on every chart carrying this caption, to change one string. This
+    /// re-resolves the captions and asks for a present, and touches nothing else.
+    ///
+    /// Throttled to [`COUNTDOWN_CHECK`] because the question itself is not free: answering it reads
+    /// the system clock and walks the caption configuration, and the finest quantum any countdown
+    /// asks for is a second. Per vblank that would be up to 360 answers to a question that can
+    /// change once. The monotonic `now` is the one the frame already took, so this costs one
+    /// `Instant` comparison on the frames it skips — on every chart, not only on those that print
+    /// no countdown.
+    fn tick_countdown_captions(&mut self, now: Instant) {
+        // Gated exactly like `pull_market_source_if_visible`: a scene nobody is looking at must not
+        // reshape text once a second, and the tick below catches its captions up the moment it
+        // comes back — the clock it compares against is absolute, not a step counter.
+        if !self.scene_visible {
+            return;
+        }
+        if self
+            .last_countdown_check
+            .is_some_and(|last| now.duration_since(last) < COUNTDOWN_CHECK)
+        {
+            return;
+        }
+        self.last_countdown_check = Some(now);
+        let tf_ms = self.candle_view.tf_ms();
+        let mut st = self.render.borrow_mut();
+        let Some(clock) = st
+            .chart_labels
+            .countdown_clock_ms(tf_ms, moon_core::util::time::now_unix_ms_i64())
+        else {
+            return;
+        };
+        for idx in 0..st.panes.len() {
+            // A pane the text pass skips must not be re-formatted for it, and must not raise a
+            // present: `prepare_text` draws captions for ACTIVE panes only, so a vacated slot held
+            // through its grace period would otherwise repaint the scene once a second for a
+            // picture nobody is drawing.
+            if !st.panes[idx].active || st.panes[idx].label_now_ms == clock {
+                continue;
+            }
+            st.panes[idx].label_now_ms = clock;
+            crate::diag::bump(&crate::diag::CHART_COUNTDOWN_TICK);
+            if st.refresh_pane_labels(idx) {
+                st.needs_present = true;
+            }
+        }
     }
 
     pub(crate) fn observe_present_rate(&mut self, now: Instant) -> bool {

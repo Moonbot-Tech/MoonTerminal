@@ -248,7 +248,11 @@ fn render_labels_popup<T: LabelsPopupHost>(
 }
 
 /// Host for the labels popup in either the tab strip or a detached-window header.
-pub(crate) trait LabelsPopupHost: LayoutPopupHost {
+/// `CandlePopupHost` is a supertrait so this popup can ask which TIMEFRAME its tab draws — the
+/// module editor previews a countdown caption set to `Авто` as the period that tab will really
+/// print. Asking through that trait rather than re-deriving the answer keeps ONE resolution rule
+/// for "which candle settings does this tab follow"; every implementor already provides it.
+pub(crate) trait LabelsPopupHost: LayoutPopupHost + super::candle_popup::CandlePopupHost {
     /// The target's per-tab override, or `None` to follow the global default.
     fn labels_override(&self, cx: &App) -> Option<ChartLabelsCfg>;
 

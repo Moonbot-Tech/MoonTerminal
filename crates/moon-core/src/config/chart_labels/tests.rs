@@ -1234,3 +1234,149 @@ fn an_unknown_field_costs_only_its_own_caption() {
         "the sibling survives"
     );
 }
+
+/// `Авто` has no length of its own and resolves to the chart's; a fixed choice ignores the chart.
+/// Resolution is TOTAL — every input answers with a named period — which is what lets the caption's
+/// prefix print a period rather than the word `Авто`, and what removes the "unnameable timeframe"
+/// case the prefix would otherwise have had to spell out by hand.
+#[test]
+fn a_label_timeframe_resolves_auto_against_the_chart() {
+    assert_eq!(LabelTf::Auto.resolve_ms(5 * 60_000), 5 * 60_000);
+    assert_eq!(LabelTf::H4.resolve_ms(5 * 60_000), 4 * 3_600_000);
+    assert_eq!(LabelTf::D1.resolve_ms(0), 24 * 3_600_000);
+    // A length outside the set — a zero included — still answers with a NAMED period rather than
+    // with `Авто`. No producer emits one: `CandleViewCfg::tf_ms` already answers within this set.
+    // What this pins is TOTALITY, which is what leaves the prefix with no case to spell out.
+    assert_eq!(LabelTf::Auto.resolved(4 * 3_600_000), LabelTf::H4);
+    assert_eq!(
+        LabelTf::H1.resolved(4 * 3_600_000),
+        LabelTf::H1,
+        "a fixed choice ignores the chart"
+    );
+    assert_eq!(LabelTf::Auto.resolved(7 * 60_000), LabelTf::M5);
+    assert_eq!(LabelTf::Auto.resolved(0), LabelTf::M5, "total, and never the setting");
+}
+
+/// The caption's timeframes are the chart's timeframes. Two hand-written tables of the same six
+/// periods exist; this is what stops them drifting apart silently when a new one is added.
+#[test]
+fn the_label_timeframes_are_exactly_the_charts_own() {
+    let offered: Vec<u32> = LabelTf::ALL
+        .into_iter()
+        .filter(|tf| *tf != LabelTf::Auto)
+        .map(|tf| (tf.resolve_ms(0) / 60_000) as u32)
+        .collect();
+    assert_eq!(
+        offered,
+        crate::market::candles::CANDLE_TF_CHOICES_MIN.to_vec(),
+        "the caption offers a period the chart cannot be set to, or misses one it can"
+    );
+}
+
+/// The remaining time is the candle grid's, floored on the Unix epoch: never zero, never longer
+/// than the period, and the same answer on every coin.
+#[test]
+fn a_label_timeframe_reports_the_remainder_of_its_own_bucket() {
+    let hour = 3_600_000;
+    assert_eq!(
+        LabelTf::H1.remaining_ms(0, 0),
+        hour,
+        "a boundary opens a full candle"
+    );
+    assert_eq!(LabelTf::H1.remaining_ms(0, hour - 1), 1);
+    assert_eq!(LabelTf::H1.remaining_ms(0, 90 * 60_000), 30 * 60_000);
+    assert_eq!(
+        LabelTf::Auto.remaining_ms(5 * 60_000, 7 * 60_000),
+        3 * 60_000,
+        "auto follows the chart's own bucket"
+    );
+}
+
+/// A timeframe left on a caption whose field was changed to one that counts nothing down is
+/// dropped, exactly like the window and the span beside it: a parameter nothing reads is one a
+/// later field change would suddenly obey.
+#[test]
+fn sanitize_drops_a_timeframe_from_a_caption_that_counts_nothing() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::TfCloseIn);
+    row.push_part(ChartLabelField::LastPrice);
+    row.parts[0].tf = LabelTf::H4;
+    row.parts[1].tf = LabelTf::H4;
+    cfg.rows[0] = row;
+    cfg.sanitize();
+    assert_eq!(
+        cfg.rows[0].parts[0].tf,
+        LabelTf::H4,
+        "the countdown keeps it"
+    );
+    assert_eq!(
+        cfg.rows[0].parts[1].tf,
+        LabelTf::Auto,
+        "the price caption does not"
+    );
+}
+
+/// The clock only advances while something counts down with it, and only a countdown inside its
+/// last hour buys the second-by-second step. This is the whole cost control for these captions.
+#[test]
+fn the_countdown_clock_picks_the_coarsest_step_that_works() {
+    let tf_5m = 5 * 60_000;
+    let one_of = |field: ChartLabelField, tf: LabelTf| {
+        let mut cfg = ChartLabelsCfg::empty();
+        let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        row.push_part(field);
+        row.parts[0].tf = tf;
+        cfg.rows[0] = row;
+        cfg
+    };
+    // Nothing drawn: no clock at all, so a chart printing no countdown pays nothing.
+    let quiet = one_of(ChartLabelField::LastPrice, LabelTf::Auto);
+    assert_eq!(quiet.countdown_clock_ms(tf_5m, 1_234_567), None);
+
+    // A day away: the printed figure is hours and minutes, which a minute step already tracks.
+    let daily = one_of(ChartLabelField::TfCloseIn, LabelTf::D1);
+    let noon = 12 * 3_600_000;
+    assert_eq!(
+        daily.countdown_clock_ms(tf_5m, noon + 1_500),
+        Some(noon),
+        "the part-minute is quantized away"
+    );
+    let clock = daily
+        .countdown_clock_ms(tf_5m, noon + 61_500)
+        .expect("a countdown is drawn");
+    assert_eq!(clock % 60_000, 0, "far out it steps by the minute: {clock}");
+
+    // Inside the last hour of that same day candle: seconds, because the caption now prints them.
+    let late = 23 * 3_600_000 + 30 * 60_000 + 1_500;
+    assert_eq!(daily.countdown_clock_ms(tf_5m, late), Some(late - 500));
+
+    // A five-minute candle is never more than five minutes out, so it is always on the fine step.
+    let five = one_of(ChartLabelField::TfCloseIn, LabelTf::Auto);
+    assert_eq!(five.countdown_clock_ms(tf_5m, 1_234_567), Some(1_234_000));
+
+    // Funding alone keeps the minute step it always had.
+    let funding = one_of(ChartLabelField::FundingIn, LabelTf::Auto);
+    assert_eq!(
+        funding.countdown_clock_ms(tf_5m, 1_234_567),
+        Some(1_200_000)
+    );
+}
+
+/// A default timeframe is not written, like every other caption parameter: the file states what was
+/// CHANGED. A chosen one survives the round trip.
+#[test]
+fn a_label_timeframe_round_trips_only_when_it_was_chosen() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::TfCloseIn);
+    cfg.rows[0] = row;
+    let bare = serde_json::to_string(&cfg).expect("writes");
+    assert!(!bare.contains("\"tf\""), "the default is silent: {bare}");
+
+    cfg.rows[0].parts[0].tf = LabelTf::H4;
+    let chosen = serde_json::to_string(&cfg).expect("writes");
+    assert!(chosen.contains("\"tf\""), "a choice is stated: {chosen}");
+    let back: ChartLabelsCfg = serde_json::from_str(&chosen).expect("reads");
+    assert_eq!(back.rows[0].parts[0].tf, LabelTf::H4);
+}

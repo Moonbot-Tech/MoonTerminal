@@ -164,15 +164,24 @@ pub enum ChartLabelField {
     /// what order, under what name and in what colour is [`crate::config::ArbViewCfg`] — a global
     /// roster, not a per-chart setting, because "Gate is green to me" is not a fact about one tab.
     ArbColumn,
+    /// Time left until the current candle of a timeframe closes.
+    ///
+    /// Reads NOTHING from the market: candle buckets are floored on the Unix epoch
+    /// ([`crate::market::candles::bucket_open_ms`]), so the answer is wall-clock arithmetic and is
+    /// the same figure on every coin. Which timeframe is the caption's own
+    /// [`super::LabelTf`] — `Авто` follows the chart, and a fixed one lets a minute chart carry the
+    /// hour's and the day's countdowns beside it.
+    TfCloseIn,
 }
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 50] = [
+    pub const ALL: [ChartLabelField; 51] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
         ChartLabelField::Quote,
+        ChartLabelField::TfCloseIn,
         ChartLabelField::LastPrice,
         ChartLabelField::Delta1h,
         ChartLabelField::Delta24h,
@@ -230,6 +239,7 @@ impl ChartLabelField {
             | ChartLabelField::Quote
             | ChartLabelField::CoinTags
             | ChartLabelField::None => ChartLabelGroup::Instrument,
+            ChartLabelField::TfCloseIn => ChartLabelGroup::Time,
             ChartLabelField::LastPrice => ChartLabelGroup::Price,
             ChartLabelField::Delta1h
             | ChartLabelField::Delta24h
@@ -332,6 +342,7 @@ impl ChartLabelField {
             ChartLabelField::DetectStrategy => "chart_labels.field.detect_strategy",
             ChartLabelField::DetectMsg => "chart_labels.field.detect_msg",
             ChartLabelField::ArbColumn => "chart_labels.field.arb_column",
+            ChartLabelField::TfCloseIn => "chart_labels.field.tf_close_in",
         }
     }
 
@@ -357,6 +368,9 @@ impl ChartLabelField {
             ChartLabelField::BtcDelta72h => Some("chart_labels.short.btc_72h"),
             ChartLabelField::Funding => Some("chart_labels.short.funding"),
             ChartLabelField::FundingIn => Some("chart_labels.short.funding_in"),
+            // The word alone would not tell two countdowns apart, which is why the timeframe rides
+            // in front of it and survives the switch — see `caption_prefix` in the terminal.
+            ChartLabelField::TfCloseIn => Some("chart_labels.short.tf_close_in"),
             ChartLabelField::Bid => Some("chart_labels.short.bid"),
             ChartLabelField::Ask => Some("chart_labels.short.ask"),
             ChartLabelField::Spread => Some("chart_labels.short.spread"),
@@ -478,6 +492,14 @@ impl ChartLabelField {
                 | ChartLabelField::WindowLiquidations
                 | ChartLabelField::WindowSpanName
         )
+    }
+
+    /// Whether this field reads a [`super::LabelTf`], and therefore shows that control.
+    ///
+    /// Asked of the FIELD, like [`Self::uses_window`], so a timeframe cannot linger on a caption
+    /// whose field was changed to something that ignores one.
+    pub fn uses_tf(self) -> bool {
+        matches!(self, ChartLabelField::TfCloseIn)
     }
 
     /// Whether this field reads a traded AMOUNT, and therefore costs a history read.
@@ -631,6 +653,17 @@ impl ChartLabelField {
                 size_mult: 1.0,
                 caption: true,
             },
+            // Captioned like the funding countdown beside it, and for a sharper reason: this
+            // caption's prefix carries its TIMEFRAME, which is what tells two countdowns apart.
+            // Falling into the bare arm below would have shipped a field whose locale key, prefix
+            // branch and editor switch all existed and never showed.
+            ChartLabelField::TfCloseIn => ResolvedLabelStyle {
+                value_only: true,
+                color_min_pct: 0.0,
+                color: LabelColor::Theme,
+                size_mult: 1.0,
+                caption: true,
+            },
             _ => ResolvedLabelStyle {
                 value_only: true,
                 color_min_pct: 0.0,
@@ -646,6 +679,10 @@ impl ChartLabelField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartLabelGroup {
     Instrument,
+    /// WHEN, rather than what: figures read off the clock and the chart's own bucket grid rather
+    /// than off the market. Its own section because a reader hunting for "how long until this
+    /// candle closes" scans the headings first, and no other heading claims time.
+    Time,
     /// What the coin COSTS: the quote side and the venue's own marks.
     Price,
     /// How far it moved — this coin's own change, the exchange's, BTC's.
@@ -666,10 +703,12 @@ pub enum ChartLabelGroup {
 
 impl ChartLabelGroup {
     /// Sections in menu order.
-    /// Sections in picker order: what it IS, what it costs, how it moves, how much traded, what
-    /// the contract charges, what is open — ours then the venue's — who acted, and the column.
-    pub const ALL: [ChartLabelGroup; 9] = [
+    /// Sections in picker order: what it IS, when its candle closes, what it costs, how it moves,
+    /// how much traded, what the contract charges, what is open — ours then the venue's — who
+    /// acted, and the column.
+    pub const ALL: [ChartLabelGroup; 10] = [
         ChartLabelGroup::Instrument,
+        ChartLabelGroup::Time,
         ChartLabelGroup::Price,
         ChartLabelGroup::Move,
         ChartLabelGroup::Volume,
@@ -683,6 +722,7 @@ impl ChartLabelGroup {
     pub fn locale_key(self) -> &'static str {
         match self {
             ChartLabelGroup::Instrument => "chart_labels.group.instrument",
+            ChartLabelGroup::Time => "chart_labels.group.time",
             ChartLabelGroup::Price => "chart_labels.group.price",
             ChartLabelGroup::Move => "chart_labels.group.move",
             ChartLabelGroup::Volume => "chart_labels.group.volume",

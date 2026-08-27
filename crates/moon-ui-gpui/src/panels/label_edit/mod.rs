@@ -34,6 +34,9 @@ use body::dialog_body;
 pub struct LabelEditState {
     /// The edited COPY. Nothing outside this dialog sees it until OK.
     row: ChartLabelRow,
+    /// Timeframe of the chart the module came from, so the preview resolves an `Авто` countdown to
+    /// the period that chart will actually print rather than to the sample's own.
+    chart_tf_ms: i64,
     /// Caption whose settings the right-hand pane shows. Clamped to the used captions on every
     /// change, so removing the last one cannot leave the pane describing a caption that is gone.
     selected: usize,
@@ -114,6 +117,9 @@ fn clamped(selected: usize, used: usize) -> usize {
 pub(crate) fn open_label_edit(
     title: String,
     row: ChartLabelRow,
+    // The timeframe of the chart this module belongs to, for previewing an `Авто` countdown as the
+    // period it will really print. Everything else the sample shows is a sample; this is not.
+    chart_tf_ms: i64,
     window: &mut Window,
     cx: &mut App,
     on_done: impl Fn(ChartLabelRow, &mut App) + 'static,
@@ -132,6 +138,7 @@ pub(crate) fn open_label_edit(
     name_input.update(cx, |st, c| st.set_value(row.name.clone(), window, c));
     let state = cx.new(|_| LabelEditState {
         row,
+        chart_tf_ms,
         selected: 0,
         name_input,
         picker_open: None,

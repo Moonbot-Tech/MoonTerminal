@@ -419,9 +419,15 @@ fn open_module_editor<T: LabelsPopupHost>(
     entity.update(app, |this, cx| this.suspend_labels_popup(cx));
     let apply_entity = entity.clone();
     let reopen_entity = entity.clone();
+    // The chart's OWN timeframe, so the editor previews an `Авто` countdown as the period this tab
+    // really prints. Read through the candle popup's host — the same tab, the same resolution rule
+    // (its own override, or the default for its kind), so the preview cannot name one period while
+    // the chart draws another.
+    let chart_tf_ms = entity.read(app).candle_view_current(app).tf_ms();
     open_label_edit(
         title,
         row,
+        chart_tf_ms,
         window,
         app,
         move |edited, app| {

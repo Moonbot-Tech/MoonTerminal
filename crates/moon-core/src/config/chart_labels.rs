@@ -354,6 +354,131 @@ impl LabelWindow {
     }
 }
 
+/// Timeframe whose candle a countdown caption is counting down to.
+///
+/// A PARAMETER of the caption for the same reason [`LabelWindow`] is one: the figure is identical
+/// over every timeframe and differs only by which one, so six fields would be one field spelled six
+/// times. [`Self::Auto`] follows the chart's own candle setting, which is what a reader wants on the
+/// chart they are watching; a fixed one is what lets a minute chart carry the hour's and the day's
+/// countdowns beside it, which is the case the feature was asked for.
+///
+/// The set mirrors [`crate::market::candles::CANDLE_TF_CHOICES_MIN`] — the timeframes the chart
+/// itself can be set to — so a reader never picks a period the terminal cannot draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelTf {
+    /// Follow the chart's own candle timeframe, whatever it is switched to next.
+    #[default]
+    Auto,
+    M1,
+    M5,
+    M30,
+    H1,
+    H4,
+    D1,
+}
+
+impl LabelTf {
+    /// Every choice, in the order the editor lists them: `Авто` first, then shortest to longest.
+    pub const ALL: [LabelTf; 7] = [
+        LabelTf::Auto,
+        LabelTf::M1,
+        LabelTf::M5,
+        LabelTf::M30,
+        LabelTf::H1,
+        LabelTf::H4,
+        LabelTf::D1,
+    ];
+
+    /// Length of this timeframe in MINUTES, or `None` for [`Self::Auto`], which has none of its own.
+    fn minutes(self) -> Option<u32> {
+        match self {
+            LabelTf::Auto => None,
+            LabelTf::M1 => Some(1),
+            LabelTf::M5 => Some(5),
+            LabelTf::M30 => Some(30),
+            LabelTf::H1 => Some(60),
+            LabelTf::H4 => Some(240),
+            LabelTf::D1 => Some(1440),
+        }
+    }
+
+    /// This choice with [`Self::Auto`] replaced by the timeframe it currently means. Never `Auto`.
+    ///
+    /// Resolving to a NAMED choice rather than to a bare length is what lets the caption's prefix
+    /// print the period a reader is looking at: printing `Авто` there would name the setting, and
+    /// two `Авто` captions on two charts would read identically.
+    ///
+    /// A length this enum cannot name resolves to five minutes — the same period
+    /// [`crate::market::candles::CandleViewCfg::tf_ms`] answers for a timeframe IT cannot name, so
+    /// the two agree on the one case neither can express. No chart reaches it: that function is the
+    /// only producer of the value, and it already answers within this set.
+    pub fn resolved(self, chart_tf_ms: i64) -> LabelTf {
+        if self != LabelTf::Auto {
+            return self;
+        }
+        LabelTf::ALL
+            .into_iter()
+            .find(|tf| tf.minutes().is_some_and(|min| i64::from(min) * 60_000 == chart_tf_ms))
+            .unwrap_or(LabelTf::M5)
+    }
+
+    /// Length in milliseconds, resolving [`Self::Auto`] against the chart's own timeframe.
+    pub fn resolve_ms(self, chart_tf_ms: i64) -> i64 {
+        i64::from(self.resolved(chart_tf_ms).minutes().unwrap_or(5)) * 60_000
+    }
+
+    /// Milliseconds left in the CURRENT candle of this timeframe, at the moment `now_ms`.
+    ///
+    /// Candle buckets are floored on the Unix epoch — see
+    /// [`crate::market::candles::bucket_open_ms`] — so this reads the clock and nothing else: the
+    /// answer is the same on every coin, every venue and every window, and no market data is
+    /// consulted to produce it.
+    ///
+    /// It lives on the parameter rather than beside either caller because BOTH callers need it —
+    /// the caption that prints the figure, and the clock that decides how often to re-print it —
+    /// and they are in different crates. Two copies of one grid rule is how the two drift apart.
+    ///
+    /// `rem_euclid` rather than `%`: a clock before the epoch is not reachable, but the remainder
+    /// of a negative dividend is negative in Rust and would report a remaining time LONGER than the
+    /// timeframe. The result is in `(0, tf]` — exactly on a boundary the new candle has just
+    /// opened, so the full period is what remains, and a zero is never reported.
+    pub fn remaining_ms(self, chart_tf_ms: i64, now_ms: i64) -> i64 {
+        let tf = self.resolve_ms(chart_tf_ms);
+        tf - now_ms.rem_euclid(tf)
+    }
+
+    pub fn locale_key(self) -> &'static str {
+        match self {
+            LabelTf::Auto => "chart_labels.tf.auto",
+            LabelTf::M1 => "chart_labels.tf.m1",
+            LabelTf::M5 => "chart_labels.tf.m5",
+            LabelTf::M30 => "chart_labels.tf.m30",
+            LabelTf::H1 => "chart_labels.tf.h1",
+            LabelTf::H4 => "chart_labels.tf.h4",
+            LabelTf::D1 => "chart_labels.tf.d1",
+        }
+    }
+
+    /// Whether this is the timeframe a part carries when it says nothing, for the file that then
+    /// does not state it.
+    fn is_default(&self) -> bool {
+        *self == LabelTf::Auto
+    }
+}
+
+/// Remaining time under which a candle countdown is clocked SECOND by second rather than by the
+/// minute: the last hour, plus one minute of slack so the step changes before the display does.
+///
+/// The hour is where the caption's own format changes: past it the figure is hours and minutes,
+/// which moves once a minute, so a second-by-second clock there would re-format the caption sixty
+/// times for one printed change. Inside it the caption prints seconds and needs every one of them.
+///
+/// The minute of slack is what makes the switch land BEFORE the format needs it: a coarse clock
+/// cannot express a sub-minute remainder at all, so arriving late would print `1ч 00м` where the
+/// caption should already be reading `59м 50с`.
+const COUNTDOWN_SECOND_STEP_BELOW_MS: i64 = 3_600_000 + 60_000;
+
 /// Smallest and largest custom span a caption may ask for.
 ///
 /// A minute span is bounded by what the retained history can ever cover — three days is already
@@ -600,6 +725,12 @@ pub struct ChartLabelPart {
     /// CHANGED, and a window on a caption that ignores one is noise in a diff.
     #[serde(skip_serializing_if = "LabelWindow::is_default")]
     pub window: LabelWindow,
+    /// Which timeframe a countdown caption counts down to; meaningless for other fields.
+    ///
+    /// Not written while it is `Авто`, like every other parameter here: a file states what was
+    /// CHANGED, and a timeframe on a caption that ignores one is noise in a diff.
+    #[serde(skip_serializing_if = "LabelTf::is_default")]
+    pub tf: LabelTf,
     /// A custom period that OVERRIDES [`Self::window`], for the volume captions that offer one.
     ///
     /// Beside the window rather than instead of it, so switching back to a fixed window returns to
@@ -651,6 +782,7 @@ impl ChartLabelPart {
                 caption: None,
             },
             pnl_basis: PnlBasis::All,
+            tf: LabelTf::Auto,
             window: LabelWindow::H1,
             span: LabelSpan::Window,
             units: VolumeUnits::Quote,
@@ -1111,6 +1243,12 @@ impl ChartLabelsCfg {
                 // for a custom period, and falling back to the window would silently answer a
                 // different question than the one on screen.
                 part.span.sanitize();
+                // A timeframe on a caption that counts nothing down, dropped for the reason the
+                // span below it is: switching a caption's field must not leave a parameter behind
+                // that nothing reads and a later field change would suddenly obey.
+                if !part.field.uses_tf() {
+                    part.tf = LabelTf::Auto;
+                }
                 // A span on a caption that reads no period at all is dropped, like the window
                 // repair above: switching a caption's field must not leave a period behind that
                 // nothing reads but a later field would suddenly obey.
@@ -1240,6 +1378,51 @@ impl ChartLabelsCfg {
             .filter(|r| r.visible)
             .flat_map(|r| r.parts[..r.used_parts()].iter())
             .filter(|p| p.is_drawn())
+    }
+
+    /// The wall clock the drawn countdown captions should be formatted against, QUANTIZED to the
+    /// coarsest step they can live with — or `None` when none of them is drawn.
+    ///
+    /// The quantum is the whole cost control for these captions. A countdown that re-formatted on
+    /// every market revision would reshape a pane's whole caption set several times a second on a
+    /// busy coin to print the same string; quantizing makes the caption cache answer "unchanged"
+    /// until the figure actually moves. A minute is enough while every countdown is far out, and
+    /// only a countdown inside its last hour — which is when the caption starts printing seconds —
+    /// buys the second-by-second step.
+    ///
+    /// The threshold carries a minute of SLACK past the hour so the step changes just BEFORE the
+    /// display needs it. Without it the switch waits for the next minute tick, and the caption
+    /// spends up to a minute printing an hour figure while the seconds it should be showing run.
+    ///
+    /// Args:
+    ///     chart_tf_ms: The chart's own candle timeframe, which an `Авто` caption resolves to.
+    ///     now_ms: Unix milliseconds.
+    ///
+    /// Returns:
+    ///     The quantized clock, or `None` when no caption counts anything down.
+    ///
+    /// An `Option` rather than a zero: zero is a legal clock — a machine whose system time cannot
+    /// be read reports exactly that — and a caller comparing against a sentinel would then take
+    /// "the epoch" for "nothing to do" and freeze the countdown for good.
+    pub fn countdown_clock_ms(&self, chart_tf_ms: i64, now_ms: i64) -> Option<i64> {
+        let mut quantum: Option<i64> = None;
+        for part in self.drawn_parts() {
+            let step = match part.field {
+                ChartLabelField::FundingIn => 60_000,
+                ChartLabelField::TfCloseIn => {
+                    match part.tf.remaining_ms(chart_tf_ms, now_ms) < COUNTDOWN_SECOND_STEP_BELOW_MS
+                    {
+                        true => 1_000,
+                        false => 60_000,
+                    }
+                }
+                _ => continue,
+            };
+            // The FINEST step any of them asks for: a clock coarser than one caption needs would
+            // freeze that caption, while a finer one merely re-formats the others for nothing.
+            quantum = Some(quantum.map_or(step, |held: i64| held.min(step)));
+        }
+        quantum.map(|q| now_ms.div_euclid(q) * q)
     }
 
     /// Every distinct PERIOD the drawn volume captions ask for, in first-seen order.
