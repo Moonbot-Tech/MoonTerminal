@@ -27,11 +27,12 @@ mod storage;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
     IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonInputState, MoonSelectEvent, MoonSelectItem,
-    MoonSelectState, MoonSliderState, Root,
+    MoonSelectState, MoonSliderState, MoonVirtualListScrollHandle, Root,
 };
 use rust_i18n::t;
 
@@ -45,7 +46,7 @@ use badges::BadgesEd;
 use common::{
     collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row,
 };
-use connections::ConnRow;
+use connections::{ConnEntry, ConnRow};
 use interface::Iface;
 use lines::Lines;
 
@@ -174,6 +175,42 @@ pub struct SettingsView {
     icons: IconSet,
     /// Group whose icon picker is open, or `None` when closed; ported from egui's `picking`.
     picking: Option<String>,
+    /// `ConnRow::row_key` of the row whose feed `n/8` menu is open, or `None` when every menu is
+    /// shut.
+    ///
+    /// The dropdown is CONTROLLED from here so its eight menu items are built for the open row
+    /// alone. Built unconditionally they cost eight `MoonMenuItem`, sixteen locale lookups and
+    /// sixteen formatted strings PER ROW PER FRAME while the menu is closed -- and a wheel notch
+    /// over the Settings body rebuilds every row, so at 56 cores that was the single largest block
+    /// of per-frame allocation on the page.
+    ///
+    /// Keyed on the row key rather than the draft `ServerConfig.id`, which is reissued after a
+    /// delete (`connections::NEXT_ROW_KEY` explains why) -- otherwise a replacement row could open
+    /// its menu by inheritance.
+    feed_open: Option<u64>,
+    /// Row key of the connections row whose input currently has keyboard focus, or `None`.
+    ///
+    /// Tracked so `connections::on_conn_visible_range` can blur a focused input the instant its row
+    /// scrolls out of the virtualized list's mounted range -- otherwise a keystroke could target a
+    /// field that is no longer on screen.
+    focused_conn_row: Option<u64>,
+    /// Retained vertical scroll position of the virtualized Connections core list.
+    ///
+    /// Constructed once here, in `new`, and passed to `MoonVirtualList::track_scroll`. Constructing
+    /// it inside `render` would reset the list to row 0 on every backend notify.
+    conn_scroll: MoonVirtualListScrollHandle,
+    /// The Connections tab's flattened entries from the last render, cached so a focus or
+    /// visible-range event outside `render` can look up a row's position without recomputing the
+    /// whole flatten pass.
+    conn_entries: Rc<Vec<ConnEntry>>,
+    /// `ConnRow::row_key` of a row whose field the user just EDITED, consumed by the next frame.
+    ///
+    /// The scroll-follow exists for exactly one situation -- a keystroke re-ranks the list and
+    /// carries the field being typed into out of view -- so it keys on the EDIT, not on the list
+    /// order. Keying it on order instead made any unrelated reshuffle (a venue resolving for some
+    /// other core, say) yank the viewport back while the user was calmly scrolling with a row still
+    /// focused. See `connections::follow_edited_conn_row`.
+    conn_edit_pending: Option<u64>,
     /// Signature of data consumed by Settings: draft/configuration fields plus session statuses.
     last_sig: u64,
     /// Last valid Main auto-close timeout retained for this Settings session.
@@ -222,6 +259,14 @@ impl SettingsView {
     }
 
     /// Build Settings window state and synchronized selectors from the current draft.
+    ///
+    /// Args:
+    ///     backend: Application backend that owns the settings draft and live session state.
+    ///     window: Newly opened Settings window.
+    ///     cx: Application context used to create controls and subscriptions.
+    ///
+    /// Returns:
+    ///     Fully initialized Settings state with a retained Connections virtual-list scroll handle.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let iface = interface::build(&backend, window, cx);
         let lines = lines::build(&backend, window, cx);
@@ -422,6 +467,11 @@ impl SettingsView {
             storage: storage::build(),
             icons: IconSet::discover(),
             picking: None,
+            feed_open: None,
+            focused_conn_row: None,
+            conn_scroll: MoonVirtualListScrollHandle::new(),
+            conn_entries: Rc::new(Vec::new()),
+            conn_edit_pending: None,
             last_sig: initial_sig,
             idle_last_secs: std::cell::Cell::new(0),
             import: None,
@@ -431,6 +481,12 @@ impl SettingsView {
 }
 
 /// Hash settings whose changes require refreshing the open window's editor state.
+///
+/// Args:
+///     b: Backend containing the active draft or saved configuration and live session state.
+///
+/// Returns:
+///     A signature for configuration and status inputs that affect Settings rendering.
 fn settings_sig(b: &Backend) -> u64 {
     let cfg = b.preview.as_ref().unwrap_or(&b.config);
     let mut h = DefaultHasher::new();
