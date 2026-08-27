@@ -36,11 +36,11 @@ was never able to do.
 
 | | |
 |---|---|
-| **Regenerated** | every visible string, the light and dark palettes, the interface metrics, the font stacks, the header figures |
-| **Hand-maintained** | `template.html` — roughly 200 lines of window-replica markup, 350 lines of CSS, and all behavioural JavaScript |
+| **Regenerated** | every visible string, both window-map modes, the light and dark palettes, the interface metrics, the font stacks, the header figures |
+| **Hand-maintained** | `template.html` — page chrome, CSS, and behavioural JavaScript. The Classic and AutoTrading replicas themselves are generated from `content/modes.yml`, `content/layouts.yml` and `content/zones.yml`. |
 
-So: **a locale or palette change is a re-run; a layout change is a template edit
-and then a re-run.** If the toolbar gains a button, somebody edits the template.
+So: **a locale, palette, or zone-copy change is a re-run; a new visual widget is a
+`map.py` renderer plus a layout entry, and then a re-run.**
 
 ## Where the data comes from
 
@@ -50,8 +50,9 @@ and then a re-run.** If the toolbar gains a button, somebody edits the template.
   drift from what a user actually sees in the terminal.
 - **`theme.snapshot.toml`** — a committed copy of MoonUI's `moon-terminal.toml`,
   carrying the upstream revision it was taken from.
-- **`content/*.yml`** — the prose the tour itself owns: zone explanations, the
-  quick-start steps, panel and window descriptions, hotkey actions.
+- **`content/*.yml`** — the prose the tour itself owns: first-class window-map
+  modes (Classic and AutoTrading), zone explanations, the quick-start steps,
+  panel and window descriptions, hotkey actions.
 
 ## Content slots — two shapes, and only two
 
@@ -105,6 +106,7 @@ re-derived from scratch next time.
 | `locales.py` | `locales/*.yml` into one flat table; refuses a key defined twice |
 | `theme.py` | the palette and metrics; snapshot-first resolution |
 | `content.py` | the slot rules and every validation |
+| `map.py` | Classic and AutoTrading window replicas from the content model |
 | `render.py` | fills the template's slots; the post-render checks |
 | `emit.py` | escaping and determinism — the only place that can corrupt the page |
 | `template.html` | the page itself, with `{{slots}}` where data goes |

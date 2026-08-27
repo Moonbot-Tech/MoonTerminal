@@ -5,8 +5,9 @@ supplies only what is derived — which is why a layout change is a template edi
 and a palette or wording change is a re-run.
 
 The emitted JavaScript shapes are a CONTRACT with the template's own code and
-cannot be changed here alone: ``T`` is a flat key to language map, ``ZONES`` is
-keyed by zone id with ``[title, body]`` pairs per language, and so on.
+cannot be changed here alone: ``T`` is a flat key to language map, ``MODES`` is
+keyed by mode id with per-mode ``zones`` maps of ``[title, body]`` pairs, and so
+on.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from . import emit
+from . import emit, map as map_mod
 from .content import Content
 from .errors import OutputError, Problems, TemplateError
 from .theme import Theme, Themes
@@ -143,15 +144,31 @@ def data_page(content: Content) -> str:
     return f"const T = {emit.js_literal(table)};"
 
 
-def data_zones(content: Content) -> str:
+def data_modes(content: Content) -> str:
+    """Per-mode labels, leads and zone tables consumed by the template's JS."""
     table: dict[str, object] = {}
-    for zone in content.zones:
-        entry: dict[str, object] = {"n": zone["n"]}
-        for code in _langs(content):
-            entry[code] = [zone["title"].get(code), zone["body"].get(code)]
-        entry["src"] = _src_line(zone)
-        table[zone["id"]] = entry
-    return f"const ZONES = {emit.js_literal(table)};"
+    default = next((m["id"] for m in content.modes if m.get("default")), "classic")
+    for mode in content.modes:
+        zones: dict[str, object] = {}
+        order = []
+        for zone in (z for z in content.zones if z["mode"] == mode["id"]):
+            entry: dict[str, object] = {"n": zone["n"]}
+            for code in _langs(content):
+                entry[code] = [zone["title"].get(code), zone["body"].get(code)]
+            entry["src"] = _src_line(zone)
+            zones[zone["id"]] = entry
+            order.append(zone["id"])
+        table[mode["id"]] = {
+            "label": dict(mode["label"].values),
+            "tip": dict(mode["tip"].values),
+            "lead": dict(mode["lead"].values),
+            "order": order,
+            "zones": zones,
+        }
+    return (
+        f"const DEFAULT_MODE = {emit.js_literal(default)};\n"
+        f"const MODES = {emit.js_literal(table)};"
+    )
 
 
 def _src_line(zone: dict) -> str:
@@ -256,8 +273,12 @@ def render(template: str, content: Content, themes: Themes) -> Rendered:
     producers = {
         "css_tokens": lambda: css_tokens(themes, content.css, problems),
         "lang_buttons": lambda: lang_buttons(content),
+        "map_leads": lambda: map_mod.map_leads(content),
+        "mode_switch": lambda: map_mod.mode_switch(content),
+        "window_maps": lambda: map_mod.window_maps(content, problems),
+        "map_annotations": lambda: map_mod.map_annotations(content),
         "data_page": lambda: data_page(content),
-        "data_zones": lambda: data_zones(content),
+        "data_modes": lambda: data_modes(content),
         "data_steps": lambda: data_steps(content),
         "data_panels": lambda: data_panels(content),
         "data_windows": lambda: data_windows(content),
@@ -304,10 +325,15 @@ def _post_checks(page: str, content: Content, problems: Problems) -> None:
                 "the heading would render empty with no other symptom",
             )
 
-    # Every clickable region must have a zone behind it, or it silently does nothing.
-    zone_ids = {z["id"] for z in content.zones}
+    # Every generated replica must exist; per-mode data-zone integrity is
+    # checked while map.py builds each replica, because nested divs make a
+    # whole-page regex split on </div> unsound.
+    for mode in content.modes:
+        if f'data-mode="{mode["id"]}"' not in markup:
+            problems.add("output", f"mode {mode['id']!r} has no generated window map")
+    all_ids = {z["id"] for z in content.zones}
     for zid in sorted(set(re.findall(r'data-zone="([^"]+)"', markup))):
-        if zid not in zone_ids:
+        if zid not in all_ids:
             problems.add(
                 "template.html",
                 f'data-zone="{zid}" has no entry in content/zones.yml',

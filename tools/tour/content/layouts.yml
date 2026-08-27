@@ -1,0 +1,28 @@
+# Visual composition of each window map. Region `id` values are renderer keys in
+# map.py; the union of `zones` must equal that mode's zone ids in zones.yml.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.layouts.v1
+maps:
+- mode: classic
+  regions:
+  - id: header
+    zones: [brand, ws, core, balance, ticker, clock]
+  - id: toolbar
+    zones: [size, lev, risk, exit, live, launch]
+  - id: classic_mid
+    zones: [ctabs, chart, book, detects]
+  - id: classic_dock
+    zones: [dtabs, table]
+  - id: status
+    zones: [status]
+- mode: auto
+  regions:
+  - id: header
+    zones: [brand, ws, core, ticker, clock]
+  - id: toolbar
+    zones: [size, lev, risk, exit, live, launch]
+  - id: auto_body
+    zones: [summary, overview, cores, atabs, chart, book, orders]
+  - id: status
+    zones: [status]

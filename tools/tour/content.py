@@ -23,6 +23,7 @@ by default; the few that genuinely carry markup say ``html: true``.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -158,6 +159,8 @@ class Text:
 class Content:
     languages: list[Language]
     page: dict[str, Text]
+    modes: list[dict]
+    layouts: dict[str, list]
     zones: list[dict]
     steps: list[dict]
     panels: list[dict]
@@ -317,21 +320,14 @@ def load(content_dir: Path, locales: Locales) -> Content:
         for key, raw in (page_doc.get("strings") or {}).items()
     }
 
-    zones_doc = _load_yaml(content_dir / "zones.yml", "tour.zones.v1", problems)
-    zones = []
-    for entry in zones_doc.get("zones", []):
-        zid = entry.get("id", "?")
-        where = f"zones.yml: zone {zid!r}"
-        body_text = r.text(f"{where} body", entry.get("body"))
-        zones.append(
-            {
-                "id": zid,
-                "n": entry.get("n"),
-                "title": r.text(f"{where} title", entry.get("title")),
-                "body": body_text,
-                "src": _zone_src(entry, body_text, locales),
-            }
-        )
+    modes_doc = _load_yaml(content_dir / "modes.yml", "tour.modes.v1", problems)
+    modes = _load_modes(modes_doc, r, problems)
+
+    layouts_doc = _load_yaml(content_dir / "layouts.yml", "tour.layouts.v1", problems)
+    layouts = _load_layouts(layouts_doc, problems)
+
+    zones_doc = _load_yaml(content_dir / "zones.yml", "tour.zones.v2", problems)
+    zones = _load_zones(zones_doc, r, locales, problems)
 
     steps_doc = _load_yaml(content_dir / "quickstart.yml", "tour.quickstart.v1", problems)
     steps = [
@@ -387,6 +383,8 @@ def load(content_dir: Path, locales: Locales) -> Content:
     content = Content(
         languages=languages,
         page=page,
+        modes=modes,
+        layouts=layouts,
         zones=zones,
         steps=steps,
         panels=panels,
@@ -402,6 +400,100 @@ def load(content_dir: Path, locales: Locales) -> Content:
     return content
 
 
+def _load_modes(doc: dict, r: _Resolver, problems: Problems) -> list[dict]:
+    """Read the first-class window-map modes and their switcher copy."""
+    modes = []
+    for index, raw in enumerate(doc.get("modes") or [], 1):
+        if not isinstance(raw, dict):
+            problems.add("modes.yml", f"mode {index} is not a mapping")
+            continue
+        mid = raw.get("id")
+        if not isinstance(mid, str) or not mid.strip():
+            problems.add("modes.yml", f"mode {index} is missing an id")
+            mid = f"mode-{index}"
+        where = f"modes.yml: mode {mid!r}"
+        default = raw.get("default", False)
+        if not isinstance(default, bool):
+            problems.add(where, f"default must be true or false, got {default!r}")
+            default = False
+        modes.append(
+            {
+                "id": mid,
+                "default": default,
+                "label": r.text(f"{where} label", raw.get("label")),
+                "tip": r.text(f"{where} tip", raw.get("tip")),
+                "lead": r.text(f"{where} lead", raw.get("lead")),
+            }
+        )
+    return modes
+
+
+def _load_layouts(doc: dict, problems: Problems) -> dict[str, list]:
+    """Read the per-mode region lists that the map renderer consumes."""
+    layouts: dict[str, list] = {}
+    for index, raw in enumerate(doc.get("maps") or [], 1):
+        if not isinstance(raw, dict):
+            problems.add("layouts.yml", f"map {index} is not a mapping")
+            continue
+        mode_id = raw.get("mode")
+        if not isinstance(mode_id, str) or not mode_id.strip():
+            problems.add("layouts.yml", f"map {index} is missing mode")
+            continue
+        if mode_id in layouts:
+            problems.add("layouts.yml", f"duplicate layout for mode {mode_id!r}")
+        regions = []
+        for ri, region in enumerate(raw.get("regions") or [], 1):
+            if not isinstance(region, dict):
+                problems.add("layouts.yml", f"mode {mode_id} region {ri} is not a mapping")
+                continue
+            rid = region.get("id")
+            zone_ids = region.get("zones")
+            if not isinstance(rid, str) or not rid.strip():
+                problems.add("layouts.yml", f"mode {mode_id} region {ri} is missing an id")
+                continue
+            if not isinstance(zone_ids, list) or not all(isinstance(z, str) for z in zone_ids):
+                problems.add("layouts.yml", f"mode {mode_id} region {rid!r} zones must be a list of ids")
+                zone_ids = []
+            regions.append({"id": rid, "zones": list(zone_ids)})
+        layouts[mode_id] = regions
+    return layouts
+
+
+def _load_zones(doc: dict, r: _Resolver, locales: Locales, problems: Problems) -> list[dict]:
+    """Read per-mode zone lists into one flattened table tagged with ``mode``."""
+    zones = []
+    blocks = doc.get("maps")
+    if not isinstance(blocks, list):
+        problems.add("zones.yml", "maps must be a list of mode blocks")
+        return zones
+    for index, block in enumerate(blocks, 1):
+        if not isinstance(block, dict):
+            problems.add("zones.yml", f"map {index} is not a mapping")
+            continue
+        mode_id = block.get("mode")
+        if not isinstance(mode_id, str) or not mode_id.strip():
+            problems.add("zones.yml", f"map {index} is missing mode")
+            continue
+        for entry in block.get("zones") or []:
+            if not isinstance(entry, dict):
+                problems.add("zones.yml", f"mode {mode_id} has a non-mapping zone")
+                continue
+            zid = entry.get("id", "?")
+            where = f"zones.yml: mode {mode_id} zone {zid!r}"
+            body_text = r.text(f"{where} body", entry.get("body"))
+            zones.append(
+                {
+                    "id": zid,
+                    "mode": mode_id,
+                    "n": entry.get("n"),
+                    "title": r.text(f"{where} title", entry.get("title")),
+                    "body": body_text,
+                    "src": _zone_src(entry, body_text, locales),
+                }
+            )
+    return zones
+
+
 def _zone_src(entry: dict, body: Text, locales: Locales) -> dict:
     """Where a zone's text came from, for the footnote under the explanation.
 
@@ -415,19 +507,60 @@ def _zone_src(entry: dict, body: Text, locales: Locales) -> dict:
 
 def _check_structure(content: Content, problems: Problems) -> None:
     """Invariants the page's own rendering depends on."""
-    ids = [z["id"] for z in content.zones]
-    duplicates = {i for i in ids if ids.count(i) > 1}
-    if duplicates:
-        problems.add("zones.yml", f"duplicate zone id(s): {sorted(duplicates)}")
-
-    numbers = sorted(z["n"] for z in content.zones if isinstance(z["n"], int))
-    expected = list(range(1, len(content.zones) + 1))
-    if numbers != expected:
+    mode_ids = [m["id"] for m in content.modes]
+    if len(mode_ids) != len(set(mode_ids)):
+        problems.add("modes.yml", f"duplicate mode id(s): {sorted({i for i in mode_ids if mode_ids.count(i) > 1})}")
+    if "classic" not in mode_ids or "auto" not in mode_ids:
         problems.add(
-            "zones.yml",
-            f"badge numbers are {numbers}, expected {expected}",
-            'the panel renders "Zone N / total", so the set must be 1..N with no gaps',
+            "modes.yml",
+            f"mode ids are {mode_ids}, expected classic and auto as first-class peers",
+            "the live Pages tour must ship both the Classic and AutoTrading window maps",
         )
+    defaults = [m["id"] for m in content.modes if m.get("default")]
+    if len(defaults) != 1:
+        problems.add("modes.yml", f"exactly one mode must be default, found {defaults}")
+
+    by_mode: dict[str, list] = defaultdict(list)
+    for zone in content.zones:
+        by_mode[zone["mode"]].append(zone)
+
+    for mode in content.modes:
+        mid = mode["id"]
+        mz = by_mode.get(mid, [])
+        ids = [z["id"] for z in mz]
+        duplicates = {i for i in ids if ids.count(i) > 1}
+        if duplicates:
+            problems.add("zones.yml", f"mode {mid}: duplicate zone id(s): {sorted(duplicates)}")
+        numbers = sorted(z["n"] for z in mz if isinstance(z["n"], int))
+        expected = list(range(1, len(mz) + 1))
+        if numbers != expected:
+            problems.add(
+                "zones.yml",
+                f"mode {mid}: badge numbers are {numbers}, expected {expected}",
+                'the panel renders "Zone N / total", so the set must be 1..N with no gaps',
+            )
+        regions = content.layouts.get(mid)
+        if not regions:
+            problems.add("layouts.yml", f"mode {mid!r} has no layout")
+        else:
+            laid: list[str] = []
+            for region in regions:
+                laid.extend(region["zones"])
+            if len(laid) != len(set(laid)):
+                problems.add("layouts.yml", f"mode {mid}: a zone id is listed in more than one region")
+            if sorted(laid) != sorted(ids):
+                problems.add(
+                    "layouts.yml",
+                    f"mode {mid}: layout zones {sorted(laid)} do not match zones.yml {sorted(ids)}",
+                    "every annotated zone must appear in exactly one rendered region",
+                )
+
+    extra_modes = sorted(set(by_mode) - set(mode_ids))
+    if extra_modes:
+        problems.add("zones.yml", f"zones declared for unknown mode(s) {extra_modes}")
+    extra_layouts = sorted(set(content.layouts) - set(mode_ids))
+    if extra_layouts:
+        problems.add("layouts.yml", f"layouts declared for unknown mode(s) {extra_layouts}")
 
     for zone in content.zones:
         for field_name in ("title", "body"):
@@ -435,7 +568,7 @@ def _check_structure(content: Content, problems: Problems) -> None:
             for code, value in text.values.items():
                 if INTERPOLATION.search(value):
                     problems.add(
-                        f"zones.yml: zone {zone['id']!r} {field_name} [{code}]",
+                        f"zones.yml: mode {zone['mode']} zone {zone['id']!r} {field_name} [{code}]",
                         "still contains a %{…} placeholder",
                         "supply it via `args:` — the tour has no runtime values",
                     )

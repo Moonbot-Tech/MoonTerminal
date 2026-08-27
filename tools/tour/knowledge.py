@@ -194,7 +194,8 @@ def index_markdown(content: Content) -> str:
             "## Available topics",
             "",
             f"- [Quick start]({PUBLIC_BASE}/kb/getting-started.md) — {len(content.steps)} steps",
-            f"- [Main interface]({PUBLIC_BASE}/kb/interface.md) — {len(content.zones)} documented zones",
+            f"- [Main interface]({PUBLIC_BASE}/kb/interface.md) — {len(content.zones)} documented zones"
+            + _mode_zone_clause(content),
             f"- [Dock panels]({PUBLIC_BASE}/kb/panels.md) — {len(content.panels)} panels",
             f"- [Separate windows]({PUBLIC_BASE}/kb/windows.md) — {len(content.windows)} windows",
             f"- [Hotkeys]({PUBLIC_BASE}/kb/hotkeys.md) — {hotkeys} shortcuts",
@@ -232,6 +233,17 @@ def getting_started_markdown(content: Content) -> str:
     return emit.normalise("\n".join(lines))
 
 
+def _mode_zone_clause(content: Content) -> str:
+    """Spell Classic vs AutoTrading zone counts when both maps are present."""
+    counts = []
+    for mode in content.modes:
+        n = sum(1 for zone in content.zones if zone["mode"] == mode["id"])
+        counts.append(f"{n} {mode['id']}")
+    if len(counts) < 2:
+        return ""
+    return " (" + ", ".join(counts) + ")"
+
+
 def interface_markdown(content: Content) -> str:
     """Render the documented main-window zones with source references."""
     lines = _front(
@@ -239,21 +251,24 @@ def interface_markdown(content: Content) -> str:
         "MoonTerminal main interface",
         "Главный интерфейс MoonTerminal",
         "MoonTerminal main interface",
-        "The currently documented clickable zones of the main window.",
+        "The currently documented clickable zones of the Classic and AutoTrading window maps.",
         content.codes,
-        ["tools/tour/content/zones.yml", "locales/*.yml"],
+        ["tools/tour/content/zones.yml", "tools/tour/content/modes.yml", "locales/*.yml"],
         ["authored-tour", "locale-literal", "advisory-code-pointer"],
         ("zone", len(content.zones)),
     )
-    for zone in content.zones:
-        source = _zone_source(zone)
-        lines.extend([f"## zone-{zone['id']}", ""])
-        lines.extend(_language_sections(zone["title"], zone["body"], content.codes))
-        if zone["body"].locale_key:
-            lines.extend(["", f"**Locale key:** `{zone['body'].locale_key}`"])
-        elif source:
-            lines.extend(["", f"**Advisory code pointer:** `{source}`"])
-        lines.append("")
+    for mode in content.modes:
+        lines.extend([f"## mode-{mode['id']}", ""])
+        for zone in (z for z in content.zones if z["mode"] == mode["id"]):
+            source = _zone_source(zone)
+            heading = f"zone-{zone['id']}" if mode["id"] == "classic" else f"zone-{mode['id']}-{zone['id']}"
+            lines.extend([f"## {heading}", ""])
+            lines.extend(_language_sections(zone["title"], zone["body"], content.codes))
+            if zone["body"].locale_key:
+                lines.extend(["", f"**Locale key:** `{zone['body'].locale_key}`"])
+            elif source:
+                lines.extend(["", f"**Advisory code pointer:** `{source}`"])
+            lines.append("")
     return emit.normalise("\n".join(lines))
 
 
@@ -416,10 +431,11 @@ def knowledge_jsonl(content: Content) -> str:
     for index, step in enumerate(content.steps, start=1):
         rows.append(_entry("quickstart", str(index), step["title"], step["body"], "tools/tour/content/quickstart.yml"))
     for zone in content.zones:
+        zone_id = str(zone["id"]) if zone["mode"] == "classic" else f"{zone['mode']}.{zone['id']}"
         rows.append(
             _entry(
                 "interface",
-                str(zone["id"]),
+                zone_id,
                 zone["title"],
                 zone["body"],
                 "tools/tour/content/zones.yml",
