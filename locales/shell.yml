@@ -1200,6 +1200,10 @@ quiet.schedule:
   ru: "Засыпать по времени"
   en: "Sleep on a schedule"
   es: "Dormir según horario"
+quiet.local_time:
+  ru: "По времени компьютера"
+  en: "Use this computer's time"
+  es: "Usar la hora de este equipo"
 quiet.from:
   ru: "С"
   en: "From"

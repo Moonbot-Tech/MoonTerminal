@@ -49,6 +49,47 @@ fn now_utc() -> DateTime<Utc> {
         .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
+/// How long a resolved system zone is reused.
+///
+/// The query is not cheap and not cached by the library: on Windows it activates a WinRT calendar
+/// per call, on macOS it resets the process-wide zone cache. The sleep schedule asks ten times a
+/// second, and a zone changes when someone travels.
+const SYSTEM_ZONE_TTL_MS: i64 = 60_000;
+
+/// The zone this MACHINE is in, as the operating system states it.
+///
+/// Separate from the header clock's zone on purpose: the clock shows whichever city the operator
+/// chose to watch, while some answers — when to fall asleep — are about where the operator
+/// actually is.
+///
+/// Cached, and the last good answer STICKS: a transient failure of the platform query would
+/// otherwise move the sleep schedule to the header clock's zone for one tick, and a schedule that
+/// jumps by hours for 100 ms clears a live wake-override and puts the terminal back to sleep. Only
+/// a machine that has never answered reports `None`.
+///
+/// Returns:
+///     The machine's zone, or `None` when the platform has never named a resolvable one.
+pub(crate) fn system_zone() -> Option<chrono_tz::Tz> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<(i64, Option<chrono_tz::Tz>)>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new((0, None)));
+    let now = moon_core::util::now_unix_ms_i64();
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.1.is_some() && now.saturating_sub(guard.0) < SYSTEM_ZONE_TTL_MS {
+            return guard.1;
+        }
+    }
+    let fresh = iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|id| cities::zone_by_id(&id));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if fresh.is_some() {
+        *guard = (now, fresh);
+    }
+    guard.1
+}
+
 /// Resolve the exact IANA zone represented by the visible header clock.
 ///
 /// Args:

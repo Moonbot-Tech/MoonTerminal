@@ -211,3 +211,29 @@ fn hand_edited_times_stay_inside_the_day() {
     assert_eq!(cfg.from_min_norm(), 5000 % DAY_MINUTES);
     assert_eq!(cfg.to_min_norm(), 0);
 }
+
+/// A layout saved before the flag existed reads the schedule on the machine's clock.
+///
+/// Breakage: defaulting to `false` would leave every existing installation on the old behaviour,
+/// where a header clock set to another city quietly moved the night — and nobody would know to go
+/// looking for a new checkbox.
+#[test]
+fn a_config_without_the_flag_uses_local_time() {
+    let saved = "schedule_on = true\nfrom_min = 1380\nto_min = 420\n";
+    let cfg: QuietCfg = toml::from_str(saved).expect("an older layout still parses");
+    assert!(cfg.use_local_time);
+    assert!(cfg.schedule_on, "the fields that were saved survive");
+    assert_eq!(cfg.from_min, 1380);
+}
+
+/// The flag round-trips, so switching it off is not forgotten on restart.
+#[test]
+fn the_flag_survives_a_round_trip() {
+    let cfg = QuietCfg {
+        use_local_time: false,
+        ..QuietCfg::default()
+    };
+    let text = toml::to_string(&cfg).expect("serialises");
+    let back: QuietCfg = toml::from_str(&text).expect("parses");
+    assert_eq!(back, cfg);
+}

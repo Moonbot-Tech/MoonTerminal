@@ -113,8 +113,11 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The schedule group: the on/off switch and the two time fields.
+    /// The schedule group: the on/off switch, which clock it runs on, and the two time fields.
     fn quiet_schedule_group(&self, cfg: &QuietCfg, cx: &Context<Self>) -> impl IntoElement {
+        // The time the window is actually measured against, so the two fields below are readable
+        // even when the header clock shows another city.
+        let now = self.backend.read(cx).quiet_clock_hhmm();
         popup_group(
             "header-quiet-schedule",
             t!("quiet.schedule_group").to_string(),
@@ -125,6 +128,22 @@ impl Shell {
             cfg.schedule_on,
             |c, v| c.schedule_on = v,
         ))
+        // Beside the window it applies to, not in the bypass group: this says WHICH 23:00 the two
+        // fields below mean, and reading it anywhere else would leave that question open.
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(design::ui_px(cx, 6.0))
+                .child(self.quiet_checkbox(
+                    "quiet-local-time",
+                    t!("quiet.local_time").to_string(),
+                    cfg.use_local_time,
+                    |c, v| c.use_local_time = v,
+                ))
+                .child(quiet_field_label(now, cx)),
+        )
         .child(
             h_flex()
                 .w_full()

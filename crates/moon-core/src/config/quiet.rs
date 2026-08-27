@@ -2,10 +2,11 @@
 //! core-status alert sounds, either on a schedule or on demand, with explicit bypasses for the
 //! events the operator must still be woken by.
 //!
-//! Every wall-clock field here is MINUTES SINCE LOCAL MIDNIGHT in the zone of the header clock —
-//! the one zone the terminal shows anywhere. This module is deliberately zone-free: the caller
-//! converts "now" into a minute-of-day and passes it in, so the schedule logic is a pure function
-//! that can be tested without a clock.
+//! Every wall-clock field here is MINUTES SINCE LOCAL MIDNIGHT, in the zone [`QuietCfg::
+//! use_local_time`] selects: the machine's own by default, the header clock's when it is switched
+//! off. This module is deliberately zone-free — the caller converts "now" into a minute-of-day and
+//! passes it in, so the schedule logic is a pure function that can be tested without a clock, and
+//! the choice of zone lives with the caller that owns both clocks.
 //!
 //! Quiet mode silences SOUND ONLY. Detect cards, chart tabs, warning episodes and badges keep
 //! working, so a night spent asleep is still fully visible in the morning.
@@ -76,6 +77,20 @@ pub struct QuietCfg {
     pub wake_override: bool,
     /// Whether the from/to window is in effect at all.
     pub schedule_on: bool,
+    /// Whether the window is read on the MACHINE's clock rather than in the zone the header clock
+    /// shows.
+    ///
+    /// On by default, and that is the answer for almost everyone: "sleep from 23:00" means the
+    /// operator's own 23:00. The header clock is a different thing — a trader watching New York
+    /// sets it to New York, and before this flag the schedule silently moved with it.
+    ///
+    /// What it does NOT fix: a machine whose zone the platform cannot name at all. There is
+    /// nothing local to read, so the schedule falls back to the header clock and, failing that, to
+    /// UTC — exactly where it was.
+    ///
+    /// Off restores exactly the old behaviour — the schedule follows the visible clock — which is
+    /// what someone deliberately keeping terminal hours in an exchange's zone wants.
+    pub use_local_time: bool,
     /// Window start, minutes since local midnight.
     pub from_min: u16,
     /// Window end, minutes since local midnight. Equal to `from_min` means "no window".
@@ -97,6 +112,7 @@ impl Default for QuietCfg {
             manual_until_ms: None,
             wake_override: false,
             schedule_on: false,
+            use_local_time: true,
             from_min: 23 * 60,
             to_min: 7 * 60,
             warn_bypass: QuietWarnBypass::default(),
