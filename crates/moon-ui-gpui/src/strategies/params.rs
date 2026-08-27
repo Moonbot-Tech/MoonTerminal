@@ -1,15 +1,42 @@
 //! Right pane of the Strategies window: the parameter-pane model and renderer, including
-//! selected-strategy badges/value editors (read-only YES/NO, input/memo, formula helper) and the
-//! full-value popover. The methods extend `StrategiesView` from [`super`].
+//! selected-strategy badges/value editors (read-only YES/NO, input/memo, formula helper), the
+//! per-section/full-mode body dispatch, and the full-value popover. The methods extend
+//! `StrategiesView` from [`super`].
 
+use std::rc::Rc;
+
+use super::param_entries::{self, FlatParams};
+use super::versions::StagedOutcome;
 use super::*;
 use rust_i18n::t;
+
+/// The parameter pane's body content: one schema section or every surviving section in full mode.
+///
+/// `Rc` lets `full_params::full_params_list` move the flattened model into its retained row
+/// factory without cloning its entries for each row.
+pub(super) enum ParamsBody {
+    Section(SchemaSection),
+    Full(Rc<FlatParams>),
+}
+
+/// Return `v` up to its first newline, appending `…` when content follows it.
+///
+/// Used only for a compact full-mode row's memo preview and its version notes: a fixed row pitch
+/// clips an embedded newline instead of wrapping it, and `.truncate()` alone only elides overflow
+/// within one line.
+fn compact_first_line(v: &str) -> String {
+    match v.split_once('\n') {
+        Some((first, _)) => format!("{first}…"),
+        None => v.to_string(),
+    }
+}
 
 pub(super) enum ParamsPanelModel {
     NoSelection,
     NoSchema,
     Content {
-        section: SchemaSection,
+        /// Prepared per-section or full-mode body for the current selection.
+        body: ParamsBody,
         values: Values,
         row_pairs: Vec<(Key, StrategyRow)>,
         multi: bool,
@@ -31,9 +58,33 @@ pub(super) enum ParamsPanelModel {
 }
 
 impl StrategiesView {
-    /// Builds the selected parameter-section model from dependency values shared across both panes.
+    /// A version's `valid_from` as the pane states it: bare `HH:MM` when the version is from
+    /// today, `DD.MM HH:MM` otherwise.
     ///
-    /// Accepting `values` keeps field and schema normalization to one pass per frame.
+    /// One helper for both banners so they can never end up rendering the same instant against
+    /// different `now_ms` snapshots — which is the only way two dates for one version could ever
+    /// disagree on this screen.
+    fn version_date(&self, vf: i64) -> String {
+        moon_core::util::display_time::format_chart_clock(
+            vf,
+            self.display_zone,
+            false,
+            moon_core::util::now_unix_ms_i64(),
+        )
+    }
+
+    /// Build the selected parameter-pane model from dependency values shared across both panes.
+    ///
+    /// Accepting `values` keeps field and schema normalization to one pass per frame. The model
+    /// selects either the active section or the filtered full-mode flatten, according to the
+    /// persisted display preference and any version-diff filter.
+    ///
+    /// Args:
+    ///     store: Core data that supplies the selected strategies and schema.
+    ///     values: Dependency values calculated once for the sections and parameters panes.
+    ///
+    /// Returns:
+    ///     Prepared content, or the reason that no parameters can be rendered.
     pub(super) fn params_model(&self, store: &CoreStore, values: Values) -> ParamsPanelModel {
         if selected_row(self, store).is_none() {
             return ParamsPanelModel::NoSelection;
@@ -41,9 +92,31 @@ impl StrategiesView {
         let Some(sections) = selected_sections(self, store) else {
             return ParamsPanelModel::NoSchema;
         };
-        // When viewing a persisted snapshot with a diff, show ONLY changed fields, either across
-        // all sections (the default "All" view) or within the selected section.
-        let section = if let Some(ch) = self.version_changed_filter() {
+        // `multi` / `common` / `differ` are computed before the body so a full-mode flatten can
+        // consume them; the per-section path below applies the same three filters at render time
+        // in `params_panel`, unchanged from before this move.
+        let row_pairs: Vec<(Key, StrategyRow)> = multi_row_pairs(self, store)
+            .into_iter()
+            .map(|(key, row)| (key, row.clone()))
+            .collect();
+        let multi = row_pairs.len() > 1;
+        let common = common_fields(self, store);
+        let differ = kinds_differ(self, store);
+
+        let body = if self.prefs.params_full {
+            let orphans = t!("strat.params_other_fields").to_string();
+            let flat = param_entries::flatten_params(
+                sections,
+                self.version_changed_filter(),
+                multi,
+                common.as_ref(),
+                differ,
+                param_entries::ParamLabels { orphans: &orphans },
+            );
+            ParamsBody::Full(Rc::new(flat))
+        } else if let Some(ch) = self.version_changed_filter() {
+            // When viewing a persisted snapshot with a diff, show ONLY changed fields, either
+            // across all sections (the default "All" view) or within the selected section.
             match self.versions.section {
                 None => {
                     let mut seen = HashSet::new();
@@ -57,29 +130,18 @@ impl StrategiesView {
                     // Add synthetic rows for changed fields absent from the current kind's schema
                     // (the core removed the field in an update, or it belongs to another kind).
                     // Otherwise the list could report "(2)" changes while displaying zero fields.
-                    let mut extra: Vec<&String> = ch
-                        .iter()
-                        .filter(|(lc, _)| !seen.contains(lc.as_str()))
-                        .map(|(_, (name, _))| name)
-                        .collect();
-                    extra.sort();
-                    fields.extend(extra.into_iter().map(|name| SchemaField {
-                        name: name.clone(),
-                        type_name: "String".to_string(),
-                        ui: SchemaFieldUi::Edit,
-                        picklist: Vec::new(),
-                        default: None,
-                    }));
-                    SchemaSection {
+                    // Full mode synthesizes the same rows from the same helper.
+                    fields.extend(param_entries::orphan_fields(ch, &seen));
+                    ParamsBody::Section(SchemaSection {
                         title: t!("strat.sections_all").to_string(),
                         fields,
-                    }
+                    })
                 }
                 Some(i) => {
                     let Some(sec) = sections.get(i) else {
                         return ParamsPanelModel::NoSchema;
                     };
-                    SchemaSection {
+                    ParamsBody::Section(SchemaSection {
                         title: sec.title.clone(),
                         fields: sec
                             .fields
@@ -87,22 +149,15 @@ impl StrategiesView {
                             .filter(|f| ch.contains_key(&f.name.to_lowercase()))
                             .cloned()
                             .collect(),
-                    }
+                    })
                 }
             }
         } else {
             let Some(section) = sections.get(self.selected_section).cloned() else {
                 return ParamsPanelModel::NoSchema;
             };
-            section
+            ParamsBody::Section(section)
         };
-        let row_pairs: Vec<(Key, StrategyRow)> = multi_row_pairs(self, store)
-            .into_iter()
-            .map(|(key, row)| (key, row.clone()))
-            .collect();
-        let multi = row_pairs.len() > 1;
-        let common = common_fields(self, store);
-        let differ = kinds_differ(self, store);
         let pending: HashMap<Key, StrategyEditRow> = row_pairs
             .iter()
             .filter_map(|(key, _)| {
@@ -131,7 +186,7 @@ impl StrategiesView {
             }
         }
         ParamsPanelModel::Content {
-            section,
+            body,
             values,
             row_pairs,
             multi,
@@ -160,6 +215,23 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Retire a "staged N fields" note once the SELECTED strategy has no remaining staged
+        // drafts. Keyed to that strategy specifically, not `field_edit_count`'s workspace-wide
+        // total: Apply and Revert both empty `field_edits` for it. Only `Staged` is retired this
+        // way — `ClearedOnly` has already discarded stale drafts and `Identical` never had any,
+        // so testing either here would vanish the note the very frame it is set.
+        if let Some((key, outcome, _)) = self.versions.staged_note {
+            if matches!(outcome, StagedOutcome::Staged(_)) {
+                let remaining = self
+                    .field_edits
+                    .keys()
+                    .filter(|(core, id, _)| (*core, *id) == key)
+                    .count();
+                if remaining == 0 {
+                    self.versions.staged_note = None;
+                }
+            }
+        }
         let p = MoonPalette::active(cx);
         let mut col = v_flex()
             .flex_1()
@@ -173,7 +245,7 @@ impl StrategiesView {
             .line_height(design::line_px(cx, 14.0));
 
         let ParamsPanelModel::Content {
-            section,
+            body,
             values,
             row_pairs,
             multi,
@@ -194,16 +266,39 @@ impl StrategiesView {
         };
         let keys: Vec<Key> = row_pairs.iter().map(|(key, _)| *key).collect();
 
-        // Section title with the field/selection count on the right.
+        // Title and field total come from the body; the multi selection-count branch keeps
+        // priority exactly as before the body could also be a full-mode list.
+        let (title, field_total) = match &body {
+            ParamsBody::Section(s) => (s.title.clone(), s.fields.len()),
+            ParamsBody::Full(f) => (t!("strat.params_full_title").to_string(), f.field_count),
+        };
         let count = if multi {
             t!("strat.selected_count", n = row_pairs.len()).to_string()
         } else {
-            t!("strat.fields_count", n = section.fields.len()).to_string()
+            t!("strat.fields_count", n = field_total).to_string()
         };
         let dirty = field_edit_count(self);
         // Capture the complete visible draft set in the rendered Apply button. If the singleton
         // workspace moves before its callback runs, `apply_field_edits` rejects this plan whole.
         let apply_plan = Arc::new(self.field_edit_plan(cx));
+        // Two-item switch between per-section and full mode, built per the pinned MoonUI source:
+        // `on_click` takes a plain indexed `Fn`, not a `cx.listener`.
+        let mode_view = cx.entity();
+        let mode_switch = MoonSegmentedControl::new("strat-params-mode")
+            .items([
+                MoonSegmentItem::new("", t!("strat.params_mode_sections").to_string())
+                    .fit_width(cx, 64.0, 120.0)
+                    .tooltip(t!("strat.params_mode_sections_tip").to_string())
+                    .selected(!self.prefs.params_full),
+                MoonSegmentItem::new("", t!("strat.params_mode_full").to_string())
+                    .fit_width(cx, 64.0, 120.0)
+                    .tooltip(t!("strat.params_mode_full_tip").to_string())
+                    .selected(self.prefs.params_full),
+            ])
+            .on_click(move |ix, _, _window, app| {
+                mode_view.update(app, |this, cx| this.set_params_full(ix == 1, cx));
+            })
+            .render();
         let mut header = h_flex()
             .w_full()
             .h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
@@ -213,12 +308,13 @@ impl StrategiesView {
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(moon(p.text))
-                    .child(section.title.clone()),
+                    .child(title),
             )
             .child(
                 h_flex()
                     .items_center()
                     .gap_2()
+                    .child(mode_switch)
                     .child(
                         div()
                             .text_size(design::t_body(cx))
@@ -258,26 +354,82 @@ impl StrategiesView {
                 .pl_2();
         }
         // The persisted-snapshot banner marks parameters as read-only. When there is no diff
-        // (for example, a created/baseline snapshot), explain why all fields are displayed.
+        // (for example, a created/baseline snapshot), explain why all fields are displayed. It is
+        // never purely prohibitive: it always carries the restore affordance too (invariant 13).
         if let Some(vf) = self.versions.sel {
-            let date = moon_core::strat_db::stats::short_date(vf, self.display_zone);
+            let date = self.version_date(vf);
             let text = if self.version_changed_filter().is_some() {
                 t!("strat.version_view", date = date).to_string()
             } else {
                 t!("strat.version_view_nodiff", date = date).to_string()
             };
             col = col.child(
-                div()
+                h_flex()
                     .w_full()
-                    .px(design::ui_px(cx, 8.0))
-                    .py(design::ui_px(cx, 4.0))
-                    .rounded(design::ui_px(cx, 3.0))
-                    .bg(moon_alpha(p.amber, 0.10))
-                    .border_l_2()
-                    .border_color(moon_alpha(p.amber, 0.72))
-                    .text_color(moon(p.amber))
-                    .child(text),
+                    .gap(design::ui_px(cx, 6.0))
+                    .items_start()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(MoonAlert::warning("strat-version-view", text)),
+                    )
+                    .child(self.version_restore_button(vf, false, cx))
+                    .into_any_element(),
             );
+        }
+        // Confirmation of the last "restore into current", shown only when the params pane is
+        // actually displaying the one strategy the note belongs to: a note keyed to a different
+        // strategy must never bleed across a selection change (plan amendment A3), and it must
+        // not bleed onto a multi-selection view either — checking the PRIMARY `selected_key` alone
+        // let a Ctrl-click deselect leave `self.selected` on the note's strategy while the panes
+        // below render the merged fields of a different multi-selection. Judge against the same
+        // effective-selection source `params_model` renders from (`multi_row_pairs` ->
+        // `selected_keys`), requiring exactly that one strategy be selected.
+        if let Some((key, outcome, vf)) = self.versions.staged_note {
+            let effective = selected_keys(self);
+            if effective.len() == 1 && effective[0] == key {
+                let date = self.version_date(vf);
+                // One wording per outcome. `ClearedOnly` may not borrow either neighbour:
+                // `version_staged` would claim fields were staged when Apply has nothing to send,
+                // and `version_staged_none` would claim nothing happened when unsaved edits were
+                // in fact discarded. Both would be false.
+                let message = match outcome {
+                    StagedOutcome::Staged(n) => {
+                        t!("strat.version_staged", n = n, date = date).to_string()
+                    }
+                    StagedOutcome::ClearedOnly(n) => {
+                        t!("strat.version_staged_cleared", n = n, date = date).to_string()
+                    }
+                    StagedOutcome::Identical => {
+                        t!("strat.version_staged_none", date = date).to_string()
+                    }
+                };
+                col = col.child(
+                    h_flex()
+                        .w_full()
+                        .gap(design::ui_px(cx, 6.0))
+                        .items_start()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(MoonAlert::info("strat-version-staged", message)),
+                        )
+                        .child(
+                            MoonButton::new("strat-version-staged-dismiss")
+                                .ghost()
+                                .size(MoonButtonSize::Micro)
+                                .label(t!("strat.edit_banner_dismiss").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.versions.staged_note = None;
+                                    cx.notify();
+                                }))
+                                .render(),
+                        )
+                        .into_any_element(),
+                );
+            }
         }
         col = col
             .child(header)
@@ -287,44 +439,68 @@ impl StrategiesView {
             col = col.child(banner);
         }
 
-        // Preserve schema field order and look up snapshot values by name.
-        let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
-        for f in &section.fields {
-            let lname = f.name.to_lowercase();
-            if multi && lname == "strategyname" {
-                continue;
-            }
-            if let Some(c) = &common {
-                if !c.contains(&lname) {
-                    continue;
+        let content: AnyElement = match body {
+            ParamsBody::Section(section) => {
+                // Preserve schema field order and look up snapshot values by name.
+                let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
+                for f in &section.fields {
+                    let lname = f.name.to_lowercase();
+                    if multi && lname == "strategyname" {
+                        continue;
+                    }
+                    if let Some(c) = &common {
+                        if !c.contains(&lname) {
+                            continue;
+                        }
+                    }
+                    if differ && lname == "signaltype" {
+                        continue;
+                    }
+                    let active = self.rules.field_active(&f.name, &values);
+                    let merged = merged_value_for_owned(self, &row_pairs, f, &pending);
+                    let pending_phase = field_pending_phase(&row_pairs, &pending, f);
+                    list = list.child(self.field_row(
+                        f,
+                        &keys,
+                        merged,
+                        active,
+                        pending_phase,
+                        None,
+                        window,
+                        cx,
+                    ));
                 }
+                div()
+                    .id("strat-params-scroll")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .child(list)
+                    .into_any_element()
             }
-            if differ && lname == "signaltype" {
-                continue;
+            ParamsBody::Full(flat) => {
+                self.full_params_list(flat, &keys, values, row_pairs, pending, window, cx)
             }
-            let active = self.rules.field_active(&f.name, &values);
-            let merged = merged_value_for_owned(self, &row_pairs, f, &pending);
-            let pending_phase = field_pending_phase(&row_pairs, &pending, f);
-            list = list.child(self.field_row(f, &keys, merged, active, pending_phase, window, cx));
-        }
-        let scroll = div()
-            .id("strat-params-scroll")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .child(list);
-        let mut body = h_flex()
+        };
+        let mut pane_body = h_flex()
             .flex_1()
             .w_full()
             .min_h_0()
             .items_start()
             .gap_2()
-            .child(scroll);
-        if let Some(helper) = self.formula_helper(cx) {
-            body = body.child(helper);
+            .child(content);
+        // Per-section mode only. A full-mode formula row is a STATIC preview that creates no
+        // `MoonTextAreaState`, so `append_formula_snippet` would have no editor to write into --
+        // either doing visibly nothing, or, worse, silently staging into a retained state left
+        // over from an earlier per-section visit that this pane is not displaying. Editing a
+        // formula in full mode goes through the row's own edit-in-sections button, which switches back.
+        if !self.prefs.params_full {
+            if let Some(helper) = self.formula_helper(cx) {
+                pane_body = pane_body.child(helper);
+            }
         }
-        col = col.child(body);
+        col = col.child(pane_body);
         col.into_any_element()
     }
 
@@ -424,7 +600,7 @@ impl StrategiesView {
         None
     }
 
-    /// Render a field row with the name on the left and value on the right.
+    /// Render a field row with the name on the left and its current value control on the right.
     ///
     /// `active=false` dims and disables the row. `merged=None` means the selected values differ,
     /// so the row displays `≠` without a value and remains editable only when active.
@@ -433,13 +609,30 @@ impl StrategiesView {
     /// value when present; this marker still records the edit beneath it. It never colours the row
     /// itself, only the trailing badge, so it can never collide with the unsent-draft amber this
     /// row already uses for `dirty`.
-    fn field_row(
+    /// `compact` is `None` in per-section mode (identical behaviour to before full mode existed);
+    /// `Some(section)` marks a full-mode compact row, carrying the owning section index (`None`
+    /// inside for a version-diff orphan row absent from any section).
+    ///
+    /// Args:
+    ///     f: Schema field whose label, control kind, and rules define the row.
+    ///     keys: Effective selected strategy keys used for retained editor identity and edits.
+    ///     merged: Shared field value, or `None` when the selected values differ.
+    ///     active: Whether dependency rules permit editing this field.
+    ///     pending_phase: Open core edit phase shown by the trailing status badge.
+    ///     compact: Full-mode marker and optional owning section, or `None` for a normal row.
+    ///     window: Strategies window that owns retained editor state.
+    ///     cx: View context used to create controls and callbacks.
+    ///
+    /// Returns:
+    ///     The complete interactive or read-only field-row element.
+    pub(super) fn field_row(
         &mut self,
         f: &SchemaField,
         keys: &[Key],
         merged: Option<String>,
         active: bool,
         pending_phase: Option<StrategyEditPhase>,
+        compact: Option<Option<usize>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -474,6 +667,10 @@ impl StrategiesView {
         // Preserve the version value before moving it into a control so it can be compared with the
         // current value and used by the "copy to current" button.
         let version_val = value.clone();
+        // Computed before `value` moves into the control below, and reused there: a memo/formula
+        // field needs its diff arrow stacked vertically rather than beside a control it cannot
+        // share a line with.
+        let stacked = is_memo_field(f, &value);
         let control: AnyElement = match f.ui {
             SchemaFieldUi::Checkbox => {
                 let on = is_on(&value);
@@ -587,7 +784,7 @@ impl StrategiesView {
                 let keys_arc = Arc::new(keys.to_vec());
                 // Render differing values as an EMPTY input with a placeholder, never as a memo;
                 // entered text applies to all selected strategies at once.
-                if !differ && is_memo_field(f, &value) {
+                if compact.is_none() && !differ && stacked {
                     let state = self.field_memo_state(
                         row_id.clone(),
                         value,
@@ -603,6 +800,56 @@ impl StrategiesView {
                         .selected(dirty)
                         .disabled(!active)
                         .into_any_element()
+                } else if compact.is_some() && !differ && is_memo_field(f, &value) {
+                    // A disabled `MoonInput` here would need a retained state entity and a
+                    // synchronization path to stay honest as drafts and version selection move
+                    // underneath it. A static element carries the same look, is rebuilt from
+                    // `merged` every frame, and touches neither `field_inputs` nor `field_memos`.
+                    let display = compact_first_line(&value);
+                    let preview = div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .h(design::ui_px(cx, 22.0))
+                        .flex()
+                        .items_center()
+                        .px(design::ui_px(cx, 7.0))
+                        .rounded(design::ui_px(cx, 4.0))
+                        .border_1()
+                        .border_color(moon(p.border))
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .child(display);
+                    let mut row = h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap(design::ui_px(cx, 6.0))
+                        .child(preview);
+                    if let Some(Some(section)) = compact {
+                        let field_for_edit = field_name.clone();
+                        row = row.child(
+                            MoonButton::new(SharedString::from(format!("field-edit-{row_id}")))
+                                .ghost()
+                                .size(MoonButtonSize::Micro)
+                                .label(t!("strat.params_edit_in_sections").to_string())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    // Two selectors, one per view: `params_model` resolves a
+                                    // persisted snapshot's per-section body from `versions.section`
+                                    // and the live one from `selected_section`. Writing only the
+                                    // live selector would land a version-view jump on whatever the
+                                    // diff had selected -- `None`, i.e. the synthetic "Все" body.
+                                    if this.viewing_version() {
+                                        this.versions.section = Some(section);
+                                    } else {
+                                        this.selected_section = section;
+                                    }
+                                    this.focused_field = Some(field_for_edit.clone());
+                                    this.set_params_full(false, cx);
+                                }))
+                                .render(),
+                        );
+                    }
+                    row.into_any_element()
                 } else {
                     let state = self.field_input_state(
                         row_id.clone(),
@@ -630,9 +877,9 @@ impl StrategiesView {
                 }
             }
         };
-        // In persisted-snapshot view, show "was: X" (the value before this snapshot) and
-        // "current: Y" (the live value now, when available) below the control. The "copy to current"
-        // button stages the snapshot value in the LIVE strategy with a yellow dirty marker;
+        // In persisted-snapshot view, show "was: X" (the value before this snapshot) before the
+        // snapshot control and "current: Y" (the live value now, when available) after it. The
+        // "copy to current" button stages the snapshot value in the LIVE strategy with a yellow dirty marker;
         // "Apply N" sends the actual change to the core and creates a new version. Always show
         // "current" while the strategy is live, but show the copy button only when the live value
         // differs from the snapshot value.
@@ -645,57 +892,114 @@ impl StrategiesView {
         } else {
             None
         };
-        let control: AnyElement = if old_note.is_some() || cur_note.is_some() {
-            let mut wrap = v_flex().w_full().gap(px(1.0)).child(control);
-            if let Some(old) = old_note {
-                let note = if old.is_empty() {
-                    t!("strat.version_added").to_string()
-                } else {
-                    t!("strat.version_was", v = old).to_string()
-                };
-                wrap = wrap.child(
+        // When a prior value exists, reading order is `before -> snapshot -> current` (defect 6):
+        // the version being viewed frames the live control it stands above, and the live value
+        // trails as context rather than leading it.
+        //
+        // Full mode's fixed row pitch clips an untruncated note (see
+        // `full_params::full_row_h_value`), so compact mode flattens each note to a single line;
+        // per-section mode keeps the note as the core sent it.
+        let control: AnyElement = match old_note {
+            None => control,
+            // No "before" to point an arrow from: the field did not exist in the prior version.
+            Some(old) if old.is_empty() => v_flex()
+                .w_full()
+                .gap(px(1.0))
+                .child(
                     div()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.text_soft))
-                        .child(note),
-                );
-            }
-            if let Some(cur) = cur_note {
-                // Compare semantically: `YES` from the import era equals `Yes`, and `1` equals `1.0`.
-                let differs = !values_equal(&cur, &version_val);
-                let fname = field_name.clone();
-                let vval = version_val.clone();
-                let mut line = h_flex().items_center().gap(design::ui_px(cx, 6.0)).child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(design::t_caption(cx))
-                        // Use blue when the live value differs and can be copied; dim matching values.
-                        .text_color(moon(if differs { p.blue } else { p.text_soft }))
-                        .child(t!("strat.version_cur", v = cur).to_string()),
-                );
-                if differs {
-                    line = line.child(
-                        MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .label(t!("strat.copy_to_current").to_string())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                // Intentionally bypass the viewing_version gate: copying from a
-                                // version is the only permitted edit in this view.
-                                if let Some((core, id)) = selected_key(this) {
-                                    this.field_edits
-                                        .insert((core, id, fname.clone()), vval.clone());
-                                    this.focused_field = Some(fname.clone());
-                                    cx.notify();
-                                }
-                            }))
-                            .render(),
-                    );
+                        .child(t!("strat.version_added").to_string()),
+                )
+                .child(control)
+                .into_any_element(),
+            Some(old) => {
+                let display_old = if compact.is_some() {
+                    compact_first_line(&old)
+                } else {
+                    old.clone()
+                };
+                let was = div()
+                    .flex_none()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_soft))
+                    .child(t!("strat.version_was", v = display_old).to_string());
+                let arrow = div()
+                    .id(SharedString::from(format!("diff-arrow-{row_id}")))
+                    .flex_none()
+                    .text_color(moon(p.text_muted))
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("strat.version_diff_tip").to_string(),
+                    ))
+                    .child(if stacked { "↓" } else { "→" });
+                if stacked {
+                    v_flex()
+                        .w_full()
+                        .gap(px(1.0))
+                        .child(was)
+                        .child(arrow)
+                        .child(control)
+                        .into_any_element()
+                } else {
+                    h_flex()
+                        .w_full()
+                        .items_start()
+                        .gap(design::ui_px(cx, 6.0))
+                        .child(was)
+                        .child(arrow)
+                        .child(div().flex_1().min_w_0().child(control))
+                        .into_any_element()
                 }
-                wrap = wrap.child(line);
             }
-            wrap.into_any_element()
+        };
+        // When available, append the live value after the snapshot value and keep it visually
+        // subordinate to the diff.
+        let control: AnyElement = if let Some(cur) = cur_note {
+            // Compare semantically: `YES` from the import era equals `Yes`, and `1` equals `1.0`.
+            let differs = !values_equal(&cur, &version_val);
+            let fname = field_name.clone();
+            let vval = version_val.clone();
+            let display_cur = if compact.is_some() {
+                compact_first_line(&cur)
+            } else {
+                cur.clone()
+            };
+            let mut line = h_flex().items_center().gap(design::ui_px(cx, 6.0)).child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    // Use blue when the live value differs and can be copied; dim matching values.
+                    .text_color(moon(if differs { p.blue } else { p.text_soft }))
+                    .child(t!("strat.version_cur", v = display_cur).to_string()),
+            );
+            if differs {
+                line = line.child(
+                    MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))
+                        .ghost()
+                        .size(MoonButtonSize::Micro)
+                        .label(t!("strat.copy_to_current").to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            // Intentionally bypass the viewing_version gate: copying from a
+                            // version is the only permitted edit in this view.
+                            if let Some((core, id)) = selected_key(this) {
+                                this.field_edits
+                                    .insert((core, id, fname.clone()), vval.clone());
+                                this.focused_field = Some(fname.clone());
+                                cx.notify();
+                            }
+                        }))
+                        .render(),
+                );
+            }
+            v_flex()
+                .w_full()
+                .gap(px(1.0))
+                .child(control)
+                .child(line)
+                .into_any_element()
         } else {
             control
         };

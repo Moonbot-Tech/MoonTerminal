@@ -88,7 +88,7 @@ pub use layout::{
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use quiet::{QuietCfg, QuietWarnBypass};
-pub use schema::UiThemeMode;
+pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};
 pub use tab_badges::TabBadgeSettings;
@@ -278,7 +278,7 @@ pub struct AppConfig {
     pub log_to_file: bool,
     /// Log-file retention in days; 0 keeps everything (settings.toml). Defaults to 14.
     pub log_retention_days: u32,
-    /// Addition to base UI font sizes in logical pixels. Defaults to +2.
+    /// Addition to base UI font sizes in logical pixels. Defaults to +3.
     pub ui_font_delta: f32,
     /// Dark/light MoonUI theme (plaintext settings.toml).
     pub ui_theme_mode: UiThemeMode,

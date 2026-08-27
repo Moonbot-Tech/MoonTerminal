@@ -189,6 +189,41 @@ fn auto_workspace_rail_width_defaults_decodes_and_clamps() {
     }
 }
 
+/// `config/layout.rs:clamp_strategies_tree_text_step` and
+/// `layout/serde_compat.rs:de_strategies_tree_text_step` must salvage one malformed text-step
+/// field, round it, and keep it within the stepper range; removing the custom decoder, clamp, or
+/// rounding would reset every unrelated saved window position after the next launch.
+#[test]
+fn strategies_tree_text_step_preserves_layout_and_normalizes_hand_edits() {
+    let absent: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("a legacy layout without the new preference must load");
+    assert_eq!(absent.analytics_period.as_deref(), Some("p-cur-month"));
+    assert_eq!(absent.strategies_tree_text_step(), 0.0);
+
+    for (written, expected) in [
+        ("\"3\"", 3.0),
+        ("1.5", 2.0),
+        ("-3", 0.0),
+        ("99", 4.0),
+        ("nan", 0.0),
+        ("\"wide\"", 0.0),
+        ("true", 0.0),
+        ("{ }", 0.0),
+        ("[0]", 0.0),
+    ] {
+        let doc =
+            format!("analytics_period = \"p-cur-month\"\nstrategies_tree_text_step = {written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+        assert_eq!(
+            decoded.strategies_tree_text_step(),
+            expected,
+            "{written} must normalize to the supported whole-number step"
+        );
+    }
+}
+
 /// Protects `layout.rs:WindowLayout::max_core_uid` from dropping active Main-core references.
 ///
 /// The plausible edit is folding only `header_ticker` into the high-water mark. A deleted core

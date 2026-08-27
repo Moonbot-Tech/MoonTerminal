@@ -12,9 +12,10 @@ use serde::Deserialize;
 
 use super::super::chart_labels::ChartLabelsCfg;
 use super::{
-    clamp_auto_workspace_rail_width, def_candle_volume_alpha, def_candle_volume_height,
-    def_candle_volume_scale, def_candle_volume_style, def_connector_thickness_px, def_marker_scale,
-    def_trade_arrow_scale, def_trade_volume_alpha, ChartGraphicsCfg, TableSortPreference,
+    clamp_auto_workspace_rail_width, clamp_strategies_tree_text_step, def_candle_volume_alpha,
+    def_candle_volume_height, def_candle_volume_scale, def_candle_volume_style,
+    def_connector_thickness_px, def_marker_scale, def_trade_arrow_scale, def_trade_volume_alpha,
+    ChartGraphicsCfg, TableSortPreference,
 };
 
 /// Read the tuner seed from whatever `layout.toml` happens to hold, never failing.
@@ -112,7 +113,8 @@ where
 
 /// Read one [`ChartGraphicsCfg`] boolean leniently, defaulting an unusable value to `true`.
 ///
-/// All three of them default on, so one helper covers the set.
+/// `ChartGraphicsCfg`'s booleans no longer share one default, so this covers only the ones that
+/// default on; see [`de_lenient_false`] for the ones that don't.
 pub(super) fn de_lenient_true<'de, D>(d: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -321,6 +323,42 @@ where
         Some(Width::Other(_)) | None => None,
     };
     Ok(width.map(clamp_auto_workspace_rail_width))
+}
+
+/// Decode the hand-editable Strategies tree text step without rejecting the complete layout
+/// document.
+///
+/// Args:
+///     d: Serde deserializer positioned at the present text-step value.
+///
+/// Returns:
+///     A clamped, rounded numeric value, accepting quoted numbers and defaulting every malformed
+///     shape.
+///
+/// Errors:
+///     Propagates only deserializer failures that cannot be consumed as ignored input.
+pub(super) fn de_strategies_tree_text_step<'de, D>(d: D) -> Result<Option<f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Every shape a hand-edited text step may use.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Step {
+        /// A bare TOML number.
+        Number(f32),
+        /// A quoted number copied from another settings surface.
+        Text(String),
+        /// Any unsupported shape accepted only to salvage the complete document.
+        Other(serde::de::IgnoredAny),
+    }
+
+    let step = match Option::<Step>::deserialize(d)? {
+        Some(Step::Number(step)) => Some(step),
+        Some(Step::Text(step)) => step.trim().parse().ok(),
+        Some(Step::Other(_)) | None => None,
+    };
+    Ok(step.map(clamp_strategies_tree_text_step))
 }
 
 /// Read the optional clock zone without conflating a malformed present key with an absent one.

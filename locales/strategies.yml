@@ -41,6 +41,42 @@ strat.settings.active_only:
   ru: "Показывать только активные"
   en: "Show active strategies only"
   es: "Mostrar solo las activas"
+strat.settings.text_step:
+  ru: "Крупнее текст дерева"
+  en: "Larger tree text"
+  es: "Texto del árbol más grande"
+strat.settings.params_full:
+  ru: "Показывать все разделы параметров сразу"
+  en: "Show every parameter section at once"
+  es: "Mostrar todas las secciones de parámetros a la vez"
+strat.params_mode_sections:
+  ru: "по разделам"
+  en: "by section"
+  es: "por sección"
+strat.params_mode_full:
+  ru: "всё сразу"
+  en: "all at once"
+  es: "todo junto"
+strat.params_mode_sections_tip:
+  ru: "Показывать один раздел за раз"
+  en: "Show one section at a time"
+  es: "Mostrar una sección a la vez"
+strat.params_mode_full_tip:
+  ru: "Показывать все разделы сразу, с прокруткой"
+  en: "Show every section at once, scrollable"
+  es: "Mostrar todas las secciones a la vez, con desplazamiento"
+strat.params_full_title:
+  ru: "Все разделы"
+  en: "All sections"
+  es: "Todas las secciones"
+strat.params_other_fields:
+  ru: "Прочие поля"
+  en: "Other fields"
+  es: "Otros campos"
+strat.params_edit_in_sections:
+  ru: "править"
+  en: "edit"
+  es: "editar"
 strat.active_only:
   ru: "активные"
   en: "active"
@@ -238,14 +274,10 @@ strat.versions_multi:
   ru: "мультивыбор — версии недоступны"
   en: "multi-select — versions unavailable"
   es: "selección múltiple — versiones no disponibles"
-strat.versions_current:
-  ru: "тек."
-  en: "cur."
-  es: "act."
 strat.version_view:
-  ru: "Просмотр версии от %{date} — только чтение"
-  en: "Viewing the version from %{date} — read-only"
-  es: "Viendo la versión del %{date} — solo lectura"
+  ru: "Вы смотрите версию от %{date}. Поля только для чтения — но их можно вернуть в текущую."
+  en: "You are viewing the version from %{date}. Fields are read-only — but they can be restored into the current one."
+  es: "Está viendo la versión del %{date}. Los campos son de solo lectura, pero pueden restaurarse en la actual."
 strat.sections_all:
   ru: "Все"
   en: "All"
@@ -259,13 +291,13 @@ strat.version_added:
   en: "new field"
   es: "campo nuevo"
 strat.versions_live:
-  ru: "Текущая"
-  en: "Current"
-  es: "Actual"
+  ru: "Живые параметры"
+  en: "Live parameters"
+  es: "Parámetros en vivo"
 strat.version_view_nodiff:
-  ru: "Версия от %{date}: изменений против предыдущей нет (точка отсчёта) — показаны все поля, только чтение"
-  en: "Version from %{date}: no changes vs the previous one (baseline) — all fields shown, read-only"
-  es: "Versión del %{date}: sin cambios frente a la anterior (línea base) — se muestran todos los campos, solo lectura"
+  ru: "Версия от %{date}: изменений против предыдущей нет (точка отсчёта) — показаны все поля, только чтение. Версию можно вернуть в текущую."
+  en: "Version from %{date}: no changes vs the previous one (baseline) — all fields shown, read-only. The version can be restored into the current one."
+  es: "Versión del %{date}: sin cambios frente a la anterior (línea base) — se muestran todos los campos, solo lectura. La versión puede restaurarse en la actual."
 strat.deleted_folder:
   ru: "Удалённые"
   en: "Deleted"
@@ -275,14 +307,154 @@ strat.menu_restore:
   en: "Restore"
   es: "Restaurar"
 strat.version_cur:
-  ru: "тек.: %{v}"
-  en: "cur.: %{v}"
-  es: "act.: %{v}"
+  ru: "сейчас: %{v}"
+  en: "now: %{v}"
+  es: "ahora: %{v}"
 strat.copy_to_current:
-  ru: "→ в тек."
-  en: "→ to cur."
-  es: "→ a act."
+  ru: "вернуть поле"
+  en: "restore field"
+  es: "restaurar campo"
 strat.version_restore:
   ru: "Восстановить в текущую"
   en: "Restore into current"
   es: "Restaurar en la actual"
+strat.versions_order:
+  ru: "новые сверху"
+  en: "newest first"
+  es: "más nuevas arriba"
+strat.versions_history:
+  ru: "История"
+  en: "History"
+  es: "Historial"
+strat.versions_live_tip:
+  ru: "Параметры стратегии, которые работают прямо сейчас. Их можно править."
+  en: "The strategy parameters running right now. They are editable."
+  es: "Los parámetros de la estrategia que están funcionando ahora. Se pueden editar."
+strat.version_open:
+  ru: "действует"
+  en: "in effect"
+  es: "en vigor"
+strat.version_open_tip:
+  ru: "Эта версия действует прямо сейчас — это то, что у вас сохранено"
+  en: "This version is in effect right now — this is what you have saved"
+  es: "Esta versión está en vigor ahora — es lo que tiene guardado"
+strat.version_previous:
+  ru: "предыдущая"
+  en: "previous"
+  es: "anterior"
+strat.version_previous_tip:
+  ru: "Состояние до последнего изменения"
+  en: "The state before the last change"
+  es: "El estado anterior al último cambio"
+strat.version_stamp_tip:
+  ru: "Версия сохранена %{stamp}"
+  en: "Version saved %{stamp}"
+  es: "Versión guardada %{stamp}"
+strat.version_changed_n:
+  ru: "полей: %{n}"
+  en: "%{n} fields"
+  es: "%{n} campos"
+strat.version_changed_tip:
+  ru: "Изменено полей в этой версии: %{n}"
+  en: "Fields changed in this version: %{n}"
+  es: "Campos modificados en esta versión: %{n}"
+strat.version_kind_created:
+  ru: "создана"
+  en: "created"
+  es: "creada"
+strat.version_kind_created_tip:
+  ru: "Стратегия создана в этот момент"
+  en: "The strategy was created at this point"
+  es: "La estrategia se creó en este momento"
+strat.version_kind_restored:
+  ru: "откат"
+  en: "rollback"
+  es: "reversión"
+strat.version_kind_restored_tip:
+  ru: "Эта версия — возврат к более старой"
+  en: "This version is a rollback to an older one"
+  es: "Esta versión es una reversión a otra anterior"
+strat.version_origin_local:
+  ru: "правка отсюда"
+  en: "edited here"
+  es: "editado aquí"
+strat.version_origin_local_tip:
+  ru: "Изменено из этого терминала"
+  en: "Changed from this terminal"
+  es: "Cambiado desde este terminal"
+strat.version_origin_external:
+  ru: "извне"
+  en: "external"
+  es: "externo"
+strat.version_origin_external_tip:
+  ru: "Изменено не из этого терминала"
+  en: "Changed outside this terminal"
+  es: "Cambiado fuera de este terminal"
+strat.version_origin_initial:
+  ru: "первый снимок"
+  en: "first snapshot"
+  es: "primera instantánea"
+strat.version_origin_initial_tip:
+  ru: "Полный набор полей, записанный при подключении"
+  en: "The full field set recorded on connect"
+  es: "El conjunto completo de campos registrado al conectar"
+strat.version_profit:
+  ru: "%{amount}$ за %{n} сделок"
+  en: "%{amount}$ over %{n} trades"
+  es: "%{amount}$ en %{n} operaciones"
+strat.version_profit_partial:
+  ru: "%{amount}$ за %{n} сделок, ещё %{open} в рынке"
+  en: "%{amount}$ over %{n} trades, %{open} still open"
+  es: "%{amount}$ en %{n} operaciones, %{open} aún abiertas"
+strat.version_no_trades:
+  ru: "сделок не было"
+  en: "no trades"
+  es: "sin operaciones"
+strat.version_profit_tip:
+  ru: "Прибыль сделок, закрытых пока действовала эта версия"
+  en: "Profit of trades closed while this version was in effect"
+  es: "Beneficio de las operaciones cerradas mientras esta versión estuvo en vigor"
+strat.version_age_now:
+  ru: "только что"
+  en: "just now"
+  es: "ahora mismo"
+strat.version_age_m:
+  ru: "%{n} мин назад"
+  en: "%{n} min ago"
+  es: "hace %{n} min"
+strat.version_age_h:
+  ru: "%{n} ч назад"
+  en: "%{n} h ago"
+  es: "hace %{n} h"
+strat.version_age_d:
+  ru: "%{n} дн назад"
+  en: "%{n} d ago"
+  es: "hace %{n} d"
+strat.version_restore_tip:
+  ru: "Подставит все поля этой версии в текущую. Ничего не запишется, пока вы не нажмёте «Применить»."
+  en: "Fills every field of this version into the current one. Nothing is written until you press Apply."
+  es: "Rellena todos los campos de esta versión en la actual. No se guarda nada hasta que pulse Aplicar."
+strat.version_staged:
+  ru: "Из версии от %{date} подставлено полей: %{n}. Нажмите «Применить», чтобы записать, или «Отменить»."
+  en: "%{n} fields filled in from the version of %{date}. Press Apply to write them, or Revert."
+  es: "%{n} campos rellenados desde la versión del %{date}. Pulse Aplicar para guardarlos, o Revertir."
+strat.version_staged_none:
+  ru: "Версия от %{date} совпадает с текущей — менять нечего."
+  en: "The version of %{date} matches the current one — nothing to change."
+  es: "La versión del %{date} coincide con la actual — no hay nada que cambiar."
+strat.version_staged_cleared:
+  ru: "Версия от %{date} уже совпадает с текущей. Несохранённые правки (%{n}) отменены — применять нечего."
+  en: "The version of %{date} already matches the current one. %{n} unsaved edits were discarded — nothing to apply."
+  es: "La versión del %{date} ya coincide con la actual. Se descartaron %{n} ediciones sin guardar — no hay nada que aplicar."
+strat.version_diff_tip:
+  ru: "Слева — как было до этой версии, справа — как стало в ней"
+  en: "Left is how it was before this version, right is what it became in it"
+  es: "A la izquierda cómo era antes de esta versión, a la derecha en qué se convirtió"
+strat.section_changed_tip:
+  ru: "Изменённых полей в этом разделе: %{n}"
+  en: "Changed fields in this section: %{n}"
+  es: "Campos modificados en esta sección: %{n}"
+strat.sections_all_tip:
+  ru: "Всего изменённых полей в этой версии: %{n}. Часть из них может отсутствовать в схеме текущего ядра, поэтому счётчики разделов не обязаны давать в сумме это число."
+  en: "Total fields changed in this version: %{n}. Some may be absent from the current core's schema, so the section counters need not add up to it."
+  es: "Total de campos modificados en esta versión: %{n}. Algunos pueden faltar en el esquema del núcleo actual, por lo que los contadores de sección no tienen por qué sumar ese número."

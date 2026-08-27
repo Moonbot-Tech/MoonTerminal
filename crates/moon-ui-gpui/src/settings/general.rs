@@ -13,7 +13,12 @@ use rust_i18n::t;
 
 use super::SettingsView;
 use crate::{Backend, design};
-use moon_core::config::UiThemeMode;
+// Aliased to their historical local names here to keep this file's call sites unchanged. Owned by
+// `moon-core` beside `default_ui_font_delta`, so a value and the range it must lie inside cannot
+// split across crates.
+use moon_core::config::{
+    UI_FONT_DELTA_MAX as FONT_DELTA_MAX, UI_FONT_DELTA_MIN as FONT_DELTA_MIN, UiThemeMode,
+};
 
 /// One bold caption beside a MoonUI select, the General tab's shape for an enum setting.
 ///
@@ -409,10 +414,6 @@ impl SettingsView {
             .child(self.security_section(cx))
     }
 }
-
-/// UI-font delta range in logical pixels, shared by the slider, input clamp, and tick marks.
-const FONT_DELTA_MIN: i32 = -2;
-const FONT_DELTA_MAX: i32 = 6;
 
 /// Format a font delta as its canonical integer-step text, normalizing negative zero.
 fn font_delta_text(v: f32) -> String {

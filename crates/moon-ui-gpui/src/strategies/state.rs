@@ -182,10 +182,9 @@ impl StrategiesView {
             // In-flight version results compare against `versions.key`; retiring it prevents an
             // old hidden core from publishing after the owner changes.
             this.versions.key = None;
-            this.versions.sel = None;
-            this.versions.row = None;
-            this.versions.changed.clear();
-            this.versions.section = None;
+            // Otherwise a confirmation for the strategy this scope just left keeps showing over
+            // whatever the new scope selects next (plan amendment A3).
+            this.versions.clear_selection();
             cx.notify();
         })
         .detach();
@@ -300,6 +299,8 @@ impl StrategiesView {
             tree_cache: None,
             pane_cache: PaneCache::default(),
             pending_scroll: None,
+            params_scroll: MoonVirtualListScrollHandle::new(),
+            pending_param_scroll: None,
             focus: cx.focus_handle(),
         }
     }

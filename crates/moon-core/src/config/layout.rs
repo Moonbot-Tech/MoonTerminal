@@ -15,7 +15,8 @@ use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
     de_candle_volume_scale, de_candle_volume_style, de_clock_zone, de_connector_thickness,
     de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map, de_lenient_seed,
-    de_lenient_true, de_lenient_u32, de_marker_scale, de_table_sort_map, de_trade_volume_alpha,
+    de_lenient_true, de_lenient_u32, de_marker_scale, de_strategies_tree_text_step,
+    de_table_sort_map, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -25,6 +26,18 @@ pub const AUTO_WORKSPACE_RAIL_WIDTH_MIN: f32 = 52.0;
 pub const AUTO_WORKSPACE_RAIL_WIDTH_MAX: f32 = 560.0;
 /// First-run Auto-workspace rail width in logical pixels.
 pub const AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT: f32 = 340.0;
+
+/// Floor for the Strategies tree's local text-size step. Zero, not negative: a negative step would
+/// let the user re-create, as a supported setting, the sub-`t_caption` defect the step's own fix
+/// pass corrects (`strategies/tree/moon.rs`).
+pub const STRATEGIES_TREE_TEXT_STEP_MIN: f32 = 0.0;
+/// Ceiling for the step. Four is where `fit_height`'s line-height term still leaves headroom over
+/// its `ui()` term at every global Font-slider setting; higher pushes the row's UI-scaled chrome
+/// (checkbox, disclosure caret) past reading as part of the same row.
+pub const STRATEGIES_TREE_TEXT_STEP_MAX: f32 = 4.0;
+/// Shipped step: the pane renders at exactly the theme base, unchanged by this setting until the
+/// user raises it.
+pub const STRATEGIES_TREE_TEXT_STEP_DEFAULT: f32 = 0.0;
 
 /// Share of a display's WORK AREA the very first window of a brand-new profile occupies.
 ///
@@ -613,6 +626,20 @@ pub struct WindowLayout {
     /// disabled so the requested row remains visible after restart.
     #[serde(default, deserialize_with = "de_lenient")]
     pub strategies_active_only: Option<bool>,
+    /// Strategies: local text-size step for the tree pane, on top of the global Font slider.
+    ///
+    /// `None` is the shipped zero — the pane renders at exactly the theme base, identical to
+    /// before this field existed. Decoded and clamped like `auto_workspace_rail_width` so a
+    /// malformed or out-of-range hand edit cannot discard the surrounding layout or produce a
+    /// step the stepper control cannot represent.
+    #[serde(default, deserialize_with = "de_strategies_tree_text_step")]
+    pub strategies_tree_text_step: Option<f32>,
+    /// Strategies: whether the parameters pane shows every section at once instead of one.
+    ///
+    /// `None` keeps the Strategies-owned default. Read leniently so a malformed hand edit cannot
+    /// discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub strategies_params_full: Option<bool>,
     /// Global "Assets" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub assets_window: Option<GeomRect>,
@@ -1142,10 +1169,10 @@ fn def_candle_volume_scale() -> [u8; 3] {
 /// tab without one draws with this.
 ///
 /// Deliberately separate from `OrdersStyle` in `orders.toml`: that file describes how each ORDER
-/// LINE is painted (colour, dash, marker sizes), while these values decide how the closed-trade
-/// history, the trade marks and the bottom volume band are drawn, and which closed TRADES appear at
-/// all. Mixing them would make two unrelated surfaces move together, which is the same reason
-/// `trade_marks.rs` refused to read `orders.toml`.
+/// LINE is painted (colour, dash, marker sizes), while these values decide how order-line repricing
+/// and closed-trade history, the trade marks, and the bottom volume band are drawn, and which
+/// closed TRADES appear at all. Mixing them would make two unrelated surfaces move together, which
+/// is the same reason `trade_marks.rs` refused to read `orders.toml`.
 ///
 /// The last six fields moved here from `ChartTheme` (`theme.toml`). They belong to a CHART TAB, not
 /// to a colour scheme: two tabs on one theme routinely want different marker sizes and a different
@@ -1244,7 +1271,8 @@ pub struct ChartGraphicsCfg {
 }
 
 impl Default for ChartGraphicsCfg {
-    /// The shipped sizes with every trade kind visible, and the closed sell line hidden.
+    /// The shipped sizes with every trade kind visible, the closed sell line hidden, and the
+    /// order move-history trail shown.
     fn default() -> Self {
         Self {
             trade_arrow_scale: def_trade_arrow_scale(),
@@ -1457,6 +1485,28 @@ pub fn clamp_auto_workspace_rail_width(width: f32) -> f32 {
     }
 }
 
+/// Clamp a persisted or runtime Strategies tree text step to the supported integer range.
+///
+/// The `round()` is load-bearing: the stepper control only ever emits integers, and a
+/// hand-written fractional value must not produce a half-step the UI cannot represent or
+/// return to.
+///
+/// Args:
+///     value: Step from persistence or a stepper change event.
+///
+/// Returns:
+///     A whole-number step within `STRATEGIES_TREE_TEXT_STEP_MIN..=STRATEGIES_TREE_TEXT_STEP_MAX`,
+///     or the shipped default for non-finite input.
+pub fn clamp_strategies_tree_text_step(value: f32) -> f32 {
+    if value.is_finite() {
+        value
+            .round()
+            .clamp(STRATEGIES_TREE_TEXT_STEP_MIN, STRATEGIES_TREE_TEXT_STEP_MAX)
+    } else {
+        STRATEGIES_TREE_TEXT_STEP_DEFAULT
+    }
+}
+
 impl WindowLayout {
     /// The candle settings a tab of this kind opens with.
     pub fn candle_view_for(
@@ -1642,6 +1692,15 @@ impl WindowLayout {
     pub fn auto_workspace_rail_width(&self) -> f32 {
         self.auto_workspace_rail_width
             .unwrap_or(AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT)
+    }
+
+    /// Return the effective Strategies tree text step, testable without a GPUI `App`.
+    ///
+    /// Returns:
+    ///     Persisted clamped step, or the shipped default when no preference has been written yet.
+    pub fn strategies_tree_text_step(&self) -> f32 {
+        self.strategies_tree_text_step
+            .unwrap_or(STRATEGIES_TREE_TEXT_STEP_DEFAULT)
     }
 
     /// Highest core uid this layout still references.
