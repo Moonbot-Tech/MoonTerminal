@@ -204,6 +204,8 @@ impl Render for ReportPanel {
     /// Returns:
     ///     The complete Report surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::REPORT_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::REPORT_RENDER_US);
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         self.sync_display_zone_fields(window, cx);
         // MoonUI renders only the selected tab or a visible tile, so reaching this method is the

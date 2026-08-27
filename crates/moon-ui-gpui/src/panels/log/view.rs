@@ -20,6 +20,7 @@ impl Render for LogPanel {
         // element tree cannot be told apart from one on the revision path — and the whole point of
         // the counters below is telling those two apart.
         crate::diag::bump(&crate::diag::LOG_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::LOG_RENDER_US);
         if !self.refresh.is_active() {
             self.set_refresh_active(true, cx);
         } else if self.refresh.take_observed_reload() {

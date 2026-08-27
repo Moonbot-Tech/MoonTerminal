@@ -449,6 +449,9 @@ pub(crate) fn effective_manual_strategy_core(
 ///
 /// Returns:
 ///     The complete responsive trading toolbar row.
+// `use<>` on the return type: the row holds no input lifetime, and saying so is what lets a caller
+// build it inside a scope narrower than the tree it is added to — the diagnostic timer around this
+// call in `shell::render` is exactly that. Without it Rust 2024 captures every argument lifetime.
 #[allow(clippy::too_many_arguments)]
 pub fn toolbar(
     backend: &Entity<Backend>,
@@ -464,7 +467,8 @@ pub fn toolbar(
     quote: &str,
     chrome_width: f32,
     cx: &App,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
+    let phase_us = crate::diag::timer();
     // Which metric is open and what its popup contains are ONE fact — `Shell` derives both from the
     // same field — so they arrive as one value: passed separately, a caller could name an open
     // metric with no content and the row would light a button over an empty popover. The content
@@ -568,6 +572,8 @@ pub fn toolbar(
 
     // Cells are fitted BEFORE rendering: both the strip itself and the row budget that decides the
     // labels' fate read them. One computation, one source.
+    crate::diag::record_us(&crate::diag::TOOLBAR_DATA_US, phase_us);
+    let phase_us = crate::diag::timer();
     let size_cells = strips::FittedCells::fit(cx, strips::size_labels(size_values));
     let sell_cells = strips::FittedCells::fit(cx, strips::sell_labels(sell_pcts));
     // The exchange's own cap on a single order, kept permanently on the row rather than only inside
@@ -603,6 +609,8 @@ pub fn toolbar(
         &max_order_caption,
         &max_order_value,
     );
+    crate::diag::record_us(&crate::diag::TOOLBAR_FIT_US, phase_us);
+    let phase_us = crate::diag::timer();
 
     // A section carries the gap INSIDE it; the boundary between two sections is drawn by the RULE
     // standing between them, not by a wider gap. Shared with the header — see
@@ -789,8 +797,11 @@ pub fn toolbar(
                 .render(),
         ),
     );
+    crate::diag::record_us(&crate::diag::TOOLBAR_TRADE_US, phase_us);
+    let phase_us = crate::diag::timer();
     // Trailing edge: Profit Monitor + Screener, then Strategies + Analytics, then Settings.
-    row.child(div().flex_1())
+    let row = row
+        .child(div().flex_1())
         .child(design::chrome_divider(cx, p))
         .child(
             section()
@@ -867,7 +878,9 @@ pub fn toolbar(
                             .and_then(|at| crate::pulse::attention_ring(p.accent, at)),
                     ),
             ),
-        )
+        );
+    crate::diag::record_us(&crate::diag::TOOLBAR_LAUNCH_US, phase_us);
+    row
 }
 
 /// A toolbar button that opens a singleton window, styled like Live

@@ -70,7 +70,7 @@ use window::detached;
 use moon_ui::{DockAreaState, DockTopologyByName, Root};
 
 use moon_core::config::{AppConfig, WindowLayout};
-use moon_core::metrics::{Metrics, MetricsSnapshot};
+use moon_core::metrics::{MetricsSampler, MetricsSnapshot};
 use moon_core::session::{CoreId, SessionManager};
 
 // Localization: load the root `locales/*.yml` files relative to this crate's manifest.
@@ -112,7 +112,10 @@ struct Backend {
     core_filter_revision: Entity<CoreFilterRevision>,
     /// Last live Auto group to own Analytics and Strategies scope; never serialized.
     workspace_focus: Option<workspace::WorkspaceFocus>,
-    metrics: Metrics,
+    /// Handle to the metrics worker. The polling itself runs on its own thread — on Windows it
+    /// blocks for 12 to 27 ms a call, which on this one would be a frame or three dropped every
+    /// second.
+    metrics: MetricsSampler,
     snap: MetricsSnapshot,
     /// Desired open markets as `(core, market)`, derived from `chart_market_refs`.
     /// Chart panels retain ownership counts rather than mutating this list directly.

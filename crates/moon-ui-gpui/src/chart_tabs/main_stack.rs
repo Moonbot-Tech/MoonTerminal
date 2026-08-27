@@ -1626,6 +1626,8 @@ impl Render for MainChartStack {
     /// Renders the per-chart tab row above either the active full-bleed chart or the virtualized
     /// whole-stack layout.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::MAIN_STACK_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::MAIN_STACK_RENDER_US);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             let empty = div()

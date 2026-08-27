@@ -24,7 +24,7 @@ use crate::persistence::{chart_persist, dock_persist};
 use crate::window::detached;
 use crate::{Backend, UiSessionState, firetest};
 use moon_core::config::{AppConfig, WindowLayout};
-use moon_core::metrics::{Metrics, MetricsSnapshot};
+use moon_core::metrics::MetricsSnapshot;
 use moon_core::session::{CoreId, SessionManager};
 
 /// Startup state gathered before the configuration was available.
@@ -154,7 +154,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         core_filter: HashSet::new(),
         core_filter_revision,
         workspace_focus: None,
-        metrics: Metrics::new(),
+        metrics: moon_core::metrics::spawn_sampler(),
         snap: MetricsSnapshot::default(),
         // open = markets of OPEN chart panels, as in App::about_to_wait in egui.
         // Empty at startup; opening a coin populates it (ported with the chart panels).
@@ -537,10 +537,33 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         let executor = cx.update(|cx| cx.background_executor().clone());
         let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
         let mut last_report = Instant::now();
+        // GPUI times every `Window::draw` itself when frame tracing is on; the collector
+        // hands over the ones recorded since the previous poll. Created before tracing is
+        // enabled, which is harmless — it simply sees nothing until it is.
+        let mut frame_timings = gpui::FrameTimingCollector::new();
         // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
         let mut last_assets_rev_sum: u64 = 0;
         loop {
+            // How late this wake-up lands is the measurement, not an implementation detail: the
+            // timer is a BACKGROUND one, but this task runs on the foreground executor, so
+            // everything past the requested 100 ms is time the main thread would not give it.
+            // See `diag::SCHED_LATE_US`.
+            let asked_at = Instant::now();
             executor.timer(Duration::from_millis(100)).await;
+            let late = asked_at
+                .elapsed()
+                .saturating_sub(Duration::from_millis(100));
+            crate::diag::bump_by(&crate::diag::SCHED_LATE_US, late.as_micros() as u64);
+            if late >= Duration::from_millis(20) {
+                crate::diag::bump(&crate::diag::SCHED_LATE_TICKS);
+            }
+            // The tick is the largest block of main-thread work outside drawing; a single slow
+            // run shows up as a gap in the frames around it. See `diag::COORD_TICK_US`.
+            let tick_us = crate::diag::scope_slow(
+                &crate::diag::COORD_TICK_US,
+                &crate::diag::COORD_TICK_SLOW,
+                20_000,
+            );
             cx.update(|cx| {
                 let mut edges = TickEdges::default();
                 consume_report_commit(coord_report_immediate_dirty.as_deref(), || {
@@ -572,7 +595,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     if b.tick_panic_local() {
                         b.mark_backend_dirty(cx);
                     }
-                    b.snap = b.metrics.sample(Instant::now());
+                    {
+                        // A lock and a copy of five floats. The polling that used to happen
+                        // HERE, blocking this thread for 12 to 27 ms once a second, now runs on
+                        // the metrics worker; this counter is what proves it left.
+                        let _sample_us = crate::diag::scope(&crate::diag::METRICS_SAMPLE_US);
+                        b.snap = b.metrics.snapshot();
+                    }
                     // Before the warning engine: a schedule boundary crossed on this very tick must
                     // already be in force for the alerts this tick opens.
                     b.tick_quiet(cx);
@@ -594,7 +623,12 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // the dirty-flag mechanism entirely. `order-cancel-lag` in particular
                     // places a real order that lands permanently in `reports.sqlite`.
                     if b.persist_allowed {
-                        dispatch_live_persistence(b, &mut coord_persistence.borrow_mut());
+                        {
+                            // Writes config and layout files from THIS thread, into the folder
+                            // beside the executable — which may be synchronised or on a share.
+                            let _persist_us = crate::diag::scope(&crate::diag::PERSIST_DISPATCH_US);
+                            dispatch_live_persistence(b, &mut coord_persistence.borrow_mut());
+                        }
                         if b.chart_specs_dirty {
                             chart_persist::save_all(&b.chart_specs);
                             b.chart_specs_dirty = false;
@@ -651,9 +685,24 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     );
                 }
             });
+            drop(tick_us);
             if last_report.elapsed().as_millis() >= 1000 {
                 let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                 last_report = Instant::now();
+                // Follow the render channel, which is live: turning tracing off also clears
+                // GPUI's buffer, so a switch flipped back on cannot report stale frames.
+                let trace_wanted = crate::diag::is_enabled();
+                if gpui::frame_trace_enabled() != trace_wanted {
+                    gpui::set_frame_trace_enabled(trace_wanted);
+                }
+                if trace_wanted {
+                    for frame in frame_timings.collect_unseen() {
+                        crate::diag::note_frame_draw(
+                            frame.draw_duration(),
+                            frame.dirty_to_draw_duration(),
+                        );
+                    }
+                }
                 // Pick up an edit to `cfg/diagnostics.toml` without a restart — the state worth
                 // observing is usually the one a restart would destroy.
                 //
@@ -688,9 +737,21 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                                 );
                             }
                             last_assets_rev_sum = rev_sum;
+                            // `gapmax` is the worst gap between two window repaints in this
+                            // interval, in milliseconds. It rides the context rather than the
+                            // counter table because `take_sample` turns every counter into a rate,
+                            // which would make nonsense of a maximum. Read it against
+                            // `shell_render`: at rest the window repaints about once a second and
+                            // this reports roughly a thousand, meaning nothing.
                             format!(
-                                "cpu={:.1} sys={:.1} windows={} charts={}",
-                                b.snap.cpu_process, b.snap.cpu_system, windows, charts
+                                "cpu={:.1} sys={:.1} windows={} charts={} gapmax={:.0} drawmax={:.0} dirtymax={:.0}",
+                                b.snap.cpu_process,
+                                b.snap.cpu_system,
+                                windows,
+                                charts,
+                                crate::diag::take_frame_gap_max_ms(),
+                                crate::diag::take_frame_draw_max_ms(),
+                                crate::diag::take_frame_latency_max_ms()
                             )
                         })
                     })

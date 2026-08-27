@@ -312,6 +312,8 @@ impl Shell {
                     });
                     return;
                 }
+                crate::diag::bump(&crate::diag::DOCK_DUMP);
+                let _dump_us = crate::diag::scope(&crate::diag::DOCK_DUMP_US);
                 let state = dock.read(cx).dump(cx);
                 let group = this.group.clone();
                 this.backend.update(cx, |b, _| {

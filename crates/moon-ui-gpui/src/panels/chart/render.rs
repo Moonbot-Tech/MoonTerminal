@@ -109,6 +109,7 @@ impl Render for ChartPanel {
     /// Render the live chart surface and its explicitly unscoped in-chart figure settings.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::CHART_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::CHART_RENDER_US);
         let became_visible = !self.scene_visible;
         self.scene_visible = true;
         self.chart.set_scene_visible(true);

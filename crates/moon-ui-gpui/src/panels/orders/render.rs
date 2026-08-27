@@ -96,6 +96,7 @@ impl Panel for OrdersPanel {
 impl Render for OrdersPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ORDERS_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::ORDERS_RENDER_US);
         let view = self.view;
         let auto_core = self.effective_scope(self.backend.read(cx)).is_auto_core();
         let cores = self.group_cores(self.backend.read(cx));

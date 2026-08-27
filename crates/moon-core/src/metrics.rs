@@ -1,17 +1,32 @@
 //! Diagnostic process and system metrics for the status bar: process/system CPU,
 //! process RAM, and RAM growth over a time window. On Windows, this also samples
-//! GPU Engine utilization for the current process through PDH. Refreshing sysinfo
-//! and PDH is expensive, so the system is polled at most once per `REFRESH_EVERY`
-//! and the cached snapshot is returned between samples.
+//! GPU Engine utilization for the current process through PDH.
+//!
+//! Sampled on a THREAD OF ITS OWN, and that is the point of the module's shape. Refreshing
+//! sysinfo and querying PDH is not merely expensive, it BLOCKS: measured at 12 to 27
+//! milliseconds a call on Windows, where the GPU query enumerates every engine of every
+//! process on the machine. Done on the UI thread once a second, as it used to be, that is one
+//! to three frames dropped in a burst, every second — invisible in an average and plainly
+//! visible in a drag. The UI now only copies the snapshot the worker last published.
+//!
+//! [`Metrics`] itself is deliberately private and is BUILT INSIDE the worker: its GPU sampler
+//! holds a raw PDH handle and is not `Send`, so the object cannot be moved onto a thread —
+//! only created on one.
 
 mod cpu_watch;
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
-/// Minimum interval between sysinfo polls.
+/// Interval the worker sleeps between polls.
+///
+/// Also the cadence `cpu_watch` and the memory window assume: the detector counts its samples
+/// as seconds. The worker is the only caller, so this is the pacing — there is no second
+/// throttle inside [`Metrics::refresh`], and there must not be, or a sleep landing a hair early
+/// would silently skip a whole second's sample.
 const REFRESH_EVERY: Duration = Duration::from_millis(1000);
 /// Time window used to calculate memory growth or decline.
 const MEM_WINDOW: Duration = Duration::from_secs(5);
@@ -31,11 +46,10 @@ pub struct MetricsSnapshot {
     pub gpu_process: f32,
 }
 
-pub struct Metrics {
+struct Metrics {
     sys: System,
     pid: Pid,
     ncpu: f32,
-    last_refresh: Option<Instant>,
     snap: MetricsSnapshot,
     gpu: GpuProcessSampler,
     /// Timestamped process memory samples used to calculate change over `MEM_WINDOW`.
@@ -47,7 +61,7 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let mut sys = System::new();
         sys.refresh_cpu_usage();
         let logical_cpus = sys.cpus().len().max(1);
@@ -56,7 +70,6 @@ impl Metrics {
             sys,
             pid,
             ncpu: logical_cpus as f32,
-            last_refresh: None,
             snap: MetricsSnapshot::default(),
             gpu: GpuProcessSampler::new(pid_as_u32(pid)),
             mem_hist: VecDeque::new(),
@@ -64,16 +77,12 @@ impl Metrics {
         }
     }
 
-    /// Returns the current snapshot, polling the system at most once per `REFRESH_EVERY`.
-    pub fn sample(&mut self, now: Instant) -> MetricsSnapshot {
-        let due = self
-            .last_refresh
-            .is_none_or(|t| now.duration_since(t) >= REFRESH_EVERY);
-        if !due {
-            return self.snap;
-        }
-        self.last_refresh = Some(now);
-
+    /// Poll the system and return the fresh snapshot.
+    ///
+    /// Unconditional: pacing belongs to the worker that owns this, and a second throttle here
+    /// would turn a sleep that woke a millisecond early into a skipped second.
+    fn refresh(&mut self) -> MetricsSnapshot {
+        let now = Instant::now();
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
         self.sys
@@ -111,8 +120,8 @@ impl Metrics {
             mem_delta_mb,
             gpu_process,
         };
-        // Fed only on a real refresh, never on the cached return above: the detector counts samples
-        // as seconds, and the caller polls it far more often than it refreshes.
+        // The detector counts its samples AS SECONDS, which is exactly why this sits on the
+        // refresh path and why the worker's sleep is the only thing pacing it.
         if let Some(event) = self
             .watch
             .observe(crate::util::now_unix_ms_i64(), &self.snap)
@@ -123,10 +132,71 @@ impl Metrics {
     }
 }
 
-impl Default for Metrics {
-    fn default() -> Self {
-        Self::new()
+/// Handle to the metrics worker: the UI's only contact with it.
+///
+/// Holds no `Metrics` and does no system work — [`snapshot`](Self::snapshot) is a lock and a copy
+/// of five floats, which is the whole reason this type exists.
+pub struct MetricsSampler {
+    latest: Arc<Mutex<MetricsSnapshot>>,
+}
+
+impl MetricsSampler {
+    /// The most recent snapshot the worker published.
+    ///
+    /// Before the first poll completes, and if the worker thread could not be started at all, this
+    /// is the default snapshot — all zeros, which is what the status bar showed during that window
+    /// anyway. A poisoned lock is recovered rather than propagated: the guarded value is a `Copy`
+    /// struct written in one assignment, so there is no half-written state to protect anyone from,
+    /// and losing process metrics is not worth taking the UI down for.
+    pub fn snapshot(&self) -> MetricsSnapshot {
+        match self.latest.lock() {
+            Ok(slot) => *slot,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
     }
+}
+
+/// Start the metrics worker and return its handle.
+///
+/// The thread holds a `Weak` to the published snapshot, so dropping the handle ends it within one
+/// [`REFRESH_EVERY`]: nothing has to be signalled and nothing can outlive its owner. It writes no
+/// files and touches no shared state beyond that slot, so a process exiting mid-sleep loses
+/// nothing.
+pub fn spawn_sampler() -> MetricsSampler {
+    let latest = Arc::new(Mutex::new(MetricsSnapshot::default()));
+    let published = Arc::downgrade(&latest);
+    let started = std::thread::Builder::new()
+        .name("moon-metrics".to_string())
+        .spawn(move || {
+            // Built HERE rather than passed in: `GpuProcessSampler` owns a raw PDH handle and is
+            // therefore not `Send`. Creating it on this thread is also where it belongs — the
+            // query is opened and collected by one thread for the life of the process.
+            let mut metrics = Metrics::new();
+            loop {
+                // Sleep FIRST. `Metrics::new` takes the baseline CPU reading, and sysinfo
+                // derives usage from the gap between two refreshes — polling immediately
+                // would divide by no elapsed time and publish a zero. It also means the
+                // strong reference below never spans a sleep, so dropping the handle is
+                // noticed within one interval.
+                std::thread::sleep(REFRESH_EVERY);
+                let Some(slot) = published.upgrade() else {
+                    return;
+                };
+                let snap = metrics.refresh();
+                // The semicolon is load-bearing: as the block's tail expression, the
+                // `LockResult` temporary would outlive `slot` and be dropped after it.
+                match slot.lock() {
+                    Ok(mut held) => *held = snap,
+                    Err(poisoned) => *poisoned.into_inner() = snap,
+                };
+            }
+        });
+    if let Err(err) = started {
+        // Reported, not fatal: the terminal runs fine without a status-bar CPU readout, and the
+        // snapshot simply stays at its default.
+        log::warn!("metrics sampler thread could not start: {err}");
+    }
+    MetricsSampler { latest }
 }
 
 fn pid_as_u32(pid: Pid) -> u32 {
@@ -178,8 +248,8 @@ impl GpuProcessSampler {
 
     fn sample(&mut self) -> Option<f32> {
         use windows_sys::Win32::System::Performance::{
-            PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
-            PDH_FMT_DOUBLE, PDH_MORE_DATA,
+            PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_MORE_DATA, PdhCollectQueryData,
+            PdhGetFormattedCounterArrayW,
         };
 
         if !self.available {

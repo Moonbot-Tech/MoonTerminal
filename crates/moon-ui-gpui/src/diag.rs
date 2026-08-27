@@ -27,11 +27,28 @@ macro_rules! diag_counters {
 }
 
 diag_counters!(
+    // Dock-panel repaints, and what each panel's own element tree costs in microseconds per second.
+    //
+    // Every `*_render_us` in this file follows one rule, and it is the rule that makes them
+    // comparable: the timer covers that view's `render` only. A child VIEW renders during the
+    // parent's prepaint, a phase later, so these numbers are disjoint — they can be summed, and the
+    // sum is the element-tree half of the frame. What they deliberately do NOT contain is layout,
+    // text shaping, paint, and the rows of a VIRTUALIZED list, all of which run after `render`
+    // returns. So a panel that reads cheap here is not proven cheap; it is proven cheap to BUILD.
+    //
+    // The question they were added for (2026-08) is the resize drag: dragging a dock splitter
+    // changes the bounds of the panels beside it every frame, and GPUI reuses a cached view only
+    // while its bounds, content mask and text style all match the previous frame
+    // (`moon-gpui/src/view.rs`). A bounds change is a cache miss, and a miss re-renders the whole
+    // subtree under it — the cache check has a `!window.refreshing` term that a re-rendering
+    // ancestor sets. That is why a drag is measured per panel rather than as one number.
     ORDERS_RENDER     => "orders_render",
+    ORDERS_RENDER_US  => "orders_render_us",
     // The News feed repaints on a news revision change — plus, while a just-arrived card's arrival
     // tint fades, at `crate::pulse::PULSE_TICK`. This counter is what tells the two apart; compare
     // it against `pulse_tick` to see which of the two is driving.
     NEWS_RENDER       => "news_render",
+    NEWS_RENDER_US    => "news_render_us",
     // View repaints requested by `crate::pulse` to advance a decorative fade. Its only user is the
     // News arrival tint: a timer that re-renders the owning PANEL, so if it ever fails to stop it
     // looks exactly like a mysterious idle floor.
@@ -52,8 +69,171 @@ diag_counters!(
     // gone unexplained: the gate watched counters blind to the branch that fires.
     CHART_HOVER_NOTIFY => "chart_hover_notify",
     SHELL_RENDER      => "shell_render",
+    // Microseconds per second inside `Shell::render` — the group window's OWN element tree: the
+    // header, the trading toolbar, the dock frame and the status bar. It does NOT include the dock
+    // panels: GPUI calls a child view's `render` during the parent's PREPAINT, a phase later, so
+    // each panel's own `*_render_us` below is disjoint from this one and from its siblings.
+    //
+    // Read it against `shell_render`: divided, it is the cost of one shell repaint. That is the
+    // number a resize drag is about — a drag notifies once per mouse move, and this says what each
+    // of those notifies buys.
+    SHELL_RENDER_US   => "shell_render_us",
+    // How the gaps BETWEEN consecutive shell repaints fall out: `slow` counts a gap of 20 to 50 ms,
+    // `stall` counts one over 50 ms. Everything faster is the remainder against `shell_render`.
+    //
+    // This is the only counter here that measures the SYMPTOM rather than the work. A drag feels
+    // smooth at a steady 60 Hz and jerky when the same average rate is made of bursts and gaps, and
+    // a rate alone cannot tell those apart — `shell_render=70` reads identically either way. At
+    // idle almost every gap is a stall and that is meaningless, since the window repaints about
+    // once a second; the two are only worth reading while something is driving the window.
+    //
+    // The 20 ms boundary was chosen against a 120 Hz display, where a served frame lands every
+    // 8.3 ms and anything past 20 is late. A path that PACES itself to 60 Hz — the dock's resize
+    // does — has a nominal gap of 16.7 ms, so its ordinary frames sit right under the boundary
+    // and its jitter reads as `slow`. Comparing `slow` across a change that altered the target
+    // rate therefore says nothing; `stall` is the one that still means a visible hitch.
+    SHELL_FRAME_SLOW  => "shell_frame_slow",
+    SHELL_FRAME_STALL => "shell_frame_stall",
+    // The main thread's non-rendering work, added 2026-08 to chase a stutter that survived halving
+    // the cost of a frame. A repaint costing 0.7 ms cannot open a 50 ms gap, so the gaps are not a
+    // throughput problem — something BLOCKS. These are the places where blocking work could be:
+    //
+    //   * `coord_tick_us` / `coord_tick_slow` — the 10 Hz coordination tick in `startup::boot`,
+    //     and how many of its runs took over 20 ms. It is the largest block of main-thread work
+    //     outside drawing: it samples process metrics, drains reconnects, ticks the warning and
+    //     quiet engines, and dispatches persistence. Ten runs a second, so a single slow one is
+    //     immediately visible as a gap in the frames around it.
+    //   * `metrics_sample_us` — `Metrics::sample` inside that tick. Throttled to once a second and
+    //     documented in `moon-core` as expensive: on Windows it refreshes CPU through PDH and
+    //     re-reads the process table. One second is also roughly the rate the stutter appears at.
+    //   * `persist_dispatch_us` — `dispatch_live_persistence`, the debounced write of dirty config
+    //     and layout. It runs ON the main thread, and the files sit beside the executable — which
+    //     may be a synchronised or network folder, where one write is a stall rather than a cost.
+    //   * `chart_present_slow` — chart own-pass draws that took over 8 ms. A base-texture rebake
+    //     paints a full-window texture per chart and has been seen at 9 ms; it happens on this
+    //     same thread, so a rebake in one window is a gap in every other window's frames.
+    // How late the coordination task actually resumed, past the 100 ms it asked to sleep, summed in
+    // microseconds and counted whenever one wake-up was over 20 ms late.
+    //
+    // This is a DIRECT probe of main-thread responsiveness and the counter the others exist to be
+    // read against. The timer is a background one, but the task runs on the foreground executor, so
+    // the delay between "the timer fired" and "the task ran again" is time the main thread refused
+    // to give it — and `coord_tick_us` cannot see any of that, because it only starts once the tick
+    // is already running. Ten samples a second, all of them free.
+    //
+    // At rest it should be a couple of milliseconds a second. It was suspected during a splitter
+    // drag because the diagnostic line's own interval stretched from 1050 ms to 1833 ms while the
+    // window kept repainting 75 times a second — frames were being served and tasks were not.
+    // The HALF OF THE FRAME the `*_render_us` family cannot see, taken from GPUI's own frame trace
+    // rather than from a counter of ours. `Window::draw` covers layout, prepaint — which is where
+    // text is actually SHAPED, as opposed to measured — and paint, none of which the terminal can
+    // time from outside. Subtract the render counters from `frame_draw_us` and what remains is
+    // exactly that work.
+    //
+    //   * `frame_draws` — window draws a second, over EVERY window, so a chart window's draw is in
+    //     here beside the main one's. Divide `frame_draw_us` by it for the cost of one.
+    //   * `frame_draw_slow` — draws over 20 ms, the ones a stutter is made of. `frame_draw_us`
+    //     alone cannot show them: twenty 2 ms draws and one 40 ms draw print the same total.
+    //
+    // Their maxima ride the context line as `drawmax` and `dirtymax`, for the same reason `gapmax`
+    // does. `dirtymax` is the interesting one: it measures from the first invalidation of a frame
+    // to the end of its draw — the whole latency a user feels, including time the frame spent
+    // WAITING to be drawn. A large `dirtymax` with a small `drawmax` means nothing was slow to
+    // draw; something else held the thread before the draw could start.
+    FRAME_DRAWS       => "frame_draws",
+    FRAME_DRAW_US     => "frame_draw_us",
+    FRAME_DRAW_SLOW   => "frame_draw_slow",
+    SCHED_LATE_US     => "sched_late_us",
+    SCHED_LATE_TICKS  => "sched_late_ticks",
+    // The dock's own serialization, which no other counter here can see: it runs in an event
+    // subscription, outside both `render` and `Window::draw`. `DockArea` emits `LayoutChanged` on
+    // EVERY move of a resize drag, and the terminal answers each one with `dump`, a walk of the
+    // whole dock tree that clones every panel's persisted view state — for Orders and Alerts that
+    // is their sort, filters and column set.
+    //
+    // Read `dock_dump` against `shell_render`: equal rates mean one full serialization per repaint.
+    DOCK_DUMP         => "dock_dump",
+    DOCK_DUMP_US      => "dock_dump_us",
+    COORD_TICK_US     => "coord_tick_us",
+    COORD_TICK_SLOW   => "coord_tick_slow",
+    METRICS_SAMPLE_US => "metrics_sample_us",
+    PERSIST_DISPATCH_US => "persist_dispatch_us",
+    CHART_PRESENT_SLOW => "chart_present_slow",
+    // `shell_render_us` split four ways, because "the shell costs 1.4 ms" names nothing to fix.
+    // Together these should account for nearly all of it; what is left over is the root flex, the
+    // window frame and the input hooks.
+    //
+    //   * `shell_prelude_us` — everything BEFORE the tree: the connection and licence summaries
+    //     over every core in the group, the order-book level count, the popup reconciles and the
+    //     exchange limits. It reads Backend, so it is the half that grows with the number of cores
+    //     rather than with what is on screen.
+    //   * `shell_header_us` / `shell_toolbar_us` / `shell_status_us` — the three chrome rows.
+    //   * `shell_dock_us` — `workspace_body`, i.e. the dock frame itself. The panels inside it are
+    //     separate views and are NOT in this number; they have their own counters.
+    //
+    // What makes the split worth having: a resize drag cannot change any of the first four, yet
+    // the root view is rebuilt on every draw — GPUI reuses only a view explicitly wrapped in
+    // `.cached(..)`, and a window root never is. So whatever is large here is being rebuilt for
+    // nothing, and the size of it decides whether pulling that row into its own cached view is
+    // worth the refactor.
+    // `shell_toolbar_us` split four ways. The row measured about 0.9 ms per repaint and is rebuilt
+    // on every one of them, which made it the single most expensive thing in the window; these say
+    // which part of it to attack.
+    //
+    //   * `toolbar_data_us` — the one Backend read: scope, sizes, exit settings, leverage.
+    //   * `toolbar_fit_us` — everything that MEASURES before building: both `FittedCells::fit`
+    //     calls, the localized launcher labels, and `row_fit`'s label ladder. Text measurement here
+    //     goes through `ui_text_width`, which lays out one glyph PER CHARACTER, so this is the part
+    //     that scales with how much text the row could show rather than with what it shows.
+    //   * `toolbar_trade_us` — the trading half of the row: order size, leverage and the max-order
+    //     readout, the stop, TP and the sell strip, and Live.
+    //   * `toolbar_launch_us` — the trailing launcher cluster: Profit Monitor, Screener,
+    //     Strategies, Analytics, Settings.
+    TOOLBAR_DATA_US   => "toolbar_data_us",
+    TOOLBAR_FIT_US    => "toolbar_fit_us",
+    TOOLBAR_TRADE_US  => "toolbar_trade_us",
+    TOOLBAR_LAUNCH_US => "toolbar_launch_us",
+    // `design::ui_text_width` — calls, characters, and microseconds per second. It lays out one
+    // glyph at a time through the text system with no cache of its own, and its own doc comment
+    // says these run per frame; this is what turns that remark into a number.
+    //
+    // Read `ui_text_width_chars` against `ui_text_width_calls`: the per-call string length. And
+    // read the microseconds against `shell_render` — divided, it is how much of one repaint goes
+    // into measuring text nobody asked to change. It is process-wide, so it covers the header and
+    // every other caller, not only the toolbar.
+    // `ui_text_width_miss` is the glyph memo's miss rate — characters that actually reached the
+    // platform shaper. In the steady state it belongs at zero, and every miss is one roughly 10 µs
+    // call. It rising without a theme, font-size or language change means the key is churning, or
+    // the cap is being hit and the whole memo thrown away every frame.
+    UI_TEXT_WIDTH_CALLS => "ui_text_width_calls",
+    UI_TEXT_WIDTH_CHARS => "ui_text_width_chars",
+    UI_TEXT_WIDTH_MISS => "ui_text_width_miss",
+    UI_TEXT_WIDTH_US  => "ui_text_width_us",
+    SHELL_PRELUDE_US  => "shell_prelude_us",
+    SHELL_HEADER_US   => "shell_header_us",
+    SHELL_TOOLBAR_US  => "shell_toolbar_us",
+    SHELL_DOCK_US     => "shell_dock_us",
+    SHELL_STATUS_US   => "shell_status_us",
     CHART_RENDER      => "chart_render",
+    CHART_RENDER_US   => "chart_render_us",
     DETACHED_RENDER   => "detached_render",
+    DETACHED_RENDER_US => "detached_render_us",
+    // The four views AROUND a chart pane, which `chart_render` does not cover: the tab strip, the
+    // two stacks that lay panes out, and the root view of an AddToChart window. Each is a separate
+    // GPUI view, so each is its own cache entry and its own miss — and a stack re-rendering while
+    // its panes do not is a completely different verdict than the reverse.
+    //
+    // `chart_tabs_render` is the strip of tabs itself. It is the one a drag is most likely to
+    // touch without anything else showing it: the strip sits at the edge of the container being
+    // resized, so its bounds change on every mouse move even when nothing in it did.
+    CHART_TABS_RENDER => "chart_tabs_render",
+    CHART_TABS_RENDER_US => "chart_tabs_render_us",
+    MAIN_STACK_RENDER => "main_stack_render",
+    MAIN_STACK_RENDER_US => "main_stack_render_us",
+    ADD_STACK_RENDER  => "add_stack_render",
+    ADD_STACK_RENDER_US => "add_stack_render_us",
+    CHART_HOST_RENDER => "chart_host_render",
+    CHART_HOST_RENDER_US => "chart_host_render_us",
     BACKEND_NOTIFY    => "backend_notify",
     CHART_PREPARE     => "chart_prepare",
     CHART_FRAME       => "chart_frame",
@@ -66,6 +246,15 @@ diag_counters!(
     // assess pixel-threshold suppression, while accounting for multiple active panes per present;
     // finer zoom levels normally suppress more subpixel camera advances.
     CHART_PRESENT     => "chart_present",
+    // Microseconds per second inside the own pass — every layer, bake and blit of `draw_gpu`, for
+    // every chart in every window, summed. Unlike the `*_render_us` family this one is NOT part of
+    // the GPUI element tree: it is the chart's own draw, and it runs on the same thread. So it is
+    // the counter that says whether a window without a chart stutters because of the charts in the
+    // OTHER windows. Divide by `chart_present` for the cost of one canvas draw.
+    //
+    // It measures the CPU side of the pass — the driver calls that record and submit the work, not
+    // the GPU's own execution, which finishes later.
+    CHART_PRESENT_US  => "chart_present_us",
     CHART_CAM_STEP    => "chart_cam_step",
     // Per-layer gpu_canvas counters required by the AGENTS.md UI Render Diagnostics contract.
     // The canvas runs outside GPUI view rendering, so each platform backend bumps these counters
@@ -213,6 +402,19 @@ diag_counters!(
     ASSETS_APPLY => "assets_apply",
     // Assets-window renders; a positive rate means the window is open and redrawing.
     ASSETS_RENDER => "assets_render",
+    ASSETS_RENDER_US => "assets_render_us",
+    // The remaining home-strip dock panels — Report, Alerts, CoreStatus — plus Detects, which is
+    // docked-only. Each had no counter at all until 2026-08, which meant a bottom strip carrying
+    // them had a blind spot exactly where a resize drag does its work: the panel beside the
+    // splitter is the one that re-renders, and until it had a counter it could not be named.
+    REPORT_RENDER => "report_render",
+    REPORT_RENDER_US => "report_render_us",
+    ALERTS_RENDER => "alerts_render",
+    ALERTS_RENDER_US => "alerts_render_us",
+    CORE_STATUS_RENDER => "core_status_render",
+    CORE_STATUS_RENDER_US => "core_status_render_us",
+    DETECTS_RENDER => "detects_render",
+    DETECTS_RENDER_US => "detects_render_us",
     // Screener rebuilds, each a full pass over all markets; a positive rate means it is open.
     SCREENER_REBUILD => "screener_rebuild",
     // Actual core-detect scans in `play_detect_sounds`, after its `detects_rev` gate. Counting before
@@ -266,6 +468,7 @@ diag_counters!(
     //     one happens. The direct answer to "what does an open Log tab cost", and the only one here
     //     a time regression cannot hide from. It excludes the element tree — that is `log_render`.
     LOG_RENDER => "log_render",
+    LOG_RENDER_US => "log_render_us",
     LOG_PULL => "log_pull",
     LOG_LINES_PARSED => "log_lines_parsed",
     LOG_ROWS_FILTERED => "log_rows_filtered",
@@ -371,6 +574,129 @@ pub fn record_us(counter: &AtomicU64, timer: Option<std::time::Instant>) {
     if let Some(timer) = timer {
         bump_by(counter, timer.elapsed().as_micros() as u64);
     }
+}
+
+/// A stopwatch that records itself when it goes out of scope.
+///
+/// For a function whose body IS the measurement — a `render` that returns the element tree it
+/// spent its time building. The tail expression is evaluated before locals are dropped, so a
+/// `let _t = scope(...)` on the first line covers the whole body including the returned tree,
+/// without the call having to find every `return` and `?` on the way out.
+pub struct Scope(&'static AtomicU64, Option<std::time::Instant>);
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        record_us(self.0, self.1);
+    }
+}
+
+/// Starts a [`Scope`] stopwatch on `counter`. Inert, and reads no clock, while diagnostics are off.
+pub fn scope(counter: &'static AtomicU64) -> Scope {
+    Scope(counter, timer())
+}
+
+/// A [`Scope`] that also counts the runs which took longer than a threshold.
+///
+/// A sum answers "what does this cost per second" and hides the shape completely: ten runs of 2 ms
+/// and one run of 20 ms print the same total, and only the second one is a visible stutter. This
+/// counts the outliers so the two can be told apart.
+pub struct ScopeSlow {
+    total: &'static AtomicU64,
+    slow: &'static AtomicU64,
+    threshold_us: u64,
+    started: Option<std::time::Instant>,
+}
+
+impl Drop for ScopeSlow {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            let us = started.elapsed().as_micros() as u64;
+            bump_by(self.total, us);
+            if us >= self.threshold_us {
+                bump(self.slow);
+            }
+        }
+    }
+}
+
+/// Starts a [`ScopeSlow`] stopwatch. Inert, and reads no clock, while diagnostics are off.
+pub fn scope_slow(
+    total: &'static AtomicU64,
+    slow: &'static AtomicU64,
+    threshold_us: u64,
+) -> ScopeSlow {
+    ScopeSlow {
+        total,
+        slow,
+        threshold_us,
+        started: timer(),
+    }
+}
+
+/// Worst gap between two consecutive window repaints seen since the last sample, in microseconds.
+///
+/// Kept out of the counter table on purpose: [`take_sample`] converts every counter to a rate by
+/// dividing by the elapsed interval, which would turn a maximum into a meaningless number. It rides
+/// the diagnostic line's context string instead, beside CPU and the window count.
+static FRAME_GAP_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+/// Offer one repaint gap to the running maximum.
+pub fn note_frame_gap_us(us: u64) {
+    if enabled() {
+        FRAME_GAP_MAX_US.fetch_max(us, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Worst single `Window::draw`, and worst first-invalidation-to-drawn latency, of the interval.
+///
+/// Out of the counter table for the same reason as [`FRAME_GAP_MAX_US`]: these are maxima, and
+/// [`take_sample`] would divide them by the interval.
+static FRAME_DRAW_MAX_US: AtomicU64 = AtomicU64::new(0);
+static FRAME_LATENCY_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+/// Fold one window draw, as GPUI timed it, into the frame counters.
+///
+/// `dirty_to_draw` is `None` for a frame whose first invalidation happened before tracing was
+/// switched on; such a frame still counts toward the draw figures, which do not depend on it.
+pub fn note_frame_draw(
+    draw: std::time::Duration,
+    dirty_to_draw: Option<std::time::Duration>,
+) {
+    let us = draw.as_micros() as u64;
+    bump(&FRAME_DRAWS);
+    bump_by(&FRAME_DRAW_US, us);
+    if us >= 20_000 {
+        bump(&FRAME_DRAW_SLOW);
+    }
+    if enabled() {
+        FRAME_DRAW_MAX_US.fetch_max(us, std::sync::atomic::Ordering::Relaxed);
+        if let Some(latency) = dirty_to_draw {
+            FRAME_LATENCY_MAX_US.fetch_max(
+                latency.as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
+}
+
+/// Take and reset the worst single draw of the interval, in milliseconds.
+pub fn take_frame_draw_max_ms() -> f64 {
+    FRAME_DRAW_MAX_US.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0
+}
+
+/// Take and reset the worst invalidation-to-drawn latency of the interval, in milliseconds.
+pub fn take_frame_latency_max_ms() -> f64 {
+    FRAME_LATENCY_MAX_US.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0
+}
+
+/// Take and reset the worst repaint gap of the interval, in milliseconds.
+///
+/// Only means anything while something is DRIVING the window: an idle window repaints about once a
+/// second, so at rest this reports roughly a thousand and says nothing. Read it against
+/// `shell_render` — at fifty repaints a second, a maximum of eighty milliseconds is one visible
+/// hitch and names its size, which `shell_frame_stall` can only count.
+pub fn take_frame_gap_max_ms() -> f64 {
+    FRAME_GAP_MAX_US.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0
 }
 
 #[derive(Clone, Debug)]
