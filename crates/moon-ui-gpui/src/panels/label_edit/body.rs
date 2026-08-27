@@ -27,8 +27,9 @@ use crate::panels::{micro_button, popup_group, popup_group_inset_px, toggle_vari
 
 /// Selectable font multipliers, inside the config's own clamp range.
 ///
-/// `1.45` is here because it is the Y-scale badge's own default: a control that cannot show the
-/// value a caption already carries renders with nothing selected, which reads as "unset".
+/// `1.45` is here because saved profiles already carry it - it used to be the Y-scale badge's own
+/// default, and no field defaults to it any more. Dropping the step would leave those captions
+/// selecting nothing, which reads as "unset". Every field now starts at `1.5`.
 const SIZE_STEPS: [f32; 7] = [0.75, 1.0, 1.25, 1.45, 1.5, 1.7, 2.0];
 
 /// Fixed colours a caption may take, beyond the theme and the by-sign modes.

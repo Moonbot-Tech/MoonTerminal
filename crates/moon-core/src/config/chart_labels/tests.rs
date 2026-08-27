@@ -1,8 +1,9 @@
 use super::*;
 
-/// The shipped default is the developer's own Main tab, transcribed from `charts.json` on
-/// 2026-08-22. Pinned because it is a DECISION, not a guess: it is what every fresh profile opens
-/// on AND what the popup's Reset returns to, so a silent edit here changes both.
+/// `ChartLabelsCfg::default` must leave every shipped caption's size override absent.
+///
+/// Re-adding `style.size_mult = Some(1.7)` to the scale module would make a fresh profile freeze
+/// one caption at the old size, so later default-size changes would not reach it.
 #[test]
 fn the_default_is_the_shipped_working_layout() {
     let cfg = ChartLabelsCfg::default();
@@ -133,10 +134,12 @@ fn the_default_is_the_shipped_working_layout() {
             ),
         ]
     );
-    assert_eq!(
-        cfg.rows[1].parts[0].style.size_mult,
-        Some(1.7),
-        "the badge is set one step above its own default"
+    assert!(
+        cfg.rows[..cfg.used_rows()]
+            .iter()
+            .flat_map(|row| row.parts[..row.used_parts()].iter())
+            .all(|part| part.style.size_mult.is_none()),
+        "the shipped layout must not freeze any caption size"
     );
     assert_eq!(
         cfg.rows[3].parts[0].window,
@@ -188,28 +191,81 @@ fn the_order_figures_are_captioned_by_default() {
     }
 }
 
-/// The coin is set one size up and the comparison delta larger still: those two sizes are the
-/// caption's whole visual hierarchy.
+/// `ChartLabelField::default_style` must route every assignable field through the shared size.
+///
+/// Restoring a per-field size in one match arm would make that caption draw differently from every
+/// other fresh caption, reviving the removed hierarchy without any user override.
 #[test]
-fn default_styles_keep_the_captions_size_hierarchy() {
-    let coin = ChartLabelField::Coin.default_style();
-    let badge = ChartLabelField::ScaleBadge.default_style();
+fn every_field_default_style_uses_the_shared_size() {
+    for field in ChartLabelField::ALL {
+        assert_eq!(
+            field.default_style().size_mult,
+            LABEL_SIZE_MULT_DEFAULT,
+            "{field:?} must use the shared default size"
+        );
+    }
     let delta = ChartLabelField::CompareDelta.default_style();
     let core = ChartLabelField::Core.default_style();
-    assert!(
-        coin.size_mult > core.size_mult,
-        "the coin leads the core name"
-    );
-    assert!(
-        delta.size_mult > badge.size_mult,
-        "the comparison delta stays dominant over the scale badge"
-    );
     assert_eq!(
         delta.color,
         LabelColor::BySign,
         "a signed figure colors by sign"
     );
     assert_eq!(core.color, LabelColor::Theme);
+}
+
+/// Fresh profiles must resolve every shipped caption to the approved 1.5x font size.
+///
+/// Changing `LABEL_SIZE_MULT_DEFAULT` back to 1.0 would make new charts draw at the old size even
+/// though their saved layout carries no override.
+#[test]
+fn every_shipped_caption_resolves_to_the_approved_default_size() {
+    let cfg = ChartLabelsCfg::default();
+    assert!(
+        cfg.rows[..cfg.used_rows()]
+            .iter()
+            .flat_map(|row| row.parts[..row.used_parts()].iter())
+            .all(|part| part.resolved_style().size_mult == 1.5),
+        "every caption in a fresh profile must draw at the approved 1.5x size"
+    );
+}
+
+/// A stored user size must survive sanitization and a wire round trip before it reaches drawing.
+///
+/// Making `ChartLabelPart::resolved_style` ignore `style.size_mult` would discard a deliberate
+/// user preference, while the out-of-range fixture also guards the documented maximum clamp.
+#[test]
+fn a_stored_size_override_survives_sanitize_and_wire_round_trip() {
+    let user_profile = r#"
+        [[rows]]
+        zone = "chart_top"
+        align = "left"
+        [[rows.parts]]
+        field = "coin"
+        style = { size_mult = 2.25 }
+    "#;
+    let mut cfg: ChartLabelsCfg = toml::from_str(user_profile).expect("the user profile parses");
+    cfg.sanitize();
+    let wire = toml::to_string_pretty(&cfg).expect("the profile serializes");
+    let round_tripped: ChartLabelsCfg = toml::from_str(&wire).expect("the profile reads back");
+    assert_eq!(
+        round_tripped.rows[0].parts[0].resolved_style().size_mult,
+        2.25,
+        "the explicit user size must still win after sanitize and wire"
+    );
+
+    let oversized_profile = user_profile.replace("2.25", "99.0");
+    let mut oversized: ChartLabelsCfg =
+        toml::from_str(&oversized_profile).expect("the oversized profile parses");
+    oversized.sanitize();
+    let clamped_wire = toml::to_string_pretty(&oversized).expect("the clamped profile serializes");
+    let clamped: ChartLabelsCfg =
+        toml::from_str(&clamped_wire).expect("the clamped profile reads back");
+    assert_eq!(
+        clamped.rows[0].parts[0].resolved_style().size_mult,
+        LABEL_SIZE_MULT_MAX,
+        "a stored size above the documented maximum must stay clamped"
+    );
 }
 
 #[test]
