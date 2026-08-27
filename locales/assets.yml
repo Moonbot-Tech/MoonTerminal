@@ -202,6 +202,12 @@ assets.settings.group_by_venue:
   ru: "Группировать ядра по биржам"
   en: "Group cores by exchange"
   es: "Agrupar núcleos por exchange"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize:
+  ru: "Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает её"
+  en: "Drag to resize the column. Double-click resets it"
+  es: "Arrastre para cambiar el ancho. Doble clic lo restablece"
 assets.transfer_title:
   ru: "Перенос %{coin}: %{from} -> %{to}"
   en: "Transfer %{coin}: %{from} -> %{to}"

@@ -30,6 +30,7 @@ mod collect;
 mod columns;
 mod render;
 mod settings;
+mod roster_width;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -149,6 +150,20 @@ pub struct AssetsView {
     /// Contextual width-storage ID: `assets-table:dock` for a dock tab and `assets-table:win` for
     /// standalone or detached views with wallets. Each mode retains independent widths.
     widths_id: String,
+    /// Roster column's own width bag — NOT a `MoonDataTable`, just a single-entry width store
+    /// reusing `MoonDataTableState` the way `core_status`'s By-IP width bag does
+    /// (`panels/core_status/mod.rs`'s `by_ip_col_widths`). Persists through
+    /// [`crate::persistence::table_persist`] under [`Self::roster_widths_id`].
+    roster_widths: Entity<MoonDataTableState>,
+    /// Contextual width-storage ID for the roster bag: `assets-roster:dock` for a dock tab,
+    /// `assets-roster:win` for standalone or detached views with wallets. The discriminator is
+    /// the CONSTRUCTOR's `show_wallets` argument, not the render-time [`Self::wallets_visible`]:
+    /// `restored_group` always passes `false`, so an Auto dock tab — which `wallets_visible`
+    /// makes show the section anyway — keeps its own `:dock` roster width rather than sharing the
+    /// detached/global `:win` one. Same behaviour [`Self::widths_id`] already has.
+    roster_widths_id: String,
+    /// Live roster-column divider drag, or `None` between drags.
+    roster_drag: Option<table::RosterDragAnchor>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -240,6 +255,30 @@ impl AssetsView {
         })
         .detach();
 
+        // Roster column's own width bag, mirroring `table_state` above but for the single-entry
+        // roster geometry (`roster_width::WIDTH_KEY`) instead of a `MoonDataTable`'s columns.
+        let roster_widths_id =
+            crate::persistence::table_persist::ctx_id("assets-roster", show_wallets);
+        let saved_roster =
+            crate::persistence::table_persist::saved(backend.read(cx), &roster_widths_id);
+        let roster_widths = cx.new(|_| {
+            let mut s = MoonDataTableState::new();
+            s.column_widths = saved_roster;
+            s
+        });
+        cx.observe(&roster_widths, |this, state, cx| {
+            crate::persistence::table_persist::persist(
+                &this.backend,
+                &this.roster_widths_id,
+                &state,
+                cx,
+            );
+            // Mandatory: nothing else observes this bag -- `bottom()` reads it during THIS view's
+            // render, so without the notify a drag or a reset paints on some unrelated repaint.
+            cx.notify();
+        })
+        .detach();
+
         // Restore the shared "hide below N USD" threshold from `layout.toml`; default to 1 USD.
         let min_value_usd = backend
             .read(cx)
@@ -313,6 +352,9 @@ impl AssetsView {
             sort: None,
             table_state,
             widths_id,
+            roster_widths,
+            roster_widths_id,
+            roster_drag: None,
             dock: None,
             focus: cx.focus_handle(),
         };
