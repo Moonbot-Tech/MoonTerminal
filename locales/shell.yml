@@ -547,6 +547,14 @@ chart.graphics.hide_closed_sell_hint:
   ru: "Живые ордера всегда показывают свою линию продажи"
   en: "Live orders always keep their sell line"
   es: "Las órdenes activas siempre conservan su línea de venta"
+chart.graphics.hide_move_history:
+  ru: "Скрывать историю переносов ордера"
+  en: "Hide the order repricing trail"
+  es: "Ocultar el rastro de reprecios de la orden"
+chart.graphics.hide_move_history_hint:
+  ru: "Останется только текущая цена. Отрезок переноса стопа виден всегда"
+  en: "Only the current price stays. A stop's own move segment is always shown"
+  es: "Solo queda el precio actual. El tramo de traslado del stop siempre se ve"
 chart.graphics.frame_trade_marks:
   ru: "Метки сделок"
   en: "Trade marks"
