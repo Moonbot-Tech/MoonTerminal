@@ -80,8 +80,10 @@ diag_counters!(
     CHART_COMBO_DRAW  => "combo_draw",
     CHART_COMBO_BAKE  => "combo_bake",
     // The candle layer draws during each base pass. `UPLOAD_LEN` counts rows uploaded after a
-    // candle-series revision; live-edge trade batches advance that revision, which is expected and
-    // inexpensive because the instance buffer contains only hundreds of rows.
+    // candle-series revision, and a live-edge trade batch advances that revision — so on a live
+    // market the WHOLE buffer is re-shipped continuously. Measured at 9 000 to 83 000 rows a second
+    // across a handful of charts, not the "hundreds" this note used to assume; what that costs is
+    // `candle_upload_us` below, and the answer is what keeps the full reupload as it is.
     CHART_CANDLE_DRAW => "candle_draw",
     CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
     // The bottom volume band is a SECOND draw on the candle layer with its own on/off switch,
@@ -95,9 +97,12 @@ diag_counters!(
     // into the automatic-Y price-scan buffer, so without this a change that removes resets reads
     // as free while that copy goes on unmeasured.
     CHART_HISTORY_READ_US => "history_read_us",
-    // Microseconds per second spent REACTING to a moved candle series: building the instance
-    // vector, walking it again for the bottom volume band, and handing it to the layer. Counted
-    // apart from `history_read_us`, which measures the moon-core side that PRODUCED the series.
+    // Microseconds per second spent re-shipping a moved candle series, over BOTH of its phases:
+    // building the instance vector and walking it for the bottom volume band (`data_state/market.rs`),
+    // and the map-and-copy into the GPU buffer a frame phase later (`chartdx/candles.rs`). Timing
+    // only the first would have named the counter after work it never observed — `set` merely parks
+    // the vector. Counted apart from `history_read_us`, which measures the moon-core side that
+    // PRODUCED the series.
     //
     // Read it against `candle_upload_len`: that counter says how many rows are re-uploaded, this
     // one says what those rows cost. A live trade batch advances the series revision, and the whole

@@ -877,12 +877,16 @@ impl RenderState {
         }
     }
 
-    #[cfg(windows)]
     /// Fill `dst` with the window background, inside a base texture sized to the whole window.
     ///
-    /// `dst` is the rectangle that will actually be read back out — this chart's slot — rather than
-    /// the texture's own extent. `res` stays the full resolution because the shader positions the
-    /// quad against it; only the covered area changes.
+    /// `dst` is ORIGIN plus SIZE, and it is the rectangle that will actually be read back out —
+    /// this chart's slot — rather than the texture's own extent. `res` stays the full resolution
+    /// because the shader positions the quad against it; only the covered area changes.
+    ///
+    /// `uv_off`/`uv_scale` are deliberately left spanning the whole image: the background PNG is
+    /// inert while `opacity` is zero, and were it ever turned on it should be re-derived from `dst`
+    /// rather than left to squeeze a window-sized image into one slot.
+    #[cfg(windows)]
     pub(super) fn render_window_background_d3d(
         &mut self,
         dst: [f32; 4],
@@ -1004,27 +1008,38 @@ impl RenderState {
                     });
                 }
                 if self.base_dirty || self.base_cache.needs_rebuild(gpu) {
-                    let base_rtv = self.base_cache.begin_rebuild(&device, &context, gpu)?;
-                    // The background fills only the slot, not the window. The base texture is
-                    // full-window — one per chart — but only the slot is ever blitted out of it, so
-                    // a full-window quad shades up to an entire screen of pixels per bake, per
-                    // chart, and throws all but this rectangle away. The slot cannot grow without a
-                    // re-bake: every path that widens it — a pane becoming active, a pane's bounds
-                    // moving, the pane count changing — sets `pixels_changed`, which is what sets
-                    // `base_dirty` (`data_state/market.rs`). So nothing outside it is ever read.
+                    // Cleared to the window background rather than to transparency: only the slot
+                    // is painted below, and `blit_opaque_fragment` forces alpha to one, so a
+                    // transparent remainder would surface any future bake/blit divergence as an
+                    // opaque BLACK rectangle instead of as nothing visible.
+                    let base_rtv = self.base_cache.begin_rebuild(
+                        &device,
+                        &context,
+                        gpu,
+                        self.window_bg_color,
+                    )?;
+                    // The background fills only the slot. The base texture is window-sized — one
+                    // per chart — but only the slot is ever blitted out of it, so a full-window
+                    // quad shaded up to an entire screen of pixels per bake, per chart, and threw
+                    // all but this rectangle away. The slot cannot grow without a re-bake: every
+                    // path that widens it — a pane becoming active, a pane's bounds moving, the
+                    // pane count changing, the slot origin moving — sets `pixels_changed`, which is
+                    // what sets `base_dirty` (`data_state/market.rs`).
                     //
-                    // Falls back to the full window when no pane is active: there is no slot to
-                    // speak of then, the blit is skipped anyway, and a background covering the
-                    // texture keeps the fallback identical to what it always drew.
-                    // `bounds_clip` answers `[left, top, right, bottom]`; this shader reads its
-                    // rectangle as ORIGIN plus SIZE (`bp_dst.xy + c * bp_dst.zw`). Converted here
-                    // rather than passed through — the two conventions coincide only at the origin,
-                    // which is exactly why the full-window value below looks the same in both.
-                    let bg_dst = match blit_clip {
-                        Some([l, t, r, b]) => [l, t, (r - l).max(0.0), (b - t).max(0.0)],
-                        None => [0.0, 0.0, res[0], res[1]],
-                    };
-                    self.render_window_background_d3d(bg_dst, res, &device, &context, &base_rtv, gpu);
+                    // `bounds_clip` answers `[left, top, right, bottom]` while this shader reads
+                    // its rectangle as ORIGIN plus SIZE (`bp_dst.xy + c * bp_dst.zw`). Converted
+                    // here rather than passed through: the two conventions coincide only at the
+                    // origin, which is why the old full-window value read correctly under both.
+                    //
+                    // With no active pane there is no slot, nothing is blitted, and the clear alone
+                    // is the whole picture — so the quad is skipped rather than shaded into a
+                    // texture no one reads.
+                    if let Some([l, t, r, b]) = blit_clip {
+                        let bg_dst = [l, t, r - l, b - t];
+                        self.render_window_background_d3d(
+                            bg_dst, res, &device, &context, &base_rtv, gpu,
+                        );
+                    }
                     self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
                     self.base_dirty = false;
                 }

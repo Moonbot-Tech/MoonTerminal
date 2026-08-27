@@ -1,9 +1,13 @@
 //! D3D11 own-pass candle layer, drawn with instancing in the base pass between the grid and
 //! combo layers so candles remain below trade crosses. The base is redrawn only on data changes
 //! or camera movement at the existing cadence, so this layer adds no work to the presentation
-//! path. The buffer, containing hundreds of candles, is cheaply reuploaded in full whenever the
-//! series revision changes. `CandleStyle` constants control the mode, zone, outline, and colors
-//! without rebuilding vertices.
+//! path. The buffer is reuploaded IN FULL whenever the series revision changes — which a live
+//! trade batch does, so on a live market that is continuous: `candle_upload_len` measures 9 000 to
+//! 83 000 rows a second across a handful of charts, not the "hundreds" this doc used to claim.
+//! `candle_upload_us` is what it costs, both halves of it — building the vector here and mapping
+//! it in `prepare` — and the answer is why the full reupload survives: under a millisecond a
+//! second on average. `CandleStyle` constants control the mode, zone, outline, and colors without
+//! rebuilding vertices.
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -15,9 +19,15 @@ use super::gpu::{
 };
 use super::types::{CandleGpu, CandleStyleGpu, ChartViewGpu, VolumeStyleGpu};
 
-/// Candle instance capacity of the GPU buffer. The visible window plus prefetch uses hundreds;
-/// 4096 leaves ample headroom while consuming 96 KB of VRAM at 24 bytes per instance. On
-/// overflow, only the most recent tail is retained.
+/// Candle instance capacity of the GPU buffer: 96 KB of VRAM at 24 bytes per instance. On
+/// overflow only the most recent tail is retained, which silently drops the left of the chart.
+///
+/// "The visible window plus prefetch uses hundreds" is what this said, and it is not what the
+/// series measures: around a thousand rows per upload on a zoomed-out chart, and the series grows
+/// with the visible range. The headroom is real — roughly four times the observed size — but it is
+/// headroom, not the order of magnitude the number was picked against. Zooming out far enough is
+/// the thing that would reach it, and it would show as candles missing on the left rather than as
+/// an error.
 const CANDLE_CAPACITY: u32 = 4096;
 const CANDLES_HLSL: &str = include_str!("shaders/candles.hlsl");
 
@@ -102,6 +112,10 @@ impl CandleLayer {
         }
         let pipe = self.pipe.as_ref().unwrap();
         if let Some(data) = self.pending.take() {
+            // The SECOND half of what `candle_upload_us` measures. `set` only parks the vector;
+            // the map-and-copy to the GPU happens here, a frame phase later, so timing only the
+            // caller would have named this counter after work it never observed.
+            let write_timer = crate::diag::timer();
             let cap = CANDLE_CAPACITY as usize;
             let data: &[CandleGpu] = if data.len() > cap {
                 &data[data.len() - cap..]
@@ -112,6 +126,7 @@ impl CandleLayer {
                 update_dynamic(context, &pipe.buffer, data);
             }
             self.count = data.len() as u32;
+            crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, write_timer);
         }
         if self.style_dirty {
             update_dynamic(context, &pipe.style_cb, &[self.style]);
