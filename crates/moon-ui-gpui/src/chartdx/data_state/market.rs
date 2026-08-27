@@ -712,8 +712,16 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
                 // A candle-series change from a rebuild or live trade batch fully reuploads the
-                // layer's instance buffer. It contains only hundreds of rows, so this is inexpensive.
+                // layer's instance buffer.
+                //
+                // "Only hundreds of rows, so this is inexpensive" is what this comment used to
+                // claim; `candle_upload_len` measures 9 000 to 83 000 rows a second across a
+                // handful of charts, because the revision advances on every LIVE TRADE BATCH and
+                // the whole composed series is re-shipped each time. `candle_upload_us` beside it
+                // is what that costs; both scale with the visible range, so zooming out multiplies
+                // them.
                 if history.candles_changed {
+                    let upload_timer = crate::diag::timer();
                     fill_candle_upload(
                         &pr.history_buffers.candles,
                         &pr.history_buffers.candle_tf_ms,
@@ -735,6 +743,7 @@ impl ChartDataState {
                         &mut pr.volume_samples,
                     );
                     pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
+                    crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
                     pr.last_candle_rev = history.candles_revision;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;

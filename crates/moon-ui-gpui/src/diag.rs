@@ -95,6 +95,15 @@ diag_counters!(
     // into the automatic-Y price-scan buffer, so without this a change that removes resets reads
     // as free while that copy goes on unmeasured.
     CHART_HISTORY_READ_US => "history_read_us",
+    // Microseconds per second spent REACTING to a moved candle series: building the instance
+    // vector, walking it again for the bottom volume band, and handing it to the layer. Counted
+    // apart from `history_read_us`, which measures the moon-core side that PRODUCED the series.
+    //
+    // Read it against `candle_upload_len`: that counter says how many rows are re-uploaded, this
+    // one says what those rows cost. A live trade batch advances the series revision, and the whole
+    // composed series is re-shipped on each one — so both numbers scale with the VISIBLE range,
+    // and zooming out multiplies them.
+    CHART_CANDLE_UPLOAD_US => "candle_upload_us",
     // Durable CLOSED-TRADE history reads started per second — a different subject from the three
     // counters above, which measure the LIVE trade buffer. Each one is an SQLite connection to the
     // report replica, and every chart tile now owns a target, so this is what says whether a detect

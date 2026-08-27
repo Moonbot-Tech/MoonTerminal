@@ -878,8 +878,14 @@ impl RenderState {
     }
 
     #[cfg(windows)]
+    /// Fill `dst` with the window background, inside a base texture sized to the whole window.
+    ///
+    /// `dst` is the rectangle that will actually be read back out — this chart's slot — rather than
+    /// the texture's own extent. `res` stays the full resolution because the shader positions the
+    /// quad against it; only the covered area changes.
     pub(super) fn render_window_background_d3d(
         &mut self,
+        dst: [f32; 4],
         res: [f32; 2],
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
@@ -887,7 +893,7 @@ impl RenderState {
         gpu: &RawGpuAccess,
     ) {
         let base = BackgroundParams {
-            dst: [0.0, 0.0, res[0], res[1]],
+            dst,
             resolution: res,
             uv_off: [0.0, 0.0],
             uv_scale: [1.0, 1.0],
@@ -975,16 +981,12 @@ impl RenderState {
                 let scissor_rs = self.scissor_rs.clone().unwrap();
                 let prev_rs = unsafe { context.RSGetState().ok() };
 
-                if self.base_dirty || self.base_cache.needs_rebuild(gpu) {
-                    let base_rtv = self.base_cache.begin_rebuild(&device, &context, gpu)?;
-                    self.render_window_background_d3d(res, &device, &context, &base_rtv, gpu);
-                    self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
-                    self.base_dirty = false;
-                }
-                // Clip the blit to THIS chart's slot, the union of its active-panel bounds, rather
-                // than the full backbuffer. With multiple `gpu_canvas` elements in one detached
-                // window stack, a full-window `window_bg` blit would erase sibling charts. With no
-                // active panels, skip the blit so the empty state remains the GPUI logo overlay.
+                // THIS chart's slot: the union of its active panes' bounds, in device pixels.
+                // Computed BEFORE the bake because both halves need it — the bake to know how much
+                // of its texture is ever read, the blit to avoid erasing sibling charts. With
+                // multiple `gpu_canvas` elements in one window a full-window blit would overwrite
+                // the neighbours; with no active panes there is nothing to blit and the empty state
+                // stays the GPUI logo overlay.
                 let mut blit_clip: Option<[f32; 4]> = None;
                 for pr in &self.panes {
                     if !pr.active {
@@ -1000,6 +1002,31 @@ impl RenderState {
                         ],
                         None => c,
                     });
+                }
+                if self.base_dirty || self.base_cache.needs_rebuild(gpu) {
+                    let base_rtv = self.base_cache.begin_rebuild(&device, &context, gpu)?;
+                    // The background fills only the slot, not the window. The base texture is
+                    // full-window — one per chart — but only the slot is ever blitted out of it, so
+                    // a full-window quad shades up to an entire screen of pixels per bake, per
+                    // chart, and throws all but this rectangle away. The slot cannot grow without a
+                    // re-bake: every path that widens it — a pane becoming active, a pane's bounds
+                    // moving, the pane count changing — sets `pixels_changed`, which is what sets
+                    // `base_dirty` (`data_state/market.rs`). So nothing outside it is ever read.
+                    //
+                    // Falls back to the full window when no pane is active: there is no slot to
+                    // speak of then, the blit is skipped anyway, and a background covering the
+                    // texture keeps the fallback identical to what it always drew.
+                    // `bounds_clip` answers `[left, top, right, bottom]`; this shader reads its
+                    // rectangle as ORIGIN plus SIZE (`bp_dst.xy + c * bp_dst.zw`). Converted here
+                    // rather than passed through — the two conventions coincide only at the origin,
+                    // which is exactly why the full-window value below looks the same in both.
+                    let bg_dst = match blit_clip {
+                        Some([l, t, r, b]) => [l, t, (r - l).max(0.0), (b - t).max(0.0)],
+                        None => [0.0, 0.0, res[0], res[1]],
+                    };
+                    self.render_window_background_d3d(bg_dst, res, &device, &context, &base_rtv, gpu);
+                    self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
+                    self.base_dirty = false;
                 }
                 if let Some(clip) = blit_clip {
                     self.base_cache.blit_to(&context, &rtv, gpu, clip);
