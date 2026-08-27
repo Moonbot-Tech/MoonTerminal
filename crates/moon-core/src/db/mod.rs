@@ -32,6 +32,7 @@ mod report_read;
 pub mod report_recovery;
 #[cfg(test)]
 mod test_support;
+mod trade_meta;
 pub mod tuner;
 pub mod valuation;
 
@@ -53,6 +54,7 @@ pub use report_read::{
     ReportTotals, RowScope, SideFilter, StrategyPurgeRows, COLUMNS_ADDED_SINCE_V2, DISPLAY_COLUMNS,
     PROFIT_PERCENT_COLUMN, VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN,
 };
+pub use trade_meta::{query_trade_meta, TradeMeta};
 
 use read_fail::read_fail;
 

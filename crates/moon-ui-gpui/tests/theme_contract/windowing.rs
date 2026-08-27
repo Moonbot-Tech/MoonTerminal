@@ -989,3 +989,24 @@ fn layout_popup_field_list_covers_every_input() {
         );
     }
 }
+
+/// A caption edit made INSIDE the trade window must be stored without separating the tab kinds.
+///
+/// `set_chart_labels_default` is the ⧉ press: besides storing the value it freezes the kinds it is
+/// not addressing at what they currently show, and says so in its own hint. A right-click toggle in
+/// one window is a statement about that window alone, so it goes through `store_chart_labels` —
+/// which does the storing and nothing else. Routing it back through the press would perform the
+/// kind-separation silently, on a gesture that never mentions it.
+#[test]
+fn a_trade_window_caption_edit_stores_without_separating_the_kinds() {
+    let src = code_only(&read_src("trade_window/mod.rs"));
+    let drain = braced_body(&src, "fn drain_panel_labels(");
+    assert!(
+        drain.contains("store_chart_labels("),
+        "the window must store its own kind's captions through store_chart_labels"
+    );
+    assert!(
+        !drain.contains("set_chart_labels_default("),
+        "storing one window's captions must not perform the ⧉ press's kind separation"
+    );
+}

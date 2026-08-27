@@ -425,7 +425,7 @@ impl AddChartStack {
         self.hold_vacated = hold;
     }
 
-    /// Which of the three defaults this stack's charts follow.
+    /// Which kind's defaults this stack's charts follow — one of the three TAB kinds.
     pub(crate) fn default_kind(&self) -> moon_core::config::ChartTabKind {
         moon_core::config::ChartTabKind::of(self.detached, self.compare_anchor.is_some())
     }

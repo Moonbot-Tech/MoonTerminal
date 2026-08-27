@@ -354,7 +354,7 @@ impl MainChartStack {
         panel
     }
 
-    /// Which of the three defaults the main chart follows: never a window, but it can be locked.
+    /// Which kind's defaults the main chart follows: never a window, but it can be locked.
     pub(crate) fn default_kind(&self) -> moon_core::config::ChartTabKind {
         moon_core::config::ChartTabKind::of(false, self.compare_anchor.is_some())
     }

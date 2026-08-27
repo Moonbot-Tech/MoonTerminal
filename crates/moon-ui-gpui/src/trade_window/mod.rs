@@ -47,7 +47,7 @@ use std::sync::mpsc;
 use crate::Backend;
 use crate::panels::chart::ChartPanel;
 use gpui::*;
-use moon_core::db::ChartTradeRecord;
+use moon_core::db::{ChartTradeRecord, TradeMeta};
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
     TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource,
@@ -163,6 +163,64 @@ pub(super) fn remembered_geometry(
     next
 }
 
+/// Resolve one trade's metadata into the strings its chart captions print.
+///
+/// The STRATEGY is the half that has to happen up here: the replica stores a Delphi-signed id, and
+/// the name behind it lives in the session's strategy store — the same lookup the Report row menu
+/// makes, so a trade names its strategy identically in both places. A core the terminal is no
+/// longer connected to has no name to give, and the id is printed instead: a number the reader can
+/// still match against their own strategy list beats an empty caption.
+///
+/// Args:
+///     backend: Live state holding the session and its strategy store.
+///     core: Core that recorded the trade.
+///     meta: What the replica answered for it.
+///
+/// Returns:
+///     The caption strings, and whether the strategy could actually be NAMED — `false` means the
+///     number is standing in, and the window keeps asking until the core's strategy list arrives.
+pub(super) fn trade_labels(
+    backend: &Backend,
+    core: CoreId,
+    meta: &TradeMeta,
+) -> (crate::chartdx::TradeLabels, bool) {
+    let name = meta
+        .strategy_id
+        .and_then(|id| strategy_name(backend, core, id));
+    // Named when there was nothing to name, too: a trade that carries no strategy at all is not
+    // waiting for one to arrive.
+    let named = meta.strategy_id.is_none() || name.is_some();
+    let strategy = name
+        // The signed number, because that is what the Report's own `strategyid` cell shows the
+        // reader — a caption standing in for a name has to match the table the window opened from.
+        .or_else(|| meta.strategy_id.map(|id| id.to_string()))
+        .unwrap_or_default();
+    (
+        crate::chartdx::TradeLabels {
+            strategy,
+            detect: meta.detect.clone(),
+            sell_reason: meta.sell_reason.clone(),
+        },
+        named,
+    )
+}
+
+/// Name one strategy through the session's own store.
+///
+/// `as u64` because the store keys strategies by the same bits the wire carries, which is the
+/// conversion every other id-bearing lookup in the terminal makes.
+///
+/// Args:
+///     backend: Live state holding the session.
+///     core: Core that owns the strategy.
+///     id: Delphi-signed identity from the replica.
+///
+/// Returns:
+///     The user's own name for it, or `None` while that core's list has not arrived.
+fn strategy_name(backend: &Backend, core: CoreId, id: i64) -> Option<String> {
+    crate::strategies::logic::row(backend.session.store(), core, id as u64).map(|s| s.name.clone())
+}
+
 /// One trade-detail window.
 pub(crate) struct TradeWindowView {
     backend: Entity<Backend>,
@@ -182,6 +240,20 @@ pub(crate) struct TradeWindowView {
     state: TradeWindowState,
     /// Monotonic dispatch counter, so a Retry supersedes an in-flight fetch instead of racing it.
     sequence: u64,
+    /// What the replica said this trade carried, kept so the strategy can be named LATER.
+    ///
+    /// A core still connecting has no strategy list yet, and the window would otherwise print the
+    /// raw id for its whole life — the Report's dedup path re-focuses an open window rather than
+    /// rebuilding it, so there is no second chance anywhere else.
+    meta: TradeMeta,
+    /// Whether the strategy still has to be named. Cleared the moment it is, so the backend
+    /// observer stops walking a core's strategy list — which runs into the thousands — per notify.
+    strategy_pending: bool,
+    /// Strategy revision this window last searched, so an unchanged list costs one compare.
+    ///
+    /// `None` covers "that core is not in the store at all", which is its own state and must not
+    /// read as revision zero — a core that arrives with an empty list would then never be searched.
+    strategies_rev: Option<u64>,
     /// Set when the window closes, so the worker abandons the remaining pages.
     cancel: Arc<AtomicBool>,
     /// Identity of this window's own series, so two windows never share a chart revision.
@@ -224,6 +296,87 @@ impl TradeWindowView {
         // The same call the open cap uses to retire a window, so the `on_release` path that
         // cancels the fetch and drops the market refs still runs.
         window.remove_window();
+    }
+
+    /// Name the trade's strategy once the core's list has arrived, and hand it to the chart.
+    ///
+    /// Called from the backend observer. Cheap while there is nothing to do: one boolean.
+    ///
+    /// Args:
+    ///     cx: View context.
+    fn retry_strategy_name(&mut self, cx: &mut Context<Self>) {
+        if !self.strategy_pending {
+            return;
+        }
+        let Some(id) = self.meta.strategy_id else {
+            self.strategy_pending = false;
+            return;
+        };
+        // The core's own strategy revision, compared BEFORE the list is walked: this runs on every
+        // backend notification, the list runs into the thousands, and a core that never connects
+        // would otherwise be searched for the window's whole life.
+        let backend = self.backend.read(cx);
+        let rev = backend
+            .session
+            .store()
+            .core(self.core)
+            .map(|core| core.strategies_rev);
+        if rev == self.strategies_rev {
+            return;
+        }
+        self.strategies_rev = rev;
+        // A list that does not hold this id is NOT a reason to stop: the feed republishes the whole
+        // set whenever its signature moves, and a set that is still filling publishes as non-empty,
+        // so "not there yet" and "deleted since the trade closed" look identical here. The cost of
+        // keeping the door open is one walk per REVISION — the gate above is what makes that cheap
+        // — and a deleted strategy simply keeps printing its number, which is the honest answer.
+        let Some(name) = strategy_name(backend, self.core, id) else {
+            return;
+        };
+        self.strategy_pending = false;
+        let labels = std::rc::Rc::new(crate::chartdx::TradeLabels {
+            strategy: name,
+            detect: self.meta.detect.clone(),
+            sell_reason: self.meta.sell_reason.clone(),
+        });
+        self.panel.update(cx, |panel, pcx| {
+            panel.attach_trade_labels(Some(labels), pcx);
+        });
+    }
+
+    /// Store a caption edit this window's own chart menu produced.
+    ///
+    /// The panel APPLIES such an edit itself and hands the set up for its owner to persist — the
+    /// same relay the tab strip and the detached window use. This window is that owner, and it has
+    /// no tab spec to put it in: it is not a tab. So the set becomes the DEFAULT of the kind this
+    /// window is, which is the only store it has and the same one a ⧉ press from the main chart
+    /// writes.
+    ///
+    /// The honest cost, stated rather than hidden: this window's edit reaches every trade window,
+    /// including one already open beside it. A per-window override would need somewhere to live
+    /// past the window's own life, and nothing here has one.
+    ///
+    /// Args:
+    ///     cx: View context.
+    fn drain_panel_labels(&mut self, cx: &mut Context<Self>) {
+        let Some(cfg) = self.panel.update(cx, |panel, _| panel.take_pending_labels()) else {
+            return;
+        };
+        self.backend.update(cx, |b, bcx| {
+            // `store_chart_labels`, NOT the ⧉ press's `set_chart_labels_default`: that one also
+            // SEPARATES the kinds, freezing the tab kinds at Main's current captions. A right-click
+            // toggle in this window is not a statement about anybody's tabs.
+            if b.layout
+                .store_chart_labels(moon_core::config::ChartTabKind::Trade, cfg)
+            {
+                b.layout_dirty = true;
+            }
+            // The other trade window reads this default on the next notification; without this it
+            // would keep the old captions until something unrelated woke it. It adopts them only
+            // while it holds no set of its own — a window whose own menu has been used keeps what
+            // that menu applied until it is reopened, exactly as a tab with an override does.
+            bcx.notify();
+        });
     }
 
     /// Whether the chart area should show an overlay instead of the chart.
@@ -362,7 +515,13 @@ impl TradeWindowView {
         self.panel.read(cx).scale()
     }
 
-    /// Applies a price scale to this window and remembers it for subsequently opened trade windows.
+    /// Apply a price scale to THIS window, for as long as it is open.
+    ///
+    /// Not remembered: a scale that outlived the window meant every later trade opened at a number
+    /// chosen for a different one, and a position whose range does not fit that number is drawn
+    /// off-screen — the window then looks frozen rather than scaled. Each window opens on Auto and
+    /// fits the trade it was opened for; this control is a look at it from another zoom, not a
+    /// setting.
     ///
     /// Display-only, like everything else this window can do: it changes how the closed trade is
     /// drawn and reaches no core. The forcing variant is deliberate — see
@@ -375,14 +534,6 @@ impl TradeWindowView {
     pub(crate) fn pick_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
         self.panel
             .update(cx, |panel, pcx| panel.force_scale(pct, pcx));
-        self.backend.update(cx, |b, _| {
-            // Compare-then-mark, the discipline the geometry observer beside this one uses: a
-            // redundant write would schedule a file write for a choice nobody changed.
-            if b.layout.trade_window_scale != pct {
-                b.layout.trade_window_scale = pct;
-                b.layout_dirty = true;
-            }
-        });
         cx.notify();
     }
 

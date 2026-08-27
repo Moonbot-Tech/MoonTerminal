@@ -860,6 +860,13 @@ struct RenderState {
     /// pane: the configuration owns a name string per row, and cloning it by value would allocate
     /// sixteen strings in the frame loop for nothing.
     chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
+    /// The closed trade this engine was handed, for the captions that state one.
+    ///
+    /// `None` on every live chart, which is what makes those captions print nothing there: they
+    /// describe A trade, and a chart that was not handed one has none to describe. Mirrored here
+    /// like `chart_labels` because the text pass reads it every frame and must not borrow the data
+    /// state to do so.
+    trade_labels: Option<Rc<TradeLabels>>,
     /// The chart's own candle timeframe in milliseconds, mirrored from `ChartDataState` like the
     /// captions above and for the same reason: a countdown caption set to `Авто` resolves against
     /// it while the text pass is running, and must not borrow the data state to read it.
@@ -1172,6 +1179,18 @@ struct ChartDataState {
     /// and style. A per-tab override or the `layout.chart_labels` fallback, like the two above.
     /// Shared with the render mirror through an `Rc`; see the field there.
     chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
+    /// The closed trade this engine draws, when it was handed one; see the render mirror.
+    trade_labels: Option<Rc<TradeLabels>>,
+    /// Whether this engine is a HISTORICAL viewer: its subject is a closed interval, not `now`.
+    ///
+    /// The ONE home of that fact — the caption gates read it here, and so does `set_follow`
+    /// through the engine, because an engine is `Clone` over these shared handles and a second
+    /// copy of the flag on the clone could disagree with this one.
+    ///
+    /// It answers from the moment the window is CONSTRUCTED, which is what the gates need: the
+    /// replay lands seconds later, and a gate that waited for it would print a few seconds of live
+    /// figures over an empty chart and then take them away.
+    historical: bool,
     /// The GLOBAL arbitrage roster, shared with the render mirror the same way. Not a per-tab
     /// override: which venues matter and what colour they are is one answer for the whole terminal.
     arb_view: Rc<moon_core::config::ArbViewCfg>,
@@ -1235,6 +1254,26 @@ struct ChartDataState {
     /// paced by a clock the user can move backwards would stop happening.
     last_countdown_check: Option<Instant>,
     view_dirty: bool,
+}
+
+/// What ONE closed trade was, in the form the captions print it.
+///
+/// STRINGS, already resolved, because the two halves of the answer live in different places: the
+/// detect line and the exit reason come from the report replica, while the strategy has to be
+/// NAMED through the session's strategy store — which this layer has no access to and no business
+/// reaching into. The window resolves both and hands the result down, exactly as it hands down the
+/// frozen series beside it.
+///
+/// Compared by value: it is part of the caption cache key, and the window replaces the whole handle
+/// rather than mutating it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TradeLabels {
+    /// Strategy that opened the trade, already named, or empty when it cannot be named.
+    pub(crate) strategy: String,
+    /// The detect line the trade fired on, with the core's diagnostic tail already dropped.
+    pub(crate) detect: String,
+    /// Why the position closed, as the core stated it.
+    pub(crate) sell_reason: String,
 }
 
 #[derive(Clone)]
@@ -1321,12 +1360,5 @@ pub struct ChartEngine {
     orders: OrdersStyle,
     scale: Option<f32>,
     follow: bool,
-    /// Whether this engine draws a CLOSED interval rather than the live edge.
-    ///
-    /// A historical viewer has no "now" to follow, so the application-wide Live flag has no
-    /// authority over it. The flag lives here rather than being checked at the one call site
-    /// because `set_follow` is reachable from the render pass, the toolbar and FireTest alike:
-    /// guarding the caller would leave the next caller to rediscover the rule.
-    historical: bool,
     present_rate_hz: f32,
 }

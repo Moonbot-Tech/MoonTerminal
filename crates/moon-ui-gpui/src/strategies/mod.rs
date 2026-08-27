@@ -13,7 +13,7 @@ mod actions;
 mod fields;
 mod filter;
 mod full_params;
-mod logic;
+pub(crate) mod logic;
 mod param_entries;
 mod params;
 mod rules;

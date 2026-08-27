@@ -1256,6 +1256,10 @@ impl RenderState {
             strategy: pr.label_strategy.clone(),
             detect_strategy: pr.label_detect_strategy.clone(),
             detect_msg: pr.label_detect_msg.clone(),
+            // Off the ENGINE rather than the pane: a handed trade is a property of the whole
+            // window — one chart, one trade — and copying it per pane would be the same three
+            // strings stored as many times as the stack has panes.
+            trade: self.trade_labels.clone(),
             last_price: pr.cached_last_price,
             scale_badge: pr.scale_badge,
             compare_pct,
@@ -1436,10 +1440,20 @@ fn elastic_band(bands: &[Band; 3]) -> Option<&Band> {
 /// candles; its right edge is already inset clear of the pane's close button by `caption_geom`.
 fn zone_bounds(zone: LabelZone, geom: &CaptionGeomInput, corner: &CaptionGeom) -> (f32, f32) {
     if zone.is_control_zone() {
-        (corner.zone_left, corner.right_x)
-    } else {
-        (geom.plot_left + ZONE_PAD, geom.plot_right - ZONE_PAD)
+        return (corner.zone_left, corner.right_x);
     }
+    // The plot's own edges, EXCEPT that the top band also clears the pane's close button. That
+    // button sits in the pane's top-right corner and is drawn over whatever is beneath it, so a
+    // right-aligned caption on this band hides under it — `ZONE_PAD` is six pixels and the button
+    // takes twenty-six. `corner.right_x` is the same inset the control strip already keeps
+    // (`caption_geom`), and taking the SMALLER of the two changes nothing while a book is drawn:
+    // the plot ends well before the strip does. It matters exactly where the book is off and the
+    // plot runs to the pane's edge — the trade-detail window, which draws no book at all.
+    let right = match zone {
+        LabelZone::ChartTop => (geom.plot_right - ZONE_PAD).min(corner.right_x),
+        _ => geom.plot_right - ZONE_PAD,
+    };
+    (geom.plot_left + ZONE_PAD, right)
 }
 
 /// Width the bands of one zone share, in logical pixels.

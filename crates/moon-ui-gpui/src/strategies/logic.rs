@@ -86,7 +86,7 @@ pub(super) fn field_edit_count(st: &StrategiesView) -> usize {
 }
 
 /// Find a strategy row in the core store.
-pub(super) fn row(store: &CoreStore, core: CoreId, id: u64) -> Option<&StrategyRow> {
+pub(crate) fn row(store: &CoreStore, core: CoreId, id: u64) -> Option<&StrategyRow> {
     store.core(core)?.strategies.iter().find(|s| s.id == id)
 }
 

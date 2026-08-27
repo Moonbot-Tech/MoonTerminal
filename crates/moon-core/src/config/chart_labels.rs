@@ -1054,6 +1054,29 @@ pub struct ChartLabelsCfg {
     pub rows: [ChartLabelRow; CHART_LABEL_ROWS],
 }
 
+/// The instrument block both shipped sets open with: the coin, optionally its core, the venue.
+///
+/// One builder rather than two copies, so the band, the alignment and the stacking cannot drift
+/// apart between the live default and the trade window's — which is exactly what a reader compares
+/// when they look at the two charts side by side.
+///
+/// Args:
+///     with_core: Whether to name the core between the coin and the venue.
+///
+/// Returns:
+///     The row, ready to place.
+fn instrument_row(with_core: bool) -> ChartLabelRow {
+    let mut row = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
+    row.preset = Some(LabelPreset::Instrument);
+    row.flow = LabelFlow::Column;
+    row.push_part(ChartLabelField::Coin);
+    if with_core {
+        row.push_part(ChartLabelField::Core);
+    }
+    row.push_part(ChartLabelField::Venue);
+    row
+}
+
 impl Default for ChartLabelsCfg {
     /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
@@ -1077,13 +1100,7 @@ impl Default for ChartLabelsCfg {
         let mut cfg = Self::empty();
 
         // The instrument, in the control strip pushed right: coin, core, venue stacked as a block.
-        let mut instrument = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
-        instrument.preset = Some(LabelPreset::Instrument);
-        instrument.flow = LabelFlow::Column;
-        instrument.push_part(ChartLabelField::Coin);
-        instrument.push_part(ChartLabelField::Core);
-        instrument.push_part(ChartLabelField::Venue);
-        cfg.rows[0] = instrument;
+        cfg.rows[0] = instrument_row(true);
 
         // The Y-scale badge on the plot's top-right corner.
         let mut scale = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
@@ -1196,6 +1213,54 @@ impl Default for ChartLabelsCfg {
 }
 
 impl ChartLabelsCfg {
+    /// The working set a TRADE-DETAIL window opens with.
+    ///
+    /// Its own value rather than [`Self::default`] because that set is built for a LIVE chart:
+    /// funding, the coin's deltas, what traded in the last minute, what is open right now. Printed
+    /// over a trade that closed hours ago those figures are not stale, they are about a different
+    /// thing entirely — and a caption is read as describing the picture under it.
+    ///
+    /// So this set states what the picture IS: which coin on which venue, and what the trade was —
+    /// the strategy that opened it, the line it fired on, and why it closed. Everything else the
+    /// window has to say is already in its own figures rail beside the chart, which is where the
+    /// prices, the size and the profit live.
+    ///
+    /// It is a DEFAULT, not a fixture: the reader owns this view's captions like any other's, and
+    /// the moment they set a default for it, theirs is what opens. See
+    /// [`super::chart_defaults::ChartTabKind::Trade`].
+    pub fn trade_default() -> Self {
+        let mut cfg = Self::empty();
+
+        // The Y-scale badge FIRST, so it takes the plot's top-right corner and the instrument
+        // block stacks under it. This window fits each trade on its own — nothing pins its scale —
+        // and the badge is what states how far the pane reaches while it does, which is what a
+        // reader comparing two trades needs. Pinning a step from the window's own control hides it
+        // by design: the step is then written on that control instead.
+        cfg.push_preset(LabelPreset::Scale);
+
+        // The same block the live default opens with, minus the core: "what am I looking at" is
+        // the same question on a frozen chart, and which core recorded the trade is already the
+        // first thing the window's own header states.
+        //
+        // Over the PLOT rather than in the control strip, which is the one thing this set changes
+        // about it. Width is shared inside a ZONE: the strip and the plot are two of them, so a
+        // block in the strip and the detect line over the plot cannot see each other and neither
+        // yields — they simply overlap. In one zone the figures draw first and hand the prose what
+        // is left (`chartdx::text::captions::widths`).
+        let mut instrument = instrument_row(false);
+        instrument.zone = LabelZone::ChartTop;
+        cfg.push_prepared(instrument);
+
+        // What the trade was, centred over the plot: the detect line is the widest thing this
+        // window prints, and either edge would put it under the block above.
+        cfg.push_preset(LabelPreset::Trade);
+
+        // Repaired HERE, so the built-in set has one shape wherever it is read or compared —
+        // rather than at each reader, where one of them would eventually forget.
+        cfg.sanitize();
+        cfg
+    }
+
     /// A configuration with no rows at all.
     ///
     /// Public because "print nothing" is a legitimate choice a user can reach by removing every

@@ -5,11 +5,13 @@
 //! every tab in the application — which made "make this the default" an all-or-nothing press: the
 //! reader could not keep the main chart dense and the torn-off windows sparse.
 //!
-//! So the default is split by what a tab IS, into the three kinds a reader actually distinguishes
-//! ([`ChartTabKind`]). The base field on `WindowLayout` stays the [`ChartTabKind::Main`] default —
-//! an old profile keeps working, and a reader who never touches the feature keeps one default for
-//! everything — and the two other kinds hold [`ChartTabDefaults`], which is empty until the first
-//! time a default is set FOR that kind. Empty means "follow Main"; see
+//! So the default is split by what a chart IS ([`ChartTabKind`]) — three kinds of TAB, plus the
+//! trade-detail window, which is not a tab at all and needs its own set most of all. The base field
+//! on `WindowLayout` stays the [`ChartTabKind::Main`] default — an old profile keeps working, and a
+//! reader who never touches the feature keeps one default for everything — and the other kinds hold
+//! [`ChartTabDefaults`], which is empty until the first time a default is set FOR that kind. Empty
+//! means "follow Main", except for the trade window's captions, which fall back to their own
+//! built-in set ([`crate::config::ChartLabelsCfg::trade_default`]); see
 //! [`WindowLayout::set_chart_labels_default`](super::layout::WindowLayout::set_chart_labels_default)
 //! for what the first press does about that.
 
@@ -21,11 +23,14 @@ use crate::market::candles::CandleViewCfg;
 
 /// What a chart tab is, for the purpose of choosing which default it follows.
 ///
-/// Deliberately three, not the five the tab bookkeeping can tell apart: a reader groups tabs by
-/// what they are FOR, and the strip's own tabs — the main chart, the numbered AddToChart tabs, a
-/// hand-assembled multi-coin tab — are all "the tabs I am looking at right now".
+/// Deliberately three KINDS OF TAB, not the five the tab bookkeeping can tell apart: a reader
+/// groups tabs by what they are FOR, and the strip's own tabs — the main chart, the numbered
+/// AddToChart tabs, a hand-assembled multi-coin tab — are all "the tabs I am looking at right now".
+/// [`Self::Trade`] joins them as the one chart that is a WINDOW rather than a tab; a walk over tabs
+/// iterates [`Self::TAB_KINDS`] instead of [`Self::ALL`].
 ///
-/// [`Self::Compare`] wins over the other two, and it is a RUNTIME state rather than an identity:
+/// [`Self::Compare`] wins over the other tab kinds, and it is a RUNTIME state rather than an
+/// identity:
 /// it is the anchor lock, which the reader puts on and takes off a live tab. Taking it off moves
 /// the tab back to the kind its place gives it, and — its own setting having been cleared when a
 /// default was applied — it adopts that kind's default at once. That is the intended behaviour and
@@ -39,15 +44,58 @@ pub enum ChartTabKind {
     /// A tab under the anchor lock, wherever it lives: in the strip, in a window, or the main
     /// chart itself.
     Compare,
+    /// The trade-detail window: one closed trade, drawn from a frozen replay.
+    ///
+    /// Not a tab at all, and the only kind that is a WINDOW rather than a state a tab can be in —
+    /// which is exactly why it needs its own defaults. It shows a market that stopped moving hours
+    /// ago, so the captions a live chart is read with describe something that is not on the screen.
+    /// It is the one kind whose caption default is NOT Main's: see
+    /// [`crate::config::ChartLabelsCfg::trade_default`].
+    Trade,
 }
 
 impl ChartTabKind {
     /// Every kind, in the order the settings popup lists them.
-    pub const ALL: [ChartTabKind; 3] = [
+    pub const ALL: [ChartTabKind; 4] = [
+        ChartTabKind::Main,
+        ChartTabKind::AddTo,
+        ChartTabKind::Compare,
+        ChartTabKind::Trade,
+    ];
+
+    /// The kinds that are TABS, for the walks that visit tabs.
+    ///
+    /// [`Self::Trade`] is absent: its windows are opened from the Report and live outside the tab
+    /// strip and `charts.json` alike, so a walk that applies a setting to every matching tab has
+    /// nothing to visit for it. A set rather than a predicate asked per element — the walks iterate
+    /// one list or the other, and cannot forget to ask.
+    pub const TAB_KINDS: [ChartTabKind; 3] = [
         ChartTabKind::Main,
         ChartTabKind::AddTo,
         ChartTabKind::Compare,
     ];
+
+    /// The captions this kind opens with when NOTHING has been stored for it, or `None` to follow
+    /// the Main default like every other kind.
+    ///
+    /// A property of the KIND rather than a branch inside the getter, so the mechanism reads "a
+    /// kind may ship its own set" instead of "one kind is special" — and so a second kind that
+    /// ever needs one costs an arm here and nothing anywhere else.
+    ///
+    /// Returns:
+    ///     The built-in set, shared and already repaired, or `None`.
+    pub fn builtin_labels(self) -> Option<&'static ChartLabelsCfg> {
+        match self {
+            // A trade-detail window draws a market that stopped moving, so Main's live captions —
+            // funding, the last minute's volume, what is open right now — would describe something
+            // that is not on the screen.
+            ChartTabKind::Trade => {
+                static TRADE: std::sync::OnceLock<ChartLabelsCfg> = std::sync::OnceLock::new();
+                Some(TRADE.get_or_init(ChartLabelsCfg::trade_default))
+            }
+            ChartTabKind::Main | ChartTabKind::AddTo | ChartTabKind::Compare => None,
+        }
+    }
 
     /// The kind of a tab that is `detached` and/or `comparing`.
     ///
@@ -67,6 +115,7 @@ impl ChartTabKind {
             ChartTabKind::Main => "chart.defaults.kind.main",
             ChartTabKind::AddTo => "chart.defaults.kind.addto",
             ChartTabKind::Compare => "chart.defaults.kind.compare",
+            ChartTabKind::Trade => "chart.defaults.kind.trade",
         }
     }
 }
@@ -77,10 +126,11 @@ impl ChartTabKind {
 /// a reader who never splits the defaults apart. It is per SETTING rather than per kind: setting
 /// the caption default for windows must not freeze their candles as a side effect.
 ///
-/// The FIRST press for a setting fills this in for BOTH non-Main kinds, not only the one addressed:
-/// separating the defaults is the moment they stop moving together, and a Compare that still
-/// followed Main would jump the next time the main chart's default was set — which is the surprise
-/// the split exists to remove.
+/// The FIRST press for a setting fills this in for EVERY other non-Main kind, not only the one
+/// addressed: separating the defaults is the moment they stop moving together, and a Compare that
+/// still followed Main would jump the next time the main chart's default was set — which is the
+/// surprise the split exists to remove. Each kind is frozen at what IT was showing, which for the
+/// trade window's captions is its own built-in set rather than Main's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartTabDefaults {
@@ -120,6 +170,23 @@ where
 }
 
 impl ChartTabDefaults {
+    /// The lenient read, BOXED — the shape `WindowLayout` stores these in.
+    ///
+    /// A `ChartTabDefaults` carries a whole caption configuration, which is a fixed array of
+    /// sixteen rows of eight captions: over six kilobytes, by value. `WindowLayout` holds one per
+    /// non-Main kind AND is moved around on the stack (it is loaded, cloned for a snapshot, and
+    /// handed to the persistence pass), so keeping them inline put four such blocks in one frame —
+    /// and the fourth is what overflowed the main thread's stack at startup. Behind a `Box` the
+    /// layout carries a pointer per kind and the blocks live on the heap.
+    ///
+    /// See the size ceiling pinned by `config::layout::tests`.
+    pub(super) fn de_lenient_boxed<'de, D>(d: D) -> Result<Box<Self>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::de_lenient(d).map(Box::new)
+    }
+
     /// Read leniently, repairing what a hand-edited file can state.
     ///
     /// The whole layout document is one deserialization, so an unusable table here must cost these

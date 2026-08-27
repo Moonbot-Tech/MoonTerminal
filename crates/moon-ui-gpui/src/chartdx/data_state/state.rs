@@ -34,6 +34,8 @@ impl ChartDataState {
             candle_view: moon_core::market::CandleViewCfg::default(),
             chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
+            trade_labels: None,
+            historical: false,
             arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::default()),
             default_x_ppm: None,
             prospective_usd: None,
@@ -79,13 +81,17 @@ impl ChartDataState {
         // — so the detect ring has to be part of what wakes it. Folded in only while such a caption
         // is drawn: detects arrive on their own stream, and mixing them unconditionally would run
         // an order sync on every detect for every chart that prints none.
-        let wants_detect = self.chart_labels.any_drawn(|f| {
-            matches!(
-                f,
-                moon_core::config::ChartLabelField::DetectStrategy
-                    | moon_core::config::ChartLabelField::DetectMsg
-            )
-        });
+        // `draws_live_market` for the reason `orders::sync` refuses to FILL these captions on a
+        // frozen engine: waking a sync for a value that path will not resolve is work with no
+        // possible effect on the screen.
+        let wants_detect = self.draws_live_market()
+            && self.chart_labels.any_drawn(|f| {
+                matches!(
+                    f,
+                    moon_core::config::ChartLabelField::DetectStrategy
+                        | moon_core::config::ChartLabelField::DetectMsg
+                )
+            });
         let container = self.container.borrow();
         if let Some((core, _market)) = container.target_ref(0) {
             if let Some(core_st) = session.store().core(core) {
@@ -107,6 +113,38 @@ impl ChartDataState {
             }
         }
         sig
+    }
+
+    /// Whether this engine's captions may read the LIVE market at all.
+    ///
+    /// One predicate for every caption gate — the position and detect ones in `orders`, the market
+    /// snapshots in `market` — because they answer the same question and a rule copied into each
+    /// of them is a rule that drifts. A frozen chart's captions describe the trade it was handed;
+    /// what funding costs right now, what the book looks like and what traded in the last minute
+    /// are facts about a different picture than the one on the screen.
+    ///
+    /// Returns:
+    ///     `true` while this engine draws the live market.
+    pub(in crate::chartdx) fn draws_live_market(&self) -> bool {
+        !self.historical && self.trade_replay.is_none()
+    }
+
+    /// Mark this engine a historical viewer, mirroring the engine's own flag.
+    ///
+    /// Args:
+    ///     historical: Whether the engine draws a finished interval rather than the live edge.
+    pub(crate) fn set_historical(&mut self, historical: bool) {
+        if self.historical == historical {
+            return;
+        }
+        self.historical = historical;
+        // The caption gates read this, and BOTH sync paths short-circuit on an unchanged signature:
+        // without these resets, a viewer marked historical after its first sync would keep whatever
+        // live figures that sync had already resolved until its market happened to move.
+        self.last_order_sig = u64::MAX;
+        self.last_prepared_market_sig = u64::MAX;
+        self.last_source_market_sig = u64::MAX;
+        self.mark_view_dirty();
     }
 
     /// Draw a frozen replay instead of the live market source, or go back to the live one.

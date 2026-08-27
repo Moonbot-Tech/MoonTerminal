@@ -39,3 +39,38 @@ fn a_broken_table_costs_only_itself() {
     let doc: Doc = toml::from_str("keep = 7\n[defaults.candle_view]\n").expect("the file loads");
     assert!(doc.defaults.candle_view.is_some());
 }
+
+/// The trade window is a kind with no TABS: it is opened from the Report and lives outside the tab
+/// strip and `charts.json` alike, so a walk that writes a setting into every matching tab has
+/// nothing to visit for it and must stop at storing the default.
+#[test]
+fn the_tab_kinds_are_every_kind_but_the_trade_window() {
+    let expected: Vec<ChartTabKind> = ChartTabKind::ALL
+        .into_iter()
+        .filter(|kind| *kind != ChartTabKind::Trade)
+        .collect();
+    assert_eq!(ChartTabKind::TAB_KINDS.to_vec(), expected);
+}
+
+/// Only the trade window ships captions of its own; every other kind follows the Main default.
+#[test]
+fn only_the_trade_window_ships_its_own_captions() {
+    for kind in ChartTabKind::ALL {
+        assert_eq!(
+            kind.builtin_labels().is_some(),
+            kind == ChartTabKind::Trade,
+            "{kind:?} disagrees about shipping its own captions"
+        );
+    }
+}
+
+/// The runtime classifier never produces the trade window: that kind is set by the window itself,
+/// which is neither detached-with-a-tab nor comparing.
+#[test]
+fn the_classifier_never_answers_trade() {
+    for detached in [false, true] {
+        for comparing in [false, true] {
+            assert_ne!(ChartTabKind::of(detached, comparing), ChartTabKind::Trade);
+        }
+    }
+}

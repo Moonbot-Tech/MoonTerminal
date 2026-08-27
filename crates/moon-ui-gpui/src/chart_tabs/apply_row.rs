@@ -1,9 +1,11 @@
 //! The row a ⧉ press opens: WHICH kinds of tab it should reach, and what it will overwrite.
 //!
 //! The press used to be the button itself — one click, and the values went to every tab in the
-//! group plus the global default. It now names its targets, because the three kinds of tab
+//! group plus the global default. It now names its targets, because the kinds of chart
 //! ([`ChartTabKind`]) are exactly what a reader wants to keep apart: a dense main chart and sparse
-//! torn-off windows is a normal thing to want, and one button could not express it.
+//! torn-off windows is a normal thing to want, and one button could not express it. A kind with no
+//! tabs — the trade-detail window — is offered only where the press stores a DEFAULT, since that is
+//! the only thing it has.
 //!
 //! Rendered INLINE inside the settings popup rather than as a popover of its own. A nested overlay
 //! would count as an outside click for the popup hosting it and close the thing the reader is
@@ -56,7 +58,11 @@ pub(crate) trait ApplyRowHost: 'static + Sized {
     fn apply_press(&self) -> &ApplyPress;
     fn apply_press_mut(&mut self) -> &mut ApplyPress;
     /// How many STORED tabs of each kind hold an override this press would drop.
-    fn apply_row_counts(&self, values: &[StackSetting], cx: &App) -> [usize; 3];
+    fn apply_row_counts(
+        &self,
+        values: &[StackSetting],
+        cx: &App,
+    ) -> [usize; ChartTabKind::ALL.len()];
     /// Perform it: the strip walks its group, a detached window queues the walk for its strip.
     fn perform_apply(&mut self, apply: ApplyAll, cx: &mut Context<Self>);
 }
@@ -89,11 +95,18 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
     // the reader cannot act on.
     let counts = match as_default {
         true => this.apply_row_counts(&values, cx),
-        false => [0; 3],
+        false => [0; ChartTabKind::ALL.len()],
     };
     let entity = cx.entity();
     let mut ticks = h_flex().gap_2().flex_wrap();
-    for kind in ChartTabKind::ALL {
+    // A press that sets DEFAULTS can address every kind; one that writes values into TABS can only
+    // address the kinds that have any. Two sets rather than a question asked per element, so the
+    // row cannot offer a tick that reaches nothing.
+    let offered: &[ChartTabKind] = match as_default {
+        true => &ChartTabKind::ALL,
+        false => &ChartTabKind::TAB_KINDS,
+    };
+    for kind in offered.iter().copied() {
         let index = KindTargets::index(kind);
         // The count is what the press OVERWRITES: a tab following the default already is not
         // changed by a press that moves it, and saying otherwise would overstate the damage.

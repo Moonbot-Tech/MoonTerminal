@@ -892,7 +892,11 @@ impl super::apply_row::ApplyRowHost for DetachedChartHost {
     fn apply_press_mut(&mut self) -> &mut super::apply_row::ApplyPress {
         &mut self.apply_press
     }
-    fn apply_row_counts(&self, values: &[StackSetting], cx: &App) -> [usize; 3] {
+    fn apply_row_counts(
+        &self,
+        values: &[StackSetting],
+        cx: &App,
+    ) -> [usize; moon_core::config::ChartTabKind::ALL.len()] {
         apply_all::override_counts(&self.backend.read(cx).chart_specs, values)
     }
     fn perform_apply(&mut self, apply: ApplyAll, cx: &mut Context<Self>) {

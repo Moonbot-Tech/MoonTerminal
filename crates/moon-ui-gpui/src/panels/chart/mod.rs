@@ -165,7 +165,7 @@ fn chart_settings_sig(
 
 pub struct ChartPanel {
     backend: Entity<Backend>,
-    /// Which of the three defaults this panel follows when it has no override of its own.
+    /// Which kind's defaults this panel follows when it has no override of its own.
     ///
     /// Owned by the STACK, which is the thing that knows whether it sits in a window and whether
     /// the anchor lock is on; pushed down through [`Self::set_default_kind`] whenever either moves.
@@ -429,7 +429,18 @@ impl ChartPanel {
         theme: ChartTheme,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut panel = Self::new_main(backend, None, focus_open, epoch, theme, cx);
+        // The captions this window opens with are its OWN kind's, not the main chart's: a frozen
+        // market cannot be read with captions that state what is happening right now. Asked for at
+        // construction, so the panel is never briefly wearing Main's.
+        let mut panel = Self::new_with_kind(
+            backend,
+            None,
+            focus_open,
+            epoch,
+            theme,
+            moon_core::config::ChartTabKind::Trade,
+            cx,
+        );
         panel.historical = true;
         // The engine must know too, and not only the panel: `Self::render` applies the
         // application-wide Live flag to whatever engine it is drawing, so a viewer that is
@@ -471,6 +482,43 @@ impl ChartPanel {
         theme: ChartTheme,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_kind(
+            backend,
+            workspace_group,
+            focus_open,
+            epoch,
+            theme,
+            moon_core::config::ChartTabKind::Main,
+            cx,
+        )
+    }
+
+    /// Build a single-pane panel that follows ONE kind's defaults.
+    ///
+    /// The kind is a parameter rather than something assigned afterwards: a panel's effective
+    /// settings are minted from it during construction, so a panel built as one kind and corrected
+    /// to another would build that signature twice and be briefly inconsistent in between.
+    ///
+    /// Args:
+    ///     backend: Shared application state and session command surface.
+    ///     workspace_group: Owning group for rail-authority checks, or `None` for diagnostics.
+    ///     focus_open: Optional initial core and market.
+    ///     epoch: Chart time origin.
+    ///     theme: Runtime chart theme.
+    ///     kind: Which kind's defaults this panel follows.
+    ///     cx: Panel context used for observers and market references.
+    ///
+    /// Returns:
+    ///     A fully initialized panel.
+    fn new_with_kind(
+        backend: Entity<Backend>,
+        workspace_group: Option<String>,
+        focus_open: Option<(CoreId, String)>,
+        epoch: f64,
+        theme: ChartTheme,
+        kind: moon_core::config::ChartTabKind,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut chart = ChartEngine::new(epoch, theme);
         chart.set_market_source(Some(backend.read(cx).session.market_source()));
         chart.set_figures_store(backend.read(cx).figures.clone());
@@ -489,8 +537,7 @@ impl ChartPanel {
                 b.retain_chart_orderbook(core, &m);
             });
         }
-        // A fresh panel holds no override yet, so its effective values ARE the global defaults.
-        let kind = moon_core::config::ChartTabKind::Main;
+        // A fresh panel holds no override yet, so its effective values ARE its kind's defaults.
         let settings_sig = {
             let b = backend.read(cx);
             chart_settings_sig(&b, None, None, None, kind)
@@ -1056,6 +1103,28 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Hand this panel the closed trade its captions describe.
+    ///
+    /// The window's second publication, beside the replay and the trade history: those two put the
+    /// PICTURE on the chart, this one puts the trade's own facts into the captions beside it. Like
+    /// them it reaches the engine this panel owns and nothing else, so a live chart is structurally
+    /// incapable of printing a trade it was never handed.
+    ///
+    /// Args:
+    ///     labels: The trade's already-resolved strings, or `None` to describe no trade.
+    ///     cx: Panel context.
+    pub(crate) fn attach_trade_labels(
+        &mut self,
+        labels: Option<std::rc::Rc<crate::chartdx::TradeLabels>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.chart.set_trade_labels(labels) {
+            return;
+        }
+        self.view_dirty = true;
+        cx.notify();
+    }
+
     /// Place the viewport on an absolute millisecond interval.
     ///
     /// The same primitive the Report's main-chart focus already uses; exposed so the trade window
@@ -1538,7 +1607,7 @@ impl ChartPanel {
         cx.notify();
     }
 
-    /// Point this panel at another of the three defaults.
+    /// Point this panel at another kind's defaults.
     ///
     /// Called by the stack when it is detached, repinned, or when the anchor lock goes on or off.
     /// The effective values are recomputed HERE rather than waited for: the settings signature is

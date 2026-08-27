@@ -43,11 +43,17 @@ pub enum LabelPreset {
     Session,
     /// The last detect this core fired on this coin, and the strategy behind what is open.
     Detect,
+    /// What ONE closed trade was: the strategy that opened it, its detect line, why it closed.
+    ///
+    /// Only a chart that was HANDED a trade can fill it — the trade-detail window — so it is also
+    /// the module that view opens with. On any other chart its captions have nothing to state and
+    /// print nothing, which is the same way every optional figure behaves here.
+    Trade,
 }
 
 impl LabelPreset {
     /// Every preset, in menu order: what the chart is, then how it moves, then what is at risk.
-    pub const ALL: [LabelPreset; 11] = [
+    pub const ALL: [LabelPreset; 12] = [
         LabelPreset::Instrument,
         LabelPreset::Scale,
         LabelPreset::CoinDeltas,
@@ -59,6 +65,7 @@ impl LabelPreset {
         LabelPreset::Funding,
         LabelPreset::Arbitrage,
         LabelPreset::Detect,
+        LabelPreset::Trade,
     ];
 
     /// Locale key of the preset's name, which is also the name the created row takes.
@@ -75,6 +82,7 @@ impl LabelPreset {
             LabelPreset::Scale => "chart_labels.preset.scale",
             LabelPreset::Session => "chart_labels.preset.session",
             LabelPreset::Detect => "chart_labels.preset.detect",
+            LabelPreset::Trade => "chart_labels.preset.trade",
         }
     }
 
@@ -129,6 +137,11 @@ impl LabelPreset {
                 ChartLabelField::DetectMsg,
                 ChartLabelField::OrderStrategy,
             ],
+            LabelPreset::Trade => &[
+                ChartLabelField::TradeStrategy,
+                ChartLabelField::TradeDetect,
+                ChartLabelField::TradeSellReason,
+            ],
         }
     }
 
@@ -151,7 +164,8 @@ impl LabelPreset {
             // the control strip is only as wide as the order book.
             | LabelPreset::Volumes
             | LabelPreset::CursorVolumes
-            | LabelPreset::Detect => LabelZone::ChartTop,
+            | LabelPreset::Detect
+            | LabelPreset::Trade => LabelZone::ChartTop,
         }
     }
 
@@ -203,7 +217,11 @@ impl LabelPreset {
             LabelPreset::Arbitrage
             | LabelPreset::Volumes
             | LabelPreset::CursorVolumes
-            | LabelPreset::Detect => LabelFlow::Column,
+            | LabelPreset::Detect
+            // The trade module stacks for the detect module's reason, and harder: its middle
+            // caption is a whole sentence, and a strategy name printed beside it would be read as
+            // part of that sentence.
+            | LabelPreset::Trade => LabelFlow::Column,
             _ => LabelFlow::Row,
         }
     }
@@ -224,7 +242,7 @@ impl LabelPreset {
             }
             // Centred: a detect line is the widest thing the chart prints, and either edge would
             // put it under a module that is already there.
-            LabelPreset::Detect => LabelAlign::Center,
+            LabelPreset::Detect | LabelPreset::Trade => LabelAlign::Center,
         }
     }
 }

@@ -112,6 +112,7 @@ impl ChartEngine {
             caption_runs: Vec::new(),
             caption_wraps: Vec::new(),
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
+            trade_labels: None,
             // The same timeframe `ChartDataState` starts on, so an `Авто` countdown is right from
             // the first frame rather than from the first `set_candle_view`.
             chart_tf_ms: moon_core::market::CandleViewCfg::default().tf_ms(),
@@ -183,7 +184,6 @@ impl ChartEngine {
             orders: OrdersStyle::default(),
             scale: None,
             follow: true,
-            historical: false,
             present_rate_hz: 60.0,
         }
     }
@@ -542,6 +542,38 @@ impl ChartEngine {
         series: Option<std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
     ) {
         self.data.borrow_mut().set_trade_replay(series);
+    }
+
+    /// Hand this engine the closed trade its captions describe, or take it away.
+    ///
+    /// Only the trade window calls this, on the engine it owns — the same boundary
+    /// [`Self::set_trade_replay`] has, and for the same reason: a live chart has no trade to
+    /// describe, so its captions must have nothing to print.
+    ///
+    /// Args:
+    ///     labels: The trade's already-resolved strings, or `None` for a chart describing none.
+    ///
+    /// Returns:
+    ///     Whether anything changed, so the caller can skip the repaint.
+    pub(crate) fn set_trade_labels(&mut self, labels: Option<std::rc::Rc<TradeLabels>>) -> bool {
+        let mut data = self.data.borrow_mut();
+        // By VALUE, not by pointer: the window rebuilds this handle when its trade resolves and
+        // hands the same content on every render afterwards, so a pointer test would report a
+        // change on each one. `Rc`'s own `PartialEq` takes the pointer shortcut when it can.
+        let unchanged = data.trade_labels == labels;
+        // Adopted even when unchanged, exactly as `set_chart_labels` adopts an equal handle: the
+        // mirror the text pass reads must never hold an older allocation than the data state.
+        data.render.borrow_mut().trade_labels = labels.clone();
+        data.trade_labels = labels;
+        if unchanged {
+            return false;
+        }
+        // The captions are re-resolved by the sync paths, which short-circuit on an unchanged
+        // signature — the same invalidation `set_chart_labels` performs, and for the same reason:
+        // this window's market and orders never move, so nothing else would wake them.
+        data.last_order_sig = u64::MAX;
+        data.mark_view_dirty();
+        true
     }
 
     /// Set the trade arrow under the cursor, which draws grown and fully opaque.
@@ -1000,7 +1032,10 @@ impl ChartEngine {
     /// Args:
     ///     historical: Whether the engine draws a finished interval rather than the live edge.
     pub fn set_historical(&mut self, historical: bool) {
-        self.historical = historical;
+        // Stored in the DATA STATE, where the caption gates read it, rather than beside it here: an
+        // engine is `Clone` over these shared handles, so a flag on the engine itself would be
+        // copied per clone and could disagree with the state every gate answers from.
+        self.data.borrow_mut().set_historical(historical);
     }
 
     /// Applies the toolbar's global Live/Pause follow state to this `ChartEngine`'s single pane.
@@ -1014,7 +1049,7 @@ impl ChartEngine {
     /// on the pane, re-anchoring it to `now` with the built-in six-hour window. A trade older than
     /// that window then fell off the left edge, leaving labelled axes over an empty plot.
     pub fn set_follow(&mut self, follow: bool, now_ms: f64) -> bool {
-        if self.historical || self.follow == follow {
+        if self.data.borrow().historical || self.follow == follow {
             return false;
         }
         self.follow = follow;

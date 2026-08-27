@@ -53,10 +53,11 @@ impl ChartDataState {
         // here, beside the configuration it overrides, because both answers must hold for the whole
         // sync — a shot arming halfway through would otherwise caption some panes and not others.
         let shot = st.shot_caption_active();
-        // Whether this ENGINE draws a frozen replay rather than a live market. Engine-level, not
-        // per-pane: the override lives on the engine a trade window owns, so it is the same answer
-        // for every pane it holds and is resolved once for the whole sync.
-        let frozen = self.trade_replay.is_some();
+        // Whether this ENGINE draws a frozen picture rather than a live market. Engine-level, not
+        // per-pane: the answer belongs to the engine a trade window owns, so it is the same for
+        // every pane it holds and is resolved once for the whole sync. One predicate, shared with
+        // the market-side gates — see `draws_live_market`.
+        let frozen = !self.draws_live_market();
         // Both caption gates are answered ONCE for the sync, not per pane: they read the
         // configuration, which cannot change inside a sync, and a walk over sixteen rows of eight
         // captions per pane per order revision is real work for an answer that never differs.
