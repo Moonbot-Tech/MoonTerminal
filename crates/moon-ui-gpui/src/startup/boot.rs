@@ -218,7 +218,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         sell_edit_req: None,
         group_exit_sync: HashMap::new(),
         manual_strat_local: HashMap::new(),
-        panic_armed: HashSet::new(),
+        panic_local: HashMap::new(),
+        panic_rev: 0,
+        last_panic_press: HashMap::new(),
         backend_dirty_since_notify: false,
         last_backend_notify: None,
         core_chart_hist: Default::default(),
@@ -564,6 +566,12 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.refresh_header_ticker_default(false);
                     b.sync_open_markets_if_due();
                     b.sync_group_manual_settings();
+                    // Background-originated correction, not a user press: goes through the 250 ms
+                    // coalescing gate `flush_backend_notify` flushes below on the same tick, rather
+                    // than a bare `cx.notify()`.
+                    if b.tick_panic_local() {
+                        b.mark_backend_dirty(cx);
+                    }
                     b.snap = b.metrics.sample(Instant::now());
                     // Before the warning engine: a schedule boundary crossed on this very tick must
                     // already be in force for the alerts this tick opens.

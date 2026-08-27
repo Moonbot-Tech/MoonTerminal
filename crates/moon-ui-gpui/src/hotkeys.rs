@@ -722,10 +722,16 @@ pub fn apply(
             }
             None => false,
         },
+        // The only debounce on the Panic Sell path: an impatient re-jab within the hotkey's
+        // debounce window is absorbed as a no-op. The direct chart-button path is deliberately
+        // unguarded because it is an explicit click on the labelled control.
         A::PanicSell => match target {
             Some((core, market)) => {
-                b.toggle_panic_sell(core, market);
-                bcx.notify();
+                if b.panic_sell_hotkey(core, market) {
+                    bcx.notify();
+                }
+                // Consumed rather than merely ignored, same as `pre_dispatch`: the key is ours
+                // even when the press itself was absorbed, and must not fall through.
                 true
             }
             None => false,

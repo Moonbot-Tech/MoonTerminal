@@ -269,9 +269,18 @@ struct Backend {
     /// Optimistic local manual-strategy selection as `(enabled, id)`, keeping the header toggle and
     /// picker responsive until the core echoes its settings.
     manual_strat_local: HashMap<CoreId, (bool, u64)>,
-    /// Locally armed Panic Sell state by `(core, market)`, providing immediate button highlighting
-    /// and on/off state without waiting for a core echo.
-    panic_armed: HashSet<(CoreId, String)>,
+    /// Optimistic Panic Sell override by `(core, market)`: SYMMETRIC (records both arm and
+    /// disarm), TTL-bounded, and takes precedence over the core snapshot while fresh. Reconciled
+    /// by the coordination tick, which drops an entry the moment the core agrees or the TTL
+    /// elapses so a stale override can never outlive the core's truth.
+    panic_local: HashMap<(CoreId, String), crate::backend::PanicLocal>,
+    /// Bumped by every accepted panic state change from the hotkey or the button, and by the
+    /// reconciliation tick. Compared by the chart panel ahead of its render throttle so the
+    /// Panic Sell / Stop Panic control repaints at once.
+    panic_rev: u64,
+    /// Hotkey-only debounce clock for Panic Sell, keyed per `(core, market)` and shared by every
+    /// window because `hotkeys::apply` has no state of its own. Pruned by the coordination tick.
+    last_panic_press: HashMap<(CoreId, String), Instant>,
     /// Backend-level notify is only for slow GPUI chrome/status/overlays. High-rate chart
     /// data goes straight into retained chart handles and must not dirty the whole tree.
     backend_dirty_since_notify: bool,
