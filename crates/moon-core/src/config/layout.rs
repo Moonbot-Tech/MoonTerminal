@@ -621,6 +621,12 @@ pub struct WindowLayout {
     /// `None` (old file / field was not written) → panel-side default of $1.
     #[serde(default)]
     pub assets_min_value: Option<f64>,
+    /// Assets: whether the wallet section's core list is grouped under exchange headings.
+    ///
+    /// `None` keeps the Assets-owned default. Read leniently so a malformed hand edit cannot
+    /// discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub assets_group_by_venue: Option<bool>,
     /// "Settings" window geometry (separate window), so it reopens in its previous position.
     #[serde(default)]
     pub settings_window: Option<GeomRect>,

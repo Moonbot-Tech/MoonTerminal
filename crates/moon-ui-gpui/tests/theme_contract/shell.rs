@@ -487,12 +487,37 @@ fn the_assets_wallets_header_caret_stays_passive() {
 
 /// The Assets wallet roster groups core rows by venue identity and resolves logos only after an
 /// off-thread prewarm, while every core keeps the trust-aware balance figure and click behavior.
+///
+/// The roster has two shapes — grouped under exchange headings and flat, chosen by the section's
+/// persisted preference — and both must reach the SAME row builder: a second copy of the row would
+/// be the one that forgets the transfer-asset refresh a click owes the core it selects. So the
+/// roster's body here is the section plus that shared builder, and the flat branch is required to
+/// call it rather than build a row of its own.
 #[test]
 fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
     let assets = read_src("panels/assets/mod.rs");
     let table = read_src("panels/assets/table.rs");
     let constructor = braced_body(&assets, "pub(super) fn new(");
-    let bottom = braced_body(&table, "pub(super) fn bottom(");
+    let section = braced_body(&table, "pub(super) fn bottom(");
+    let row = braced_body(&table, "fn wallet_core_row(");
+    assert_eq!(
+        section.matches("self.wallet_core_row(").count(),
+        2,
+        "both roster shapes — grouped and flat — must build their rows through wallet_core_row"
+    );
+    // Counting the calls alone would still pass if one branch called the builder and the other
+    // grew a hand-written row beside it. A row needs an identity, and the roster's identity is
+    // spelled once — inside the builder — so an inline copy shows up here as a second spelling.
+    assert!(
+        !section.contains(r#"format!("asset-core-{cid}")"#),
+        "a roster row built outside wallet_core_row is the copy that forgets the refresh a click \
+         owes the core it selects"
+    );
+    assert!(
+        row.contains(r#"format!("asset-core-{cid}")"#),
+        "the shared row builder must own the core row identity"
+    );
+    let bottom = format!("{section}\n{row}");
 
     for needle in [
         "cx.background_spawn(async { crate::media::exchange_logos::prewarm() })",
@@ -526,6 +551,97 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
     assert!(
         bottom.contains("asset-exchange-unknown") && !bottom.contains("status_dot"),
         "unknown exchange headings stay explicit without a fake logo or status dot"
+    );
+}
+
+/// The wallet roster's grouping preference must own exactly one optional layout key and one write
+/// path, and every string it shows must exist in the Assets locales.
+///
+/// The plausible edit is a bare `bool` in the layout, or a second writer that flips the field
+/// without marking the layout dirty: the first loses the absent-versus-disabled distinction, the
+/// second makes the gear's choice survive until restart and then silently revert.
+#[test]
+fn assets_wallet_grouping_owns_one_layout_key_and_one_writer() {
+    let settings = read_src("panels/assets/settings.rs");
+    let table = read_src("panels/assets/table.rs");
+    let view = read_src("panels/assets/mod.rs");
+    let layout = read_src("../../moon-core/src/config/layout.rs");
+    let locales = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("locales")
+            .join("assets.yml"),
+    )
+    .expect("read Assets locales");
+
+    for key in [
+        "assets.settings.title",
+        "assets.settings.display",
+        "assets.settings.group_by_venue",
+    ] {
+        assert!(
+            settings.contains(key),
+            "the settings popup does not consume {key}"
+        );
+        assert!(
+            locales.contains(&format!("{key}:")),
+            "locales do not define {key}"
+        );
+    }
+
+    let declaration = "pub assets_group_by_venue: Option<bool>";
+    assert!(
+        layout.contains(declaration),
+        "the grouping preference must remain an optional layout key"
+    );
+    let at = layout.find(declaration).expect("missing declaration");
+    assert!(
+        layout[at.saturating_sub(120)..at]
+            .contains("#[serde(default, deserialize_with = \"de_lenient\")]"),
+        "a malformed hand edit must not discard the whole layout"
+    );
+    assert_eq!(
+        settings
+            .matches("layout.assets_group_by_venue = Some(value)")
+            .count(),
+        1,
+        "exactly one writer may store the preference"
+    );
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut production_sources = Vec::new();
+    rust_sources(&src_root, &mut production_sources);
+    for path in production_sources {
+        let text = fs::read_to_string(&path).unwrap();
+        let rel = path.to_string_lossy().replace('\\', "/");
+        if rel.ends_with("panels/assets/settings.rs") {
+            continue;
+        }
+        assert!(
+            !text.contains("assets_group_by_venue = Some("),
+            "{rel} writes the preference behind the settings module's back"
+        );
+    }
+    assert!(
+        settings.contains("backend.layout_dirty = true"),
+        "an edit that never marks the layout dirty is forgotten at restart"
+    );
+    // Resolved where it is drawn, never cached in the view: the global "⧉" window and an Auto dock
+    // tab can both show a wallet section, and a per-view copy would leave the surface that did not
+    // host the gear drawing the old shape until restart.
+    assert!(
+        !view.contains("group_by_venue"),
+        "the preference must not be copied into AssetsView state"
+    );
+    assert!(
+        settings.contains("pub(super) fn group_by_venue(&self, cx: &App) -> bool")
+            && settings.contains("self.backend"),
+        "the reader must resolve the preference from the shared layout"
+    );
+    assert!(
+        table.contains("self.group_by_venue(cx)")
+            && table.contains("self.wallet_settings_popover(p, cx)"),
+        "the wallet section must read the preference and carry the gear beside its refresh button"
     );
 }
 

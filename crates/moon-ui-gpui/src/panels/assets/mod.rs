@@ -29,6 +29,7 @@ mod cache;
 mod collect;
 mod columns;
 mod render;
+mod settings;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -101,6 +102,8 @@ pub struct AssetsView {
     pub(super) sel_cores: HashSet<CoreId>,
     /// Whether the core list and Spot, Futures, and Quarterly wallet section is collapsed.
     pub(super) wallets_collapsed: bool,
+    /// Whether that settings popup is showing. Process-lifetime state, never persisted.
+    pub(super) wallet_settings_open: bool,
     /// UI-thread edge proving exchange logos were prewarmed off the render path.
     pub(super) exchange_logos_ready: bool,
     /// Open transfer-quantity dialog and its input. `PendingTransfer` is private to `wallets`, so
@@ -291,6 +294,7 @@ impl AssetsView {
             min_value_slider,
             sel_cores: HashSet::new(),
             wallets_collapsed: false,
+            wallet_settings_open: false,
             exchange_logos_ready: false,
             pending_transfer: None,
             transfer_input: None,

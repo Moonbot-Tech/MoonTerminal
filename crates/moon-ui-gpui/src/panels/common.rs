@@ -121,6 +121,24 @@ pub(crate) const POPUP_GROUP_PAD: f32 = 6.0;
 /// all three.
 pub(crate) const POPUP_GROUP_INSET: f32 = 2.0 * (POPUP_GROUP_PAD + 1.0);
 
+/// Compact `MoonCheckbox` mark width in design units.
+///
+/// The Compact checkbox's own geometry, which MoonUI exposes as a size variant rather than as
+/// readable tokens: a settings popup that measures its content has to know how much room the mark
+/// and its gap take before the label starts. Stated once here for the same reason
+/// [`POPUP_GROUP_INSET`] is — two popups measuring the same control with numbers of their own
+/// drift apart the first time either is nudged.
+pub(crate) const COMPACT_CHECKBOX_MARK: f32 = 12.0;
+
+/// Design-unit gap a compact `MoonCheckbox` leaves between its mark and its label.
+pub(crate) const COMPACT_CHECKBOX_GAP: f32 = 6.0;
+
+/// Compact `MoonCheckbox` label size before font scaling.
+pub(crate) const COMPACT_CHECKBOX_FONT: f32 = 9.5;
+
+/// `MoonGroupBox` caption size before font scaling, as [`popup_group`] renders it.
+pub(crate) const POPUP_GROUP_CAPTION_FONT: f32 = 10.5;
+
 /// [`POPUP_GROUP_INSET`] in rendered pixels at the current UI scale.
 ///
 /// Args:

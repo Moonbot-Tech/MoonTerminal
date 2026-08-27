@@ -847,6 +847,38 @@ fn strategies_preferences_round_trip_without_endangering_layout() {
     }
 }
 
+/// `layout.rs:WindowLayout::assets_group_by_venue` must preserve an explicit choice and ignore a
+/// malformed hand edit; a bare boolean would lose the absent-versus-disabled distinction, and a
+/// strict one would discard every neighboring layout preference on restart.
+#[test]
+fn assets_grouping_round_trips_without_endangering_layout() {
+    let saved = WindowLayout {
+        assets_group_by_venue: Some(false),
+        assets_min_value: Some(5.0),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load");
+    assert_eq!(decoded.assets_group_by_venue, Some(false));
+    assert_eq!(decoded.assets_min_value, Some(5.0));
+
+    let absent: WindowLayout = toml::from_str("assets_min_value = 5.0\n")
+        .expect("a layout written before the Assets preference must remain readable");
+    assert_eq!(absent.assets_group_by_venue, None);
+
+    for written in ["17", "\"maybe\"", "[true]", "{ enabled = true }"] {
+        let doc = format!("assets_min_value = 5.0\nassets_group_by_venue = {written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(
+            decoded.assets_min_value,
+            Some(5.0),
+            "{written}: a malformed Assets preference discarded a neighboring setting"
+        );
+        assert_eq!(decoded.assets_group_by_venue, None);
+    }
+}
+
 /// The header clock's compatibility offset must survive as the seed city migration reads.
 ///
 /// Breakage this pins: deleting `layout.rs:header_clock_offset_min` as dead code once
