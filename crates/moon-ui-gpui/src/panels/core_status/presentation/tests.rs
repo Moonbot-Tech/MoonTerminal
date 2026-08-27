@@ -38,20 +38,42 @@ fn unknown_and_unlimited_read_differently() {
     assert_eq!(api_expiry_text(ApiKeyState::Perpetual), "\u{221e}");
 }
 
-/// The colour follows the ENGINE's warning decision, which carries the user's day threshold. A
-/// second set of steps here would leave the number grey under a lit warning triangle as soon as the
-/// threshold is not the default — the disagreement `lat_level` exists to prevent for the pings.
+/// The engine's warning flag still controls the Warning branch before the panel's independent
+/// notice band. Letting notice replace it would leave a number blue or grey under the engine's
+/// yellow warning triangle.
 #[test]
 fn the_colour_follows_the_engines_decision_not_its_own_thresholds() {
     // 30 days left, and the user set a 60-day horizon: the engine warns, so the cell must colour.
     assert_eq!(
-        api_expiry_level(ApiKeyState::Days(30), true),
+        api_expiry_level(ApiKeyState::Days(30), true, false),
         LoadLevel::Warning
     );
     // Same 30 days under the default horizon: no warning, no colour.
     assert_eq!(
-        api_expiry_level(ApiKeyState::Days(30), false),
+        api_expiry_level(ApiKeyState::Days(30), false, false),
         LoadLevel::Normal
+    );
+}
+
+/// `presentation.rs:api_expiry_level` must reject stale warning flags when `state.days()` is
+/// absent. Mutation: delete the no-day-count guard; an unknown or perpetual key would render as a
+/// warning even though the terminal has no expiring key to report.
+#[test]
+fn an_unknown_or_perpetual_key_ignores_stale_warning_flags() {
+    assert_eq!(
+        api_expiry_level(ApiKeyState::Unknown, true, false),
+        LoadLevel::Normal,
+        "an absent expiry cannot be a warning"
+    );
+    assert_eq!(
+        api_expiry_level(ApiKeyState::Perpetual, true, true),
+        LoadLevel::Normal,
+        "a perpetual key cannot be a warning"
+    );
+    assert_eq!(
+        api_expiry_level(ApiKeyState::Days(30), true, false),
+        LoadLevel::Warning,
+        "a reported day count still obeys the engine warning flag"
     );
 }
 
@@ -60,7 +82,7 @@ fn the_colour_follows_the_engines_decision_not_its_own_thresholds() {
 #[test]
 fn an_expired_key_is_red_regardless() {
     assert_eq!(
-        api_expiry_level(ApiKeyState::Days(-3), false),
+        api_expiry_level(ApiKeyState::Days(-3), false, false),
         LoadLevel::Critical
     );
 }
@@ -70,11 +92,11 @@ fn an_expired_key_is_red_regardless() {
 #[test]
 fn an_unlimited_or_unknown_key_is_never_coloured() {
     assert_eq!(
-        api_expiry_level(ApiKeyState::Perpetual, false),
+        api_expiry_level(ApiKeyState::Perpetual, false, false),
         LoadLevel::Normal
     );
     assert_eq!(
-        api_expiry_level(ApiKeyState::Unknown, false),
+        api_expiry_level(ApiKeyState::Unknown, false, false),
         LoadLevel::Normal
     );
 }

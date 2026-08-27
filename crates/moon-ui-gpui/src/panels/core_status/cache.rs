@@ -19,10 +19,19 @@ impl CoreStatusView {
     ///
     /// Args:
     ///     b: Backend snapshot containing config, sessions, market identity, and the warning engine.
+    ///     fleet_newest: The newest MoonBot build currently reported anywhere in the fleet, from the
+    ///         STORE rather than these (possibly scoped) rows.
+    ///     api_axis_on: Whether the user has the ApiExpiry warning axis enabled. A user who switched
+    ///         it off asked not to be told about API keys; the notice band respects that.
     ///
     /// Returns:
     ///     Canonically ordered visible rows with CPU smoothed by the backend warning engine.
-    fn collect(&self, b: &Backend) -> Vec<CoreStatusRow> {
+    fn collect(
+        &self,
+        b: &Backend,
+        fleet_newest: Option<u32>,
+        api_axis_on: bool,
+    ) -> Vec<CoreStatusRow> {
         let store = b.session.store();
         // One clock reading for the whole snapshot: a per-row `now` could classify two cores
         // against different days in the same frame.
@@ -52,6 +61,14 @@ impl CoreStatusView {
             if let Some(system) = system {
                 sys.system_cpu_percent = Some(system);
             }
+            // Classified once here, against one clock reading, so every column, colour and sort in
+            // this frame agrees about the same key -- the triangle as much as the colour, since both
+            // read this state below.
+            let api_key = model::ApiKeyState::of(api_expiry, now_ms);
+            // Straight off the same store record every other field above reads: the store drops it
+            // on any non-Ready status, so a row can never show a build the current connection did
+            // not report.
+            let server_version = core.and_then(|core| core.server_version);
             out.push(CoreStatusRow {
                 id,
                 name,
@@ -65,14 +82,20 @@ impl CoreStatusView {
                 exch_warn: b.warn.core_exch_warn(id),
                 ping_sev: b.warn.core_ping_level(id),
                 exch_sev: b.warn.core_exch_level(id),
-                // Classified once here, against one clock reading, so every column, colour and sort
-                // in this frame agrees about the same key.
-                api_key: model::ApiKeyState::of(api_expiry, now_ms),
-                api_warn: b.warn.core_api_warn(id),
-                // Straight off the same store record every other field above reads: the store
-                // drops it on any non-Ready status, so a row can never show a build the current
-                // connection did not report.
-                server_version: core.and_then(|core| core.server_version),
+                api_key,
+                // The engine rebuilds its `api_warn` map only on its own tick, while the store
+                // clears `api_expiry` the INSTANT a reconnect begins. So a stale `true` can outlive
+                // the day count it was about. The classified state is authoritative: no number, no
+                // warning -- for the triangle as much as for the colour, since both read this bool.
+                api_warn: b.warn.core_api_warn(id) && api_key.days().is_some(),
+                // Colour-only band, decided from the SAME classified state the cell prints -- so the
+                // number and its colour cannot describe different keys.
+                api_notice: api_axis_on && api_key.within_notice(),
+                server_version,
+                version_behind: server_version
+                    .zip(fleet_newest)
+                    .filter(|(mine, newest)| mine < newest)
+                    .map(|(_, newest)| newest),
             });
         }
         out
@@ -89,9 +112,19 @@ impl CoreStatusView {
         let backend = self.backend.clone();
         let (mut groups, rows) = {
             let b = backend.read(cx);
-            let rows = self.collect(b);
+            // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset
+            // of the fleet must not compute a lower maximum and silently flag nothing, and two Core
+            // Status panels with different scopes must not disagree about which cores are stale.
+            let fleet_newest: Option<u32> = b
+                .session
+                .store()
+                .cores()
+                .filter_map(|(_, core)| core.server_version)
+                .max();
+            let api_axis_on = b.warn_axes().api;
+            let rows = self.collect(b, fleet_newest, api_axis_on);
             let names = b.layout.core_server_names.clone();
-            let mut groups = aggregate_servers(&rows);
+            let mut groups = aggregate_servers(&rows, fleet_newest);
             assign_server_names(&mut groups, &names);
             // All three warning axes come from the backend engine's current state.
             for group in &mut groups {

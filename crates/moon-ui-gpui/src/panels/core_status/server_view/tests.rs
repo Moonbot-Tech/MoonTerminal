@@ -6,7 +6,7 @@ use moon_core::feed::{ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 use super::tree_items;
-use crate::panels::core_status::model::{aggregate_servers, CoreStatusRow};
+use crate::panels::core_status::model::{CoreStatusRow, aggregate_servers};
 
 /// Build one ready core snapshot at an address.
 fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
@@ -23,9 +23,11 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
+        api_notice: false,
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        version_behind: None,
     }
 }
 
@@ -34,7 +36,7 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
 #[test]
 fn server_root_folds_its_core_children() {
     let address = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 17));
-    let groups = aggregate_servers(&[row(51, address, 3000)]);
+    let groups = aggregate_servers(&[row(51, address, 3000)], None);
 
     let items = tree_items(&groups);
 
@@ -50,7 +52,7 @@ fn server_root_folds_its_core_children() {
 fn tree_items_follow_address_order() {
     let low = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
     let high = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 20));
-    let groups = aggregate_servers(&[row(82, high, 3000), row(81, low, 3000)]);
+    let groups = aggregate_servers(&[row(82, high, 3000), row(81, low, 3000)], None);
 
     let items = tree_items(&groups);
 

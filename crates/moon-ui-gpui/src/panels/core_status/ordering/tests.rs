@@ -37,9 +37,11 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         exch_sev: LatencySeverity::Normal,
         api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
         api_warn: false,
+        api_notice: false,
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        version_behind: None,
     }
 }
 
@@ -75,9 +77,11 @@ fn group(
             exch_sev: LatencySeverity::Normal,
             api_key: ApiKeyState::Unknown,
             api_warn: false,
+            api_notice: false,
             startup: CoreStartupStatus::default(),
             time_offset: CoreTimeOffsetStatus::default(),
             server_version: None,
+            version_behind: None,
         })
         .collect::<Vec<_>>();
     let ready_count = cores
@@ -93,8 +97,10 @@ fn group(
         ping_warn: false,
         exch_warn: false,
         api_warn: false,
+        api_notice: false,
         api_key: ApiKeyState::Unknown,
         version: GroupVersion::Absent,
+        version_behind: None,
         tz_offset: TzOffsetGroup::Absent,
         address: None,
         cores,

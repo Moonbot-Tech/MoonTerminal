@@ -31,7 +31,8 @@ use super::ordering::GroupSortField;
 use super::presentation::{
     LoadLevel, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level, lat_level,
     level_color, memory_free, memory_u16, percent, ping_plain, tz_offset_group_text,
-    version_group_text, version_text,
+    version_behind_group_tooltip, version_behind_tooltip, version_color, version_group_text,
+    version_text,
 };
 use super::startup::{
     StartupCell, startup_cell, startup_cell_text, startup_facts, startup_tooltip,
@@ -417,7 +418,10 @@ fn server_row(
                     api_expiry_text(group.api_key),
                     w.api,
                     w.icon,
-                    level_color(api_expiry_level(group.api_key, group.api_warn), p),
+                    level_color(
+                        api_expiry_level(group.api_key, group.api_warn, group.api_notice),
+                        p,
+                    ),
                     group.api_warn,
                     p,
                 ))
@@ -425,12 +429,20 @@ fn server_row(
                 // build is shown only when EVERY core reported and all agree, because a silent
                 // sibling is a process this row cannot vouch for. Disagreement reads as an
                 // ellipsis, whose whole message is "expand me".
-                .child(version_slot(
-                    version_group_text(group.version),
-                    matches!(group.version, GroupVersion::Uniform(_)),
-                    w.version,
-                    p,
-                ))
+                .child(
+                    version_slot(
+                        version_group_text(group.version),
+                        matches!(group.version, GroupVersion::Uniform(_)),
+                        group.version_behind.is_some(),
+                        w.version,
+                        p,
+                    )
+                    .when_some(group.version_behind, |c, (have, newest)| {
+                        c.tooltip(crate::panels::common::text_tooltip(
+                            version_behind_group_tooltip(have, newest),
+                        ))
+                    }),
+                )
                 // Rolled up from this server's cores so a COLLAPSED group still tells the
                 // truth: an unfinished core wins, otherwise the longest any of them took.
                 .child(startup_text_cell(
@@ -441,13 +453,12 @@ fn server_row(
                 // Rolled up from this server's cores so a COLLAPSED group still tells the truth: a
                 // silent sibling beside a measured core reads as `Mixed`, never as the sibling's own
                 // offset. The hover names the representative core the text is drawn from.
-                .child(
-                    tz_offset_group_cell(group.tz_offset, w.tz_off, p)
-                        .tooltip(crate::panels::common::text_tooltip(tz_offset_group_tooltip(
-                            &group.cores,
-                            group.tz_offset,
-                        ))),
-                )
+                .child(tz_offset_group_cell(group.tz_offset, w.tz_off, p).tooltip(
+                    crate::panels::common::text_tooltip(tz_offset_group_tooltip(
+                        &group.cores,
+                        group.tz_offset,
+                    )),
+                ))
                 .child(
                     div()
                         .w(px(w.cores))
@@ -592,21 +603,33 @@ fn core_row(
                     api_expiry_text(core.api_key),
                     w.api,
                     w.icon,
-                    level_color(api_expiry_level(core.api_key, core.api_warn), p),
+                    level_color(
+                        api_expiry_level(core.api_key, core.api_warn, core.api_notice),
+                        p,
+                    ),
                     core.api_warn,
                     p,
                 ))
-                // This core's own reported build. No warning treatment and no colour ramp: a ramp
-                // needs a threshold, and this workspace defines no minimum version by explicit
-                // decision. The one age claim the terminal makes — `legacy_core`, about a missing
-                // PROTOCOL version — stays in the fault hover one cell to the right, where it can
-                // co-occur with this number instead of being duplicated by it.
-                .child(version_slot(
-                    version_text(core.server_version),
-                    core.server_version.is_some(),
-                    w.version,
-                    p,
-                ))
+                // This core's own reported build. No warning treatment beyond the "behind the
+                // fleet" mark: a ramp needs a threshold, and this workspace defines no minimum
+                // version by explicit decision. The one age claim the terminal makes — `legacy_core`,
+                // about a missing PROTOCOL version — stays in the fault hover one cell to the right,
+                // where it can co-occur with this number instead of being duplicated by it.
+                .child(
+                    version_slot(
+                        version_text(core.server_version),
+                        core.server_version.is_some(),
+                        core.version_behind.is_some(),
+                        w.version,
+                        p,
+                    )
+                    .when_some(core.version_behind, |c, newest| {
+                        c.tooltip(crate::panels::common::text_tooltip(version_behind_tooltip(
+                            core.server_version,
+                            newest,
+                        )))
+                    }),
+                )
                 // The per-core cell carries the full detail behind it; the server row above only
                 // summarises, so the hover lives here where there is one snapshot to describe.
                 //
@@ -897,7 +920,12 @@ fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stat
         TzOffsetCell::Measured { .. } => p.text_soft,
         TzOffsetCell::Unknown => p.text_muted,
     };
-    plain_slot("core-status-tz-off", tz_offset_cell_text(cell), value_w, color)
+    plain_slot(
+        "core-status-tz-off",
+        tz_offset_cell_text(cell),
+        value_w,
+        color,
+    )
 }
 
 /// One reported-build cell, in the same slot chrome the startup column uses.
@@ -905,19 +933,34 @@ fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stat
 /// A reported build is a frozen identity fact rather than a live measurement, so it is subordinate
 /// to the metrics beside it — `text_soft`, the same treatment [`startup_text_cell`] gives a
 /// FINISHED startup. Absence and disagreement are `text_muted`: they mean "no answer", and painting
-/// them amber or red would turn a fact this terminal cannot establish into an accusation.
+/// them red or a warning colour would turn a fact this terminal cannot establish into an
+/// accusation. A build behind the fleet's newest takes [`super::presentation::notice_color`] --
+/// a STATE mark against a fleet-derived reference, not a threshold ramp and not an episode: no
+/// triangle, no sound, no warning source of its own. That function owns which colour it is, and
+/// why it is not the amber used elsewhere in this file.
 ///
 /// Args:
 ///     text: The already-composed cell text.
 ///     reported: Whether there is a build to show, as opposed to absence or disagreement.
+///     behind: Whether this build is behind the fleet's newest reported build.
 ///     value_w: Current column width from [`ByIpWidths`].
 ///     p: Active Moon palette.
 ///
 /// Returns:
 ///     A compact build cell with a stable footprint.
-fn version_slot(text: String, reported: bool, value_w: f32, p: MoonPalette) -> Stateful<Div> {
-    let color = if reported { p.text_soft } else { p.text_muted };
-    plain_slot("core-status-version", text, value_w, color)
+fn version_slot(
+    text: String,
+    reported: bool,
+    behind: bool,
+    value_w: f32,
+    p: MoonPalette,
+) -> Stateful<Div> {
+    plain_slot(
+        "core-status-version",
+        text,
+        value_w,
+        version_color(behind, reported, p),
+    )
 }
 
 /// A fixed-width text cell with NO warning-icon lead, for a column that has no `WarnAxis` behind

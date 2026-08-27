@@ -1211,6 +1211,7 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
 fn core_status_table_binds_scoped_telemetry_columns() {
     let text = read_src("panels/core_status/table.rs");
     let flat_row = braced_body(&text, "fn core_status_row(");
+    let version_cell = braced_body(&text, "fn version_hover_cell(");
     let server = read_src("panels/core_status/server_view.rs");
     let server_row = braced_body(&server, "fn server_row(");
     let process_row = braced_body(&server, "fn core_row(");
@@ -1270,11 +1271,7 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         );
     }
     for (body, binding, row) in [
-        (
-            flat_row,
-            "MoonDataCell::text(version_text(r.server_version))",
-            "Flat",
-        ),
+        (version_cell, "version_text(r.server_version)", "Flat"),
         (
             server_row,
             "version_group_text(group.version)",

@@ -6,7 +6,7 @@ use moon_core::feed::{ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
 use moon_core::session::{CoreStartupState, CoreStartupStatus, CoreSysStatus};
 
 use super::{
-    aggregate_servers, group_version, CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey,
+    CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, aggregate_servers, group_version,
 };
 
 /// Build one core snapshot for aggregation tests.
@@ -33,9 +33,11 @@ fn row(
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
+        api_notice: false,
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        version_behind: None,
     }
 }
 
@@ -60,7 +62,7 @@ fn same_ip_with_different_ports_forms_one_server() {
         ),
     ];
 
-    let groups = aggregate_servers(&rows);
+    let groups = aggregate_servers(&rows, None);
 
     assert_eq!(groups.len(), 1);
     assert_eq!(
@@ -99,6 +101,36 @@ fn group_version_requires_every_core_to_report_the_same_build() {
     assert_eq!(group_version(&[]), GroupVersion::Absent);
 }
 
+/// `model.rs:finish_group` must mark a collapsed group as behind only after every core agrees on
+/// its build. Mutation: replace the Uniform-only match with a `find_map` over child
+/// `version_behind`; a Mixed group would claim that its ellipsis is an older build.
+#[test]
+fn only_uniform_groups_are_marked_behind_the_fleet() {
+    let address = Some([192, 0, 2, 55]);
+    let mut older = row(
+        1,
+        address,
+        3000,
+        ConnStatus::Ready,
+        CoreSysStatus::default(),
+    );
+    older.server_version = Some(734);
+    older.version_behind = Some(735);
+    let mut newest = row(
+        2,
+        address,
+        3001,
+        ConnStatus::Ready,
+        CoreSysStatus::default(),
+    );
+    newest.server_version = Some(735);
+
+    let groups = aggregate_servers(&[older, newest], Some(735));
+
+    assert_eq!(groups[0].version, GroupVersion::Mixed);
+    assert_eq!(groups[0].version_behind, None);
+}
+
 /// `model.rs:finish_group` must use the newest sample independently per machine metric and a `u64`
 /// process-memory sum; one whole sample or a `u16` sum shows stale data or overflows.
 #[test]
@@ -134,7 +166,7 @@ fn metrics_use_freshest_sources_and_wide_process_sum() {
         ),
     ];
 
-    let server = &aggregate_servers(&rows)[0];
+    let server = &aggregate_servers(&rows, None)[0];
 
     assert_eq!(server.system_cpu_percent, Some(91));
     assert_eq!(server.free_physical_memory_mb, Some(24_000));
@@ -163,7 +195,7 @@ fn unknown_endpoints_remain_isolated() {
         ),
     ];
 
-    let groups = aggregate_servers(&rows);
+    let groups = aggregate_servers(&rows, None);
 
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0].key, ServerKey::Unknown(31));
@@ -198,7 +230,7 @@ fn servers_are_ordered_by_address() {
         ),
     ];
 
-    let addresses = aggregate_servers(&rows)
+    let addresses = aggregate_servers(&rows, None)
         .iter()
         .filter_map(|group| group.address)
         .collect::<Vec<_>>();
@@ -248,7 +280,7 @@ fn cores_within_server_ordered_by_name() {
         ),
     ];
 
-    let groups = aggregate_servers(&rows);
+    let groups = aggregate_servers(&rows, None);
 
     assert_eq!(
         groups[0]
@@ -281,7 +313,7 @@ fn partial_readiness_is_degraded() {
         ),
     ];
 
-    let server = &aggregate_servers(&rows)[0];
+    let server = &aggregate_servers(&rows, None)[0];
 
     assert_eq!(server.ready_count, 1);
     assert_eq!(server.connectivity, ServerConnectivity::Degraded);
@@ -306,11 +338,14 @@ fn key_row(id: u64, address: [u8; 4], key: super::ApiKeyState) -> CoreStatusRow 
 /// reports the one that actually needs attention rather than whichever core sorted first.
 #[test]
 fn a_server_reports_its_soonest_key() {
-    let groups = aggregate_servers(&[
-        key_row(1, [10, 0, 0, 1], super::ApiKeyState::Days(40)),
-        key_row(2, [10, 0, 0, 1], super::ApiKeyState::Days(3)),
-        key_row(3, [10, 0, 0, 1], super::ApiKeyState::Perpetual),
-    ]);
+    let groups = aggregate_servers(
+        &[
+            key_row(1, [10, 0, 0, 1], super::ApiKeyState::Days(40)),
+            key_row(2, [10, 0, 0, 1], super::ApiKeyState::Days(3)),
+            key_row(3, [10, 0, 0, 1], super::ApiKeyState::Perpetual),
+        ],
+        None,
+    );
 
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].api_key, super::ApiKeyState::Days(3));
@@ -320,16 +355,22 @@ fn a_server_reports_its_soonest_key() {
 /// key beside a sibling nobody could check would otherwise report the whole machine as safe.
 #[test]
 fn one_unlimited_key_does_not_speak_for_unchecked_siblings() {
-    let mixed = aggregate_servers(&[
-        key_row(1, [10, 0, 0, 2], super::ApiKeyState::Perpetual),
-        key_row(2, [10, 0, 0, 2], super::ApiKeyState::Unknown),
-    ]);
+    let mixed = aggregate_servers(
+        &[
+            key_row(1, [10, 0, 0, 2], super::ApiKeyState::Perpetual),
+            key_row(2, [10, 0, 0, 2], super::ApiKeyState::Unknown),
+        ],
+        None,
+    );
     assert_eq!(mixed[0].api_key, super::ApiKeyState::Unknown);
 
-    let all_unlimited = aggregate_servers(&[
-        key_row(1, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
-        key_row(2, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
-    ]);
+    let all_unlimited = aggregate_servers(
+        &[
+            key_row(1, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
+            key_row(2, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
+        ],
+        None,
+    );
     assert_eq!(all_unlimited[0].api_key, super::ApiKeyState::Perpetual);
 }
 
@@ -337,10 +378,13 @@ fn one_unlimited_key_does_not_speak_for_unchecked_siblings() {
 /// state the column has, and `days()` places it below zero for exactly that reason.
 #[test]
 fn an_expired_key_wins_the_server_row() {
-    let groups = aggregate_servers(&[
-        key_row(1, [10, 0, 0, 4], super::ApiKeyState::Days(0)),
-        key_row(2, [10, 0, 0, 4], super::ApiKeyState::Days(-3)),
-    ]);
+    let groups = aggregate_servers(
+        &[
+            key_row(1, [10, 0, 0, 4], super::ApiKeyState::Days(0)),
+            key_row(2, [10, 0, 0, 4], super::ApiKeyState::Days(-3)),
+        ],
+        None,
+    );
 
     assert_eq!(groups[0].api_key, super::ApiKeyState::Days(-3));
 }
@@ -459,9 +503,11 @@ fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow 
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
+        api_notice: false,
         startup,
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        version_behind: None,
     }
 }
 

@@ -6,8 +6,8 @@ use crate::panels::core_status::by_ip_widths::{ByIpWidths, MAX_COL_W, MIN_COL_W}
 
 /// Right-edge reserve of a real row: the status dot plus the tree's overlay scrollbar.
 const RESERVED: f32 = 5.0 + 16.0;
-/// Rem size at the shipped defaults (`12 * scale + ui_font_delta`).
-const REM: f32 = 14.0;
+/// Rem size at the shipped defaults (`12 * scale + ui_font_delta = 15`).
+const REM: f32 = 15.0;
 
 /// An empty user-width bag: the panel as shipped, before anyone has dragged a column.
 ///
