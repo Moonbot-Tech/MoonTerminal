@@ -738,10 +738,11 @@ impl ChartDataState {
                         &mut pr.volume_samples,
                     );
                     // `take` hands the buffer away and leaves an empty one to grow again on the
-                    // next revision — tens of ~24 KB alloc/free cycles a second on a live market,
-                    // and part of what the timer above reports. Left alone deliberately: retaining
-                    // it means handing the buffer back OUT of the layer, an API change across three
-                    // backends for a slice of a figure already at 0.14% of wall time.
+                    // next revision — tens of ~24 KB allocations a second on a live market. The
+                    // allocation lands inside the timer above; the matching free happens when the
+                    // layer drops the vector, which no timer spans. Left alone deliberately:
+                    // retaining it means handing the buffer back OUT of the layer, an API change
+                    // across three backends for a slice of a figure already at 0.14% of wall time.
                     pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
                     crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
                     pr.last_candle_rev = history.candles_revision;

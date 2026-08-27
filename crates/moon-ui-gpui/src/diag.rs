@@ -104,20 +104,27 @@ diag_counters!(
     // the vector. Counted apart from `history_read_us`, which measures the moon-core side that
     // PRODUCED the series.
     //
-    // Read it against `candle_upload_len`: that counter says how many rows are re-uploaded, this
-    // one says what those rows cost. A live trade batch advances the series revision, and the whole
+    // Read it against `candle_upload_len`: that counter says how many rows were PRODUCED for
+    // upload — it is bumped before the layer applies its capacity cap, so the two diverge by
+    // `candle_dropped` exactly when that fires. This one says what they cost. A live trade batch advances the series revision, and the whole
     // composed series is re-shipped on each one — so both numbers scale with the VISIBLE range,
     // and zooming out multiplies them.
     //
     // Part of it is the instance vector's own allocation; see the note at the call site.
+    //
+    // Two caveats on reading it. Only the DX11 path records the GPU half — `chartdx/candles.rs` is
+    // Windows-only — so on macOS and Linux this is the CPU half alone. And a revision superseded
+    // before the next frame is counted once on the CPU side and never on the GPU side, because
+    // `set` overwrites a vector that was never mapped.
     CHART_CANDLE_UPLOAD_US => "candle_upload_us",
     // Candle instances DROPPED because the series outgrew the layer's buffer, per second. The
     // layer keeps the newest `CANDLE_CAPACITY`; the chart's left then simply has no candles while
     // the grid and the trades still draw there.
     //
-    // Zero at every size seen so far. Anything else means the visible range now outruns the
-    // buffer — a fine timeframe zoomed out far is what reaches it — and the number is how many
-    // candles are missing from the left edge.
+    // Zero at every size seen so far. Anything else means the visible range now outruns the buffer
+    // — a fine timeframe zoomed out far is what reaches it. It is a RATE, and the whole buffer is
+    // re-shipped on every revision, so it reads as "missing candles multiplied by uploads a
+    // second": divide by `base_bake` for how many are actually absent from the left edge.
     CHART_CANDLE_DROPPED => "candle_dropped",
     // Durable CLOSED-TRADE history reads started per second — a different subject from the three
     // counters above, which measure the LIVE trade buffer. Each one is an SQLite connection to the

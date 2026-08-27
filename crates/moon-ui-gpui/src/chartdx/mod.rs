@@ -975,8 +975,9 @@ struct RenderState {
     /// texture is CLEARED to it, which is both the fill and — see `base.rs`'s module doc — what
     /// keeps a bake/blit divergence off the screen. Do not clear that texture to zero.
     ///
-    /// It covers GPUI or SwapChain's unpainted white background on the first frame. The branded
-    /// empty-state logo is a GPUI SVG layer, not a native raster splash.
+    /// Within the blitted slot it is what covers GPUI or SwapChain's unpainted white background on
+    /// the first frame. The branded empty-state logo is a GPUI SVG layer, not a native raster
+    /// splash.
     #[cfg(windows)]
     window_bg_color: [f32; 4],
     #[cfg(windows)]

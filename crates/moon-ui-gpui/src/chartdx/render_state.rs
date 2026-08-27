@@ -954,12 +954,24 @@ impl RenderState {
                 let scissor_rs = self.scissor_rs.clone().unwrap();
                 let prev_rs = unsafe { context.RSGetState().ok() };
 
-                // THIS chart's slot: the union of its active panes' bounds, in device pixels.
-                // Computed BEFORE the bake because both halves need it — the bake to know how much
-                // of its texture is ever read, the blit to avoid erasing sibling charts. With
-                // multiple `gpu_canvas` elements in one window a full-window blit would overwrite
-                // the neighbours; with no active panes there is nothing to blit and the empty state
-                // stays the GPUI logo overlay.
+                if self.base_dirty || self.base_cache.needs_rebuild(gpu) {
+                    // The clear IS the background fill: it paints `window_bg_color` over the whole
+                    // texture, and the dedicated background pass this used to run painted that same
+                    // colour through a full pipeline pass — `opacity` was hardcoded to zero, so its
+                    // shader reduced to `float4(bg.rgb, 1.0)`.
+                    let base_rtv = self.base_cache.begin_rebuild(
+                        &device,
+                        &context,
+                        gpu,
+                        self.window_bg_color,
+                    )?;
+                    self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
+                    self.base_dirty = false;
+                }
+                // Clip the blit to THIS chart's slot, the union of its active-panel bounds, rather
+                // than the full backbuffer. With multiple `gpu_canvas` elements in one detached
+                // window stack, a full-window blit would erase sibling charts. With no active
+                // panels, skip the blit so the empty state remains the GPUI logo overlay.
                 let mut blit_clip: Option<[f32; 4]> = None;
                 for pr in &self.panes {
                     if !pr.active {
@@ -975,21 +987,6 @@ impl RenderState {
                         ],
                         None => c,
                     });
-                }
-                if self.base_dirty || self.base_cache.needs_rebuild(gpu) {
-                    // The clear IS the background fill. It paints `window_bg_color`, and the
-                    // dedicated background pass this used to run painted the same colour through a
-                    // whole pipeline pass — `opacity` was hardcoded to zero, so its shader reduced
-                    // to `float4(bg.rgb, 1.0)`, and it covered the entire window to have all but
-                    // this chart's slot thrown away by the scissored blit below.
-                    let base_rtv = self.base_cache.begin_rebuild(
-                        &device,
-                        &context,
-                        gpu,
-                        self.window_bg_color,
-                    )?;
-                    self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
-                    self.base_dirty = false;
                 }
                 if let Some(clip) = blit_clip {
                     self.base_cache.blit_to(&context, &rtv, gpu, clip);

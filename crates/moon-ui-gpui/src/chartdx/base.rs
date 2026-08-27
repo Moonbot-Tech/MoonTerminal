@@ -1,14 +1,14 @@
 //! Window-sized cached chart base for DX11.
 //!
-//! The texture is allocated at the full backbuffer size, but only THIS chart's slot is ever
-//! painted into it and only that slot is ever blitted out — several charts share one backbuffer,
-//! each with its own cache. Inside the slot it holds every chart pixel that does not belong to the
-//! high-frequency cursor/readout overlay; cursor-only frames blit it and then draw the cursor.
+//! The texture is allocated at the full backbuffer size, but only THIS chart's slot is ever blitted
+//! out of it — several charts share one backbuffer, each with its own cache. Inside the slot it
+//! holds every chart pixel that does not belong to the high-frequency cursor/readout overlay;
+//! cursor-only frames blit it and then draw the cursor.
 //!
-//! Outside the slot it holds the window background, which is what the CLEAR paints. That colour is
-//! not decoration: `blit_opaque_fragment` forces alpha to one, so were the uncovered region left at
-//! a transparent clear, any future divergence between the baked rect and the blitted rect would
-//! reach the screen as an opaque BLACK rectangle instead of as nothing visible at all.
+//! The CLEAR paints the whole texture with the window background, and that is both the fill and a
+//! safety net: it is the only thing under the layers, and `blit_opaque_fragment` forces alpha to
+//! one — so a transparent clear would surface any divergence between what the bake drew and what
+//! the blit reads as an opaque BLACK rectangle instead of as nothing visible at all.
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -99,8 +99,7 @@ impl BaseCache {
     /// `clip` is this chart's slot in device-pixel backbuffer coordinates `(l, t, r, b)`.
     /// Blitting is restricted to it because a full-window blit would overwrite adjacent charts when
     /// one window contains multiple `gpu_canvas` elements. The quad spans the whole texture and the
-    /// scissor is the only thing that narrows it — which is also why `clip` must stay inside what
-    /// the last bake painted.
+    /// scissor is the only thing that narrows it.
     pub fn blit_to(
         &mut self,
         context: &ID3D11DeviceContext,
