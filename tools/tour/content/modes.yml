@@ -1,0 +1,33 @@
+# First-class window-map modes. AutoTrading is the default schematic; Classic is the
+# basic manual workspace alongside it.
+# Labels and leads are authored here; tips reuse locales/workspace.yml so they
+# cannot drift from the in-app workspace-mode control.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.modes.v1
+modes:
+- id: classic
+  label:
+    ru: Базовый режим
+    en: Classic
+  tip:
+    locale: workspace.mode.classic_tip
+  lead:
+    ru: Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их
+      клавишей Tab.
+    en: Nineteen zones. Hover the window and their outlines appear; click any of them, or walk through
+      with Tab.
+- id: auto
+  default: true
+  label:
+    ru: Авто торговля
+    en: AutoTrading
+  tip:
+    locale: workspace.mode.auto_tip
+  lead:
+    ru: Девятнадцать зон рабочего пространства Автоторговля — левая рейка ядер, закреплённые графики и
+      общая раскладка без открепления окон. Наведите мышь на окно — границы зон проявятся; кликните любую
+      или пройдите их клавишей Tab.
+    en: Nineteen AutoTrading workspace zones — the left core rail, pinned charts, and a shared layout
+      with window detachment disabled. Hover the window and their outlines appear; click any of them,
+      or walk through with Tab.

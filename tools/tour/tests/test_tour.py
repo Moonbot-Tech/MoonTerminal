@@ -30,10 +30,10 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tour import emit, knowledge, paths, render as render_mod  # noqa: E402
+from tour import emit, knowledge, map as map_mod, paths, render as render_mod  # noqa: E402
 from tour.__main__ import main as tour_main  # noqa: E402
 from tour.content import Language, load as load_content  # noqa: E402
-from tour.errors import ContentError, TourError  # noqa: E402
+from tour.errors import ContentError, Problems, TourError  # noqa: E402
 from tour.locales import load as load_locales  # noqa: E402
 from tour.theme import load as load_theme, resolve as resolve_theme  # noqa: E402
 
@@ -114,6 +114,8 @@ class KnowledgeBundle(unittest.TestCase):
         content = copy.deepcopy(original)
         content.languages.append(Language(code="es", label="ES", html_lang="es"))
         texts = list(content.page.values())
+        for mode in content.modes:
+            texts.extend((mode["label"], mode["tip"], mode["lead"]))
         for zone in content.zones:
             texts.extend((zone["title"], zone["body"]))
         for step in content.steps:
@@ -349,9 +351,14 @@ class LocaleFidelity(unittest.TestCase):
             if not text.locale_key:
                 continue
             for code in content.codes:
+                source = locales.get(text.locale_key, code)
+                if "%{" in source:
+                    self.assertNotIn("%{", text.get(code), f"page key {key!r} left a placeholder")
+                    checked += 1
+                    continue
                 self.assertEqual(
                     text.get(code),
-                    locales.get(text.locale_key, code),
+                    source,
                     f"page key {key!r} drifted from {text.locale_key!r} [{code}]",
                 )
                 checked += 1
@@ -361,8 +368,13 @@ class LocaleFidelity(unittest.TestCase):
                 if not text.locale_key:
                     continue
                 for code in content.codes:
+                    source = locales.get(text.locale_key, code)
+                    if "%{" in source:
+                        self.assertNotIn("%{", text.get(code))
+                        checked += 1
+                        continue
                     self.assertEqual(
-                        text.get(code), locales.get(text.locale_key, code)
+                        text.get(code), source
                     )
                     checked += 1
         self.assertGreater(checked, 0, "no locale-backed slots — the wiring is dead")
@@ -374,6 +386,13 @@ class LanguageCompleteness(unittest.TestCase):
         for key, text in content.page.items():
             for code in content.codes:
                 self.assertTrue(text.get(code).strip(), f"page.{key} has no {code}")
+        for mode in content.modes:
+            for field in ("label", "tip", "lead"):
+                for code in content.codes:
+                    self.assertTrue(
+                        mode[field].get(code).strip(),
+                        f"mode.{mode['id']}.{field} has no {code}",
+                    )
 
     def test_a_missing_language_is_reported_not_dropped(self):
         """The negative case. Without it the positive one proves nothing."""
@@ -392,10 +411,13 @@ class LanguageCompleteness(unittest.TestCase):
 
     def test_an_unknown_locale_key_is_reported_with_a_suggestion(self):
         def typo_the_key(doc):
-            for zone in doc["zones"]:
-                if zone["id"] == "live":
-                    zone["body"] = {"locale": "toolbar.live_tipp"}
-                    return
+            for block in doc.get("maps") or []:
+                if block.get("mode") != "classic":
+                    continue
+                for zone in block.get("zones") or []:
+                    if zone["id"] == "live":
+                        zone["body"] = {"locale": "toolbar.live_tipp"}
+                        return
             raise AssertionError("zone 'live' is gone — update this test")
 
         locales = load_locales(paths.LOCALES_DIR)
@@ -452,13 +474,15 @@ class ThemeFidelity(unittest.TestCase):
 class Structure(unittest.TestCase):
     def test_zone_numbers_cover_the_range_with_no_gaps(self):
         _, content, _ = build()
-        numbers = sorted(z["n"] for z in content.zones)
-        self.assertEqual(numbers, list(range(1, len(content.zones) + 1)))
+        for mode in content.modes:
+            numbers = sorted(z["n"] for z in content.zones if z["mode"] == mode["id"])
+            self.assertEqual(numbers, list(range(1, len(numbers) + 1)), mode["id"])
 
     def test_zone_ids_are_unique(self):
         _, content, _ = build()
-        ids = [z["id"] for z in content.zones]
-        self.assertEqual(len(ids), len(set(ids)))
+        for mode in content.modes:
+            ids = [z["id"] for z in content.zones if z["mode"] == mode["id"]]
+            self.assertEqual(len(ids), len(set(ids)), mode["id"])
 
     def test_every_clickable_region_has_a_zone(self):
         page, content, _ = build()
@@ -551,6 +575,184 @@ class Escaping(unittest.TestCase):
         self.assertNotIn("[", destination)
         self.assertNotIn("(", destination)
         self.assertNotIn(")", destination)
+
+
+def _app_markup(page: str, mode_id: str) -> str:
+    """Return one generated window replica by matching its opening/closing divs."""
+    token = f'id="app-{mode_id}"'
+    at = page.find(token)
+    if at < 0:
+        return ""
+    start = page.rfind("<div", 0, at)
+    depth = 0
+    i = start
+    while i < len(page):
+        if page.startswith("<div", i):
+            depth += 1
+            i += 4
+            continue
+        if page.startswith("</div>", i):
+            depth -= 1
+            i += 6
+            if depth == 0:
+                return page[start:i]
+            continue
+        i += 1
+    return page[start:]
+
+
+class WindowModes(unittest.TestCase):
+    """Classic and AutoTrading must both be generated from the content model."""
+
+    def test_classic_and_auto_are_first_class_modes(self):
+        _, content, _ = build()
+        ids = [mode["id"] for mode in content.modes]
+        self.assertEqual(ids, ["classic", "auto"])
+        self.assertFalse(content.modes[0]["default"])
+        self.assertTrue(content.modes[1]["default"])
+        self.assertEqual(content.modes[0]["label"].get("ru"), "Базовый режим")
+        self.assertEqual(content.modes[1]["label"].get("ru"), "Авто торговля")
+        classic = [z for z in content.zones if z["mode"] == "classic"]
+        auto = [z for z in content.zones if z["mode"] == "auto"]
+        self.assertEqual(len(classic), 19)
+        self.assertGreaterEqual(len(auto), 8)
+        self.assertTrue(any(z["id"] == "overview" for z in auto))
+        self.assertTrue(any(z["id"] == "cores" for z in auto))
+        self.assertFalse(any(z["id"] == "detects" for z in auto))
+        self.assertFalse(any(z["id"] == "alerts" for z in auto))
+
+    def test_window_replicas_are_not_hardcoded_in_the_template(self):
+        template = paths.TEMPLATE.read_text(encoding="utf-8")
+        markup = re.sub(r"<script>.*?</script>", "", template, flags=re.S)
+        self.assertNotIn('data-zone="', markup)
+        self.assertNotIn('id="app-classic"', markup)
+        self.assertNotIn('id="app-auto"', markup)
+        self.assertIn("{{window_maps}}", template)
+        self.assertIn("{{mode_switch}}", template)
+        self.assertIn("{{data_modes}}", template)
+
+    def test_each_mode_map_exposes_exactly_its_zones(self):
+        page, content, _ = build()
+        markup = re.sub(r"<script>.*?</script>", "", page, flags=re.S)
+        for mode in content.modes:
+            html = _app_markup(markup, mode["id"])
+            self.assertTrue(html, mode["id"])
+            found = set(re.findall(r'data-zone="([^"]+)"', html))
+            expected = {z["id"] for z in content.zones if z["mode"] == mode["id"]}
+            self.assertEqual(found, expected, mode["id"])
+        classic_html = _app_markup(markup, "classic")
+        auto_html = _app_markup(markup, "auto")
+        self.assertIn('data-i18n="tab.news"', classic_html)
+        self.assertIn('data-i18n="tab.alerts"', classic_html)
+        self.assertNotIn('data-i18n="tab.news"', auto_html)
+        self.assertNotIn('data-i18n="tab.alerts"', auto_html)
+        self.assertIn('data-i18n="tab.charts"', auto_html)
+        self.assertIn("auto-rail", auto_html)
+
+    def test_dropping_auto_mode_is_reported(self):
+        def drop_auto(doc):
+            doc["modes"] = [item for item in doc["modes"] if item["id"] != "auto"]
+
+        locales = load_locales(paths.LOCALES_DIR)
+        with broken_content("modes.yml", drop_auto) as content_dir:
+            with self.assertRaises(TourError) as caught:
+                content = load_content(content_dir, locales)
+                content.problems.raise_if_any("content is not usable", ContentError)
+        self.assertIn("auto", str(caught.exception))
+
+    def test_mode_switch_is_keyboard_operable(self):
+        page, content, _ = build()
+        self.assertIn('role="radiogroup"', page)
+        self.assertIn('name="tour-mode"', page)
+        self.assertIn("prefers-reduced-motion", page)
+        self.assertIn("@keyframes map-in", page)
+        for mode in content.modes:
+            self.assertIn(f'id="mode-{mode["id"]}"', page)
+            self.assertIn('type="radio"', page)
+            self.assertIn(mode["label"].get("ru"), page)
+            self.assertIn(mode["label"].get("en"), page)
+
+    def test_auto_is_the_no_hash_and_invalid_hash_default(self):
+        page, _, _ = build()
+        classic_input = re.search(r'<input[^>]+id="mode-classic"[^>]*>', page).group(0)
+        auto_input = re.search(r'<input[^>]+id="mode-auto"[^>]*>', page).group(0)
+        self.assertNotIn(" checked", classic_input)
+        self.assertIn(" checked", auto_input)
+        self.assertIn('const DEFAULT_MODE = "auto";', page)
+        self.assertIn('if(h === "map-classic" || h === "classic") return "classic";', page)
+        self.assertIn('if(h === "map-auto" || h === "auto") return "auto";', page)
+        self.assertIsNotNone(
+            re.search(
+                r'function modeFromHash\(\)\{.*?return DEFAULT_MODE;\s*\}',
+                page,
+                flags=re.S,
+            )
+        )
+
+    def test_mode_change_uses_the_generated_radio_and_updates_inactive_maps(self):
+        page, _, _ = build()
+        self.assertIn(
+            "const checked = $('.tour-mode-input[name=\"tour-mode\"]:checked');",
+            page,
+        )
+        self.assertNotIn('.input[name="tour-mode"]:checked', page)
+        self.assertRegex(
+            page,
+            r'const on = app\.dataset\.mode === mode;\s*'
+            r'if\("inert" in app\) app\.inert = !on;\s*'
+            r'app\.setAttribute\("aria-hidden", String\(!on\)\);',
+        )
+        self.assertIn(
+            'input.addEventListener("change", ()=> applyMode(currentMode(), true));',
+            page,
+        )
+
+    def test_no_script_default_hides_classic_and_keeps_auto_first(self):
+        page, _, _ = build()
+        self.assertIn('.app-map[data-mode="classic"]{display:none}', page)
+        self.assertIsNone(
+            re.search(r'^\.app-map\[data-mode="auto"\]\{display:none\}$', page, re.M)
+        )
+        self.assertIn(
+            'body:has(#mode-classic:checked) .app-map[data-mode="auto"]{display:none}',
+            page,
+        )
+        self.assertLess(page.index('id="mode-auto"'), page.index('id="app-auto"'))
+
+    def test_narrow_auto_map_keeps_a_compact_left_rail(self):
+        template = paths.TEMPLATE.read_text(encoding="utf-8")
+        narrow = re.search(
+            r'@media\(max-width:760px\)\{\s*'
+            r'(?P<body>\.auto-rail\{width:calc\(92px \* var\(--k\)\).*?)\n\}',
+            template,
+            re.S,
+        )
+        self.assertIsNotNone(narrow)
+        css = narrow.group("body")
+        self.assertNotIn("flex-direction:column", css)
+        self.assertNotIn("width:100%", css)
+        self.assertNotIn("border-right:0", css)
+
+    def test_noscript_lists_every_mode_annotation(self):
+        page, content, _ = build()
+        noscript = page[page.rfind("<noscript>") :]
+        for zone in content.zones:
+            self.assertIn(zone["title"].get("ru"), noscript, zone["id"])
+
+    def test_generated_js_keeps_modes_in_the_content_model(self):
+        page, content, _ = build()
+        self.assertIn("const DEFAULT_MODE", page)
+        self.assertIn("const MODES", page)
+        self.assertNotIn("const ZONES =", page)
+        for mode in content.modes:
+            self.assertIn(f'"{mode["id"]}"', page[page.index("const MODES") :])
+
+    def test_renderer_rejects_an_unknown_layout_region(self):
+        _, content, _ = build()
+        content.layouts["auto"] = [{"id": "not-a-region", "zones": ["brand"]}]
+        problems = Problems()
+        map_mod.window_maps(content, problems)
+        self.assertTrue(any("not-a-region" in item.what for item in problems.items))
 
 
 if __name__ == "__main__":

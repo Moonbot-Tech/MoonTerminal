@@ -1,219 +1,440 @@
-# The 19 clickable regions of the window replica. `n` is the badge number and the
-# set must cover 1..19 with no gaps: the panel renders "Zone N / 19".
+# Clickable regions of each window-map mode. `n` is the badge number and the set
+# must cover 1..N with no gaps inside that mode: the panel renders "Zone N / total".
+# Zone ids are unique per mode (the same chrome control may appear in both).
 # `src` names where the text came from, so a reader can check it against the code.
 # Edited by hand; rendered into docs/tour/index.html by `make tour`.
 
-_schema: tour.zones.v1
-zones:
-- id: brand
-  n: 1
-  title:
-    ru: Бренд и перетаскивание
-    en: Brand and window drag
-  body:
-    ru: 'Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI
-      сам рисует разделитель — поэтому второго терминал не добавляет.'
-    en: The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of
-      it, which is why the terminal never adds a second one.
-  src:
-    code: chrome/terminal_chrome.rs — brand_cluster
-- id: ws
-  n: 2
-  title:
-    ru: Режим воркспейса
-    en: Workspace mode
-  body:
-    ru: Переключает рабочее пространство группы. В режиме «Авто» терминал сам держит на графике монету
-      активного ядра.
-    en: Switches the group's workspace. In Auto mode the terminal keeps the active core's coin on the
-      chart for you.
-  src:
-    code: locales/workspace.yml
-- id: core
-  n: 3
-  title:
-    ru: Активное ядро и его шестерёнка
-    en: Active core and its gear
-  body:
-    ru: Выбор ядра, к которому относятся баланс, торговые кнопки и график. Шестерёнка открывает настройки
-      именно этого ядра — блэклист, плечо, режим позиции.
-    en: Picks the core that the balance, the trading buttons and the chart belong to. The gear opens that
-      core's own settings — blacklist, leverage, position mode.
-  src:
-    code: shell/core_settings_popup.rs
-- id: balance
-  n: 4
-  title:
-    ru: Баланс ядра
-    en: Core balance
-  body:
-    ru: Свободный и общий USDT активного торгового ядра, как их отдаёт сервер. Если число устарело или
-      курс посчитать не удалось, терминал показывает это, а не выдаёт старую цифру за живую.
-    en: Free and total USDT of the active trading core, as the server reports them. When the figure is
-      stale or a rate could not be priced, the terminal says so instead of passing an old number off as
-      live.
-  src:
-    code: moon-core — CoreData::balance_state()
-- id: ticker
-  n: 5
-  title:
-    ru: Тикер курса
-    en: Rate ticker
-  body:
-    locale: header.ticker_tip
-- id: clock
-  n: 6
-  title:
-    ru: Часы
-    en: Clock
-  body:
-    locale: header.clock_tip
-- id: size
-  n: 7
-  title:
-    ru: Размер ордера F1–F6
-    en: Order size F1–F6
-  body:
-    ru: Размер ордера F1–F6 · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить. Те же слоты
-      висят на клавишах F1…F6.
-    en: Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots
-      sit on the F1…F6 keys.
-  src:
-    code: locales/shell.yml — toolbar.size_hint
-- id: lev
-  n: 8
-  title:
-    locale: toolbar.lev_title
-  body:
-    ru: Плечо для рынка активного ядра. Смена отправляется на биржу как отдельная команда — в логе она
-      появится строкой «Плечо … ×N».
-    en: Leverage for the active core's market. A change is sent to the exchange as its own command and
-      shows up in the log as "Leverage … ×N".
-  src:
-    code: locales/shell.yml — toolbar.lev_title
-- id: risk
-  n: 9
-  title:
-    ru: 'Риск: стоп-лосс'
-    en: 'Risk: stop loss'
-  body:
-    ru: Тумблер защиты от провала цены и значение стоп-лосса. Значение правится во всплывашке рядом.
-    en: The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside
-      it.
-  src:
-    code: locales/shell.yml — toolbar.sl_title
-- id: exit
-  n: 10
-  title:
-    ru: 'Выход: TP и фикс-продажи'
-    en: 'Exit: TP and fixed sells'
-  body:
-    ru: Тейк-профит и полоса фиксированных продаж S1–S6. Фиксированная продажа S · клик — задействовать
-      · двойной клик — правка · Ctrl+колесо — изменить.
-    en: Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to
-      edit · Ctrl+wheel to change.
-  src:
-    code: locales/shell.yml — toolbar.tp_title, toolbar.sell_hint
-- id: live
-  n: 11
-  title:
-    ru: Live / Пауза
-    en: Live / Pause
-  body:
-    locale: toolbar.live_tip
-- id: launch
-  n: 12
-  title:
-    ru: Запуск отдельных окон
-    en: Separate-window launchers
-  body:
-    ru: Монитор прибыли · Скринер · Стратегии · Аналитика · Настройки. Каждое — отдельное окно ОС; Аналитика
-      открывается сама один раз при старте.
-    en: Profit Monitor · Screener · Strategies · Analytics · Settings. Each is its own OS window; Analytics
-      opens itself once at startup.
-  src:
-    code: controls/toolbar.rs
-- id: ctabs
-  n: 13
-  title:
-    ru: Вкладки графиков
-    en: Chart tabs
-  body:
-    ru: Открытые графики группы. Escape закрывает активный Main-график, Shift+Escape — все Main-графики
-      во всех группах.
-    en: The group's open charts. Escape closes the active Main chart, Shift+Escape closes every Main chart
-      in every group.
-  src:
-    code: locales/hotkeys.yml — встроенные
-- id: chart
-  n: 14
-  title:
-    ru: Область графика
-    en: Chart area
-  body:
-    ru: Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по
-      времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет
-      этот ордер.
-    en: Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift
-      or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order.
-  src:
-    code: locales/hotkeys.yml — встроенные
-- id: book
-  n: 15
-  title:
-    locale: chart.layout.orderbook
-  body:
-    ru: 'Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить
-      лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.'
-    en: 'Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click
-      moves an open long, Ctrl+click moves the exit lines.'
-  src:
-    code: locales/hotkeys.yml — жесты стакана
-- id: detects
-  n: 16
-  title:
-    ru: Лента детектов
-    en: Detect ribbon
-  body:
-    ru: 'Карточки сработавших детектов по паре «ядро — монета». Вид настраивается шестерёнкой: размер,
-      поля, мини-график, цветная полоса сервера.'
-    en: 'Cards for fired detections per core-and-coin pair. The gear configures the look: size, fields,
-      mini-chart, coloured server strip.'
-  src:
-    code: locales/dock.yml — detects.cfg.*
-- id: dtabs
-  n: 17
-  title:
-    ru: Вкладки дока
-    en: Dock tabs
-  body:
-    ru: Клик — выбрать · двойной клик или перетаскивание — открепить в окно. Правый клик по вкладке включает
-      счётчики непрочитанного.
-    en: Click to select · double-click or drag to pop out into a window. Right-click a tab to turn on
-      unread counters.
-  src:
-    code: locales/dock.yml — dock.tab.hint_docked
-- id: table
-  n: 18
-  title:
-    ru: Тело панели
-    en: Panel body
-  body:
-    ru: Таблица активной вкладки. Ширины колонок, их видимость и сортировка запоминаются отдельно для
-      дока и для открепленного окна — одна панель в двух местах не спорит сама с собой.
-    en: The active tab's table. Column widths, visibility and sorting are remembered separately for the
-      dock and for the detached window, so one panel in two places never fights itself.
-  src:
-    code: persistence/table_persist.rs
-- id: status
-  n: 19
-  title:
-    ru: Статус-бар
-    en: Status bar
-  body:
-    ru: 'Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются.
-      Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM.'
-    en: 'Connection: green when every core is ready, red when one failed, amber while they are still connecting.
-      Then licence, order-book depth, FPS and CPU / GPU / RAM usage.'
-  src:
-    code: shell/status_bar.rs
+_schema: tour.zones.v2
+maps:
+- mode: classic
+  zones:
+  - id: brand
+    n: 1
+    title:
+      ru: Бренд и перетаскивание
+      en: Brand and window drag
+    body:
+      ru: 'Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI
+        сам рисует разделитель — поэтому второго терминал не добавляет.'
+      en: The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of
+        it, which is why the terminal never adds a second one.
+    src:
+      code: chrome/terminal_chrome.rs — brand_cluster
+  - id: ws
+    n: 2
+    title:
+      ru: Режим воркспейса
+      en: Workspace mode
+    body:
+      ru: Переключает рабочее пространство группы. В режиме «Авто» терминал сам держит на графике монету
+        активного ядра.
+      en: Switches the group's workspace. In Auto mode the terminal keeps the active core's coin on the
+        chart for you.
+    src:
+      code: locales/workspace.yml
+  - id: core
+    n: 3
+    title:
+      ru: Активное ядро и его шестерёнка
+      en: Active core and its gear
+    body:
+      ru: Выбор ядра, к которому относятся баланс, торговые кнопки и график. Шестерёнка открывает настройки
+        именно этого ядра — блэклист, плечо, режим позиции.
+      en: Picks the core that the balance, the trading buttons and the chart belong to. The gear opens that
+        core's own settings — blacklist, leverage, position mode.
+    src:
+      code: shell/core_settings_popup.rs
+  - id: balance
+    n: 4
+    title:
+      ru: Баланс ядра
+      en: Core balance
+    body:
+      ru: Свободный и общий USDT активного торгового ядра, как их отдаёт сервер. Если число устарело или
+        курс посчитать не удалось, терминал показывает это, а не выдаёт старую цифру за живую.
+      en: Free and total USDT of the active trading core, as the server reports them. When the figure is
+        stale or a rate could not be priced, the terminal says so instead of passing an old number off as
+        live.
+    src:
+      code: moon-core — CoreData::balance_state()
+  - id: ticker
+    n: 5
+    title:
+      ru: Тикер курса
+      en: Rate ticker
+    body:
+      locale: header.ticker_tip
+  - id: clock
+    n: 6
+    title:
+      ru: Часы
+      en: Clock
+    body:
+      locale: header.clock_tip
+  - id: size
+    n: 7
+    title:
+      ru: Размер ордера F1–F6
+      en: Order size F1–F6
+    body:
+      ru: Размер ордера F1–F6 · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить. Те же слоты
+        висят на клавишах F1…F6.
+      en: Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots
+        sit on the F1…F6 keys.
+    src:
+      code: locales/shell.yml — toolbar.size_hint
+  - id: lev
+    n: 8
+    title:
+      locale: toolbar.lev_title
+    body:
+      ru: Плечо для рынка активного ядра. Смена отправляется на биржу как отдельная команда — в логе она
+        появится строкой «Плечо … ×N».
+      en: Leverage for the active core's market. A change is sent to the exchange as its own command and
+        shows up in the log as "Leverage … ×N".
+    src:
+      code: locales/shell.yml — toolbar.lev_title
+  - id: risk
+    n: 9
+    title:
+      ru: 'Риск: стоп-лосс'
+      en: 'Risk: stop loss'
+    body:
+      ru: Тумблер защиты от провала цены и значение стоп-лосса. Значение правится во всплывашке рядом.
+      en: The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside
+        it.
+    src:
+      code: locales/shell.yml — toolbar.sl_title
+  - id: exit
+    n: 10
+    title:
+      ru: 'Выход: TP и фикс-продажи'
+      en: 'Exit: TP and fixed sells'
+    body:
+      ru: Тейк-профит и полоса фиксированных продаж S1–S6. Фиксированная продажа S · клик — задействовать
+        · двойной клик — правка · Ctrl+колесо — изменить.
+      en: Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to
+        edit · Ctrl+wheel to change.
+    src:
+      code: locales/shell.yml — toolbar.tp_title, toolbar.sell_hint
+  - id: live
+    n: 11
+    title:
+      ru: Live / Пауза
+      en: Live / Pause
+    body:
+      locale: toolbar.live_tip
+  - id: launch
+    n: 12
+    title:
+      ru: Запуск отдельных окон
+      en: Separate-window launchers
+    body:
+      ru: Монитор прибыли · Скринер · Стратегии · Аналитика · Настройки. Каждое — отдельное окно ОС; Аналитика
+        открывается сама один раз при старте.
+      en: Profit Monitor · Screener · Strategies · Analytics · Settings. Each is its own OS window; Analytics
+        opens itself once at startup.
+    src:
+      code: controls/toolbar.rs
+  - id: ctabs
+    n: 13
+    title:
+      ru: Вкладки графиков
+      en: Chart tabs
+    body:
+      ru: Открытые графики группы. Escape закрывает активный Main-график, Shift+Escape — все Main-графики
+        во всех группах.
+      en: The group's open charts. Escape closes the active Main chart, Shift+Escape closes every Main chart
+        in every group.
+    src:
+      code: locales/hotkeys.yml — встроенные
+  - id: chart
+    n: 14
+    title:
+      ru: Область графика
+      en: Chart area
+    body:
+      ru: Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по
+        времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет
+        этот ордер.
+      en: Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift
+        or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order.
+    src:
+      code: locales/hotkeys.yml — встроенные
+  - id: book
+    n: 15
+    title:
+      locale: chart.layout.orderbook
+    body:
+      ru: 'Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить
+        лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.'
+      en: 'Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click
+        moves an open long, Ctrl+click moves the exit lines.'
+    src:
+      code: locales/hotkeys.yml — жесты стакана
+  - id: detects
+    n: 16
+    title:
+      ru: Лента детектов
+      en: Detect ribbon
+    body:
+      ru: 'Карточки сработавших детектов по паре «ядро — монета». Вид настраивается шестерёнкой: размер,
+        поля, мини-график, цветная полоса сервера.'
+      en: 'Cards for fired detections per core-and-coin pair. The gear configures the look: size, fields,
+        mini-chart, coloured server strip.'
+    src:
+      code: locales/dock.yml — detects.cfg.*
+  - id: dtabs
+    n: 17
+    title:
+      ru: Вкладки дока
+      en: Dock tabs
+    body:
+      ru: Клик — выбрать · двойной клик или перетаскивание — открепить в окно. Правый клик по вкладке включает
+        счётчики непрочитанного.
+      en: Click to select · double-click or drag to pop out into a window. Right-click a tab to turn on
+        unread counters.
+    src:
+      code: locales/dock.yml — dock.tab.hint_docked
+  - id: table
+    n: 18
+    title:
+      ru: Тело панели
+      en: Panel body
+    body:
+      ru: Таблица активной вкладки. Ширины колонок, их видимость и сортировка запоминаются отдельно для
+        дока и для открепленного окна — одна панель в двух местах не спорит сама с собой.
+      en: The active tab's table. Column widths, visibility and sorting are remembered separately for the
+        dock and for the detached window, so one panel in two places never fights itself.
+    src:
+      code: persistence/table_persist.rs
+  - id: status
+    n: 19
+    title:
+      ru: Статус-бар
+      en: Status bar
+    body:
+      ru: 'Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются.
+        Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM.'
+      en: 'Connection: green when every core is ready, red when one failed, amber while they are still connecting.
+        Then licence, order-book depth, FPS and CPU / GPU / RAM usage.'
+    src:
+      code: shell/status_bar.rs
+
+- mode: auto
+  zones:
+  - id: brand
+    n: 1
+    title:
+      ru: Бренд и перетаскивание
+      en: Brand and window drag
+    body:
+      ru: 'Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI
+        сам рисует разделитель — поэтому второго терминал не добавляет.'
+      en: The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of
+        it, which is why the terminal never adds a second one.
+    src:
+      code: chrome/terminal_chrome.rs — brand_cluster
+  - id: ws
+    n: 2
+    title:
+      ru: Режим воркспейса
+      en: Workspace mode
+    body:
+      locale: workspace.mode.auto_tip
+  - id: core
+    n: 3
+    title:
+      ru: Индикатор ядра, закреплённый рейкой
+      en: Rail-pinned core indicator
+    body:
+      ru: 'В Автоторговле пилюля в шапке отключена и без меню: она только показывает выбранное на левой
+        рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в
+        шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного
+        случайного сервера.'
+      en: 'In AutoTrading the header pill is disabled and has no menu: it only mirrors the core chosen on
+        the left rail, or Full summary. The gear still opens that core''s settings. Header balance is hidden
+        while Overview is selected, so a single arbitrary server''s figure cannot sit next to a label that
+        means the whole group.'
+    src:
+      code: chrome/terminal_chrome.rs — core_selector .disabled(auto)
+  - id: ticker
+    n: 4
+    title:
+      ru: Тикер курса
+      en: Rate ticker
+    body:
+      locale: header.ticker_tip
+  - id: clock
+    n: 5
+    title:
+      ru: Часы
+      en: Clock
+    body:
+      locale: header.clock_tip
+  - id: size
+    n: 6
+    title:
+      ru: Размер ордера F1–F6
+      en: Order size F1–F6
+    body:
+      ru: Размер ордера F1–F6 · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить. Те же слоты
+        висят на клавишах F1…F6.
+      en: Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots
+        sit on the F1…F6 keys.
+    src:
+      code: locales/shell.yml — toolbar.size_hint
+  - id: lev
+    n: 7
+    title:
+      locale: toolbar.lev_title
+    body:
+      ru: Плечо для рынка активного ядра. Смена отправляется на биржу как отдельная команда — в логе она
+        появится строкой «Плечо … ×N».
+      en: Leverage for the active core's market. A change is sent to the exchange as its own command and
+        shows up in the log as "Leverage … ×N".
+    src:
+      code: locales/shell.yml — toolbar.lev_title
+  - id: risk
+    n: 8
+    title:
+      ru: 'Риск: стоп-лосс'
+      en: 'Risk: stop loss'
+    body:
+      ru: Тумблер защиты от провала цены и значение стоп-лосса. Значение правится во всплывашке рядом.
+      en: The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside
+        it.
+    src:
+      code: locales/shell.yml — toolbar.sl_title
+  - id: exit
+    n: 9
+    title:
+      ru: 'Выход: TP и фикс-продажи'
+      en: 'Exit: TP and fixed sells'
+    body:
+      ru: Тейк-профит и полоса фиксированных продаж S1–S6. Фиксированная продажа S · клик — задействовать
+        · двойной клик — правка · Ctrl+колесо — изменить.
+      en: Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to
+        edit · Ctrl+wheel to change.
+    src:
+      code: locales/shell.yml — toolbar.tp_title, toolbar.sell_hint
+  - id: live
+    n: 10
+    title:
+      ru: Live / Пауза
+      en: Live / Pause
+    body:
+      locale: toolbar.live_tip
+  - id: launch
+    n: 11
+    title:
+      ru: Запуск отдельных окон
+      en: Separate-window launchers
+    body:
+      ru: Монитор прибыли, Скринер и Настройки остаются общими на всё приложение. Стратегии и Аналитика
+        берут видимый состав ядер у последнего живого окна Автоторговли, с которым работал пользователь.
+      en: Profit Monitor, Screener and Settings stay application-wide. Strategies and Analytics inherit
+        the visible core set from the last live AutoTrading window the user interacted with.
+    src:
+      code: workspace.rs — WorkspaceFocus; controls/toolbar.rs
+  - id: summary
+    n: 12
+    title:
+      ru: Сводка по ядрам
+      en: Core summary
+    body:
+      ru: Счётчики «ядер / готово / проблем» считаются по всему приложению, а не по выбранному на рейке
+        ядру. Узкая рейка сжимает строку до числа ядер, полный текст остаётся в подсказке.
+      en: The cores / ready / problems counts are application-wide, not narrowed to the rail's selected
+        core. A narrow rail compresses the line to the core count; the full text stays in the tooltip.
+    src:
+      code: workspace.rs — derive_workspace_roster / WorkspaceRosterSummary
+  - id: overview
+    n: 13
+    title:
+      locale: workspace.overview
+    body:
+      locale: workspace.overview_tip
+      args:
+        group: Main
+  - id: cores
+    n: 14
+    title:
+      ru: Дерево ядер по биржам
+      en: Exchange-grouped core tree
+    body:
+      ru: Заголовки бирж идут по живым метаданным рынка, неизвестная биржа — первой; ядра внутри — в каноническом
+        порядке. Отключённые и недоступные строки остаются видимыми и клик по ним ничего не меняет. Клик
+        по ядру этой группы меняет только её Auto-область; клик по ядру другой группы открывает уже существующее
+        окно той группы, панели между окнами не переезжают.
+      en: Exchange headings follow live market metadata, with unknown exchange first; cores inside a heading
+        keep canonical order. Disabled and unavailable rows stay visible and reject clicks. A click on
+        a core in this group only changes this group's Auto scope; a click on another group's core activates
+        that group's existing window, and panels are not reparented.
+    src:
+      code: workspace.rs — plan_workspace_navigation; docs/WINDOWING.md
+  - id: atabs
+    n: 15
+    title:
+      ru: Закреплённые графики и рабочие вкладки
+      en: Pinned charts and operational tabs
+    body:
+      ru: 'ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets,
+        CoreStatus, Log и Detects. News и Alerts (Фигуры) в Автоторговле нет: это панели только Classic.
+        Открепить вкладку или график нельзя.'
+      en: ChartTabs stays first, visually separate, and cannot be moved ahead of. After it come Report,
+        Assets, CoreStatus, Log and Detects. News and Alerts (Figures) are absent — they are Classic-only.
+        Detaching a tab or a chart is rejected.
+    src:
+      code: shell/workspace.rs — AUTO_WORKSPACE_TAB_NAMES, AUTO_CLASSIC_ONLY_PANEL_NAMES
+  - id: chart
+    n: 16
+    title:
+      ru: Область графика
+      en: Chart area
+    body:
+      ru: Тот же GPU-график, что в Classic. Колесо — зум по времени, Shift или Alt + колесо — прокрутка.
+        В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в Автоторговле
+        возвращает на Report.
+      en: The same GPU chart as Classic. Wheel zooms by time, Shift or Alt + wheel pans. Overview does
+        not retarget the Main chart to some other core. Escape on the last Main chart in AutoTrading reveals
+        Report.
+    src:
+      code: shell/workspace.rs — should_return_to_report_after_main_close
+  - id: book
+    n: 17
+    title:
+      locale: chart.layout.orderbook
+    body:
+      ru: 'Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить
+        лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.'
+      en: 'Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click
+        moves an open long, Ctrl+click moves the exit lines.'
+    src:
+      code: locales/hotkeys.yml — жесты стакана
+  - id: orders
+    n: 18
+    title:
+      ru: Нижняя поверхность ордеров
+      en: Lower Orders surface
+    body:
+      ru: Отдельная нижняя панель, не кандидат на стартовую вкладку Автоторговли. На первом запуске она
+        выше обычного на четыре строки таблицы. Открепить её из Автоторговли нельзя.
+      en: A separate lower panel, not a candidate for the AutoTrading start tab. On first run it is four
+        table rows taller than the previous seed. It cannot be detached from AutoTrading.
+    src:
+      code: shell/workspace.rs — default_auto_workspace_topology
+  - id: status
+    n: 19
+    title:
+      ru: Статус-бар
+      en: Status bar
+    body:
+      ru: 'Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются.
+        Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM. Выбранное на рейке ядро эти цифры
+        не сужает.'
+      en: 'Connection: green when every core is ready, red when one failed, amber while they are still connecting.
+        Then licence, order-book depth, FPS and CPU / GPU / RAM usage. The rail''s selected core does not
+        narrow these figures.'
+    src:
+      code: shell/status_bar.rs; docs/ARCHITECTURE.md — Auto status bar

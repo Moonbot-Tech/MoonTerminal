@@ -24,11 +24,9 @@ strings:
   map.h:
     ru: Карта окна
     en: Window map
-  map.lead:
-    ru: Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их
-      клавишей Tab.
-    en: Nineteen zones. Hover the window and their outlines appear; click any of them, or walk through
-      with Tab.
+  map.mode_group:
+    ru: Рабочее пространство
+    en: Workspace
   map.all:
     ru: Все номера
     en: All numbers
@@ -79,6 +77,20 @@ strings:
       snapshot; labels and explanations come from the validated tour model and selected locales/*.yml. It is a schematic, not a live-session capture.'
   ui.ws:
     locale: workspace.mode.auto
+  ui.overview:
+    locale: workspace.overview
+  ui.summary:
+    locale: workspace.summary
+    args:
+      configured: 5
+      ready: 4
+      problem: 1
+  ui.status.disabled:
+    locale: workspace.status.disabled
+  ui.status.ready:
+    locale: workspace.status.ready
+  ui.status.problem:
+    locale: workspace.status.problem
   ui.balance:
     ru: 'Баланс:'
     en: 'Balance:'

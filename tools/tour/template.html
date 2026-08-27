@@ -108,12 +108,106 @@ h2{margin:0;font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;font-weight:650
 .maphead{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin:0 0 22px}
 .maphead .slead{margin:0}
 .toggle{
-  margin-left:auto;appearance:none;cursor:pointer;
+  appearance:none;cursor:pointer;
   border:1px solid var(--border);border-radius:var(--r-btn);background:transparent;
   color:var(--text-soft);font:600 11px/1 var(--mono);letter-spacing:.06em;padding:8px 12px
 }
 .toggle[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .toggle:focus-visible{outline:2px solid var(--sel-ring);outline-offset:2px}
+.map-controls{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.maphead .slead{flex:1 1 28ch;min-width:0}
+.mode-switch{flex:none}
+.mode-switch .mode-opt{
+  position:relative;display:inline-flex;align-items:center;justify-content:center;
+  padding:8px 13px;cursor:pointer;font:600 12px/1 var(--ui);letter-spacing:.04em;
+  color:var(--text-soft);user-select:none
+}
+.mode-switch .mode-opt + .mode-opt{border-left:1px solid var(--border)}
+.mode-switch .tour-mode-input{
+  position:absolute;inline-size:1px;block-size:1px;overflow:hidden;
+  clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;padding:0;margin:0
+}
+.mode-switch .mode-opt:has(.tour-mode-input:checked){background:var(--accent);color:var(--on-accent)}
+.mode-switch .mode-opt:has(.tour-mode-input:focus-visible){outline:2px solid var(--sel-ring);outline-offset:-2px}
+
+@keyframes map-in{
+  from{opacity:0;transform:translateX(14px)}
+  to{opacity:1;transform:none}
+}
+.mapstage{display:grid}
+.app-map{grid-area:1/1}
+.app-map[data-mode="classic"]{display:none}
+body:has(#mode-auto:checked) .app-map[data-mode="auto"]{display:block;animation:map-in .32s ease}
+body:has(#mode-auto:checked) .app-map[data-mode="classic"]{display:none}
+body:has(#mode-classic:checked) .app-map[data-mode="classic"]{display:block;animation:map-in .32s ease}
+body:has(#mode-classic:checked) .app-map[data-mode="auto"]{display:none}
+body:has(#mode-auto:checked) [data-mode-lead="classic"],
+body:has(#mode-classic:checked) [data-mode-lead="auto"]{display:none}
+.ns-maps{padding:18px 0 8px;color:var(--text-soft)}
+.ns-maps h3{margin:18px 0 8px;font-size:16px}
+.ns-maps ol{margin:0;padding-left:1.3em}
+.ns-maps li{margin:0 0 8px}
+
+.sw.on{background:var(--accent)}
+.sw.on::after{left:auto;right:1px;background:var(--on-accent)}
+.pill.is-pinned{opacity:.92}
+.dot.accent{background:var(--accent)}
+.dot.warn{background:var(--amber)}
+.dot.muted{background:var(--text-faint)}
+
+.auto-mid{min-height:calc(248px * var(--k))}
+.auto-rail{
+  width:calc(148px * var(--k));flex:none;background:var(--gutter);
+  border-right:1px solid var(--border-hover);display:flex;flex-direction:column;min-width:0
+}
+.rail-summary,.rail-overview,.rail-cores{
+  width:100%;border:0;background:transparent;color:inherit;font:inherit;text-align:left
+}
+.rail-summary{
+  flex:none;padding:calc(7px * var(--k)) calc(8px * var(--k));
+  border-bottom:1px solid var(--border-soft);color:var(--text-soft);
+  font:600 10px/1.3 var(--mono);text-align:center
+}
+.rail-overview{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:calc(7px * var(--k)) calc(8px * var(--k));
+  border-bottom:1px solid var(--border-soft);font-weight:650
+}
+.rail-overview.sel{color:var(--accent-fg)}
+.rail-cores{flex:1 1 auto;padding:calc(4px * var(--k)) 0;display:flex;flex-direction:column;gap:0}
+.exch{
+  padding:calc(4px * var(--k)) calc(8px * var(--k));
+  font:650 10px/1.2 var(--ui);color:var(--text-muted);letter-spacing:.04em;
+  background:var(--panel);
+  border-bottom:1px solid var(--border-soft)
+}
+.core-row{
+  display:flex;align-items:center;gap:6px;padding:calc(4px * var(--k)) calc(8px * var(--k));
+  font-size:.92em
+}
+.core-row.off{color:var(--text-faint)}
+.core-row .st{margin-left:auto;font:500 9px/1 var(--mono);color:var(--text-muted)}
+.auto-dock{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.atabs{
+  height:var(--h-docktab);background:var(--tabbar);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:calc(4px * var(--k));padding:0 calc(6px * var(--k));width:100%
+}
+.ctab.pin{font-weight:700}
+.pin-sep{width:1px;height:calc(12px * var(--k));background:var(--border);margin:0 calc(4px * var(--k));flex:none}
+.auto-orders{
+  display:block;width:100%;border-top:1px solid var(--border);background:var(--surface);
+  min-height:calc(var(--h-thead) + var(--h-row) * 9)
+}
+@media(max-width:760px){
+  .auto-rail{width:calc(92px * var(--k))}
+  .rail-summary{padding-inline:calc(4px * var(--k))}
+  .rail-overview{justify-content:flex-start;padding-inline:calc(5px * var(--k))}
+  .rail-overview>span:not(.dot),.exch,.core-row .mono{
+    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+  }
+  .core-row{padding-inline:calc(5px * var(--k))}
+  .core-row .st{display:none}
+}
 
 /* — шапка окна — */
 .hdr{
@@ -354,183 +448,15 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
   <section id="map">
     <div class="shead"><span class="snum">01</span><h2 data-i18n="map.h">Карта окна</h2></div>
     <div class="maphead">
-      <p class="slead" data-i18n="map.lead">Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.</p>
-      <button class="toggle" id="showall" type="button" aria-pressed="true" data-i18n="map.all">Все номера</button>
+      {{map_leads}}
+      <div class="map-controls">
+        {{mode_switch}}
+        <button class="toggle" id="showall" type="button" aria-pressed="true" data-i18n="map.all">Все номера</button>
+      </div>
     </div>
 
     <div class="tourgrid">
-      <div class="app reveal" id="app">
-
-        <!-- шапка -->
-        <div class="hdr">
-          <button class="z brand" data-zone="brand" type="button"><i class="zn">1</i>
-            <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.6A8.6 8.6 0 1 1 9.9 3.9a6.9 6.9 0 0 0 10.6 10.7Z" fill="currentColor"/></svg>
-          </button>
-          <button class="z pill ghost" data-zone="ws" type="button"><i class="zn">2</i><span data-i18n="ui.ws">Авто</span><span class="caret">▾</span></button>
-          <button class="z pill" data-zone="core" type="button"><i class="zn">3</i><span class="dot"></span><span class="mono">BinF1</span><span class="caret">▾</span><span style="opacity:.5">⚙</span></button>
-          <button class="z" data-zone="balance" type="button" style="padding:0 6px"><i class="zn">4</i>
-            <span style="color:var(--text-muted)" data-i18n="ui.balance">Баланс:</span>
-            <span class="mono" style="font-weight:600"> 975.45</span><span class="mono" style="color:var(--text-muted)">/2492 USDT</span>
-          </button>
-          <span class="grow"></span>
-          <button class="z" data-zone="ticker" type="button" style="padding:0 6px"><i class="zn">5</i>
-            <span class="mono">1 BTC = <b>62 773$</b></span>
-            <span class="mono" style="color:var(--green-text)"> +0.1%</span>
-            <span class="mono" style="color:var(--red-text)"> −0.2%</span>
-          </button>
-          <span class="vr"></span>
-          <button class="z" data-zone="clock" type="button" style="padding:0 6px"><i class="zn">6</i>
-            <span class="mono">15:16:35</span> <span class="mono" style="color:var(--text-muted)">(WAW)</span>
-          </button>
-          <span class="wctl mono">− □ ✕</span>
-        </div>
-
-        <!-- тулбар -->
-        <div class="tb">
-          <button class="z grp" data-zone="size" type="button"><i class="zn">7</i>
-            <span class="k lab mono" data-i18n="ui.size">size</span>
-            <span class="k mono">50</span><span class="k mono">100</span>
-            <span class="k on mono">250</span><span class="k mono">500</span>
-            <span class="k mono">1000</span><span class="k mono">2500</span>
-          </button>
-          <span class="vr"></span>
-          <button class="z grp" data-zone="lev" type="button"><i class="zn">8</i>
-            <span class="k on mono">Lev ×5</span>
-          </button>
-          <span class="vr"></span>
-          <button class="z grp" data-zone="risk" type="button"><i class="zn">9</i>
-            <span class="k lab mono">SL</span><span class="sw"></span>
-            <span class="k mono" style="color:var(--red-text)">−2.25%</span>
-          </button>
-          <span class="vr"></span>
-          <button class="z grp" data-zone="exit" type="button"><i class="zn">10</i>
-            <span class="k on mono">TP 2.00%</span>
-            <span class="k mono">+1%</span><span class="k mono">+3%</span>
-            <span class="k mono">+5%</span><span class="k mono">+10%</span><span class="k mono">+100%</span>
-          </button>
-          <span class="vr"></span>
-          <button class="z grp" data-zone="live" type="button"><i class="zn">11</i>
-            <span class="k mono" style="color:var(--green-text)">● Live</span>
-          </button>
-          <span class="grow"></span>
-          <button class="z grp" data-zone="launch" type="button"><i class="zn">12</i>
-            <span class="pill ghost" data-i18n="ui.pm">Монитор прибыли</span>
-            <span class="pill ghost" data-i18n="ui.scr">Скринер</span>
-            <span class="pill ghost" data-i18n="ui.str">Стратегии</span>
-            <span class="pill ghost" data-i18n="ui.an">Аналитика</span>
-            <span class="pill ghost" data-i18n="ui.set">Настройки</span>
-          </button>
-        </div>
-
-        <!-- центр -->
-        <div class="mid">
-          <div class="chartcol">
-            <div class="ctabs">
-              <button class="z ctab sel" data-zone="ctabs" type="button"><i class="zn">13</i>Main</button>
-              <span class="grow"></span>
-              <span class="pill ghost mono" data-i18n="ui.coin">Монета…</span>
-              <span class="pill ghost mono">🔍 20%</span>
-            </div>
-            <div class="canvas">
-              <button class="z plot" data-zone="chart" type="button" aria-label="Chart"><i class="zn">14</i>
-                <svg viewBox="0 0 420 200" preserveAspectRatio="none" aria-hidden="true" id="chartsvg"></svg>
-              </button>
-              <button class="z book" data-zone="book" type="button" aria-label="Order book"><i class="zn">15</i>
-                <svg viewBox="0 0 60 200" preserveAspectRatio="none" aria-hidden="true">
-                  <g fill="var(--red)" opacity=".85">
-                    <rect x="26" y="6"  width="34" height="3.4"/><rect x="14" y="12" width="46" height="3.4"/>
-                    <rect x="32" y="18" width="28" height="3.4"/><rect x="8"  y="24" width="52" height="3.4"/>
-                    <rect x="38" y="30" width="22" height="3.4"/><rect x="20" y="36" width="40" height="3.4"/>
-                    <rect x="30" y="42" width="30" height="3.4"/><rect x="42" y="48" width="18" height="3.4"/>
-                    <rect x="24" y="54" width="36" height="3.4"/><rect x="36" y="60" width="24" height="3.4"/>
-                    <rect x="16" y="66" width="44" height="3.4"/><rect x="44" y="72" width="16" height="3.4"/>
-                    <rect x="30" y="78" width="30" height="3.4"/><rect x="40" y="84" width="20" height="3.4"/>
-                    <rect x="34" y="90" width="26" height="3.4"/>
-                  </g>
-                  <g fill="var(--green)" opacity=".85">
-                    <rect x="34" y="106" width="26" height="3.4"/><rect x="22" y="112" width="38" height="3.4"/>
-                    <rect x="42" y="118" width="18" height="3.4"/><rect x="12" y="124" width="48" height="3.4"/>
-                    <rect x="30" y="130" width="30" height="3.4"/><rect x="38" y="136" width="22" height="3.4"/>
-                    <rect x="18" y="142" width="42" height="3.4"/><rect x="26" y="148" width="34" height="3.4"/>
-                    <rect x="40" y="154" width="20" height="3.4"/><rect x="10" y="160" width="50" height="3.4"/>
-                    <rect x="32" y="166" width="28" height="3.4"/><rect x="24" y="172" width="36" height="3.4"/>
-                    <rect x="36" y="178" width="24" height="3.4"/><rect x="16" y="184" width="44" height="3.4"/>
-                    <rect x="28" y="190" width="32" height="3.4"/>
-                  </g>
-                </svg>
-              </button>
-            </div>
-          </div>
-          <button class="z rail" data-zone="detects" type="button"><i class="zn">16</i>
-            <span class="dcard"><b>NAKA_</b><span class="mono">52s</span><span class="badge">Gate</span></span>
-            <span class="dcard"><b>ES</b><span class="mono">18s</span><span class="badge">BybitSlava</span></span>
-            <span class="dcard"><b>ULTIMA_</b><span class="mono">10s</span><span class="badge">Gate</span></span>
-            <span class="dcard"><b>TLM</b><span class="mono">46s</span><span class="badge">BybitSlava</span></span>
-          </button>
-        </div>
-
-        <!-- док -->
-        <div class="dock">
-          <button class="z dtabs" data-zone="dtabs" type="button" style="width:100%"><i class="zn">17</i>
-            <span class="dtab sel" data-i18n="tab.orders">Ордера</span>
-            <span class="dtab" data-i18n="tab.assets">Активы</span>
-            <span class="dtab" data-i18n="tab.report">Отчёт</span>
-            <span class="dtab" data-i18n="tab.alerts">Фигуры</span>
-            <span class="dtab" data-i18n="tab.news">Новости</span>
-            <span class="dtab" data-i18n="tab.core_status">Статус ядер</span>
-            <span class="dtab" data-i18n="tab.log">Лог</span>
-            <span class="dtab" data-i18n="tab.detects">Детекты</span>
-          </button>
-          <div class="z dbody" data-zone="table" role="button" tabindex="0"><i class="zn">18</i>
-            <div class="dpane">
-              <span class="filters">
-                <span class="pill ghost" data-i18n="ui.allcores">Все ядра ▾</span>
-                <span class="pill ghost" data-i18n="ui.real">Реальные ▾</span>
-                <span class="pill ghost" data-i18n="ui.fields">Поля ▾</span>
-                <span class="mono" style="color:var(--text-muted)">852</span>
-              </span>
-              <table class="t">
-                <thead><tr>
-                  <th data-i18n="col.core">Ядро</th><th data-i18n="col.side">Сторона</th>
-                  <th data-i18n="col.token">Токен</th><th data-i18n="col.size">Size</th>
-                  <th>SL</th><th data-i18n="col.pnl">PNL %</th>
-                </tr></thead>
-                <tbody>
-                  <tr><td>BinF1</td><td class="buy">BUY</td><td>ACT</td><td>42593</td><td class="on">ON</td><td>—</td></tr>
-                  <tr><td>BB1</td><td class="sell">Short-B</td><td>TA</td><td>840</td><td class="on">ON</td><td class="neg">−0.05%</td></tr>
-                  <tr><td>BinF3</td><td class="sell">SELL</td><td>PYTH</td><td>9933</td><td class="on">ON</td><td class="neg">−1.88%</td></tr>
-                  <tr><td>Bitget1</td><td class="sell">SELL</td><td>MAPO</td><td>35483</td><td class="off">OFF</td><td class="neg">−0.61%</td></tr>
-                  <tr><td>F5</td><td class="buy">BUY</td><td>SYN</td><td>2681</td><td class="on">ON</td><td>—</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="dpane">
-              <span class="filters">
-                <span class="mono" style="font-weight:600" data-i18n="tab.assets">Активы</span>
-                <span class="grow"></span>
-                <span class="mono" style="color:var(--text-muted)">Σ 10 244,63$</span>
-              </span>
-              <table class="t">
-                <thead><tr><th data-i18n="col.core">Ядро</th><th data-i18n="col.asset">Актив</th><th data-i18n="col.qty">Кол-во</th><th data-i18n="col.val">Стоим.$</th></tr></thead>
-                <tbody>
-                  <tr><td>BinKEAUSDC</td><td>BTC</td><td>0.162</td><td>10 185,83$</td></tr>
-                  <tr><td>BinKEAUSDC</td><td>BNB</td><td>0.077</td><td>45,39$</td></tr>
-                  <tr><td>Bitget1</td><td>BGB</td><td>7.797</td><td>13,4$</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- статус -->
-        <button class="z sb" data-zone="status" type="button" style="width:100%"><i class="zn">19</i>
-          <span><span data-i18n="ui.conn">Соединение:</span> <b>OK</b></span>
-          <span>Binance Futures</span><span>ping 32ms</span>
-          <span data-i18n="ui.mode">Режим: Demo</span><span>PRO</span>
-          <span>book 1384</span><span>25 fps</span>
-          <span>CPU 2%/5%</span><span>GPU 6%</span><span>RAM 6363 MB</span>
-        </button>
-      </div>
+      {{window_maps}}
 
       <aside class="explain" id="rail" aria-live="polite">
         <div>
@@ -547,6 +473,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
         <p class="src" id="rail-src"></p>
       </aside>
     </div>
+    {{map_annotations}}
   </section>
 
   <!-- ==================== 02. БЫСТРЫЙ СТАРТ ==================== -->
@@ -601,9 +528,9 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ESC[c]);
 {{data_page}}
 
 /* ------------------------------------------------------------------
-   ЗОНЫ. `src` — ключ локали, откуда взято пояснение.
+   Режимы Classic / AutoTrading и их зоны.
    ------------------------------------------------------------------ */
-{{data_zones}}
+{{data_modes}}
 
 {{data_steps}}
 
@@ -617,8 +544,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ESC[c]);
    Свечи. Детерминированный ряд (свой LCG вместо Math.random),
    чтобы картинка не прыгала между перерисовками.
    ------------------------------------------------------------------ */
-function drawChart(){
-  const svg = document.getElementById("chartsvg");
+function drawChart(svg){
   if(!svg) return;
   const W=420, PLOT_TOP=6, PLOT_BOT=168, VOL_TOP=176, VOL_BOT=198;
   const N=54, step=W/N, bw=Math.max(2, step*0.56);
@@ -685,13 +611,67 @@ function drawChart(){
   svg.innerHTML = s;
 }
 
+function drawCharts(){
+  $$(".chartsvg").forEach(drawChart);
+}
+
 /* ------------------------------------------------------------------ */
 let lang = "ru";
+let mode = DEFAULT_MODE;
 let picked = null;
-const ORDER = Object.keys(ZONES);
 
 const $  = (s,r)=> (r||document).querySelector(s);
 const $$ = (s,r)=> Array.from((r||document).querySelectorAll(s));
+const modeTable = ()=> MODES[mode] || MODES[DEFAULT_MODE];
+const zonesOf = ()=> modeTable().zones;
+const orderOf = ()=> modeTable().order;
+const activeApp = ()=> $(`.app-map[data-mode="${mode}"]`);
+
+function syncModeChrome(){
+  $$("[data-mode-lead]").forEach(el=>{
+    const spec = MODES[el.dataset.modeLead];
+    if(spec) el.textContent = spec.lead[lang];
+  });
+  $$(".mode-opt").forEach(lab=>{
+    const input = lab.querySelector("input");
+    const spec = input && MODES[input.value];
+    if(!spec) return;
+    lab.title = spec.tip[lang];
+    const label = lab.querySelector(".mode-label");
+    if(label) label.textContent = spec.label[lang];
+  });
+  const group = $(".mode-switch");
+  if(group && T["map.mode_group"]) group.setAttribute("aria-label", T["map.mode_group"][lang]);
+  $$(".z[data-zone]").forEach(el=>{
+    const map = el.closest(".app-map");
+    const table = map && MODES[map.dataset.mode];
+    const z = table && table.zones[el.dataset.zone];
+    if(z) el.setAttribute("aria-label", `${z.n}. ${z[lang][0]}`);
+  });
+}
+
+function currentMode(){
+  const checked = $('.tour-mode-input[name="tour-mode"]:checked');
+  return (checked && MODES[checked.value]) ? checked.value : DEFAULT_MODE;
+}
+
+function applyMode(next, fromUser){
+  if(!MODES[next]) next = DEFAULT_MODE;
+  mode = next;
+  const radio = document.getElementById("mode-" + mode);
+  if(radio && !radio.checked) radio.checked = true;
+  $$(".app-map").forEach(app=>{
+    const on = app.dataset.mode === mode;
+    if("inert" in app) app.inert = !on;
+    app.setAttribute("aria-hidden", String(!on));
+  });
+  if(picked && !zonesOf()[picked]) picked = null;
+  pick(picked);
+  if(fromUser){
+    const hash = "#map-" + mode;
+    if(location.hash !== hash) history.replaceState(null, "", hash);
+  }
+}
 
 function render(){
   document.documentElement.lang = lang;
@@ -701,6 +681,7 @@ function render(){
     if(v) el.textContent = v[lang];
   });
   $$("[data-lang]").forEach(b=> b.setAttribute("aria-pressed", String(b.dataset.lang===lang)));
+  syncModeChrome();
 
   {{data_stats}}
   $("#stats").innerHTML = STATS.map(([v,l])=>
@@ -740,14 +721,16 @@ function render(){
 }
 
 function showZone(key){
-  if(!key || !ZONES[key]){
+  const table = zonesOf();
+  const ORDER = orderOf();
+  if(!key || !table[key]){
     $("#rail-tag").innerHTML = `<span>${esc(T["rail.pick"][lang])}</span>`;
     $("#rail-h").textContent = T["rail.h"][lang];
     $("#rail-p").textContent = T["rail.p"][lang];
     $("#rail-src").textContent = "";
     return;
   }
-  const z = ZONES[key];
+  const z = table[key];
   $("#rail-tag").innerHTML = `<i>${z.n}</i><span>${esc(T["rail.zone"][lang])} ${z.n} / ${ORDER.length}</span>`;
   $("#rail-h").textContent = z[lang][0];
   $("#rail-p").textContent = z[lang][1];
@@ -756,16 +739,25 @@ function showZone(key){
 
 function pick(key){
   picked = key;
-  $$(".z").forEach(el=> el.setAttribute("aria-current", String(el.dataset.zone===key)));
+  const app = activeApp();
+  $$(".app-map .z").forEach(el=>{
+    const on = app && el.closest(".app-map") === app && el.dataset.zone===key;
+    el.setAttribute("aria-current", String(!!on));
+  });
   showZone(key);
 }
 
 /* наведение показывает зону, не закрепляя её; уход возвращает закреплённую */
-$$(".z").forEach(el=>{
+$$(".z[data-zone]").forEach(el=>{
   const k = el.dataset.zone;
+  const enter = ()=>{
+    const map = el.closest(".app-map");
+    if(map && map.dataset.mode !== mode) return;
+    showZone(k);
+  };
   el.addEventListener("click", ()=> pick(k));
   el.addEventListener("focus", ()=> pick(k));
-  el.addEventListener("mouseenter", ()=> showZone(k));
+  el.addEventListener("mouseenter", enter);
   el.addEventListener("mouseleave", ()=> showZone(picked));
   if(el.tagName !== "BUTTON"){
     el.addEventListener("keydown", e=>{
@@ -775,19 +767,33 @@ $$(".z").forEach(el=>{
 });
 
 function stepZone(d){
+  const ORDER = orderOf();
   const i = picked ? ORDER.indexOf(picked) : -1;
   const n = (i + d + ORDER.length * 2) % ORDER.length;
   pick(ORDER[d > 0 && i < 0 ? 0 : n]);
-  const el = document.querySelector('.z[data-zone="' + picked + '"]');
+  const app = activeApp();
+  const el = app && app.querySelector('.z[data-zone="' + picked + '"]');
   if(el && el.focus) el.focus({preventScroll:true});
 }
 $("#prev").addEventListener("click", ()=> stepZone(-1));
 $("#next").addEventListener("click", ()=> stepZone(1));
 
 $("#showall").addEventListener("click", e=>{
-  const on = $("#app").classList.toggle("reveal");
-  e.currentTarget.setAttribute("aria-pressed", String(on));
+  const next = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  $$(".app-map").forEach(app=> app.classList.toggle("reveal", next));
+  e.currentTarget.setAttribute("aria-pressed", String(next));
 });
+
+$$('input[name="tour-mode"]').forEach(input=>{
+  input.addEventListener("change", ()=> applyMode(currentMode(), true));
+});
+
+function modeFromHash(){
+  const h = (location.hash || "").replace(/^#/, "");
+  if(h === "map-auto" || h === "auto") return "auto";
+  if(h === "map-classic" || h === "classic") return "classic";
+  return DEFAULT_MODE;
+}
 
 $$("[data-lang]").forEach(b=> b.addEventListener("click", ()=>{ lang=b.dataset.lang; render(); }));
 
@@ -805,8 +811,10 @@ function syncTheme(){
 }
 
 syncTheme();
-drawChart();
+applyMode(modeFromHash(), false);
+drawCharts();
 render();
+window.addEventListener("hashchange", ()=> applyMode(modeFromHash(), false));
 </script>
 
 </body>
