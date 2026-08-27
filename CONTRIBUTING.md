@@ -85,6 +85,10 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - Panels ship as a dock tab, a detached window and a group-window host, at widths from a narrow
   side dock to full screen. Give each panel a defined narrow behaviour; a horizontal scrollbar is
   not one.
+- **A new display feature ships ON.** An ABSENT setting resolves to the full, decorated
+  behaviour — `#[serde(default)]`, `unwrap_or(DEFAULT)` — so an upgrade never silently drops
+  what the user already reads. A value the user has STORED is never rewritten: whoever wants
+  the space back turns it off once, and that choice survives.
 
 ## Commits and PRs
 
