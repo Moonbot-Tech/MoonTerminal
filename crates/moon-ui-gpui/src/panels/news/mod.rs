@@ -1187,6 +1187,7 @@ impl Panel for NewsView {
 impl Render for NewsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::NEWS_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::NEWS_RENDER_US);
         // Drawing the feed IS reading it, and this is the one place that means the same thing on
         // every surface: the front dock tab, a detached window, a tile. The window-active guard is
         // what stops the pile from being consumed unseen — an unfocused window still repaints on

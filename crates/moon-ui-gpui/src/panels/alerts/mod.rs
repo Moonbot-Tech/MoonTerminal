@@ -855,6 +855,8 @@ impl Panel for AlertsPanel {
 
 impl Render for AlertsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::ALERTS_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::ALERTS_RENDER_US);
         let p = MoonPalette::active(cx);
         // A COLUMN, and nothing else, around the table. Two layout traps live in these four
         // lines and this panel fell into both:

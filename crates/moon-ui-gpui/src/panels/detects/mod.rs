@@ -562,6 +562,8 @@ impl Render for DetectsPanel {
     /// Returns:
     ///     Toolbar and filtered card grid without discarding out-of-scope retained cards.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::DETECTS_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::DETECTS_RENDER_US);
         let p = MoonPalette::active(cx);
         let is_light = p.is_light();
         let cfg = self.view_cfg(cx);

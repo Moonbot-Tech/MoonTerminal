@@ -105,6 +105,8 @@ impl Render for Shell {
     ///     The complete window element tree for the current frame.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SHELL_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::SHELL_RENDER_US);
+        let prelude_us = crate::diag::timer();
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
 
         // Collect frame and status diagnostics here; chart data, input, and axes stay in ChartPanel.
@@ -113,6 +115,15 @@ impl Render for Shell {
         if let Some(prev) = self.last_frame {
             let dt = now_inst.duration_since(prev).as_secs_f32().max(1e-4);
             self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
+            // Bucket the gap since the previous repaint. The smoothed FPS above cannot
+            // answer "is it jerky": it is an average, and an average hides exactly the
+            // burst-and-gap pattern a stutter is made of. See `diag::SHELL_FRAME_SLOW`.
+            let gap_ms = dt * 1000.0;
+            if gap_ms > 50.0 {
+                crate::diag::bump(&crate::diag::SHELL_FRAME_STALL);
+            } else if gap_ms > 20.0 {
+                crate::diag::bump(&crate::diag::SHELL_FRAME_SLOW);
+            }
         }
         self.last_frame = Some(now_inst);
         let fps = self.fps;
@@ -220,6 +231,11 @@ impl Render for Shell {
             )
         };
 
+        // Everything above is the prelude: Backend reads whose cost scales with the number
+        // of cores in the group rather than with what the frame shows. The three chrome rows
+        // and the dock frame are timed one by one below.
+        crate::diag::record_us(&crate::diag::SHELL_PRELUDE_US, prelude_us);
+
         v_flex()
             .size_full()
             .relative() // Anchor absolute popup layers over the dock.
@@ -250,42 +266,54 @@ impl Render for Shell {
                 this.modifier_watch.interrupt();
             }))
             // ── Header ──────────────────────────────────────────────
-            .child(terminal_chrome::header(
-                &self.group,
-                self.backend.clone(),
-                self.updater.clone(),
-                cx.entity(),
-                ticker_sel,
-                self.header_core_selector_open,
-                self.core_settings_open,
-                core_settings_content,
-                self.quiet_settings_open,
-                quiet_settings_content,
-                chrome_width,
-                p,
-                cx,
-            ))
+            .child({
+                let _t = crate::diag::scope(&crate::diag::SHELL_HEADER_US);
+                terminal_chrome::header(
+                    &self.group,
+                    self.backend.clone(),
+                    self.updater.clone(),
+                    cx.entity(),
+                    ticker_sel,
+                    self.header_core_selector_open,
+                    self.core_settings_open,
+                    core_settings_content,
+                    self.quiet_settings_open,
+                    quiet_settings_content,
+                    chrome_width,
+                    p,
+                    cx,
+                )
+            })
             // Trading toolbar: fixed-height size, leverage, risk, exit, Live, and window-launch
             // sections. It is one chrome row rather than a dock panel.
-            .child(controls::toolbar(
-                &self.backend,
-                &self.group,
-                self.size_edit.clone(),
-                &self.size_input,
-                self.sell_edit.clone(),
-                &self.sell_input,
-                &cx.entity(),
-                self.settings_hint_at(),
-                metric_popup,
-                toolbar_max_order,
-                &toolbar_quote,
-                chrome_width,
-                cx,
-            ))
+            .child({
+                let _t = crate::diag::scope(&crate::diag::SHELL_TOOLBAR_US);
+                controls::toolbar(
+                    &self.backend,
+                    &self.group,
+                    self.size_edit.clone(),
+                    &self.size_input,
+                    self.sell_edit.clone(),
+                    &self.sell_input,
+                    &cx.entity(),
+                    self.settings_hint_at(),
+                    metric_popup,
+                    toolbar_max_order,
+                    &toolbar_quote,
+                    chrome_width,
+                    cx,
+                )
+            })
             // One DockArea: Classic keeps its local tree; Auto adds the rail around shared topology.
-            .child(self.workspace_body(chrome_width, p, cx))
+            .child({
+                let _t = crate::diag::scope(&crate::diag::SHELL_DOCK_US);
+                self.workspace_body(chrome_width, p, cx)
+            })
             // ── Status bar, fully ported from egui's lower `shell::ui` panel ──
-            .child(self.status_bar(conn, license, snap, book_levels, fps, chrome_width, cx))
+            .child({
+                let _t = crate::diag::scope(&crate::diag::SHELL_STATUS_US);
+                self.status_bar(conn, license, snap, book_levels, fps, chrome_width, cx)
+            })
             .child(
                 MoonWindowFrame::main("moon-main-window-frame", chrome_width)
                     .header_height(design::HEADER_TOP_H)

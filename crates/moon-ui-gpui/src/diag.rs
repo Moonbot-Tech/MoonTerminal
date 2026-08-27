@@ -27,11 +27,28 @@ macro_rules! diag_counters {
 }
 
 diag_counters!(
+    // Dock-panel repaints, and what each panel's own element tree costs in microseconds per second.
+    //
+    // Every `*_render_us` in this file follows one rule, and it is the rule that makes them
+    // comparable: the timer covers that view's `render` only. A child VIEW renders during the
+    // parent's prepaint, a phase later, so these numbers are disjoint — they can be summed, and the
+    // sum is the element-tree half of the frame. What they deliberately do NOT contain is layout,
+    // text shaping, paint, and the rows of a VIRTUALIZED list, all of which run after `render`
+    // returns. So a panel that reads cheap here is not proven cheap; it is proven cheap to BUILD.
+    //
+    // The question they were added for (2026-08) is the resize drag: dragging a dock splitter
+    // changes the bounds of the panels beside it every frame, and GPUI reuses a cached view only
+    // while its bounds, content mask and text style all match the previous frame
+    // (`moon-gpui/src/view.rs`). A bounds change is a cache miss, and a miss re-renders the whole
+    // subtree under it — the cache check has a `!window.refreshing` term that a re-rendering
+    // ancestor sets. That is why a drag is measured per panel rather than as one number.
     ORDERS_RENDER     => "orders_render",
+    ORDERS_RENDER_US  => "orders_render_us",
     // The News feed repaints on a news revision change — plus, while a just-arrived card's arrival
     // tint fades, at `crate::pulse::PULSE_TICK`. This counter is what tells the two apart; compare
     // it against `pulse_tick` to see which of the two is driving.
     NEWS_RENDER       => "news_render",
+    NEWS_RENDER_US    => "news_render_us",
     // View repaints requested by `crate::pulse` to advance a decorative fade. Its only user is the
     // News arrival tint: a timer that re-renders the owning PANEL, so if it ever fails to stop it
     // looks exactly like a mysterious idle floor.
@@ -52,8 +69,100 @@ diag_counters!(
     // gone unexplained: the gate watched counters blind to the branch that fires.
     CHART_HOVER_NOTIFY => "chart_hover_notify",
     SHELL_RENDER      => "shell_render",
+    // Microseconds per second inside `Shell::render` — the group window's OWN element tree: the
+    // header, the trading toolbar, the dock frame and the status bar. It does NOT include the dock
+    // panels: GPUI calls a child view's `render` during the parent's PREPAINT, a phase later, so
+    // each panel's own `*_render_us` below is disjoint from this one and from its siblings.
+    //
+    // Read it against `shell_render`: divided, it is the cost of one shell repaint. That is the
+    // number a resize drag is about — a drag notifies once per mouse move, and this says what each
+    // of those notifies buys.
+    SHELL_RENDER_US   => "shell_render_us",
+    // How the gaps BETWEEN consecutive shell repaints fall out: `slow` counts a gap of 20 to 50 ms,
+    // `stall` counts one over 50 ms. Everything faster is the remainder against `shell_render`.
+    //
+    // This is the only counter here that measures the SYMPTOM rather than the work. A drag feels
+    // smooth at a steady 60 Hz and jerky when the same average rate is made of bursts and gaps, and
+    // a rate alone cannot tell those apart — `shell_render=70` reads identically either way. At
+    // idle almost every gap is a stall and that is meaningless, since the window repaints about
+    // once a second; the two are only worth reading while something is driving the window.
+    SHELL_FRAME_SLOW  => "shell_frame_slow",
+    SHELL_FRAME_STALL => "shell_frame_stall",
+    // `shell_render_us` split four ways, because "the shell costs 1.4 ms" names nothing to fix.
+    // Together these should account for nearly all of it; what is left over is the root flex, the
+    // window frame and the input hooks.
+    //
+    //   * `shell_prelude_us` — everything BEFORE the tree: the connection and licence summaries
+    //     over every core in the group, the order-book level count, the popup reconciles and the
+    //     exchange limits. It reads Backend, so it is the half that grows with the number of cores
+    //     rather than with what is on screen.
+    //   * `shell_header_us` / `shell_toolbar_us` / `shell_status_us` — the three chrome rows.
+    //   * `shell_dock_us` — `workspace_body`, i.e. the dock frame itself. The panels inside it are
+    //     separate views and are NOT in this number; they have their own counters.
+    //
+    // What makes the split worth having: a resize drag cannot change any of the first four, yet
+    // the root view is rebuilt on every draw — GPUI reuses only a view explicitly wrapped in
+    // `.cached(..)`, and a window root never is. So whatever is large here is being rebuilt for
+    // nothing, and the size of it decides whether pulling that row into its own cached view is
+    // worth the refactor.
+    // `shell_toolbar_us` split four ways. The row measured about 0.9 ms per repaint and is rebuilt
+    // on every one of them, which made it the single most expensive thing in the window; these say
+    // which part of it to attack.
+    //
+    //   * `toolbar_data_us` — the one Backend read: scope, sizes, exit settings, leverage.
+    //   * `toolbar_fit_us` — everything that MEASURES before building: both `FittedCells::fit`
+    //     calls, the localized launcher labels, and `row_fit`'s label ladder. Text measurement here
+    //     goes through `ui_text_width`, which lays out one glyph PER CHARACTER, so this is the part
+    //     that scales with how much text the row could show rather than with what it shows.
+    //   * `toolbar_trade_us` — the trading half of the row: order size, leverage and the max-order
+    //     readout, the stop, TP and the sell strip, and Live.
+    //   * `toolbar_launch_us` — the trailing launcher cluster: Profit Monitor, Screener,
+    //     Strategies, Analytics, Settings.
+    TOOLBAR_DATA_US   => "toolbar_data_us",
+    TOOLBAR_FIT_US    => "toolbar_fit_us",
+    TOOLBAR_TRADE_US  => "toolbar_trade_us",
+    TOOLBAR_LAUNCH_US => "toolbar_launch_us",
+    // `design::ui_text_width` — calls, characters, and microseconds per second. It lays out one
+    // glyph at a time through the text system with no cache of its own, and its own doc comment
+    // says these run per frame; this is what turns that remark into a number.
+    //
+    // Read `ui_text_width_chars` against `ui_text_width_calls`: the per-call string length. And
+    // read the microseconds against `shell_render` — divided, it is how much of one repaint goes
+    // into measuring text nobody asked to change. It is process-wide, so it covers the header and
+    // every other caller, not only the toolbar.
+    // `ui_text_width_miss` is the glyph memo's miss rate — characters that actually reached the
+    // platform shaper. In the steady state it belongs at zero, and every miss is one roughly 10 µs
+    // call. It rising without a theme, font-size or language change means the key is churning, or
+    // the cap is being hit and the whole memo thrown away every frame.
+    UI_TEXT_WIDTH_CALLS => "ui_text_width_calls",
+    UI_TEXT_WIDTH_CHARS => "ui_text_width_chars",
+    UI_TEXT_WIDTH_MISS => "ui_text_width_miss",
+    UI_TEXT_WIDTH_US  => "ui_text_width_us",
+    SHELL_PRELUDE_US  => "shell_prelude_us",
+    SHELL_HEADER_US   => "shell_header_us",
+    SHELL_TOOLBAR_US  => "shell_toolbar_us",
+    SHELL_DOCK_US     => "shell_dock_us",
+    SHELL_STATUS_US   => "shell_status_us",
     CHART_RENDER      => "chart_render",
+    CHART_RENDER_US   => "chart_render_us",
     DETACHED_RENDER   => "detached_render",
+    DETACHED_RENDER_US => "detached_render_us",
+    // The four views AROUND a chart pane, which `chart_render` does not cover: the tab strip, the
+    // two stacks that lay panes out, and the root view of an AddToChart window. Each is a separate
+    // GPUI view, so each is its own cache entry and its own miss — and a stack re-rendering while
+    // its panes do not is a completely different verdict than the reverse.
+    //
+    // `chart_tabs_render` is the strip of tabs itself. It is the one a drag is most likely to
+    // touch without anything else showing it: the strip sits at the edge of the container being
+    // resized, so its bounds change on every mouse move even when nothing in it did.
+    CHART_TABS_RENDER => "chart_tabs_render",
+    CHART_TABS_RENDER_US => "chart_tabs_render_us",
+    MAIN_STACK_RENDER => "main_stack_render",
+    MAIN_STACK_RENDER_US => "main_stack_render_us",
+    ADD_STACK_RENDER  => "add_stack_render",
+    ADD_STACK_RENDER_US => "add_stack_render_us",
+    CHART_HOST_RENDER => "chart_host_render",
+    CHART_HOST_RENDER_US => "chart_host_render_us",
     BACKEND_NOTIFY    => "backend_notify",
     CHART_PREPARE     => "chart_prepare",
     CHART_FRAME       => "chart_frame",
@@ -66,6 +175,15 @@ diag_counters!(
     // assess pixel-threshold suppression, while accounting for multiple active panes per present;
     // finer zoom levels normally suppress more subpixel camera advances.
     CHART_PRESENT     => "chart_present",
+    // Microseconds per second inside the own pass — every layer, bake and blit of `draw_gpu`, for
+    // every chart in every window, summed. Unlike the `*_render_us` family this one is NOT part of
+    // the GPUI element tree: it is the chart's own draw, and it runs on the same thread. So it is
+    // the counter that says whether a window without a chart stutters because of the charts in the
+    // OTHER windows. Divide by `chart_present` for the cost of one canvas draw.
+    //
+    // It measures the CPU side of the pass — the driver calls that record and submit the work, not
+    // the GPU's own execution, which finishes later.
+    CHART_PRESENT_US  => "chart_present_us",
     CHART_CAM_STEP    => "chart_cam_step",
     // Per-layer gpu_canvas counters required by the AGENTS.md UI Render Diagnostics contract.
     // The canvas runs outside GPUI view rendering, so each platform backend bumps these counters
@@ -213,6 +331,19 @@ diag_counters!(
     ASSETS_APPLY => "assets_apply",
     // Assets-window renders; a positive rate means the window is open and redrawing.
     ASSETS_RENDER => "assets_render",
+    ASSETS_RENDER_US => "assets_render_us",
+    // The remaining home-strip dock panels — Report, Alerts, CoreStatus — plus Detects, which is
+    // docked-only. Each had no counter at all until 2026-08, which meant a bottom strip carrying
+    // them had a blind spot exactly where a resize drag does its work: the panel beside the
+    // splitter is the one that re-renders, and until it had a counter it could not be named.
+    REPORT_RENDER => "report_render",
+    REPORT_RENDER_US => "report_render_us",
+    ALERTS_RENDER => "alerts_render",
+    ALERTS_RENDER_US => "alerts_render_us",
+    CORE_STATUS_RENDER => "core_status_render",
+    CORE_STATUS_RENDER_US => "core_status_render_us",
+    DETECTS_RENDER => "detects_render",
+    DETECTS_RENDER_US => "detects_render_us",
     // Screener rebuilds, each a full pass over all markets; a positive rate means it is open.
     SCREENER_REBUILD => "screener_rebuild",
     // Actual core-detect scans in `play_detect_sounds`, after its `detects_rev` gate. Counting before
@@ -266,6 +397,7 @@ diag_counters!(
     //     one happens. The direct answer to "what does an open Log tab cost", and the only one here
     //     a time regression cannot hide from. It excludes the element tree — that is `log_render`.
     LOG_RENDER => "log_render",
+    LOG_RENDER_US => "log_render_us",
     LOG_PULL => "log_pull",
     LOG_LINES_PARSED => "log_lines_parsed",
     LOG_ROWS_FILTERED => "log_rows_filtered",
@@ -371,6 +503,25 @@ pub fn record_us(counter: &AtomicU64, timer: Option<std::time::Instant>) {
     if let Some(timer) = timer {
         bump_by(counter, timer.elapsed().as_micros() as u64);
     }
+}
+
+/// A stopwatch that records itself when it goes out of scope.
+///
+/// For a function whose body IS the measurement — a `render` that returns the element tree it
+/// spent its time building. The tail expression is evaluated before locals are dropped, so a
+/// `let _t = scope(...)` on the first line covers the whole body including the returned tree,
+/// without the call having to find every `return` and `?` on the way out.
+pub struct Scope(&'static AtomicU64, Option<std::time::Instant>);
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        record_us(self.0, self.1);
+    }
+}
+
+/// Starts a [`Scope`] stopwatch on `counter`. Inert, and reads no clock, while diagnostics are off.
+pub fn scope(counter: &'static AtomicU64) -> Scope {
+    Scope(counter, timer())
 }
 
 #[derive(Clone, Debug)]

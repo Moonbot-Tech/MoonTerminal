@@ -27,6 +27,8 @@ impl Render for DetachedChartHost {
     /// The market dropdown and dismiss layer use the measured header height so scaling cannot move
     /// either layer across the search field.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::CHART_HOST_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::CHART_HOST_RENDER_US);
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         // Correct a restored window's size once it is on the target display with the correct scale:
         // force the saved logical size to override `WM_DPICHANGED` shrinkage.

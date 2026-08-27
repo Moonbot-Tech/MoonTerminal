@@ -571,6 +571,8 @@ impl Render for CoreStatusView {
     /// Returns:
     ///     Full dock, detached-window, or group-host panel contents.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::CORE_STATUS_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::CORE_STATUS_RENDER_US);
         let cores = self.scope_cores(self.backend.read(cx));
         let rows = self.cached_rows.clone();
         let groups = self.cached_groups.clone();

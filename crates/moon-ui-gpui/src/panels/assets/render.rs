@@ -89,6 +89,7 @@ impl Render for AssetsView {
     /// Render the always-present table and footer plus the optional Wallets section.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ASSETS_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::ASSETS_RENDER_US);
         // Keep the shared Assets-view activity marker fresh. While any view renders at least once
         // per second through RenderGate, feed snapshots may publish after a one-second minimum;
         // without a visible view, the minimum interval rises to five seconds after domain events.

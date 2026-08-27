@@ -1117,6 +1117,8 @@ impl Render for AddChartStack {
     /// These stacks have no fullscreen mode, so their shared card helper always retains the
     /// separator and never needs the Main stack's position note.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::ADD_STACK_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::ADD_STACK_RENDER_US);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             // Use an opaque background: a detached window has `Root=NoFill` and no own pass, so

@@ -538,6 +538,7 @@ impl Render for DetachedWindow {
     ///     Full-window element containing the detached panel titlebar and live content.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::DETACHED_RENDER);
+        let _render_us = crate::diag::scope(&crate::diag::DETACHED_RENDER_US);
         // Detached panels share Main's group but live in a separate OS window whose mouse movement
         // Shell cannot observe. Record group activity from any widget in this active window so Main's
         // inactivity policy does not close its chart while the user works in a detached panel.
