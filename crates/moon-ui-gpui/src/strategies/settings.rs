@@ -17,20 +17,12 @@ use rust_i18n::t;
 use super::StrategiesView;
 use crate::design::{self, moon};
 use crate::panels::{
+    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, POPUP_GROUP_CAPTION_FONT,
     popup_close_button, popup_gear_trigger, popup_group, popup_group_inset_px, popup_title,
 };
 
 #[cfg(test)]
 mod tests;
-
-/// Compact MoonCheckbox mark width in design units.
-const COMPACT_CHECKBOX_MARK: f32 = 12.0;
-/// Compact MoonCheckbox gap between its mark and label in design units.
-const COMPACT_CHECKBOX_GAP: f32 = 6.0;
-/// Compact MoonCheckbox label size before font scaling.
-const COMPACT_CHECKBOX_FONT: f32 = 9.5;
-/// MoonGroupBox caption size before font scaling.
-const GROUP_CAPTION_FONT: f32 = 10.5;
 
 /// Resolved display preferences of the Strategies window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -305,7 +297,7 @@ fn settings_content_width(cx: &App) -> f32 {
     let group = t!(DISPLAY_GROUP);
     let title_width =
         design::ui_text_width(cx, &title, tokens.typography.mono_font_size, 400.0, true);
-    let group_width = design::ui_text_width(cx, &group, GROUP_CAPTION_FONT, 600.0, true);
+    let group_width = design::ui_text_width(cx, &group, POPUP_GROUP_CAPTION_FONT, 600.0, true);
     let checkbox_label_width = POPUP_ROWS
         .iter()
         .map(|row| design::ui_text_width(cx, &t!(row.label), COMPACT_CHECKBOX_FONT, 400.0, false))

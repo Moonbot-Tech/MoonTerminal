@@ -189,6 +189,19 @@ assets.wallets_hint:
   ru: "Кошельки · перетащи монету между контейнерами"
   en: "Wallets · drag a coin between containers"
   es: "Carteras · arrastra una moneda entre contenedores"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title:
+  ru: "Настройки кошельков"
+  en: "Wallets settings"
+  es: "Ajustes de carteras"
+assets.settings.display:
+  ru: "Отображение"
+  en: "Display"
+  es: "Visualización"
+assets.settings.group_by_venue:
+  ru: "Группировать ядра по биржам"
+  en: "Group cores by exchange"
+  es: "Agrupar núcleos por exchange"
 assets.transfer_title:
   ru: "Перенос %{coin}: %{from} -> %{to}"
   en: "Transfer %{coin}: %{from} -> %{to}"

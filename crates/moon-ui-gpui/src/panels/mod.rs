@@ -48,6 +48,7 @@ pub(crate) mod tab_menu;
 
 pub(crate) use arb_edit::open_arb_edit;
 pub(crate) use common::{
+    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, POPUP_GROUP_CAPTION_FONT,
     POPUP_GROUP_INSET, RadioMark, RenderGate, data_table_host, detach_button, icon_checkbox,
     micro_button, num, popup_apply_all_button, popup_close_button, popup_gear_trigger, popup_group,
     popup_group_inset_px, popup_title, radio_items, side_label, toggle_variant,

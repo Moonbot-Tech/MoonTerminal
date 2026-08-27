@@ -290,6 +290,11 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "strategies/settings.rs",
             r#".id("strategies-settings-popup")"#,
         ),
+        (
+            "panels/assets/settings.rs",
+            "panels/assets/settings.rs",
+            r#".id("assets-wallets-settings-popup")"#,
+        ),
         // The Alerts row gear. Its content is `figstyle::rows` BARE — the same rows the chart's
         // own settings panel wraps in `figstyle::shell`, which is what paints a surface there and
         // must not be handed to a popover that already paints one. The anchor is the content
