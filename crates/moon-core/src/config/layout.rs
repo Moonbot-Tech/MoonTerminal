@@ -14,8 +14,8 @@ mod serde_compat;
 use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
     de_candle_volume_scale, de_candle_volume_style, de_clock_zone, de_connector_thickness,
-    de_lenient_chart_labels, de_lenient_graphics, de_lenient_map, de_lenient_seed, de_lenient_true,
-    de_lenient_u32, de_marker_scale, de_table_sort_map, de_trade_volume_alpha,
+    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map, de_lenient_seed,
+    de_lenient_true, de_lenient_u32, de_marker_scale, de_table_sort_map, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -1189,6 +1189,14 @@ pub struct ChartGraphicsCfg {
     /// `closed_alpha` and reads as a live price the terminal is still tracking.
     #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
     pub hide_closed_sell_line: bool,
+    /// Whether an order line hides its repricing history: the server-reported trace, the locally
+    /// reconstructed staircase, and the knot marking each reprice. The server's `SetStopPrice`
+    /// segment remains visible because it records where a stop sat, rather than a reprice.
+    ///
+    /// OFF by default, unlike its neighbour above: it removes information a user may rely on, so
+    /// it is opt-in rather than opt-out.
+    #[serde(default, deserialize_with = "de_lenient_false")]
+    pub hide_order_move_history: bool,
 
     // --- Trade marks. Moved here from `ChartTheme` so they are per TAB rather than per theme. ---
     /// Multiplier on the trade-cross marker size. The device pixel ratio is applied separately and
@@ -1244,6 +1252,7 @@ impl Default for ChartGraphicsCfg {
             show_real_trades: true,
             show_emulator_trades: true,
             hide_closed_sell_line: true,
+            hide_order_move_history: false,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             candle_volume_style: def_candle_volume_style(),

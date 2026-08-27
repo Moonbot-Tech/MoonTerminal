@@ -33,6 +33,7 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert!(empty.chart_graphics.hide_closed_sell_line);
     assert!(empty.chart_graphics.show_real_trades);
     assert!(empty.chart_graphics.show_emulator_trades);
+    assert!(!empty.chart_graphics.hide_order_move_history);
     assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.0);
     assert_eq!(empty.chart_graphics.connector_thickness_px, 2.0);
 
@@ -42,7 +43,8 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
                connector_thickness_px = 3.0\n\
                show_real_trades = \"yes\"\n\
                show_emulator_trades = false\n\
-               hide_closed_sell_line = false\n";
+               hide_closed_sell_line = false\n\
+               hide_order_move_history = \"not-a-bool\"\n";
     let decoded: WindowLayout = toml::from_str(doc)
         .expect("one malformed chart-graphics field must not reject the layout document");
     assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
@@ -54,6 +56,10 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     );
     assert!(!decoded.chart_graphics.show_emulator_trades);
     assert!(!decoded.chart_graphics.hide_closed_sell_line);
+    assert!(
+        !decoded.chart_graphics.hide_order_move_history,
+        "a malformed opt-in history preference must preserve its false default"
+    );
 }
 
 /// Protects all workspace maps as a restart-stable, backwards-compatible layout contract.

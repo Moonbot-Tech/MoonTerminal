@@ -147,8 +147,10 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 }
 
 /// Builds order-line geometry for `market`: primary order lines, a separate trace history
-/// of their movement, start crosses plus end crosses or filled-entry arrows, fallback-step knots,
-/// and a continuous liquidation line. Culls orders outside the visible time window.
+/// of their movement (unless `graphics.hide_order_move_history` hides it, along with the
+/// fallback-step knots that mark it), start crosses plus end crosses or filled-entry arrows,
+/// and a continuous liquidation line. The server's `SetStopPrice` segment remains visible. Culls
+/// orders outside the visible time window.
 ///
 /// The ENTRY line is the one exception to "an active line runs to the right edge": once the wire
 /// dates the entry's fill it ends there instead, marked with the closed-trade-history arrow rather
@@ -359,23 +361,30 @@ pub fn build_order_geometry(
 
             let trace_points = &line.server_points;
             let has_server_trace = !trace_points.is_empty();
-            if has_server_trace {
-                // MoonProtoBeta already stores points in the same format as Delphi's
+            // Gates the three draw sites that reconstruct a line's repricing HISTORY: the server
+            // trace below, the local staircase and its risers, and the knot markers. Never folded
+            // into `has_server_trace` itself — that flag still decides which of the two mutually
+            // exclusive representations applies; this is an extra gate on both.
+            let show_move_history = !graphics.hide_order_move_history;
+            // Hoisted out of the trace block below because the SetStopPrice line at the end of
+            // this arm is drawn at the same opacity and outlives the flag that hides the trace.
+            let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
+            let base_trace_alpha = if highlighted {
+                style.trace_alpha.max(0.7)
+            } else {
+                style.trace_alpha
+            };
+            let trace_alpha = if show_light_lines {
+                base_trace_alpha * 0.5
+            } else {
+                base_trace_alpha
+            };
+            if has_server_trace && show_move_history {
+                // MoonProtoBeta already stores repricing points in the same format as Delphi's
                 // TOrderLine.SetPointTrade: an anchor plus groups of three points. Draw them
-                // exactly like TOrderLine.DrawInternal, not as an ordinary polyline.
-                // IMPORTANT: this is a separate server trace. It does not replace the live price
-                // of the primary order line below.
-                let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
-                let base_trace_alpha = if highlighted {
-                    style.trace_alpha.max(0.7)
-                } else {
-                    style.trace_alpha
-                };
-                let trace_alpha = if show_light_lines {
-                    base_trace_alpha * 0.5
-                } else {
-                    base_trace_alpha
-                };
+                // exactly like TOrderLine.DrawInternal, not as an ordinary polyline. The separate
+                // SetStopPrice segment below shares their arrival but is not part of this trace.
+                // IMPORTANT: this trace does not replace the live price of the primary order line.
                 let trace_color = rgba(line_color, trace_alpha);
                 let trace_thickness = if highlighted { 2.0 } else { 1.0 };
                 let trace_dash = if show_light_lines {
@@ -466,7 +475,15 @@ pub fn build_order_geometry(
                         }
                     }
                 }
+            }
 
+            // The stop line the server delivers WITH a trace (Moonbot `SetStopPrice`), and NOT a
+            // record of the line moving: it is horizontal at one price, saying where the stop sat
+            // between two instants. `hide_order_move_history` therefore leaves it alone — the
+            // checkbox promises to remove the repricing trail and nothing else. It shares the
+            // trace's arrival and its opacity, which is the only reason it was ever written inside
+            // that block.
+            if has_server_trace {
                 if let (Some(stop_price), Some(stop_time_ms), Some(&(start_time, _))) = (
                     line.server_stop_price,
                     line.server_stop_time_ms,
@@ -559,7 +576,7 @@ pub fn build_order_geometry(
                 None => edge_rel,
             };
 
-            if !has_server_trace && path.show && n > 1 {
+            if !has_server_trace && show_move_history && path.show && n > 1 {
                 for i in 0..n {
                     let (t, p) = points[i];
                     // The repricing staircase is the ENTRY line's own history, so it stops where
@@ -663,7 +680,8 @@ pub fn build_order_geometry(
 
             // Knots are fallback-step points on the straight line. For a server trace, do not
             // duplicate knots on the primary line because the trace is already a separate object.
-            if st.knots && !has_server_trace {
+            // A knot is also part of the move HISTORY it marks, so it is hidden along with it.
+            if st.knots && !has_server_trace && show_move_history {
                 for i in 1..n {
                     markers.push(MarkerInstance::at_price(
                         to_rel(points[i].0),

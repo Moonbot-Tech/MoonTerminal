@@ -47,15 +47,19 @@ const MODES: [u8; 4] = [
 /// Steps for how many recent candles are redrawn with trades, where zero means candles only.
 ///
 /// The same steps are used for hiding recent candles.
-const ZONES: [u16; 7] = [0, 1, 2, 3, 5, 10, 20];
+const ZONES: [u16; 8] = [0, 1, 2, 3, 5, 10, 20, 50];
 
 const OUTLINES: [u8; 3] = [1, 2, 3];
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 ///
 /// The row allowance is 7×42 rather than any row's real width: the widest row is the four 70-unit
-/// mode segments (280), and the zone/hide rows are seven 34-unit segments (238). The extra ~14 is
+/// mode segments (280), and the zone/hide rows are eight 34-unit segments (272). The extra ~14 is
 /// slack, kept deliberately — the mode labels are localized and ES runs longer than RU/EN.
+///
+/// A ZONES step added past eight therefore has to be checked against 280, not against this
+/// number: the segments are rendered pixels (`MoonSegmentItem::width`, no item gap), so the row
+/// is exactly `ZONES.len() * 34`.
 pub(super) fn content_width(cx: &App) -> Pixels {
     px(7.0 * 42.0 + popup_group_inset_px(cx))
 }

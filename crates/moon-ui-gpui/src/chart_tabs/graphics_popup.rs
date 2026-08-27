@@ -1,7 +1,8 @@
 //! The "Chart graphics" popup (the palette button beside the candlestick one) configures how the
 //! chart DRAWS: the size of the closed-trade history arrows, the thickness of their entry-to-exit
-//! connector, which closed TRADES appear at all, whether a closed order keeps its sell line, the
-//! size of the live trade marks, and the bottom volume band.
+//! connector, which closed TRADES appear at all, whether a closed order keeps its sell line,
+//! whether any order line shows its repricing history, the size of the live trade marks, and the
+//! bottom volume band.
 //!
 //! The last two groups used to live in Settings -> Interface, keyed to the THEME. They describe a
 //! chart tab, not a colour scheme, so they moved here and became per tab like everything else in
@@ -281,7 +282,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
 
-    // --- Which closed trades the history layer draws, plus the closed order's sell line. ---
+    // --- Which closed trades the history layer draws, plus the closed order's sell line and every
+    // order line's repricing trail. ---
     let real_cb = {
         let entity = entity.clone();
         MoonCheckbox::new(SharedString::from(format!("{id}-real")))
@@ -319,6 +321,21 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         .text_size(design::t_caption(cx))
         .text_color(rgb(p.text_muted))
         .child(t!("chart.graphics.hide_closed_sell_hint").to_string());
+    let hide_move_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-hide-move-history")))
+            .label(t!("chart.graphics.hide_move_history").to_string())
+            .checked(cfg.hide_order_move_history)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| c.hide_order_move_history = v);
+            })
+    };
+    let hide_move_hint = div()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(t!("chart.graphics.hide_move_history_hint").to_string());
 
     // --- Trade marks: the live trade crosses and their per-trade volume bars. ---
     let marker_scale_row = {
@@ -502,8 +519,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         .child(
             // The two trade-kind checkboxes belong HERE, beside the arrow size and the connector they
             // now share a subject with. They used to sit in the order-lines group because that is
-            // what they filtered; the order-lines group keeps only the closed sell line, which
-            // genuinely is about an order line.
+            // what they filtered; the order-lines group keeps the closed sell line and every order
+            // line's move-history trail, which genuinely are about order lines.
             popup_group("frame-history", t!("chart.graphics.frame_history")).child(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
@@ -518,7 +535,9 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
                     .child(hide_sell_cb)
-                    .child(hide_sell_hint),
+                    .child(hide_sell_hint)
+                    .child(hide_move_cb)
+                    .child(hide_move_hint),
             ),
         )
         .child(

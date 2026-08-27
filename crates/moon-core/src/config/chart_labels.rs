@@ -111,6 +111,18 @@ pub const LABEL_ROW_NAME_MAX: usize = 48;
 pub const LABEL_SIZE_MULT_MIN: f32 = 0.5;
 pub const LABEL_SIZE_MULT_MAX: f32 = 3.0;
 
+/// Multiplier a caption draws at while nothing overrides it — every caption, of every field.
+///
+/// One number rather than a per-field ladder: a chart is read from across a desk, and the size the
+/// captions were legible at is the same for the coin, the badge and the position figures alike. The
+/// hierarchy the ladder used to state — the coin a step over the core, the badge a step under the
+/// comparison delta — is still available per caption, on the popup's own size strip, which is where
+/// a reader who wants one puts it.
+///
+/// It is a DEFAULT, not a value: a part that overrides nothing writes nothing to the file, so a
+/// profile follows this number when it moves rather than freezing the one it was created under.
+pub const LABEL_SIZE_MULT_DEFAULT: f32 = 1.5;
+
 /// Which band of the pane a row lives in.
 ///
 /// A chart pane is two columns, and a row belongs to one of them: `Chart*` bands lie over the
@@ -1046,9 +1058,13 @@ impl Default for ChartLabelsCfg {
     /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
     /// Not a designer's guess: this is the developer's own Main tab, transcribed from its
-    /// `charts.json` entry on 2026-08-25 — ten modules, each placed, spaced and sized by hand, and
-    /// adopted as the shipped set so a fresh profile opens on a chart that has been USED rather
-    /// than assembled.
+    /// `charts.json` entry on 2026-08-25 — ten modules, each placed and spaced by hand, and adopted
+    /// as the shipped set so a fresh profile opens on a chart that has been USED rather than
+    /// assembled.
+    ///
+    /// SIZES are deliberately absent from it: every caption here overrides nothing and draws at
+    /// [`LABEL_SIZE_MULT_DEFAULT`], which is both what the shipped chart is meant to look like and
+    /// what keeps a profile created today following that number if it ever moves again.
     ///
     /// Named through [`ChartLabelRow::preset`] rather than by a literal, so the popup speaks the
     /// reader's language: this set ships to everyone, and typed names would have shipped the
@@ -1067,14 +1083,12 @@ impl Default for ChartLabelsCfg {
         instrument.push_part(ChartLabelField::Coin);
         instrument.push_part(ChartLabelField::Core);
         instrument.push_part(ChartLabelField::Venue);
-        instrument.parts[2].style.size_mult = Some(1.0);
         cfg.rows[0] = instrument;
 
-        // The Y-scale badge on the plot's top-right corner, one size up.
+        // The Y-scale badge on the plot's top-right corner.
         let mut scale = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
         scale.preset = Some(LabelPreset::Scale);
         scale.push_part(ChartLabelField::ScaleBadge);
-        scale.parts[0].style.size_mult = Some(1.7);
         cfg.rows[1] = scale;
 
         // The coin's own movement: a block of two, standing BESIDE the badge rather than under it,
@@ -1100,7 +1114,6 @@ impl Default for ChartLabelsCfg {
         volumes.push_part(ChartLabelField::WindowSellVolume);
         for part in volumes.parts.iter_mut().filter(|p| p.is_used()) {
             part.window = LabelWindow::M1;
-            part.style.size_mult = Some(1.25);
         }
         volumes.parts[1].style.caption = Some(false);
         volumes.parts[2].style.caption = Some(false);
@@ -1120,7 +1133,6 @@ impl Default for ChartLabelsCfg {
         for part in cursor.parts.iter_mut().filter(|p| p.is_used()) {
             part.span = LabelSpan::Seconds(10);
             part.anchor = SpanAnchor::Cursor;
-            part.style.size_mult = Some(1.25);
             part.bar = false;
         }
         cursor.parts[1].style.caption = Some(false);
@@ -1136,9 +1148,6 @@ impl Default for ChartLabelsCfg {
         orders.push_part(ChartLabelField::OpenPnlMoney);
         orders.push_part(ChartLabelField::OpenPnlPct);
         orders.push_part(ChartLabelField::Exposure);
-        for part in orders.parts.iter_mut().filter(|p| p.is_used()) {
-            part.style.size_mult = Some(1.25);
-        }
         orders.parts[2].style.caption = Some(false);
         cfg.rows[5] = orders;
 
@@ -1148,9 +1157,6 @@ impl Default for ChartLabelsCfg {
         session.gap = 4;
         session.push_part(ChartLabelField::SessionPnl);
         session.push_part(ChartLabelField::SessionProfit);
-        for part in session.parts.iter_mut().filter(|p| p.is_used()) {
-            part.style.size_mult = Some(1.25);
-        }
         cfg.rows[6] = session;
 
         // Funding under that, spaced off the line; the countdown prints bare, beside the rate that

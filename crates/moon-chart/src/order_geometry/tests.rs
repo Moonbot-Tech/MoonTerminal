@@ -123,6 +123,38 @@ fn draw_order_segments(
     segs
 }
 
+/// Builds the primary order-line markers for the shared BTCUSDT fixture market.
+fn draw_order_markers(
+    store: &OrderLineStore,
+    style: &OrdersStyle,
+    graphics: &ChartGraphicsCfg,
+) -> Vec<MarkerInstance> {
+    let mut zones = Vec::new();
+    let mut hlines = Vec::new();
+    let mut segs = Vec::new();
+    let mut markers = Vec::new();
+    build_order_geometry(
+        store,
+        "BTCUSDT",
+        style,
+        graphics,
+        1.0,
+        None,
+        None,
+        0.0,
+        3_000.0,
+        0.0,
+        10_000.0,
+        10_000.0,
+        true,
+        &mut zones,
+        &mut hlines,
+        &mut segs,
+        &mut markers,
+    );
+    markers
+}
+
 /// Counts straight segments at one deliberately unique fixture price.
 fn segment_count_at(segs: &[SegInstance], price: f32) -> usize {
     segs.iter()
@@ -361,6 +393,140 @@ fn server_trace_is_separate_from_active_order_line() {
                 && near(s.thickness, 2.0)
         }),
         "server trace stop-line must be drawn like Moonbot SetStopPrice"
+    );
+}
+
+/// `order_geometry.rs:build_order_geometry` must keep Moonbot's `SetStopPrice` segment outside
+/// the movement-history gate; folding it under that guard deletes the stop's visible price interval
+/// when a user hides repricing trails.
+#[test]
+fn hidden_move_history_keeps_server_stop_line_but_removes_server_trace() {
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[test_order_with_buy_trace()], 0));
+
+    let style = OrdersStyle::default();
+    let hidden = draw_order_segments(
+        &store,
+        &style,
+        &ChartGraphicsCfg {
+            hide_order_move_history: true,
+            ..ChartGraphicsCfg::default()
+        },
+    );
+    let stop_color = crate::layers::rgb_with_alpha(style.stop.color, style.trace_alpha);
+
+    assert!(
+        !hidden.iter().any(|seg| {
+            near(seg.t0_rel, 1_000.0)
+                && near(seg.t1_rel, 2_000.0)
+                && near(seg.p0, 60_000.0)
+                && near(seg.p1, 60_000.0)
+                && near(seg.pattern, SEG_PATTERN_DASH_DOT_DOT)
+        }),
+        "hiding movement history must remove the server trace"
+    );
+    assert!(
+        !hidden.iter().any(|seg| {
+            near(seg.t0_rel, 2_500.0)
+                && near(seg.t1_rel, 2_500.0)
+                && near(seg.p0, 61_000.0)
+                && near(seg.p1, 61_500.0)
+                && near(seg.pattern, SEG_PATTERN_DOT)
+        }),
+        "hiding movement history must remove the server temporary-point riser"
+    );
+    assert!(
+        hidden.iter().any(|seg| {
+            near(seg.extend, SEG_EXTEND_EDGE) && near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0)
+        }),
+        "hiding movement history must retain the current-price order line"
+    );
+    assert!(
+        hidden.iter().any(|seg| {
+            near(seg.t0_rel, 1_000.0)
+                && near(seg.t1_rel, 2_000.0)
+                && near(seg.p0, 59_500.0)
+                && near(seg.p1, 59_500.0)
+                && near(seg.pattern, SEG_PATTERN_DOT)
+                && near(seg.thickness, 2.0)
+                && near(seg.color[0], stop_color[0])
+                && near(seg.color[1], stop_color[1])
+                && near(seg.color[2], stop_color[2])
+                && near(seg.color[3], stop_color[3])
+        }),
+        "Moonbot SetStopPrice must remain a dotted stop-coloured two-pixel segment"
+    );
+}
+
+/// `order_geometry.rs:build_order_geometry` must hide local fallback repricing steps and knots
+/// without removing the current-price line; dropping either history guard leaves a reprice trail
+/// after the user turns it off.
+#[test]
+fn hidden_move_history_removes_local_staircase_and_knots_only() {
+    let mut row = test_order_with_buy_trace();
+    row.buy_trace = None;
+    row.create_time_ms = 1_000.0;
+    row.buy_price = 60_000.0;
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row.clone()], 0));
+    row.buy_price = 61_000.0;
+    assert!(store.update(&[row], 0));
+
+    let style = OrdersStyle::default();
+    let shown = draw_order_segments(&store, &style, &ChartGraphicsCfg::default());
+    let shown_markers = draw_order_markers(&store, &style, &ChartGraphicsCfg::default());
+    let hidden = draw_order_segments(
+        &store,
+        &style,
+        &ChartGraphicsCfg {
+            hide_order_move_history: true,
+            ..ChartGraphicsCfg::default()
+        },
+    );
+    let hidden_markers = draw_order_markers(
+        &store,
+        &style,
+        &ChartGraphicsCfg {
+            hide_order_move_history: true,
+            ..ChartGraphicsCfg::default()
+        },
+    );
+
+    assert!(
+        shown.iter().any(|seg| {
+            near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0) && near(seg.extend, SEG_EXTEND_NONE)
+        }),
+        "the default must retain the fallback staircase"
+    );
+    assert!(
+        !hidden.iter().any(|seg| {
+            near(seg.p0, 60_000.0) && near(seg.p1, 60_000.0) && near(seg.extend, SEG_EXTEND_NONE)
+        }),
+        "hiding movement history must remove the fallback staircase"
+    );
+    assert!(
+        hidden.iter().any(|seg| {
+            near(seg.p0, 61_000.0) && near(seg.p1, 61_000.0) && near(seg.extend, SEG_EXTEND_EDGE)
+        }),
+        "hiding movement history must retain the current-price line"
+    );
+    assert!(
+        hidden_markers.iter().any(|marker| {
+            near(marker.shape, MARKER_SHAPE_CROSS) && near(marker.price, 61_000.0)
+        }),
+        "hiding movement history must retain the live-line start cross"
+    );
+    assert!(
+        shown_markers
+            .iter()
+            .any(|marker| near(marker.shape, MARKER_SHAPE_KNOT)),
+        "the default must retain a knot for the fallback reprice"
+    );
+    assert!(
+        !hidden_markers
+            .iter()
+            .any(|marker| near(marker.shape, MARKER_SHAPE_KNOT)),
+        "hiding movement history must remove every fallback reprice knot"
     );
 }
 

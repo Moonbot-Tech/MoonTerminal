@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{LabelColor, ResolvedLabelStyle};
+use super::{LABEL_SIZE_MULT_DEFAULT, LabelColor, ResolvedLabelStyle};
 
 /// What one caption prints.
 ///
@@ -567,16 +567,17 @@ impl ChartLabelField {
 
     /// Style this field draws with when its part overrides nothing.
     ///
-    /// These are the sizes and colors the hard-coded caption used, so the default configuration
-    /// reproduces it without the popup restating them.
+    /// These are the colors the hard-coded caption used, so the default configuration reproduces it
+    /// without the popup restating them. The SIZE is no longer part of that: every field defaults to
+    /// [`LABEL_SIZE_MULT_DEFAULT`], and a caption that wants to lead its neighbours says so on the
+    /// popup's size strip.
     pub fn default_style(self) -> ResolvedLabelStyle {
         match self {
-            // The coin leads, one size up: it is the fact a glance needs.
             ChartLabelField::Coin => ResolvedLabelStyle {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
-                size_mult: 1.25,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: false,
             },
             // The comparison delta is the one figure a broom-mode pane exists to show.
@@ -584,16 +585,14 @@ impl ChartLabelField {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::BySign,
-                size_mult: 1.7,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: false,
             },
-            // Deliberately smaller than the comparison delta beside it: a secondary indicator must
-            // not compete with the figure the pane is being read for.
             ChartLabelField::ScaleBadge => ResolvedLabelStyle {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
-                size_mult: 1.45,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: false,
             },
             ChartLabelField::Delta1h
@@ -615,7 +614,7 @@ impl ChartLabelField {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::BySign,
-                size_mult: 1.0,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: true,
             },
             // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
@@ -650,7 +649,7 @@ impl ChartLabelField {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
-                size_mult: 1.0,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: true,
             },
             // Captioned like the funding countdown beside it, and for a sharper reason: this
@@ -668,7 +667,7 @@ impl ChartLabelField {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
-                size_mult: 1.0,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: false,
             },
         }
