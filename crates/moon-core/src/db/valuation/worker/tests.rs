@@ -284,7 +284,6 @@ fn seed_value(store: &Connection, source: TradeSource, core_uid: i64, row_id: i6
 fn partition_events_delete_only_the_named_source_and_core() {
     let store =
         super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
-    let reports = Connection::open_in_memory().expect("open report fixture");
     seed_value(&store, TradeSource::Typed, 1, 10);
     seed_value(&store, TradeSource::Typed, 2, 20);
     seed_value(&store, TradeSource::Legacy, 1, 30);
@@ -319,7 +318,6 @@ fn partition_events_delete_only_the_named_source_and_core() {
         &store,
         &NoNetwork,
         &axis(),
-        &reports,
         OutboxEvent {
             seq: 1,
             source: TradeSource::Typed,
@@ -327,6 +325,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
             row_id: 0,
             action: OutboxAction::RescanCore,
         },
+        None,
         &mut deferred,
         &BTreeSet::new(),
     );
@@ -355,7 +354,6 @@ fn partition_events_delete_only_the_named_source_and_core() {
         &store,
         &NoNetwork,
         &axis(),
-        &reports,
         OutboxEvent {
             seq: 2,
             source: TradeSource::Legacy,
@@ -363,6 +361,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
             row_id: 0,
             action: OutboxAction::PurgeLegacy,
         },
+        None,
         &mut deferred,
         &BTreeSet::new(),
     );
@@ -382,7 +381,6 @@ fn partition_events_delete_only_the_named_source_and_core() {
 fn hard_delete_removes_one_exact_prepared_identity() {
     let store =
         super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
-    let reports = Connection::open_in_memory().expect("open report fixture");
     seed_value(&store, TradeSource::Typed, 1, 10);
     seed_value(&store, TradeSource::Typed, 1, 11);
     let mut deferred = BTreeMap::new();
@@ -391,7 +389,6 @@ fn hard_delete_removes_one_exact_prepared_identity() {
         &store,
         &NoNetwork,
         &axis(),
-        &reports,
         OutboxEvent {
             seq: 1,
             source: TradeSource::Typed,
@@ -399,6 +396,7 @@ fn hard_delete_removes_one_exact_prepared_identity() {
             row_id: 10,
             action: OutboxAction::Delete,
         },
+        None,
         &mut deferred,
         &BTreeSet::new(),
     );
@@ -445,7 +443,6 @@ fn row_event_replaces_a_stale_deferred_copy() {
         &store,
         &NoNetwork,
         &axis(),
-        &reports,
         OutboxEvent {
             seq: 1,
             source: TradeSource::Typed,
@@ -453,6 +450,11 @@ fn row_event_replaces_a_stale_deferred_copy() {
             row_id: 10,
             action: OutboxAction::Row,
         },
+        Some(
+            load_trade(&reports, TradeSource::Typed, 1, 10)
+                .expect("load the row observed by its outbox event")
+                .expect("the staged row remains eligible"),
+        ),
         &mut deferred,
         &BTreeSet::new(),
     );
@@ -472,6 +474,168 @@ fn row_event_replaces_a_stale_deferred_copy() {
             )
             .expect("read current prepared value"),
         (closedate, 1, 7.0)
+    );
+}
+
+/// A drained reconciliation must restart only after an event that invalidates an entire prepared
+/// partition. Breakage: `worker.rs:outbox_activity_should_rearm_reconciliation` always returning
+/// `false` leaves rows deleted by a rescan or legacy purge without a value until a future manual
+/// rebuild, so recent profit figures remain blank.
+#[test]
+fn partition_invalidation_rearms_a_drained_reconciliation_only() {
+    let rescan = OutboxEvent {
+        seq: 1,
+        source: TradeSource::Typed,
+        core_uid: 7,
+        row_id: 0,
+        action: OutboxAction::RescanCore,
+    };
+    let row = OutboxEvent {
+        seq: 2,
+        source: TradeSource::Typed,
+        core_uid: 7,
+        row_id: 10,
+        action: OutboxAction::Row,
+    };
+
+    assert!(outbox_activity_should_rearm_reconciliation(
+        &None,
+        &[rescan]
+    ));
+    assert!(
+        !outbox_activity_should_rearm_reconciliation(&None, &[row]),
+        "a row event values itself and must not restart a full history walk"
+    );
+    assert!(
+        !outbox_activity_should_rearm_reconciliation(&Some(ReconcileState::new()), &[rescan]),
+        "an active newest-first walk keeps its cursor instead of restarting"
+    );
+}
+
+/// Event-aligned observations must let a later missing row delete the value prepared by an earlier
+/// observation. Breakage: `worker.rs:consume_outbox` retaining only `Some` observations would
+/// preserve a stale figure after a same-key row is removed, so the user could read deleted profit.
+#[test]
+fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
+    let store =
+        super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
+    let reports = Connection::open_in_memory().expect("open report fixture");
+    let closedate = current_minute_utc() - 60;
+    reports
+        .execute_batch(&format!(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER, newrecid INTEGER, closedate INTEGER,
+                 basecurrency INTEGER, profitbtc REAL, spentbtc REAL
+             );
+             INSERT INTO orders_rep VALUES (1, 10, {closedate}, 1, 7.0, 3.0);"
+        ))
+        .expect("seed report row for the first observation");
+    let event = OutboxEvent {
+        seq: 1,
+        source: TradeSource::Typed,
+        core_uid: 1,
+        row_id: 10,
+        action: OutboxAction::Row,
+    };
+    let first = load_trade(&reports, TradeSource::Typed, 1, 10)
+        .expect("load the first row observation")
+        .expect("first observation finds the row");
+    reports
+        .execute(
+            "DELETE FROM orders_rep WHERE core_uid=1 AND newrecid=10",
+            [],
+        )
+        .expect("remove the row before the later observation");
+    let second =
+        load_trade(&reports, TradeSource::Typed, 1, 10).expect("load the later row observation");
+    assert!(
+        second.is_none(),
+        "fixture must provide a later missing observation"
+    );
+
+    let mut deferred = BTreeMap::new();
+    assert!(matches!(
+        process_event(
+            &store,
+            &NoNetwork,
+            &axis(),
+            event,
+            Some(first),
+            &mut deferred,
+            &BTreeSet::new(),
+        ),
+        PrepareResult::Complete { changed: true }
+    ));
+    assert_eq!(
+        store
+            .query_row("SELECT COUNT(*) FROM trade_values", [], |row| row
+                .get::<_, i64>(0))
+            .expect("count first prepared value"),
+        1
+    );
+
+    assert!(matches!(
+        process_event(
+            &store,
+            &NoNetwork,
+            &axis(),
+            OutboxEvent { seq: 2, ..event },
+            second,
+            &mut deferred,
+            &BTreeSet::new(),
+        ),
+        PrepareResult::Complete { changed: true }
+    ));
+    assert_eq!(
+        store
+            .query_row("SELECT COUNT(*) FROM trade_values", [], |row| row
+                .get::<_, i64>(0))
+            .expect("count values after the missing observation"),
+        0,
+        "the later missing observation must remove the earlier prepared figure"
+    );
+}
+
+/// Deferred-minute wakeups must be capped at the next boundary without shortening unrelated
+/// backoff. Breakage: `worker.rs:park_delay` omitting `until_next_minute` lets an eligible candle
+/// wait for a multi-minute retry, while applying it without deferred work turns recovery into a
+/// needless one-minute loop.
+#[test]
+fn deferred_minute_deadline_caps_only_the_deferred_park() {
+    let status = ValuationStatus::default();
+    let now_ms = 1_700_000_010_000;
+    let long_delay = Duration::from_secs(300);
+    let idle = CurrentRateState::default();
+
+    assert_eq!(
+        park_delay(&status, &idle, false, true, long_delay, now_ms),
+        Duration::from_millis(30_250),
+        "a deferred row at this mid-minute instant must wake at 00:00.250"
+    );
+    assert_eq!(
+        park_delay(&status, &idle, false, false, long_delay, now_ms),
+        long_delay,
+        "recovery and ordinary backoff are not minute-capped without deferred work"
+    );
+
+    let mut fresh = CurrentRateState::default();
+    fresh.rates.insert(
+        8,
+        super::super::CurrentRate {
+            rate_usdt: 1.0,
+            provider: "fixture".to_string(),
+            symbol: "USDCUSDT".to_string(),
+            fetched_at_ms: now_ms + 5_000 - super::super::FRESHNESS_MS,
+        },
+    );
+    assert_eq!(
+        park_delay(&status, &fresh, true, true, long_delay, now_ms),
+        Duration::from_secs(5),
+        "the earliest freshness deadline still wins over the minute cap"
+    );
+    assert!(
+        !park_delay(&status, &idle, false, true, long_delay, 1_700_000_040_250).is_zero(),
+        "the next boundary must remain a positive future delay at a boundary margin"
     );
 }
 
@@ -499,8 +663,15 @@ fn deferred_processing_yields_after_one_bounded_batch() {
     let generation = AtomicU64::new(0);
     let dirty = AtomicBool::new(false);
 
-    let turn = process_deferred(&store, &NoNetwork, &axis(), &generation, &dirty, &mut deferred)
-        .expect("process one deferred batch");
+    let turn = process_deferred(
+        &store,
+        &NoNetwork,
+        &axis(),
+        &generation,
+        &dirty,
+        &mut deferred,
+    )
+    .expect("process one deferred batch");
 
     assert!(matches!(turn, StageTurn::Ran { more: true }));
     assert_eq!(deferred.len(), 1);
@@ -701,7 +872,8 @@ fn reconciliation_restores_pending_rows_without_bypassing_the_retry_boundary() {
         .expect("attach valuation fixture");
 
     let pending = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
-        .expect("scan startup reconciliation");
+        .expect("scan startup reconciliation")
+        .expect("valuation cache attached");
 
     assert_eq!(pending.len(), 1);
     let store = super::super::open_store(&path).expect("reopen valuation fixture");
@@ -751,7 +923,8 @@ fn empty_replacement_reconciles_rows_after_outbox_acknowledgement() {
         .expect("attach empty replacement");
 
     let pending = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
-        .expect("scan historical rows independently of outbox");
+        .expect("scan historical rows independently of outbox")
+        .expect("valuation cache attached");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].core_uid, 4);
     assert_eq!(pending[0].row_id, 99);
@@ -876,7 +1049,8 @@ fn reconciliation_values_the_newest_trades_before_older_ones() {
     ]);
 
     let batch = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
-        .expect("scan newest-first reconciliation");
+        .expect("scan newest-first reconciliation")
+        .expect("valuation cache attached");
 
     let order = batch
         .iter()
@@ -921,7 +1095,8 @@ fn reconciliation_visits_every_row_once_when_close_dates_tie() {
             "reconciliation cursor failed to terminate"
         );
         let batch = reconciliation_batch(&reports, TradeSource::Typed, cursor, 2)
-            .expect("scan tied reconciliation batch");
+            .expect("scan tied reconciliation batch")
+            .expect("valuation cache attached");
         if batch.is_empty() {
             break;
         }
@@ -963,7 +1138,8 @@ fn a_restart_covers_trades_that_arrived_above_the_previous_cursor() {
     // Walk down to the oldest row, as a long backfill would.
     let cursor = Some((1_700_000_200, 1, 11));
     let tail = reconciliation_batch(&reports, TradeSource::Typed, cursor, 256)
-        .expect("scan reconciliation tail");
+        .expect("scan reconciliation tail")
+        .expect("valuation cache attached");
     assert_eq!(
         tail.iter().map(|i| i.row_id).collect::<Vec<_>>(),
         vec![10],
@@ -978,8 +1154,9 @@ fn a_restart_covers_trades_that_arrived_above_the_previous_cursor() {
         )
         .expect("insert a newer trade");
 
-    let resumed =
-        reconciliation_batch(&reports, TradeSource::Typed, None, 256).expect("scan after restart");
+    let resumed = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
+        .expect("scan after restart")
+        .expect("valuation cache attached");
 
     assert_eq!(
         resumed.first().map(|input| (input.core_uid, input.row_id)),

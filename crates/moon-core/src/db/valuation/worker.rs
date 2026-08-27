@@ -41,7 +41,7 @@ use super::resolver::resolve_historical_rate;
 use super::{
     HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput, TradeSource,
 };
-use crate::db::{DbMsg, ReadFail, ReadResult, ReportAxis, ReportTx};
+use crate::db::{DbMsg, FailKind, ReadFail, ReadResult, ReportAxis, ReportTx};
 use crate::util::now_unix_ms_i64;
 
 /// Number of report rows reconciled before publishing progress and yielding to durable outbox work.
@@ -253,15 +253,22 @@ enum StageTurn {
     Drained,
     /// The report replica does not exist yet, which is a healthy startup state, not a failure.
     AwaitingReplica,
+    /// The report replica exists, but a source's schema has not finished delivering the columns
+    /// this stage needs — a healthy startup state, distinct from `AwaitingReplica` (whose subject
+    /// is the replica FILE, not its schema). A cache-attachment failure is a THIRD, different
+    /// fact and is never reported through `StageTurn` at all: it surfaces as a genuine `Err` and
+    /// flows through `attempt`'s existing cache-recovery detection instead.
+    AwaitingInputs,
 }
 
 impl StageTurn {
     /// Whether this turn counts as the stage making progress.
     ///
     /// Returns:
-    ///     `false` only while the stage could not access the report replica.
+    ///     `false` while the stage could not access the report replica, or while it could but the
+    ///     source's schema had not finished delivering the columns this stage needs.
     const fn is_progress(self) -> bool {
-        !matches!(self, Self::AwaitingReplica)
+        !matches!(self, Self::AwaitingReplica | Self::AwaitingInputs)
     }
 }
 
@@ -534,8 +541,13 @@ fn run_worker(
                     );
                     // Capped by the freshness deadline too: an unopenable derived cache must not
                     // decide how long an expired current rate — which needs no cache — stays up.
+                    //
+                    // `deferred_due` is `false` here: the store was just dropped above, so no
+                    // deferred row can be processed on the next turn and the minute boundary is
+                    // not a deadline yet. Capping this backoff to it would turn the cache-recovery
+                    // wait into a one-minute retry loop.
                     let settled = now_unix_ms_i64();
-                    park_worker(&status, &current, &current_wanted, delay, settled);
+                    park_worker(&status, &current, &current_wanted, false, delay, settled);
                     continue;
                 }
             }
@@ -583,6 +595,7 @@ fn run_worker(
                     &dirty,
                     &mut deferred,
                     &mut pending_ack,
+                    &mut reconciliation,
                 )
             },
         ) {
@@ -590,7 +603,10 @@ fn run_worker(
             // Deliberately NOT conditioned on `retry_after`: every stage guards its own backoff, so
             // draining a full outbox batch cannot re-run a stage that is resting. Gating this on
             // another stage's wait would throttle live report changes to one 512-event batch per
-            // backoff, up to five minutes apart.
+            // backoff, up to five minutes apart. The reconciliation re-arm itself lives inside
+            // `consume_outbox` (see `outbox_activity_should_rearm_reconciliation`), keyed on
+            // whether the drain saw a partition-invalidating event this turn — not on any event,
+            // and not on `more`/`batch_was_full`.
             Attempt::Done(StageTurn::Ran { more: true }) => continue,
             _ => {}
         }
@@ -640,7 +656,14 @@ fn run_worker(
         // evaluated when the loop turns, so a worker asleep on a five-minute provider backoff would
         // otherwise notice the cutoff only when that backoff ended — and health-only revisions
         // deliberately requery nothing, so the expired figure would stay on screen meanwhile.
-        park_worker(&status, &current, &current_wanted, delay, settled);
+        park_worker(
+            &status,
+            &current,
+            &current_wanted,
+            !deferred.is_empty(),
+            delay,
+            settled,
+        );
     }
 }
 
@@ -754,27 +777,81 @@ fn cap_at_deadline(delay: Duration, deadline: Option<i64>, now_ms: i64) -> Durat
     }
 }
 
+/// Cap one park by the next UTC minute deadline while a deferred row could become eligible there.
+///
+/// A deferred row's candle can close at the next minute boundary independently of any stage's own
+/// backoff, so a park selected only from stage waits can oversleep it by as long as the longest
+/// backoff, up to five minutes.
+///
+/// Args:
+///     deferred_due: Whether at least one deferred row could become eligible at the next minute
+///         deadline.
+///     delay: Park the caller selected.
+///     now_ms: Current wall clock in Unix milliseconds.
+///
+/// Returns:
+///     The shorter of the caller's park and the wait until the next minute deadline, or the
+///     caller's park unchanged while no deferred row is waiting on that deadline.
+fn until_next_minute(deferred_due: bool, delay: Duration, now_ms: i64) -> Duration {
+    cap_at_deadline(
+        delay,
+        deferred_due.then(|| next_minute_deadline_ms(now_ms)),
+        now_ms,
+    )
+}
+
+/// Apply every outstanding deadline to one selected park.
+///
+/// Split out of [`park_worker`] so all three caps are applied together in a pure function.
+///
+/// Args:
+///     status: Current worker health, carrying the stall deadline.
+///     current: Pass state, carrying the freshness deadline.
+///     wanted: Whether the application-wide current-rate mode is enabled.
+///     deferred_due: Whether at least one deferred row could become eligible at the next minute
+///         deadline.
+///     delay: Park the loop selected on its own.
+///     now_ms: Current wall clock in Unix milliseconds.
+///
+/// Returns:
+///     The park shortened by the freshness, stall, and next-minute deadlines, never zero.
+fn park_delay(
+    status: &ValuationStatus,
+    current: &CurrentRateState,
+    wanted: bool,
+    deferred_due: bool,
+    delay: Duration,
+    now_ms: i64,
+) -> Duration {
+    let delay = until_expiry(current, wanted, delay, now_ms);
+    let delay = until_stall(status, delay, now_ms);
+    until_next_minute(deferred_due, delay, now_ms)
+}
+
 /// Park the worker for `delay`, shortened by every deadline it must not oversleep.
 ///
-/// The ONE park in this loop. Applying both caps here keeps the invariant "no park outlives a
+/// The ONE park in this loop. Applying all three caps here keeps the invariant "no park outlives a
 /// deadline" true for every caller, including any future park arm.
 ///
 /// Args:
 ///     status: Current worker health, carrying the stall deadline.
 ///     current: Pass state, carrying the freshness deadline.
 ///     current_wanted: Whether the application-wide current-rate mode is enabled.
+///     deferred_due: Whether at least one deferred row could become eligible at the next minute
+///         boundary.
 ///     delay: Park the loop selected on its own.
 ///     now_ms: Current wall clock in Unix milliseconds.
 fn park_worker(
     status: &ValuationStatus,
     current: &CurrentRateState,
     current_wanted: &AtomicBool,
+    deferred_due: bool,
     delay: Duration,
     now_ms: i64,
 ) {
     let wanted = current_wanted.load(Ordering::Acquire);
-    let delay = until_expiry(current, wanted, delay, now_ms);
-    std::thread::park_timeout(until_stall(status, delay, now_ms));
+    let delay = park_delay(status, current, wanted, deferred_due, delay, now_ms);
+    std::thread::park_timeout(delay);
 }
 
 /// Shorten a park so a run that is only waiting out the clock still publishes when it stalls.
@@ -884,7 +961,8 @@ fn note_failure(
 ///     state: Source and keyset cursor advanced only after a complete batch.
 ///
 /// Returns:
-///     Whether the sources drained, advanced, or are still waiting for the report replica.
+///     Whether the sources drained, advanced, or are still waiting for the report replica or its
+///     schema.
 fn reconcile_step(
     store: &Connection,
     source: &dyn SpotRateSource,
@@ -903,8 +981,26 @@ fn reconcile_step(
             Err(error) => return Err(report_fault(error)),
         };
         refresh_axis(&conn, axis)?;
-        let inputs = reconciliation_batch(&conn, trade_source, state.after, RECONCILE_BATCH)
-            .map_err(report_fault)?;
+        // `None` means this source's schema has not finished delivering the columns this walk
+        // needs (a matched-but-incomplete layout, or a table not yet carrying `closedate`/
+        // `basecurrency`/`profitbtc`) — a healthy startup state, never "this source is drained".
+        // Treating it as an empty batch would advance `state.source_index` and permanently retire
+        // the walk once both sources report it, which is exactly the collapse this stage must not
+        // perform on a read failure. `AwaitingInputs` leaves `state.source_index`/`state.after`
+        // untouched so the same source is retried once its schema catches up.
+        //
+        // A genuinely ABSENT source (no layout at all, e.g. a fully-migrated user's missing
+        // legacy table) is NOT this case: `reconciliation_batch` reports that as a real, empty
+        // `Some(Vec::new())`, which the `is_empty()` branch below correctly advances past.
+        //
+        // A cache-attachment failure is a THIRD, different fact, and is never routed through
+        // `StageTurn` here at all — `reconciliation_batch` reports it as a genuine `Err`, which
+        // the `?` below sends through the normal failure/cache-recovery path instead.
+        let Some(inputs) = reconciliation_batch(&conn, trade_source, state.after, RECONCILE_BATCH)
+            .map_err(report_fault)?
+        else {
+            return Ok(StageTurn::AwaitingInputs);
+        };
         if inputs.is_empty() {
             state.source_index += 1;
             state.after = None;
@@ -962,7 +1058,63 @@ fn reconcile_step(
     Ok(StageTurn::Drained)
 }
 
+/// Whether a drained reconciliation walk should resume because the outbox drain this turn
+/// observed a PARTITION-INVALIDATING event — one that wipes a whole core/source of prepared
+/// values with no per-row outbox event left behind to re-value them individually.
+///
+/// Deliberately NOT keyed on the outbox batch size (`OUTBOX_BATCH`/a `batch_was_full` flag): that
+/// couples a tuning constant to worker lifecycle and never re-arms at all for a cold start smaller
+/// than one full batch. Deliberately NOT keyed on "any event this turn" either: on a live terminal
+/// almost every turn drains at least one `Row`/`Delete` event, and each re-arm's "drained" outcome
+/// is not cheap — `reconciliation_batch`'s antijoin (`LEFT JOIN ... AND v.row_id IS NULL`) cannot
+/// short-circuit when nothing matches, so proving there is nothing left to reconcile costs a full
+/// closedate-range index walk plus a per-row probe and a temp B-tree for the tie-break columns, for
+/// BOTH sources, synchronously, before this turn's own outbox drain even runs. Re-arming on every
+/// turn would turn a one-time backfill cost into a permanent per-turn full-history rescan competing
+/// with the live outbox drain on the money-path thread — the very thing this goal exists to speed
+/// up.
+///
+/// The only two facts that matter: whether reconciliation has anything left to do on its own, and
+/// whether this turn's outbox activity actually left rows unvalued with no per-row event able to
+/// catch them. Only `OutboxAction::RescanCore`/`PurgeLegacy` do that — both call
+/// `delete_partition`, wiping `trade_values` for a whole core/source, so a walk is the only thing
+/// that can recover the now-unvalued rows. `Row` values its own row directly in the same batch;
+/// `Delete` removes a row that needs no revaluing; neither leaves anything for a walk to find. A
+/// cold start needs no re-arm at all — `run_worker` already seeds `reconciliation = Some(..)`.
+///
+/// **Named residual, not silently fixed**: the walk this re-arms still drains `[Typed, Legacy]`
+/// sequentially (see [`reconcile_step`]'s own doc), so "newest-first" holds PER SOURCE, not
+/// globally — a core with a large, still-undrained legacy partition has its newest LEGACY rows
+/// wait behind the entire typed backlog. Interleaving the two sources needs a merged two-cursor
+/// walk, which would reshape the cursor expression `valuation_never_routed_contract.rs:156`
+/// anchors verbatim; that is a materially bigger change than this goal and is not made here.
+///
+/// Args:
+///     reconciliation: Current startup/backfill reconciliation cursor, or `None` once drained.
+///     events: This turn's unacknowledged outbox events, already durability-filtered by the
+///         caller.
+///
+/// Returns:
+///     `true` when a drained walk should be re-armed: reconciliation is idle AND at least one
+///     event this turn invalidated a whole partition.
+fn outbox_activity_should_rearm_reconciliation(
+    reconciliation: &Option<ReconcileState>,
+    events: &[OutboxEvent],
+) -> bool {
+    reconciliation.is_none()
+        && events.iter().any(|event| {
+            matches!(
+                event.action,
+                OutboxAction::RescanCore | OutboxAction::PurgeLegacy
+            )
+        })
+}
+
 /// Consume one contiguous report outbox prefix and acknowledge it only after valuation commits.
+///
+/// A partition-invalidating event observed this turn also re-arms a drained reconciliation walk —
+/// see [`outbox_activity_should_rearm_reconciliation`] for why only that event kind qualifies, and
+/// for the per-source residual it does not fix.
 ///
 /// Args:
 ///     store: Open valuation writer connection.
@@ -973,6 +1125,8 @@ fn reconcile_step(
 ///     dirty: Coalescing UI wake edge.
 ///     deferred: Current-minute rows retained until their candle closes.
 ///     pending_ack: Highest sequence sent to the report writer but not yet observed deleted.
+///     reconciliation: Startup/backfill reconciliation cursor, re-armed here once drained if this
+///         turn's durable activity makes that worthwhile.
 ///
 /// Returns:
 ///     Whether another full outbox batch may already be waiting, or that the replica is absent.
@@ -985,6 +1139,7 @@ fn consume_outbox(
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     pending_ack: &mut Option<i64>,
+    reconciliation: &mut Option<ReconcileState>,
 ) -> Result<StageTurn, FaultCause> {
     let conn = match crate::db::open_reader() {
         Ok(conn) => conn,
@@ -998,15 +1153,26 @@ fn consume_outbox(
     if events.is_empty() {
         return Ok(StageTurn::Ran { more: false });
     }
-    let mut row_inputs = Vec::new();
+    if outbox_activity_should_rearm_reconciliation(reconciliation, events) {
+        *reconciliation = Some(ReconcileState::new());
+    }
+    let mut row_inputs = Vec::with_capacity(events.len());
+    // One slot per event in `events`, index-aligned rather than keyed by identity. A duplicate
+    // `Row` event for one identity therefore keeps its OWN observation instead of collapsing into
+    // a shared map entry: a later `None` correctly overrides an earlier `Some` in pass 2 rather
+    // than being lost behind it. It also lets pass 2 take ownership of each `TradeInput` by
+    // value, so inserting one into `deferred` needs no clone.
+    let mut loaded: Vec<Option<TradeInput>> = Vec::with_capacity(events.len());
     for event in events {
-        if event.action == OutboxAction::Row {
-            if let Some(input) = load_trade(&conn, event.source, event.core_uid, event.row_id)
-                .map_err(report_fault)?
-            {
-                row_inputs.push(input);
-            }
+        let input = if event.action == OutboxAction::Row {
+            load_trade(&conn, event.source, event.core_uid, event.row_id).map_err(report_fault)?
+        } else {
+            None
+        };
+        if let Some(input) = &input {
+            row_inputs.push(input.clone());
         }
+        loaded.push(input);
     }
     let prefetched = settle_prefetch(
         prefetch_rates(store, source, axis, &row_inputs),
@@ -1015,13 +1181,13 @@ fn consume_outbox(
     )?;
     let mut changed = prefetched.changed;
     let mut acknowledged = None;
-    for event in events {
+    for (event, input) in events.iter().zip(loaded) {
         match process_event(
             store,
             source,
             axis,
-            &conn,
             *event,
+            input,
             deferred,
             &prefetched.canonical_exact_missing,
         ) {
@@ -1061,12 +1227,29 @@ fn consume_outbox(
 
 /// Apply one durable report event to the prepared valuation store.
 ///
+/// The row arm reuses the `TradeInput` the caller's pass-1 prefetch loop already loaded for THIS
+/// event's own slot, rather than reading the report replica a second time. Under a quiescent
+/// writer the two reads are provably identical; under a concurrent writer commit they could
+/// already differ before this change — and today's second read silently disagreed with the
+/// `prefetch_rates` batch computed from the first, which is strictly less coherent than reusing
+/// one read for both. It cannot lose a newer value either way: the writer that mutated a row also
+/// calls `stage_row` in the same transaction, producing a strictly higher outbox `seq`
+/// (AUTOINCREMENT). `send_ack` only ever acknowledges a `seq` this worker actually saw, and
+/// `ack_outbox` deletes the acknowledged prefix, so a newer write always survives as its own later
+/// event, and `store_trade_value`'s upsert lets that later write win.
+///
+/// `loaded` is this event's own slot, not a shared lookup: a duplicate `Row` event for the same
+/// identity earlier in the same batch is a DIFFERENT slot with its own independently-observed
+/// value (`Some` or `None`), so a later `None` correctly deletes even when an earlier event in the
+/// same batch saw `Some`.
+///
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
 ///     axis: Per-core time axis rate minutes are resolved against.
-///     reports: Report reader observing the committed event.
 ///     event: Ordered durable outbox event.
+///     loaded: This event's own pass-1 load outcome, `Some` for a `Row` event whose trade was
+///         found, `None` otherwise.
 ///     deferred: Current-minute rows retained until their candle closes.
 ///     canonical_exact_missing: Keys already proven absent on canonical exact routes.
 ///
@@ -1076,8 +1259,8 @@ fn process_event(
     store: &Connection,
     source: &dyn SpotRateSource,
     axis: &ReportAxis,
-    reports: &Connection,
     event: OutboxEvent,
+    loaded: Option<TradeInput>,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     canonical_exact_missing: &BTreeSet<(i64, i64)>,
 ) -> PrepareResult {
@@ -1085,8 +1268,8 @@ fn process_event(
         OutboxAction::Row => {
             let key = (event.source.code(), event.core_uid, event.row_id);
             deferred.remove(&key);
-            match load_trade(reports, event.source, event.core_uid, event.row_id) {
-                Ok(Some(input)) => {
+            match loaded {
+                Some(input) => {
                     let minute = valuation_minute(axis, &input);
                     match prepare_trade(
                         store,
@@ -1102,8 +1285,7 @@ fn process_event(
                         result => result,
                     }
                 }
-                Ok(None) => delete_trade(store, event.source, event.core_uid, event.row_id),
-                Err(error) => PrepareResult::Retry(report_fault(error)),
+                None => delete_trade(store, event.source, event.core_uid, event.row_id),
             }
         }
         OutboxAction::Delete => {
@@ -1414,8 +1596,13 @@ fn load_trade(
     core_uid: i64,
     row_id: i64,
 ) -> ReadResult<Option<TradeInput>> {
-    let Some((table, columns, id_column)) = source_layout(conn, source)? else {
-        return Ok(None);
+    let (table, columns, id_column) = match source_layout(conn, source)? {
+        SourceLayout::Found {
+            table,
+            columns,
+            id_column,
+        } => (table, columns, id_column),
+        SourceLayout::Absent | SourceLayout::Incomplete => return Ok(None),
     };
     if !super::has_required_trade_inputs(&columns) {
         return Ok(None);
@@ -1484,18 +1671,40 @@ fn load_trade(
 ///     limit: Maximum mismatched rows to return.
 ///
 /// Returns:
-///     Current complete inputs requiring preparation, ordered newest first.
+///     Current complete inputs requiring preparation, ordered newest first. `None` when this
+///     source's schema has not finished delivering the columns this query needs — a matched
+///     layout still missing `core_uid`/its id column, or an attached table not yet carrying
+///     `closedate`/`basecurrency`/`profitbtc`. A source with NO layout at all is durably absent
+///     and reports that as a real, empty batch (`Some(Vec::new())`) instead, since a
+///     fully-migrated user's missing legacy table must not poll forever.
+///
+/// Errors:
+///     Returns a classified read failure on a schema probe or query error, including when the
+///     derived cache is not attached to this reader. The latter is a cache-health fact distinct
+///     from either "not ready" case above and follows the normal failure/cache-recovery path.
 fn reconciliation_batch(
     conn: &Connection,
     source: TradeSource,
     after: Option<ReconcileCursor>,
     limit: usize,
-) -> ReadResult<Vec<TradeInput>> {
-    let Some((table, columns, id_column)) = source_layout(conn, source)? else {
-        return Ok(Vec::new());
+) -> ReadResult<Option<Vec<TradeInput>>> {
+    let (table, columns, id_column) = match source_layout(conn, source)? {
+        SourceLayout::Found {
+            table,
+            columns,
+            id_column,
+        } => (table, columns, id_column),
+        SourceLayout::Absent => return Ok(Some(Vec::new())),
+        SourceLayout::Incomplete => return Ok(None),
     };
-    if !super::has_required_trade_inputs(&columns) || !super::is_attached(conn) {
-        return Ok(Vec::new());
+    if !super::has_required_trade_inputs(&columns) {
+        return Ok(None);
+    }
+    if !super::is_attached(conn) {
+        return Err(ReadFail::Failed {
+            kind: FailKind::Other,
+            msg: Arc::from("valuation cache is not attached to this reader"),
+        });
     }
     let spent = if columns.contains("spentbtc") {
         &format!(
@@ -1572,7 +1781,7 @@ fn reconciliation_batch(
             super::read_fail::read_fail_on(conn, "valuation: reconcile row", error)
         })?);
     }
-    Ok(inputs)
+    Ok(Some(inputs))
 }
 
 /// How many minutes a discovered quote-ordinal set is reused before the report is re-scanned.
@@ -1938,6 +2147,31 @@ fn current_rate_window(minute: i64) -> (i64, i64) {
     )
 }
 
+/// Resolution of one source's physical layout, distinguishing a durable absence from a startup
+/// schema that has not finished arriving.
+///
+/// These are different facts and must not be conflated: a fully-migrated user's missing legacy
+/// table is a permanent, correct "nothing here", while a fresh reports database that has not yet
+/// run `apply_schema` is a transient state that must be retried, not treated as drained.
+enum SourceLayout {
+    /// Physical table and stable row identity resolved; query-specific input columns may still be
+    /// absent.
+    Found {
+        /// Physical table this source resolves to.
+        table: &'static str,
+        /// Columns the attached schema currently carries for that table.
+        columns: std::collections::HashSet<String>,
+        /// Stable row-id column name for this source (`newrecid` or `db_id`).
+        id_column: &'static str,
+    },
+    /// No layout matches this source at all — e.g. a fully-migrated user has no legacy table.
+    /// Permanent for the life of this schema.
+    Absent,
+    /// A layout matched, but its `core_uid` or id column has not arrived yet — the startup schema
+    /// `apply_schema` delivers gradually. Transient; becomes `Found` once the column lands.
+    Incomplete,
+}
+
 /// Resolve one source's physical table, column set, and stable row-id column.
 ///
 /// Args:
@@ -1945,27 +2179,23 @@ fn current_rate_window(minute: i64) -> (i64, i64) {
 ///     source: Typed or legacy source partition.
 ///
 /// Returns:
-///     Source layout, absence, or a classified schema-probe failure.
-fn source_layout(
-    conn: &Connection,
-    source: TradeSource,
-) -> ReadResult<
-    Option<(
-        &'static str,
-        std::collections::HashSet<String>,
-        &'static str,
-    )>,
-> {
+///     Source layout classified as found, durably absent, or not yet complete; or a classified
+///     schema-probe failure.
+fn source_layout(conn: &Connection, source: TradeSource) -> ReadResult<SourceLayout> {
     for layout in super::super::read_sources_res(conn)? {
         if layout.legacy == (source == TradeSource::Legacy) {
             let id_column = if layout.legacy { "db_id" } else { "newrecid" };
             if !layout.cols.contains(id_column) || !layout.cols.contains("core_uid") {
-                return Ok(None);
+                return Ok(SourceLayout::Incomplete);
             }
-            return Ok(Some((layout.table, layout.cols, id_column)));
+            return Ok(SourceLayout::Found {
+                table: layout.table,
+                columns: layout.cols,
+                id_column,
+            });
         }
     }
-    Ok(None)
+    Ok(SourceLayout::Absent)
 }
 
 /// Delete one prepared value, reporting whether storage changed.
@@ -2189,13 +2419,27 @@ fn current_minute_utc() -> i64 {
     now_unix_ms_i64().div_euclid(60_000) * 60
 }
 
+/// Next UTC minute boundary plus a small close-publication margin.
+///
+/// The one definition of the boundary: [`delay_to_next_minute`] derives from it for the plain
+/// retry delay, and [`until_next_minute`] caps a park by the same instant.
+///
+/// Args:
+///     now_ms: Current wall clock in Unix milliseconds.
+///
+/// Returns:
+///     Unix milliseconds of the next minute boundary after the close-publication margin.
+fn next_minute_deadline_ms(now_ms: i64) -> i64 {
+    (now_ms.div_euclid(60_000) + 1) * 60_000 + 250
+}
+
 /// Delay anchored to the next UTC minute boundary plus a small close-publication margin.
 ///
 /// Returns:
 ///     Positive wait duration that does not drift from process start.
 fn delay_to_next_minute() -> Duration {
     let now = now_unix_ms_i64();
-    let next = (now.div_euclid(60_000) + 1) * 60_000 + 250;
+    let next = next_minute_deadline_ms(now);
     Duration::from_millis(next.saturating_sub(now).max(1) as u64)
 }
 
