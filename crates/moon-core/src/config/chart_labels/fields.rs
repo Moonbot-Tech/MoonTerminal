@@ -660,7 +660,7 @@ impl ChartLabelField {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
-                size_mult: 1.0,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: true,
             },
             _ => ResolvedLabelStyle {
