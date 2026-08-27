@@ -540,7 +540,7 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
         ".on_click(cx.listener(move |this",
         "this.overview_wallet_pick = Some(cid)",
         "this.selected_core = Some(cid)",
-        ".min_w(px(240.0))",
+        ".min_w(design::font_w_px(cx, roster_width::MIN_BASE_W))",
         ".flex_shrink_1()",
     ] {
         assert!(

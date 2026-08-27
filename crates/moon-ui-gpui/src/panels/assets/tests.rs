@@ -1,8 +1,8 @@
 //! Regression tests for retained Assets state across temporary Auto workspace scopes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use super::{reconcile_retained_assets_state, resolve_workspace_wallet_core};
+use super::{reconcile_retained_assets_state, resolve_workspace_wallet_core, roster_width};
 
 /// `cache.rs:AssetsView::rebuild_cache` must validate retained filters and wallet detail against
 /// every live group core, not the effective one-core Auto query. Replacing the full validity set
@@ -110,4 +110,42 @@ fn group_assets_shortcuts_cannot_bypass_the_auto_rail() {
     assert!(table.contains("b.open_on_main_if_authorized("));
     assert!(table.contains("AssetsScope::Group(group) => Some(group.as_str())"));
     assert!(table.contains("AssetsScope::All => None"));
+}
+
+/// `roster_width.rs::DEFAULT_BASE_W` must remain the inverse-scaled shipped default, not 420.0.
+///
+/// Mutation: change the base width to the old rendered `420.0`. At the default Font-slider scale
+/// the roster would render near 496 px instead of 420 px, silently taking width from all wallets.
+#[test]
+fn roster_default_renders_at_the_shipped_width_scale() {
+    let rendered = roster_width::resolved(&HashMap::new()) * (13.0 / 11.0);
+
+    assert!(
+        (rendered - 420.0).abs() < 0.05,
+        "the unconfigured roster must render at the old 420 px default, got {rendered}"
+    );
+}
+
+/// `roster_width.rs::dragged` must convert pointer pixels back into persisted base-width units.
+///
+/// Mutation: drop the division by `scale`. At a raised Font slider the divider would trail the
+/// cursor and persist the wrong width, so the wallet roster would jump after a restart.
+#[test]
+fn roster_drag_converts_rendered_pointer_delta_to_base_width() {
+    let actual = roster_width::dragged(300.0, 100.0, 218.0, 13.0 / 11.0)
+        .expect("finite pointer and positive scale must produce a base width");
+    let expected = 300.0 + 118.0 * 11.0 / 13.0;
+
+    assert!(
+        (actual - expected).abs() < 0.01,
+        "dragged base width must divide the rendered delta by scale: expected {expected}, got {actual}"
+    );
+    assert!(
+        (actual - 418.0).abs() > 0.01,
+        "dropping the scale division would persist the raw 118 px delta"
+    );
+    assert!(
+        (actual - (300.0 + 118.0 * 13.0 / 11.0)).abs() > 0.01,
+        "multiplying by scale would make the roster outpace the pointer"
+    );
 }
