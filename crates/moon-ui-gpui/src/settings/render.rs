@@ -13,7 +13,16 @@ use super::{SETTINGS_HEADER_H, SettingsView, Tab};
 use crate::design;
 
 impl Render for SettingsView {
+    /// Render the active Settings tab, its bounded or scrolling body, and the shared footer.
+    ///
+    /// Args:
+    ///     window: Settings window providing viewport dimensions.
+    ///     cx: Settings context used to render the active tab and install callbacks.
+    ///
+    /// Returns:
+    ///     The complete Settings window element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::SETTINGS_RENDER);
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 
@@ -69,7 +78,27 @@ impl Render for SettingsView {
         // would consume the full column height and push out the footer. The outer `flex_1 +
         // min_h(0)` container takes the remaining height and permits shrinking, while the inner
         // scroll div fills that container.
-        let body = div().flex_1().min_h(px(0.0)).w_full().child(
+        //
+        // The Connections tab is the one exception: it owns a virtualized core list that needs a
+        // BOUNDED, non-scrolling parent of its own -- nesting it inside this scrollbar would give it
+        // an effectively infinite height to lay out against, since `MoonVirtualList` fills whatever
+        // its parent hands it. So Connections gets `overflow_hidden` here instead, and the tab's own
+        // content takes `flex_1 + min_h_0` down to the list, matching every other
+        // `MoonVirtualList` call site in this app. Every other tab is unaffected.
+        let body_inner = if self.active == Tab::Connections {
+            div()
+                .id("settings-body")
+                .size_full()
+                .bg(rgba_from(p.shell, 1.0))
+                .flex()
+                .flex_col()
+                .min_h(px(0.0))
+                .p(design::ui_px(cx, 18.0))
+                .gap(design::ui_px(cx, 10.0))
+                .overflow_hidden()
+                .child(content)
+                .into_any_element()
+        } else {
             div()
                 .id("settings-body")
                 .size_full()
@@ -81,8 +110,10 @@ impl Render for SettingsView {
                         .gap(design::ui_px(cx, 10.0))
                         .child(content),
                 )
-                .overflow_y_scrollbar(),
-        );
+                .overflow_y_scrollbar()
+                .into_any_element()
+        };
+        let body = div().flex_1().min_h(px(0.0)).w_full().child(body_inner);
 
         // ── Footer: Save and status ─────────────────────────────────────────
         // Resolve status keys against the current locale here so a language change cannot leave

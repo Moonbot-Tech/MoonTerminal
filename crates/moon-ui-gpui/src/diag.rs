@@ -299,6 +299,19 @@ diag_counters!(
     //     it was told to cache, and these panes are functions returning elements, not views. So
     //     this split is the go/no-go for caching them — a large `strat_model_us` is worth a cache,
     //     a small one means the cost is in element construction and only a real view would help.
+    // The Settings window's own render rate, and how much of the Connections tab each of those
+    // renders pays for. A wheel notch over a scrolling GPUI div ends in `cx.notify(current_view)`,
+    // so `settings_render` tracks the wheel rate rather than any data change -- it is the
+    // MULTIPLIER, not the problem.
+    //
+    // The number to read is `settings_conn_row_build / settings_conn_tab_build`: CORE ROWS BUILT
+    // PER TAB RENDER. Unvirtualized that equals the configured core count whatever is on screen,
+    // so at 56 cores it reads 56 and grows with the account; virtualized it holds near the number
+    // of rows the viewport can show and stops growing. A ratio that climbs back toward the core
+    // count means the list stopped virtualizing.
+    SETTINGS_RENDER => "settings_render",
+    SETTINGS_CONN_TAB_BUILD => "settings_conn_tab_build",
+    SETTINGS_CONN_ROW_BUILD => "settings_conn_row_build",
     STRAT_RENDER => "strat_render",
     STRAT_ROW_RENDER => "strat_row_render",
     STRAT_TREE_US => "strat_tree_us",

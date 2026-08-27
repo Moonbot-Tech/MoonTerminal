@@ -652,15 +652,17 @@ impl ChartLabelField {
                 size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: true,
             },
-            // Captioned like the funding countdown beside it, and for a sharper reason: this
-            // caption's prefix carries its TIMEFRAME, which is what tells two countdowns apart.
-            // Falling into the bare arm below would have shipped a field whose locale key, prefix
-            // branch and editor switch all existed and never showed.
+            // An arm of its own for ONE reason: the caption is on. Its prefix carries the
+            // TIMEFRAME, which is what tells two countdowns apart, so falling into the bare arm
+            // below would ship a field whose locale key, prefix branch and editor switch all exist
+            // and never show. Everything else here matches that arm — the size especially, which
+            // comes from the shared default like every other caption's and is pinned by
+            // `every_field_default_style_uses_the_shared_size`.
             ChartLabelField::TfCloseIn => ResolvedLabelStyle {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
-                size_mult: 1.0,
+                size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: true,
             },
             _ => ResolvedLabelStyle {
