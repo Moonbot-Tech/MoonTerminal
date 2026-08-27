@@ -451,17 +451,3 @@ pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
     .ok()
     .flatten()
 }
-
-/// Format Unix milliseconds as `DD.MM` in a selected display zone.
-///
-/// Args:
-///     ms: Instant to format as Unix milliseconds.
-///     zone: IANA display zone selected by the terminal clock.
-///
-/// Returns:
-///     Compact civil date, or an empty string for an invalid timestamp.
-pub fn short_date(ms: i64, zone: chrono_tz::Tz) -> String {
-    crate::util::display_time::at_millis(ms, zone)
-        .map(|dt| dt.format("%d.%m").to_string())
-        .unwrap_or_default()
-}

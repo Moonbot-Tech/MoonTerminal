@@ -624,8 +624,9 @@ fn strategy_filter_rows_wrap_fitted_controls_and_pin_their_right_hand_controls()
     }
 }
 
-/// Strategies settings must own exactly two optional layout preferences and one dirty/write path;
-/// bypassing `write_pref` would make popup edits or explicit reveals diverge across restart.
+/// Strategies settings must own the two boolean and one numeric optional layout preferences, each
+/// with one writer; bypassing their persisted setters would make popup edits or explicit reveals
+/// diverge across restart.
 #[test]
 fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let settings = read_src("strategies/settings.rs");
@@ -657,6 +658,7 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
         // place the preference still spells itself out in full.
         "strat.settings.active_only",
         "strat.active_only",
+        "strat.settings.text_step",
     ] {
         assert!(settings.contains(key), "settings UI does not consume {key}");
         assert!(
@@ -667,24 +669,40 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut production_sources = Vec::new();
     rust_sources(&src_root, &mut production_sources);
-    for field in ["strategies_group_by_venue", "strategies_active_only"] {
-        let declaration = format!("pub {field}: Option<bool>");
+    for (field, declaration, decoder, store) in [
+        (
+            "strategies_group_by_venue",
+            "pub strategies_group_by_venue: Option<bool>",
+            "de_lenient",
+            "layout.strategies_group_by_venue = Some(value)",
+        ),
+        (
+            "strategies_active_only",
+            "pub strategies_active_only: Option<bool>",
+            "de_lenient",
+            "layout.strategies_active_only = Some(value)",
+        ),
+        (
+            "strategies_tree_text_step",
+            "pub strategies_tree_text_step: Option<f32>",
+            "de_strategies_tree_text_step",
+            "backend.layout.strategies_tree_text_step = Some(value)",
+        ),
+    ] {
         assert!(
-            layout.contains(&declaration),
+            layout.contains(declaration),
             "{field} must remain an optional layout preference"
         );
         let at = layout
-            .find(&declaration)
+            .find(declaration)
             .unwrap_or_else(|| panic!("missing {field} declaration"));
         let attrs = &layout[at.saturating_sub(120)..at];
         assert!(
-            attrs.contains("#[serde(default, deserialize_with = \"de_lenient\")]"),
-            "{field} must use optional generic lenient decoding"
+            attrs.contains(&format!("deserialize_with = \"{decoder}\"")),
+            "{field} must use its optional lenient decoder"
         );
         assert_eq!(
-            settings
-                .matches(&format!("layout.{field} = Some(value)"))
-                .count(),
+            settings.matches(store).count(),
             1,
             "{field} must have one Strategies-owned store closure"
         );
@@ -709,6 +727,9 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     assert!(write.contains("store(&mut backend.layout, value)"));
     assert!(write.contains("backend.layout_dirty = true"));
     assert!(write.contains("self.filter.active_only = self.prefs.active_only"));
+    let set_tree_text_step = code_only(braced_body(&settings, "fn set_tree_text_step("));
+    assert!(set_tree_text_step.contains("clamp_strategies_tree_text_step(value)"));
+    assert!(set_tree_text_step.contains("backend.layout_dirty = true"));
     assert!(!settings.contains("strategies_open"));
 
     let restore = code_only(braced_body(&state, "pub(super) fn new("));
@@ -748,8 +769,11 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     assert!(settings.contains("fn settings_content_width("));
     assert!(settings.contains(".content_width(settings_content_width(cx))"));
     let measured_width = code_only(braced_body(&settings, "fn settings_content_width("));
-    assert!(measured_width.contains("design::ui_text_width("));
+    let popup_measurement = code_only(braced_body(&settings, "fn popup_text_width("));
+    assert!(popup_measurement.contains("design::ui_text_width("));
     assert!(measured_width.contains("COMPACT_CHECKBOX_MARK + COMPACT_CHECKBOX_GAP"));
+    assert!(measured_width.contains("strat.settings.text_step"));
+    assert!(measured_width.contains("TEXT_STEP_BUTTON_W * 2.0"));
     assert!(measured_width.contains("popup_group_inset_px(cx)"));
     assert!(!settings.contains("const CONTENT_WIDTH"));
     for tuner_symbol in [
@@ -1011,5 +1035,58 @@ fn strategies_window_seeds_expansion_from_the_auto_workspace() {
     assert!(
         !src.contains("expanded_cores: HashSet::new()"),
         "construction must not hard-code an empty expansion, or the Auto rail seed is dead code"
+    );
+}
+
+/// `versions.rs::stage_version_into_current` must only stage restored fields, never dispatch them.
+///
+/// Plausible edit: call `apply_field_edits` or `strategy_edit` directly from the restore path.
+/// That would make Restore write a live strategy immediately, skipping the visible Apply step and
+/// its core-confirmed pending window.
+#[test]
+fn version_restore_stays_a_two_step_stage_then_apply_flow() {
+    let versions = read_src("strategies/versions.rs");
+    let restore = code_only(braced_body(
+        &versions,
+        "pub(super) fn stage_version_into_current(",
+    ));
+
+    assert!(
+        restore.contains("this.field_edits.insert("),
+        "Restore must stage changed fields in field_edits for the separate Apply action"
+    );
+    assert!(
+        restore.contains("this.select_version(None"),
+        "Restore must return to live edit mode after staging the snapshot"
+    );
+    assert!(
+        !restore.contains("apply_field_edits"),
+        "Restore must not dispatch Apply itself, or one click writes the live strategy"
+    );
+    assert!(
+        !restore.contains("strategy_edit"),
+        "Restore must not bypass Apply by sending strategy_edit directly"
+    );
+}
+
+/// `versions.rs::stage_version_into_current` must clear stale drafts only for the restored key.
+///
+/// Plausible edit: weaken `*c == core && *i == id` to the core check alone. Restoring strategy A
+/// would then silently discard unsaved parameter edits on strategy B in that same core.
+#[test]
+fn version_restore_clears_stale_drafts_only_for_its_own_strategy() {
+    let versions = read_src("strategies/versions.rs");
+    let restore = code_only(braced_body(
+        &versions,
+        "pub(super) fn stage_version_into_current(",
+    ));
+
+    assert!(
+        restore.contains("this.field_edits.retain("),
+        "Restore must remove stale field drafts before staging the selected snapshot"
+    );
+    assert!(
+        restore.contains("*c == core && *i == id"),
+        "Restore must match both core and strategy id so other strategies retain their drafts"
     );
 }

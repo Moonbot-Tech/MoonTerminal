@@ -13,8 +13,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta,
-    h_flex,
+    MoonPalette, MoonText, MoonTheme, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem,
+    MoonTreeRowMeta, h_flex,
 };
 
 use super::super::filter::PreparedFilter;
@@ -60,6 +60,82 @@ fn id_del_folder(core: CoreId) -> SharedString {
 }
 fn id_del_strat(core: CoreId, id: u64) -> SharedString {
     SharedString::from(format!("ds:{core}:{id}"))
+}
+
+/// Unscaled row height, at the tree's local text step of zero.
+///
+/// The single home for this number: every row kind must derive its height from [`row_h`], never
+/// from this literal directly, because `MoonTree` renders through GPUI's `uniform_list`, which
+/// measures ONE row (index 0) and applies that height to every row. Any divergence between row
+/// kinds is silently resolved in favour of whichever kind is first, so the failure is intermittent
+/// and reads as a rendering glitch rather than a compile-time mistake.
+const ROW_H_BASE: f32 = 23.0;
+/// Unscaled row text line-height, at the tree's local text step of zero. Paired with
+/// [`ROW_H_BASE`] for the same reason: both feed [`row_h`] and must move together.
+const ROW_LINE_BASE: f32 = 14.0;
+/// Unscaled row vertical padding, at the tree's local text step of zero. Unlike the other two, this
+/// does not grow with `step` — see [`row_h`].
+const ROW_PAD_BASE: f32 = 4.5;
+
+/// Hand-kept mirror of MoonUI's `MoonBadgeSize::Tiny` unscaled metrics (`badge.rs:301-308`),
+/// consulted ONLY by [`row_badge_size`] when `step` is above zero — every user at the shipped
+/// default renders genuine `MoonBadgeSize::Tiny` instead, so a MoonUI metrics change reaches the
+/// tree normally.
+///
+/// `BadgeMetrics` is private in MoonUI, so nothing here can check this automatically — if MoonUI's
+/// Tiny metrics move, this must follow by hand. Same convention as [`crate::design::glyph_btn_w`]
+/// and [`crate::design::micro_control_h_value`]. MoonUI is a rolling dependency
+/// (`CONTRIBUTING.md`), so re-check this against `moon/badge.rs`'s `BadgeMetrics` whenever it is
+/// refreshed.
+const BADGE_TINY_H: f32 = 13.0;
+const BADGE_TINY_RADIUS: f32 = 4.0;
+const BADGE_TINY_FONT: f32 = 8.5;
+const BADGE_TINY_LINE: f32 = 11.0;
+const BADGE_TINY_PAD_X: f32 = 4.0;
+const BADGE_TINY_MIN_W: f32 = 16.0;
+
+/// Row height at the tree's local text step, in `Pixels`.
+///
+/// The only caller of [`design::fit_h_px`] for a tree row — see [`ROW_H_BASE`] for why every row
+/// kind must share this one function rather than compute its own height.
+///
+/// Args:
+///     app: Application context used to read active theme tokens.
+///     step: Local unscaled text-size step, `0.0` for no local adjustment.
+///
+/// Returns:
+///     The scaled row height that fits the row's text line box at `step`.
+fn row_h(app: &App, step: f32) -> Pixels {
+    design::fit_h_px(app, ROW_H_BASE + step, ROW_LINE_BASE + step, ROW_PAD_BASE)
+}
+
+/// Badge size at the tree's local text step.
+///
+/// Opt-in on the mirror: at `step` zero — every user until one deliberately raises the dial —
+/// this returns genuine `MoonBadgeSize::Tiny`, so MoonUI owns the metrics and a future MoonUI
+/// change reaches the tree normally. Only a raised step consults the hand-kept mirror, and the
+/// worst case there is a badge that looks like the OLD `Tiny` plus the step — cosmetic staleness,
+/// never a broken row. Only `height`, `font_size` and `line_height` take the step, because the box
+/// must contain the text; `radius`, `pad_x` and `min_width` are pure geometry and stay at the
+/// `Tiny` values, which `BadgeMetrics::scaled` already puts through `ui()`.
+///
+/// Args:
+///     step: Local unscaled text-size step, `0.0` for no local adjustment.
+///
+/// Returns:
+///     `MoonBadgeSize::Tiny` at `step` zero, otherwise a `Custom` mirror grown by `step`.
+fn row_badge_size(step: f32) -> MoonBadgeSize {
+    if step <= 0.0 {
+        return MoonBadgeSize::Tiny;
+    }
+    MoonBadgeSize::Custom {
+        height: BADGE_TINY_H + step,
+        radius: BADGE_TINY_RADIUS,
+        font_size: BADGE_TINY_FONT + step,
+        line_height: BADGE_TINY_LINE + step,
+        pad_x: BADGE_TINY_PAD_X,
+        min_width: BADGE_TINY_MIN_W,
+    }
 }
 
 /// Data for one tree row, looked up by node ID from `render_row` and decorators.
@@ -578,6 +654,10 @@ impl StrategiesView {
         // the view and its subscriptions never drop. Both back-references must be weak; one is not
         // enough.
         let view = cx.entity().downgrade();
+        // Captured once per build rather than re-read per drag chip: the chip only ever renders
+        // for the duration of one drag gesture, so a mid-drag preference change is not a concern
+        // the row renderer above has to guard against.
+        let step = self.prefs.tree_text_step;
 
         // ── Row rendering ──
         let row_data = data.clone();
@@ -605,7 +685,7 @@ impl StrategiesView {
                     _ => None,
                 }
             },
-            |drag: &StratDrag, _pos, _window, app| {
+            move |drag: &StratDrag, _pos, _window, app| {
                 let n = drag.ids.len();
                 app.new(|_| DragChip {
                     label: SharedString::from(if n > 1 {
@@ -613,6 +693,7 @@ impl StrategiesView {
                     } else {
                         "≡".to_string()
                     }),
+                    step,
                 })
             },
         )
@@ -633,9 +714,10 @@ impl StrategiesView {
                     _ => None,
                 }
             },
-            |_drag: &FolderDrag, _pos, _window, app| {
+            move |_drag: &FolderDrag, _pos, _window, app| {
                 app.new(|_| DragChip {
                     label: SharedString::from("▣"),
+                    step,
                 })
             },
         )
@@ -707,6 +789,9 @@ fn render_row(
     let _ = meta;
     crate::diag::bump(&crate::diag::STRAT_ROW_RENDER);
     let p = MoonPalette::active(app);
+    // Read from the entity each render rather than a value captured into the row closure, so a
+    // preference change is never served stale.
+    let step = view.read(app).prefs.tree_text_step;
     let depth = entry.depth();
     let indent = design::ui_px(app, 6.0 + 12.0 * depth as f32);
     let node_id = entry.item().id().clone();
@@ -716,7 +801,7 @@ fn render_row(
 
     match node {
         NodeData::Exchange { label, logo } => {
-            exchange_row(node_id, indent, label, logo.clone(), app)
+            exchange_row(node_id, indent, label, logo.clone(), step, app)
         }
         NodeData::Core {
             core,
@@ -742,6 +827,7 @@ fn render_row(
                 p.blue,
                 600.0,
                 ToggleTarget::Core(core),
+                step,
                 app,
             )
         }
@@ -766,6 +852,7 @@ fn render_row(
                 p.text_soft,
                 400.0,
                 ToggleTarget::Folder(core, path),
+                step,
                 app,
             )
         }
@@ -792,6 +879,7 @@ fn render_row(
             *highlighted,
             *is_short,
             indent,
+            step,
             app,
         ),
         NodeData::DeletedFolder { core, count } => {
@@ -806,6 +894,7 @@ fn render_row(
                 p.text_muted,
                 400.0,
                 ToggleTarget::Deleted(core),
+                step,
                 app,
             )
         }
@@ -825,6 +914,7 @@ fn render_row(
             *is_short,
             *highlighted,
             indent,
+            step,
             app,
         ),
     }
@@ -837,6 +927,7 @@ fn render_row(
 ///     indent: Tree-provided indentation for the heading depth.
 ///     label: Localized shared venue-section caption.
 ///     logo: Prewarmed brand logo, absent for unidentified venues.
+///     step: Local unscaled text-size step read from the tree's own preference.
 ///     app: Application context providing palette and scaled geometry.
 ///
 /// Returns:
@@ -846,13 +937,14 @@ fn exchange_row(
     indent: Pixels,
     label: &str,
     logo: Option<Arc<RenderImage>>,
+    step: f32,
     app: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(app);
     h_flex()
         .id(row_id)
         .w_full()
-        .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
+        .h(row_h(app, step))
         .pl(indent)
         .pr(design::ui_px(app, 6.0))
         .items_center()
@@ -873,6 +965,8 @@ fn exchange_row(
                     .uppercase(false)
                     .color(p.text_soft)
                     .weight(600.0)
+                    .font_size(design::moon_text_base(app, step))
+                    .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
         )
@@ -902,6 +996,7 @@ enum ToggleTarget {
 ///     color: Heading text color.
 ///     weight: Heading font weight.
 ///     target: Core, folder, or Deleted collection toggled by the row.
+///     step: Local unscaled text-size step read from the tree's own preference.
 ///     app: Application context used for palette and sizing tokens.
 ///
 /// Returns:
@@ -916,6 +1011,7 @@ fn core_folder_row(
     color: u32,
     weight: f32,
     target: ToggleTarget,
+    step: f32,
     app: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(app);
@@ -935,7 +1031,7 @@ fn core_folder_row(
         // the "clicking a folder sometimes does not expand it" defect.
         .id(row_id)
         .w_full()
-        .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
+        .h(row_h(app, step))
         .pl(indent)
         .pr(design::ui_px(app, 6.0))
         .items_center()
@@ -948,19 +1044,25 @@ fn core_folder_row(
         })
         // Passive: the whole row carries the click that expands or collapses this node, so the
         // marker stays hitbox-free and cannot swallow it.
-        // Chrome, so it tracks the UI slider rather than the row's own text scale.
+        // The unscaled base rides the pane's local text step so the caret stays proportional to
+        // the row it marks; `MoonDisclosure` still applies the UI scale on top of it internally,
+        // so the value passed here must stay unscaled.
         .child(
             MoonDisclosure::glyph(expanded)
-                .size(design::DISCLOSURE_GLYPH_MARKER)
-                .box_size(design::DISCLOSURE_BOX),
+                .size(design::DISCLOSURE_GLYPH_MARKER + step)
+                .box_size(design::DISCLOSURE_BOX + step),
         )
         .child(
-            MoonText::new(text)
-                .mono(true)
-                .uppercase(false)
-                .color(color)
-                .weight(weight)
-                .render(),
+            div().flex_1().min_w_0().truncate().child(
+                MoonText::new(text)
+                    .mono(true)
+                    .uppercase(false)
+                    .color(color)
+                    .weight(weight)
+                    .font_size(design::moon_text_base(app, step))
+                    .line_height(ROW_LINE_BASE + step)
+                    .render(),
+            ),
         )
         .on_click(move |_e, window, app| {
             view_click.update(app, |this, cx| {
@@ -1009,6 +1111,9 @@ fn core_folder_row(
 
 /// Renders a muted deleted-strategy row without a checkbox or DnD.
 /// Clicking selects it and jumps to its latest version; right-click opens its Restore context menu.
+///
+/// Args:
+///     step: Local unscaled text-size step read from the tree's own preference.
 #[allow(clippy::too_many_arguments)]
 fn deleted_strategy_row(
     view: &Entity<StrategiesView>,
@@ -1019,6 +1124,7 @@ fn deleted_strategy_row(
     is_short: bool,
     highlighted: bool,
     indent: Pixels,
+    step: f32,
     app: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(app);
@@ -1029,7 +1135,7 @@ fn deleted_strategy_row(
         .id(SharedString::from(format!("dstrat-{core}-{id}")))
         .flex_1()
         .min_w_0()
-        .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
+        .h(row_h(app, step))
         .items_center()
         .justify_between()
         .gap(design::ui_px(app, 6.0))
@@ -1044,6 +1150,8 @@ fn deleted_strategy_row(
                     .mono(true)
                     .uppercase(false)
                     .color(p.text_muted)
+                    .font_size(design::moon_text_base(app, step))
+                    .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
         )
@@ -1055,8 +1163,8 @@ fn deleted_strategy_row(
                     MoonTone::Muted
                 })
                 .variant(MoonBadgeVariant::Soft)
-                .size(MoonBadgeSize::Tiny)
-                .render_with_palette(p),
+                .size(row_badge_size(step))
+                .render_with_theme(p, MoonTheme::active_tokens(app)),
         )
         .on_click(move |_e, window, app| {
             view_click.update(app, |this, cx| {
@@ -1090,18 +1198,22 @@ fn deleted_strategy_row(
     } else {
         name_row = name_row.hover(move |s| s.bg(moon_alpha(p.panel, 0.74)));
     }
+    // No outer `.py(...)`: `name_row` above already carries `row_h(app, step)`, and `uniform_list`
+    // measures this row's total height, so an outer pad here would desync it from the heading rows
+    // (C2, plan-corrections-1.md).
     h_flex()
         .w_full()
         .items_center()
         .gap(design::ui_px(app, 6.0))
         .pl(indent)
         .pr(design::ui_px(app, 2.0))
-        .py(design::ui_px(app, 1.0))
         .child(
             MoonText::new("✕")
                 .mono(true)
                 .uppercase(false)
                 .color(p.text_muted)
+                .font_size(design::moon_text_base(app, step))
+                .line_height(ROW_LINE_BASE + step)
                 .render(),
         )
         .child(name_row)
@@ -1123,6 +1235,7 @@ fn deleted_strategy_row(
 ///     highlighted: Whether filtering should emphasize the row.
 ///     is_short: Whether the strategy trades the short side.
 ///     indent: Tree indentation for the row.
+///     step: Local unscaled text-size step read from the tree's own preference.
 ///     app: Application context used for theme and design tokens.
 ///
 /// Returns:
@@ -1139,6 +1252,7 @@ fn strategy_row(
     highlighted: bool,
     is_short: bool,
     indent: Pixels,
+    step: f32,
     app: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(app);
@@ -1162,7 +1276,7 @@ fn strategy_row(
         .id(SharedString::from(format!("strat-{core}-{id}")))
         .flex_1()
         .min_w_0()
-        .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
+        .h(row_h(app, step))
         .items_center()
         .justify_between()
         .gap(design::ui_px(app, 6.0))
@@ -1177,6 +1291,8 @@ fn strategy_row(
                     .mono(true)
                     .uppercase(false)
                     .color(p.text)
+                    .font_size(design::moon_text_base(app, step))
+                    .line_height(ROW_LINE_BASE + step)
                     .render(),
             ),
         )
@@ -1190,8 +1306,8 @@ fn strategy_row(
                     MoonTone::Positive
                 })
                 .variant(MoonBadgeVariant::Soft)
-                .size(MoonBadgeSize::Tiny)
-                .render_with_palette(p),
+                .size(row_badge_size(step))
+                .render_with_theme(p, MoonTheme::active_tokens(app)),
         )
         .on_click(move |e: &ClickEvent, window, app| {
             let m = e.modifiers();
@@ -1237,13 +1353,15 @@ fn strategy_row(
     }
 
     let view_chk = view.clone();
+    // No outer `.py(...)`: `name_row` above already carries `row_h(app, step)`, and `uniform_list`
+    // measures this row's total height, so an outer pad here would desync it from the heading rows
+    // (C2, plan-corrections-1.md).
     h_flex()
         .w_full()
         .items_center()
         .gap(design::ui_px(app, 6.0))
         .pl(indent)
         .pr(design::ui_px(app, 2.0))
-        .py(design::ui_px(app, 1.0))
         .child(
             // Use a green tone for enabled/active. The default Info tone produced a pale blue box
             // that was indistinguishable from empty on the light theme; Positive also makes the
@@ -1275,6 +1393,8 @@ fn strategy_row(
                 .mono(true)
                 .uppercase(false)
                 .color(dot)
+                .font_size(design::moon_text_base(app, step))
+                .line_height(ROW_LINE_BASE + step)
                 .render(),
         )
         .child(name_row)

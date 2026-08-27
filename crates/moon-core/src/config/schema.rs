@@ -40,8 +40,25 @@ pub fn default_version() -> u32 {
     0
 }
 
+/// Lower bound the settings-UI Font slider and tick loop hold `ui_font_delta` within.
+///
+/// [`default_ui_font_delta`] must lie inside `UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX`, so a future
+/// range narrowing cannot ship a default the slider cannot represent. `repair_ui_font_delta` does
+/// NOT clamp to this range: a hand-edited `settings.toml` is allowed a deliberate out-of-range
+/// choice, and these constants exist for the slider and for that assertion, not for repair.
+pub const UI_FONT_DELTA_MIN: i32 = -2;
+/// Upper bound the settings-UI Font slider and tick loop hold `ui_font_delta` within. See
+/// [`UI_FONT_DELTA_MIN`].
+pub const UI_FONT_DELTA_MAX: i32 = 6;
+
+/// Return the `ui_font_delta` used when a `settings.toml` field is ABSENT, and as the repair
+/// fallback [`repair_ui_font_delta`] applies to a PRESENT but non-finite stored value.
+///
+/// A present FINITE value — including `0.0` — is never replaced by either path, which is what
+/// keeps an existing user's chosen delta untouched. `3.0` lies within
+/// `UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX` (`settings/general.rs`).
 pub fn default_ui_font_delta() -> f32 {
-    2.0
+    3.0
 }
 
 pub fn default_ui_scale() -> f32 {
@@ -257,8 +274,8 @@ pub struct SettingsFile {
     /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Addition to base UI font sizes in logical pixels. Default +2 turns designed 10 px text
-    /// into 12 px at 1x without zooming the whole interface.
+    /// Addition to base UI font sizes in logical pixels. Default +3 turns designed 10 px text
+    /// into 13 px at 1x without zooming the whole interface.
     #[serde(default = "default_ui_font_delta")]
     pub ui_font_delta: f32,
     /// Dark/light MoonUI theme. This plaintext setting is neither a secret nor the chart theme.

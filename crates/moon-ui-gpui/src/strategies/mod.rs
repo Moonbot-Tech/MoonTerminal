@@ -2,16 +2,19 @@
 //! The separate OS window contains tree, versions, schema-section, and parameter panels. Its
 //! core/folder/strategy tree optionally groups cores by venue and supports search, an active-only
 //! display preference, staged checkboxes, and start/stop Apply; schema sections dim inactive
-//! entries, while parameter rows support read-only, YES/NO, and long values. Field and section
-//! dependencies load from `assets/param_deps.toml` through [`rules`] and hot-reload only when
-//! `MOON_STRATEGY_RULES_HOT_RELOAD` is set.
+//! entries, while parameter rows support read-only, YES/NO, and long values in a selected section
+//! or a persisted, virtualized full-mode list. Field and section dependencies load from
+//! `assets/param_deps.toml` through [`rules`] and hot-reload only when `MOON_STRATEGY_RULES_HOT_RELOAD`
+//! is set.
 //! The view reads the live per-core Backend store, and Apply sends checkbox changes plus start/stop
 //! through `session.apply_strategies`.
 
 mod actions;
 mod fields;
 mod filter;
+mod full_params;
 mod logic;
+mod param_entries;
 mod params;
 mod rules;
 mod sections;
@@ -22,6 +25,7 @@ mod state;
 // `pub(crate)` exposes `unique_name`, `set_field`, and `STRATEGY_NAME_FIELD` to the Analytics
 // tuner's Make Copy operation.
 pub(crate) mod tree;
+mod version_facts;
 mod versions;
 mod window;
 
@@ -41,9 +45,10 @@ use moon_ui::{
     MoonAlert, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton,
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonColorPicker,
     MoonColorPickerEvent, MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent,
-    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTextArea, MoonTextAreaEvent,
-    MoonTextAreaState, MoonTone, MoonTreeEvent, MoonTreeItem, MoonTreeState, MoonWindowFrame, Root,
-    h_flex, v_flex,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonScrollbarVisibility,
+    MoonSegmentItem, MoonSegmentedControl, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState,
+    MoonTone, MoonTreeEvent, MoonTreeItem, MoonTreeState, MoonVirtualList,
+    MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};
@@ -72,7 +77,7 @@ pub struct StrategiesView {
     search: Entity<MoonInputState>,
     /// Tree filters for kind, direction, and search text synchronized from the input.
     filter: StrategyFilter,
-    /// Resolved persisted display preferences for grouping and active-row visibility.
+    /// Resolved persisted display preferences for grouping, active-row visibility, and parameter mode.
     prefs: StrategiesPrefs,
     /// UI-thread edge proving exchange logos were prewarmed off the tree render path.
     exchange_logos_ready: bool,
@@ -180,6 +185,14 @@ pub struct StrategiesView {
     /// Selection alone does not bring a row on screen: only `MoonTreeState::scroll_to_item`
     /// does, and it needs the tree's item index, which exists only inside render.
     pending_scroll: Option<Key>,
+    /// Retained scroll position of the full-mode parameter list, so a repaint or a mode round-trip
+    /// does not jump the reader back to the top.
+    params_scroll: MoonVirtualListScrollHandle,
+    /// Section the sections panel asked the full-mode list to scroll to, consumed by the next render.
+    ///
+    /// A one-shot request rather than a comparison against `selected_section`: clicking the section
+    /// already on screen must scroll to it again.
+    pending_param_scroll: Option<usize>,
     focus: FocusHandle,
 }
 

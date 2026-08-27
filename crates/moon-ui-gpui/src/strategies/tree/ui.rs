@@ -138,6 +138,8 @@ pub(super) struct FolderDrag {
 /// Preview displayed beneath the cursor while dragging.
 pub(super) struct DragChip {
     pub(super) label: SharedString,
+    /// The tree's local text step, so the floating label matches the row it was dragged from.
+    pub(super) step: f32,
 }
 
 impl Render for DragChip {
@@ -151,7 +153,9 @@ impl Render for DragChip {
             .border_1()
             .border_color(moon(p.blue))
             .text_color(moon(p.text))
-            .text_size(design::t_body(cx))
+            // Raw GPUI text, so it needs the SCALED value through `text_px`; `moon_text_base`'s
+            // result must never reach `.text_size(...)` unscaled.
+            .text_size(design::text_px(cx, design::moon_text_base(cx, self.step)))
             .font_family(design::mono())
             .child(self.label.clone())
     }

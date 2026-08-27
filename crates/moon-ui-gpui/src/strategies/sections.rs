@@ -1,12 +1,13 @@
-//! The middle sections panel renderer.
+//! The middle schema-sections panel renderer and full-mode table of contents.
 
 use super::*;
 
 impl StrategiesView {
-    /// Renders schema sections using dependency values shared with the parameters panel.
+    /// Render schema sections using dependency values shared with the parameters panel.
     ///
     /// The caller computes `values` once per frame because building them normalizes every selected
-    /// field and schema field name.
+    /// field and schema field name. In full mode, section clicks also queue the matching heading
+    /// for the virtualized parameters list to scroll into view.
     pub(super) fn sections_panel(
         &self,
         store: &CoreStore,
@@ -59,6 +60,7 @@ impl StrategiesView {
         // sections containing changed fields.
         if let Some(ch) = self.version_changed_filter() {
             let ch: HashSet<String> = ch.keys().cloned().collect();
+            let total = ch.len();
             let mut list = v_flex().w_full().gap_0();
             let row_base = |id: SharedString, cx: &Context<Self>| {
                 div()
@@ -78,11 +80,24 @@ impl StrategiesView {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(moon(p.text))
                 .child(t!("strat.sections_all").to_string())
+                .child(
+                    h_flex().ml_auto().flex_none().child(
+                        MoonBadge::new(total.to_string())
+                            .variant(MoonBadgeVariant::Soft)
+                            .size(MoonBadgeSize::Status)
+                            .tone(MoonTone::Muted)
+                            .render(),
+                    ),
+                )
+                .tooltip(crate::panels::common::text_tooltip(
+                    t!("strat.sections_all_tip", n = total).to_string(),
+                ))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if this.versions.section.is_some() {
                         this.versions.section = None;
                         cx.notify();
                     }
+                    this.request_param_scroll(0, cx);
                 }));
             if on_all {
                 all_row = all_row
@@ -93,22 +108,36 @@ impl StrategiesView {
             }
             list = list.child(all_row);
             for (i, sec) in sections.iter().enumerate() {
-                if !sec
+                let n = sec
                     .fields
                     .iter()
-                    .any(|f| ch.contains(&f.name.to_lowercase()))
-                {
+                    .filter(|f| ch.contains(&f.name.to_lowercase()))
+                    .count();
+                if n == 0 {
                     continue;
                 }
                 let on = self.versions.section == Some(i);
                 let mut row = row_base(SharedString::from(format!("sec-ver-{i}")), cx)
                     .text_color(moon(p.text))
                     .child(sec.title.clone())
+                    .child(
+                        h_flex().ml_auto().flex_none().child(
+                            MoonBadge::new(n.to_string())
+                                .variant(MoonBadgeVariant::Soft)
+                                .size(MoonBadgeSize::Status)
+                                .tone(MoonTone::Muted)
+                                .render(),
+                        ),
+                    )
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("strat.section_changed_tip", n = n).to_string(),
+                    ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.versions.section != Some(i) {
                             this.versions.section = Some(i);
                             cx.notify();
                         }
+                        this.request_param_scroll(i, cx);
                     }));
                 if on {
                     row = row
@@ -162,6 +191,7 @@ impl StrategiesView {
                         this.selected_section = i;
                         cx.notify();
                     }
+                    this.request_param_scroll(i, cx);
                 }));
             if on {
                 row = row

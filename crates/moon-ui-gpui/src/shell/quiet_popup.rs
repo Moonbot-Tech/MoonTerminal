@@ -92,7 +92,7 @@ impl Shell {
             // to `content_width_font(CONTENT_W)`, which it resolves through `font_width` (a pure
             // multiply by the mono-body scale). Restating it here with `font_value` — the ADDITIVE
             // `font()` used for text SIZES — produced a content block ~47 px narrower than the
-            // frame around it at the shipped +2 delta. One box, one width, set by its owner.
+            // frame around it at the shipped +3 delta. One box, one width, set by its owner.
             .w_full()
             .gap(design::ui_px(cx, 6.0))
             .child(

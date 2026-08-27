@@ -38,6 +38,21 @@ pub const HEADER_PAD_X: f32 = 12.0;
 /// positions.
 pub const CHROME_GAP: f32 = 8.0;
 
+/// Width MoonUI's `MoonVirtualList` vertical overlay scrollbar covers at its container's right
+/// edge.
+///
+/// MIRRORS MoonUI: `moon/virtual_list.rs` builds every `MoonVirtualList`'s track via
+/// `moon_scrollbar_overlay_with_palette` (`moon/scroll_area.rs`), which draws it as
+/// `.absolute().right(px(0.0)).w(px(tokens.ui(8.0)))` — an OVERLAY that reserves no layout width of
+/// its own. A `w_full` row inside such a list must therefore subtract this by hand on its
+/// right-justified content, or that content ends up drawn under the track.
+///
+/// The value is in DESIGN UNITS, so apply it through [`ui_px`], never as a raw `px`. That constant
+/// is private in MoonUI, so nothing checks this mirror; if it moves there, this must follow by
+/// hand. This is NOT `scroll/scrollbar.rs`'s legacy `Scrollbar` (`WIDTH = 4.*2. + 8.` = 16.0) —
+/// that implementation is not on the `MoonVirtualList` call path, so do not "correct" this to 16.0.
+pub const MOON_SCROLLBAR_OVERLAY_W: f32 = 8.0;
+
 /// Base (unscaled) glyph edge for an interactive disclosure caret built with
 /// `MoonDisclosure::button`.
 ///
@@ -105,7 +120,7 @@ pub fn chrome_section(cx: &App) -> Div {
 /// (`MoonDropdown::trigger_width`, `MoonButton::width`), never to a `*_scaled` variant: MoonUI
 /// scales a scaled trigger width by `font()` (which adds the Font-slider delta) while it scales the
 /// height by `ui()` (a pure multiply), so the two diverge as soon as the slider leaves zero — a
-/// scaled 26 renders ≈31×26 at the shipped default delta.
+/// scaled 26 renders ≈33×26 at the shipped default delta.
 ///
 /// MIRRORS MoonUI, like [`micro_control_h_value`]: `MoonButtonMetrics::base_for_size(Size::Small)`,
 /// which `MoonButtonSize::Action` resolves to, is `height 26`, `line_height 14`, so its `pad_y` is
@@ -354,7 +369,7 @@ fn base_text(cx: &App) -> f32 {
 ///
 /// Returns:
 ///     Approximately 9px at the default theme base with zero Font-slider delta, for badges, small
-///     labels, and counters. The application's default +2 delta makes it approximately 11px.
+///     labels, and counters. The application's default +3 delta makes it approximately 12px.
 pub fn t_caption(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) - 2.0)
 }
@@ -366,7 +381,7 @@ pub fn t_caption(cx: &App) -> Pixels {
 ///
 /// Returns:
 ///     Approximately 11px at the default theme base with zero Font-slider delta. The application's
-///     default +2 delta makes it approximately 13px.
+///     default +3 delta makes it approximately 14px.
 pub fn t_body(cx: &App) -> Pixels {
     text_px(cx, base_text(cx))
 }
@@ -383,7 +398,7 @@ pub fn t_body(cx: &App) -> Pixels {
 ///
 /// Returns:
 ///     Approximately 12px at the default theme base with zero Font-slider delta. The application's
-///     default +2 delta makes it approximately 14px.
+///     default +3 delta makes it approximately 15px.
 pub fn t_body_lg(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) + 1.0)
 }
@@ -395,9 +410,29 @@ pub fn t_body_lg(cx: &App) -> Pixels {
 ///
 /// Returns:
 ///     Approximately 14px at the default theme base with zero Font-slider delta. The application's
-///     default +2 delta makes it approximately 16px.
+///     default +3 delta makes it approximately 17px.
 pub fn t_title(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) + 3.0)
+}
+
+/// Return an UNSCALED base for a MoonUI component's own size field — `MoonText::font_size`,
+/// `MoonBadgeSize::Custom`'s `font_size` — never for a raw-GPUI `.text_size(...)`.
+///
+/// MoonUI components apply `tokens.font()` to whatever base they are given, so passing a `t_*`
+/// result or [`font_value`] here would scale the Font-slider delta twice: invisible at delta 0,
+/// producing roughly 30px text at the shipped range's top end. `step` is a caller-supplied LOCAL
+/// unscaled addition, for a surface the user has been given its own size control over on top of
+/// the global Font slider; zero means exactly the theme base, matching every other caller of
+/// `base_text`. Use [`text_px`] instead when the destination is `div().text_size(...)`.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///     step: Local unscaled addition on top of the theme base; `0.0` for no local adjustment.
+///
+/// Returns:
+///     The unscaled base size, in the same units MoonUI's own component defaults use.
+pub fn moon_text_base(cx: &App, step: f32) -> f32 {
+    base_text(cx) + step
 }
 
 pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f32) -> Pixels {
