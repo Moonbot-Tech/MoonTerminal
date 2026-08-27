@@ -1,9 +1,11 @@
 //! Deterministic regression coverage for the Connections hierarchy.
 
+use super::entries::{flatten_entries, ConnEntry, EntryLabels};
 use super::sync_groups_from_servers;
-use super::tab::{ServerRowMeta, exchange_sections, pending_server_indices, visible_group_rows};
+use super::tab::{pending_server_indices, visible_group_rows, ServerRowMeta};
+use crate::core_order::CoreOrder;
 use moon_core::config::{
-    FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
+    AppConfig, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
     TakeProfitMode,
 };
 use moon_core::venue::CoreVenue;
@@ -32,10 +34,12 @@ fn server(group: &str) -> ServerConfig {
     }
 }
 
-/// `tab.rs:exchange_sections` must keep the unknown bucket first; changing its insertion to append
-/// after known exchanges hides inactive or unidentified cores below the populated exchange list.
+/// `entries.rs:core_row_entry` must keep each sorted row's source `draft_index`; replacing it
+/// with a ranked display position writes a name or key edit into a different core's saved config.
+/// The same fixture keeps the unknown bucket first, so unidentified cores remain visible above
+/// populated exchange sections.
 #[test]
-fn exchange_sections_group_known_names_and_keep_unknown_first() {
+fn flatten_entries_group_known_names_and_keep_unknown_first() {
     let servers: Vec<ServerRowMeta> = vec![
         (1, 11, true, "default".to_string(), Some(venue(7))),
         (2, 12, true, "default".to_string(), None),
@@ -44,29 +48,46 @@ fn exchange_sections_group_known_names_and_keep_unknown_first() {
         (5, 15, true, "secondary".to_string(), None),
     ];
 
-    let sections = exchange_sections(&servers, "default");
-    let names: Vec<Option<String>> = sections
-        .iter()
-        .map(|(venue, _)| venue.map(crate::controls::venue_label))
-        .collect();
-    let members: Vec<Vec<usize>> = sections
-        .iter()
-        .map(|(_, members)| members.clone())
-        .collect();
+    let config = AppConfig::load(None, false).expect("test-binary config must load");
+    let entries = flatten_entries(
+        &servers,
+        &[("default".to_string(), true, 0)],
+        &CoreOrder::new(&config),
+        EntryLabels {
+            pending: "Pending",
+            exchange: &|venue| {
+                venue
+                    .map(crate::controls::venue_label)
+                    .unwrap_or_else(|| "Unknown".to_string())
+            },
+        },
+    );
+    let mut sections = Vec::<(String, Vec<usize>)>::new();
+    for entry in entries {
+        match entry {
+            ConnEntry::ExchangeHeader { caption, .. } => sections.push((caption, Vec::new())),
+            ConnEntry::CoreRow { draft_index, .. } => {
+                if let Some((_, members)) = sections.last_mut() {
+                    members.push(draft_index);
+                }
+            }
+            ConnEntry::PendingHeader { .. } | ConnEntry::GroupHeader { .. } => {}
+        }
+    }
 
     assert_eq!(
-        names,
+        sections,
         vec![
-            None,
-            Some("Binance Futures".to_string()),
-            Some("Bybit Spot".to_string())
+            ("Unknown".to_string(), vec![1]),
+            ("Binance Futures".to_string(), vec![2]),
+            ("Bybit Spot".to_string(), vec![0, 3]),
         ]
     );
-    assert_eq!(members, vec![vec![1], vec![2], vec![0, 3]]);
 }
 
-/// `tab.rs:pending_server_indices` must select `uid == 0`; reversing that predicate replaces the
-/// top section with saved cores while new cores remain excluded from groups, hiding their fields.
+/// `entries.rs:flatten_entries` must keep `uid == 0` rows in its top section; reversing the
+/// predicate replaces it with saved cores while new cores remain excluded from groups, hiding their
+/// fields.
 #[test]
 fn pending_section_selects_only_unsaved_cores_and_excludes_them_from_groups() {
     let servers: Vec<ServerRowMeta> = vec![
@@ -76,7 +97,63 @@ fn pending_section_selects_only_unsaved_cores_and_excludes_them_from_groups() {
     ];
 
     assert_eq!(pending_server_indices(&servers), vec![1, 2]);
-    assert_eq!(exchange_sections(&servers, "default")[0].1, vec![0]);
+    let config = AppConfig::load(None, false).expect("test-binary config must load");
+    let entries = flatten_entries(
+        &servers,
+        &[("default".to_string(), true, 0)],
+        &CoreOrder::new(&config),
+        EntryLabels {
+            pending: "Pending",
+            exchange: &|venue| {
+                venue
+                    .map(crate::controls::venue_label)
+                    .unwrap_or_else(|| "Unknown".to_string())
+            },
+        },
+    );
+    assert_eq!(
+        entries,
+        vec![
+            ConnEntry::PendingHeader {
+                caption: "Pending".to_string(),
+                member_count: 2,
+            },
+            ConnEntry::CoreRow {
+                draft_index: 1,
+                core_id: 2,
+                uid: 0,
+                active: true,
+                indented: true,
+            },
+            ConnEntry::CoreRow {
+                draft_index: 2,
+                core_id: 3,
+                uid: 0,
+                active: true,
+                indented: true,
+            },
+            ConnEntry::GroupHeader {
+                name: "default".to_string(),
+                active: true,
+                icon: 0,
+                member_count: 2,
+            },
+            ConnEntry::ExchangeHeader {
+                group_index: 0,
+                exchange_index: 0,
+                caption: "Binance Futures".to_string(),
+                member_count: 1,
+                identified: true,
+            },
+            ConnEntry::CoreRow {
+                draft_index: 0,
+                core_id: 1,
+                uid: 21,
+                active: true,
+                indented: true,
+            },
+        ]
+    );
 }
 
 /// Regression target: restoring the old retain-and-recreate loop in

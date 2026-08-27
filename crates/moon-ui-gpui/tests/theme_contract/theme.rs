@@ -295,6 +295,11 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "panels/assets/settings.rs",
             r#".id("assets-wallets-settings-popup")"#,
         ),
+        (
+            "settings/connections/tab.rs",
+            "settings/connections/tab.rs",
+            r#".id("icon-picker")"#,
+        ),
         // The Alerts row gear. Its content is `figstyle::rows` BARE — the same rows the chart's
         // own settings panel wraps in `figstyle::shell`, which is what paints a surface there and
         // must not be handed to a popover that already paints one. The anchor is the content
@@ -311,7 +316,7 @@ fn popover_contents_do_not_paint_a_second_surface() {
     // `font_value` is banned for a different reason, and it is the one that actually shipped: the
     // popover resolves `content_width_font` through `font_width` (a pure multiply), while
     // `design::font_value` is the ADDITIVE `font()` used for text SIZES. A content root that sets
-    // its own width with it lands ~47px off the frame at the shipped +2 Font delta. A content root
+    // its own width with it lands ~47px off the frame at the shipped +3 Font delta. A content root
     // needs no width of its own at all — `w_full` — and the two callers that do state one use
     // `font_w_px`, which is the same formula the popover uses.
     const BANNED: &[&str] = &[

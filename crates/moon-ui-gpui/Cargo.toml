@@ -142,3 +142,17 @@ foreign-types = "0.5"
 block = "0.1"
 objc = "0.2"
 core-graphics = "0.24"
+
+[dev-dependencies]
+# `test-support` is what makes `gpui::TestAppContext` / `gpui::VisualTestContext` -- and with them
+# `#[gpui::test]` and a real headless `draw()` -- nameable from this crate's tests. GPUI gates both
+# behind `cfg(any(test, feature = "test-support"))`, so without this line a test can only assert on
+# the SHAPE of the source; with it, a test can lay out and paint an element tree and time it. That
+# is the only in-repo instrument that can measure a rendering change here, because `moon-ui-gpui`
+# is a binary crate with no `[lib]` and the application itself must never be run on a developer
+# machine holding live keys.
+#
+# A dev-dependency, deliberately: the workspace is on resolver "2", so this feature reaches the
+# test build only and never the shipped binary. MoonUI's own `moon-ui-components` declares it the
+# same way.
+gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["test-support"] }

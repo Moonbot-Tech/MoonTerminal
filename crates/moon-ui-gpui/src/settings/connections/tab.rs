@@ -1,18 +1,23 @@
 //! Connections tab assembly: pending-core, group, and exchange branch headers; icon picker;
-//! market-data and core-order selectors; and the editable hierarchy with its top add button.
+//! market-data and core-order selectors; and the virtualized editable hierarchy with its top add
+//! button.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize, MoonMenuSize, MoonPalette,
-    MoonSelect, MoonTooltipView, StyledExt, h_flex, v_flex,
+    MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility, MoonSelect, MoonTooltipView,
+    MoonVirtualList, StyledExt, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
-use super::table::conn_diagnosis;
+use super::entries::{ConnEntry, EntryLabels, flatten_entries};
+use super::table::{conn_row_h_value, server_row};
 use crate::design;
 use moon_core::config::GroupConfig;
 use moon_core::session::CoreId;
@@ -51,6 +56,28 @@ pub(super) fn visible_group_rows(
         .collect()
 }
 
+/// Count how many draft rows name each group, in one pass over the servers.
+///
+/// The branch header prints this beside the group name. Counting it inside the group loop instead
+/// rescans every server once per group, which is quadratic in the core count and is paid on every
+/// frame the tab is rebuilt -- and a wheel notch rebuilds it.
+///
+/// Pending rows (uid 0) participate, matching the header the user sees: a newly added, unsaved
+/// row is still a member of the group whose name is typed in it.
+///
+/// Args:
+///     servers: Every current draft server row.
+///
+/// Returns:
+///     A count per referenced group name; a group no row names is absent, which reads as zero.
+pub(super) fn member_counts(servers: &[ServerRowMeta]) -> HashMap<&str, usize> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for (_, _, _, group, _) in servers {
+        *counts.entry(group.as_str()).or_insert(0) += 1;
+    }
+    counts
+}
+
 /// Return draft indices for unsaved cores that must stay in the top pending section.
 pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
     servers
@@ -60,212 +87,266 @@ pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
         .collect()
 }
 
-/// Group one window group's server indices into an unknown-first exchange hierarchy.
-///
-/// Known venues use stable caption order. Member indices retain draft order here and are ranked
-/// through `CoreOrder` by the renderer, keeping membership and user ordering separate.
+/// Render a compact pending-core or exchange subsection above its editable rows.
 ///
 /// Args:
-///     servers: Draft and saved server rows from Connections settings.
-///     group: Window group whose saved server rows should be included.
+///     id: Stable element identity for the heading.
+///     name: Localized subsection caption.
+///     member_count: Number of core rows in the subsection.
+///     highlighted: Whether to use the active heading colours.
+///     p: Active palette.
+///     cx: Application context.
 ///
 /// Returns:
-///     Venues and their source indices, with the unidentified section first.
-pub(super) fn exchange_sections<'a>(
-    servers: &'a [ServerRowMeta],
-    group: &str,
-) -> Vec<(Option<&'a CoreVenue>, Vec<usize>)> {
-    crate::core_order::exchange_sections(
-        servers
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, uid, _, server_group, _))| *uid != 0 && server_group == group)
-            .map(|(index, (_, _, _, _, venue))| (index, venue.as_ref())),
-    )
+///     A compact heading row with an indicator, caption, and member count.
+fn subsection_header_row(
+    id: SharedString,
+    name: String,
+    member_count: usize,
+    highlighted: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .id(id)
+        .w_full()
+        .gap_2()
+        .items_center()
+        .pl(px(20.0))
+        .pr_1()
+        .py_0p5()
+        .child(
+            div()
+                .w(px(6.0))
+                .h(px(6.0))
+                .rounded_full()
+                .bg(rgb(if highlighted { p.accent } else { p.text_soft })),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_bold()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(if highlighted { p.text } else { p.text_soft }))
+                .child(name),
+        )
+        .child(
+            div()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(p.text_soft))
+                .child(t!("conn.member_count", n = member_count).to_string()),
+        )
 }
 
-impl SettingsView {
-    /// Render a group branch header with active state, icon, name, member count, window action,
-    /// icon-picker action, and add-core action.
-    ///
-    /// `ico_el` is prepared by the caller because texture loading needs `&mut self.icons`.
-    fn group_header_row(
-        &mut self,
-        name: &str,
-        active: bool,
-        ico_el: AnyElement,
-        member_count: usize,
-        p: MoonPalette,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let nm_act = name.to_string();
-        let nm_eye = name.to_string();
-        let nm_pick = name.to_string();
-        let nm_add = name.to_string();
-        h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .px_1()
-            .py_0p5()
-            .rounded(design::r_button(cx))
-            .bg(rgb(p.panel_high))
-            .child(
-                MoonCheckbox::new(SharedString::from(format!("grp-{name}")))
-                    .checked(active)
-                    .size(MoonCheckboxSize::Compact)
-                    .on_change(cx.listener(move |this, ch: &bool, _w, cx| {
+/// Render a group branch header with active state, icon, name, member count, window action,
+/// icon-picker popover, and add-core action.
+///
+/// A free function taking a WEAK handle: it is built inside the virtual list's row factory, which
+/// only ever hands out `&mut App` -- see `table.rs`'s module doc for why a strong handle here would
+/// leak the window.
+///
+/// Args:
+///     weak: Weak callback owner every listener below closes over.
+///     name: The group's name, also its identity for the icon picker.
+///     active: Whether the group is enabled.
+///     ico_el: The group's icon, already resolved from the preloaded texture cache.
+///     member_count: How many draft rows name this group.
+///     pick_ids: Every pickable icon id, non-empty only while this group's picker is open.
+///     icon_tex: Preloaded icon textures, keyed by id.
+///     picking_open: Whether this group's icon picker is the one currently open.
+///     p: Active palette.
+///     cx: Application context.
+///
+/// Returns:
+///     A group heading row with its controls and, when open, its icon-picker popover.
+#[allow(clippy::too_many_arguments)]
+fn group_header_row(
+    weak: &WeakEntity<SettingsView>,
+    name: &str,
+    active: bool,
+    ico_el: AnyElement,
+    member_count: usize,
+    pick_ids: &[u32],
+    icon_tex: &HashMap<u32, Option<Arc<RenderImage>>>,
+    picking_open: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let nm_act = name.to_string();
+    let nm_eye = name.to_string();
+    let nm_add = name.to_string();
+
+    let popover_body =
+        picking_open.then(|| icon_picker_grid(weak, name, pick_ids, icon_tex, p, cx));
+    let mut popover = MoonPopover::new(SharedString::from(format!("pick-pop-{name}")))
+        .placement(MoonPopoverPlacement::BottomStart)
+        .content_width_ui(240.0)
+        .close_on_content_click(false)
+        .overlay_closable(true)
+        .open(picking_open)
+        .on_open_change({
+            let weak = weak.clone();
+            let name = name.to_string();
+            move |open, _window, app| {
+                let _ = weak.update(app, |this, cx| {
+                    this.picking = open.then(|| name.clone());
+                    cx.notify();
+                });
+            }
+        })
+        .trigger(
+            MoonButton::new(SharedString::from(format!("pick-{name}")))
+                .outline()
+                .size(MoonButtonSize::Micro)
+                .width(54.0)
+                .label(t!("conn.icon_btn").to_string())
+                .render(),
+        );
+    if let Some(body) = popover_body {
+        popover = popover.content(body);
+    }
+
+    h_flex()
+        .w_full()
+        .gap_1()
+        .items_center()
+        .px_1()
+        .py_0p5()
+        .rounded(design::r_button(cx))
+        .bg(rgb(p.panel_high))
+        .child(
+            MoonCheckbox::new(SharedString::from(format!("grp-{name}")))
+                .checked(active)
+                .size(MoonCheckboxSize::Compact)
+                .on_change({
+                    let weak = weak.clone();
+                    move |ch: &bool, _window, cx| {
                         let v = *ch;
                         let n = nm_act.clone();
-                        this.backend.update(cx, |b, bcx| {
-                            if let Some(p) = b.preview.as_mut() {
-                                if let Some(gc) = p.groups.iter_mut().find(|g| g.name == n) {
-                                    gc.active = v;
-                                    bcx.notify();
+                        let _ = weak.update(cx, |this, ctx| {
+                            this.backend.update(ctx, |b, bcx| {
+                                if let Some(p) = b.preview.as_mut() {
+                                    if let Some(gc) = p.groups.iter_mut().find(|g| g.name == n) {
+                                        gc.active = v;
+                                        bcx.notify();
+                                    }
                                 }
-                            }
+                            });
+                            ctx.notify();
                         });
-                        cx.notify();
-                    })),
-            )
-            .child(ico_el)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_bold()
-                    .child(name.to_string()),
-            )
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("conn.member_count", n = member_count).to_string()),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("eye-tip-{name}")))
-                    .tooltip(|_window, cx| {
-                        cx.new(|_| MoonTooltipView::new(t!("conn.show_group").to_string()))
-                            .into()
-                    })
-                    .child(
-                        MoonButton::new(SharedString::from(format!("eye-{name}")))
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .width(34.0)
-                            .label("win")
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                    }
+                }),
+        )
+        .child(ico_el)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_bold()
+                .child(name.to_string()),
+        )
+        .child(
+            div()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(p.text_soft))
+                .child(t!("conn.member_count", n = member_count).to_string()),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("eye-tip-{name}")))
+                .tooltip(|_window, cx| {
+                    cx.new(|_| MoonTooltipView::new(t!("conn.show_group").to_string()))
+                        .into()
+                })
+                .child(
+                    MoonButton::new(SharedString::from(format!("eye-{name}")))
+                        .ghost()
+                        .size(MoonButtonSize::Micro)
+                        .width(34.0)
+                        .label("win")
+                        .on_click({
+                            let weak = weak.clone();
+                            move |_, _, cx| {
                                 let n = nm_eye.clone();
-                                this.backend.update(cx, |b, bcx| {
-                                    b.show_group_request.push(n);
-                                    bcx.notify();
+                                let _ = weak.update(cx, |this, ctx| {
+                                    this.backend.update(ctx, |b, bcx| {
+                                        b.show_group_request.push(n);
+                                        bcx.notify();
+                                    });
                                 });
-                            }))
-                            .render(),
-                    ),
-            )
-            .child(
-                MoonButton::new(SharedString::from(format!("pick-{name}")))
-                    .outline()
-                    .size(MoonButtonSize::Micro)
-                    .width(54.0)
-                    .label(t!("conn.icon_btn").to_string())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.picking = Some(nm_pick.clone());
-                        cx.notify();
-                    }))
-                    .render(),
-            )
-            .child(
-                MoonButton::new(SharedString::from(format!("addgrp-{name}")))
-                    .outline()
-                    .size(MoonButtonSize::Micro)
-                    .width(56.0)
-                    .label(format!("+ {}", t!("conn.add_core_short")))
-                    .on_click(
-                        cx.listener(move |this, _, w, cx| this.add_server(nm_add.clone(), w, cx)),
-                    )
-                    .render(),
-            )
-    }
+                            }
+                        })
+                        .render(),
+                ),
+        )
+        .child(popover)
+        .child(
+            MoonButton::new(SharedString::from(format!("addgrp-{name}")))
+                .outline()
+                .size(MoonButtonSize::Micro)
+                .width(56.0)
+                .label(format!("+ {}", t!("conn.add_core_short")))
+                .on_click({
+                    let weak = weak.clone();
+                    move |_, window, cx| {
+                        let n = nm_add.clone();
+                        let _ = weak.update(cx, |this, ctx| this.add_server(n, window, ctx));
+                    }
+                })
+                .render(),
+        )
+}
 
-    /// Render a compact pending-core or exchange subsection above its editable rows.
-    fn subsection_header_row(
-        id: SharedString,
-        name: String,
-        member_count: usize,
-        highlighted: bool,
-        p: MoonPalette,
-        cx: &App,
-    ) -> impl IntoElement {
-        h_flex()
-            .id(id)
-            .w_full()
-            .gap_2()
-            .items_center()
-            .pl(px(20.0))
-            .pr_1()
-            .py_0p5()
-            .child(
-                div()
-                    .w(px(6.0))
-                    .h(px(6.0))
-                    .rounded_full()
-                    .bg(rgb(if highlighted { p.accent } else { p.text_soft })),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_bold()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(if highlighted { p.text } else { p.text_soft }))
-                    .child(name),
-            )
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("conn.member_count", n = member_count).to_string()),
-            )
-    }
-
-    /// Build the selected group's icon-picker header and scrollable icon grid.
-    ///
-    /// Clicking an icon assigns it and closes the picker. The two rows are returned separately so
-    /// they can be inserted into the tree without a wrapper container.
-    fn icon_picker_rows(
-        &mut self,
-        name: &str,
-        pick_ids: &[u32],
-        icon_tex: &HashMap<u32, Option<Arc<RenderImage>>>,
-        p: MoonPalette,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let mut grid = h_flex().w_full().flex_wrap().gap_1();
-        for id in pick_ids.iter().copied() {
-            let cell: AnyElement = match icon_tex.get(&id).and_then(|t| t.clone()) {
-                Some(arc) => img(arc)
-                    .w(design::ui_px(cx, 22.0))
-                    .h(design::ui_px(cx, 22.0))
-                    .into_any_element(),
-                None => continue,
-            };
-            let nm = name.to_string();
-            grid = grid.child(
-                div()
-                    .id(SharedString::from(format!("ico-{id}")))
-                    .p_0p5()
-                    .cursor_pointer()
-                    .rounded(design::r_button(cx))
-                    .hover(move |s| s.bg(rgb(p.panel_high)))
-                    .child(cell)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let n = nm.clone();
-                        this.backend.update(cx, |b, bcx| {
+/// Build one group's icon-picker grid, as the content of its anchored [`MoonPopover`].
+///
+/// Built only while its group's picker is open (the caller gates this): a 220px scrolling grid of
+/// every icon is real per-frame cost that a closed picker must not pay, the same mistake the feed
+/// dropdown's items made before Phase A.
+///
+/// Args:
+///     weak: Weak callback owner the icon click closures close over.
+///     name: The owning group's name, the click target for an icon assignment.
+///     pick_ids: Every pickable icon id.
+///     icon_tex: Preloaded icon textures, keyed by id.
+///     p: Active palette.
+///     cx: Application context.
+///
+/// Returns:
+///     The popover body containing the icon selector and its close control.
+fn icon_picker_grid(
+    weak: &WeakEntity<SettingsView>,
+    name: &str,
+    pick_ids: &[u32],
+    icon_tex: &HashMap<u32, Option<Arc<RenderImage>>>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let mut grid = h_flex().w_full().flex_wrap().gap_1();
+    for id in pick_ids.iter().copied() {
+        let cell: AnyElement = match icon_tex.get(&id).and_then(|t| t.clone()) {
+            Some(arc) => img(arc)
+                .w(design::ui_px(cx, 22.0))
+                .h(design::ui_px(cx, 22.0))
+                .into_any_element(),
+            None => continue,
+        };
+        let nm = name.to_string();
+        let weak_ico = weak.clone();
+        grid = grid.child(
+            div()
+                .id(SharedString::from(format!("ico-{id}")))
+                .p_0p5()
+                .cursor_pointer()
+                .rounded(design::r_button(cx))
+                .hover(move |s| s.bg(rgb(p.panel_high)))
+                .child(cell)
+                .on_click(move |_, _, cx| {
+                    let n = nm.clone();
+                    let _ = weak_ico.update(cx, |this, ctx| {
+                        this.backend.update(ctx, |b, bcx| {
                             if let Some(p) = b.preview.as_mut() {
                                 if let Some(g) = p.groups.iter_mut().find(|g| g.name == n) {
                                     g.icon = id;
@@ -274,16 +355,20 @@ impl SettingsView {
                             }
                         });
                         this.picking = None;
-                        cx.notify();
-                    })),
-            );
-        }
-        vec![
+                        ctx.notify();
+                    });
+                }),
+        );
+    }
+    let weak_close = weak.clone();
+    v_flex()
+        .id("icon-picker")
+        .gap_1()
+        .child(
             h_flex()
                 .w_full()
                 .items_center()
                 .gap_1()
-                .pl(px(20.0))
                 .child(
                     div()
                         .flex_1()
@@ -297,23 +382,26 @@ impl SettingsView {
                         .size(MoonButtonSize::Micro)
                         .width(24.0)
                         .label("x")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.picking = None;
-                            cx.notify();
-                        }))
+                        .on_click(move |_, _, cx| {
+                            let _ = weak_close.update(cx, |this, ctx| {
+                                this.picking = None;
+                                ctx.notify();
+                            });
+                        })
                         .render(),
-                )
-                .into_any_element(),
+                ),
+        )
+        .child(
             div()
-                .id("icon-picker")
-                .pl(px(20.0))
+                .id("icon-picker-grid")
                 .max_h(px(220.0))
                 .overflow_y_scroll()
-                .child(grid)
-                .into_any_element(),
-        ]
-    }
+                .child(grid),
+        )
+        .into_any_element()
+}
 
+impl SettingsView {
     /// Render the market-data source dropdown ported from the egui ComboBox.
     fn market_src_selector(&self, cx: &App) -> impl IntoElement {
         h_flex()
@@ -370,24 +458,27 @@ impl SettingsView {
             )
     }
 
-    /// Render the Connections tab with selectors, pending cores, and the group/exchange tree.
+    /// Render the Connections tab with selectors, pending cores, and the virtualized group/exchange
+    /// tree.
     ///
     /// Args:
     ///     cx: Settings context used to read the draft, live status, and active theme.
     ///
     /// Returns:
-    ///     The complete Connections tab.
+    ///     The complete Connections tab: fixed selectors and headers above a virtualized core list
+    ///     that owns the tab's only scroll (`settings/render.rs` gives Connections a non-scrolling
+    ///     bounded body for exactly this reason).
     pub(in crate::settings) fn connections_tab(
         &mut self,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::SETTINGS_CONN_TAB_BUILD);
         let p = MoonPalette::active(cx);
-        // Snapshot live core status for the status dots.
+        // Snapshot live core status for the status dots. The dot's COLOUR is the only thing every
+        // row needs on every frame, so this one map is the only one built here. The tooltip's
+        // VERDICT needs the retained fault and the startup snapshot too, but only for the single
+        // dot under the pointer -- so it reads those from the live store at hover time instead.
         let status = self.backend.read(cx).session.status_map();
-        // The dot's COLOUR comes from the status; its tooltip comes from the verdict, which needs
-        // the retained fault and the startup snapshot beside it. Read all three in one borrow.
-        let faults = self.backend.read(cx).session.fault_map();
-        let startups = self.backend.read(cx).session.startup_map();
         // Snapshot server row metadata and groups as (name, active, icon).
         // Rank from the draft so a pending sort-mode change is visible before it is applied.
         let (order, servers, mut groups) = {
@@ -413,7 +504,8 @@ impl SettingsView {
         // Keep group branches in stable name order.
         groups.sort_by(|a, b| a.0.cmp(&b.0));
         // Preload group icons and, while the picker is open, every picker icon. `texture()` needs
-        // `&mut self.icons`, so load before building UI and then read from the map.
+        // `&mut self.icons`, so load before building UI and then read from the map -- the row
+        // factory below only ever gets `&App` and could not call it itself.
         if self
             .picking
             .as_ref()
@@ -438,119 +530,175 @@ impl SettingsView {
                 .entry(*id)
                 .or_insert_with(|| self.icons.texture(*id));
         }
+        let icon_tex = Rc::new(icon_tex);
+        let pick_ids = Rc::new(pick_ids);
 
-        // Build one tree-like list: pending rows come first, then each group and exchange branch.
-        // It is not expandable; indentation expresses hierarchy. The column header uses the same
-        // left inset as leaves so core columns stay aligned.
-        let mut list_col = v_flex()
-            .w_full()
-            .min_w_0()
-            .gap_1()
-            .child(Self::hint_label(
-                "h-section",
-                t!("conn.groups_panel_heading").to_string(),
-                t!("conn.groups_panel_tip").to_string().into(),
-                p,
-            ))
-            .child(Self::conn_col_head_row(p, cx));
+        // Flatten pending rows and every group's exchange sections into the sequence the virtual
+        // list draws. Pure and GPUI-free (`entries.rs`); localized captions are resolved here,
+        // where `t!` is available, and threaded in.
+        let pending_caption = t!("conn.pending_cores").to_string();
+        let labels = EntryLabels {
+            pending: &pending_caption,
+            exchange: &|venue| crate::controls::venue_section_label(venue),
+        };
+        let entries = Rc::new(flatten_entries(&servers, &groups, &order, labels));
+        self.conn_entries = entries.clone();
+        // A row the user is EDITING must stay on screen: a keystroke can re-rank the list and carry
+        // that row out of the mounted range, where the eviction policy would blur it and the field
+        // would accept one character and refuse the rest. Scrolling here, before the list lays out,
+        // means the range the eviction handler later sees already contains the row.
+        self.follow_edited_conn_row();
 
-        // Keep every newly added row directly below the column header until Save assigns its uid.
-        // Ranking still goes through CoreOrder, but no persisted group can precede this section.
-        let mut pending = pending_server_indices(&servers);
-        order.sort_by(&mut pending, |index| servers[*index].0);
-        if !pending.is_empty() {
-            list_col = list_col.child(Self::subsection_header_row(
-                "pending-cores".into(),
-                t!("conn.pending_cores").to_string(),
-                pending.len(),
-                true,
-                p,
-                cx,
-            ));
-            for i in pending {
-                let (id, _, srv_active, _, _) = &servers[i];
-                if let Some(row) = self.conn.get(i) {
-                    let st = status.get(id).cloned();
-                    let diag = conn_diagnosis(&st, faults.get(id), startups.get(id));
-                    list_col = list_col.child(
-                        div()
-                            .ml(px(8.0))
-                            .pl(px(11.0))
-                            .border_l_1()
-                            .border_color(rgb(p.border))
-                            .child(self.server_row(cx, i, row, *id, *srv_active, st, diag)),
-                    );
-                }
-            }
-        }
+        let row_count = entries.len();
+        let row_h = conn_row_h_value(cx);
 
-        // Explain the empty state when no server contributes a group.
-        if groups.is_empty() {
-            list_col = list_col.child(
-                div()
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("conn.no_groups").to_string()),
-            );
-        }
-
-        for (group_index, (name, active, icon)) in groups.iter().enumerate() {
-            let member_count = servers
-                .iter()
-                .filter(|(_, _, _, group, _)| group == name)
-                .count();
-            let ico_el: AnyElement = match icon_tex.get(icon).and_then(|t| t.clone()) {
-                Some(arc) => img(arc)
-                    .w(design::ui_px(cx, 20.0))
-                    .h(design::ui_px(cx, 20.0))
-                    .into_any_element(),
-                None => div()
-                    .w(design::ui_px(cx, 20.0))
-                    .h(design::ui_px(cx, 20.0))
-                    .into_any_element(),
-            };
-            list_col =
-                list_col.child(self.group_header_row(name, *active, ico_el, member_count, p, cx));
-            // Render exchange branches with their core leaves. Keep inactive cores at their
-            // canonical position; the status dot shows state. Each member index is also the index
-            // in `preview.servers` used by row mutations.
-            for (exchange_index, (venue, mut members)) in
-                exchange_sections(&servers, name).into_iter().enumerate()
-            {
-                let identified = venue.is_some();
-                let exchange_name = crate::controls::venue_section_label(venue);
-                list_col = list_col.child(Self::subsection_header_row(
-                    SharedString::from(format!("exchange-{group_index}-{exchange_index}")),
-                    exchange_name,
-                    members.len(),
-                    identified,
-                    p,
-                    cx,
-                ));
-                order.sort_by(&mut members, |index| servers[*index].0);
-                for i in members {
-                    let (id, _, srv_active, _, _) = &servers[i];
-                    if let Some(row) = self.conn.get(i) {
-                        let st = status.get(id).cloned();
-                        let diag = conn_diagnosis(&st, faults.get(id), startups.get(id));
-                        list_col = list_col.child(
-                            div()
-                                .ml(px(8.0))
-                                .pl(px(11.0))
-                                .border_l_1()
-                                .border_color(rgb(p.border))
-                                .child(self.server_row(cx, i, row, *id, *srv_active, st, diag)),
-                        );
+        let list: AnyElement = if row_count == 0 {
+            // No servers at all: nothing to virtualize, and no group or pending heading to draw.
+            div()
+                .text_color(rgb(p.text_soft))
+                .child(t!("conn.no_groups").to_string())
+                .into_any_element()
+        } else {
+            let factory_weak = cx.entity().downgrade();
+            let factory_entries = entries;
+            let factory_icon_tex = icon_tex;
+            let factory_pick_ids = pick_ids;
+            let factory_picking = picking;
+            let factory_status = status;
+            // WEAK, and deliberately NOT `cx.processor`: that helper captures `self.entity()` --
+            // a STRONG handle (`moon-gpui/src/app/context.rs:268`) -- and `MoonVirtualList` stores
+            // this callback inside the rendered element. A strong handle there closes the same
+            // `SettingsView -> element -> closure -> SettingsView` cycle the row factory above is
+            // written weakly to avoid, and the cost is not merely a leaked allocation: the window
+            // never drops, so `on_release` never runs, the unsaved draft is never discarded, and
+            // the previewed theme is never restored.
+            let range_weak = cx.entity().downgrade();
+            let on_visible_range =
+                move |range: Range<usize>, window: &mut Window, app: &mut App| {
+                    let _ = range_weak.update(app, |this, cx| {
+                        this.on_conn_visible_range(range, window, cx);
+                    });
+                };
+            MoonVirtualList::new(
+                "conn-core-list",
+                row_count,
+                row_h,
+                move |ix, _window, app| {
+                    let Some(entry) = factory_entries.get(ix) else {
+                        return div().into_any_element();
+                    };
+                    match entry {
+                        ConnEntry::PendingHeader {
+                            caption,
+                            member_count,
+                        } => subsection_header_row(
+                            "pending-cores".into(),
+                            caption.clone(),
+                            *member_count,
+                            true,
+                            p,
+                            app,
+                        )
+                        .into_any_element(),
+                        ConnEntry::GroupHeader {
+                            name,
+                            active,
+                            icon,
+                            member_count,
+                        } => {
+                            let ico_el: AnyElement =
+                                match factory_icon_tex.get(icon).and_then(|t| t.clone()) {
+                                    Some(arc) => img(arc)
+                                        .w(design::ui_px(app, 20.0))
+                                        .h(design::ui_px(app, 20.0))
+                                        .into_any_element(),
+                                    None => div()
+                                        .w(design::ui_px(app, 20.0))
+                                        .h(design::ui_px(app, 20.0))
+                                        .into_any_element(),
+                                };
+                            let open = factory_picking.as_deref() == Some(name.as_str());
+                            group_header_row(
+                                &factory_weak,
+                                name,
+                                *active,
+                                ico_el,
+                                *member_count,
+                                &factory_pick_ids,
+                                &factory_icon_tex,
+                                open,
+                                p,
+                                app,
+                            )
+                            .into_any_element()
+                        }
+                        ConnEntry::ExchangeHeader {
+                            group_index,
+                            exchange_index,
+                            caption,
+                            member_count,
+                            identified,
+                        } => subsection_header_row(
+                            SharedString::from(format!("exchange-{group_index}-{exchange_index}")),
+                            caption.clone(),
+                            *member_count,
+                            *identified,
+                            p,
+                            app,
+                        )
+                        .into_any_element(),
+                        ConnEntry::CoreRow {
+                            draft_index,
+                            core_id,
+                            active,
+                            indented,
+                            ..
+                        } => {
+                            let Some(view) = factory_weak.upgrade() else {
+                                return div().into_any_element();
+                            };
+                            let view_ref = view.read(app);
+                            let Some(row) = view_ref.conn.get(*draft_index) else {
+                                return div().into_any_element();
+                            };
+                            let st = factory_status.get(core_id).cloned();
+                            let built = server_row(
+                                &view_ref,
+                                &factory_weak,
+                                row,
+                                *draft_index,
+                                *core_id,
+                                *active,
+                                st,
+                                app,
+                            );
+                            if *indented {
+                                div()
+                                    .ml(px(8.0))
+                                    .pl(px(11.0))
+                                    .border_l_1()
+                                    .border_color(rgb(p.border))
+                                    .child(built)
+                                    .into_any_element()
+                            } else {
+                                built
+                            }
+                        }
                     }
-                }
-            }
-            // Insert the icon picker directly below its selected group.
-            if picking.as_deref() == Some(name.as_str()) {
-                list_col =
-                    list_col.children(self.icon_picker_rows(name, &pick_ids, &icon_tex, p, cx));
-            }
-        }
+                },
+            )
+            .track_scroll(&self.conn_scroll)
+            .on_visible_range(on_visible_range)
+            .surface(false)
+            .border(false)
+            .radius(0.0)
+            .scrollbar_visibility(MoonScrollbarVisibility::Always)
+            .into_any_element()
+        };
 
         v_flex()
+            .flex_1()
+            .min_h(px(0.0))
             .w_full()
             .gap_2()
             // Market-data source dropdown ported from the egui ComboBox.
@@ -590,6 +738,13 @@ impl SettingsView {
                             ),
                     ),
             )
-            .child(list_col)
+            .child(Self::hint_label(
+                "h-section",
+                t!("conn.groups_panel_heading").to_string(),
+                t!("conn.groups_panel_tip").to_string().into(),
+                p,
+            ))
+            .child(Self::conn_col_head_row(p, cx))
+            .child(div().flex_1().min_h(px(0.0)).w_full().child(list))
     }
 }
