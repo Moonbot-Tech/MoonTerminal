@@ -67,7 +67,7 @@ const LINE_BOX: f32 = 1.3;
 ///
 /// The height resolves as `fit_height(base, line, pad) = max(ui(base), line_height(line) +
 /// 2 * ui(pad))`, and `line_height` is ADDITIVE in the Font-slider delta — so the trigger is 26px at
-/// delta 0, 28px at the shipped +2 and 32px at +6, past `CTRL_H` exactly where the goal says nothing
+/// delta 0, 29px at the shipped +3 and 32px at +6, past `CTRL_H` exactly where the goal says nothing
 /// may clip. Deriving the floor from MoonUI's own contract rather than from a generic text ratio is
 /// what makes the band track the CONTROL instead of merely the text beside it.
 const ACTION_H: f32 = 26.0;
@@ -78,7 +78,7 @@ const ACTION_PAD_Y: f32 = (ACTION_H - ACTION_LINE_H) * 0.5;
 ///
 /// The popup mixes two scales that MoonUI moves independently: its captions and values are raw
 /// GPUI text on the FONT scale (`design::t_caption` / `design::t_body`, which grow with the Font
-/// slider AND its `ui_font_delta`, +2 at the shipped default), while its `MoonCheckbox`,
+/// slider AND its `ui_font_delta`, +3 at the shipped default), while its `MoonCheckbox`,
 /// `MoonButton` steppers and the ▶ box are MoonUI widgets on the UI scale. A column sized on one
 /// of the two is wrong whenever the other is larger: on the UI scale the text outgrew its column
 /// at the stock config, and on the font scale a widened UI would push the widgets out.

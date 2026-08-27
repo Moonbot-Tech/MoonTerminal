@@ -51,6 +51,10 @@ pub(super) struct CoreStatusRow {
     /// Whether this core's key is inside the configured warning horizon, decided by the engine so
     /// the cell mark and the episode agree.
     pub(super) api_warn: bool,
+    /// Whether this core's key is inside the purely visual notice horizon — colour only, no
+    /// episode, no sound. Decided from the same classified state the cell prints, so the number
+    /// and its colour cannot describe different keys.
+    pub(super) api_notice: bool,
     /// MoonBot build most recently reported for this core, or `None`.
     ///
     /// `None` is UNINTERPRETABLE and must be rendered as a plain absence: the store clears the
@@ -60,6 +64,10 @@ pub(super) struct CoreStatusRow {
     /// an age claim; the one age claim the terminal makes is `Diagnosis::legacy_core`, which is
     /// about a missing PROTOCOL version and lives in the fault tooltip.
     pub(super) server_version: Option<u32>,
+    /// The newest build seen across the whole fleet, when THIS core is behind it; `None` when it is
+    /// current, or when it reported nothing (an absence is never an age claim -- see
+    /// `server_version`).
+    pub(super) version_behind: Option<u32>,
 }
 
 /// What is known about one core's exchange API key, as of a given moment.
@@ -89,6 +97,11 @@ pub(super) enum ApiKeyState {
 /// live, with `known == true`): too round to be a real date, most likely a core-side stand-in, and
 /// rendering it as "1000" would present that constant as a measurement.
 const API_PERPETUAL_DAYS: i32 = 365;
+
+/// Purely VISUAL horizon: a key inside it colours, but opens no episode, plays no sound and
+/// creates no setting. NOT a threshold the engine ever sees -- `WarnTuning::api_days` remains the
+/// one alert threshold. 21 days is the horizon the user named.
+pub(super) const API_NOTICE_DAYS: i32 = 21;
 
 impl ApiKeyState {
     /// Classify one core's stored answer against the current clock.
@@ -149,6 +162,18 @@ impl ApiKeyState {
     /// Whether the key is already past its date.
     pub(super) fn is_expired(self) -> bool {
         self.days().is_some_and(|days| days < 0)
+    }
+
+    /// Whether there is a real day count and it is STRICTLY inside the notice horizon.
+    ///
+    /// Strict `<`, not `<=`: `days_left_at` FLOORS, so a displayed `21` means at least 21 whole
+    /// days remain, and the user asked for "less than 21 days". A cell reading exactly 21 is
+    /// therefore outside the band and stays neutral; 20 is the first coloured value.
+    ///
+    /// `Unknown` and `Perpetual` have no number and are never inside anything -- the "never fire
+    /// on an unknown fact" guarantee, inherited from `days()` rather than restated.
+    pub(super) fn within_notice(self) -> bool {
+        self.days().is_some_and(|days| days < API_NOTICE_DAYS)
     }
 }
 
@@ -314,6 +339,10 @@ pub(super) struct ServerStatusGroup {
     /// API-key warning: any core on this server has a key inside the warning horizon. The key
     /// belongs to the core, so the server row only carries the attention state, like ping.
     pub(super) api_warn: bool,
+    /// Whether any core on this server has a key inside the purely visual notice horizon. Decided
+    /// together with `api_warn` from the same cores so the two halves of the API aggregate cannot
+    /// drift apart.
+    pub(super) api_notice: bool,
     /// The most urgent key among this server's cores — the one the server row shows and sorts by.
     /// A real day count wins whenever any core has one; `Unknown` when none does and at least one
     /// core is unaccounted for; `Perpetual` only when every core is unlimited.
@@ -321,6 +350,17 @@ pub(super) struct ServerStatusGroup {
     /// What this server's cores agree on about their MoonBot build — see [`group_version`]. A
     /// collapsed group shows this, so it must never speak for a core that reported nothing.
     pub(super) version: GroupVersion,
+    /// `(this server's agreed build, the fleet's newest)`, when EVERY core here agrees on a build
+    /// and that build is behind the fleet's newest. `Mixed` and `Absent` stay neutral: a collapsed
+    /// row may only be marked about the build it actually displays, and only a `Uniform` group has
+    /// one.
+    ///
+    /// BOTH builds, as one indivisible value, for the same reason [`CoreStatusRow::version_behind`]
+    /// carries the target rather than a bare `bool`: the hover names both numbers, and a shape that
+    /// held only the newest would force the view to re-derive "which build is this group on" out of
+    /// [`Self::version`] -- re-stating the `Uniform`-only rule in a second place, where it could
+    /// drift from this one.
+    pub(super) version_behind: Option<(u32, u32)>,
     /// What this server's cores agree on about their measured clock offset — see
     /// [`group_tz_offset`]. A collapsed group shows this, so it must never assert a clock on
     /// behalf of a core nobody measured.
@@ -367,11 +407,17 @@ impl ServerStatusGroup {
 ///
 /// Args:
 ///     rows: Ordered core snapshots in the current panel scope.
+///     fleet_newest: The newest MoonBot build currently reported anywhere in the fleet, from the
+///         STORE rather than these (possibly scoped) rows, so a group's behind-ness never depends
+///         on which tab is open.
 ///
 /// Returns:
 ///     Attention servers before Online servers, with stable group and core order inside each
 ///     partition.
-pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup> {
+pub(super) fn aggregate_servers(
+    rows: &[CoreStatusRow],
+    fleet_newest: Option<u32>,
+) -> Vec<ServerStatusGroup> {
     let mut groups = Vec::<ServerStatusGroup>::new();
     let mut positions = HashMap::<ServerKey, usize>::new();
 
@@ -388,8 +434,10 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 ping_warn: false,
                 exch_warn: false,
                 api_warn: false,
+                api_notice: false,
                 api_key: ApiKeyState::Unknown,
                 version: GroupVersion::Absent,
+                version_behind: None,
                 tz_offset: TzOffsetGroup::Absent,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
@@ -410,7 +458,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
     }
 
     for group in &mut groups {
-        finish_group(group);
+        finish_group(group, fleet_newest);
         group.cores.sort_by(|a, b| a.name.cmp(&b.name));
     }
     // Order servers by name: address servers by IP (which matches the `Server N` ordinal), then
@@ -486,10 +534,11 @@ pub(super) fn ordered_flat_rows(rows: &[CoreStatusRow]) -> Vec<CoreStatusRow> {
 ///
 /// Args:
 ///     group: Partially built group whose `cores` collection is complete.
+///     fleet_newest: The newest MoonBot build currently reported anywhere in the fleet.
 ///
 /// Returns:
 ///     Nothing; summary fields are updated in place.
-fn finish_group(group: &mut ServerStatusGroup) {
+fn finish_group(group: &mut ServerStatusGroup, fleet_newest: Option<u32>) {
     group.ready_count = group
         .cores
         .iter()
@@ -503,12 +552,23 @@ fn finish_group(group: &mut ServerStatusGroup) {
     group.logical_cpu_count =
         freshest_metric(&group.cores, |sys| sys.logical_cpu_count).map(|(_, value)| value);
 
-    // Both halves of the API-key aggregate derive from the rows this group already holds, so they
-    // are decided together — the displayed key and the flag beside it cannot drift apart.
+    // All three halves of the API-key aggregate derive from the rows this group already holds, so
+    // they are decided together — the displayed key and the flags beside it cannot drift apart.
     group.api_key = soonest_key(&group.cores);
     group.api_warn = group.cores.iter().any(|core| core.api_warn);
+    group.api_notice = group.cores.iter().any(|core| core.api_notice);
     group.startup = group_startup(&group.cores);
     group.version = group_version(&group.cores);
+    // A collapsed row may only be marked about the build it actually DISPLAYS. `Mixed` prints an
+    // ellipsis and `Absent` a dash: both are "no answer", and colouring either would turn a
+    // fact this row cannot state into an accusation -- the same discipline `version_slot` already
+    // applies to `text_muted`. Only a group whose cores all agree has a build to be behind WITH.
+    group.version_behind = match group.version {
+        GroupVersion::Uniform(have) => fleet_newest
+            .filter(|newest| have < *newest)
+            .map(|newest| (have, newest)),
+        GroupVersion::Mixed | GroupVersion::Absent => None,
+    };
     group.tz_offset = group_tz_offset(&group.cores);
 
     let mut has_process_memory = false;

@@ -192,6 +192,23 @@ core_status.col.version:
   ru: "MoonBot"
   en: "MoonBot"
   es: "MoonBot"
+# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+# across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
+# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# `util::fmt::core_build` at the call site.
+core_status.version_behind:
+  ru: "Сборка MoonBot устарела: %{have}. Самая новая среди ваших ядер — %{newest}"
+  en: "Outdated MoonBot build: %{have}. The newest across your cores is %{newest}"
+  es: "Compilacion de MoonBot desactualizada: %{have}. La mas reciente entre tus nucleos es %{newest}"
+# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
+# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
+# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
+# has none to be behind with), which is why this string must not tell the user to expand anything:
+# expanding a Uniform group reveals N cores all reporting the number they can already see.
+core_status.version_behind_group:
+  ru: "Все ядра этого сервера на сборке %{have}, а новее уже есть: %{newest}"
+  en: "Every core on this server runs %{have}; a newer build exists: %{newest}"
+  es: "Todos los nucleos de este servidor usan %{have}; ya existe una mas reciente: %{newest}"
 core_status.col.api_key:
   ru: "АПИ (дн)"
   en: "API (d)"

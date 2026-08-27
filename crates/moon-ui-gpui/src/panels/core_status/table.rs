@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use super::model::ServerKey;
 use super::ordering::{FlatLine, FlatSection};
 use super::presentation::{
-    api_expiry_text, connection_presentation, memory_u16, percent, ping, version_text,
+    api_expiry_level, api_expiry_text, connection_presentation, level_color, memory_u16, percent,
+    ping, version_behind_tooltip, version_color, version_text,
 };
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
 use super::time_offset::{tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip};
@@ -134,7 +135,7 @@ pub(super) fn core_status_table(
                 // so which column sits leftmost stopped mattering.
                 section_row(section, logos_ready, sorted, section_columns.len(), p, app)
             }
-            FlatLine::Core(row) => core_status_row(&table_rows[*row], &server_names),
+            FlatLine::Core(row) => core_status_row(&table_rows[*row], &server_names, p),
         })
         .columns(columns())
         .state(state)
@@ -152,10 +153,15 @@ pub(super) fn core_status_table(
 /// Args:
 ///     r: Cached core snapshot.
 ///     server_names: Server display name per server key.
+///     p: Active Moon palette, for the API and MoonBot cells' colour.
 ///
 /// Returns:
 ///     One row in column order, with server, core, connection, build, and telemetry cells.
-fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>) -> MoonDataRow {
+fn core_status_row(
+    r: &CoreStatusRow,
+    server_names: &HashMap<ServerKey, String>,
+    p: MoonPalette,
+) -> MoonDataRow {
     let sys = &r.sys;
     let server = server_names
         .get(&ServerKey::for_row(r))
@@ -168,7 +174,7 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(server),
         MoonDataCell::text(r.name.clone()),
         MoonDataCell::element(status_cell(r, diag.as_ref())),
-        MoonDataCell::text(version_text(r.server_version)),
+        MoonDataCell::element(version_hover_cell(r, p)),
         MoonDataCell::text(percent(sys.process_cpu_percent)),
         MoonDataCell::text(percent(sys.system_cpu_percent)),
         MoonDataCell::text(memory_u16(sys.used_memory_mb)),
@@ -176,7 +182,10 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(ping(sys.round_trip_ms)),
         MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
         MoonDataCell::text(count(sys.logical_cpu_count)),
-        MoonDataCell::text(api_expiry_text(r.api_key)),
+        MoonDataCell::text(api_expiry_text(r.api_key)).text_color(level_color(
+            api_expiry_level(r.api_key, r.api_warn, r.api_notice),
+            p,
+        )),
         MoonDataCell::element(startup_hover_cell(r)),
         MoonDataCell::element(tz_offset_hover_cell(r)),
     ])
@@ -331,6 +340,34 @@ fn status_cell(r: &CoreStatusRow, diag: Option<&Diagnosis>) -> Stateful<Div> {
         ))),
         None => cell,
     }
+}
+
+/// The MoonBot build cell, carrying [`super::presentation::notice_color`] when this core is
+/// behind the fleet's newest reported build, with the hover naming both builds. No warning
+/// treatment beyond the colour: no triangle, no icon column, same as the by-IP tree's
+/// `version_slot`.
+///
+/// Args:
+///     r: The row being rendered.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     The cell element.
+fn version_hover_cell(r: &CoreStatusRow, p: MoonPalette) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("cs-version-{}", r.id)))
+        .text_color(rgb(version_color(
+            r.version_behind.is_some(),
+            r.server_version.is_some(),
+            p,
+        )))
+        .child(version_text(r.server_version))
+        .when_some(r.version_behind, |c, newest| {
+            c.tooltip(crate::panels::common::text_tooltip(version_behind_tooltip(
+                r.server_version,
+                newest,
+            )))
+        })
 }
 
 /// The startup cell, with the same structured hover the by-IP tree already shows.

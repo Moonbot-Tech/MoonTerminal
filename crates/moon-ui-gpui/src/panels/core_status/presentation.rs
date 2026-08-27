@@ -205,17 +205,34 @@ pub(super) fn tz_offset_group_text(group: TzOffsetGroup) -> String {
 /// let the number stay grey under a lit warning triangle the moment the threshold is not the
 /// default, the exact disagreement `lat_level` exists to prevent for the ping axes.
 ///
+/// The panel-side `notice` band IS a second set of day steps, and that is legitimate rather than a
+/// repeat of the same mistake: `warn` is tested BEFORE `notice` and returns `Warning`
+/// unconditionally, so the banned failure mode (`warn` true but the colour stays grey) is
+/// unreachable no matter what the two horizons are — the notice branch is never even reached while
+/// `warn` holds. That is a stronger guarantee than widening the notice horizon to match the
+/// configured one would have bought, and it needs neither the configured horizon nor a
+/// shared-surface widening to hold.
+///
 /// Args:
 ///     state: The key's state as classified for this frame.
 ///     warn: Whether the engine currently warns about this key.
+///     notice: Whether the key is inside the purely visual notice horizon.
 ///
 /// Returns:
-///     Red once the key is past its date, yellow while the engine warns, else no colour.
-pub(super) fn api_expiry_level(state: ApiKeyState, warn: bool) -> LoadLevel {
+///     Red once the key is past its date, yellow while the engine warns, blue inside the notice
+///     horizon, else no colour. Always `Normal` when there is no day count to speak of — an unknown
+///     fact must never render as a problem, whatever either flag claims.
+pub(super) fn api_expiry_level(state: ApiKeyState, warn: bool, notice: bool) -> LoadLevel {
     if state.is_expired() {
-        LoadLevel::Critical
-    } else if warn {
+        return LoadLevel::Critical;
+    }
+    if state.days().is_none() {
+        return LoadLevel::Normal;
+    }
+    if warn {
         LoadLevel::Warning
+    } else if notice {
+        LoadLevel::Notice
     } else {
         LoadLevel::Normal
     }
@@ -278,13 +295,15 @@ pub(super) fn memory_free(process_mem_mb: Option<u64>, free_mb: Option<u16>) -> 
 
 /// Operational load state of a core along one axis (CPU load or free memory).
 ///
-/// Ordered `Normal < Warning < Critical`, so severities combine with `max`. Exposed for reuse:
-/// today it colors the metric numbers and drives the warnings sort; later it can drive core badges
-/// and a tab indicator without recomputing the thresholds.
+/// Ordered `Normal < Notice < Warning < Critical`, so severities combine with `max`. Exposed for
+/// reuse: today it colors the metric numbers and drives the warnings sort; later it can drive core
+/// badges and a tab indicator without recomputing the thresholds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum LoadLevel {
     /// Comfortable headroom.
     Normal,
+    /// Purely visual "look at this" mark: colour only, no episode, no sound.
+    Notice,
     /// Getting tight.
     Warning,
     /// Near exhaustion.
@@ -346,9 +365,98 @@ pub(super) fn free_mem_level(process_mem_mb: Option<u64>, free_mb: Option<u16>) 
 pub(super) fn level_color(level: LoadLevel, palette: MoonPalette) -> u32 {
     match level {
         LoadLevel::Normal => palette.text_soft,
+        LoadLevel::Notice => notice_color(palette),
         LoadLevel::Warning => palette.yellow,
         LoadLevel::Critical => palette.red,
     }
+}
+
+/// The panel's colour-only "look at this" mark, shared by the API notice band and the
+/// behind-the-fleet build. NOT a triangle: a triangle means an engine episode.
+///
+/// BLUE, deliberately, and NOT amber. Amber already carries one meaning throughout this panel --
+/// something is wrong RIGHT NOW -- across five call sites: the dock-tab warning badge (`mod.rs`),
+/// the `Degraded` connectivity dot and the dropout triangle (`server_view.rs`), a core still
+/// starting (`StartupCell::Progress`), and the sustained-warning triangle in [`metric_cell`]. A
+/// notice is the opposite claim: no episode, no sound, nothing broken yet. Painting it amber too
+/// would leave those two meanings separated only by the presence of a small glyph, and a user
+/// scanning 56 rows reads hue long before icon-presence.
+///
+/// It also keeps the tiers apart in the LIGHT theme, where amber (`0xB97824`) and yellow
+/// (`0xB8860B`) are near-identical ochres -- roughly 9 degrees apart in hue at the same lightness
+/// -- so an amber notice beside a yellow alert would have been effectively one colour there. Blue
+/// separates cleanly in both themes.
+///
+/// The resulting ramp reads as one scale: blue = worth knowing, yellow + triangle = the engine is
+/// alerting, red = already expired.
+pub(super) fn notice_color(p: MoonPalette) -> u32 {
+    p.blue
+}
+
+/// Colour for a reported-build cell: [`notice_color`] when this build is behind the fleet's
+/// newest, `text_soft` for a build that is current, `text_muted` for absence or disagreement.
+///
+/// `behind` can only be true where a build was actually reported, so the notice colour can
+/// never paint an absence -- but the order here makes that structural rather than merely true
+/// today.
+///
+/// Args:
+///     behind: Whether this cell's build is behind the fleet's newest reported build.
+///     reported: Whether there is a build to show at all.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     The notice colour when behind, soft text when current, muted text for absence or
+///     disagreement.
+pub(super) fn version_color(behind: bool, reported: bool, p: MoonPalette) -> u32 {
+    if behind {
+        notice_color(p)
+    } else if reported {
+        p.text_soft
+    } else {
+        p.text_muted
+    }
+}
+
+/// Hover text for a per-core reported build that is behind the fleet's newest.
+///
+/// Args:
+///     have: This core's own reported build, when it has one.
+///     newest: The newest build currently reported across the fleet.
+///
+/// Returns:
+///     Localized hover text naming both builds.
+pub(super) fn version_behind_tooltip(have: Option<u32>, newest: u32) -> String {
+    t!(
+        "core_status.version_behind",
+        have = version_text(have),
+        newest = moon_core::util::fmt::core_build(newest)
+    )
+    .to_string()
+}
+
+/// Hover text for a collapsed server row whose cores all agree on a build that is behind the
+/// fleet's newest.
+///
+/// It NAMES the group's own build rather than telling the user to expand the group. A group is
+/// only ever marked when [`GroupVersion::Uniform`] holds -- a `Mixed` group states no build, so it
+/// has none to be behind with -- and expanding a Uniform group therefore reveals N cores all
+/// reporting the number already printed on the collapsed row. "Expand me" is the ELLIPSIS cell's
+/// instruction, and this is not that cell.
+///
+/// Args:
+///     have: The build every core on this server reported.
+///     newest: The newest build currently reported across the fleet.
+///
+/// Returns:
+///     Localized hover text naming both builds.
+pub(super) fn version_behind_group_tooltip(have: u32, newest: u32) -> String {
+    t!(
+        "core_status.version_behind_group",
+        have = moon_core::util::fmt::core_build(have),
+        newest = moon_core::util::fmt::core_build(newest)
+    )
+    .to_string()
 }
 
 #[cfg(test)]
