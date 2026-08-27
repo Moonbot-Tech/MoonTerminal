@@ -711,15 +711,10 @@ impl ChartDataState {
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
-                // A candle-series change from a rebuild or live trade batch fully reuploads the
-                // layer's instance buffer.
-                //
-                // "Only hundreds of rows, so this is inexpensive" is what this comment used to
-                // claim; `candle_upload_len` measures 9 000 to 83 000 rows a second across a
-                // handful of charts, because the revision advances on every LIVE TRADE BATCH and
-                // the whole composed series is re-shipped each time. `candle_upload_us` beside it
-                // is what that costs; both scale with the visible range, so zooming out multiplies
-                // them.
+                // A live trade batch advances the series revision, so on a live market the whole
+                // composed series is re-shipped continuously — not the "hundreds of rows" this
+                // once assumed. What it measures and what it costs: `candle_upload_len` and
+                // `candle_upload_us` in `diag.rs`.
                 if history.candles_changed {
                     let upload_timer = crate::diag::timer();
                     fill_candle_upload(
@@ -742,6 +737,11 @@ impl ChartDataState {
                         candle_tf_ms as f64,
                         &mut pr.volume_samples,
                     );
+                    // `take` hands the buffer away and leaves an empty one to grow again on the
+                    // next revision — tens of ~24 KB alloc/free cycles a second on a live market,
+                    // and part of what the timer above reports. Left alone deliberately: retaining
+                    // it means handing the buffer back OUT of the layer, an API change across three
+                    // backends for a slice of a figure already at 0.14% of wall time.
                     pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
                     crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, upload_timer);
                     pr.last_candle_rev = history.candles_revision;

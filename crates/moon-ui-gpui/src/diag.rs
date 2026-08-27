@@ -108,7 +108,17 @@ diag_counters!(
     // one says what those rows cost. A live trade batch advances the series revision, and the whole
     // composed series is re-shipped on each one — so both numbers scale with the VISIBLE range,
     // and zooming out multiplies them.
+    //
+    // Part of it is the instance vector's own allocation; see the note at the call site.
     CHART_CANDLE_UPLOAD_US => "candle_upload_us",
+    // Candle instances DROPPED because the series outgrew the layer's buffer, per second. The
+    // layer keeps the newest `CANDLE_CAPACITY`; the chart's left then simply has no candles while
+    // the grid and the trades still draw there.
+    //
+    // Zero at every size seen so far. Anything else means the visible range now outruns the
+    // buffer — a fine timeframe zoomed out far is what reaches it — and the number is how many
+    // candles are missing from the left edge.
+    CHART_CANDLE_DROPPED => "candle_dropped",
     // Durable CLOSED-TRADE history reads started per second — a different subject from the three
     // counters above, which measure the LIVE trade buffer. Each one is an SQLite connection to the
     // report replica, and every chart tile now owns a target, so this is what says whether a detect

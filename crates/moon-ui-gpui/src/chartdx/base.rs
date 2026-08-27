@@ -64,11 +64,8 @@ impl BaseCache {
         !self.is_valid_for(gpu)
     }
 
-    /// Point the pipeline at this chart's base texture and clear it, ready for the slot to be
-    /// painted into it.
-    ///
-    /// `clear` is the window background. See the module doc for why the uncovered region carries a
-    /// colour rather than transparency.
+    /// Point the pipeline at this chart's base texture and clear it to `clear`, the window
+    /// background — see the module doc for why that colour and not transparency.
     pub fn begin_rebuild(
         &mut self,
         device: &ID3D11Device,

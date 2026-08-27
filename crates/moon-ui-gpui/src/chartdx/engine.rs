@@ -160,7 +160,6 @@ impl ChartEngine {
             #[cfg(windows)]
             scissor_generation: 0,
             #[cfg(windows)]
-            window_bg: background::BackgroundLayer::new(background::SPLASH_PNG),
             #[cfg(windows)]
             window_bg_color: rgb4(theme.bg),
             #[cfg(windows)]
