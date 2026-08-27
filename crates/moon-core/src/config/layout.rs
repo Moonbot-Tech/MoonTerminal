@@ -675,25 +675,6 @@ pub struct WindowLayout {
     #[serde(default, deserialize_with = "de_lenient")]
     pub trade_window: Option<GeomRect>,
 
-    /// Price scale shared by EVERY trade-detail window, as a fraction of price.
-    ///
-    /// One value for all of them, on exactly the terms the geometry above is shared on: the user
-    /// picks a scale once and every trade opened afterwards arrives at it. A per-trade key would
-    /// mean the first look at each new position ignored the choice, which is the opposite of what
-    /// was asked for. Not a per-tab value either - `ChartTabSpec.scale` is where a TAB's scale
-    /// lives, and a trade window is a window rather than a tab.
-    ///
-    /// `None` is Auto, and it is also what "never configured" reads as. Those two collapse ON
-    /// PURPOSE: a window that has never been given a scale must open in Auto, which is the same
-    /// picture `None` already asks for, so distinguishing them would buy a state with no
-    /// behaviour behind it.
-    ///
-    /// The VALUE is not trusted on the way back in. `de_lenient` checks the serialized type and
-    /// nothing else, so a hand-edited file can return a non-finite, negative or simply
-    /// non-preset number; the reader normalizes it before it reaches a chart, or the scale drawn
-    /// and the scale displayed would disagree on every restart.
-    #[serde(default, deserialize_with = "de_lenient")]
-    pub trade_window_scale: Option<f32>,
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_period: Option<String>,
@@ -965,15 +946,23 @@ pub struct WindowLayout {
     /// written before the split opens exactly as it did. See [`super::chart_defaults`].
     #[serde(
         default,
-        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient"
+        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
     )]
-    pub chart_defaults_addto: super::chart_defaults::ChartTabDefaults,
+    pub chart_defaults_addto: Box<super::chart_defaults::ChartTabDefaults>,
     /// Defaults for tabs under the anchor lock, wherever they live. Empty means "follow Main".
     #[serde(
         default,
-        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient"
+        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
     )]
-    pub chart_defaults_compare: super::chart_defaults::ChartTabDefaults,
+    pub chart_defaults_compare: Box<super::chart_defaults::ChartTabDefaults>,
+    /// Defaults for the trade-detail window. Empty means "follow this kind's own built-in set" —
+    /// which, for the captions, is NOT Main's: see
+    /// [`super::chart_labels::ChartLabelsCfg::trade_default`].
+    #[serde(
+        default,
+        deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
+    )]
+    pub chart_defaults_trade: Box<super::chart_defaults::ChartTabDefaults>,
     // The former `detect_view_by_group` moved to a separate `detects_view.toml`
     // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
     /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
@@ -1533,8 +1522,13 @@ impl WindowLayout {
         &self,
         kind: super::chart_defaults::ChartTabKind,
     ) -> &super::chart_labels::ChartLabelsCfg {
+        // Stored, else the kind's own shipped set, else Main's — one chain, with "a kind may ship
+        // its own captions" living on the KIND rather than as a branch here. The shipped set is
+        // built once and shared: this is read on every settings comparison, and a fresh clone per
+        // read would make a panel's signature differ from itself.
         self.kind_defaults(kind)
             .and_then(|d| d.chart_labels.as_ref())
+            .or_else(|| kind.builtin_labels())
             .unwrap_or(&self.chart_labels)
     }
 
@@ -1544,7 +1538,9 @@ impl WindowLayout {
         kind: super::chart_defaults::ChartTabKind,
         value: crate::market::candles::CandleViewCfg,
     ) -> bool {
-        let split = self.split_defaults(|d| &mut d.candle_view, |l| l.candle_view);
+        // No kind ships its own candles: every one of them follows Main until it is given a value.
+        let split =
+            self.split_defaults(|d| &mut d.candle_view, |l, k| l.candle_view_for(k), |_| false);
         let moved = match self.kind_defaults_mut(kind) {
             Some(d) => std::mem::replace(&mut d.candle_view, Some(value)) != Some(value),
             None => std::mem::replace(&mut self.candle_view, value) != value,
@@ -1558,7 +1554,11 @@ impl WindowLayout {
         kind: super::chart_defaults::ChartTabKind,
         value: ChartGraphicsCfg,
     ) -> bool {
-        let split = self.split_defaults(|d| &mut d.chart_graphics, |l| l.chart_graphics);
+        let split = self.split_defaults(
+            |d| &mut d.chart_graphics,
+            |l, k| l.chart_graphics_for(k),
+            |_| false,
+        );
         let moved = match self.kind_defaults_mut(kind) {
             Some(d) => std::mem::replace(&mut d.chart_graphics, Some(value)) != Some(value),
             None => std::mem::replace(&mut self.chart_graphics, value) != value,
@@ -1572,12 +1572,38 @@ impl WindowLayout {
         kind: super::chart_defaults::ChartTabKind,
         value: super::chart_labels::ChartLabelsCfg,
     ) -> bool {
-        let split = self.split_defaults(|d| &mut d.chart_labels, |l| l.chart_labels.clone());
-        let moved = match self.kind_defaults_mut(kind) {
+        let split = self.split_defaults(
+            |d| &mut d.chart_labels,
+            |l, k| l.chart_labels_for(k).clone(),
+            // The trade window ships its own captions; see the guard inside.
+            |k| k.builtin_labels().is_some(),
+        );
+        // `|` rather than `||`: the store must run even when the separation already reported a
+        // change, or the pressed value would never be written.
+        split | self.store_chart_labels(kind, value)
+    }
+
+    /// Store one kind's captions and NOTHING else, reporting whether they moved.
+    ///
+    /// No separation of the other kinds: the caller is recording what ONE view is showing, not
+    /// making a statement about the others. Separating them is a deliberate press with its own
+    /// wording in the popup — a right-click toggle inside a window must not perform it silently.
+    ///
+    /// Args:
+    ///     kind: The kind whose captions are being stored.
+    ///     value: The set to store.
+    ///
+    /// Returns:
+    ///     Whether the stored value actually changed.
+    pub fn store_chart_labels(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: super::chart_labels::ChartLabelsCfg,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
             Some(d) => d.chart_labels.replace(value.clone()) != Some(value),
             None => std::mem::replace(&mut self.chart_labels, value.clone()) != value,
-        };
-        split || moved
+        }
     }
 
     /// This kind's own defaults, or `None` for Main, whose defaults are the base fields.
@@ -1589,6 +1615,7 @@ impl WindowLayout {
             super::chart_defaults::ChartTabKind::Main => None,
             super::chart_defaults::ChartTabKind::AddTo => Some(&self.chart_defaults_addto),
             super::chart_defaults::ChartTabKind::Compare => Some(&self.chart_defaults_compare),
+            super::chart_defaults::ChartTabKind::Trade => Some(&self.chart_defaults_trade),
         }
     }
 
@@ -1600,6 +1627,7 @@ impl WindowLayout {
             super::chart_defaults::ChartTabKind::Main => None,
             super::chart_defaults::ChartTabKind::AddTo => Some(&mut self.chart_defaults_addto),
             super::chart_defaults::ChartTabKind::Compare => Some(&mut self.chart_defaults_compare),
+            super::chart_defaults::ChartTabKind::Trade => Some(&mut self.chart_defaults_trade),
         }
     }
 
@@ -1619,21 +1647,39 @@ impl WindowLayout {
     fn split_defaults<T: Clone>(
         &mut self,
         slot: impl Fn(&mut super::chart_defaults::ChartTabDefaults) -> &mut Option<T>,
-        base: impl Fn(&Self) -> T,
+        base: impl Fn(&Self, super::chart_defaults::ChartTabKind) -> T,
+        ships_builtin: impl Fn(super::chart_defaults::ChartTabKind) -> bool,
     ) -> bool {
-        let current = base(self);
         let mut wrote = false;
-        for kind in [
-            super::chart_defaults::ChartTabKind::AddTo,
-            super::chart_defaults::ChartTabKind::Compare,
-        ] {
-            let value = current.clone();
+        // Every kind: `kind_defaults_mut` answers `None` for Main, whose defaults ARE the base
+        // fields, so this needs no hand-kept list of "the others" — a new kind is covered by
+        // adding it to `ALL` and nowhere else.
+        for kind in super::chart_defaults::ChartTabKind::ALL {
+            // A kind that SHIPS its own set does not follow Main and has nothing to be separated
+            // from: freezing it here would copy today's built-in value into the profile, and the
+            // reader would then be stuck on it — a later build could improve that set and never
+            // reach them, because their file now holds a copy made the first time they pressed
+            // "make default" on some entirely different kind.
+            if ships_builtin(kind) {
+                continue;
+            }
+            // Asked and released BEFORE the value is built, so the two borrows never overlap and
+            // the value — a whole caption configuration — is only cloned for a slot that will
+            // actually take it.
+            let empty = match self.kind_defaults_mut(kind) {
+                Some(defaults) => slot(defaults).is_none(),
+                None => false,
+            };
+            if !empty {
+                continue;
+            }
+            // Read per KIND rather than one Main value copied to all: the trade window's captions
+            // do not follow Main, so freezing it at Main's set would replace the view the reader is
+            // looking at with a different one the first time any OTHER kind's default was set.
+            let value = base(self, kind);
             if let Some(defaults) = self.kind_defaults_mut(kind) {
-                let entry = slot(defaults);
-                if entry.is_none() {
-                    *entry = Some(value);
-                    wrote = true;
-                }
+                *slot(defaults) = Some(value);
+                wrote = true;
             }
         }
         wrote

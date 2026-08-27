@@ -164,6 +164,22 @@ pub enum ChartLabelField {
     /// what order, under what name and in what colour is [`crate::config::ArbViewCfg`] — a global
     /// roster, not a per-chart setting, because "Gate is green to me" is not a fact about one tab.
     ArbColumn,
+    /// Strategy that opened the trade a HISTORICAL chart is showing.
+    ///
+    /// A third strategy caption, and the only one that is a fact about a trade rather than about
+    /// the market right now: [`Self::OrderStrategy`] names what holds an order, [`Self::DetectStrategy`]
+    /// what last fired, and this one names the strategy the closed trade under the cursor belongs
+    /// to. It prints on a chart that was handed one — the trade-detail window — and nothing
+    /// anywhere else, which is why it is a field of its own rather than a mode of the two.
+    TradeStrategy,
+    /// The detect line that opened that trade, as the core wrote it into the report.
+    ///
+    /// Prose, and the widest thing this chart prints — the core states its conditions, its bounds
+    /// and half a dozen figures in one sentence. Its diagnostic tail (CPU, API budget, latency) is
+    /// dropped when the trade is read; see `moon_core::db::query_trade_meta`.
+    TradeDetect,
+    /// Why that trade closed, as the core stated it: `Auto Price Down`, `StopLoss …`, `Sell Price`.
+    TradeSellReason,
     /// Time left until the current candle of a timeframe closes.
     ///
     /// Reads NOTHING from the market: candle buckets are floored on the Unix epoch
@@ -176,7 +192,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 51] = [
+    pub const ALL: [ChartLabelField; 54] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -227,6 +243,9 @@ impl ChartLabelField {
         ChartLabelField::CoinBalance,
         ChartLabelField::DetectStrategy,
         ChartLabelField::DetectMsg,
+        ChartLabelField::TradeStrategy,
+        ChartLabelField::TradeDetect,
+        ChartLabelField::TradeSellReason,
         ChartLabelField::ArbColumn,
     ];
 
@@ -285,6 +304,9 @@ impl ChartLabelField {
             ChartLabelField::OrderStrategy
             | ChartLabelField::DetectStrategy
             | ChartLabelField::DetectMsg => ChartLabelGroup::Strategy,
+            ChartLabelField::TradeStrategy
+            | ChartLabelField::TradeDetect
+            | ChartLabelField::TradeSellReason => ChartLabelGroup::Trade,
         }
     }
 
@@ -341,6 +363,9 @@ impl ChartLabelField {
             ChartLabelField::CoinBalance => "chart_labels.field.coin_balance",
             ChartLabelField::DetectStrategy => "chart_labels.field.detect_strategy",
             ChartLabelField::DetectMsg => "chart_labels.field.detect_msg",
+            ChartLabelField::TradeStrategy => "chart_labels.field.trade_strategy",
+            ChartLabelField::TradeDetect => "chart_labels.field.trade_detect",
+            ChartLabelField::TradeSellReason => "chart_labels.field.trade_sell_reason",
             ChartLabelField::ArbColumn => "chart_labels.field.arb_column",
             ChartLabelField::TfCloseIn => "chart_labels.field.tf_close_in",
         }
@@ -398,6 +423,8 @@ impl ChartLabelField {
             ChartLabelField::SessionProfit => Some("chart_labels.short.session_profit"),
             ChartLabelField::CoinBalance => Some("chart_labels.short.coin_balance"),
             ChartLabelField::DetectStrategy => Some("chart_labels.short.detect_strategy"),
+            ChartLabelField::TradeStrategy => Some("chart_labels.short.trade_strategy"),
+            ChartLabelField::TradeSellReason => Some("chart_labels.short.trade_sell_reason"),
             _ => None,
         }
     }
@@ -424,7 +451,10 @@ impl ChartLabelField {
     /// else the chart prints is a number or a name — wrapping those would move a figure onto a line
     /// of its own, where it reads as a caption of its own.
     pub fn wraps(self) -> bool {
-        matches!(self, ChartLabelField::DetectMsg)
+        matches!(
+            self,
+            ChartLabelField::DetectMsg | ChartLabelField::TradeDetect
+        )
     }
 
     /// Whether what this field prints is a PERCENTAGE.
@@ -645,7 +675,12 @@ impl ChartLabelField {
             | ChartLabelField::CoinBalance
             // Two strategy captions can sit on one chart — the one holding an order and the one
             // that last fired — and a bare name says nothing about which is which.
-            | ChartLabelField::DetectStrategy => ResolvedLabelStyle {
+            | ChartLabelField::DetectStrategy
+            // Same argument as the two strategy captions above, and one step further: a chart can
+            // print the strategy that fired, the one holding an order and the one that owns the
+            // closed trade, and three bare names would name nothing.
+            | ChartLabelField::TradeStrategy
+            | ChartLabelField::TradeSellReason => ResolvedLabelStyle {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,
@@ -698,6 +733,12 @@ pub enum ChartLabelGroup {
     /// a reader picking "position size" has to be told which one they are picking.
     Exchange,
     Strategy,
+    /// What ONE closed trade was, on a chart that was handed one.
+    ///
+    /// Its own section rather than more of [`Self::Strategy`]: those fields answer "what is
+    /// happening on this market now", these answer "what was this trade", and the only chart that
+    /// can answer the second is the trade-detail window.
+    Trade,
     /// The column of other venues' prices, which is one field and its own subject.
     Arbitrage,
 }
@@ -707,7 +748,7 @@ impl ChartLabelGroup {
     /// Sections in picker order: what it IS, when its candle closes, what it costs, how it moves,
     /// how much traded, what the contract charges, what is open — ours then the venue's — who
     /// acted, and the column.
-    pub const ALL: [ChartLabelGroup; 10] = [
+    pub const ALL: [ChartLabelGroup; 11] = [
         ChartLabelGroup::Instrument,
         ChartLabelGroup::Time,
         ChartLabelGroup::Price,
@@ -717,6 +758,7 @@ impl ChartLabelGroup {
         ChartLabelGroup::Position,
         ChartLabelGroup::Exchange,
         ChartLabelGroup::Strategy,
+        ChartLabelGroup::Trade,
         ChartLabelGroup::Arbitrage,
     ];
 
@@ -732,6 +774,7 @@ impl ChartLabelGroup {
             ChartLabelGroup::Position => "chart_labels.group.position",
             ChartLabelGroup::Exchange => "chart_labels.group.exchange",
             ChartLabelGroup::Strategy => "chart_labels.group.strategy",
+            ChartLabelGroup::Trade => "chart_labels.group.trade",
         }
     }
 }

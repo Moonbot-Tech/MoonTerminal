@@ -1416,3 +1416,77 @@ fn the_funding_countdown_ignores_the_finer_shared_clock() {
     both_steps_agree(FUNDING_AT_MS - 30_000);
     both_steps_agree(FUNDING_AT_MS + 30_000);
 }
+
+/// The trade captions answer from the HANDED trade and from nothing else.
+///
+/// A live chart is never handed one, so the three fields print nothing there rather than falling
+/// back to what the market is doing now — which is the whole point of them being their own fields
+/// instead of a mode of the detect captions beside them.
+#[test]
+fn the_trade_captions_print_nothing_without_a_trade() {
+    for field in [
+        ChartLabelField::TradeStrategy,
+        ChartLabelField::TradeDetect,
+        ChartLabelField::TradeSellReason,
+    ] {
+        assert!(
+            one_field(
+                field,
+                LabelInputs {
+                    // Everything a LIVE chart would have, and no trade: the captions must not
+                    // borrow any of it.
+                    detect_strategy: "BTC Sniper".into(),
+                    detect_msg: "Delta 5m 3.4%".into(),
+                    strategy: "Alpha".into(),
+                    ..Default::default()
+                }
+            )
+            .is_none(),
+            "{field:?} printed without a trade"
+        );
+    }
+}
+
+/// Handed a trade, each caption states its own half of it, and the strategy names itself: a chart
+/// can print the strategy that fired, the one holding an order and the one that owns this trade.
+#[test]
+fn a_handed_trade_states_its_strategy_line_and_exit() {
+    let handed = |trade: crate::chartdx::TradeLabels| LabelInputs {
+        trade: Some(Rc::new(trade)),
+        ..Default::default()
+    };
+    let trade = crate::chartdx::TradeLabels {
+        strategy: "Hook Short".into(),
+        detect: "Hook Short Depth: 2.47% R: 120%".into(),
+        sell_reason: "Auto Price Down".into(),
+    };
+
+    let strategy =
+        one_field(ChartLabelField::TradeStrategy, handed(trade.clone())).expect("prints");
+    assert!(strategy.ends_with("Hook Short"), "{strategy:?}");
+    assert!(strategy.contains(": "), "it names itself: {strategy:?}");
+
+    let detect = one_field(ChartLabelField::TradeDetect, handed(trade.clone())).expect("prints");
+    assert_eq!(detect, "Hook Short Depth: 2.47% R: 120%");
+
+    let exit = one_field(ChartLabelField::TradeSellReason, handed(trade)).expect("prints");
+    assert!(exit.ends_with("Auto Price Down"), "{exit:?}");
+
+    // A trade the replica had nothing to say about prints nothing, rather than an empty plate.
+    assert!(
+        one_field(
+            ChartLabelField::TradeDetect,
+            handed(crate::chartdx::TradeLabels::default())
+        )
+        .is_none()
+    );
+}
+
+/// The trade's detect line is PROSE and wraps like the live one, instead of being cut at the first
+/// module boundary: it is the widest thing this chart prints.
+#[test]
+fn the_trade_detect_line_wraps_like_the_live_one() {
+    assert!(ChartLabelField::TradeDetect.wraps());
+    assert!(!ChartLabelField::TradeStrategy.wraps());
+    assert!(!ChartLabelField::TradeSellReason.wraps());
+}

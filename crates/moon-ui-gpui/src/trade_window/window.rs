@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use gpui::*;
-use moon_core::db::ChartTradeRecord;
+use moon_core::db::{ChartTradeRecord, TradeMeta};
 use moon_core::session::CoreId;
 use moon_ui::{MoonBackgroundPolicy, Root};
 
@@ -54,6 +54,8 @@ const MAX_WINDOWS: usize = 2;
 /// Args:
 ///     backend: Shared application state.
 ///     record: The clicked trade, already resolved from the durable replica.
+///     meta: What that trade carried beside its prices — the detect line, the strategy, the exit
+///         reason — read in the same background pass as the record itself.
 ///     core: Core that recorded it.
 ///     market: Exchange-native market the coin resolved to.
 ///     stamps: Entry and exit times, already formatted in the Report's own clock.
@@ -61,6 +63,7 @@ const MAX_WINDOWS: usize = 2;
 pub(crate) fn open_trade_window(
     backend: &Entity<Backend>,
     record: ChartTradeRecord,
+    meta: TradeMeta,
     core: CoreId,
     market: String,
     stamps: (String, String),
@@ -165,6 +168,11 @@ pub(crate) fn open_trade_window(
     opts.window_clear_color = Some(gpui::rgb(
         ((bg[0] as u32) << 16) | ((bg[1] as u32) << 8) | bg[2] as u32,
     ));
+    // Resolved HERE, while the session is in hand: naming the strategy is a session lookup. Whether
+    // it could be named travels with it — a core still connecting has no list yet, and the window
+    // keeps asking until it does.
+    let (resolved, named) = super::trade_labels(backend.read(cx), core, &meta);
+    let labels = std::rc::Rc::new(resolved);
     let epoch = moon_chart::paint::now_unix_ms();
     // Kept for the failure log below, which the move into the window builder would otherwise take.
     let (coin, record_id) = (record.coin.clone(), record.record_id);
@@ -205,23 +213,15 @@ pub(crate) fn open_trade_window(
                 view.mode = moon_core::market::CandleViewCfg::default().mode;
             }
             panel.set_candle_view(Some(view), pcx);
-            // THE SHARED VERTICAL SCALE, on the same terms as the timeframe pin above: in place
-            // before the first fetch answers, so the picture never appears at one scale and jumps
-            // to another as the rows land.
-            //
-            // Normalized rather than trusted. The value comes back from a hand-editable file whose
-            // deserializer checks only that it is a number, and an unmatched one would be applied
-            // to the chart while the control beside it labelled itself "Auto".
-            //
-            // Nothing re-applies this later and nothing needs to: a pinned percentage leaves the
-            // view's auto and manual flags both clear, and the per-frame Y fit re-targets the
-            // range from that percentage on every frame while they stay clear. So the pin holds
-            // itself through the empty first frames, through the rows arriving, and through a
-            // Retry - which touches the series and never the scale.
-            let stored =
-                crate::controls::normalized_scale(owner.read(pcx).layout.trade_window_scale);
-            panel.set_scale(stored, pcx);
+            // THE TRADE'S OWN CAPTIONS, published before the first fetch answers like the
+            // timeframe pin above: they come from the replica, not from the network, so the window
+            // states what this trade WAS even while the picture behind it is still loading — and
+            // never has to swap one set of captions for another once it lands.
+            panel.attach_trade_labels(Some(labels.clone()), pcx);
         });
+        // Cloned BEFORE the view takes the panel: the observer below needs the handle, and an
+        // `Entity` handle is a refcount, not a copy of the panel.
+        let panel_handle = panel.clone();
         let view = cx.new(|vcx| {
             let mut this = TradeWindowView {
                 backend: owner.clone(),
@@ -238,6 +238,10 @@ pub(crate) fn open_trade_window(
                 market: market.clone(),
                 stamps: stamps.clone(),
                 state: TradeWindowState::Loading,
+                meta,
+                strategy_pending: !named,
+                // Nothing searched yet; the first notification does the walk.
+                strategies_rev: None,
                 sequence: 0,
                 cancel: Arc::new(AtomicBool::new(false)),
                 window_id: window.window_handle().window_id(),
@@ -270,6 +274,20 @@ pub(crate) fn open_trade_window(
                         b.layout_dirty = true;
                     }
                 });
+            })
+            .detach();
+            // The ONE thing this window watches the application for: the strategy list of a core
+            // that was still connecting when the window opened. It costs a revision compare per
+            // notification — see `retry_strategy_name` — and nothing at all once the name is in.
+            vcx.observe(&owner, |this: &mut TradeWindowView, _backend, cx| {
+                this.retry_strategy_name(cx);
+            })
+            .detach();
+            // Captions edited from this window's own chart menu, relayed up by the panel for its
+            // OWNER to store — the same observer the detached chart window runs, for the same
+            // reason: the panel applies, the owner persists.
+            vcx.observe(&panel_handle, |this: &mut TradeWindowView, _panel, cx| {
+                this.drain_panel_labels(cx);
             })
             .detach();
             vcx.observe_window_activation(window, |this: &mut TradeWindowView, window, _cx| {

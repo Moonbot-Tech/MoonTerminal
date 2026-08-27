@@ -7,7 +7,7 @@
 
 use chrono::TimeZone;
 use gpui::*;
-use moon_core::db::{self, ChartTradeRecord, ReportFilter};
+use moon_core::db::{self, ChartTradeRecord, ReportFilter, TradeMeta};
 use rust_i18n::t;
 
 use super::{ReportPanel, columns, selection};
@@ -97,14 +97,16 @@ impl ReportPanel {
                 .spawn(async move { load_trade(core, coin, record_id, filter) })
                 .await;
             cx.update(|cx| {
-                let Some(record) = found else {
+                let Some((record, meta)) = found else {
                     return;
                 };
                 let stamps = (
                     stamp(axis.to_utc(record.buy_date, core), axis.zone()),
                     stamp(axis.to_utc(record.close_date, core), axis.zone()),
                 );
-                crate::trade_window::open_trade_window(&backend, record, core, market, stamps, cx);
+                crate::trade_window::open_trade_window(
+                    &backend, record, meta, core, market, stamps, cx,
+                );
             });
         })
         .detach();
@@ -151,10 +153,20 @@ impl ReportPanel {
     }
 }
 
-/// Read one trade back from the durable replica.
+/// Read one trade back from the durable replica, with what it carried beside its prices.
 ///
 /// Scoped to the row's own coin so the bounded read is spent where the target actually is; a
 /// whole-filter read would be both slower and likelier to push the target past the cap.
+///
+/// TWO reads on ONE snapshot: the record comes from the same bounded history the chart's own
+/// markers are drawn from, and the metadata from a single-row lookup beside it. They share the
+/// snapshot so the window cannot end up describing a row from one moment with a detect line from
+/// another — and the metadata is not folded into the history read because that one returns a
+/// thousand rows and none of the others needs a sentence of prose attached.
+///
+/// A metadata read that FAILS is not a failed open: the window's whole point is that the trade is
+/// there even when something else is not, so an unreadable detect line degrades to empty captions
+/// rather than to no window.
 ///
 /// Args:
 ///     core: Core that recorded the row.
@@ -163,13 +175,14 @@ impl ReportPanel {
 ///     filter: The published filter that produced the row.
 ///
 /// Returns:
-///     The typed trade, or `None` when the replica cannot answer or the row fell past the cap.
+///     The typed trade and its metadata, or `None` when the replica cannot answer or the row fell
+///     past the cap.
 fn load_trade(
     core: u64,
     coin: String,
     record_id: i64,
     filter: ReportFilter,
-) -> Option<ChartTradeRecord> {
+) -> Option<(ChartTradeRecord, TradeMeta)> {
     let conn = db::open_reader().ok()?;
     let snapshot = db::read_snapshot(&conn).ok()?;
     let history = db::query_chart_trade_history(
@@ -180,10 +193,17 @@ fn load_trade(
         HISTORY_LIMIT,
     )
     .ok()?;
-    history
+    let record = history
         .records
         .into_iter()
-        .find(|record| record.record_id == record_id)
+        .find(|record| record.record_id == record_id)?;
+    // The RECORD, not its id: while both report sources hold rows for one core, a bare id can
+    // name a different trade in the other table — see `moon_core::db::trade_meta`.
+    let meta = db::query_trade_meta(&snapshot, &record)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Some((record, meta))
 }
 
 /// Label of the row-menu entry that opens this window.

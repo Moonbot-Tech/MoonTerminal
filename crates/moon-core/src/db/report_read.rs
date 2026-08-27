@@ -1207,6 +1207,32 @@ fn rec_id_expr(src: &ReadSource) -> &'static str {
     }
 }
 
+/// SQL projecting the identity a chart trade is ADDRESSED by, for one source.
+///
+/// The typed replica's `newrecid` where it has one, and the source's own row id where it does not —
+/// which is not a detail: a typed row whose `newrecid` is still zero is handed out under `id`, and a
+/// reader that looked it up by `newrecid` would find a DIFFERENT trade wearing that number.
+///
+/// One definition, because two readers agreeing on what a record id means is the whole point:
+/// `query_chart_trade_history` MINTS these ids and `super::trade_meta::query_trade_meta` resolves
+/// them back.
+///
+/// Args:
+///     src: The source the expression is built against.
+///
+/// Returns:
+///     A SQL expression over the alias `r`.
+pub(in crate::db) fn record_identity_expr(src: &ReadSource) -> String {
+    let fallback_id = if src.cols.contains("id") {
+        "r.id"
+    } else if src.legacy && src.cols.contains("db_id") {
+        "r.db_id"
+    } else {
+        "0"
+    };
+    format!("COALESCE(NULLIF({}, 0), {fallback_id}, 0)", rec_id_expr(src))
+}
+
 /// Rows of one strategy that a report purge can address, plus the ones it cannot.
 pub struct StrategyPurgeRows {
     /// Soft-deletable `newrecid`s from the typed replica.
@@ -1950,17 +1976,7 @@ pub fn query_chart_trade_history(
         }
         compatible_source = true;
         let (where_sql, mut params) = build_where(&scope, &source.cols, has_strategy_names);
-        let fallback_id = if source.cols.contains("id") {
-            "r.id"
-        } else if source.legacy && source.cols.contains("db_id") {
-            "r.db_id"
-        } else {
-            "0"
-        };
-        let record_id = format!(
-            "COALESCE(NULLIF({}, 0), {fallback_id}, 0)",
-            rec_id_expr(&source)
-        );
+        let record_id = record_identity_expr(&source);
         // Money is OPTIONAL here, deliberately: `REQUIRED_COLUMNS` names none of these columns, so
         // a source that cannot produce a figure still returns every trade and the chart still draws
         // it. Both legs go through `settled_amount_expr` — the same correction the Report grid and
@@ -2105,7 +2121,7 @@ pub fn query_chart_trade_history(
 ///
 /// Returns:
 ///     Parsed integer, or `None` for NULL, blobs, malformed text, and non-integral reals.
-fn report_value_i64(value: &Value) -> Option<i64> {
+pub(in crate::db) fn report_value_i64(value: &Value) -> Option<i64> {
     match value {
         Value::Integer(value) => Some(*value),
         Value::Real(value) if value.is_finite() && value.fract() == 0.0 => Some(*value as i64),
@@ -2138,7 +2154,7 @@ fn report_value_f64(value: &Value) -> Option<f64> {
 ///
 /// Returns:
 ///     Cloned text, or `None` for every non-text storage class.
-fn report_value_text(value: &Value) -> Option<String> {
+pub(in crate::db) fn report_value_text(value: &Value) -> Option<String> {
     match value {
         Value::Text(value) => Some(value.clone()),
         Value::Null | Value::Integer(_) | Value::Real(_) | Value::Blob(_) => None,

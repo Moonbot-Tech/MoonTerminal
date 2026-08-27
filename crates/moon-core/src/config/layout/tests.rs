@@ -1500,3 +1500,149 @@ fn window_geometry_state_flags_keep_legacy_layouts_readable_and_windowed_toml_un
         "an untouched windowed geometry must preserve the legacy TOML shape"
     );
 }
+
+/// The trade window opens on ITS OWN captions, not on the main chart's.
+///
+/// This is the whole reason the kind exists: a chart drawing a market that stopped moving hours ago
+/// cannot be read with captions stating what funding costs and what traded in the last minute. The
+/// built-in set states what the picture IS and what the trade WAS.
+#[test]
+fn the_trade_window_falls_back_to_its_own_captions() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::config::chart_labels::{ChartLabelField, ChartLabelsCfg};
+
+    let layout = WindowLayout::default();
+    let trade = layout.chart_labels_for(ChartTabKind::Trade);
+    assert_eq!(trade, &ChartLabelsCfg::trade_default());
+    assert_ne!(
+        trade, &layout.chart_labels,
+        "the trade window must not inherit the live chart's captions"
+    );
+    // It prints the trade, and none of the live figures the main default opens with.
+    for field in [
+        ChartLabelField::TradeStrategy,
+        ChartLabelField::TradeDetect,
+        ChartLabelField::TradeSellReason,
+    ] {
+        assert!(
+            trade.any_drawn(|f| f == field),
+            "the built-in trade set does not print {field:?}"
+        );
+    }
+    for field in [
+        ChartLabelField::Funding,
+        ChartLabelField::WindowBuyVolume,
+        ChartLabelField::OpenPnlMoney,
+    ] {
+        assert!(
+            !trade.any_drawn(|f| f == field),
+            "the built-in trade set prints the live figure {field:?}"
+        );
+    }
+    // The other two kinds still follow Main, which the split has not touched.
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::AddTo),
+        &layout.chart_labels
+    );
+
+    // EVERY module of this set lives over the PLOT. Width is shared inside a ZONE, so a module
+    // left in the control strip cannot see the detect line over the plot: neither yields and they
+    // overlap.
+    use crate::config::chart_labels::LabelZone;
+    for row in trade.rows.iter().take_while(|row| !row.is_blank()) {
+        assert_eq!(
+            row.zone,
+            LabelZone::ChartTop,
+            "module {:?} is not over the plot",
+            row.preset
+        );
+    }
+}
+
+/// Setting ANOTHER kind's default freezes the trade window at what IT was showing — its own set —
+/// and never at Main's.
+///
+/// The freeze exists so kinds stop moving together the moment they are separated. Copying Main's
+/// value into every kind would do the opposite here: the reader would set the main chart's captions
+/// and find the trade window wearing them, which is the exact surprise this kind removes.
+#[test]
+fn separating_the_kinds_does_not_hand_the_trade_window_mains_captions() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::config::chart_labels::ChartLabelsCfg;
+
+    let mut layout = WindowLayout::default();
+    let mut pressed = ChartLabelsCfg::empty();
+    pressed.push_preset(crate::config::chart_labels::LabelPreset::Scale);
+    assert!(layout.set_chart_labels_default(ChartTabKind::Main, pressed.clone()));
+
+    assert_eq!(layout.chart_labels_for(ChartTabKind::Main), &pressed);
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::Trade),
+        &ChartLabelsCfg::trade_default(),
+        "the trade window kept its own set when the kinds were separated"
+    );
+    // And the two tab kinds kept the set they were showing at that moment, which IS Main's old one.
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::AddTo),
+        &ChartLabelsCfg::default()
+    );
+    // The trade window's slot stays EMPTY rather than frozen at a copy of the shipped set: it does
+    // not follow Main, so there is nothing to separate it from — and a copy taken today would
+    // outlive every later improvement to that set.
+    assert!(
+        layout.chart_defaults_trade.chart_labels.is_none(),
+        "a kind that ships its own captions must not be frozen at a copy of them"
+    );
+
+    // Its own default, once set, wins over the built-in set like any other kind's.
+    let mut own = ChartLabelsCfg::empty();
+    own.push_preset(crate::config::chart_labels::LabelPreset::Instrument);
+    assert!(layout.set_chart_labels_default(ChartTabKind::Trade, own.clone()));
+    assert_eq!(layout.chart_labels_for(ChartTabKind::Trade), &own);
+}
+
+/// Storing what ONE view shows must not separate the other kinds behind the user's back.
+///
+/// The ⧉ press is a deliberate statement about several kinds and says so in its own wording; a
+/// right-click caption toggle inside a window is a statement about that window only. Routing the
+/// second through the first froze the tab kinds at Main's captions as a side effect.
+#[test]
+fn storing_one_kinds_captions_separates_nothing() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::config::chart_labels::{ChartLabelsCfg, LabelPreset};
+
+    let mut layout = WindowLayout::default();
+    let mut edited = ChartLabelsCfg::empty();
+    edited.push_preset(LabelPreset::Trade);
+    assert!(layout.store_chart_labels(ChartTabKind::Trade, edited.clone()));
+
+    assert_eq!(layout.chart_labels_for(ChartTabKind::Trade), &edited);
+    // The tab kinds are untouched: they still FOLLOW Main rather than holding a frozen copy of it.
+    assert!(layout.chart_defaults_addto.chart_labels.is_none());
+    assert!(layout.chart_defaults_compare.chart_labels.is_none());
+
+    // And the press that IS meant to separate them still does.
+    assert!(layout.set_chart_labels_default(ChartTabKind::Main, edited.clone()));
+    assert!(layout.chart_defaults_addto.chart_labels.is_some());
+}
+
+/// `WindowLayout` must stay SMALL, because it is moved on the stack.
+///
+/// It is loaded, cloned for snapshots and handed to the persistence pass, so its size is paid
+/// several frames deep on the main thread. Each `ChartTabDefaults` carries a whole caption
+/// configuration — a fixed array of sixteen rows of eight captions, over six kilobytes by value —
+/// and inlining a FOURTH one (the trade window's) is what overflowed that stack at startup: the
+/// application built, tested green, and died before its first frame. They are boxed for that
+/// reason, and this is the guard that says so before the next kind is added.
+///
+/// The ceiling is deliberately loose: it fails on another multi-kilobyte block being inlined, not
+/// on a field or two.
+#[test]
+fn the_layout_stays_off_the_stack() {
+    let size = std::mem::size_of::<WindowLayout>();
+    assert!(
+        size <= 12 * 1024,
+        "WindowLayout grew to {size} bytes — box the block that was added, or the main thread's \
+         stack overflows before the first frame"
+    );
+}

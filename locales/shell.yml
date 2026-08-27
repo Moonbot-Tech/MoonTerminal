@@ -615,6 +615,10 @@ chart.defaults.kind.compare:
   ru: "Сравнения"
   en: "Comparisons"
   es: "Comparaciones"
+chart.defaults.kind.trade:
+  ru: "Окно сделки"
+  en: "Trade window"
+  es: "Ventana de la operación"
 chart.defaults.set:
   ru: "Сделать дефолтом"
   en: "Make default"
@@ -624,9 +628,9 @@ chart.defaults.apply:
   en: "Apply"
   es: "Aplicar"
 chart.defaults.set_hint:
-  ru: "Дефолт для выбранных видов вкладок. Их собственные настройки будут сброшены — в скобках сколько."
-  en: "Default for the ticked kinds of tab. Their own settings are cleared — the count is in brackets."
-  es: "Predeterminado para los tipos marcados. Sus ajustes propios se borran: el número va entre paréntesis."
+  ru: "Дефолт для выбранных видов. Собственные настройки их вкладок будут сброшены — в скобках сколько."
+  en: "Default for the ticked kinds. Their tabs' own settings are cleared — the count is in brackets."
+  es: "Predeterminado para los tipos marcados. Los ajustes propios de sus pestañas se borran: el número va entre paréntesis."
 chart.defaults.apply_hint:
   ru: "Записать эти значения всем вкладкам выбранных видов. У этих настроек дефолта нет."
   en: "Write these values into every tab of the ticked kinds. These settings have no default."
@@ -1473,6 +1477,10 @@ chart_labels.group.strategy:
   ru: "Стратегия"
   en: "Strategy"
   es: "Estrategia"
+chart_labels.group.trade:
+  ru: "Сделка"
+  en: "Trade"
+  es: "Operación"
 chart_labels.field.none:
   ru: "—"
   en: "—"
@@ -1833,6 +1841,10 @@ chart_labels.preset.detect:
   ru: "Детект"
   en: "Detect"
   es: "Detección"
+chart_labels.preset.trade:
+  ru: "Сделка"
+  en: "Trade"
+  es: "Operación"
 arb.title:
   ru: "Арбитраж: площадки"
   en: "Arbitrage venues"
@@ -1901,6 +1913,26 @@ chart_labels.short.detect_strategy:
   ru: "Детект"
   en: "Detect"
   es: "Detect"
+chart_labels.field.trade_strategy:
+  ru: "Стратегия сделки"
+  en: "Trade strategy"
+  es: "Estrategia de la operación"
+chart_labels.field.trade_detect:
+  ru: "Детект сделки"
+  en: "Trade detect line"
+  es: "Línea del detect de la operación"
+chart_labels.field.trade_sell_reason:
+  ru: "Причина выхода"
+  en: "Exit reason"
+  es: "Motivo de salida"
+chart_labels.short.trade_strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+chart_labels.short.trade_sell_reason:
+  ru: "Выход"
+  en: "Exit"
+  es: "Salida"
 chart_labels.group.price:
   ru: "Цена"
   en: "Price"

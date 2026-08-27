@@ -49,6 +49,14 @@ pub(in crate::chartdx) struct LabelInputs {
     /// unable to tell "nothing fired" from "it fired a while ago".
     pub detect_strategy: String,
     pub detect_msg: String,
+    /// What the CLOSED TRADE this chart was handed was: the strategy that opened it, the line it
+    /// fired on, why it closed. `None` on every live chart — the trade-detail window is the only
+    /// one that is handed a trade, and the captions reading this print nothing anywhere else.
+    ///
+    /// Carried behind an `Rc` because it is fixed for the window's life and this struct is rebuilt
+    /// on every caption refresh: cloning three strings per refresh to compare them against
+    /// themselves is the churn the handle removes.
+    pub trade: Option<Rc<crate::chartdx::TradeLabels>>,
     /// Last traded price the chart itself is drawing.
     pub last_price: Option<f32>,
     /// Y-scale badge as a whole percentage; `None` while it is hidden.
@@ -425,6 +433,27 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         // module's line and reserves its plate. So the RESULT is checked, not just the input.
         ChartLabelField::DetectMsg => non_empty(&inputs.detect_msg)
             .and_then(|t| non_empty(&detect_line(&t)))
+            .map(|t| (cut(&t), None)),
+        // The three trade captions answer from the handed trade and from nowhere else: a chart with
+        // none prints nothing, which is what keeps them silent on every live chart rather than
+        // falling back to whatever the market is doing now.
+        ChartLabelField::TradeStrategy => inputs
+            .trade
+            .as_ref()
+            .and_then(|trade| non_empty(&trade.strategy))
+            .map(|t| (t, None)),
+        // Cut like the live detect line beside it, and for the same reason: this is the core's own
+        // prose, the widest thing the chart prints, and the width budget downstream measures a
+        // string that has already been shaped.
+        ChartLabelField::TradeDetect => inputs
+            .trade
+            .as_ref()
+            .and_then(|trade| non_empty(&trade.detect))
+            .map(|t| (cut(&t), None)),
+        ChartLabelField::TradeSellReason => inputs
+            .trade
+            .as_ref()
+            .and_then(|trade| non_empty(&trade.sell_reason))
             .map(|t| (cut(&t), None)),
         ChartLabelField::ScaleBadge => inputs.scale_badge.map(|pct| {
             // A range below a whole percent in a quiet Auto market reads as "<1%", never as zero:
@@ -1403,6 +1432,14 @@ fn sample_inputs() -> LabelInputs {
         strategy: "Alpha".to_string(),
         detect_strategy: "BTC Sniper".to_string(),
         detect_msg: "Delta 5m 3.4% · vol x7".to_string(),
+        // The editor previews every field on ONE sample, the trade captions included: a reader
+        // configuring the trade window's module has to see what it will print, and a preview that
+        // left them blank would read as a module that prints nothing.
+        trade: Some(Rc::new(crate::chartdx::TradeLabels {
+            strategy: "Hook Short".to_string(),
+            detect: "Hook Short Depth: 2.5% R: 120% VolK: 19.5".to_string(),
+            sell_reason: "Auto Price Down".to_string(),
+        })),
         last_price: Some(51234.5),
         scale_badge: Some(12),
         compare_pct: Some(1.2),

@@ -39,10 +39,11 @@ const COLUMN_W: f32 = 178.0;
 /// set the height of all five. Sections are packed into columns instead, several to a column, each
 /// keeping its own heading — which is the only thing that makes a long list readable at all.
 ///
-/// Sixteen is where the ten sections settle into five columns, the tallest of them exactly sixteen
-/// rows; twelve splits them further, and twenty puts twenty rows in one. Worth re-checking whenever
-/// a section is added — the number is a result, not a preference, and the tallest column is now
-/// flush against it.
+/// Sixteen is where the sections settle into five columns, the tallest of them exactly sixteen
+/// rows; twelve splits them further, and twenty puts twenty rows in one. Re-checked when the
+/// eleventh section (the trade window's own captions) landed: eleven sections over 54 fields still
+/// pack into five columns at this height. Worth re-checking whenever a section is added — the
+/// number is a result, not a preference, and the tallest column is flush against it.
 const MAX_COLUMN_ROWS: usize = 16;
 
 /// Lay the sections out into columns, keeping each section whole and its heading with it.

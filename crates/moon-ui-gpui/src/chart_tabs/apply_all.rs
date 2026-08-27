@@ -37,12 +37,12 @@ use super::common::{GlobalSlot, LayoutPopupSnapshot, StackSetting, set_stack_set
 use crate::persistence::chart_persist::{ChartTabSpec, StackOrientation};
 use moon_core::config::ChartBucket;
 
-/// Which of the three tab kinds a press addresses.
+/// Which of the tab kinds a press addresses.
 ///
 /// A set rather than one kind: the reader who wants the main chart and the windows to agree says so
 /// with two ticks, and the popup that offers the ticks is the same one for every setting.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct KindTargets([bool; 3]);
+pub(crate) struct KindTargets([bool; ChartTabKind::ALL.len()]);
 
 impl KindTargets {
     /// The set holding just this kind — what a press starts as, its own kind ticked.
@@ -72,6 +72,7 @@ impl KindTargets {
             ChartTabKind::Main => 0,
             ChartTabKind::AddTo => 1,
             ChartTabKind::Compare => 2,
+            ChartTabKind::Trade => 3,
         }
     }
 }
@@ -442,9 +443,14 @@ fn applicable(values: &[StackSetting], is_main: bool, is_custom: bool) -> Vec<St
 /// default already and is not overwritten by a press that changes it, while a closed tab that holds
 /// one is — and is exactly the surprise worth naming before the press. Free-standing because the
 /// detached windows ask it too, and they own no group bookkeeping.
-pub(super) fn override_counts(specs: &[ChartTabSpec], values: &[StackSetting]) -> [usize; 3] {
+pub(super) fn override_counts(
+    specs: &[ChartTabSpec],
+    values: &[StackSetting],
+) -> [usize; ChartTabKind::ALL.len()] {
     let slots = pressed_slots(values);
-    let mut out = [0usize; 3];
+    // The trade window's slot stays at zero by construction: it owns no tab and therefore no spec
+    // that could hold an override — it is absent from `ChartTabKind::TAB_KINDS`.
+    let mut out = [0usize; ChartTabKind::ALL.len()];
     for spec in specs {
         if slots.iter().any(|slot| spec_holds_slot(*slot, spec)) {
             out[KindTargets::index(spec_kind(spec))] += 1;

@@ -76,6 +76,13 @@ impl ChartDataState {
         &mut self,
         source: &moon_core::market::MarketDataSource,
     ) -> bool {
+        // A frozen replay reads no live history at all — see the `live` gate in
+        // `sync_from_market_source`. Without this the pointer path would keep filling the
+        // measuring captions the market path has stopped answering, and the window would print
+        // what traded in the last ten seconds beside a trade that closed hours ago.
+        if !self.draws_live_market() {
+            return false;
+        }
         let mut st = self.render.borrow_mut();
         if !st.chart_labels.any_cursor_anchored() {
             return false;
@@ -1184,68 +1191,86 @@ impl ChartDataState {
         // snapshot, and this sync runs on market revisions — which on a busy coin is several times
         // a second, per pane.
         use moon_core::config::ChartLabelField as LabelField;
-        let wants_deltas = st
-            .chart_labels
-            .any_drawn(|f| matches!(f, LabelField::Delta1h | LabelField::Delta24h));
+        // Whether this engine draws the LIVE market rather than a frozen replay. Every caption
+        // gate below is ANDed with it, so a trade-detail window reads none of these snapshots.
+        //
+        // Not an optimization — a correctness rule, and the same one `orders.rs` already applies to
+        // the position and detect captions: funding, the coin's deltas, the book, what traded in
+        // the last minute and the arbitrage column all describe the market RIGHT NOW, and a caption
+        // is read as describing the picture under it. Over a trade that closed hours ago they are
+        // not stale figures, they are figures about a different thing. Gated here, at the read,
+        // rather than at the draw, so the window does not pay for snapshots it must not print.
+        let live = self.draws_live_market();
+        let wants_deltas = live
+            && st
+                .chart_labels
+                .any_drawn(|f| matches!(f, LabelField::Delta1h | LabelField::Delta24h));
         // The market-wide background and funding travel together: one snapshot read answers both,
         // so the gate is their union rather than a flag each.
-        let wants_context = st.chart_labels.any_drawn(|f| {
-            matches!(
-                f,
-                LabelField::ExchangeDelta1h
-                    | LabelField::ExchangeDelta24h
-                    | LabelField::BtcDelta1h
-                    | LabelField::BtcDelta24h
-                    | LabelField::BtcDelta72h
-                    | LabelField::Funding
-                    | LabelField::FundingIn
-            )
-        });
+        let wants_context = live
+            && st.chart_labels.any_drawn(|f| {
+                matches!(
+                    f,
+                    LabelField::ExchangeDelta1h
+                        | LabelField::ExchangeDelta24h
+                        | LabelField::BtcDelta1h
+                        | LabelField::BtcDelta24h
+                        | LabelField::BtcDelta72h
+                        | LabelField::Funding
+                        | LabelField::FundingIn
+                )
+            });
         // The quote side, the venue's caps, the coin's tags and the EXCHANGE's own position: one
         // readout, two snapshots, gated as a union like the context above.
-        let wants_figures = st.chart_labels.any_drawn(|f| {
-            matches!(
-                f,
-                LabelField::CoinTags
-                    | LabelField::Bid
-                    | LabelField::Ask
-                    | LabelField::Spread
-                    | LabelField::MarkPrice
-                    | LabelField::MarkDelta
-                    | LabelField::PriceStep
-                    | LabelField::Volume24h
-                    | LabelField::MaxLeverage
-                    | LabelField::MaxOrder
-                    | LabelField::ExchPosSize
-                    | LabelField::LiqPrice
-                    | LabelField::Leverage
-                    | LabelField::MarginMode
-                    | LabelField::SessionPnl
-                    | LabelField::SessionProfit
-                    | LabelField::CoinBalance
-            )
-        });
+        let wants_figures = live
+            && st.chart_labels.any_drawn(|f| {
+                matches!(
+                    f,
+                    LabelField::CoinTags
+                        | LabelField::Bid
+                        | LabelField::Ask
+                        | LabelField::Spread
+                        | LabelField::MarkPrice
+                        | LabelField::MarkDelta
+                        | LabelField::PriceStep
+                        | LabelField::Volume24h
+                        | LabelField::MaxLeverage
+                        | LabelField::MaxOrder
+                        | LabelField::ExchPosSize
+                        | LabelField::LiqPrice
+                        | LabelField::Leverage
+                        | LabelField::MarginMode
+                        | LabelField::SessionPnl
+                        | LabelField::SessionProfit
+                        | LabelField::CoinBalance
+                )
+            });
         // Inside the readout above but gated apart, because valuing it walks the catalogue for the
         // core's base-currency rate. A modern core states this counter for EVERY market — zero
         // included — so its own presence gates nothing, and a chart drawing only a Bid would pay
         // that walk per pane on every revision.
-        let wants_session = st
-            .chart_labels
-            .any_drawn(|f| f == LabelField::SessionProfit);
+        let wants_session = live
+            && st
+                .chart_labels
+                .any_drawn(|f| f == LabelField::SessionProfit);
         // Its own gate rather than a share of the one above: this readout walks the retained trade
         // buckets and the 5-minute candle ring, so a chart that prints a spread and no window
         // figure must not pay for that walk on every market revision.
-        let wants_windows = st.chart_labels.any_drawn(|f| f == LabelField::WindowDelta);
+        let wants_windows = live && st.chart_labels.any_drawn(|f| f == LabelField::WindowDelta);
         // Which PERIODS the volume captions ask for, deduplicated: two modules reading the same
         // minute are one read, and a chart printing none of them collects nothing at all. The set
         // is tiny — one or two — so it is a vector rather than a set. The ANCHOR travels with each:
         // the same minute measured at the live edge and around the pointer are two periods.
-        let wanted_keys = st.chart_labels.volume_spans();
+        let wanted_keys = if live {
+            st.chart_labels.volume_spans()
+        } else {
+            Vec::new()
+        };
         // The arbitrage column, on its own gate AND its own clock. The readout asks the core venue
         // by venue — each call takes the market lock — so it is read a few times a second rather
         // than on every revision, which on a busy coin is several times that. A column of prices is
         // read by eye; the reference terminal repaints it no faster either.
-        let wants_arb = st.chart_labels.any_drawn(|f| f == LabelField::ArbColumn);
+        let wants_arb = live && st.chart_labels.any_drawn(|f| f == LabelField::ArbColumn);
         let arb_now_ms = now as i64;
         // The clock only advances while something counts down with it, and it is quantized so an
         // idle chart re-formats its captions when the printed figure moves rather than once per

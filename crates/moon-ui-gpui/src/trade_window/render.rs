@@ -107,11 +107,15 @@ impl Render for TradeWindowView {
                             .min_w_0()
                             .items_center(),
                     )
-                    // THE VERTICAL-SCALE CONTROL, and it is also the only place the chosen scale
-                    // is ever STATED: the chart's own scale badge is gated on a chart-label
-                    // setting the user need not have on, and hides a cleanly pinned percentage
-                    // even when they do. Reached through the `controls` facade because the
-                    // `scale` module behind it is private.
+                    // THE VERTICAL-SCALE CONTROL: a look at this trade from another zoom, for as
+                    // long as the window is open. The window itself opens on AUTO and fits the
+                    // trade it was opened for — a remembered percentage fitted the trade it was
+                    // chosen for and drew the next one off-screen, which read as a frozen chart.
+                    //
+                    // The chart's own badge states what the pane is CURRENTLY on and is part of
+                    // this view's caption set; this trigger states what was PICKED. Reached
+                    // through the `controls` facade because the `scale` module behind it is
+                    // private.
                     //
                     // `chrome_section` is `flex_none`, for the same reason the close button below
                     // is: the title cluster beside it is `flex_1().min_w_0()` and would otherwise
