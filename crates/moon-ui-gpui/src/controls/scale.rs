@@ -33,34 +33,6 @@ fn scale_label(scale: Option<f32>) -> String {
         .unwrap_or_else(|| t!("toolbar.scale_auto").to_string())
 }
 
-/// Keeps a persisted scale only when it is one this control can actually display.
-///
-/// A stored scale is read back from a hand-editable file whose deserializer checks the TYPE and
-/// not the value, so it can return a non-finite, non-positive or simply non-preset number. Handed
-/// on unchecked, such a value would be applied to the chart while [`scale_label`] - which matches
-/// presets exactly - labelled the trigger "Auto", leaving the picture and its own caption
-/// disagreeing on every restart. Normalizing on the way IN keeps "the trigger states what the
-/// chart is on" true by construction.
-///
-/// Args:
-///     stored: The persisted value, straight off the layout file.
-///
-/// Returns:
-///     The value when it is a known preset, or `None` for Auto.
-pub(crate) fn normalized_scale(stored: Option<f32>) -> Option<f32> {
-    let value = stored?;
-    if !value.is_finite() {
-        return None;
-    }
-    SCALES
-        .iter()
-        .filter_map(|(_, preset)| *preset)
-        .find(|preset| (*preset - value).abs() <= f32::EPSILON)
-}
-
-#[cfg(test)]
-mod tests;
-
 /// Returns the next price-scale step for the Scale +/- shortcuts.
 ///
 /// `SCALES` is the single ordering source: Auto → 50% → 20% → 10% → 5% → 2%, with increasing
@@ -180,12 +152,12 @@ pub(crate) fn scale_dropdown_for_tabs(
 
 /// Builds the trade-detail window's own price-scale dropdown.
 ///
-/// The TRIGGER is the required indication, and it has to be, because the chart itself cannot
-/// carry one: `ChartEngine::scale_badge` returns nothing unless the user has switched on an
-/// unrelated chart label, and even then `scale_badge_pct` deliberately hides a cleanly pinned
-/// percentage, since an untouched fixed scale reads back as the step that was chosen. A cleanly
-/// pinned 10% therefore draws NOTHING on the plot under any setting - so the control states the
-/// answer instead, permanently and without depending on anything else being enabled.
+/// The TRIGGER states what was PICKED, and it is the only thing that does while a percentage is
+/// pinned: `scale_badge_pct` shows the badge in Auto, and hides it under a clean pin on purpose —
+/// an untouched fixed scale reads back as the step that was chosen, so the plot would repeat the
+/// number already on this control. The window's shipped caption set carries that badge, so the
+/// two together always answer "what zoom is this": the badge while the pane fits itself, the
+/// trigger the moment the reader pins a step.
 ///
 /// Micro trigger rather than the detached window's taller one: this sits in a window header
 /// beside a title cluster, which is the tab strip's proportions and not a toolbar's.

@@ -60,8 +60,8 @@ pub use metric::{MetricTarget, OpenMetricPopup, TradeMetric, metric_popup_conten
 
 use moon_core::market::{MarketLimits, MaxOrderSource};
 pub(crate) use scale::{
-    normalized_scale, scale_dropdown_for_add_stack, scale_dropdown_for_tabs,
-    scale_dropdown_for_trade_window, step_scale,
+    scale_dropdown_for_add_stack, scale_dropdown_for_tabs, scale_dropdown_for_trade_window,
+    step_scale,
 };
 pub use toolbar::toolbar;
 pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};

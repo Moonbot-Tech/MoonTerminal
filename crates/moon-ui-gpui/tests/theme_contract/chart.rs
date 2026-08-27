@@ -907,14 +907,18 @@ fn move_gestures_stay_a_click_on_every_button() {
     );
 }
 
-/// Removing `engine.rs:ChartEngine::set_follow`'s `self.historical ||` guard must fail: the
-/// global Live flag re-anchors a closed-trade window to now and leaves its old candles off-screen.
+/// Removing `engine.rs:ChartEngine::set_follow`'s historical guard must fail: the global Live flag
+/// re-anchors a closed-trade window to now and leaves its old candles off-screen.
+///
+/// The flag is read out of the DATA STATE rather than off the engine: an engine is `Clone` over
+/// shared handles, and the caption gates answer the same question from there, so a second copy on
+/// the engine could disagree with the one everything else reads.
 #[test]
 fn historical_panels_make_the_engine_ignore_the_global_follow_flag() {
     let engine = read_src("chartdx/engine.rs");
     let follow = code_only(braced_body(&engine, "pub fn set_follow("));
     assert!(
-        follow.contains("if self.historical || self.follow == follow {"),
+        follow.contains("if self.data.borrow().historical || self.follow == follow {"),
         "set_follow must return before the live-reset body when the engine is historical"
     );
     let panel = read_src("panels/chart/mod.rs");
@@ -925,14 +929,26 @@ fn historical_panels_make_the_engine_ignore_the_global_follow_flag() {
     );
 }
 
-/// Removing `window.rs`'s `normalized_scale` call must fail: a hand-edited non-preset scale
-/// alters a trade chart while the dropdown misleadingly labels the persisted setting Auto.
+/// A trade window must open on AUTO: nothing may pin its vertical scale.
+///
+/// It used to open at a remembered percentage, one shared by every trade window. A percentage
+/// chosen for one position does not fit the next — the trade is then drawn off the visible range
+/// and the window reads as frozen rather than scaled. The scale control is still there; it is a
+/// look from another zoom, for as long as that window is open, and it is not remembered.
 #[test]
-fn trade_windows_normalize_their_persisted_scale_before_applying_it() {
+fn trade_windows_open_on_auto_and_pin_no_scale() {
     let window = code_only(&read_src("trade_window/window.rs"));
+    for pin in ["set_scale(", "force_scale(", "set_scale_percent("] {
+        assert!(
+            !window.contains(pin),
+            "a trade window must not pin a vertical scale as it opens, and `{pin}` does"
+        );
+    }
+    let view = code_only(&read_src("trade_window/mod.rs"));
+    let pick = braced_body(&view, "pub(crate) fn pick_scale(");
     assert!(
-        window.contains("normalized_scale(owner.read(pcx).layout.trade_window_scale)"),
-        "the persisted trade-window scale must be normalized before set_scale receives it"
+        !pick.contains("layout"),
+        "picking a scale addresses this window only; it must not be persisted"
     );
 }
 
