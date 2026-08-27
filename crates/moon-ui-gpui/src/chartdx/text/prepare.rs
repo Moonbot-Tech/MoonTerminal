@@ -141,8 +141,10 @@ impl RenderState {
             readout_metrics_changed |=
                 self.draw_pane_captions(ctx, idx, caption_input, caption_fg)?;
             // This pane's captions were drawn from labels the substitution had already reached.
-            // `refresh_pane_labels` runs on the SYNC paths, not this one, so a presented frame can
-            // still carry captions built before the swap; the flag is what tells those apart. A
+            // `refresh_pane_labels` runs on the SYNC paths and on the countdown tick, not on this
+            // one, so a presented frame can still carry captions built before the swap; the flag
+            // is what tells those apart — and the countdown tick rebuilds it from the same
+            // `shot_caption_active` this reads, so it cannot forge the proof. A
             // pane whose captions were suppressed for want of room draws no core name either, so
             // it does not hold the proof back.
             if shot_caption && self.panes[idx].labels_shot_substituted {

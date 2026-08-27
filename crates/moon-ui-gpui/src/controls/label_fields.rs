@@ -4,8 +4,8 @@
 //! caption print" and "which figure does the caption I am adding print". What differs is what
 //! happens to the pick, which is the callback; never the list.
 //!
-//! A grid rather than a menu, and that is a decision the list forced: the catalogue is forty-five
-//! figures in five sections, and `MoonDropdown` draws ONE column with no hover-opened submenus —
+//! A grid rather than a menu, and that is a decision the list forced: the catalogue is fifty-one
+//! figures in ten sections, and `MoonDropdown` draws ONE column with no hover-opened submenus —
 //! its nested level opens only when the parent row is explicitly `selected`, which needs state the
 //! menu does not keep. A column per section shows the whole catalogue at once, which is also how a
 //! reader picks from it: they know the subject before they know the figure.
@@ -39,9 +39,10 @@ const COLUMN_W: f32 = 178.0;
 /// set the height of all five. Sections are packed into columns instead, several to a column, each
 /// keeping its own heading — which is the only thing that makes a long list readable at all.
 ///
-/// Sixteen is where the nine sections settle into four columns of at most fifteen rows; twelve
-/// splits them into seven columns, and twenty puts twenty rows in one. Worth re-checking whenever
-/// a section is added — the number is a result, not a preference.
+/// Sixteen is where the ten sections settle into five columns, the tallest of them exactly sixteen
+/// rows; twelve splits them further, and twenty puts twenty rows in one. Worth re-checking whenever
+/// a section is added — the number is a result, not a preference, and the tallest column is now
+/// flush against it.
 const MAX_COLUMN_ROWS: usize = 16;
 
 /// Lay the sections out into columns, keeping each section whole and its heading with it.

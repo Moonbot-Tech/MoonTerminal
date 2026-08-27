@@ -9,13 +9,13 @@
 use gpui::*;
 use moon_core::config::{
     CHART_LABEL_PARTS, ChartLabelField, ChartLabelPart, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    LabelColor, LabelFlow, LabelSpan, LabelStyle, LabelWindow, PnlBasis, SpanAnchor, VolumeUnits,
+    LabelColor, LabelFlow, LabelSpan, LabelStyle, LabelTf, LabelWindow, PnlBasis, SpanAnchor,
+    VolumeUnits,
 };
 use moon_core::util::fmt::DeltaSign;
-use moon_ui::{MoonWindowExt as _,
-
+use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonMenuSize, MoonPalette, h_flex, v_flex,
+    MoonInput, MoonMenuSize, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -147,8 +147,52 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
         .child(name_row)
         .child(flow_row)
         .child(body)
-        .child(preview(&row, p, cx))
+        .child(preview(&row, state.read(cx).chart_tf_ms, p, cx))
         .into_any_element()
+}
+
+/// One labelled dropdown of the settings pane: the caption on the left, the menu on the right.
+///
+/// The sibling of `seg_row`, which every SHORT choice in this pane goes through. A dropdown is what
+/// the two long ones need — the period list and the timeframe list are too many options to lay out
+/// as segments — and one builder is what keeps their chrome from drifting apart.
+///
+/// Args:
+///     id: Element id of the dropdown, unique within this dialog.
+///     label: Localized caption printed to its left.
+///     current: Localized name of the choice in force, shown on the trigger.
+///     items: Menu entries, already built by `crate::panels::radio_items`.
+///     p: Active palette.
+///     cx: Read for the theme's scaled metrics.
+fn dropdown_row(
+    id: &'static str,
+    label: &str,
+    current: &str,
+    items: Vec<moon_ui::MoonMenuItem>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text))
+                .child(label.to_string()),
+        )
+        .child(
+            MoonDropdown::new(id)
+                .label(current.to_string())
+                .trigger_caret(true)
+                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_size(MoonButtonSize::Micro)
+                .trigger_width_scaled(84.0)
+                .menu_width_scaled(104.0)
+                .menu_size(MoonMenuSize::Compact)
+                .items(items),
+        )
 }
 
 /// The module's captions, in print order: pick one, move it, hide it, remove it.
@@ -424,6 +468,36 @@ fn caption_settings(
         ));
     }
 
+    // Which timeframe this caption counts down to. `Авто` follows the chart, and the fixed ones are
+    // what let one chart carry several countdowns at once — which is the whole reason the timeframe
+    // is a setting here rather than a field of its own per period.
+    if part.field.uses_tf() {
+        let state = state.clone();
+        let current = part.tf;
+        let items = crate::panels::radio_items(
+            LabelTf::ALL.into_iter().map(|tf| {
+                (
+                    tf,
+                    SharedString::from(format!("le-tf-{tf:?}")),
+                    SharedString::from(t!(tf.locale_key()).to_string()),
+                )
+            }),
+            current,
+            crate::panels::RadioMark::Check,
+            move |cx, tf: LabelTf| {
+                write_row(&state, cx, |s| s.row.parts[selected].tf = tf);
+            },
+        );
+        col = col.child(dropdown_row(
+            "le-tf",
+            &t!("chart_labels.tf"),
+            &t!(current.locale_key()),
+            items,
+            p,
+            cx,
+        ));
+    }
+
     // The PERIOD this caption reads, as one list: seconds, the fixed windows, and counts of
     // trades. One control rather than "a window dropdown, plus a custom value the chart's menu can
     // set and only a Clear button can undo" — the reader picking a period here should see every
@@ -453,29 +527,14 @@ fn caption_settings(
                 });
             },
         );
-        col = col.child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(design::ui_px(cx, 6.0))
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text))
-                        .child(t!("chart_labels.window").to_string()),
-                )
-                .child(
-                    MoonDropdown::new("le-window")
-                        .label(period_label(part.span, part.window))
-                        .trigger_caret(true)
-                        .trigger_variant(MoonButtonVariant::Soft)
-                        .trigger_size(MoonButtonSize::Micro)
-                        .trigger_width_scaled(84.0)
-                        .menu_width_scaled(104.0)
-                        .menu_size(MoonMenuSize::Compact)
-                        .items(items),
-                ),
-        );
+        col = col.child(dropdown_row(
+            "le-window",
+            &t!("chart_labels.window"),
+            &period_label(part.span, part.window),
+            items,
+            p,
+            cx,
+        ));
     }
 
     // WHERE the period sits. Above the unit because it changes what the figure ANSWERS rather than
@@ -739,7 +798,12 @@ fn caption_settings(
 /// Sample rather than live, so every caption answers — see `chartdx::text::preview_row`. Drawn with
 /// the real styles: colour mode, size multiplier and prefix all show here, which is what makes this
 /// a preview rather than a list of field names.
-fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> AnyElement {
+fn preview(
+    row: &moon_core::config::ChartLabelRow,
+    chart_tf_ms: i64,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
     let base = design::t_body(cx);
     // The sample runs the way the module does — a column module previews as a block, which is the
     // whole point of asking the question in the editor rather than on the chart.
@@ -748,7 +812,7 @@ fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> 
     } else {
         v_flex().w_full().gap_1()
     };
-    let captions = crate::chartdx::preview_row(row);
+    let captions = crate::chartdx::preview_row(row, chart_tf_ms);
     if captions.is_empty() {
         line = line.child(
             div()
@@ -779,26 +843,13 @@ fn preview(row: &moon_core::config::ChartLabelRow, p: MoonPalette, cx: &App) -> 
         let split = caption.style.value_only && !caption.prefix.is_empty();
         let (prefix, value) = match split {
             true => (caption.prefix.clone(), caption.text.clone()),
-            false => (
-                String::new(),
-                format!("{}{}", caption.prefix, caption.text),
-            ),
+            false => (String::new(), format!("{}{}", caption.prefix, caption.text)),
         };
         let mut pair = h_flex().items_baseline();
         if !prefix.is_empty() {
-            pair = pair.child(
-                div()
-                    .text_size(size)
-                    .text_color(moon(p.text))
-                    .child(prefix),
-            );
+            pair = pair.child(div().text_size(size).text_color(moon(p.text)).child(prefix));
         }
-        let cell = pair.child(
-            div()
-                .text_size(size)
-                .text_color(moon(color))
-                .child(value),
-        );
+        let cell = pair.child(div().text_size(size).text_color(moon(color)).child(value));
         match caption.column {
             true => {
                 column = Some(column.unwrap_or_else(|| v_flex().gap_1()).child(cell));

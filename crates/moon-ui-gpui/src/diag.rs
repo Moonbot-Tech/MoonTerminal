@@ -151,8 +151,21 @@ diag_counters!(
     // magnitude below the draw count. The two moving together means a caption is being rebuilt on
     // every frame — a value formatted below its own printed precision, and a reshape of its
     // retained GPU run each time.
+    //
+    // One legitimate FLOOR was added in 2026-08: a chart carrying a countdown caption
+    // ("До закрытия ТФ", funding) re-formats that pane once per clock step — once a second while a
+    // countdown is inside its last hour, once a minute otherwise. Subtract `chart_countdown_tick`
+    // before reading the rule above; what is left is the caption cost the rule is about.
     CHART_CAPTION_DRAW => "chart_caption_draw",
     CHART_CAPTION_REBUILD => "chart_caption_rebuild",
+    // Panes whose captions were re-formatted by the COUNTDOWN clock rather than by a market
+    // revision, per second. It is the floor `chart_caption_rebuild` carries on a chart that prints
+    // a countdown, and the only way to tell that floor from a caption genuinely thrashing.
+    //
+    // Its ceiling is one per active pane per second, and it is reached whenever any drawn countdown
+    // is inside its last hour — which for a 1м/5м/30м/1ч timeframe is always. Higher than that
+    // means the clock quantum stopped working.
+    CHART_COUNTDOWN_TICK => "chart_countdown_tick",
     FIRETEST_MOUSE_SENT => "firetest_mouse_sent",
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",

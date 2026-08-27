@@ -1453,6 +1453,10 @@ chart_labels.group.instrument:
   ru: "Инструмент"
   en: "Instrument"
   es: "Instrumento"
+chart_labels.group.time:
+  ru: "Время"
+  en: "Time"
+  es: "Tiempo"
 chart_labels.group.position:
   ru: "Позиция"
   en: "Position"
@@ -1549,6 +1553,10 @@ chart_labels.field.funding_in:
   ru: "До фандинга"
   en: "Funding in"
   es: "Funding en"
+chart_labels.field.tf_close_in:
+  ru: "До закрытия ТФ"
+  en: "TF closes in"
+  es: "Cierre del TF en"
 chart_labels.field.coin_tags:
   ru: "Теги монеты"
   en: "Coin tags"
@@ -1941,6 +1949,38 @@ arb.min_abs_off:
   ru: "всё"
   en: "all"
   es: "todo"
+chart_labels.tf:
+  ru: "Таймфрейм"
+  en: "Timeframe"
+  es: "Temporalidad"
+chart_labels.tf.auto:
+  ru: "Авто"
+  en: "Auto"
+  es: "Auto"
+chart_labels.tf.m1:
+  ru: "1м"
+  en: "1m"
+  es: "1m"
+chart_labels.tf.m5:
+  ru: "5м"
+  en: "5m"
+  es: "5m"
+chart_labels.tf.m30:
+  ru: "30м"
+  en: "30m"
+  es: "30m"
+chart_labels.tf.h1:
+  ru: "1ч"
+  en: "1h"
+  es: "1h"
+chart_labels.tf.h4:
+  ru: "4ч"
+  en: "4h"
+  es: "4h"
+chart_labels.tf.d1:
+  ru: "1д"
+  en: "1d"
+  es: "1d"
 chart_labels.window:
   ru: "Период"
   en: "Window"
@@ -2065,6 +2105,10 @@ chart_labels.short.funding_in:
   ru: "Фандинг через"
   en: "Funding in"
   es: "Funding en"
+chart_labels.short.tf_close_in:
+  ru: "Закр."
+  en: "Closes"
+  es: "Cierre"
 chart_labels.funding_soon:
   ru: "вот-вот"
   en: "any moment"
@@ -2077,6 +2121,10 @@ chart_labels.unit_minute:
   ru: "м"
   en: "m"
   es: "m"
+chart_labels.unit_second:
+  ru: "с"
+  en: "s"
+  es: "s"
 chart_labels.short.exposure:
   ru: "Сумма"
   en: "Size"

@@ -12,11 +12,11 @@
 
 use std::rc::Rc;
 
-use moon_core::config::{
-    ChartLabelField, ChartLabelPart, ChartLabelsCfg, LabelSpan, PnlBasis, ROW_NAME_PART, SpanAnchor,
-    VolumeUnits,
-};
 use moon_core::config::{ARB_PART_BASE, ArbViewCfg};
+use moon_core::config::{
+    ChartLabelField, ChartLabelPart, ChartLabelsCfg, LabelSpan, PnlBasis, ROW_NAME_PART,
+    SpanAnchor, VolumeUnits,
+};
 use moon_core::market::{
     ArbQuote, CoinTag, LiqSpanReadout, MarketFiguresReadout, MarketWindowsReadout, VolumeAt,
     VolumeSpan, VolumeSpanReadout,
@@ -63,11 +63,19 @@ pub(in crate::chartdx) struct LabelInputs {
     /// `None` until a caption asks for any of it — the sync path does not read the snapshot for a
     /// figure nobody prints.
     pub context: Option<moon_core::market::MarketContextReadout>,
-    /// Wall clock the funding countdown is measured against, in Unix milliseconds.
+    /// Wall clock the countdown captions are measured against, in Unix milliseconds.
     ///
     /// Carried as an INPUT rather than read at format time so the cache key sees it: a countdown
-    /// re-formats when the minute it prints changes, and not on every revision in between.
+    /// re-formats when the figure it prints changes, and not on every revision in between. Already
+    /// QUANTIZED by the sync to the coarsest step the drawn countdowns can live with — a minute
+    /// while every one of them is far out, a second once one is inside its last hour.
     pub now_ms: i64,
+    /// The chart's own candle timeframe in milliseconds, for a countdown caption set to `Авто`.
+    ///
+    /// A caption parameter resolves against it rather than the caption reading the candle
+    /// configuration itself: the caption pass is handed everything it prints, and this keeps the
+    /// timeframe in the cache key, so switching the chart's timeframe re-formats the countdown.
+    pub chart_tf_ms: i64,
     /// Quote side, venue caps, coin tags and the EXCHANGE's own position on this market.
     ///
     /// `None` until a caption asks for any of it, like [`Self::context`]: the readout takes the
@@ -360,7 +368,11 @@ impl LabelState {
                     row: row_ix,
                     part: part_ix,
                     text,
-                    prefix: caption_prefix(part, part.resolved_style().caption),
+                    prefix: caption_prefix(
+                        part,
+                        part.resolved_style().caption,
+                        self.inputs.chart_tf_ms,
+                    ),
                     reachable: false,
                     venue: None,
                     sign,
@@ -479,11 +491,25 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .context
             .and_then(|c| c.funding_pct)
             .and_then(|v| signed_pct_label(part, v)),
+        // Measured against the shared clock floored to ITS OWN minute, both for the figure and for
+        // the elapsed test that suppresses it - one clock, or the caption disappears at a different
+        // instant than the one it counts to. Funding's target does not sit on the bucket grid, so
+        // when a candle countdown beside this pulls the shared clock down to its second step, an
+        // unfloored reading would shift the printed minute and move the moment the caption goes
+        // away. The floor is a no-op while the shared clock is already on the minute, which is
+        // every chart that draws no candle countdown - so this is exactly the behaviour that
+        // shipped before one existed.
         ChartLabelField::FundingIn => inputs
             .context
             .and_then(|c| c.funding_at_ms)
-            .and_then(|at| fmt_countdown(at - inputs.now_ms))
+            .and_then(|at| fmt_countdown(at - inputs.now_ms.div_euclid(60_000) * 60_000))
             .map(|text| (text, None)),
+        // Always printed: the countdown asks the clock, not the market, so there is no state in
+        // which it has nothing to say - which is why this arm has no `None` at all.
+        ChartLabelField::TfCloseIn => Some((
+            fmt_tf_countdown(part.tf.remaining_ms(inputs.chart_tf_ms, inputs.now_ms)),
+            None,
+        )),
         ChartLabelField::OpenOrders => (stats.open_orders > 0).then(|| {
             (
                 stats.open_orders.to_string(),
@@ -790,15 +816,15 @@ fn plain(text: &str) -> String {
 }
 
 /// One figure off the market readout, absent when the readout itself is.
-fn figure(inputs: &LabelInputs, pick: impl Fn(&MarketFiguresReadout) -> Option<f64>) -> Option<f64> {
+fn figure(
+    inputs: &LabelInputs,
+    pick: impl Fn(&MarketFiguresReadout) -> Option<f64>,
+) -> Option<f64> {
     inputs.figures.as_ref().and_then(pick)
 }
 
 /// The window figures this caption is configured to read.
-fn window(
-    inputs: &LabelInputs,
-    part: &ChartLabelPart,
-) -> Option<moon_core::market::WindowFigures> {
+fn window(inputs: &LabelInputs, part: &ChartLabelPart) -> Option<moon_core::market::WindowFigures> {
     let windows = inputs.windows.as_ref()?;
     windows.windows.get(part.window.index()).copied()
 }
@@ -955,7 +981,10 @@ fn tags_text(tags: &[CoinTag]) -> String {
 /// instead of a check per drawing site.
 fn signed_pct_label(part: &ChartLabelPart, v: f64) -> Option<(String, Option<DeltaSign>)> {
     let (text, sign) = fmt::signed_pct(v, 2)?;
-    Some((text, colored_sign(part.resolved_style().color_min_pct, v, sign)))
+    Some((
+        text,
+        colored_sign(part.resolved_style().color_min_pct, v, sign),
+    ))
 }
 
 /// The sign a percentage is coloured by, or `None` when it is too small to be worth painting.
@@ -981,12 +1010,61 @@ fn fmt_countdown(remaining_ms: i64) -> Option<String> {
     Some(match (hours, minutes) {
         (0, 0) => t!("chart_labels.funding_soon").to_string(),
         (0, m) => format!("{m}{}", t!("chart_labels.unit_minute")),
-        (h, m) => format!(
-            "{h}{} {m:02}{}",
-            t!("chart_labels.unit_hour"),
-            t!("chart_labels.unit_minute")
-        ),
+        (h, m) => hours_and_minutes(h, m),
     })
+}
+
+/// `2ч 05м` — the one spelling both countdowns print once they are past an hour.
+///
+/// Shared rather than typed twice: the two callers round differently and suppress differently, but
+/// what they PRINT at this range is one string, and two copies of it drift the moment a locale unit
+/// or the zero-padding changes.
+fn hours_and_minutes(hours: i64, minutes: i64) -> String {
+    format!(
+        "{hours}{} {minutes:02}{}",
+        t!("chart_labels.unit_hour"),
+        t!("chart_labels.unit_minute")
+    )
+}
+
+/// Whole units of `step` in `value`, rounded UP, with a negative value answering zero.
+fn ceil_div(value: i64, step: i64) -> i64 {
+    let value = value.max(0);
+    value.div_euclid(step) + i64::from(value.rem_euclid(step) > 0)
+}
+
+/// Format a candle countdown as `23ч 05м`, `47м 03с` or `42с`.
+///
+/// Three steps rather than one shape, because the figure a reader needs changes with the distance:
+/// seconds are noise an hour out, and minutes alone are useless in the last one. The step is the
+/// same threshold the sync quantizes its clock by, so the seconds shown are always seconds the
+/// clock actually advances — a display finer than its own clock would print a frozen number.
+///
+/// Rounded UP at EVERY step, and that is a correctness rule rather than a taste: the clock this is
+/// handed is quantized, and the quantum changes with what else the chart draws. Because the bucket
+/// grid and both quanta are multiples of each other, a quantized clock yields exactly
+/// `ceil(remaining / quantum) * quantum` — so rounding up again is idempotent and the SAME instant
+/// prints the same figure on either step. Flooring the minutes while the seconds rounded up made
+/// the caption read a whole minute lower whenever a second caption pulled the clock to its fine
+/// step, which is a figure that changes for a reason the reader cannot see.
+///
+/// Rounding up is also what the last second needs: it reads `1с` and then the candle rolls, where
+/// rounding down would print `0с` for a whole second and read as a stopped chart.
+fn fmt_tf_countdown(remaining_ms: i64) -> String {
+    let secs = ceil_div(remaining_ms, 1000);
+    if secs >= 3600 {
+        let mins = ceil_div(secs, 60);
+        return hours_and_minutes(mins / 60, mins % 60);
+    }
+    let (minutes, seconds) = (secs / 60, secs % 60);
+    if minutes > 0 {
+        return format!(
+            "{minutes}{} {seconds:02}{}",
+            t!("chart_labels.unit_minute"),
+            t!("chart_labels.unit_second")
+        );
+    }
+    format!("{seconds}{}", t!("chart_labels.unit_second"))
 }
 
 /// Longest detect line kept, in characters.
@@ -1056,8 +1134,25 @@ fn non_empty(s: &str) -> Option<String> {
 /// the dictionary, like everything else this feature prints.
 ///
 /// A window figure names itself with its window — two "Δ" captions on one line are unreadable
-/// unless each says whether it is the minute or the day — which is the only variation in the rule.
-fn caption_prefix(part: &ChartLabelPart, on: bool) -> String {
+/// unless each says whether it is the minute or the day — and a candle countdown names itself with
+/// its timeframe for exactly the same reason.
+fn caption_prefix(part: &ChartLabelPart, on: bool, chart_tf_ms: i64) -> String {
+    // The timeframe is this caption's IDENTITY, not its decoration: a chart carrying the hour's and
+    // the day's countdowns beside each other is unreadable without it, and the countdowns are the
+    // one figure a reader stacks several of. So the switch drops the WORD and keeps the period —
+    // the mirror of the window rule below, which keeps the word and drops the period, and for the
+    // same reason: whichever half says which figure this is, stays.
+    //
+    // `Авто` is resolved to the timeframe it currently means. Naming the setting would print the
+    // same prefix on a minute chart and a day chart, which is the confusion this prefix exists to
+    // remove.
+    if part.field.uses_tf() {
+        let period = t!(part.tf.resolved(chart_tf_ms).locale_key()).to_string();
+        return match part.field.caption_key().filter(|_| on) {
+            Some(key) => format!("{} {period}: ", t!(key).trim_end()),
+            None => format!("{period}: "),
+        };
+    }
     let Some(key) = part.field.caption_key() else {
         return String::new();
     };
@@ -1167,13 +1262,20 @@ pub(crate) struct PreviewCaption {
 /// Sample rather than live values, deliberately: the editor is where a caption is CHOSEN, and a
 /// figure the current market happens not to have — no position, no funding on a spot market —
 /// would print nothing and read as "this label is broken". Every field answers here.
-pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<PreviewCaption> {
+pub(crate) fn preview_row(
+    row: &moon_core::config::ChartLabelRow,
+    chart_tf_ms: i64,
+) -> Vec<PreviewCaption> {
     // A module switched off prints nothing, and the sample says so rather than showing what it
     // WOULD print: the editor's line answers "what will the chart show".
     if !row.is_drawn() {
         return Vec::new();
     }
     let mut inputs = sample_inputs();
+    // The one input that is NOT a sample: a countdown set to `Авто` names the timeframe it will
+    // actually follow. Previewing the sample's own would print a period the chart does not use, on
+    // the single setting whose whole purpose is to track the chart.
+    inputs.chart_tf_ms = chart_tf_ms;
     // One sample reading under every span this module asks for. Without it a caption set to "the
     // last 500 trades" would preview as blank — the editor would say the label is broken when it is
     // merely custom.
@@ -1237,7 +1339,7 @@ pub(crate) fn preview_row(row: &moon_core::config::ChartLabelRow) -> Vec<Preview
             let style = part.resolved_style();
             out.push(PreviewCaption {
                 column: false,
-                prefix: caption_prefix(part, style.caption),
+                prefix: caption_prefix(part, style.caption, inputs.chart_tf_ms),
                 text,
                 sign,
                 style,
@@ -1376,8 +1478,13 @@ fn sample_inputs() -> LabelInputs {
             funding_pct: Some(0.01),
             funding_at_ms: Some(5 * 3_600_000 + 33 * 60_000),
         }),
-        // The countdown is measured against this, so the pair prints a fixed `5ч 33м`.
+        // The countdowns are measured against this, so the funding pair prints a fixed `5ч 33м`.
+        // A candle countdown lands on a bucket boundary here and previews its FULL period, which is
+        // the widest string it can print — the preview is also how a reader judges whether the
+        // caption fits where they are putting it.
         now_ms: 0,
+        // The sample chart is on the five-minute timeframe, so an `Авто` caption previews `5м`.
+        chart_tf_ms: 5 * 60_000,
         basis: [stats; 3],
     }
 }

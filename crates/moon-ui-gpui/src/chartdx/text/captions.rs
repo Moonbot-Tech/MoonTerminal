@@ -1214,8 +1214,11 @@ impl RenderState {
 
     /// Re-resolve one pane's captions from the values it currently holds.
     ///
-    /// Called from the SYNC paths — a market revision or an order revision — never from the frame
-    /// path: this is where strings are built, and `prepare_text` runs on every presented frame.
+    /// Called from the SYNC paths — a market revision or an order revision — and, for the
+    /// countdown captions alone, from the frame path when their quantized clock moves
+    /// (`ChartDataState::tick_countdown_captions`). This is where strings are BUILT, which is why
+    /// the frame path calls it once per quantum rather than per frame: `prepare_text` runs on
+    /// every presented frame and must find the strings already made.
     ///
     /// Returns whether the drawn captions changed, so the caller can repaint only when they did.
     pub(in crate::chartdx) fn refresh_pane_labels(&mut self, idx: usize) -> bool {
@@ -1267,6 +1270,7 @@ impl RenderState {
             arb: pr.label_arb.clone(),
             arb_reachable: pr.label_arb_reachable.clone(),
             now_ms: pr.label_now_ms,
+            chart_tf_ms: self.chart_tf_ms,
             basis: pr.label_basis,
         };
         let arb_view = self.arb_view.clone();

@@ -87,7 +87,11 @@ fn cfg_of(fields: &[ChartLabelField]) -> ChartLabelsCfg {
 
 fn texts_of(cfg: &ChartLabelsCfg, inputs: LabelInputs) -> Vec<String> {
     let mut state = LabelState::default();
-    state.update(&Rc::new(cfg.clone()), &Rc::new(ArbViewCfg::default()), inputs);
+    state.update(
+        &Rc::new(cfg.clone()),
+        &Rc::new(ArbViewCfg::default()),
+        inputs,
+    );
     // Prefix and value are stored apart and drawn apart; a test that reads what the chart SHOWS has
     // to put them back together, which is also what the non-split drawing path does.
     state
@@ -168,7 +172,10 @@ fn a_detect_line_drops_the_strategy_tail() {
 
     // Mid-sentence, it is part of what the detect said and stays — including when the line happens
     // to end in the same two characters the tail does.
-    for line in ["(strategy <A>) fired twice", "see (strategy <A>) below (x>)"] {
+    for line in [
+        "(strategy <A>) fired twice",
+        "see (strategy <A>) below (x>)",
+    ] {
         let inline = one_field(
             ChartLabelField::DetectMsg,
             LabelInputs {
@@ -248,7 +255,11 @@ fn a_figure_below_the_colour_threshold_prints_without_a_sign() {
     };
 
     let mut state = LabelState::default();
-    state.update(&Rc::new(cfg.clone()), &Rc::new(ArbViewCfg::default()), quiet);
+    state.update(
+        &Rc::new(cfg.clone()),
+        &Rc::new(ArbViewCfg::default()),
+        quiet,
+    );
     let entry = state.texts.first().expect("prints");
     assert_eq!(entry.text, "+0.40%", "the value is still there");
     assert!(entry.sign.is_none(), "but it is not painted");
@@ -301,7 +312,10 @@ fn the_column_prints_one_line_per_venue() {
         moon_core::config::ArbVenueCfg::new(moon_core::market::ArbVenue::from_code(9)),
     ];
 
-    let texts = texts_with(&cfg, arb_inputs(vec![arb_quote(4, 101.0), arb_quote(9, 99.0)], view));
+    let texts = texts_with(
+        &cfg,
+        arb_inputs(vec![arb_quote(4, 101.0), arb_quote(9, 99.0)], view),
+    );
 
     assert_eq!(texts.len(), 2, "one line per venue, from one caption");
     assert!(texts[0].starts_with("BinanceF"), "{:?}", texts[0]);
@@ -868,11 +882,16 @@ fn the_funding_countdown_states_hours_and_minutes() {
 
 /// A funding time already past is not printed: the core republishes the next one within seconds,
 /// and a negative countdown reads as a stuck chart rather than as a stale field.
+///
+/// Elapsed by more than the caption's own minute, because that is the finest state it can observe:
+/// the clock it is handed is quantized to the minute it prints, so "one millisecond past" is not a
+/// moment this caption can be in — and asserting on one would be asserting on a resolution the
+/// caption deliberately does not have.
 #[test]
 fn an_elapsed_funding_time_prints_nothing() {
     let inputs = LabelInputs {
         context: Some(ctx()),
-        now_ms: FUNDING_AT_MS + 1,
+        now_ms: FUNDING_AT_MS + 60_001,
         ..Default::default()
     };
     assert!(one_field(ChartLabelField::FundingIn, inputs).is_none());
@@ -927,7 +946,7 @@ fn the_preview_answers_for_every_field() {
     for field in ChartLabelField::ALL {
         let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
         row.push_part(field);
-        let captions = preview_row(&row);
+        let captions = preview_row(&row, TF_5M);
         // One line for an ordinary caption; a column caption previews as the whole column, which is
         // the sample roster's two venues.
         let expected = if field.is_column() { 2 } else { 1 };
@@ -953,7 +972,7 @@ fn the_preview_skips_a_hidden_caption_and_prints_the_name() {
     row.parts[1].visible = false;
     row.name = "Дельты".to_string();
     row.show_name = true;
-    let captions = preview_row(&row);
+    let captions = preview_row(&row, TF_5M);
     assert_eq!(captions.len(), 2, "the name and the one visible caption");
     assert_eq!(captions[0].text, "Дельты");
     assert_eq!(
@@ -990,7 +1009,7 @@ fn a_hidden_module_prints_nothing_at_all() {
         "a hidden module prints neither its captions nor its name"
     );
     assert!(
-        preview_row(&cfg_rc.rows[0]).is_empty(),
+        preview_row(&cfg_rc.rows[0], TF_5M).is_empty(),
         "and the editor's sample says the same"
     );
 }
@@ -1209,11 +1228,17 @@ fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
     let mut part = ChartLabelPart::new(ChartLabelField::WindowBuyVolume);
     part.window = moon_core::config::LabelWindow::M5;
 
-    let with = super::caption_prefix(&part, true);
-    let without = super::caption_prefix(&part, false);
+    let with = super::caption_prefix(&part, true, TF_5M);
+    let without = super::caption_prefix(&part, false, TF_5M);
 
-    assert!(with.starts_with("Bv"), "the side is named either way: {with:?}");
-    assert!(with.contains('5'), "the period is spelled when it is on: {with:?}");
+    assert!(
+        with.starts_with("Bv"),
+        "the side is named either way: {with:?}"
+    );
+    assert!(
+        with.contains('5'),
+        "the period is spelled when it is on: {with:?}"
+    );
     assert!(
         without.starts_with("Bv"),
         "the side survives the switch: {without:?}"
@@ -1228,6 +1253,166 @@ fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
 #[test]
 fn the_prefix_switch_still_removes_a_plain_caption() {
     let part = ChartLabelPart::new(ChartLabelField::OpenOrders);
-    assert!(!super::caption_prefix(&part, true).is_empty());
-    assert!(super::caption_prefix(&part, false).is_empty());
+    assert!(!super::caption_prefix(&part, true, TF_5M).is_empty());
+    assert!(super::caption_prefix(&part, false, TF_5M).is_empty());
+}
+
+/// The five-minute chart every countdown test measures against.
+const TF_5M: i64 = 5 * 60_000;
+
+/// Candle buckets are floored on the Unix epoch, so a countdown is pure clock arithmetic: on a
+/// boundary the candle has just opened and the FULL period remains. Zero is never printed — it
+/// would claim a candle that closes and never reopens.
+#[test]
+fn a_candle_countdown_on_a_boundary_states_the_full_period() {
+    let inputs = LabelInputs {
+        now_ms: 0,
+        chart_tf_ms: TF_5M,
+        ..Default::default()
+    };
+    let text = one_field(ChartLabelField::TfCloseIn, inputs).expect("prints");
+    let expected = format!(
+        "5{} 00{}",
+        rust_i18n::t!("chart_labels.unit_minute"),
+        rust_i18n::t!("chart_labels.unit_second")
+    );
+    assert!(text.ends_with(&expected), "{text:?}");
+}
+
+/// Three steps, because the figure a reader needs changes with the distance: seconds are noise an
+/// hour out and minutes alone are useless in the last one.
+#[test]
+fn the_candle_countdown_steps_from_hours_down_to_seconds() {
+    let at = |remaining_ms: i64, tf_ms: i64| {
+        let inputs = LabelInputs {
+            // A boundary minus the remainder: the bucket grid starts at the epoch.
+            now_ms: tf_ms - remaining_ms,
+            chart_tf_ms: tf_ms,
+            ..Default::default()
+        };
+        one_field(ChartLabelField::TfCloseIn, inputs).expect("prints")
+    };
+    let (h, m, s) = (
+        rust_i18n::t!("chart_labels.unit_hour"),
+        rust_i18n::t!("chart_labels.unit_minute"),
+        rust_i18n::t!("chart_labels.unit_second"),
+    );
+    let day = 24 * 3_600_000;
+    assert!(
+        at(2 * 3_600_000 + 5 * 60_000, day).ends_with(&format!("2{h} 05{m}")),
+        "past an hour the seconds are dropped"
+    );
+    assert!(
+        at(47 * 60_000 + 3_000, 3_600_000).ends_with(&format!("47{m} 03{s}")),
+        "inside the hour both halves are printed"
+    );
+    assert!(
+        at(42_000, TF_5M).ends_with(&format!("42{s}")),
+        "the last minute is seconds alone"
+    );
+}
+
+/// Rounded UP: the last second reads `1с` and then the candle rolls. Rounding down would print a
+/// zero for a whole second, which reads as a stopped chart.
+#[test]
+fn the_candle_countdown_rounds_a_part_second_up() {
+    let inputs = LabelInputs {
+        now_ms: TF_5M - 1,
+        chart_tf_ms: TF_5M,
+        ..Default::default()
+    };
+    let text = one_field(ChartLabelField::TfCloseIn, inputs).expect("prints");
+    let expected = format!("1{}", rust_i18n::t!("chart_labels.unit_second"));
+    assert!(text.ends_with(&expected), "{text:?}");
+}
+
+/// The prefix names the TIMEFRAME, resolved: two countdowns on one chart are unreadable otherwise,
+/// and printing the word `Авто` would name the setting rather than the period it currently means.
+#[test]
+fn the_candle_countdown_prefix_names_the_resolved_timeframe() {
+    let auto = ChartLabelPart::new(ChartLabelField::TfCloseIn);
+    let hour = ChartLabelPart {
+        tf: moon_core::config::LabelTf::H1,
+        ..auto
+    };
+    let auto_prefix = super::caption_prefix(&auto, false, TF_5M);
+    assert!(
+        auto_prefix.contains(&*rust_i18n::t!("chart_labels.tf.m5")),
+        "auto follows the chart: {auto_prefix:?}"
+    );
+    assert!(
+        !auto_prefix.contains(&*rust_i18n::t!("chart_labels.tf.auto")),
+        "the setting is not the period: {auto_prefix:?}"
+    );
+    let hour_prefix = super::caption_prefix(&hour, false, TF_5M);
+    assert!(
+        hour_prefix.contains(&*rust_i18n::t!("chart_labels.tf.h1")),
+        "a fixed timeframe ignores the chart: {hour_prefix:?}"
+    );
+
+    // The switch drops the WORD and keeps the period: the period is what tells two countdowns
+    // apart, which is the mirror of the window rule and the reason for it.
+    let named = super::caption_prefix(&hour, true, TF_5M);
+    assert!(
+        named.contains(&*rust_i18n::t!("chart_labels.tf.h1")),
+        "{named:?}"
+    );
+    assert!(
+        named.len() > hour_prefix.len(),
+        "{named:?} vs {hour_prefix:?}"
+    );
+}
+
+/// The SAME instant must print the same figure whichever step the clock is on. The quantum is a
+/// cost control; it is not allowed to change the number, and a caption that reads differently
+/// depending on which OTHER caption shares its chart is a caption nobody can trust.
+#[test]
+fn a_candle_countdown_reads_the_same_on_either_clock_step() {
+    let day: i64 = 24 * 3_600_000;
+    // Ten hours and thirty seconds before the daily candle closes, on a boundary-anchored grid.
+    let now: i64 = day - (10 * 3_600_000 + 30_000);
+    let at = |quantum: i64| {
+        let inputs = LabelInputs {
+            now_ms: now.div_euclid(quantum) * quantum,
+            chart_tf_ms: day,
+            ..Default::default()
+        };
+        one_field(ChartLabelField::TfCloseIn, inputs).expect("prints")
+    };
+    assert_eq!(
+        at(1_000),
+        at(60_000),
+        "the second step and the minute step must agree"
+    );
+}
+
+/// The funding countdown must not move because a CANDLE countdown was added beside it. Funding's
+/// target is not on the bucket grid, so a finer shared clock shifts the minute it prints rather
+/// than sharpening it — the caption reads its own minute regardless of which step is in force.
+#[test]
+fn the_funding_countdown_ignores_the_finer_shared_clock() {
+    let at = |now_ms: i64| {
+        one_field(
+            ChartLabelField::FundingIn,
+            LabelInputs {
+                context: Some(ctx()),
+                now_ms,
+                chart_tf_ms: TF_5M,
+                ..Default::default()
+            },
+        )
+    };
+    // The same instant, quantized to the minute and to the second: one figure either way.
+    let both_steps_agree = |true_now: i64| {
+        assert_eq!(
+            at(true_now.div_euclid(60_000) * 60_000),
+            at(true_now.div_euclid(1_000) * 1_000),
+            "the two clock steps disagree at {true_now}"
+        );
+    };
+    both_steps_agree(FUNDING_AT_MS - (47 * 60_000 + 30_000));
+    // And at the boundary, where the caption stops printing: the step must not decide the instant
+    // the caption disappears either, which is the half of this the figure test alone would miss.
+    both_steps_agree(FUNDING_AT_MS - 30_000);
+    both_steps_agree(FUNDING_AT_MS + 30_000);
 }
