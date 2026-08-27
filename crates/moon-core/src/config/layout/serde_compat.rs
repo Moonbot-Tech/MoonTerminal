@@ -120,6 +120,18 @@ where
     Ok(de_lenient::<D, bool>(d)?.unwrap_or(true))
 }
 
+/// Read one [`ChartGraphicsCfg`] boolean leniently, defaulting an unusable value to `false`.
+///
+/// A separate helper from [`de_lenient_true`] on purpose: reusing that one for a field whose
+/// documented default is `false` would make a malformed value fall back to `true` instead,
+/// flipping the field on for every user with a bad read.
+pub(super) fn de_lenient_false<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, bool>(d)?.unwrap_or(false))
+}
+
 /// Read the arrow-size multiplier leniently, defaulting an unusable value.
 pub(super) fn de_arrow_scale<'de, D>(d: D) -> Result<f32, D::Error>
 where
