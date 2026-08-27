@@ -1,9 +1,10 @@
 //! D3D11 own-pass candle layer, drawn with instancing in the base pass between the grid and
 //! combo layers so candles remain below trade crosses. The base is redrawn only on data changes
 //! or camera movement at the existing cadence, so this layer adds no work to the presentation
-//! path. The buffer, containing hundreds of candles, is cheaply reuploaded in full whenever the
-//! series revision changes. `CandleStyle` constants control the mode, zone, outline, and colors
-//! without rebuilding vertices.
+//! path. The buffer is reuploaded IN FULL whenever the series revision changes, which a live trade
+//! batch does — so on a live market that is continuous, and it survives because it is cheap: see
+//! `candle_upload_len` and `candle_upload_us` in `diag.rs`. `CandleStyle` constants control the
+//! mode, zone, outline, and colors without rebuilding vertices.
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -15,9 +16,12 @@ use super::gpu::{
 };
 use super::types::{CandleGpu, CandleStyleGpu, ChartViewGpu, VolumeStyleGpu};
 
-/// Candle instance capacity of the GPU buffer. The visible window plus prefetch uses hundreds;
-/// 4096 leaves ample headroom while consuming 96 KB of VRAM at 24 bytes per instance. On
-/// overflow, only the most recent tail is retained.
+/// Candle instance capacity of the GPU buffer: 96 KB of VRAM at 24 bytes per instance.
+///
+/// Around a thousand instances per upload on a zoomed-out chart, and the series grows with the
+/// visible range — so this is roughly four times the observed size, not the order of magnitude it
+/// reads as. On overflow only the newest tail is kept and the chart's left simply loses its
+/// candles while the grid and trades still draw there; `candle_dropped` counts them.
 const CANDLE_CAPACITY: u32 = 4096;
 const CANDLES_HLSL: &str = include_str!("shaders/candles.hlsl");
 
@@ -102,8 +106,15 @@ impl CandleLayer {
         }
         let pipe = self.pipe.as_ref().unwrap();
         if let Some(data) = self.pending.take() {
+            // Second half of `candle_upload_us`: `set` only parks the vector, the map-and-copy
+            // happens here, a frame phase later.
+            let write_timer = crate::diag::timer();
             let cap = CANDLE_CAPACITY as usize;
             let data: &[CandleGpu] = if data.len() > cap {
+                crate::diag::bump_by(
+                    &crate::diag::CHART_CANDLE_DROPPED,
+                    (data.len() - cap) as u64,
+                );
                 &data[data.len() - cap..]
             } else {
                 &data
@@ -112,6 +123,7 @@ impl CandleLayer {
                 update_dynamic(context, &pipe.buffer, data);
             }
             self.count = data.len() as u32;
+            crate::diag::record_us(&crate::diag::CHART_CANDLE_UPLOAD_US, write_timer);
         }
         if self.style_dirty {
             update_dynamic(context, &pipe.style_cb, &[self.style]);

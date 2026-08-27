@@ -971,12 +971,13 @@ struct RenderState {
     scissor_rs: Option<ID3D11RasterizerState>,
     #[cfg(windows)]
     scissor_generation: u64,
-    /// Full-window dark base drawn as the FIRST own-pass layer across the ENTIRE backbuffer without
-    /// scissoring, covering GPUI or SwapChain's unpainted white background on the first frame. The
-    /// branded empty-state logo is a GPUI SVG layer, not a native raster splash.
-    #[cfg(windows)]
-    window_bg: background::BackgroundLayer,
-    /// Dark-base color equal to `rgb4(theme.bg)`, updated in `prepare` and filling the ENTIRE window.
+    /// Dark base of the chart, equal to `rgb4(theme.bg)` and updated in `prepare`. The base
+    /// texture is CLEARED to it, which is both the fill and — see `base.rs`'s module doc — what
+    /// keeps a bake/blit divergence off the screen. Do not clear that texture to zero.
+    ///
+    /// Within the blitted slot it is what covers GPUI or SwapChain's unpainted white background on
+    /// the first frame. The branded empty-state logo is a GPUI SVG layer, not a native raster
+    /// splash.
     #[cfg(windows)]
     window_bg_color: [f32; 4],
     #[cfg(windows)]

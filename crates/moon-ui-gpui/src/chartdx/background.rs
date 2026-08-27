@@ -15,8 +15,6 @@ pub use super::types::BackgroundParams;
 
 /// Per-panel plot watermark, disabled by default via `CHART_PHOTO_BACKGROUND_ENABLED`.
 pub const BACKGROUND_3DLOGO_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.png");
-/// Branded full-window background beneath panels that covers white gutters and empty areas.
-pub const SPLASH_PNG: &[u8] = include_bytes!("../../../../assets/img/splash-cold-glow.png");
 const BACKGROUND_HLSL: &str = include_str!("shaders/background.hlsl");
 
 struct BackgroundPipe {

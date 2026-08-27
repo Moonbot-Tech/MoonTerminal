@@ -41,8 +41,10 @@ float4 blit_fragment(BlitOut i) : SV_Target {
     return bp_tex.Sample(bp_samp, i.uv);
 }
 
-// OPAQUE variant for blitting the complete base (base.rs). The base is an opaque frame of the
-// entire scene and must be blitted as a replacement (alpha=1, blending off). Otherwise, alpha<1
+// OPAQUE variant for blitting the base (base.rs). The base is an opaque frame of this chart's
+// SLOT — the scissor narrows the blit to it, and the bake paints it, while the rest of the texture
+// carries the window background from the clear. It must be blitted as a replacement
+// (alpha=1, blending off). Otherwise, alpha<1
 // blends in the backbuffer's white clear color (the Opaque-window fork clears to [1,1,1,1]),
 // causing pale panel flashes on every UI present. Combo/orderbook do NOT use this fragment;
 // they require transparency over the background.

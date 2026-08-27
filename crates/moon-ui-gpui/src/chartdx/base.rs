@@ -1,7 +1,14 @@
-//! Full-window cached chart base for DX11.
+//! Window-sized cached chart base for DX11.
 //!
-//! The base texture contains every chart pixel that does not belong to the high-frequency
-//! cursor/readout overlay. Cursor-only frames blit this texture and then draw the cursor.
+//! The texture is allocated at the full backbuffer size, but only THIS chart's slot is ever blitted
+//! out of it — several charts share one backbuffer, each with its own cache. Inside the slot it
+//! holds every chart pixel that does not belong to the high-frequency cursor/readout overlay;
+//! cursor-only frames blit it and then draw the cursor.
+//!
+//! The CLEAR paints the whole texture with the window background, and that is both the fill and a
+//! safety net: it is the only thing under the layers, and `blit_opaque_fragment` forces alpha to
+//! one — so a transparent clear would surface any divergence between what the bake drew and what
+//! the blit reads as an opaque BLACK rectangle instead of as nothing visible at all.
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -57,11 +64,14 @@ impl BaseCache {
         !self.is_valid_for(gpu)
     }
 
+    /// Point the pipeline at this chart's base texture and clear it to `clear`, the window
+    /// background — see the module doc for why that colour and not transparency.
     pub fn begin_rebuild(
         &mut self,
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         gpu: &RawGpuAccess,
+        clear: [f32; 4],
     ) -> anyhow::Result<ID3D11RenderTargetView> {
         let w = gpu.width();
         let h = gpu.height();
@@ -79,7 +89,7 @@ impl BaseCache {
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(tex.rtv.clone())]), None);
             context.RSSetViewports(Some(&[full_viewport(gpu)]));
-            context.ClearRenderTargetView(&tex.rtv, &[0.0, 0.0, 0.0, 0.0]);
+            context.ClearRenderTargetView(&tex.rtv, &clear);
         }
         self.valid = true;
         crate::diag::bump(&crate::diag::CHART_BASE_BAKE);
@@ -87,9 +97,9 @@ impl BaseCache {
     }
 
     /// `clip` is this chart's slot in device-pixel backbuffer coordinates `(l, t, r, b)`.
-    /// Blitting is restricted to it because a full-window `window_bg` blit would overwrite
-    /// adjacent charts when one window contains multiple `gpu_canvas` elements. The base texture
-    /// covers the full screen, while the scissor restricts writes to this slot.
+    /// Blitting is restricted to it because a full-window blit would overwrite adjacent charts when
+    /// one window contains multiple `gpu_canvas` elements. The quad spans the whole texture and the
+    /// scissor is the only thing that narrows it.
     pub fn blit_to(
         &mut self,
         context: &ID3D11DeviceContext,

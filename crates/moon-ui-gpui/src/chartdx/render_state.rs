@@ -878,27 +878,6 @@ impl RenderState {
     }
 
     #[cfg(windows)]
-    pub(super) fn render_window_background_d3d(
-        &mut self,
-        res: [f32; 2],
-        device: &ID3D11Device,
-        context: &ID3D11DeviceContext,
-        rtv: &ID3D11RenderTargetView,
-        gpu: &RawGpuAccess,
-    ) {
-        let base = BackgroundParams {
-            dst: [0.0, 0.0, res[0], res[1]],
-            resolution: res,
-            uv_off: [0.0, 0.0],
-            uv_scale: [1.0, 1.0],
-            opacity: 0.0,
-            _pad: 0.0,
-            bg: self.window_bg_color,
-        };
-        self.window_bg.render(&base, device, context, rtv, gpu);
-    }
-
-    #[cfg(windows)]
     pub(super) fn render_chart_base_d3d(
         &mut self,
         res: [f32; 2],
@@ -976,15 +955,23 @@ impl RenderState {
                 let prev_rs = unsafe { context.RSGetState().ok() };
 
                 if self.base_dirty || self.base_cache.needs_rebuild(gpu) {
-                    let base_rtv = self.base_cache.begin_rebuild(&device, &context, gpu)?;
-                    self.render_window_background_d3d(res, &device, &context, &base_rtv, gpu);
+                    // The clear IS the background fill: it paints `window_bg_color` over the whole
+                    // texture, and the dedicated background pass this used to run painted that same
+                    // colour through a full pipeline pass — `opacity` was hardcoded to zero, so its
+                    // shader reduced to `float4(bg.rgb, 1.0)`.
+                    let base_rtv = self.base_cache.begin_rebuild(
+                        &device,
+                        &context,
+                        gpu,
+                        self.window_bg_color,
+                    )?;
                     self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
                     self.base_dirty = false;
                 }
                 // Clip the blit to THIS chart's slot, the union of its active-panel bounds, rather
                 // than the full backbuffer. With multiple `gpu_canvas` elements in one detached
-                // window stack, a full-window `window_bg` blit would erase sibling charts. With no
-                // active panels, skip the blit so the empty state remains the GPUI logo overlay.
+                // window stack, a full-window blit would erase sibling charts. With no active
+                // panels, skip the blit so the empty state remains the GPUI logo overlay.
                 let mut blit_clip: Option<[f32; 4]> = None;
                 for pr in &self.panes {
                     if !pr.active {

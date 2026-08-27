@@ -80,8 +80,10 @@ diag_counters!(
     CHART_COMBO_DRAW  => "combo_draw",
     CHART_COMBO_BAKE  => "combo_bake",
     // The candle layer draws during each base pass. `UPLOAD_LEN` counts rows uploaded after a
-    // candle-series revision; live-edge trade batches advance that revision, which is expected and
-    // inexpensive because the instance buffer contains only hundreds of rows.
+    // candle-series revision, and a live-edge trade batch advances that revision — so on a live
+    // market the WHOLE buffer is re-shipped continuously. Measured at 9 000 to 83 000 rows a second
+    // across a handful of charts, not the "hundreds" this note used to assume; what that costs is
+    // `candle_upload_us` below, and the answer is what keeps the full reupload as it is.
     CHART_CANDLE_DRAW => "candle_draw",
     CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
     // The bottom volume band is a SECOND draw on the candle layer with its own on/off switch,
@@ -95,6 +97,35 @@ diag_counters!(
     // into the automatic-Y price-scan buffer, so without this a change that removes resets reads
     // as free while that copy goes on unmeasured.
     CHART_HISTORY_READ_US => "history_read_us",
+    // Microseconds per second spent re-shipping a moved candle series, over BOTH of its phases:
+    // building the instance vector and walking it for the bottom volume band (`data_state/market.rs`),
+    // and the map-and-copy into the GPU buffer a frame phase later (`chartdx/candles.rs`). Timing
+    // only the first would have named the counter after work it never observed — `set` merely parks
+    // the vector. Counted apart from `history_read_us`, which measures the moon-core side that
+    // PRODUCED the series.
+    //
+    // Read it against `candle_upload_len`: that counter says how many rows were PRODUCED for
+    // upload — it is bumped before the layer applies its capacity cap, so the two diverge by
+    // `candle_dropped` exactly when that fires. This one says what they cost. A live trade batch advances the series revision, and the whole
+    // composed series is re-shipped on each one — so both numbers scale with the VISIBLE range,
+    // and zooming out multiplies them.
+    //
+    // Part of it is the instance vector's own allocation; see the note at the call site.
+    //
+    // Two caveats on reading it. Only the DX11 path records the GPU half — `chartdx/candles.rs` is
+    // Windows-only — so on macOS and Linux this is the CPU half alone. And a revision superseded
+    // before the next frame is counted once on the CPU side and never on the GPU side, because
+    // `set` overwrites a vector that was never mapped.
+    CHART_CANDLE_UPLOAD_US => "candle_upload_us",
+    // Candle instances DROPPED because the series outgrew the layer's buffer, per second. The
+    // layer keeps the newest `CANDLE_CAPACITY`; the chart's left then simply has no candles while
+    // the grid and the trades still draw there.
+    //
+    // Zero at every size seen so far. Anything else means the visible range now outruns the buffer
+    // — a fine timeframe zoomed out far is what reaches it. It is a RATE, and the whole buffer is
+    // re-shipped on every revision, so it reads as "missing candles multiplied by uploads a
+    // second": divide by `base_bake` for how many are actually absent from the left edge.
+    CHART_CANDLE_DROPPED => "candle_dropped",
     // Durable CLOSED-TRADE history reads started per second — a different subject from the three
     // counters above, which measure the LIVE trade buffer. Each one is an SQLite connection to the
     // report replica, and every chart tile now owns a target, so this is what says whether a detect
