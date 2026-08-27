@@ -85,6 +85,46 @@ fn open_asset_coin_menu(
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
 }
 
+/// Pointer x and roster BASE width captured at the instant a roster-column divider drag began.
+///
+/// Held on [`AssetsView`] for the life of one drag. `base_w` is the BASE width, not the painted
+/// one — see [`super::roster_width::dragged`]. The anchor is captured once because the grabbed
+/// edge is the column's own right edge, so relayout of that edge cannot compound the delta.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RosterDragAnchor {
+    /// Pointer x at the grab, in window pixels.
+    pub(super) mouse_x: f32,
+    /// The roster's base width at the grab.
+    pub(super) base_w: f32,
+}
+
+/// GPUI drag payload identifying the panel whose roster divider is being dragged. Carries no
+/// visual.
+///
+/// `view` is the same guard `ByIpResizeDrag` uses and for the same reason: a docked tab and the
+/// global window each register a listener for this payload type, so without the check a drag
+/// started in one would resize the roster of the other.
+#[derive(Clone, Debug)]
+struct RosterResizeDrag {
+    /// Entity id of the panel that owns the handle being dragged.
+    view: EntityId,
+}
+
+impl Render for RosterResizeDrag {
+    /// Render nothing: the payload exists only for GPUI's drag routing, and the column itself is
+    /// the drag feedback.
+    ///
+    /// Args:
+    ///     _: Window supplied by GPUI; unused because the payload has no visual.
+    ///     _: Entity context supplied by GPUI; unused because the payload has no visual state.
+    ///
+    /// Returns:
+    ///     An empty element.
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 impl AssetsView {
     /// Top controls: multi-core selector and dust threshold. Every summary figure — the row
     /// count, Σ over visible rows, and the scope balance — is rendered by [`Self::footer`].
@@ -395,6 +435,76 @@ impl AssetsView {
         item.into_any_element()
     }
 
+    /// Record where a roster-column divider drag began.
+    ///
+    /// Called once per drag, from the handle's `on_drag` constructor, which GPUI runs a single
+    /// time after the drag threshold is crossed.
+    ///
+    /// Args:
+    ///     anchor: The pointer x and the roster's base width at the grab.
+    ///
+    /// Returns:
+    ///     Nothing; no repaint, because nothing has moved yet.
+    pub(super) fn begin_roster_resize(&mut self, anchor: RosterDragAnchor) {
+        self.roster_drag = Some(anchor);
+    }
+
+    /// Apply a live roster divider drag: the anchored base width plus the pointer's travel since
+    /// the grab, converted from rendered pixels to base units by the current font scale.
+    ///
+    /// Args:
+    ///     pointer_x: Current pointer x, in window pixels.
+    ///     cx: View context; the width bag's observer persists and repaints.
+    ///
+    /// Returns:
+    ///     Nothing. A drag with no live anchor is ignored rather than guessed at.
+    pub(super) fn drag_roster_col(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+        let Some(anchor) = self.roster_drag else {
+            return;
+        };
+        let scale = design::font_scale(cx);
+        let Some(w) = roster_width::dragged(anchor.base_w, anchor.mouse_x, pointer_x, scale) else {
+            return;
+        };
+        self.roster_widths.update(cx, |state, cx| {
+            if state.column_widths.get(roster_width::WIDTH_KEY).copied() == Some(w) {
+                return;
+            }
+            state.set_column_width(roster_width::WIDTH_KEY, w);
+            cx.notify();
+        });
+    }
+
+    /// Restore automatic width for the roster column.
+    ///
+    /// Mirrors the `MoonDataTable` and By-IP divider gesture: a plain double-click drops the
+    /// column back to its default width. One column, so there is no Shift-to-reset-all variant.
+    ///
+    /// "No stored width" and "stored width equal to the default" are deliberately NOT normalized:
+    /// a drag landing exactly on the default persists that number and pins it across a future
+    /// change of `DEFAULT_BASE_W`; double-click removes the entry instead, so the column follows
+    /// whatever the build's default is. Double-click is the ONLY unset gesture.
+    ///
+    /// An already-clear bag changes nothing and must NOT notify: the observer would otherwise arm
+    /// `layout_dirty` and schedule a layout write for a double-click that did nothing.
+    ///
+    /// Args:
+    ///     cx: View context; the width bag's observer persists and repaints.
+    ///
+    /// Returns:
+    ///     Nothing.
+    pub(super) fn reset_roster_col(&mut self, cx: &mut Context<Self>) {
+        self.roster_widths.update(cx, |state, cx| {
+            if state
+                .column_widths
+                .remove(roster_width::WIDTH_KEY)
+                .is_some()
+            {
+                cx.notify();
+            }
+        });
+    }
+
     /// Collapsible Wallets section: a selectable balance-aware core list plus the Spot,
     /// Futures, and Quarterly transfer containers. Expanded content shares the available height.
     ///
@@ -549,20 +659,26 @@ impl AssetsView {
         // Style the left container like the wallet columns, including the same `shell_high` header,
         // so the expanded section reads as four matching vertical containers.
         //
-        // 420 rather than 240: core names here are the user's own free text and run long
-        // (`VLTR$18 ~ F-BN / SUB ACC No 38 L`), while the free/total pair beside them already takes
-        // roughly half the column — so at 240, and still at 300, the name truncated to a few
-        // characters plus an ellipsis. A roster you cannot read by name cannot be used to pick a
-        // transfer host, which is the column's whole purpose.
+        // Roughly 420 rather than 240 rendered pixels at the shipped default font delta: core
+        // names here are the user's own free text and run long (`VLTR$18 ~ F-BN / SUB ACC No 38
+        // L`), while the free/total pair beside them already takes roughly half the column — so at
+        // 240, and still at 300, the name truncated to a few characters plus an ellipsis. A roster
+        // you cannot read by name cannot be used to pick a transfer host, which is the column's
+        // whole purpose.
         //
         // The three wallet columns pay for it and that is the right trade: they are a `flex_1`
         // remainder, so widening this one narrows them evenly, and they are routinely near-empty
-        // (a core holds a handful of currencies) while this column is never empty. It stays FIXED
-        // rather than content-sized on purpose — a roster that resized with the longest name would
-        // shift all three neighbours every time a core connected.
+        // (a core holds a handful of currencies) while this column is never empty.
+        //
+        // Those two numbers now live as `roster_width::{DEFAULT_BASE_W, MIN_BASE_W}` (base,
+        // unscaled units — see that module) rather than as the fixed law above: the column tracks
+        // the Font slider like every other metric in the panel, and the user can drag it wider
+        // himself via the resize handle at its right edge, with the result persisted.
+        let base_w = roster_width::resolved(&self.roster_widths.read(cx).column_widths);
         let left = v_flex()
-            .w(px(420.0))
-            .min_w(px(240.0))
+            .relative()
+            .w(design::font_w_px(cx, base_w))
+            .min_w(design::font_w_px(cx, roster_width::MIN_BASE_W))
             .h_full()
             .flex_grow_0()
             .flex_shrink_1()
@@ -588,7 +704,8 @@ impl AssetsView {
                     .min_h(px(0.0))
                     .overflow_y_scroll()
                     .child(list),
-            );
+            )
+            .child(roster_resize_handle(base_w, p, cx));
 
         // Right side: Spot, Futures, and Quarterly wallet containers.
         let right = match selected {
@@ -623,6 +740,80 @@ impl AssetsView {
                     .child(div().flex_1().h_full().min_w_0().child(right)),
             )
     }
+}
+
+/// Build the divider strip pinned to the roster column's right edge.
+///
+/// Mirrors `core_status::by_ip_header::resize_handle`, with one difference: this function already
+/// has a `Context<AssetsView>` (it is called from within `bottom()`), so its handlers use
+/// `cx.listener` directly instead of `window.listener_for` — the free-function workaround
+/// `by_ip_header`'s header needs because it has no `Context` of its own.
+///
+/// Args:
+///     anchor_base: The roster's current BASE (pre-drag) width, baked in as the drag's starting
+///         point.
+///     p: Active Moon palette.
+///     cx: Assets view context, for the listeners and the entity id the drag payload guards with.
+///
+/// Returns:
+///     An absolutely-positioned grab strip anchored to the roster's right edge.
+fn roster_resize_handle(anchor_base: f32, p: MoonPalette, cx: &Context<AssetsView>) -> AnyElement {
+    let view = cx.entity();
+    let view_id = view.entity_id();
+    let begin_view = view.downgrade();
+
+    div()
+        .id("assets-roster-resize")
+        .absolute()
+        .right(px(0.0))
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .w(design::ui_px(cx, 6.0))
+        // MANDATORY: behind this strip sit the header, the `overflow_y_scroll` list and the
+        // roster rows whose `on_click` selects a transfer host. Without it, grabbing the divider
+        // re-selects a core instead of starting a drag.
+        .occlude()
+        .cursor(CursorStyle::ResizeColumn)
+        .hover(move |style| style.bg(design::moon_alpha(p.accent, 0.14)))
+        .tooltip(crate::panels::common::text_tooltip(
+            t!("assets.roster_resize").to_string(),
+        ))
+        // One column, so no Shift variant — unlike the By-IP divider, there is nothing else to
+        // reset and the tooltip must not promise one.
+        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+            if event.click_count() >= 2 {
+                this.reset_roster_col(cx);
+            }
+        }))
+        .on_drag(
+            RosterResizeDrag { view: view_id },
+            move |drag, _, window, app| {
+                // Runs exactly ONCE, at drag start, past GPUI's drag threshold. Capturing the
+                // anchor here is what keeps the arithmetic independent of a cell origin that
+                // relayout moves.
+                let mouse_x = f32::from(window.mouse_position().x);
+                if let Some(view) = begin_view.upgrade() {
+                    view.update(app, |this, _| {
+                        this.begin_roster_resize(RosterDragAnchor {
+                            mouse_x,
+                            base_w: anchor_base,
+                        });
+                    });
+                }
+                app.new(|_| drag.clone())
+            },
+        )
+        .on_drag_move(cx.listener(
+            move |this, event: &DragMoveEvent<RosterResizeDrag>, _window, cx| {
+                // Copy out of the payload before touching `cx` again: `drag` borrows from it.
+                let owner = event.drag(cx).view;
+                if owner != cx.entity_id() {
+                    return;
+                }
+                this.drag_roster_col(f32::from(event.event.position.x), cx);
+            },
+        ))
+        .into_any_element()
 }
 
 /// Define the visible Moonbot Assets columns, action buttons included.
