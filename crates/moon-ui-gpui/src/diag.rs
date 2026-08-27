@@ -86,6 +86,12 @@ diag_counters!(
     // a rate alone cannot tell those apart — `shell_render=70` reads identically either way. At
     // idle almost every gap is a stall and that is meaningless, since the window repaints about
     // once a second; the two are only worth reading while something is driving the window.
+    //
+    // The 20 ms boundary was chosen against a 120 Hz display, where a served frame lands every
+    // 8.3 ms and anything past 20 is late. A path that PACES itself to 60 Hz — the dock's resize
+    // does — has a nominal gap of 16.7 ms, so its ordinary frames sit right under the boundary
+    // and its jitter reads as `slow`. Comparing `slow` across a change that altered the target
+    // rate therefore says nothing; `stall` is the one that still means a visible hitch.
     SHELL_FRAME_SLOW  => "shell_frame_slow",
     SHELL_FRAME_STALL => "shell_frame_stall",
     // The main thread's non-rendering work, added 2026-08 to chase a stutter that survived halving
@@ -118,8 +124,36 @@ diag_counters!(
     // At rest it should be a couple of milliseconds a second. It was suspected during a splitter
     // drag because the diagnostic line's own interval stretched from 1050 ms to 1833 ms while the
     // window kept repainting 75 times a second — frames were being served and tasks were not.
+    // The HALF OF THE FRAME the `*_render_us` family cannot see, taken from GPUI's own frame trace
+    // rather than from a counter of ours. `Window::draw` covers layout, prepaint — which is where
+    // text is actually SHAPED, as opposed to measured — and paint, none of which the terminal can
+    // time from outside. Subtract the render counters from `frame_draw_us` and what remains is
+    // exactly that work.
+    //
+    //   * `frame_draws` — window draws a second, over EVERY window, so a chart window's draw is in
+    //     here beside the main one's. Divide `frame_draw_us` by it for the cost of one.
+    //   * `frame_draw_slow` — draws over 20 ms, the ones a stutter is made of. `frame_draw_us`
+    //     alone cannot show them: twenty 2 ms draws and one 40 ms draw print the same total.
+    //
+    // Their maxima ride the context line as `drawmax` and `dirtymax`, for the same reason `gapmax`
+    // does. `dirtymax` is the interesting one: it measures from the first invalidation of a frame
+    // to the end of its draw — the whole latency a user feels, including time the frame spent
+    // WAITING to be drawn. A large `dirtymax` with a small `drawmax` means nothing was slow to
+    // draw; something else held the thread before the draw could start.
+    FRAME_DRAWS       => "frame_draws",
+    FRAME_DRAW_US     => "frame_draw_us",
+    FRAME_DRAW_SLOW   => "frame_draw_slow",
     SCHED_LATE_US     => "sched_late_us",
     SCHED_LATE_TICKS  => "sched_late_ticks",
+    // The dock's own serialization, which no other counter here can see: it runs in an event
+    // subscription, outside both `render` and `Window::draw`. `DockArea` emits `LayoutChanged` on
+    // EVERY move of a resize drag, and the terminal answers each one with `dump`, a walk of the
+    // whole dock tree that clones every panel's persisted view state — for Orders and Alerts that
+    // is their sort, filters and column set.
+    //
+    // Read `dock_dump` against `shell_render`: equal rates mean one full serialization per repaint.
+    DOCK_DUMP         => "dock_dump",
+    DOCK_DUMP_US      => "dock_dump_us",
     COORD_TICK_US     => "coord_tick_us",
     COORD_TICK_SLOW   => "coord_tick_slow",
     METRICS_SAMPLE_US => "metrics_sample_us",
@@ -611,6 +645,48 @@ pub fn note_frame_gap_us(us: u64) {
     if enabled() {
         FRAME_GAP_MAX_US.fetch_max(us, std::sync::atomic::Ordering::Relaxed);
     }
+}
+
+/// Worst single `Window::draw`, and worst first-invalidation-to-drawn latency, of the interval.
+///
+/// Out of the counter table for the same reason as [`FRAME_GAP_MAX_US`]: these are maxima, and
+/// [`take_sample`] would divide them by the interval.
+static FRAME_DRAW_MAX_US: AtomicU64 = AtomicU64::new(0);
+static FRAME_LATENCY_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+/// Fold one window draw, as GPUI timed it, into the frame counters.
+///
+/// `dirty_to_draw` is `None` for a frame whose first invalidation happened before tracing was
+/// switched on; such a frame still counts toward the draw figures, which do not depend on it.
+pub fn note_frame_draw(
+    draw: std::time::Duration,
+    dirty_to_draw: Option<std::time::Duration>,
+) {
+    let us = draw.as_micros() as u64;
+    bump(&FRAME_DRAWS);
+    bump_by(&FRAME_DRAW_US, us);
+    if us >= 20_000 {
+        bump(&FRAME_DRAW_SLOW);
+    }
+    if enabled() {
+        FRAME_DRAW_MAX_US.fetch_max(us, std::sync::atomic::Ordering::Relaxed);
+        if let Some(latency) = dirty_to_draw {
+            FRAME_LATENCY_MAX_US.fetch_max(
+                latency.as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
+}
+
+/// Take and reset the worst single draw of the interval, in milliseconds.
+pub fn take_frame_draw_max_ms() -> f64 {
+    FRAME_DRAW_MAX_US.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0
+}
+
+/// Take and reset the worst invalidation-to-drawn latency of the interval, in milliseconds.
+pub fn take_frame_latency_max_ms() -> f64 {
+    FRAME_LATENCY_MAX_US.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0
 }
 
 /// Take and reset the worst repaint gap of the interval, in milliseconds.

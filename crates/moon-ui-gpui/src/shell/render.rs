@@ -94,6 +94,33 @@ impl Shell {
     }
 }
 
+/// Replace the two chrome rows with empty boxes of the same height, for one measurement.
+///
+/// `MOON_CHROME_STUB=1`. Not a feature and not a setting — an A/B knob, and the cheapest honest
+/// answer to "what share of a frame do the header and the toolbar actually cost". The element
+/// trees they build are counted (`shell_header_us`, `shell_toolbar_us`), but LAYOUT, text shaping
+/// and paint happen below `render`, where nothing the terminal can install will see them — and
+/// those are 83% of a frame. Two runs of the same drag, and the difference in `frame_draw_us` per
+/// draw is their real share.
+///
+/// The boxes keep each row's HEIGHT so the dock below is laid out over the same area. Dropping
+/// the rows outright would hand the dock more height, more visible table rows and a more
+/// expensive frame — an A/B measuring its own distortion.
+///
+/// Read once: a `var_os` on the render path would join the cost it is meant to measure.
+fn chrome_stubbed() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("MOON_CHROME_STUB").is_ok_and(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "false" | "no" | "off"
+            )
+        })
+    })
+}
+
 impl Render for Shell {
     /// Render the group window with its two chrome rows, dock, status bar, and anchored popovers.
     ///
@@ -267,7 +294,10 @@ impl Render for Shell {
                 this.modifier_watch.interrupt();
             }))
             // ── Header ──────────────────────────────────────────────
-            .child({
+            .children(chrome_stubbed().then(|| {
+                div().w_full().h(px(design::header_height(cx)))
+            }))
+            .children((!chrome_stubbed()).then(|| {
                 let _t = crate::diag::scope(&crate::diag::SHELL_HEADER_US);
                 terminal_chrome::header(
                     &self.group,
@@ -284,10 +314,13 @@ impl Render for Shell {
                     p,
                     cx,
                 )
-            })
+            }))
             // Trading toolbar: fixed-height size, leverage, risk, exit, Live, and window-launch
             // sections. It is one chrome row rather than a dock panel.
-            .child({
+            .children(chrome_stubbed().then(|| {
+                div().w_full().h(px(design::toolbar_height(cx)))
+            }))
+            .children((!chrome_stubbed()).then(|| {
                 let _t = crate::diag::scope(&crate::diag::SHELL_TOOLBAR_US);
                 controls::toolbar(
                     &self.backend,
@@ -304,7 +337,7 @@ impl Render for Shell {
                     chrome_width,
                     cx,
                 )
-            })
+            }))
             // One DockArea: Classic keeps its local tree; Auto adds the rail around shared topology.
             .child({
                 let _t = crate::diag::scope(&crate::diag::SHELL_DOCK_US);

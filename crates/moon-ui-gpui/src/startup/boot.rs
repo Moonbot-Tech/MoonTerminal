@@ -537,6 +537,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         let executor = cx.update(|cx| cx.background_executor().clone());
         let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
         let mut last_report = Instant::now();
+        // GPUI times every `Window::draw` itself when frame tracing is on; the collector
+        // hands over the ones recorded since the previous poll. Created before tracing is
+        // enabled, which is harmless — it simply sees nothing until it is.
+        let mut frame_timings = gpui::FrameTimingCollector::new();
         // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
         let mut last_assets_rev_sum: u64 = 0;
         loop {
@@ -685,6 +689,20 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             if last_report.elapsed().as_millis() >= 1000 {
                 let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                 last_report = Instant::now();
+                // Follow the render channel, which is live: turning tracing off also clears
+                // GPUI's buffer, so a switch flipped back on cannot report stale frames.
+                let trace_wanted = crate::diag::is_enabled();
+                if gpui::frame_trace_enabled() != trace_wanted {
+                    gpui::set_frame_trace_enabled(trace_wanted);
+                }
+                if trace_wanted {
+                    for frame in frame_timings.collect_unseen() {
+                        crate::diag::note_frame_draw(
+                            frame.draw_duration(),
+                            frame.dirty_to_draw_duration(),
+                        );
+                    }
+                }
                 // Pick up an edit to `cfg/diagnostics.toml` without a restart — the state worth
                 // observing is usually the one a restart would destroy.
                 //
@@ -726,12 +744,14 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                             // `shell_render`: at rest the window repaints about once a second and
                             // this reports roughly a thousand, meaning nothing.
                             format!(
-                                "cpu={:.1} sys={:.1} windows={} charts={} gapmax={:.0}",
+                                "cpu={:.1} sys={:.1} windows={} charts={} gapmax={:.0} drawmax={:.0} dirtymax={:.0}",
                                 b.snap.cpu_process,
                                 b.snap.cpu_system,
                                 windows,
                                 charts,
-                                crate::diag::take_frame_gap_max_ms()
+                                crate::diag::take_frame_gap_max_ms(),
+                                crate::diag::take_frame_draw_max_ms(),
+                                crate::diag::take_frame_latency_max_ms()
                             )
                         })
                     })
