@@ -226,22 +226,14 @@ pub fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
 ///
 /// The light theme uses its darker text token for legibility; the dark theme uses its base green.
 pub fn positive_color(p: MoonPalette) -> u32 {
-    if p.is_light() {
-        p.green_text
-    } else {
-        p.green
-    }
+    if p.is_light() { p.green_text } else { p.green }
 }
 
 /// Return the theme-correct danger colour.
 ///
 /// The light theme uses its darker text token for legibility; the dark theme uses its base red.
 pub fn danger_color(p: MoonPalette) -> u32 {
-    if p.is_light() {
-        p.red_text
-    } else {
-        p.red
-    }
+    if p.is_light() { p.red_text } else { p.red }
 }
 
 /// Convert GPUI's `0xRRGGBB` representation to palette/config `[u8; 3]` RGB bytes.
@@ -684,11 +676,61 @@ pub fn text_metrics_key(cx: &App, base_font_size: f32, weight: f32, mono: bool) 
 /// Returns:
 ///     The summed glyph-advance estimate in pixels.
 pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mono: bool) -> f32 {
+    // Counted, because the callers run this every frame: see `diag::UI_TEXT_WIDTH_CALLS`.
+    let measured = crate::diag::timer();
+    crate::diag::bump(&crate::diag::UI_TEXT_WIDTH_CALLS);
+    crate::diag::bump_by(
+        &crate::diag::UI_TEXT_WIDTH_CHARS,
+        text.chars().count() as u64,
+    );
     let (font_id, size) = measure_font(cx, base_font_size, weight, mono);
+    let size_bits = size.as_f32().to_bits();
     let ts = cx.text_system();
-    text.chars()
-        .map(|ch| f32::from(ts.layout_width(font_id, size, ch)))
-        .sum()
+    let width: f32 = GLYPH_ADVANCE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= GLYPH_ADVANCE_MAX {
+            cache.clear();
+        }
+        text.chars()
+            .map(|ch| {
+                *cache.entry((font_id, size_bits, ch)).or_insert_with(|| {
+                    crate::diag::bump(&crate::diag::UI_TEXT_WIDTH_MISS);
+                    f32::from(ts.layout_width(font_id, size, ch))
+                })
+            })
+            .sum()
+    });
+    crate::diag::record_us(&crate::diag::UI_TEXT_WIDTH_US, measured);
+    width
+}
+
+/// One glyph advance, remembered.
+///
+/// `App::text_system()` hands back the process-wide `TextSystem`, whose `layout_width` calls the
+/// platform shaper directly — the CACHED one (`line_layout_cache`) belongs to `WindowTextSystem`,
+/// which this function has no handle on. So every character cost a full DirectWrite/CoreText line
+/// shaping, measured at roughly 10 µs each: the toolbar's label ladder alone made 72 of those calls
+/// per repaint, and the window repaints on every frame it draws.
+///
+/// Keyed on `(FontId, size bits, char)`, which fully determines the answer: weight and family are
+/// resolved INTO the font id by [`measure_font`], and the size is the scaled pixel value. So there
+/// is nothing to invalidate — a theme or font-slider change simply asks about a different key.
+/// GPUI hands out font ids from a monotonic table and never reassigns one, so a remembered id
+/// cannot come to name a different font later.
+///
+/// Deliberately per GLYPH rather than per string. Shaping each string once would be fewer platform
+/// calls, but it would apply kerning and return a different number, and the per-character sum is
+/// depended upon AS SUCH — see `chrome::clock`, which documents it as "glyph advances only, no
+/// kerning". A glyph memo leaves every existing width bit-identical.
+///
+/// The cap exists only so an unbounded run of exotic text cannot grow this without limit; the real
+/// working set is one alphabet per typography, a few hundred entries. Clearing wholesale rather
+/// than evicting is fine at that size — it costs one cold frame.
+const GLYPH_ADVANCE_MAX: usize = 8192;
+
+thread_local! {
+    static GLYPH_ADVANCE: std::cell::RefCell<HashMap<(FontId, u32, char), f32>> =
+        std::cell::RefCell::new(HashMap::new());
 }
 
 /// Truncate `text` with an ellipsis to the available prefix budget, returning the result and width.
