@@ -4,6 +4,7 @@
 mod tests;
 
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
@@ -15,6 +16,98 @@ use crate::Backend;
 
 /// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
 pub(crate) const MANUAL_STRATEGY_KIND: u8 = 12;
+
+/// How long a fresh `PanicLocal` override outranks the core snapshot.
+///
+/// The override's only job is bridging one core round trip. 3 s is >= 3x the slowest in-app data
+/// cadence (the 1000 ms background-panel floor) and covers a WAN round trip to a VPS-hosted core
+/// plus one order-publish tick. Matches the in-repo `stop_overlay` TTL constant and now its
+/// lifecycle too: on expiry we prefer the core's truth over our optimistic guess, which is
+/// correct on the money path where the core is the authority.
+pub(crate) const PANIC_LOCAL_TTL: Duration = Duration::from_secs(3);
+
+/// Minimum spacing between two panic-sell hotkey presses on the same `(core, market)` before the
+/// later one is treated as a deliberate reversal rather than an impatient re-jab.
+///
+/// 500 ms sits above the impatient-burst band (re-jabs run 100-300 ms apart; OS key repeat is
+/// already excluded before this point) and at or below the fastest deliberate reversal, which
+/// requires reading a changed label and choosing to undo (~500-700 ms).
+pub(crate) const PANIC_TOGGLE_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// Optimistic Panic Sell override for one `(core, market)`.
+///
+/// It records both arm and disarm requests. The reconciliation tick drops it when the core agrees
+/// or its TTL expires, returning authority to the retained core snapshot.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PanicLocal {
+    /// The armed state this override asserts, pending core confirmation.
+    pub want: bool,
+    /// When this override was recorded, for TTL and settle comparisons.
+    pub at: Instant,
+}
+
+/// Resolve the effective armed state from an optional fresh local override and the core snapshot.
+///
+/// `local` carries `(want, age)` when a `PanicLocal` exists. While `age < PANIC_LOCAL_TTL` the
+/// override outranks the snapshot in both directions (arm and disarm); once stale, or absent, the
+/// snapshot is authoritative. `snapshot_armed` is supplied LAZILY and is not evaluated at all while
+/// a fresh override decides the answer: the caller is on the chart render path, and the snapshot
+/// walk is `order_lines.iter_market`, so skipping it on the common post-press path matters.
+///
+/// Args:
+///     local: Requested state and age for the optional local override.
+///     snapshot_armed: Deferred lookup of the retained core state.
+///
+/// Returns:
+///     The fresh local state when available, otherwise the retained core state.
+fn effective_panic_armed(
+    local: Option<(bool, Duration)>,
+    snapshot_armed: impl FnOnce() -> bool,
+) -> bool {
+    match local {
+        Some((want, age)) if age < PANIC_LOCAL_TTL => want,
+        _ => snapshot_armed(),
+    }
+}
+
+/// Whether a `PanicLocal` override has settled and may be dropped by the reconciliation tick.
+///
+/// Settled once the TTL has elapsed (the override can no longer influence `effective_panic_armed`)
+/// or the moment the core snapshot agrees with what the override asserts -- dropping it as soon as
+/// the core agrees, rather than only on the user's next press, is what stops a transient agreement
+/// from being forgotten and turning an intended re-arm into a disarm.
+///
+/// Args:
+///     want: Armed state asserted by the local override.
+///     age: Time since the override was accepted.
+///     snapshot_armed: Current state from the retained core snapshot.
+///
+/// Returns:
+///     `true` when the override cannot change the effective state any longer.
+fn panic_local_settled(want: bool, age: Duration, snapshot_armed: bool) -> bool {
+    age >= PANIC_LOCAL_TTL || snapshot_armed == want
+}
+
+/// Whether a panic-sell hotkey press arriving `now` falls inside the debounce window opened by
+/// `last`, and so must be absorbed as a no-op rather than toggling anything.
+///
+/// Every press restarts the window, absorbed or not: the absorbed press is itself the evidence
+/// that the user is still inside the burst. This deliberately diverges from the house pacing idiom
+/// of anchoring to the last *accepted* event — those are rate limiters, where dropping is free
+/// because the value is idempotent; this is an ambiguity guard, where the suppressed press is the
+/// signal that a re-anchor to the last executed press would defeat: a burst of four presses 160 ms
+/// apart would otherwise absorb three and then execute the fourth at 500 ms, reproducing the very
+/// disarm this guard exists to remove.
+///
+/// Args:
+///     last: Time of the preceding hotkey press for this target.
+///     now: Time of the press being considered.
+///
+/// Returns:
+///     `true` when the press falls inside the debounce window.
+fn panic_press_absorbed(last: Option<Instant>, now: Instant) -> bool {
+    last.is_some_and(|last| now.duration_since(last) < PANIC_TOGGLE_DEBOUNCE)
+}
 
 /// Apply one visible toolbar edit with the same wire quantization used by MoonProto.
 fn apply_group_exit_edit(exit: &mut GroupExitSettings, edit: ClientSettingsEdit) -> bool {
@@ -346,37 +439,136 @@ impl Backend {
             .unwrap_or(raw)
     }
 
-    /// Return whether panic sell is armed for `(core, market)` to highlight the Panic Sell button.
+    /// Return whether the retained order-line snapshot shows panic sell armed for `(core, market)`.
     ///
-    /// The state is the union of the retained order-line snapshot and the process-local armed set.
-    pub(crate) fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
-        let snapshot_armed = self.session.store().core(core).is_some_and(|data| {
+    /// Args:
+    ///     core: Core whose retained order lines are queried.
+    ///     market: Market whose open order lines are queried.
+    ///
+    /// Returns:
+    ///     `true` when an open retained order line has panic sell armed.
+    fn panic_snapshot_armed(&self, core: CoreId, market: &str) -> bool {
+        self.session.store().core(core).is_some_and(|data| {
             data.order_lines
                 .iter_market(market)
                 .any(|order| order.closed_ms.is_none() && order.panic_sell)
-        });
-        if snapshot_armed {
-            return true;
-        }
-        self.panic_armed.contains(&(core, market.to_string()))
+        })
     }
 
-    /// Toggle panic sell for a market using the union of the order-line snapshot and local armed set.
+    /// Return whether panic sell is armed for `(core, market)` to highlight the Panic Sell button.
     ///
-    /// A successfully enabled local entry survives core updates until a later toggle removes it.
+    /// A fresh local override takes precedence over the retained snapshot in both directions. This
+    /// stays `&self` and non-mutating because render calls it through `backend.read(cx)`. It scans
+    /// `panic_local` instead of probing by an owned `String`: the map is usually empty, so avoiding
+    /// that per-render allocation is cheaper.
+    ///
+    /// Args:
+    ///     core: Core that owns the market.
+    ///     market: Market whose Panic Sell state is requested.
+    ///
+    /// Returns:
+    ///     Effective armed state, using the snapshot when no fresh override exists.
+    pub(crate) fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
+        let local = self
+            .panic_local
+            .iter()
+            .find(|((c, m), _)| *c == core && m.as_str() == market)
+            .map(|(_, l)| (l.want, l.at.elapsed()));
+        effective_panic_armed(local, || self.panic_snapshot_armed(core, market))
+    }
+
+    /// Toggle panic sell for a market, recording a symmetric optimistic override on acceptance.
+    ///
+    /// Returns whether the command was ACCEPTED, not the resulting armed state. The hotkey reaches
+    /// this only through [`Backend::panic_sell_hotkey`], which uses that result after debouncing;
+    /// the direct chart-button click is deliberately unguarded and ignores it.
+    ///
+    /// Args:
+    ///     core: Core that receives the command.
+    ///     market: Market to arm or disarm.
     pub(crate) fn toggle_panic_sell(&mut self, core: CoreId, market: String) -> bool {
         let key = (core, market.clone());
         let on = !self.is_panic_armed(core, &market);
         if let Err(error) = self.session.panic_sell_market(core, market, on) {
             log::warn!("panic sell market failed: {error:#}");
-            return !on;
+            return false;
         }
-        if on {
-            self.panic_armed.insert(key);
-        } else {
-            self.panic_armed.remove(&key);
+        self.panic_local.insert(
+            key,
+            PanicLocal {
+                want: on,
+                at: Instant::now(),
+            },
+        );
+        self.panic_rev = self.panic_rev.wrapping_add(1);
+        true
+    }
+
+    /// The only debounced Panic Sell entry point. It restarts the hotkey-only debounce window for
+    /// absorbed and accepted presses, but leaves no window after a refused command. The direct
+    /// chart-button path calls [`Backend::toggle_panic_sell`] instead.
+    ///
+    /// Args:
+    ///     core: Core that receives the command.
+    ///     market: Market to arm or disarm.
+    ///
+    /// Returns:
+    ///     `true` when the command was accepted and the caller should repaint.
+    pub(crate) fn panic_sell_hotkey(&mut self, core: CoreId, market: String) -> bool {
+        let key = (core, market.clone());
+        let now = Instant::now();
+        if panic_press_absorbed(self.last_panic_press.get(&key).copied(), now) {
+            // Every press restarts the window, absorbed or not: the absorbed press is itself the
+            // evidence that the user is still inside the burst.
+            self.last_panic_press.insert(key, now);
+            return false;
         }
-        on
+        let accepted = self.toggle_panic_sell(core, market);
+        if accepted {
+            // A refused command starts no window: nothing armed and nothing repainted, so the very
+            // next press must be free to retry.
+            self.last_panic_press.insert(key, now);
+        }
+        accepted
+    }
+
+    /// Reconcile every `PanicLocal` override against the core snapshot on the coordination tick.
+    ///
+    /// Buys four things: (1) an entry is dropped the moment the core AGREES, not merely when the
+    /// user presses again -- stopping a transient agreement from being forgotten and turning the
+    /// next intended re-arm into a disarm; (2) dropping an entry bumps `panic_rev`, so an EXPIRY
+    /// repaints too -- without this a stale "Stop Panic" label could survive on a quiet market and a
+    /// click on it would arm panic sell; (3) `last_panic_press` is pruned here, so the debounce map
+    /// cannot grow for the process lifetime, and pruning only removes entries already outside the
+    /// window so it can never change whether a press is absorbed; (4) this reuses the coordination
+    /// loop that already runs at a fixed cadence whether or not anything happened, instead of
+    /// `stop_overlay`'s per-press one-shot task, so it needs no task, no version stamp and no
+    /// render-path work, and it covers the quiet-market case a render-side prune cannot reach.
+    ///
+    /// Returns whether any entry settled, so the caller knows whether to request a repaint.
+    pub(crate) fn tick_panic_local(&mut self) -> bool {
+        let settled: Vec<(CoreId, String)> = self
+            .panic_local
+            .iter()
+            .filter(|((core, market), l)| {
+                panic_local_settled(
+                    l.want,
+                    l.at.elapsed(),
+                    self.panic_snapshot_armed(*core, market),
+                )
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &settled {
+            self.panic_local.remove(key);
+        }
+        self.last_panic_press
+            .retain(|_, at| at.elapsed() < PANIC_TOGGLE_DEBOUNCE);
+        if settled.is_empty() {
+            return false;
+        }
+        self.panic_rev = self.panic_rev.wrapping_add(1);
+        true
     }
 
     /// Cancel pending buy orders across all markets for a core for the "cancel all buys" hotkey.
