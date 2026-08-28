@@ -216,7 +216,7 @@ pub(super) struct RowChrome {
     pub(super) role: RowRole,
     /// Instant this row's core closed its newest trade, while the highlight is still live.
     pub(super) flash: Option<Instant>,
-    /// Profit-column width selected by the current last-trade decision.
+    /// Profit-column width measured from the values this snapshot holds.
     pub(super) profit_width: f32,
     /// What clicking this row does, or `None` when the preference is off.
     pub(super) select: Option<RowSelect>,

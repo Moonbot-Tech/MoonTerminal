@@ -11,12 +11,54 @@ use moon_core::feed::ExchangeId;
 use moon_core::util::fmt::DeltaSign;
 use moon_core::venue::CoreVenue;
 
-use super::format::{format_profit, profit_column_width};
+use super::format::{
+    ColumnFloor, ColumnMetrics, ProfitFloor, ProfitForm, ProfitLen, format_profit,
+    plan_profit_column,
+};
 use super::rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
     duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_venues, sort_rows,
 };
+
+/// Every part printed: the form a column takes whenever the room allows it.
+const FULL: ProfitForm = ProfitForm {
+    suffix: true,
+    ticker: true,
+    si: false,
+};
+
+/// Column metrics whose glyph advances are exactly one unit, so a width reads as a character count.
+///
+/// Args:
+///     available: Room the column may take.
+///     ticker: Length of the currency ticker.
+///
+/// Returns:
+///     Metrics carrying the real Russian headings measured in characters.
+fn metrics(available: f32, ticker: usize) -> ColumnMetrics {
+    metrics_at(available, ticker)
+}
+
+/// Same metrics under a second name, so a test can state that only the room changed.
+///
+/// Args:
+///     available: Room the column may take.
+///     ticker: Length of the currency ticker.
+///
+/// Returns:
+///     Metrics carrying the real Russian headings measured in characters.
+fn metrics_at(available: f32, ticker: usize) -> ColumnMetrics {
+    ColumnMetrics {
+        row_char: 1.0,
+        total_char: 1.0,
+        // "Прибыль" and "Прибыль, USDT", each plus the sort arrow the heading budget reserves.
+        heading: 9.0,
+        heading_with_unit: 15.0,
+        ticker,
+        available,
+    }
+}
 
 /// Return deterministic fallback labels for pure grouping tests.
 ///
@@ -223,19 +265,20 @@ fn retired_bot_preference_falls_back_to_core() {
     assert_eq!(GroupMode::default(), GroupMode::Core);
 }
 
-/// `profit_monitor/mod.rs:MIN_WINDOW_WIDTH` must remain the independently derived Name-plus-Profit
-/// budget, and `MonitorLayout::for_width` must preserve every exact degradation boundary. Restoring
-/// the old 390px minimum, keeping Trades always visible, removing a scale multiplier, or shifting a
-/// threshold makes the budget or one adjacent pair red and blocks or clips the narrow window.
+/// `profit_monitor/mod.rs:MIN_WINDOW_WIDTH` must keep fitting Name beside a profit column wide
+/// enough to print an ordinary amount, and `MonitorLayout::for_width` must preserve every exact
+/// degradation boundary. Restoring the old 390px minimum, keeping Trades always visible, removing a
+/// scale multiplier, or shifting a threshold makes the budget or one adjacent pair red and blocks
+/// or clips the narrow window.
 #[test]
 fn responsive_layout_degrades_at_the_documented_boundaries() {
-    assert_eq!(
-        super::MIN_WINDOW_WIDTH,
-        super::MIN_NAME_COLUMN_WIDTH
-            + super::PROFIT_COLUMN_WIDTH
-            + 2.0 * super::TABLE_HORIZONTAL_PADDING
-            + super::TABLE_COLUMN_GAP,
-        "the OS minimum must fit Name, Profit, their gap, and both side paddings"
+    assert!(
+        super::MIN_WINDOW_WIDTH
+            >= super::MIN_NAME_COLUMN_WIDTH
+                + super::PROFIT_MIN_COLUMN_WIDTH
+                + 2.0 * super::TABLE_HORIZONTAL_PADDING
+                + super::TABLE_COLUMN_GAP,
+        "the OS minimum must fit Name, a printable Profit, their gap, and both side paddings"
     );
     assert_eq!(
         MonitorLayout::for_width(super::MIN_WINDOW_WIDTH, 1.0),
@@ -244,7 +287,6 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: false,
             status_label: false,
             trades: false,
-            last_trade: false,
             win_rate: false,
             average_order: false,
         },
@@ -259,7 +301,6 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: false,
             status_label: false,
             trades: true,
-            last_trade: false,
             win_rate: false,
             average_order: false,
         }
@@ -271,13 +312,10 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: false,
             trades: true,
-            last_trade: false,
             win_rate: false,
             average_order: false,
         }
     );
-    assert!(!MonitorLayout::for_width(499.0, 1.0).last_trade);
-    assert!(MonitorLayout::for_width(500.0, 1.0).last_trade);
     assert!(!MonitorLayout::for_width(619.0, 1.0).win_rate);
     assert!(MonitorLayout::for_width(620.0, 1.0).win_rate);
     assert!(!MonitorLayout::for_width(699.0, 1.0).status_label);
@@ -289,7 +327,6 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: true,
             trades: true,
-            last_trade: true,
             win_rate: true,
             average_order: false,
         }
@@ -301,7 +338,6 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: true,
             trades: true,
-            last_trade: true,
             win_rate: true,
             average_order: true,
         }
@@ -313,7 +349,6 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: false,
             status_label: false,
             trades: true,
-            last_trade: false,
             win_rate: false,
             average_order: false,
         }
@@ -325,15 +360,12 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: false,
             trades: true,
-            last_trade: false,
             win_rate: false,
             average_order: false,
         }
     );
     assert!(!MonitorLayout::for_width(487.4, 1.25).trades);
     assert!(MonitorLayout::for_width(487.5, 1.25).trades);
-    assert!(!MonitorLayout::for_width(624.9, 1.25).last_trade);
-    assert!(MonitorLayout::for_width(625.0, 1.25).last_trade);
     assert!(!MonitorLayout::for_width(774.9, 1.25).win_rate);
     assert!(MonitorLayout::for_width(775.0, 1.25).win_rate);
     assert!(!MonitorLayout::for_width(874.9, 1.25).status_label);
@@ -524,11 +556,16 @@ fn clock_refresh_uses_minute_local_midnight_or_no_timer_by_period() {
 #[test]
 fn formatted_profit_keeps_unit_and_rounded_sign_coupled() {
     assert_eq!(
-        format_profit(-0.001, None, Some(ProfitUnit::Quote(QuoteCurrency::usdt()))),
+        format_profit(
+            -0.001,
+            None,
+            Some(ProfitUnit::Quote(QuoteCurrency::usdt())),
+            FULL
+        ),
         ("+0 USDT".to_string(), DeltaSign::Zero)
     );
     assert_eq!(
-        format_profit(12.5, None, Some(ProfitUnit::Percent)),
+        format_profit(12.5, None, Some(ProfitUnit::Percent), FULL),
         ("+12.5%".to_string(), DeltaSign::Positive)
     );
 }
@@ -543,52 +580,367 @@ fn formatted_profit_keeps_unit_and_rounded_sign_coupled() {
 fn last_trade_suffix_shares_the_total_unit_and_rounding() {
     let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
     assert_eq!(
-        format_profit(-57.114, Some(-0.6), usdt),
+        format_profit(-57.114, Some(-0.6), usdt, FULL),
         ("-57.11(-0.6) USDT".to_string(), DeltaSign::Negative)
     );
     assert_eq!(
-        format_profit(12.0, Some(-0.004), usdt),
+        format_profit(12.0, Some(-0.004), usdt, FULL),
         ("+12(+0) USDT".to_string(), DeltaSign::Positive),
         "a suffix that rounds away must not print a minus the number no longer shows"
     );
     assert_eq!(
-        format_profit(41.0, Some(-3.0), usdt).1,
+        format_profit(41.0, Some(-3.0), usdt, FULL).1,
         DeltaSign::Positive,
         "the colour follows the total, not the last trade"
     );
     assert_eq!(
-        format_profit(3.5, Some(1.25), Some(ProfitUnit::Percent)),
+        format_profit(3.5, Some(1.25), Some(ProfitUnit::Percent), FULL),
         ("+3.5(+1.25)%".to_string(), DeltaSign::Positive)
     );
     assert_eq!(
-        format_profit(-57.114, None, usdt).0,
+        format_profit(-57.114, None, usdt, FULL).0,
         "-57.11 USDT",
         "a core with no trade in the period must show no empty bracket"
     );
 }
 
-/// `profit_monitor/mod.rs:profit_column_width` must claim the suffix allowance only while the
-/// suffix is drawn, and `MonitorLayout` must keep a name column at its minimum in the first tier
-/// that allows one.
+/// `profit_monitor/format.rs:plan_profit_column` must spend only what the values need, and give
+/// everything above that back to the name column.
 ///
-/// Breakage: widening the column unconditionally steals space from Name at every width; enabling
-/// the suffix below its own tier truncates a money value instead of dropping it.
+/// Breakage: sizing the column for a worst case nobody is showing — the fixed 154 units this
+/// replaced — truncates a name on every row to reserve digits that are never drawn.
 #[test]
-fn last_trade_column_never_starves_the_name_column() {
-    assert_eq!(profit_column_width(false), super::PROFIT_COLUMN_WIDTH);
+fn the_profit_column_is_sized_from_the_values_it_shows() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    // "+167.21" and "(+3.4)": eighteen characters once " USDT" is added.
+    let row = ProfitLen::measure(167.21, Some(3.4), usdt);
+    let column = plan_profit_column(row, row, true, &metrics(200.0, 4), ProfitFloor::default());
+    assert_eq!(column.form, FULL, "a wide window prints every part");
     assert_eq!(
-        profit_column_width(true),
-        super::PROFIT_COLUMN_WIDTH + super::PROFIT_LAST_TRADE_EXTRA
+        column.width, 18.0,
+        "the column must claim its content, not the room it was offered"
     );
-    // Narrowest width that turns the suffix on, spending it on every column that tier shows.
-    let used = profit_column_width(true)
-        + super::TRADES_COLUMN_WIDTH
-        + 2.0 * super::TABLE_HORIZONTAL_PADDING
-        + 2.0 * super::TABLE_COLUMN_GAP;
+
+    // A short amount claims less again, down to the heading it must still show.
+    let short = ProfitLen::measure(6.22, None, usdt);
+    assert_eq!(
+        plan_profit_column(
+            short,
+            short,
+            false,
+            &metrics(200.0, 4),
+            ProfitFloor::default()
+        )
+        .width,
+        10.0,
+        "+6.22 USDT is ten characters"
+    );
+    let tiny = ProfitLen::measure(0.0, None, usdt);
+    assert_eq!(
+        plan_profit_column(
+            tiny,
+            tiny,
+            false,
+            &metrics(200.0, 4),
+            ProfitFloor::default()
+        )
+        .width,
+        9.0,
+        "the heading is the floor once the values are shorter than it"
+    );
+}
+
+/// `profit_monitor/format.rs:candidate_forms` must give up the ticker first, the suffix second and
+/// the digits last.
+///
+/// Breakage: abbreviating before dropping the ticker takes precision away from the figure the
+/// window exists to show while a removable label is still printed; truncating instead of degrading
+/// turns a money value into a different, plausible number.
+#[test]
+fn a_narrow_profit_column_drops_the_ticker_before_the_suffix() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    let row = ProfitLen::measure(167.21, Some(3.4), usdt);
+    let plan = |available: f32| {
+        plan_profit_column(
+            row,
+            row,
+            true,
+            &metrics(available, 4),
+            ProfitFloor::default(),
+        )
+    };
+
+    assert_eq!(plan(18.0).form, FULL, "everything fits at its exact width");
+    let no_ticker = plan(17.0);
     assert!(
-        super::LAST_TRADE_WIDTH - used >= super::MIN_NAME_COLUMN_WIDTH,
-        "the suffix tier must still leave Name its minimum: {} left",
-        super::LAST_TRADE_WIDTH - used
+        no_ticker.form.suffix && !no_ticker.form.ticker && !no_ticker.form.si,
+        "the ticker goes first, and the heading takes over naming the unit: {:?}",
+        no_ticker.form
+    );
+    let no_suffix = plan(12.0);
+    assert!(
+        !no_suffix.form.suffix && no_suffix.form.ticker && !no_suffix.form.si,
+        "dropping the suffix buys the ticker back: {:?}",
+        no_suffix.form
+    );
+    assert_eq!(no_suffix.width, 12.0, "+167.21 USDT is twelve characters");
+
+    // Abbreviation is reached only once no plain form fits at all.
+    let large = ProfitLen::measure(1234567.89, None, usdt);
+    assert_eq!(
+        plan_profit_column(
+            large,
+            large,
+            false,
+            &metrics(16.0, 4),
+            ProfitFloor::default()
+        )
+        .width,
+        16.0,
+        "+1234567.89 USDT fits sixteen characters and must be printed in full"
+    );
+    assert!(
+        !plan_profit_column(
+            large,
+            large,
+            false,
+            &metrics(12.0, 4),
+            ProfitFloor::default()
+        )
+        .form
+        .si,
+        "eleven exact characters still fit twelve: the ticker goes, not the digits"
+    );
+    let abbreviated = plan_profit_column(
+        large,
+        large,
+        false,
+        &metrics(10.0, 4),
+        ProfitFloor::default(),
+    );
+    assert!(
+        abbreviated.form.si,
+        "only when no plain form fits does the amount abbreviate: {:?}",
+        abbreviated.form
+    );
+    assert_eq!(
+        format_profit(
+            1234567.89,
+            None,
+            usdt,
+            ProfitForm {
+                suffix: false,
+                ticker: true,
+                si: true
+            }
+        )
+        .0,
+        "+1.23M USDT"
+    );
+}
+
+/// `profit_monitor/format.rs:plan_profit_column` must let the VALUES decide the form and treat the
+/// heading as a floor only.
+///
+/// Breakage: charging the longer "Прибыль, USDT" heading against the fit test rejects a form whose
+/// digits fit, so a money value abbreviates to buy room for a label that ellipsizes harmlessly —
+/// and the terminal then prints different precision in different locales.
+#[test]
+fn a_long_heading_never_costs_a_money_value_its_digits() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    let row = ProfitLen::measure(167.21, Some(3.4), usdt);
+    let wordy = ColumnMetrics {
+        heading_with_unit: 100.0,
+        ..metrics(13.0, 4)
+    };
+    let column = plan_profit_column(row, row, true, &wordy, ProfitFloor::default());
+    assert!(
+        column.form.suffix && !column.form.ticker && !column.form.si,
+        "the values fit without the ticker, so no further rung may be taken: {:?}",
+        column.form
+    );
+    assert_eq!(
+        column.width, 13.0,
+        "an unfittable heading is clamped, never paid for out of the digits"
+    );
+}
+
+/// `profit_monitor/format.rs:plan_profit_column` must not climb back up the ladder within one
+/// period.
+///
+/// Breakage: re-deriving the form from each snapshot makes one core crossing a digit boundary strip
+/// the ticker from every cell and put it back a refresh later, which is the flicker the ratchet
+/// exists to stop.
+#[test]
+fn the_column_does_not_climb_back_up_the_ladder() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    let row = ProfitLen::measure(167.21, Some(3.4), usdt);
+    let held = plan_profit_column(
+        row,
+        row,
+        true,
+        &metrics(200.0, 4),
+        ProfitFloor {
+            width: 0.0,
+            rung: 2,
+        },
+    );
+    assert_eq!(
+        held.rung, 2,
+        "a released rung is not reclaimed by a wide window"
+    );
+    assert!(!held.form.suffix && held.form.ticker);
+}
+
+/// `profit_monitor/format.rs:ColumnFloor::carried` must release the ratchet as soon as the
+/// measurement it was taken under moves.
+///
+/// Breakage: a ratchet with no release keeps a column degraded after the window that degraded it is
+/// widened again — the ticker and the suffix would never come back until the period rolled over —
+/// and holds a stale width after the Font slider changes the glyph advance underneath it.
+#[test]
+fn the_floor_releases_itself_when_the_measurement_moves() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    let metrics = metrics(120.0, 4);
+    let taken = ProfitFloor {
+        width: 90.0,
+        rung: 2,
+    };
+    let floor = ColumnFloor {
+        unit: usdt,
+        available: metrics.available,
+        row_char: metrics.row_char,
+        floor: taken,
+    };
+    assert_eq!(
+        floor.carried(usdt, &metrics),
+        taken,
+        "same question, same floor"
+    );
+    assert_eq!(
+        floor.carried(Some(ProfitUnit::Quote(QuoteCurrency::btc())), &metrics),
+        ProfitFloor::default(),
+        "another currency measures different text"
+    );
+    assert_eq!(
+        floor.carried(usdt, &metrics_at(100.0, 4)),
+        ProfitFloor::default(),
+        "a resized window must be able to climb back up the ladder"
+    );
+    assert_eq!(
+        floor.carried(
+            usdt,
+            &ColumnMetrics {
+                row_char: 2.0,
+                ..metrics
+            }
+        ),
+        ProfitFloor::default(),
+        "a different glyph advance makes the stored width mean something else"
+    );
+}
+
+/// `profit_monitor/format.rs:ProfitLen` must fold every measured line, and `value_width` must
+/// charge the footer its own larger type step.
+///
+/// Breakage: measuring only the visible rows makes the column jump while scrolling; measuring the
+/// footer at row size truncates the grand total, which is drawn one step up from the rows.
+#[test]
+fn the_column_is_measured_across_every_line_and_type_size() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    let mut rows = ProfitLen::measure(6.22, None, usdt);
+    rows.absorb(ProfitLen::measure(-12345.67, None, usdt));
+    rows.absorb(ProfitLen::measure(25.81, None, usdt));
+    // The widest row, "-12345.67 USDT", is fourteen characters.
+    assert_eq!(
+        plan_profit_column(
+            rows,
+            ProfitLen::default(),
+            false,
+            &metrics(200.0, 4),
+            ProfitFloor::default()
+        )
+        .width,
+        14.0
+    );
+
+    let total = ProfitLen::measure(167.21, None, usdt);
+    let footer = ColumnMetrics {
+        total_char: 1.5,
+        ..metrics(200.0, 4)
+    };
+    assert_eq!(
+        plan_profit_column(
+            ProfitLen::default(),
+            total,
+            false,
+            &footer,
+            ProfitFloor::default()
+        )
+        .width,
+        18.0,
+        "twelve footer characters at one and a half units each"
+    );
+}
+
+/// `profit_monitor/format.rs:abbreviated` must round to the unit BEFORE abbreviating, and must
+/// refuse to touch anything below the SI floor.
+///
+/// Breakage: abbreviating the raw value makes a `-0.004` that the column prints as zero still
+/// arrive coloured as a loss; abbreviating below a thousand routes through `fmt::adaptive`, which
+/// re-rounds to five significant digits and prints NO marker — on an eight-decimal quote that
+/// silently replaces the row's number with a different one that looks exact.
+#[test]
+fn an_abbreviated_amount_keeps_its_rounded_sign_and_its_small_digits() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    let btc = Some(ProfitUnit::Quote(QuoteCurrency::btc()));
+    let si = ProfitForm {
+        suffix: false,
+        ticker: true,
+        si: true,
+    };
+    assert_eq!(
+        format_profit(-0.004, None, usdt, si),
+        ("+0 USDT".to_string(), DeltaSign::Zero)
+    );
+    assert_eq!(
+        format_profit(-2_300_000.0, None, usdt, si),
+        ("-2.3M USDT".to_string(), DeltaSign::Negative)
+    );
+    assert_eq!(
+        format_profit(12.345_678_91, None, btc, si).0,
+        "+12.34567891 BTC",
+        "below the SI floor the abbreviated form prints the exact amount"
+    );
+    assert_eq!(
+        format_profit(999.99, None, usdt, si).0,
+        "+999.99 USDT",
+        "the floor is a thousand, where the marker starts stating the scale"
+    );
+
+    // The measurement agrees with the text: both spellings are the same below the floor.
+    let small = ProfitLen::measure(999.99, None, usdt);
+    assert_eq!(
+        plan_profit_column(
+            small,
+            small,
+            false,
+            &metrics(200.0, 4),
+            ProfitFloor::default()
+        )
+        .width,
+        plan_profit_column(
+            small,
+            small,
+            false,
+            &metrics(200.0, 4),
+            ProfitFloor {
+                width: 0.0,
+                rung: 2
+            }
+        )
+        .width,
+        "the abbreviated rung abbreviates nothing here, so it must claim the same width"
     );
 }
 
@@ -745,7 +1097,7 @@ fn the_run_column_is_paid_for_by_the_name_column() {
         });
         let used = super::name_min_width(slots)
             + slots.width()
-            + super::PROFIT_COLUMN_WIDTH
+            + super::PROFIT_MIN_COLUMN_WIDTH
             + 2.0 * super::TABLE_HORIZONTAL_PADDING
             // One gap to the profit column, plus the run column's own gap to the name.
             + 2.0 * super::TABLE_COLUMN_GAP;

@@ -263,6 +263,9 @@ impl ProfitMonitorView {
             return;
         }
         (row.set)(&mut self.prefs, value);
+        // Several of these change what the profit column measures — the suffix outright, the rest
+        // through which lines the table draws — so the measured width starts over.
+        self.release_profit_width();
         if !self.prefs.flash {
             // Turning the highlight off must clear what is already glowing, not wait it out: the
             // repaint chain re-arms on `Arrivals::live`, so an unrendered stamp would keep ticking.
