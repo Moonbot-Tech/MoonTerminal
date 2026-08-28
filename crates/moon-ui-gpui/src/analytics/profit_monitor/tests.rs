@@ -702,6 +702,63 @@ fn display_preferences_separate_unset_from_disabled() {
     layout.profit_monitor_group_sections = Some(false);
     let restored = super::MonitorPrefs::restore(&layout);
     assert!(restored.idle_cores && !restored.group_sections);
+
+    // The three run controls SEND COMMANDS to cores, so every one of them ships off: a profit
+    // window that grew a Stop button in an update is one mis-click away from stopping a fleet.
+    let defaults = super::MonitorPrefs::default();
+    assert!(!defaults.core_status && !defaults.trading_buttons && !defaults.group_trading);
+    layout.profit_monitor_core_status = Some(true);
+    layout.profit_monitor_group_trading = Some(true);
+    let restored = super::MonitorPrefs::restore(&layout);
+    assert!(restored.core_status && restored.group_trading && !restored.trading_buttons);
+}
+
+/// `profit_monitor/mod.rs:run_slots` must reserve the trailing slot for EITHER trading preference,
+/// and `name_min_width` must pay for the whole column out of the Name column.
+///
+/// Breakage: reserving the slot only for the per-core preference makes a group-only configuration
+/// draw captions wider than the rows beneath them; taking the width from anywhere but Name raises
+/// `MIN_WINDOW_WIDTH`, which is exactly the constraint this column was fitted into.
+#[test]
+fn the_run_column_is_paid_for_by_the_name_column() {
+    let mut prefs = super::MonitorPrefs::default();
+    assert!(!super::run_slots(prefs).any(), "off by default");
+    assert_eq!(
+        super::name_min_width(super::run_slots(prefs)),
+        super::MIN_NAME_COLUMN_WIDTH
+    );
+
+    // Either trading preference reserves the same trailing slot.
+    prefs.trading_buttons = true;
+    let per_core = super::run_slots(prefs);
+    prefs.trading_buttons = false;
+    prefs.group_trading = true;
+    assert_eq!(super::run_slots(prefs), per_core);
+    assert!(per_core.trading && !per_core.status);
+
+    // Every combination still fits the unchanged minimum window width.
+    for (status, trading) in [(true, false), (false, true), (true, true)] {
+        let slots = super::run_slots(super::MonitorPrefs {
+            core_status: status,
+            trading_buttons: trading,
+            ..super::MonitorPrefs::default()
+        });
+        let used = super::name_min_width(slots)
+            + slots.width()
+            + super::PROFIT_COLUMN_WIDTH
+            + 2.0 * super::TABLE_HORIZONTAL_PADDING
+            // One gap to the profit column, plus the run column's own gap to the name.
+            + 2.0 * super::TABLE_COLUMN_GAP;
+        assert!(
+            used <= super::MIN_WINDOW_WIDTH,
+            "run column {slots:?} pushed the table to {used} past the {} minimum",
+            super::MIN_WINDOW_WIDTH
+        );
+        assert!(
+            super::name_min_width(slots) >= super::NAME_COLUMN_FLOOR,
+            "the name column must keep its floor"
+        );
+    }
 }
 
 /// `profit_monitor/rows.rs:grouped_rows` must give an ACTIVE core with no trade its zero row, in

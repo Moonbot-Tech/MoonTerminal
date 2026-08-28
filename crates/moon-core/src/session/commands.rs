@@ -46,6 +46,65 @@ impl SessionManager {
         )
     }
 
+    /// Start or stop one core's GLOBAL strategy engine — Moonbot's own Start/Stop, which the core
+    /// reports back as `strategies_running`.
+    ///
+    /// A named operation rather than an [`Self::apply_strategies`] call at each site: this one
+    /// carries NO checkbox edits of its own, so a run control cannot rewrite which strategies the
+    /// core has selected as a side effect of pressing Start. What it cannot prevent is the
+    /// protocol's own shape — `TStratStartStopCommandV2` always ships MoonProto's outstanding
+    /// checked delta alongside the action (moonproto `events/local_strats.rs`), exactly as
+    /// Moonbot's own Start does. That delta is whatever the Strategies window already changed and
+    /// the core has not echoed yet; nothing here produces one.
+    ///
+    /// The command is an intent — the core answers with a new runtime state, which is what any
+    /// indicator must follow.
+    ///
+    /// Args:
+    ///     core: Core to command.
+    ///     on: Whether to start (`true`) or stop (`false`) trading.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel.
+    pub fn set_trading(&self, core: CoreId, on: bool) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::StrategiesAction {
+                checks: Vec::new(),
+                start_stop: Some(on),
+            },
+            "set trading",
+        )
+    }
+
+    /// Start or stop trading on a whole scope — a saved group, an exchange row, a selection.
+    ///
+    /// One command per core, because that is what the protocol offers; the loop lives here so the
+    /// windows that act on a group cannot each invent their own error handling. A core whose
+    /// command channel is gone is skipped and named in the log rather than aborting the scope:
+    /// with one core of six down, the user asked for the other five to stop.
+    ///
+    /// Returns WHICH cores accepted it, not how many. A caller that shows "waiting for the core"
+    /// must arm exactly the cores it reached — arming the rest leaves controls waiting on an
+    /// answer to a command nobody sent.
+    ///
+    /// Args:
+    ///     cores: Cores to command.
+    ///     on: Whether to start (`true`) or stop (`false`) trading.
+    ///
+    /// Returns:
+    ///     The cores whose command channel accepted the intent, in the order given.
+    pub fn set_trading_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+        let mut sent = Vec::with_capacity(cores.len());
+        for core in cores {
+            match self.set_trading(*core, on) {
+                Ok(()) => sent.push(*core),
+                Err(error) => log::warn!("set trading {on} on core {core} failed: {error:#}"),
+            }
+        }
+        sent
+    }
+
     /// Edit fields for strategies belonging to one core, with one `(id, changes)` entry per
     /// strategy. All edits for the core travel in one command because the feed patches the full
     /// snapshot and sends one `sync_local_strategies`; separate syncs would overwrite each other.

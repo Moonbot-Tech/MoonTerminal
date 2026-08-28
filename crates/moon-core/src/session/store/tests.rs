@@ -618,3 +618,145 @@ fn log_since_recovers_from_a_restarted_counter() {
 
     assert_eq!(lines.map(|l| l.msg.clone()).collect::<Vec<_>>(), ["fresh"]);
 }
+
+/// A repeated run-state report must not churn its revision, and losing `Ready` must move it.
+///
+/// Breakage: bumping on every repeat wakes every cached surface gated on the token whenever a core
+/// re-states what it already said; not bumping when the confirmation drops leaves a control
+/// claiming a state the current connection never reported.
+#[test]
+fn a_repeated_run_state_report_is_silent_but_a_lost_connection_is_not() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::RuntimeState(crate::feed::RuntimeState {
+        is_started: true,
+        auto_detect_active: true,
+    }));
+    core.apply(FeedMsg::StrategiesRunning(true));
+    let (runtime_rev, trading_rev) = (core.runtime_state_rev, core.strategies_running_rev);
+
+    core.apply(FeedMsg::StrategiesRunning(true));
+    assert_eq!(
+        core.strategies_running_rev, trading_rev,
+        "same value, same connection"
+    );
+    assert_eq!(core.runtime_state_rev, runtime_rev);
+
+    core.apply(FeedMsg::Status(ConnStatus::Disconnected));
+    assert_ne!(core.strategies_running_rev, trading_rev);
+    assert_ne!(core.runtime_state_rev, runtime_rev);
+    let trading_rev = core.strategies_running_rev;
+
+    // The same value again, but now it re-confirms a connection that had reported nothing.
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::StrategiesRunning(true));
+    assert_ne!(
+        core.strategies_running_rev, trading_rev,
+        "re-confirmation is a change a control renders"
+    );
+}
+
+/// The strategy engine and the market runtime are reported over different commands, so one must
+/// never move the other's revision.
+///
+/// Breakage: folding them into one counter makes a pending "start trading" intent look answered by
+/// an unrelated auto-detect flip, and the button hands itself back showing the pre-command state.
+#[test]
+fn each_run_state_half_moves_only_its_own_revision() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    let (runtime_rev, trading_rev) = (core.runtime_state_rev, core.strategies_running_rev);
+
+    core.apply(FeedMsg::StrategiesRunning(false));
+    assert_ne!(core.strategies_running_rev, trading_rev);
+    assert_eq!(core.runtime_state_rev, runtime_rev);
+
+    let trading_rev = core.strategies_running_rev;
+    core.apply(FeedMsg::RuntimeState(crate::feed::RuntimeState {
+        is_started: true,
+        auto_detect_active: false,
+    }));
+    assert_ne!(core.runtime_state_rev, runtime_rev);
+    assert_eq!(core.strategies_running_rev, trading_rev);
+}
+
+/// A reconnect must not LOSE the core's run state — MoonProto repeats neither init nor its
+/// post-init resync on `Connected { fresh: false }`, and the protocol has no request for either
+/// half, so a value dropped here is a value nobody will ever send again.
+///
+/// Breakage (the one this test was written for): clearing the fields on a non-`Ready` status left
+/// every core that survived one link blip with an "unknown" run state for the rest of the session,
+/// while the core itself was `Ready` and trading.
+#[test]
+fn a_reconnect_keeps_the_run_state_but_marks_it_unconfirmed() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::RuntimeState(crate::feed::RuntimeState {
+        is_started: true,
+        auto_detect_active: true,
+    }));
+    core.apply(FeedMsg::StrategiesRunning(true));
+    assert!(core.runtime_state_confirmed && core.strategies_running_confirmed);
+    let (runtime_rev, trading_rev) = (core.runtime_state_rev, core.strategies_running_rev);
+
+    // The link blips: Reconnecting, then Ready again with no fresh push behind it.
+    core.apply(FeedMsg::Status(ConnStatus::Stage("reconnecting".into())));
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+
+    assert_eq!(
+        core.runtime_state.map(|state| state.is_started),
+        Some(true),
+        "the last known runtime state must survive the reconnect"
+    );
+    assert_eq!(
+        core.strategies_running,
+        Some(true),
+        "the last known trading state must survive the reconnect"
+    );
+    assert!(
+        !core.runtime_state_confirmed && !core.strategies_running_confirmed,
+        "but neither half may still claim to be confirmed by THIS connection"
+    );
+    assert_ne!(
+        (core.runtime_state_rev, core.strategies_running_rev),
+        (runtime_rev, trading_rev),
+        "losing confirmation changes what a control draws, so both revisions must move"
+    );
+
+    // A fresh push re-confirms its own half only.
+    core.apply(FeedMsg::StrategiesRunning(true));
+    assert!(core.strategies_running_confirmed);
+    assert!(!core.runtime_state_confirmed);
+}
+
+/// A DIFFERENT MoonBot answering on the same connection must not inherit the previous one's run
+/// state — unlike a reconnect, this drops the values themselves.
+///
+/// Breakage: MoonProto keeps its retained settings and strategy state across a server restart (it
+/// clears only news and session profits), so a terminal that merely un-confirms would keep showing
+/// — and let a button act on — the state of a process that no longer exists.
+#[test]
+fn a_server_restart_forgets_the_previous_instances_run_state() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::RuntimeState(crate::feed::RuntimeState {
+        is_started: true,
+        auto_detect_active: true,
+    }));
+    core.apply(FeedMsg::StrategiesRunning(true));
+    let (runtime_rev, trading_rev) = (core.runtime_state_rev, core.strategies_running_rev);
+
+    core.apply(FeedMsg::RunStateForgotten);
+
+    assert_eq!(core.runtime_state, None);
+    assert_eq!(core.strategies_running, None);
+    assert!(!core.runtime_state_confirmed && !core.strategies_running_confirmed);
+    assert_ne!(core.runtime_state_rev, runtime_rev);
+    assert_ne!(core.strategies_running_rev, trading_rev);
+
+    // Idempotent: a second notice about the same restart is not a change.
+    let (runtime_rev, trading_rev) = (core.runtime_state_rev, core.strategies_running_rev);
+    core.apply(FeedMsg::RunStateForgotten);
+    assert_eq!(core.runtime_state_rev, runtime_rev);
+    assert_eq!(core.strategies_running_rev, trading_rev);
+}

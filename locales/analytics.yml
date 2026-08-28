@@ -127,6 +127,23 @@ profit_monitor.settings.core_filter:
   ru: "Клик по строке фильтрует главное окно"
   en: "Row click filters the main window"
   es: "Clic en fila filtra la ventana principal"
+# Controls that COMMAND cores. Off by default; see `MonitorPrefs::default`.
+profit_monitor.settings.core_control:
+  ru: "Управление ядрами"
+  en: "Core control"
+  es: "Control de núcleos"
+profit_monitor.settings.core_status:
+  ru: "Статус ядра и кнопка запуска"
+  en: "Core run status and start button"
+  es: "Estado del núcleo y botón de inicio"
+profit_monitor.settings.trading_buttons:
+  ru: "Старт/стоп автоторговли у ядра"
+  en: "Start/stop trading on a core"
+  es: "Iniciar/detener trading de un núcleo"
+profit_monitor.settings.group_trading:
+  ru: "Старт/стоп автоторговли на всю группу"
+  en: "Start/stop trading for a whole group"
+  es: "Iniciar/detener trading de un grupo"
 
 analytics.window_title:
   ru: "MoonTerminal — Аналитика"

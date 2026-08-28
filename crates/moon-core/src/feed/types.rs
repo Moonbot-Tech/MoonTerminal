@@ -1177,6 +1177,21 @@ pub enum FeedMsg {
     LevManage(LevManageState),
     /// Core runtime and passive-mode state sent on `RuntimeStateUpdated`.
     RuntimeState(RuntimeState),
+    /// Forget everything known about the core's run state: a DIFFERENT MoonBot process now answers
+    /// on this connection (`LifecycleEvent::ServerRestart`, a changed `PeerAppToken`).
+    ///
+    /// MoonProto keeps its own retained settings/strategy state across that event — it clears only
+    /// news and session profits — so the values behind it describe the process that just went away.
+    /// Sent for the same reason the store drops `server_version`: a replacement instance has to
+    /// speak for itself.
+    RunStateForgotten,
+    /// Whether the core's global strategy engine is running, sent on
+    /// `Event::Strat(StratEvent::RuntimeState)`.
+    ///
+    /// Deliberately NOT a field of [`RuntimeState`]: the core reports the two over different
+    /// commands (`TRuntimeStateCommand` and `TStratRuntimeState`) and at different moments, so
+    /// merging them would force one arrival to invent a value for the other half.
+    StrategiesRunning(bool),
     /// Core account hedge mode for dual-side positions, sent on `HedgeModeUpdated`.
     HedgeMode(bool),
     /// Exchange API-key expiration for this core, sent on a successful

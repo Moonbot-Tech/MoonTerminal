@@ -48,6 +48,12 @@ pub(super) struct MonitorPrefs {
     pub(super) idle_cores: bool,
     /// Whether clicking a row's core cell filters every main-window panel to that core.
     pub(super) core_filter: bool,
+    /// Whether a row leads with its core's run status, and a restart button when it is stopped.
+    pub(super) core_status: bool,
+    /// Whether a row carries the start/stop control for its own core's trading.
+    pub(super) trading_buttons: bool,
+    /// Whether a group caption carries that control for every core the group names.
+    pub(super) group_trading: bool,
 }
 
 impl Default for MonitorPrefs {
@@ -71,6 +77,13 @@ impl Default for MonitorPrefs {
             group_sections: true,
             idle_cores: false,
             core_filter: true,
+            // The three run controls are OFF by default, and for a stronger reason than
+            // `idle_cores` is: they SEND COMMANDS to cores. A profit window that quietly grew a
+            // Stop button after an update is a window whose next mis-click stops a fleet's
+            // trading. Someone who wants them switches them on and knows they are there.
+            core_status: false,
+            trading_buttons: false,
+            group_trading: false,
         }
     }
 }
@@ -135,8 +148,14 @@ const DISPLAY_GROUP: &str = "profit_monitor.settings.display";
 /// Caption of the group holding what a click in this window does to the rest of the terminal.
 const INTERACTION_GROUP: &str = "profit_monitor.settings.interaction";
 
+/// Caption of the group holding the controls that COMMAND cores rather than describe them.
+///
+/// Its own group, not a third block of "interaction": everything above changes what this window
+/// shows or which cores other panels show, while everything here sends a command to a core.
+const CORE_CONTROL_GROUP: &str = "profit_monitor.settings.core_control";
+
 /// Every preference, in the order the popup shows them.
-const PREF_ROWS: [PrefRow; 6] = [
+const PREF_ROWS: [PrefRow; 9] = [
     PrefRow {
         id: "exchange-icons",
         releases_cores: false,
@@ -196,6 +215,36 @@ const PREF_ROWS: [PrefRow; 6] = [
         set: |prefs, value| prefs.core_filter = value,
         saved: |layout| layout.profit_monitor_core_filter,
         store: |layout, value| layout.profit_monitor_core_filter = Some(value),
+    },
+    PrefRow {
+        id: "core-status",
+        releases_cores: false,
+        group: CORE_CONTROL_GROUP,
+        label: "profit_monitor.settings.core_status",
+        read: |prefs| prefs.core_status,
+        set: |prefs, value| prefs.core_status = value,
+        saved: |layout| layout.profit_monitor_core_status,
+        store: |layout, value| layout.profit_monitor_core_status = Some(value),
+    },
+    PrefRow {
+        id: "trading-buttons",
+        releases_cores: false,
+        group: CORE_CONTROL_GROUP,
+        label: "profit_monitor.settings.trading_buttons",
+        read: |prefs| prefs.trading_buttons,
+        set: |prefs, value| prefs.trading_buttons = value,
+        saved: |layout| layout.profit_monitor_trading_buttons,
+        store: |layout, value| layout.profit_monitor_trading_buttons = Some(value),
+    },
+    PrefRow {
+        id: "group-trading",
+        releases_cores: false,
+        group: CORE_CONTROL_GROUP,
+        label: "profit_monitor.settings.group_trading",
+        read: |prefs| prefs.group_trading,
+        set: |prefs, value| prefs.group_trading = value,
+        saved: |layout| layout.profit_monitor_group_trading,
+        store: |layout, value| layout.profit_monitor_group_trading = Some(value),
     },
 ];
 
@@ -338,6 +387,12 @@ fn settings_content(
         .child(pref_group(
             "profit-monitor-interaction",
             INTERACTION_GROUP,
+            prefs,
+            &view,
+        ))
+        .child(pref_group(
+            "profit-monitor-core-control",
+            CORE_CONTROL_GROUP,
             prefs,
             &view,
         ))

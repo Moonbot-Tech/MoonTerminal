@@ -161,6 +161,13 @@ pub struct CoreData {
     pub lev_manage: Option<LevManageState>,
     /// Core runtime and passive-mode state, or `None` until it arrives.
     pub runtime_state: Option<RuntimeState>,
+    /// Whether the core's global strategy engine is running, or `None` until it reports.
+    ///
+    /// `None` is a THIRD state, not a false: a core that has connected but has not yet sent
+    /// `TStratRuntimeState` knows nothing about its own trading, and rendering that as "stopped"
+    /// would offer a Start button for a core that may already be trading. Read it through
+    /// [`super::SessionManager::core_run_state`] rather than field by field.
+    pub strategies_running: Option<bool>,
     /// Account hedge mode for dual-side positions, or `None` until the core responds.
     pub hedge_mode: Option<bool>,
     /// Exchange API-key expiration, or `None` while this core has never answered. A LATER failure
@@ -252,6 +259,20 @@ pub struct CoreData {
     pub client_settings_rev: u64,
     pub lev_manage_rev: u64,
     pub runtime_state_rev: u64,
+    /// Advances when `strategies_running` changes, including its first arrival.
+    pub strategies_running_rev: u64,
+    /// Whether the CURRENT connection has reported the runtime state.
+    ///
+    /// Retained values are not dropped on a reconnect — MoonProto repeats neither init nor its
+    /// post-init resync on `Connected { fresh: false }`, and the protocol has no request for this
+    /// state, so a dropped value is one nobody will ever send again. What a reconnect does drop is
+    /// the CLAIM that the value is current, which is what a control renders differently.
+    pub runtime_state_confirmed: bool,
+    /// Whether the current connection has reported the strategy-engine state.
+    ///
+    /// Separate from the runtime half because the two arrive over different commands: after a
+    /// reconnect the core may volunteer one and stay silent about the other.
+    pub strategies_running_confirmed: bool,
     pub hedge_mode_rev: u64,
     /// Advances only when the API-key ANSWER changes — not when the same answer is re-received on
     /// the six-hourly poll, and not on the receipt stamp alone.
@@ -315,6 +336,7 @@ impl CoreData {
             client_settings: None,
             lev_manage: None,
             runtime_state: None,
+            strategies_running: None,
             hedge_mode: None,
             api_expiry: None,
             server_version: None,
@@ -342,6 +364,9 @@ impl CoreData {
             client_settings_rev: 0,
             lev_manage_rev: 0,
             runtime_state_rev: 0,
+            strategies_running_rev: 0,
+            runtime_state_confirmed: false,
+            strategies_running_confirmed: false,
             hedge_mode_rev: 0,
             api_expiry_rev: 0,
             log_rev: 0,
@@ -551,13 +576,31 @@ impl CoreData {
                 if matches!(s, ConnStatus::Ready) {
                     self.fault = None;
                 }
-                // The reported BUILD describes the connection that reported it. MoonProto publishes
-                // the snapshot behind it only at Ready, so a core that has left Ready has no live
-                // claim to a build, and the replacement feed may reach a different MoonBot
+                // The reported BUILD describes the connection that reported it. MoonProto
+                // publishes the snapshot behind it only at Ready, so a core that has left Ready has
+                // no live claim to a build, and the replacement feed may reach a different MoonBot
                 // entirely. Dropping it here is the inverse of the fault rule above: the fault
                 // survives everything until Ready, the build survives nothing but Ready.
+                //
+                // The RUN state is retained but marked UNCONFIRMED, which is a different rule for
+                // a different reason. MoonProto repeats neither init nor its post-init resync on a
+                // reconnect (`Connected { fresh: false }`) and the protocol has no request for
+                // either half, so dropping the values would leave every core that survived a link
+                // blip reading as "never reported" while it trades normally. What the blip really
+                // invalidates is the CLAIM that the values are current, and a control renders that
+                // claim rather than hiding the value. The feed re-publishes both from MoonProto's
+                // own retained snapshot when the core returns — see `feed::live`, which is what
+                // usually restores the confirmation within the same second.
                 if !matches!(s, ConnStatus::Ready) {
                     self.server_version = None;
+                    if self.runtime_state_confirmed {
+                        self.runtime_state_confirmed = false;
+                        self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
+                    }
+                    if self.strategies_running_confirmed {
+                        self.strategies_running_confirmed = false;
+                        self.strategies_running_rev = self.strategies_running_rev.wrapping_add(1);
+                    }
                 }
                 self.status = s;
             }
@@ -668,9 +711,35 @@ impl CoreData {
                 }
             }
             FeedMsg::RuntimeState(state) => {
-                if self.runtime_state != Some(state) {
-                    self.runtime_state = Some(state);
+                // The REPORT re-confirms the half even when the value repeats: after a reconnect
+                // "the core still says started" is exactly the fact a control was missing.
+                let changed = self.runtime_state != Some(state) || !self.runtime_state_confirmed;
+                self.runtime_state = Some(state);
+                self.runtime_state_confirmed = true;
+                if changed {
                     self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::RunStateForgotten => {
+                // A different MoonBot answers now, so the retained halves describe a process that
+                // is gone. Unlike a reconnect this drops the VALUES, not just their confirmation:
+                // there is nothing here for the new instance to be judged by.
+                if self.runtime_state.take().is_some() || self.runtime_state_confirmed {
+                    self.runtime_state_confirmed = false;
+                    self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
+                }
+                if self.strategies_running.take().is_some() || self.strategies_running_confirmed {
+                    self.strategies_running_confirmed = false;
+                    self.strategies_running_rev = self.strategies_running_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::StrategiesRunning(running) => {
+                let changed =
+                    self.strategies_running != Some(running) || !self.strategies_running_confirmed;
+                self.strategies_running = Some(running);
+                self.strategies_running_confirmed = true;
+                if changed {
+                    self.strategies_running_rev = self.strategies_running_rev.wrapping_add(1);
                 }
             }
             FeedMsg::Endpoint(endpoint) => {

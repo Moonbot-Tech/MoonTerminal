@@ -24,16 +24,19 @@ use super::format::{
     format_amount, format_profit, format_trade_count, format_win_rate, profit_column_width,
 };
 use super::line::{
-    RowChrome, RowRole, RowSelect, row_h_px, row_h_value, row_id, section_header, table_row,
+    RowChrome, RowRole, RowSelect, row_h_px, row_h_value, row_id, section_header,
+    table_row,
 };
 use super::rows::MonitorRow;
 use super::sections::MonitorEntry;
 use super::settings::MonitorPrefs;
 use super::{
-    AVERAGE_ORDER_COLUMN_WIDTH, EXCHANGE_LOGO_SIZE, MIN_NAME_COLUMN_WIDTH, MonitorLayout,
-    MonitorSort, MonitorSortColumn, NAME_LOGO_GAP, ProfitMonitorView, TABLE_COLUMN_GAP,
-    TABLE_HORIZONTAL_PADDING, TRADES_COLUMN_WIDTH, WIN_RATE_COLUMN_WIDTH, sort_arrow,
+    AVERAGE_ORDER_COLUMN_WIDTH, EXCHANGE_LOGO_SIZE, MonitorLayout, MonitorSort, MonitorSortColumn,
+    NAME_LOGO_GAP, ProfitMonitorView, TABLE_COLUMN_GAP, TABLE_HORIZONTAL_PADDING,
+    TRADES_COLUMN_WIDTH, WIN_RATE_COLUMN_WIDTH, name_min_width, run_slots, sort_arrow,
 };
+use crate::Backend;
+use crate::controls::core_run::{RunKey, RunScope, RunSlots, reserved_cell, run_cell};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use crate::media::exchange_logos::exchange_logo;
@@ -179,6 +182,7 @@ pub(super) fn table(
     scroll: &MoonVirtualListScrollHandle,
     palette: MoonPalette,
     view: Entity<ProfitMonitorView>,
+    backend: Entity<Backend>,
     cx: &App,
 ) -> AnyElement {
     let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));
@@ -228,17 +232,51 @@ pub(super) fn table(
         entries
             .iter()
             .map(|entry| {
-                let cores = match entry {
-                    MonitorEntry::Row { row, .. } => row.filter_cores.clone(),
-                    MonitorEntry::Header(head) => head.cores.clone(),
-                    MonitorEntry::Subtotal { .. } => return None,
-                };
+                let cores = entry.scope_cores()?;
                 Some(RowSelect {
                     selected: !selection.is_empty()
                         && !cores.is_empty()
                         && cores.iter().all(|core| selection.contains(core)),
                     cores,
                     owner: owner.clone(),
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // Resolved once per render like the logos and the click payloads, and for the same reason: the
+    // item builder runs for every visible line on every frame. A line's scope is its FILTER
+    // payload, not the cores that traded — an Exchange row commands every configured core of that
+    // exchange, and a Core row commands exactly its own, which is also what makes the restart
+    // button available to a row and not to a caption. Skipped entirely while the column is off.
+    let slots = run_slots(prefs);
+    let run_scopes: Vec<Option<RunScope>> = if slots.any() {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let cores = entry.scope_cores()?;
+                let (key, trading) = match entry {
+                    // A core saved into several groups is drawn once per group, so only its first
+                    // line may key on the core itself — exactly what `row_id` does for the row.
+                    MonitorEntry::Row {
+                        row, occurrence: 0, ..
+                    } => (RunKey::Core(row.primary_core), prefs.trading_buttons),
+                    MonitorEntry::Row { .. } => (RunKey::Repeat(index), prefs.trading_buttons),
+                    // A caption always gets its cell — the folded status dot is worth showing even
+                    // when the group's own trading control is switched off. Either preference may
+                    // be on without the other.
+                    MonitorEntry::Header(head) => {
+                        (RunKey::Section(head.section), prefs.group_trading)
+                    }
+                    MonitorEntry::Subtotal { .. } => return None,
+                };
+                (!cores.is_empty()).then_some(RunScope {
+                    key,
+                    cores,
+                    reserve: slots,
+                    offers_trading: trading,
                 })
             })
             .collect()
@@ -267,6 +305,7 @@ pub(super) fn table(
         layout,
         profit_width,
         prefs.exchange_icons,
+        slots,
         sort,
         view.clone(),
         palette,
@@ -284,6 +323,11 @@ pub(super) fn table(
             let Some(entry) = list_entries.get(index) else {
                 return div().into_any_element();
             };
+            let run = run_scopes
+                .get(index)
+                .and_then(|scope| scope.as_ref())
+                .and_then(|scope| run_cell(scope, &backend, palette, app))
+                .or_else(|| reserved_cell(slots, app));
             let select = selects.get(index).cloned().flatten();
             let is_selected = select.as_ref().is_some_and(|select| select.selected);
             let (row, name, stripe, id) = match entry {
@@ -291,6 +335,7 @@ pub(super) fn table(
                     return section_header(
                         head,
                         prefs.exchange_icons,
+                        run,
                         select.filter(|select| !select.cores.is_empty()),
                         is_selected,
                         palette,
@@ -348,6 +393,8 @@ pub(super) fn table(
                     flash: flashes.get(index).copied().flatten(),
                     profit_width,
                     select,
+                    run,
+                    run_slots: slots,
                 },
                 palette,
                 app,
@@ -409,6 +456,11 @@ pub(super) fn table(
             flash: None,
             profit_width,
             select: None,
+            // The total commands nothing — it is every core at once, and "restart the fleet" is not
+            // a button this window offers. It keeps the reserved width, or its label stops lining
+            // up with the names above it, exactly like the logo gutter beside it.
+            run: reserved_cell(slots, cx),
+            run_slots: slots,
         },
         palette,
         cx,
@@ -448,6 +500,7 @@ fn table_header(
     layout: MonitorLayout,
     profit_width: f32,
     logo_gutter: bool,
+    run_slots: RunSlots,
     sort: Option<MonitorSort>,
     view: Entity<ProfitMonitorView>,
     palette: MoonPalette,
@@ -484,7 +537,7 @@ fn table_header(
         match width {
             Some(width) => cell.w(design::ui_px(cx, width)).flex_none(),
             None => cell
-                .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
+                .min_w(design::ui_px(cx, name_min_width(run_slots)))
                 .flex_1(),
         }
     };
@@ -497,6 +550,9 @@ fn table_header(
         .bg(moon(palette.table_head))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
+        // The run column has no sortable heading: it is a control, not a value. It keeps its width
+        // here so the Name heading starts where the names below it do.
+        .children(reserved_cell(run_slots, cx))
         .child(
             sortable(
                 "profit-monitor-heading-name",

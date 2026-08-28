@@ -21,6 +21,17 @@ use crate::config::ServerConfig;
 use crate::market::SharedMarketStore;
 use crate::util::now_unix_ms as now_ms;
 
+/// Whether one synthetic-feed switch is set to anything but `0`.
+///
+/// Args:
+///     k: Variable name.
+///
+/// Returns:
+///     Whether the branch it selects is on.
+fn env_flag(k: &str) -> bool {
+    std::env::var(k).is_ok_and(|v| v != "0")
+}
+
 fn env_usize(k: &str, d: usize) -> usize {
     std::env::var(k)
         .ok()
@@ -110,6 +121,17 @@ pub fn run(
     let _ = tx.send(FeedMsg::CoreBase {
         base: "USDT".to_string(),
     });
+
+    // Run state, so the terminal's core RUN controls have something to show on a synthetic core.
+    // A real core reports these over `TRuntimeStateCommand` and `TStratRuntimeState`; without them
+    // the whole control renders as "never reported" and the bench cannot exercise it at all.
+    // `MOON_SYNTH_STOPPED` / `MOON_SYNTH_TRADING_OFF` select the other branch of each — a stopped
+    // runtime (which is what puts the restart button on screen) and a stopped strategy engine.
+    let _ = tx.send(FeedMsg::RuntimeState(crate::feed::RuntimeState {
+        is_started: !env_flag("MOON_SYNTH_STOPPED"),
+        auto_detect_active: true,
+    }));
+    let _ = tx.send(FeedMsg::StrategiesRunning(!env_flag("MOON_SYNTH_TRADING_OFF")));
 
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
     //

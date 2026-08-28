@@ -107,6 +107,12 @@ struct Backend {
     /// Cores broadcast by the Profit Monitor's core click; empty means every core, as in a panel's
     /// own retained filter. Process-lifetime like those filters, and never serialized.
     core_filter: HashSet<CoreId>,
+    /// Run intents (restart, start/stop trading) already sent and still unanswered.
+    ///
+    /// One register per process rather than one per window: the same core is drawn in the Profit
+    /// Monitor, the Core Status panel and the core-settings popup, and a button pressed in one must
+    /// not look unpressed in the others. See `controls::core_run`.
+    run_pending: crate::controls::core_run::RunPending,
     /// Dedicated wake channel for `core_filter`, observed only by the panels that own a core
     /// selector and by the monitor that publishes it.
     core_filter_revision: Entity<CoreFilterRevision>,

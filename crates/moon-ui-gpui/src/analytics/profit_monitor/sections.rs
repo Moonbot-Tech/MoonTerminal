@@ -69,6 +69,25 @@ pub(super) enum MonitorEntry {
     },
 }
 
+impl MonitorEntry {
+    /// Return the cores this line stands for, or `None` for a line that stands for no set.
+    ///
+    /// One definition for both passes that need it — the core-filter payload and the run control —
+    /// because the answer is a property of the line, not of the feature reading it. A subtotal is
+    /// the one line with no set: it is a fold, and "act on this fold" would mean whatever its
+    /// section happens to hold right now.
+    ///
+    /// Returns:
+    ///     The line's cores, shared rather than copied.
+    pub(super) fn scope_cores(&self) -> Option<Rc<[CoreId]>> {
+        match self {
+            Self::Row { row, .. } => Some(row.filter_cores.clone()),
+            Self::Header(head) => Some(head.cores.clone()),
+            Self::Subtotal { .. } => None,
+        }
+    }
+}
+
 /// A group caption and what clicking it stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SectionHead {
