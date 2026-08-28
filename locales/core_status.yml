@@ -558,6 +558,22 @@ core_status.startup.f.reconnects:
   ru: "Переподключений"
   en: "Reconnects"
   es: "Reconexiones"
+core_status.startup.f.local_port:
+  ru: "Локальный UDP-порт"
+  en: "Local UDP port"
+  es: "Puerto UDP local"
+core_status.startup.f.previous_port:
+  ru: "Предыдущий UDP-порт"
+  en: "Previous UDP port"
+  es: "Puerto UDP anterior"
+core_status.startup.f.port_changes:
+  ru: "Смен локального порта"
+  en: "Local port changes"
+  es: "Cambios de puerto local"
+core_status.startup.packets:
+  ru: "отпр. %{sent} · прин. %{recv}"
+  en: "sent %{sent} · recv %{recv}"
+  es: "env. %{sent} · rec. %{recv}"
 core_status.startup.f.rtt:
   ru: "RTT"
   en: "RTT"
@@ -634,6 +650,10 @@ core_status.fault.short.no_response:
   ru: "нет ответа"
   en: "no answer"
   es: "sin respuesta"
+core_status.fault.short.unparsed:
+  ru: "UDP принят"
+  en: "UDP received"
+  es: "UDP recibido"
 core_status.fault.short.access:
   ru: "ключ / доступ"
   en: "key / access"
@@ -666,6 +686,10 @@ core_status.fault.reason.silent:
   ru: "За %{t} с от ядра не пришло ни байта"
   en: "Not one byte arrived from the core in %{t} s"
   es: "En %{t} s no llego ni un byte del nucleo"
+core_status.fault.reason.unparsed:
+  ru: "UDP-пакетов получено: %{n}; за %{t} с терминал не принял рукопожатие"
+  en: "UDP packets received: %{n}; the terminal did not accept a handshake within %{t} s"
+  es: "Paquetes UDP recibidos: %{n}; el terminal no acepto el handshake en %{t} s"
 core_status.fault.reason.partial:
   ru: "От ядра пришло %{bytes}, но за %{t} с соединение так и не установилось"
   en: "%{bytes} arrived from the core, but the connection never completed within %{t} s"
@@ -714,6 +738,10 @@ core_status.fault.next.no_response:
   ru: "Открой UDP-порт ядра и в панели хостера, и в фаерволе самой машины. У ВМ, поднятой из снапшота, группа правил не переносится, а Windows метит новый адаптер как Общественный, и правило для Частной сети молчит"
   en: "Open the core UDP port both in the hoster panel and in the firewall of the machine itself. A VM restored from a snapshot does not carry its rule group over, and Windows marks a new adapter Public while a Private-only rule stays silent"
   es: "Abre el puerto UDP del nucleo tanto en el panel del hoster como en el firewall de la propia maquina. Una VM restaurada desde una instantanea no conserva su grupo de reglas, y Windows marca el adaptador nuevo como Publico mientras una regla solo para Privada permanece muda"
+core_status.fault.next.unparsed:
+  ru: "Пакеты дошли до терминала: это не закрытый порт. Пришли лог и эти счётчики в поддержку"
+  en: "Packets reached the terminal: this is not a closed port. Send the log and these counters to support"
+  es: "Los paquetes llegaron al terminal: no es un puerto cerrado. Envia el registro y estos contadores al soporte"
 core_status.fault.next.access:
   ru: "Вставь ключ, экспортированный ИМЕННО этим ботом, и проверь, что на ядре включён режим Kernel (VPS). Он остаётся неактивным, пока биржевой аккаунт не заведён под реферала MoonBonus"
   en: "Paste the key exported from THIS bot, and check that Kernel (VPS) mode is on at the core. It stays inactive while the exchange account is not under the MoonBonus referral"

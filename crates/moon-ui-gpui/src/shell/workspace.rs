@@ -1204,15 +1204,18 @@ fn workspace_core_tooltip(row: &WorkspaceRosterRow) -> String {
         // The reason and its next step come BEFORE the channel telemetry: a rail row is a glance
         // surface, and the actionable half must not sit under a dozen measurement lines.
         if let Some(diag) = diag.as_ref() {
-            lines.push(crate::conn_diag::fault_tooltip(
-                &crate::conn_diag::fault_facts(diag),
+            lines.push(crate::panels::problem_diagnostic_text(
+                diag,
+                row.fault.as_ref(),
+                &row.startup,
+            ));
+        } else {
+            lines.push(format!(
+                "{}:\n{}",
+                t!("core_status.col.startup"),
+                crate::panels::startup_diagnostic_text(&row.startup)
             ));
         }
-        lines.push(format!(
-            "{}:\n{}",
-            t!("core_status.col.startup"),
-            crate::panels::startup_diagnostic_text(&row.startup)
-        ));
     }
     lines.join("\n")
 }

@@ -4,6 +4,44 @@
 use super::*;
 use crate::feed::{ConnStatus, CoreIdentityFacts, INIT_STEPS_TOTAL};
 
+/// A transport timeout must distinguish no return path from packets that reached the process but
+/// were rejected above the UDP socket.
+///
+/// Breakage: classifying only by accepted Sliced bytes makes both cases read "not one byte" even
+/// when MoonProto counted physical inbound datagrams before protocol validation.
+#[test]
+fn connect_timeout_retains_physical_udp_evidence_from_both_sockets() {
+    let fault = ConnFault {
+        kind: ConnFaultKind::ConnectTimedOut { timeout_ms: 15_000 },
+        identity: CoreIdentityFacts::default(),
+        startup: CoreStartupStatus {
+            current_port_sent_packets: 9,
+            current_port_received_packets: 2,
+            sent_packets_before_last_port_change: 7,
+            received_packets_before_last_port_change: 3,
+            received_sliced_bytes: 0,
+            ..Default::default()
+        },
+    };
+
+    let diagnosis = diagnose(
+        &ConnStatus::Failed("connect timeout".to_string()),
+        Some(&fault),
+        &CoreStartupStatus::default(),
+    )
+    .expect("a retained connect timeout must have a diagnosis");
+
+    assert_eq!(
+        diagnosis.class,
+        FailureClass::NoResponse {
+            packets_sent: 16,
+            packets_received: 5,
+            bytes: 0,
+            elapsed_ms: 15_000,
+        }
+    );
+}
+
 /// `conn_verdict.rs:diagnose` must require a populated identity field before setting
 /// `legacy_core`; relaxing its guard to a missing MoonProto version alone would falsely tell a
 /// current core that failed authorization to update MoonBot instead of fixing its access setup.

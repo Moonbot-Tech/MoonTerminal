@@ -4348,7 +4348,7 @@ dependencies = [
 [[package]]
 name = "moonproto"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#9c7b3d736d16b7ecfa8a467a799d9a2df4b9bf7e"
+source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#02cbe52d16df667ae4f24e4a7b06a2e6cf8f7072"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

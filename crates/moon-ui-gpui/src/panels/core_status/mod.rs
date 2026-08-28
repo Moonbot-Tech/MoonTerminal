@@ -28,7 +28,7 @@ mod time_offset;
 mod warnings;
 
 pub(crate) use presentation::connection_status_text;
-pub(crate) use startup::startup_diagnostic_text;
+pub(crate) use startup::{problem_diagnostic_text, startup_diagnostic_text};
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;

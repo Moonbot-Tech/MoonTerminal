@@ -121,7 +121,93 @@ fn present_upstream_values_each_add_exactly_one_fact_line() {
     let facts_without = startup_facts(&without);
     let facts_with = startup_facts(&with);
     assert_eq!(facts_with.len(), facts_without.len() + 3);
+    assert_eq!(
+        facts_with
+            .iter()
+            .filter(|f| f.label == t!("core_status.startup.f.received"))
+            .count(),
+        1
+    );
 
     let tooltip = startup_tooltip(&facts_with);
     assert_eq!(tooltip.lines().count(), facts_with.len());
+}
+
+/// Local-port facts are omitted until a socket exists, then current, previous, and change-count
+/// inputs add exactly one line each without taking over the Sliced-byte `Received` label.
+#[test]
+fn local_udp_ports_add_three_distinct_optional_fact_lines() {
+    let without = CoreStartupStatus {
+        state: CoreStartupState::Connecting,
+        ..Default::default()
+    };
+    let with = CoreStartupStatus {
+        current_local_udp_port: Some(31_002),
+        current_port_sent_packets: 17,
+        current_port_received_packets: 23,
+        previous_local_udp_port: Some(31_001),
+        sent_packets_before_last_port_change: 11,
+        received_packets_before_last_port_change: 13,
+        local_port_change_count: 2,
+        ..without
+    };
+
+    let facts_without = startup_facts(&without);
+    let facts_with = startup_facts(&with);
+    assert_eq!(facts_with.len(), facts_without.len() + 3);
+    let current = facts_with
+        .iter()
+        .find(|f| f.label == t!("core_status.startup.f.local_port"))
+        .expect("the current socket must have its own fact");
+    assert_eq!(
+        current.value,
+        format!(
+            "31002 · {}",
+            t!("core_status.startup.packets", sent = 17, recv = 23)
+        )
+    );
+    let previous = facts_with
+        .iter()
+        .find(|f| f.label == t!("core_status.startup.f.previous_port"))
+        .expect("the previous socket must have its own fact");
+    assert_eq!(
+        previous.value,
+        format!(
+            "31001 · {}",
+            t!("core_status.startup.packets", sent = 11, recv = 13)
+        )
+    );
+}
+
+/// Problem surfaces must retain both the actionable verdict and its own failed-attempt socket facts.
+///
+/// Breakage: pairing a retained fault with the live retry snapshot makes the reason describe one
+/// socket while the counters beneath it silently describe another.
+#[test]
+fn problem_diagnostic_keeps_verdict_and_socket_facts_on_the_failed_attempt() {
+    let failed = CoreStartupStatus {
+        current_local_udp_port: Some(31_002),
+        current_port_sent_packets: 17,
+        current_port_received_packets: 23,
+        ..Default::default()
+    };
+    let fault = moon_core::feed::ConnFault {
+        kind: moon_core::feed::ConnFaultKind::ConnectTimedOut { timeout_ms: 15_000 },
+        identity: Default::default(),
+        startup: failed,
+    };
+    let live_retry = CoreStartupStatus {
+        current_local_udp_port: Some(32_004),
+        current_port_sent_packets: 1,
+        ..Default::default()
+    };
+    let diagnosis = moon_core::feed::diagnose(&ConnStatus::Connecting, Some(&fault), &live_retry)
+        .expect("the retained timeout must remain diagnosable during its retry");
+
+    let text = problem_diagnostic_text(&diagnosis, Some(&fault), &live_retry);
+    assert!(text.contains("31002"));
+    assert!(text.contains("17"));
+    assert!(text.contains("23"));
+    assert!(!text.contains("32004"));
+    assert!(text.lines().count() > startup_facts(&failed).len());
 }
