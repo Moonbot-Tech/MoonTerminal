@@ -126,5 +126,13 @@ done
 codesign --verify --strict "$STAGED_APP"
 echo "Imaging a universal bundle: $ARCHS"
 
-hdiutil create -volname "MoonTerminal" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
+# Size the image EXPLICITLY. Left to itself, `hdiutil create -srcfolder` derives the size from
+# the source with a margin so thin that 22 KB of binary growth overflowed it: v0.32.2 failed
+# twice with "hdiutil: create failed - No space left on device" and "could not access
+# /Volumes/MoonTerminal/MoonTerminal.app/Contents/MacOS/moonterminal" — a path INSIDE the
+# mounted image, not on the runner disk, which is what distinguishes this from the disk
+# exhaustion the header describes. The margin costs nothing in the artifact: UDZO stores only
+# the used blocks, so the shipped .dmg stays the size of its contents.
+CONTENT_KB="$(du -sk "$DMG_ROOT" | cut -f1)"
+hdiutil create -volname "MoonTerminal" -srcfolder "$DMG_ROOT" -ov -size "$((CONTENT_KB + 65536))k" -format UDZO "$DMG"
 echo "Built $DMG (version $VERSION)"
