@@ -303,6 +303,35 @@ fn startup_poll_never_settles_before_any_snapshot_was_sent() {
     assert!(!startup_poll_settled(true, None));
 }
 
+/// A re-handshake during the FIRST startup must not be read as a working connection.
+///
+/// Breakage: MoonProto sets the flag behind `fresh` on the first AuthDone, before the init spine
+/// runs, so a link blip mid-startup also arrives as `fresh: false`. Taking that alone is what left
+/// cores with no market list reading "connected" for a whole session — the 2026-08-27 incident,
+/// where seven of twenty-two cores did exactly this.
+#[test]
+fn a_reconnect_before_init_finished_is_not_operational() {
+    assert!(!reconnect_is_operational(false, false));
+}
+
+/// Once initialization has finished, a re-handshake IS the connection resuming.
+///
+/// Breakage: MoonProto repeats neither init nor `Ready` after a reconnect, so waiting for an event
+/// that will never arrive would freeze the status at "reconnected" forever while data flows.
+#[test]
+fn a_reconnect_after_init_is_operational() {
+    assert!(reconnect_is_operational(false, true));
+}
+
+/// The first connection of a client always initializes, whatever the latch says.
+///
+/// Breakage: reducing the rule to the latch alone — plausible once the latch exists — would call
+/// the very first `Connected` of a rebuilt client operational before init had run at all.
+#[test]
+fn a_fresh_connection_is_never_operational_yet() {
+    assert!(!reconnect_is_operational(true, true));
+}
+
 /// The order table and the chart's order lines carry the SAME rows, and `session/store.rs` feeds the
 /// line store from either message — so a turn that published both would put the identical set on the
 /// channel twice. The table is the one that also runs the throttle, so it has to be the one that
@@ -312,5 +341,29 @@ fn a_due_table_wins_over_the_order_lines() {
     assert_eq!(
         OrdersPublish::decide(true, true),
         Some(OrdersPublish::Table)
+    );
+}
+
+/// The reconnect loop's backoff rule reads a marker attached as an anyhow CONTEXT.
+///
+/// Breakage: `feed/mod.rs` decides whether an ended run counted as a stable connection by
+/// downcasting to `NeverOperational`. If attaching it as context ever stopped being reachable
+/// through `downcast_ref` — a different attachment API, an extra wrapper — the downcast would go
+/// quietly false and a core that can never finish initialization would reset the backoff on every
+/// attempt and rebuild on a fixed cadence for the life of the session, which is the failure this
+/// marker exists to prevent.
+#[test]
+fn a_run_that_never_worked_is_recognisable_through_its_cause() {
+    let never = run_failed(false, anyhow::anyhow!("startup stalled"));
+    assert!(never.downcast_ref::<NeverOperational>().is_some());
+    assert!(
+        format!("{never:#}").contains("startup stalled"),
+        "the cause must survive the marker: {never:#}"
+    );
+
+    let worked = run_failed(true, anyhow::anyhow!("link dropped"));
+    assert!(
+        worked.downcast_ref::<NeverOperational>().is_none(),
+        "a run that reached Ready is not marked"
     );
 }

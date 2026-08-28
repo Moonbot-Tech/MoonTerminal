@@ -15,6 +15,7 @@ mod convert;
 mod deadline;
 mod dirty;
 mod market_role;
+mod startup_watchdog;
 #[cfg(test)]
 mod tests;
 
@@ -131,6 +132,66 @@ fn startup_poll_settled(is_ready: bool, sent: Option<CoreStartupStatus>) -> bool
     is_ready && sent.is_some_and(|prev| prev.state.is_terminal())
 }
 
+/// Whether a MoonProto re-handshake resumes an OPERATIONAL connection.
+///
+/// `Connected { fresh }` does not answer this on its own. MoonProto derives `fresh` from
+/// `was_ever_connected`, which it sets on the FIRST AuthDone — before the init spine runs at all
+/// (`client/lifecycle.rs`) — so a link blip during the first startup arrives with `fresh: false`
+/// too. Reading that flag alone is what left cores with no market list, no strategies and no
+/// runtime state reading "connected" for a whole session. Only a startup that reached `Ready` makes
+/// the next re-handshake a resumption of something that works.
+///
+/// Extracted so the status mapping and the licence re-request answer it from ONE place: two
+/// hand-written copies of this rule would drift, and the wrong half stays invisible until a core
+/// happens to reconnect mid-init.
+///
+/// Args:
+///     fresh: MoonProto's own flag from `LifecycleEvent::Connected`.
+///     init_completed: Whether `LifecycleEvent::Ready` has already landed on this client.
+///
+/// Returns:
+///     Whether the core may be treated as up.
+fn reconnect_is_operational(fresh: bool, init_completed: bool) -> bool {
+    !fresh && init_completed
+}
+
+/// Marker attached to every `run` failure from an attempt that never became operational.
+///
+/// [`crate::feed::spawn`]'s reconnect loop resets its backoff for a connection that lasted long
+/// enough to look stable. Lifetime alone cannot tell "worked for an hour, then dropped" from "spent
+/// three minutes failing to come up", and the second one is exactly what must escalate: without
+/// this, a core that can never finish initialization rebuilds on a fixed cadence for the life of
+/// the session and never backs off.
+///
+/// One marker for the general fact rather than a downcast per failing kind: the startup watchdog is
+/// the first exit that needs it, MoonProto's own `ConnectFailed` after a long init ladder is the
+/// second, and the next one should only have to route through [`run_failed`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::feed) struct NeverOperational;
+
+impl std::fmt::Display for NeverOperational {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the connection never became operational")
+    }
+}
+
+/// Tag one `run` failure with whether the attempt had ever become operational.
+///
+/// Args:
+///     init_completed: Whether `LifecycleEvent::Ready` landed before this failure.
+///     cause: What ended the run.
+///
+/// Returns:
+///     The error to return from `run`, carrying [`NeverOperational`] when it never worked.
+fn run_failed(init_completed: bool, cause: impl Into<anyhow::Error>) -> anyhow::Error {
+    let cause = cause.into();
+    if init_completed {
+        cause
+    } else {
+        cause.context(NeverOperational)
+    }
+}
+
 /// Return whether one normalized strategy generation still needs database delivery.
 fn strategy_db_export_due(
     schema_ready: bool,
@@ -218,6 +279,7 @@ use convert::{
 use deadline::CoalescedDeadline;
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
+use startup_watchdog::{StartupStalled, StartupWatchdog};
 
 /// What to do with an arriving report alive map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -544,6 +606,12 @@ pub(super) fn run(
     // rather than re-sending an unchanged one.
     let mut last_startup = Instant::now();
     let mut startup_sent: Option<CoreStartupStatus> = None;
+    // Whether MoonProto has finished this client's one-time initialization, and the clock that
+    // gives up when it never does. Both exist because `Connected { fresh: false }` does NOT mean
+    // "already initialized" — see `reconnect_is_operational`, which owns that rule and the reason
+    // for it.
+    let mut init_completed = false;
+    let mut startup_watchdog = StartupWatchdog::default();
     loop {
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
@@ -660,27 +728,40 @@ pub(super) fn run(
         // re-open either — the cell would freeze at its last in-progress figure forever.
         let was_ready = is_ready;
         for ev in lifecycle_events.drain(..) {
-            log::info!("lifecycle: {ev:?}");
+            // The core is named because these lines are the only record of a connection's shape,
+            // and every core in the process writes them into ONE file: without the label, telling
+            // which of twenty-two cores never reached `Ready` means correlating by timestamp
+            // against unrelated lines that happen to carry a name.
+            log::info!(
+                "core {} lifecycle: {ev:?}",
+                crate::feed::core_label(server.id)
+            );
             let request_license_state = match &ev {
                 LifecycleEvent::Ready => true,
-                LifecycleEvent::Connected { fresh } => !*fresh,
+                // Asking a core that is still coming up buys a pending timeout, not a licence, so
+                // this reads the same predicate as the status mapping below.
+                LifecycleEvent::Connected { fresh } => {
+                    reconnect_is_operational(*fresh, init_completed)
+                }
                 _ => false,
             };
             let st = match ev {
                 LifecycleEvent::Connecting => ConnStatus::Stage("connecting…".into()),
                 LifecycleEvent::Connected { fresh } => {
                     // fresh=true means one-time initialization follows, so wait for Ready.
-                    // fresh=false means a reconnect: moonproto does NOT repeat initialization or
-                    // emit Ready again, but subscriptions/indexes are restored and the client is
-                    // operational. Otherwise status would remain stuck at "reconnected" (0/N)
-                    // forever even while data flows. Therefore a reconnect is immediately Ready.
-                    if fresh {
-                        ConnStatus::Stage("connected, init…".into())
-                    } else {
+                    //
+                    // fresh=false does NOT mean initialization already ran — that rule and its
+                    // reason live on `reconnect_is_operational`. Once it HAS finished, a reconnect
+                    // is immediately Ready: moonproto repeats neither init nor `Ready`, but restores
+                    // subscriptions and indexes, so waiting for an event that will never arrive
+                    // would leave the status stuck at "reconnected" (0/N) forever while data flows.
+                    if reconnect_is_operational(fresh, init_completed) {
                         // A reconnect replays a backlog of old log lines under fresh receipt
                         // times — exactly the burst the estimator's quarantine must discard.
                         offset_estimator.note_ready(now_ms_i64());
                         ConnStatus::Ready
+                    } else {
+                        ConnStatus::Stage("connected, init…".into())
                     }
                 }
                 // The per-step fact now travels typed on `FeedMsg::StartupStatus`, where the UI can
@@ -692,6 +773,12 @@ pub(super) fn run(
                     ConnStatus::Stage("connected, init…".into())
                 }
                 LifecycleEvent::Ready => {
+                    // The one moment initialization is known to have finished. Everything that
+                    // treats a later re-handshake as a resumed connection — the status mapping
+                    // above, the licence re-request, the startup watchdog — hangs off this latch,
+                    // and nothing clears it: a client whose init completed never runs init again,
+                    // and a client that is rebuilt gets a fresh `run` with a fresh latch.
+                    init_completed = true;
                     offset_estimator.note_ready(now_ms_i64());
                     ConnStatus::Ready
                 }
@@ -756,9 +843,10 @@ pub(super) fn run(
             // republishing it has to be released by exactly this status too. `Reconnecting` and
             // `ServerRestart` are handled INSIDE this loop and never return from `run`, so a local
             // flag that only resets on a fresh `run` would leave the column permanently blank after
-            // the first link blip of a session: the store would clear the build, `Connected {
-            // fresh: false }` would put the core back to Ready, and nothing would ever resend it.
-            // The two halves must move on the same event or they disagree.
+            // the first link blip of a session: the store would clear the build, the next
+            // `Connected { fresh: false }` would put an already-initialized core back to Ready, and
+            // nothing would ever resend it. The two halves must move on the same event or they
+            // disagree.
             if !is_ready {
                 version_sent = false;
             }
@@ -845,7 +933,7 @@ pub(super) fn run(
         // Propagate a terminal startup failure as Err so the app-level loop recreates the client;
         // moonproto cannot revive this runtime itself.
         if let Some(e) = connect_failed {
-            return Err(anyhow::anyhow!("{e}"));
+            return Err(run_failed(init_completed, anyhow::anyhow!("{e}")));
         }
 
         // Drain domain events from MoonEventSink. Read ticks/order books/orders from the snapshot
@@ -944,11 +1032,37 @@ pub(super) fn run(
         let settled = startup_poll_settled(is_ready, startup_sent);
         let startup_edge = !was_ready && is_ready;
         if !settled && (startup_edge || last_startup.elapsed() >= STARTUP_POLL) {
-            last_startup = Instant::now();
+            // Named rather than reused from `last_startup`: it is the instant the watchdog's clock
+            // is measured against, and a later edit moving that assignment must not silently
+            // redefine it.
+            let polled_at = Instant::now();
+            last_startup = polled_at;
             let snap = convert::startup_status_from_proto(client.startup_status());
             if startup_sent.is_none_or(|prev| !prev.progress_eq(&snap)) {
                 startup_sent = Some(snap);
                 let _ = tx.send(FeedMsg::StartupStatus(snap));
+            }
+            // Give up on a FIRST startup that has stopped advancing. MoonProto's init spine has no
+            // terminal failure of its own — a required step that times out is re-sent forever, and
+            // the phases that wait for authorization park indefinitely — so nothing else in this
+            // process would ever rebuild the client, and the core would stay half-initialized for
+            // the session. Failing the run hands it to the app-level reconnect in `feed::spawn`.
+            //
+            // `init_completed` is the SINGLE owner of "initialization has finished", and the
+            // watchdog checks it itself. The snapshot cannot serve as a second guard: after startup
+            // MoonProto publishes `Ready`/`Reconnecting` in step with authorization rather than
+            // freezing, so a post-init blip looks exactly like a stalled one from there.
+            if startup_watchdog.observe(&snap, polled_at, init_completed) {
+                // The fault carries the reason across the crate boundary as FACTS, so the panel
+                // words this attempt through the existing "stalled at this step" verdict. Without
+                // it the store would keep the PREVIOUS attempt's fault — cleared only on Ready —
+                // and explain the stall with an unrelated earlier cause. The reconnect loop logs
+                // the error itself, beside the retry it is about to make.
+                let _ = tx.send(FeedMsg::ConnFault(convert::stall_fault(
+                    client.server_info(),
+                    snap,
+                )));
+                return Err(run_failed(init_completed, StartupStalled::of(&snap)));
             }
         }
         // API-key expiration: a pure poll, since no event announces that a key aged a day. Gated on
