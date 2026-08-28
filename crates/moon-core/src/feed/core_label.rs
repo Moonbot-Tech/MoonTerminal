@@ -52,11 +52,14 @@ pub struct CoreLabel {
 
 impl fmt::Display for CoreLabel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = names()
-            .read()
-            .ok()
-            .and_then(|map| map.get(&self.id).cloned());
-        match name {
+        // Formatted UNDER the read guard rather than through a cloned name: this runs on the
+        // connection-churn path — once per lifecycle event, per core — and a whole config of cores
+        // flapping at once would otherwise be one heap allocation each. Nothing reachable from a
+        // `Formatter` reads this map again, so holding it here cannot re-enter.
+        let Ok(map) = names().read() else {
+            return write!(f, "{}", self.id);
+        };
+        match map.get(&self.id) {
             Some(name) => write!(f, "{} «{name}»", self.id),
             None => write!(f, "{}", self.id),
         }

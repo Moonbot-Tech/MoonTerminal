@@ -355,10 +355,30 @@ pub(super) fn conn_fault_from_proto(
             message,
         },
     };
-    let startup = startup_status_from_proto(startup);
+    fault(kind, info, startup_status_from_proto(startup))
+}
+
+/// Assemble one fault record.
+///
+/// The three producers differ only in the kind they name; identity and the frozen snapshot are the
+/// same record whatever ended the attempt, and are built here so a new field on [`ConnFault`], or
+/// any change to how identity is derived, is one edit rather than three.
+///
+/// Args:
+///     kind: What ended the attempt.
+///     info: `BaseCheck` result, when the core got that far.
+///     startup: Startup snapshot captured at the failure site.
+///
+/// Returns:
+///     The fault record.
+fn fault(
+    kind: ConnFaultKind,
+    info: Option<moonproto::ServerInfo>,
+    startup: CoreStartupStatus,
+) -> ConnFault {
     ConnFault {
-        identity: identity_facts(info),
         kind,
+        identity: identity_facts(info),
         startup,
     }
 }
@@ -381,14 +401,39 @@ pub(super) fn bind_fault(
     info: Option<moonproto::ServerInfo>,
     startup: moonproto::StartupStatus,
 ) -> ConnFault {
-    let startup = startup_status_from_proto(startup);
-    ConnFault {
-        kind: ConnFaultKind::LocalBindFailed {
+    fault(
+        ConnFaultKind::LocalBindFailed {
             consecutive_failures,
         },
-        identity: identity_facts(info),
-        startup,
-    }
+        info,
+        startup_status_from_proto(startup),
+    )
+}
+
+/// Build the fault for a first startup this terminal gave up on — see
+/// [`super::startup_watchdog`].
+///
+/// Carries the reason across the crate boundary as facts, so the panel words it through the
+/// existing localized "stalled at this step" verdict rather than through the untranslatable
+/// raw-text fallback every other `live::run` error lands on. It gets its OWN kind rather than
+/// borrowing [`ConnFaultKind::InitStepTimedOut`]: see that variant's sibling for why a step nobody
+/// answered must not be read as evidence about the core.
+///
+/// Takes the ALREADY-PROJECTED snapshot, unlike its two siblings: the caller is the startup poll,
+/// which converted it one line earlier, and re-reading `startup_status()` here would describe a
+/// slightly later moment than the one that decided to give up.
+///
+/// Args:
+///     info: `BaseCheck` result, when the core got that far before stalling.
+///     startup: Startup snapshot that the stall was detected on.
+///
+/// Returns:
+///     The fault record for a stalled startup.
+pub(super) fn stall_fault(
+    info: Option<moonproto::ServerInfo>,
+    startup: CoreStartupStatus,
+) -> ConnFault {
+    fault(ConnFaultKind::StartupStalled, info, startup)
 }
 
 /// Convert one successful `CheckAPIExpirationTime` answer into terminal state.

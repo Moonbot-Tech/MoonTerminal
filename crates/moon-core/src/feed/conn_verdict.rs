@@ -236,6 +236,11 @@ pub fn diagnose(
             elapsed_ms: *timeout_ms,
         },
         ConnFaultKind::InitStepTimedOut { step, raw_step } => step_class(*step, raw_step, None, s),
+        // A startup this terminal gave up on. It goes straight to the stalled-sync class instead of
+        // through `step_class`: nothing was reported, so the step it stopped on is a location, not
+        // evidence, and the two arms that read a step AS evidence would turn silence into a
+        // confident wrong cause.
+        ConnFaultKind::StartupStalled => syncing(s, s.current_step, true),
         ConnFaultKind::InitStepFailed {
             step,
             raw_step,

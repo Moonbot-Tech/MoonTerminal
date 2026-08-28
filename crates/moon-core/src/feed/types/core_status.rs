@@ -377,8 +377,9 @@ pub struct ConnFault {
     pub startup: CoreStartupStatus,
 }
 
-/// The distinguishable ways a connection attempt can end, mirrored from MoonProto's `ConnectError`
-/// and `LifecycleEvent::BindFailed`.
+/// The distinguishable ways a connection attempt can end — mostly mirrored from MoonProto's
+/// `ConnectError` and `LifecycleEvent::BindFailed`, plus the ones this terminal decides for itself
+/// when the library reports no failure at all ([`Self::StartupStalled`]).
 ///
 /// Deliberately close to the wire shape rather than to the user-facing classes: turning these into
 /// causes is a decision with its own tests, and it belongs in the layer that can also word them.
@@ -414,6 +415,19 @@ pub enum ConnFaultKind {
         /// of a guessed cause.
         raw_step: String,
     },
+    /// THIS terminal gave up on a startup that stopped advancing — see
+    /// `feed::live::startup_watchdog`.
+    ///
+    /// Separate from [`Self::InitStepTimedOut`] although both concern a step, because that one is
+    /// MoonProto reporting a step it could not finish, and the verdict reads the earliest two steps
+    /// as evidence about the CORE — a wrong build on `BaseCheck`, a refused account on `AuthCheck`.
+    /// A stall is evidence about neither: nothing answered, and which step it happened to be
+    /// sitting on says nothing about why. Folding it into that kind would put a confident wrong
+    /// diagnosis on the most likely stall steps.
+    ///
+    /// Carries nothing: where it stopped is already in [`ConnFault::startup`], frozen at the same
+    /// instant, and a second copy is only something to keep in sync.
+    StartupStalled,
     /// A mandatory init step returned a server-side error.
     InitStepFailed {
         /// The step, when this build recognises its name.

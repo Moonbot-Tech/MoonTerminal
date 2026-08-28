@@ -693,7 +693,15 @@ pub fn spawn(
                     Err(e) => {
                         // A long-lived connection is not a repeatedly failing host, so reset its
                         // backoff before reconnecting.
-                        if started.elapsed() >= STABLE_AFTER {
+                        //
+                        // A run that never finished initialization is the exception, however long
+                        // it lasted: the startup watchdog gives up well past `STABLE_AFTER`, so
+                        // without this a permanently stuck core would reset the backoff on every
+                        // single attempt and rebuild its client on a fixed cadence forever, never
+                        // escalating. Lifetime alone cannot tell "connected for an hour" from
+                        // "spent three minutes failing to come up".
+                        let never_worked = e.downcast_ref::<live::NeverOperational>().is_some();
+                        if !never_worked && started.elapsed() >= STABLE_AFTER {
                             backoff = BACKOFF_MIN;
                         }
                         let wait = jittered(backoff);
@@ -706,12 +714,32 @@ pub fn spawn(
                         // whether another attempt is active from the retained `ConnFault` and the
                         // latest lifecycle status, then words that conditional fact through
                         // `core_status.fault.retrying`.
+                        // The WHOLE chain, not just the outermost message: a run that never became
+                        // operational is wrapped in a marker the reconnect rule above reads, and
+                        // printing only that layer would replace the actual reason with the generic
+                        // sentence. This payload is the honest "could not determine" fallback the
+                        // verdict falls back to when no typed fault was retained, so it has to keep
+                        // whatever detail there is.
                         if tx
-                            .send(FeedMsg::Status(ConnStatus::Failed(format!("{e}"))))
+                            .send(FeedMsg::Status(ConnStatus::Failed(format!("{e:#}"))))
                             .is_err()
                         {
                             break; // The UI is closed.
                         }
+                        // Drop tokens left over from the attempt that just died BEFORE waiting on
+                        // them. The dying client's event sink wakes this same channel, so its
+                        // shutdown events reliably leave one queued — and a stale token would end
+                        // the wait immediately, making the backoff computed above a number nobody
+                        // ever honours. Only a token that arrives from here on is a real "retry
+                        // now" from the coordinator.
+                        //
+                        // The accepted cost: a coordinator command queued in the moment the run was
+                        // dying loses its nudge and waits out the backoff. The command itself is
+                        // safe in `cmd_rx` and runs when the next attempt starts. The window is the
+                        // teardown itself, and the wait it falls into is `BACKOFF_MIN` until a core
+                        // has failed repeatedly — which is exactly when an instant retry is the
+                        // wrong answer anyway.
+                        while run_wake_rx.try_recv().is_ok() {}
                         match run_wake_rx.recv_timeout(wait) {
                             Ok(()) => while run_wake_rx.try_recv().is_ok() {},
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
