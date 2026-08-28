@@ -1354,6 +1354,29 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
     );
 }
 
+/// Summary completion must not start the compact StrategyBase read behind the user's back.
+///
+/// Plausible regression: restoring the old completion prefetch or an armed state doubles the
+/// full-period database work while Summary is visible instead of leaving Strategies lazy-loaded
+/// through its tab-entry and report-refresh routes.
+#[test]
+fn summary_completion_keeps_strategy_base_lazy() {
+    let analytics = read_src("analytics/mod.rs");
+    let code = code_only(&analytics);
+    let summary_reload = code_only(braced_body(&analytics, "fn reload_summary("));
+
+    assert!(
+        !summary_reload.contains("reload_strategy_base(")
+            && !summary_reload.contains("ReadLane::StrategyBase")
+            && !summary_reload.contains("prefetch"),
+        "Summary completion must not launch or prefetch the StrategyBase read"
+    );
+    assert!(
+        !code.contains("strategy_prefetch_armed") && !code.contains("fn prefetch_strategy_base("),
+        "Analytics must not retain an armed StrategyBase prefetch path"
+    );
+}
+
 /// `analytics/mod.rs:reload_strategy_base` must retain the current Strategies snapshot while an
 /// automatic report refresh is in flight or briefly fails; restoring an unconditional reset,
 /// applying an automatic failure, or swapping either caller's `after_report` polarity makes the

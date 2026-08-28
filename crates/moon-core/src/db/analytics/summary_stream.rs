@@ -12,7 +12,15 @@ use super::strategy_meta::{read_metadata, StrategyMetadata, SummaryMetadata};
 use super::{CoreSeries, DayPoint, GroupStat, KindCore, KindStat, PeriodStats, Query, TopTrade};
 use crate::db::metrics::profit_factor;
 use crate::db::read_fail::{read_fail, read_fail_on};
+use crate::db::report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS};
 use crate::db::{QuoteScope, ReadResult};
+
+/// Maximum true-UTC span SQLite may sort for one current-period Summary statement.
+const QUERY_WINDOW_SECS: i64 = 7 * 86_400;
+/// Maximum difference between the retained and predicate-baked offsets for one row.
+const OFFSET_SCAN_PADDING_SECS: i64 = MAX_OFFSET_SECS as i64 - MIN_OFFSET_SECS as i64;
+/// Maximum raw `closedate` span each production window may scan from a physical source.
+const MAX_INNER_SCAN_SECS: i64 = QUERY_WINDOW_SECS + 2 * OFFSET_SCAN_PADDING_SECS;
 
 /// Fully finalized current-period pieces consumed by [`super::summary_on`].
 pub(super) struct SummaryParts {
@@ -349,6 +357,64 @@ fn push_top_row(rows: &mut Vec<TradeRow>, row: TradeRow, best: bool) {
     rows.truncate(5);
 }
 
+/// Return the bounded raw-date range supplied to the unified source for one outer UTC window.
+///
+/// `period_predicate_on` bakes one offset per core at the whole period's upper bound, while the
+/// outer `mt_to_utc` residual resolves the offset retained for each row. Those two valid offsets
+/// can differ by at most the full [`MIN_OFFSET_SECS`]..=[`MAX_OFFSET_SECS`] range, so padding both
+/// sides by that difference cannot exclude an outer-accepted row. Identity axes have no such
+/// difference and keep the exact index range.
+///
+/// Args:
+///     axis: Resolved historical report axis used by the outer residual.
+///     outer_from: Inclusive true-UTC window bound.
+///     outer_to: Exclusive true-UTC window bound.
+///
+/// Returns:
+///     Inclusive and exclusive raw-date bounds for the unified source.
+fn inner_window_bounds(axis: &crate::db::ReportAxis, outer_from: i64, outer_to: i64) -> (i64, i64) {
+    if axis.is_utc_identity() {
+        (outer_from, outer_to)
+    } else {
+        (
+            outer_from.saturating_sub(OFFSET_SCAN_PADDING_SECS),
+            outer_to.saturating_add(OFFSET_SCAN_PADDING_SECS),
+        )
+    }
+}
+
+/// Build the prepared current-stream SQL shared by production and plan-contract tests.
+///
+/// The order tail covers every value observable by [`Accumulator`]. Rows still tied after the
+/// tuple are therefore sequence-equivalent for streaks, drawdown, aggregates, and displayed top
+/// rows even when SQLite changes UNION branch or index traversal order.
+///
+/// Args:
+///     src: Unified filtered source retaining its inner `?1`/`?2` range.
+///     true_time: Exact true-UTC expression used by the residual and primary order key.
+///     inline_raw: Raw-money projection or NULL placeholders for the neutral-source mode.
+///
+/// Returns:
+///     One reusable statement with inner range and exact outer residual parameters.
+fn current_stream_sql(src: &str, true_time: &str, inline_raw: &str) -> String {
+    format!(
+        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), o.pnl,
+                o.core_uid, o.core_name, COALESCE(o.coin,''),
+                CAST(o.strategyid AS TEXT),
+                CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
+                COALESCE(o.isshort,0), {inline_raw}
+         FROM {src}
+         WHERE {true_time} >= ?3 AND {true_time} < ?4
+         ORDER BY {true_time},
+                  o.closedate, o.core_uid, o.pnl IS NULL, o.pnl,
+                  COALESCE(o.buydate, o.closedate), o.core_name IS NULL, o.core_name,
+                  COALESCE(o.coin,''), typeof(o.strategyid), CAST(o.strategyid AS TEXT),
+                  COALESCE(o.isshort,0), o.profitbtc IS NULL, o.profitbtc,
+                  o.spentbtc IS NULL, o.spentbtc,
+                  typeof(o.basecurrency), CAST(o.basecurrency AS TEXT)"
+    )
+}
+
 /// Read and finalize all current-period Summary projections.
 ///
 /// Args:
@@ -372,54 +438,131 @@ pub(super) fn read(
     include_kinds: bool,
     has_names: bool,
 ) -> ReadResult<SummaryParts> {
+    read_with_window(
+        conn,
+        src,
+        raw_src,
+        q,
+        axis,
+        StreamReadConfig {
+            bucket,
+            include_kinds,
+            has_names,
+            query_window_secs: QUERY_WINDOW_SECS,
+        },
+    )
+}
+
+/// Execution and projection controls for one bounded current-period stream read.
+#[derive(Clone, Copy)]
+struct StreamReadConfig {
+    /// Hour, day, or week bucket size.
+    bucket: i64,
+    /// Whether the one-day kind chart is visible.
+    include_kinds: bool,
+    /// Whether the attached strategy database can enrich labels.
+    has_names: bool,
+    /// Positive maximum true-UTC span sorted by one statement execution.
+    query_window_secs: i64,
+}
+
+/// Read current-period Summary projections through bounded chronological SQL windows.
+///
+/// Each execution rebinds the unified source's `?1`/`?2` to a bounded raw-date range and applies
+/// an exact half-open true-UTC `?3`/`?4` residual outside it. The source SQL, including its offset
+/// grouping and metric projection, stays unchanged and the prepared statement is reused.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     src: Unified active-lens report source.
+///     raw_src: Optional lens-neutral source used only for Percent raw enrichments.
+///     q: Concrete Summary query.
+///     axis: Resolved historical report axis shared by filtering and accumulation.
+///     config: Execution window and projection controls.
+///
+/// Returns:
+///     Every current-period Summary projection or one classified read failure.
+fn read_with_window(
+    conn: &Connection,
+    src: &str,
+    raw_src: Option<&str>,
+    q: &Query,
+    axis: &crate::db::ReportAxis,
+    config: StreamReadConfig,
+) -> ReadResult<SummaryParts> {
     const CTX: &str = "analytics: summary current stream";
+    let StreamReadConfig {
+        bucket,
+        include_kinds,
+        has_names,
+        query_window_secs,
+    } = config;
+    debug_assert!(query_window_secs > 0);
     // The axis arrives RESOLVED from the caller rather than being read here, for two reasons: it
     // must be the one the rest of this Summary read already used, and resolving it costs two
-    // queries that `current_summary_rows_execute_one_statement` exists to keep out of this path.
+    // queries that `current_summary_rows_execute_multiple_bounded_statements` keeps out of this
+    // path.
     // `q.axis` is deliberately NOT consulted — that field is the panel's copy from when the query
     // was built.
-    // The ORDER BY below calls `mt_to_utc`, so the scalar has to exist on this connection.
-    super::time_zone::install(conn, axis).map_err(|error| read_fail_on(conn, CTX, error))?;
+    let true_time = if axis.is_utc_identity() {
+        "o.closedate"
+    } else {
+        // A shifted axis needs the registered scalar to merge cores by their true UTC order.
+        super::time_zone::install(conn, axis).map_err(|error| read_fail_on(conn, CTX, error))?;
+        "mt_to_utc(o.closedate, o.core_uid)"
+    };
     let inline_raw = if raw_src.is_none() {
         "o.profitbtc, o.spentbtc, o.basecurrency"
     } else {
         "NULL, NULL, NULL"
     };
-    let sql = format!(
-        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), o.pnl,
-                o.core_uid, o.core_name, COALESCE(o.coin,''),
-                CAST(o.strategyid AS TEXT),
-                CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
-                COALESCE(o.isshort,0), {inline_raw}
-         FROM {src} ORDER BY mt_to_utc(o.closedate, o.core_uid)"
-    );
+    let sql = current_stream_sql(src, true_time, inline_raw);
     let mut statement = conn
         .prepare(&sql)
         .map_err(|error| read_fail_on(conn, CTX, error))?;
-    let rows = statement
-        .query_map(rusqlite::params![q.from, q.to], |row| {
-            Ok(TradeRow {
-                closedate: row.get(0)?,
-                buydate: row.get(1)?,
-                pnl: row.get(2)?,
-                core_uid: row.get(3)?,
-                core_name: row.get(4)?,
-                coin: row.get(5)?,
-                strategy_text: row.get(6)?,
-                strategy_id: row.get(7)?,
-                is_short: row.get::<_, i64>(8)? != 0,
-                raw_profit: row.get(9)?,
-                spent: row.get(10)?,
-                basecurrency: row.get(11)?,
-            })
-        })
-        .map_err(|error| read_fail_on(conn, CTX, error))?;
     let mut accumulator = Accumulator::default();
-    for row in rows {
-        let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
-        accumulator
-            .push(row, bucket, raw_src.is_none(), axis)
+    let mut window_from = q.from;
+    while window_from < q.to {
+        let window_to = window_from
+            .checked_add(query_window_secs)
+            .unwrap_or(q.to)
+            .min(q.to);
+        let (inner_from, inner_to) = inner_window_bounds(axis, window_from, window_to);
+        debug_assert!(
+            inner_to.saturating_sub(inner_from)
+                <= query_window_secs.saturating_add(2 * OFFSET_SCAN_PADDING_SECS)
+        );
+        if query_window_secs == QUERY_WINDOW_SECS {
+            debug_assert!(inner_to.saturating_sub(inner_from) <= MAX_INNER_SCAN_SECS);
+        }
+        let rows = statement
+            .query_map(
+                rusqlite::params![inner_from, inner_to, window_from, window_to],
+                |row| {
+                    Ok(TradeRow {
+                        closedate: row.get(0)?,
+                        buydate: row.get(1)?,
+                        pnl: row.get(2)?,
+                        core_uid: row.get(3)?,
+                        core_name: row.get(4)?,
+                        coin: row.get(5)?,
+                        strategy_text: row.get(6)?,
+                        strategy_id: row.get(7)?,
+                        is_short: row.get::<_, i64>(8)? != 0,
+                        raw_profit: row.get(9)?,
+                        spent: row.get(10)?,
+                        basecurrency: row.get(11)?,
+                    })
+                },
+            )
             .map_err(|error| read_fail_on(conn, CTX, error))?;
+        for row in rows {
+            let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
+            accumulator
+                .push(row, bucket, raw_src.is_none(), axis)
+                .map_err(|error| read_fail_on(conn, CTX, error))?;
+        }
+        window_from = window_to;
     }
     accumulator.finish_period(bucket, axis.zone());
 

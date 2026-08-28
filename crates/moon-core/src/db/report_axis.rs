@@ -164,6 +164,22 @@ impl ReportAxis {
         self.zone
     }
 
+    /// Return whether every retained offset leaves every stored timestamp unchanged.
+    ///
+    /// An empty axis and explicitly measured UTC cores both satisfy this predicate. Invalid
+    /// measurements do not participate because [`from_measured`](Self::from_measured) drops them
+    /// before the axis is retained.
+    ///
+    /// Returns:
+    ///     `true` exactly when every retained segment has a zero offset, so [`to_utc`](Self::to_utc)
+    ///     is the identity for every core and instant.
+    pub fn is_utc_identity(&self) -> bool {
+        self.segments
+            .values()
+            .flatten()
+            .all(|segment| segment.offset_secs == 0)
+    }
+
     /// Return the offset applying to one core at one instant.
     ///
     /// Args:
