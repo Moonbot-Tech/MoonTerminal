@@ -33,6 +33,55 @@ fn offset_lookup_distinguishes_unmeasured_from_measured_utc() {
     assert_eq!(axis.offset_secs(7, 10), Some(0));
 }
 
+/// `ReportAxis::is_utc_identity` -- treating one retained non-zero segment as identity lets the
+/// Summary stream sort that core on raw local time, while treating an empty, measured-zero, or
+/// invalid-only axis as shifted pays for a scalar sort whose key is identical to `closedate`.
+#[test]
+fn utc_identity_requires_every_retained_segment_to_be_zero() {
+    let empty = ReportAxis::identity_core_local();
+    let measured_zero = ReportAxis::from_measured(
+        HashMap::from([(
+            1,
+            vec![OffsetSegment {
+                from_utc: 10,
+                offset_secs: 0,
+            }],
+        )]),
+        chrono_tz::Europe::Warsaw,
+    );
+    let historical_mixed = ReportAxis::from_measured(
+        HashMap::from([(
+            1,
+            vec![
+                OffsetSegment {
+                    from_utc: 10,
+                    offset_secs: 0,
+                },
+                OffsetSegment {
+                    from_utc: 20,
+                    offset_secs: 3_600,
+                },
+            ],
+        )]),
+        chrono_tz::UTC,
+    );
+    let invalid_only = ReportAxis::from_measured(
+        HashMap::from([(
+            3,
+            vec![OffsetSegment {
+                from_utc: 30,
+                offset_secs: MAX_OFFSET_SECS + 1,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+
+    assert!(empty.is_utc_identity());
+    assert!(measured_zero.is_utc_identity());
+    assert!(!historical_mixed.is_utc_identity());
+    assert!(invalid_only.is_utc_identity());
+}
+
 /// `ReportAxis::offset_secs` -- letting a pre-observation timestamp fall through instead of using
 /// the earliest segment loses the correction for older rows and shifts their report times.
 #[test]

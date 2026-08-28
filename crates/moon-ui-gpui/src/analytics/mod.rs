@@ -366,13 +366,6 @@ pub struct AnalyticsView {
     strategy_data_period: Period,
     /// Whether the compact Strategies base predates the latest report generation.
     strategy_dirty: bool,
-    /// Whether the tuner base may still be warmed in the background for the current scope.
-    ///
-    /// One prefetch per user-visible scope, and no more. The prefetch's own completion re-plans
-    /// the refresh gate, so re-arming it on every writer generation would let Summary and the
-    /// strategy base alternate forever under continuous ingestion — twice the background
-    /// database work for a tab nobody has opened.
-    strategy_prefetch_armed: bool,
     /// Closed trades the core never dated, under the CURRENT filters.
     ///
     /// `None` while unknown. Failures are tracked separately so the banner never claims that
@@ -891,7 +884,6 @@ impl AnalyticsView {
             strategy_data: ProfitLoadState::default(),
             strategy_data_period: saved_strat_period.unwrap_or(Period::CurMonth),
             strategy_dirty: true,
-            strategy_prefetch_armed: true,
             undated: None,
             undated_error: None,
             undated_expanded: session.undated_expanded,
@@ -1276,12 +1268,9 @@ impl AnalyticsView {
 
     /// Current filters over one EXPLICIT time window.
     ///
-    /// Split out from [`Self::query`] because the strategy base must read `strat_period`
-    /// whatever tab is on screen: it already records `strategy_data_period = self.strat_period`,
-    /// and taking the window from the ACTIVE tab instead was safe only for as long as that read
-    /// could not start from Summary. The background warm-up does exactly that, and the two
-    /// sources disagreeing would put another period's numbers under the tuner's own period
-    /// label, with nothing marking them stale.
+    /// Split out from [`Self::query`] because the strategy base records
+    /// `strategy_data_period = self.strat_period`, so its read must use that same window rather
+    /// than whichever tab's period happens to be active.
     ///
     /// Args:
     ///     period: Window the caller is building a result for.
@@ -1472,8 +1461,6 @@ impl AnalyticsView {
         }
         self.data_dirty = true;
         self.strategy_dirty = true;
-        // A new scope needs a new warm base.
-        self.strategy_prefetch_armed = true;
         self.undated = None;
         self.undated_error = None;
         match self.tab {
@@ -1564,46 +1551,9 @@ impl AnalyticsView {
                 );
                 this.apply_undated_result(undated, after_report);
                 this.settle_report_refresh_retry(retry_error.as_ref(), cx);
-                // The Summary is on screen and the user is reading it; warm the tuner base now
-                // rather than after they click.
-                //
-                // Not while ANYTHING in this compound read failed, though — and `data_error`
-                // alone is not that test. `summary_data` classifies its main data, its
-                // undated-close read and its optional core scan independently, so the main data
-                // can land fine while `undated` or `cores` came back Busy. `retry_error` is
-                // exactly that classification, and the line above has just queued a
-                // quiet-period retry for it. Starting a second full-period scan into a database
-                // that is already reporting contention would walk straight past that delay and
-                // make the contention worse. `strategy_prefetch_armed` is untouched when we skip,
-                // so the retry's own completion warms the base instead.
-                if data_error.is_none() && retry_error.is_none() {
-                    this.prefetch_strategy_base(cx);
-                }
                 cx.notify();
             },
         );
-    }
-
-    /// Warm the tuner's strategy base in the background while the Summary is on screen.
-    ///
-    /// The measured complaint this exists for: at 200 cores over half a million report rows the
-    /// strategy base is its own full-period read, and the user paid for all of it AFTER clicking
-    /// the tuner tab. Running it while they read the Summary costs the same database work at a
-    /// moment nobody is waiting.
-    ///
-    /// Deliberately the EXISTING read, with its existing arguments — no second cache, no second
-    /// lane, no second thread. `after_report` keeps any visible snapshot; the axis is not chained
-    /// because no tuning axis may start from a tab that is not showing one; and the overlay stays
-    /// down because the window must not dim under work the user did not ask for.
-    ///
-    /// Args:
-    ///     cx: GPUI context used to run and publish the background read.
-    fn prefetch_strategy_base(&mut self, cx: &mut Context<Self>) {
-        if !self.strategy_prefetch_armed || self.tab != Tab::Summary || !self.strategy_dirty {
-            return;
-        }
-        self.strategy_prefetch_armed = false;
-        self.reload_strategy_base(true, false, false, cx);
     }
 
     /// Reload the compact Strategies base and optionally continue with its visible axis.
@@ -1674,11 +1624,11 @@ impl AnalyticsView {
                 // the retry gate settles. Manual scope changes have already retired the old data,
                 // so they publish the classified failure instead of showing stale values.
                 //
-                // "Keep what is visible" needs something visible to keep. The background
-                // warm-up is the first caller to reach here over a NEVER-SETTLED state, and there
-                // the rule would leave the tuner reading "Loading" forever with nothing in flight
-                // — a pending state that was really a classified failure, which is the one thing
-                // this window must never show.
+                // "Keep what is visible" needs something visible to keep. An automatic catch-up
+                // can reach here over a NEVER-SETTLED state, and there the rule would leave the
+                // tuner reading "Loading" forever with nothing in flight — a pending state that
+                // was really a classified failure, which is the one thing this window must never
+                // show.
                 //
                 // The test is `Loading`, deliberately NOT "has scalar data": `Split` carries a
                 // real per-quote breakdown the toolbar renders, and `NotReady` / `Failed` are
