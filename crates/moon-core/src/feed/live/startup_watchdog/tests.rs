@@ -68,7 +68,7 @@ fn only_the_achievement_fields_restart_the_clock() {
     /// One named way the snapshot can churn without init achieving anything.
     type Churn = (&'static str, fn(&mut CoreStartupStatus));
 
-    let churn: [Churn; 4] = [
+    let churn: [Churn; 5] = [
         ("phase", |s| {
             s.state = CoreStartupState::Reconnecting;
             s.reconnect_count += 1;
@@ -86,6 +86,13 @@ fn only_the_achievement_fields_restart_the_clock() {
             s.current_step_retries += 1;
             s.total_init_retries += 1;
             s.elapsed_ms += STARTUP_STALL.as_millis() as u64;
+        }),
+        ("physical UDP", |s| {
+            s.previous_local_udp_port = s.current_local_udp_port;
+            s.current_local_udp_port = Some(31_001);
+            s.current_port_sent_packets += 17;
+            s.current_port_received_packets += 23;
+            s.local_port_change_count += 1;
         }),
     ];
 

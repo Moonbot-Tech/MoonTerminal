@@ -15,7 +15,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::conn_diag::{fault_facts, fault_short, fault_tooltip};
+use crate::conn_diag::fault_short;
 
 use crate::design;
 use moon_core::feed::ConnStatus;
@@ -35,7 +35,8 @@ use super::presentation::{
     version_text,
 };
 use super::startup::{
-    StartupCell, startup_cell, startup_cell_text, startup_facts, startup_tooltip,
+    StartupCell, problem_diagnostic_text, startup_cell, startup_cell_text, startup_facts,
+    startup_tooltip,
 };
 use super::time_offset::{
     TzOffsetCell, tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip,
@@ -645,9 +646,9 @@ fn core_row(
                             w.startup,
                             p.red,
                         )
-                        .tooltip(crate::panels::common::text_tooltip(fault_tooltip(
-                            &fault_facts(&d),
-                        ))),
+                        .tooltip(crate::panels::common::text_tooltip(
+                            problem_diagnostic_text(&d, core.fault.as_ref(), &core.startup),
+                        )),
                         None => startup_text_cell(
                             startup_cell(&core.status, &core.startup),
                             w.startup,

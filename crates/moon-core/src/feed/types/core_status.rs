@@ -275,6 +275,22 @@ pub struct CoreStartupStatus {
     pub total_init_retries: u32,
     /// Reconnect episodes observed while this core was starting.
     pub reconnect_count: u32,
+    /// Local UDP port currently owned by this terminal's client socket.
+    ///
+    /// This is not the core's listening port and not necessarily the public port seen through NAT.
+    pub current_local_udp_port: Option<u16>,
+    /// Physical UDP datagrams successfully sent on the current local socket.
+    pub current_port_sent_packets: u64,
+    /// Physical UDP datagrams received on the current local socket, before protocol validation.
+    pub current_port_received_packets: u64,
+    /// Local UDP port closed by the latest automatic reconnect.
+    pub previous_local_udp_port: Option<u16>,
+    /// Final physical send count captured before the latest local-port change.
+    pub sent_packets_before_last_port_change: u64,
+    /// Final physical receive count captured before the latest local-port change.
+    pub received_packets_before_last_port_change: u64,
+    /// Automatic local-socket replacements observed while this client was starting.
+    pub local_port_change_count: u32,
     /// Last full client↔core UDP round-trip reported by Ping, ms.
     ///
     /// NOT the same figure as [`CoreSysStatus::round_trip_ms`], which shares this field name on a
@@ -343,6 +359,15 @@ impl CoreStartupStatus {
             && self.current_step_retries == other.current_step_retries
             && self.total_init_retries == other.total_init_retries
             && self.reconnect_count == other.reconnect_count
+            && self.current_local_udp_port == other.current_local_udp_port
+            && self.current_port_sent_packets == other.current_port_sent_packets
+            && self.current_port_received_packets == other.current_port_received_packets
+            && self.previous_local_udp_port == other.previous_local_udp_port
+            && self.sent_packets_before_last_port_change
+                == other.sent_packets_before_last_port_change
+            && self.received_packets_before_last_port_change
+                == other.received_packets_before_last_port_change
+            && self.local_port_change_count == other.local_port_change_count
             && self.round_trip_ms == other.round_trip_ms
             && self.path_mtu_bytes == other.path_mtu_bytes
             && self.downlink_delivery_percent == other.downlink_delivery_percent

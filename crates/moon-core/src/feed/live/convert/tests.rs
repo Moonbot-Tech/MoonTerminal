@@ -1,5 +1,28 @@
 use super::*;
 
+/// Distinct values prove every physical UDP diagnostic crosses the MoonProto boundary without a
+/// current/previous or sent/received swap.
+#[test]
+fn startup_status_maps_local_port_and_physical_packet_fields() {
+    let mut proto = moonproto::StartupStatus::default();
+    proto.current_local_udp_port = Some(31_000);
+    proto.current_port_sent_packets = 17;
+    proto.current_port_received_packets = 23;
+    proto.previous_local_udp_port = Some(30_999);
+    proto.sent_packets_before_last_port_change = 11;
+    proto.received_packets_before_last_port_change = 13;
+    proto.local_port_change_count = 1;
+    let startup = startup_status_from_proto(proto);
+
+    assert_eq!(startup.current_local_udp_port, Some(31_000));
+    assert_eq!(startup.current_port_sent_packets, 17);
+    assert_eq!(startup.current_port_received_packets, 23);
+    assert_eq!(startup.previous_local_udp_port, Some(30_999));
+    assert_eq!(startup.sent_packets_before_last_port_change, 11);
+    assert_eq!(startup.received_packets_before_last_port_change, 13);
+    assert_eq!(startup.local_port_change_count, 1);
+}
+
 /// A future edit that wires machine-wide `system_cpu_percent` into the
 /// process-CPU field, swaps process/system, or feeds `used_memory_mb` from
 /// `free_physical_memory_mb` — the scope-vs-average confusion the panel must

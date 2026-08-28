@@ -444,8 +444,8 @@ pub(super) fn run(
         ..Default::default()
     };
 
-    // `connect` is nonblocking; add connect_timeout so a stuck initialization step arrives as
-    // ConnectFailed with a reason instead of remaining silent.
+    // `connect` is nonblocking; bound the transport/authorization phase before the per-step Init
+    // deadlines and the terminal-owned startup watchdog take over.
     let event_wake_tx = wake_tx.clone();
     let (event_sink, event_queue) = MoonEventSink::queue_with_waker(move || {
         let _ = event_wake_tx.send(());

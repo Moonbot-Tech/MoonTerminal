@@ -107,7 +107,12 @@ fn step_label_opt(step: Option<CoreInitStep>) -> String {
 pub(crate) fn fault_short(class: &FailureClass) -> String {
     match class {
         FailureClass::LocalPort { .. } => t!("core_status.fault.short.local_port"),
-        FailureClass::NoResponse { .. } => t!("core_status.fault.short.no_response"),
+        FailureClass::NoResponse {
+            packets_received: 0,
+            bytes: 0,
+            ..
+        } => t!("core_status.fault.short.no_response"),
+        FailureClass::NoResponse { .. } => t!("core_status.fault.short.unparsed"),
         FailureClass::Access { .. } => t!("core_status.fault.short.access"),
         FailureClass::CoreUnidentified { .. } => t!("core_status.fault.short.unidentified"),
         FailureClass::Syncing { stalled: false, .. } => t!("core_status.fault.short.syncing"),
@@ -131,12 +136,26 @@ fn reason(class: &FailureClass) -> String {
             t!("core_status.fault.reason.local_port", n = attempts).to_string()
         }
         FailureClass::NoResponse {
+            packets_received: 0,
             bytes: 0,
             elapsed_ms,
+            ..
         } => t!("core_status.fault.reason.silent", t = secs(*elapsed_ms)).to_string(),
+        FailureClass::NoResponse {
+            packets_received,
+            bytes: 0,
+            elapsed_ms,
+            ..
+        } => t!(
+            "core_status.fault.reason.unparsed",
+            n = packets_received,
+            t = secs(*elapsed_ms)
+        )
+        .to_string(),
         FailureClass::NoResponse {
             bytes: seen,
             elapsed_ms,
+            ..
         } => t!(
             "core_status.fault.reason.partial",
             bytes = bytes(*seen),
@@ -188,7 +207,12 @@ fn reason(class: &FailureClass) -> String {
 fn next_step(class: &FailureClass) -> String {
     match class {
         FailureClass::LocalPort { .. } => t!("core_status.fault.next.local_port"),
-        FailureClass::NoResponse { .. } => t!("core_status.fault.next.no_response"),
+        FailureClass::NoResponse {
+            packets_received: 0,
+            bytes: 0,
+            ..
+        } => t!("core_status.fault.next.no_response"),
+        FailureClass::NoResponse { .. } => t!("core_status.fault.next.unparsed"),
         FailureClass::Access { .. } => t!("core_status.fault.next.access"),
         FailureClass::CoreUnidentified { .. } => t!("core_status.fault.next.unidentified"),
         FailureClass::Syncing { stalled: false, .. } => t!("core_status.fault.next.syncing"),

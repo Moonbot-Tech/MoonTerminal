@@ -269,6 +269,42 @@ fn a_current_step_change_counts_as_different_progress() {
     assert!(!a.progress_eq(&b));
 }
 
+/// Every physical socket field must pass the feed's `progress_eq` gate independently.
+///
+/// Breakage: omitting any new MoonProto field freezes that part of the hover at its first polled
+/// value even while the socket status keeps changing.
+#[test]
+fn every_physical_socket_change_counts_as_different_progress() {
+    /// One independently observable socket-status change.
+    type Change = (&'static str, fn(&mut CoreStartupStatus));
+
+    let changes: [Change; 7] = [
+        ("current port", |s| s.current_local_udp_port = Some(31_002)),
+        ("current sent", |s| s.current_port_sent_packets = 17),
+        ("current received", |s| s.current_port_received_packets = 23),
+        ("previous port", |s| {
+            s.previous_local_udp_port = Some(31_001)
+        }),
+        ("previous sent", |s| {
+            s.sent_packets_before_last_port_change = 11
+        }),
+        ("previous received", |s| {
+            s.received_packets_before_last_port_change = 13
+        }),
+        ("port changes", |s| s.local_port_change_count = 2),
+    ];
+
+    for (name, change) in changes {
+        let baseline = CoreStartupStatus {
+            state: CoreStartupState::Connecting,
+            ..Default::default()
+        };
+        let mut changed = baseline;
+        change(&mut changed);
+        assert!(!baseline.progress_eq(&changed), "suppressed {name}");
+    }
+}
+
 /// Build a detect row carrying `keep_in_chart_secs`; the rest is filler this test never reads.
 fn detect_row(keep_in_chart_secs: u32) -> DetectRow {
     DetectRow {

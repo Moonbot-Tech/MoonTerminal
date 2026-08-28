@@ -9,7 +9,7 @@
 //! crate with no `[lib]`, and a panel decision that needs a real test has to be a free function
 //! first.
 
-use moon_core::feed::ConnStatus;
+use moon_core::feed::{ConnFault, ConnStatus, Diagnosis};
 use moon_core::session::{CoreStartupState, CoreStartupStatus};
 use rust_i18n::t;
 
@@ -163,6 +163,40 @@ pub(super) fn startup_facts(s: &CoreStartupStatus) -> Vec<StartupFact> {
         )
         .to_string(),
     );
+    if let Some(port) = s.current_local_udp_port {
+        push(
+            t!("core_status.startup.f.local_port").to_string(),
+            format!(
+                "{} · {}",
+                port,
+                t!(
+                    "core_status.startup.packets",
+                    sent = s.current_port_sent_packets,
+                    recv = s.current_port_received_packets
+                )
+            ),
+        );
+    }
+    if let Some(port) = s.previous_local_udp_port {
+        push(
+            t!("core_status.startup.f.previous_port").to_string(),
+            format!(
+                "{} · {}",
+                port,
+                t!(
+                    "core_status.startup.packets",
+                    sent = s.sent_packets_before_last_port_change,
+                    recv = s.received_packets_before_last_port_change
+                )
+            ),
+        );
+    }
+    if s.local_port_change_count > 0 {
+        push(
+            t!("core_status.startup.f.port_changes").to_string(),
+            s.local_port_change_count.to_string(),
+        );
+    }
     push(
         t!("core_status.startup.f.received").to_string(),
         format!(
@@ -258,4 +292,32 @@ pub(super) fn startup_tooltip(facts: &[StartupFact]) -> String {
 ///     The same labelled diagnostic lines rendered by the Core Status startup hover.
 pub(crate) fn startup_diagnostic_text(status: &CoreStartupStatus) -> String {
     startup_tooltip(&startup_facts(status))
+}
+
+/// Combine the shared connection verdict with the complete startup telemetry for one problem core.
+///
+/// The actionable reason stays first; physical socket evidence follows under the same Startup
+/// heading used by Core Status. Settings, the by-IP tree, and the Auto rail all call this rather
+/// than maintaining three hand-written combinations. A retained fault supplies its own frozen
+/// snapshot so a retry cannot relabel the previous attempt's verdict with a new socket's counters.
+///
+/// Args:
+///     diagnosis: Classified reason and retry state to render first.
+///     fault: Frozen failed-attempt evidence when this diagnosis came from a retained fault.
+///     live_status: Latest startup snapshot, used only when no failed attempt exists.
+///
+/// Returns:
+///     One localized tooltip whose verdict and telemetry describe the same attempt.
+pub(crate) fn problem_diagnostic_text(
+    diagnosis: &Diagnosis,
+    fault: Option<&ConnFault>,
+    live_status: &CoreStartupStatus,
+) -> String {
+    let evidence_status = fault.map(|fault| &fault.startup).unwrap_or(live_status);
+    format!(
+        "{}\n{}:\n{}",
+        crate::conn_diag::fault_tooltip(&crate::conn_diag::fault_facts(diagnosis)),
+        t!("core_status.col.startup"),
+        startup_diagnostic_text(evidence_status)
+    )
 }

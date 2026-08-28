@@ -53,10 +53,14 @@ pub enum FailureClass {
     },
     /// The transport handshake never completed — the port / hoster-firewall class.
     ///
-    /// [`Self::NoResponse::bytes`] is what makes the wording honest: at zero, nothing whatsoever
-    /// came back and the message may say so; above zero the core IS reachable and something is
-    /// dropping or mangling the rest, which is a different sentence and a different next step.
+    /// Physical packet counts and accepted payload bytes make the wording honest: zero inbound
+    /// packets means nothing reached the socket, while inbound packets with zero accepted bytes
+    /// prove the problem is above the local UDP receive boundary.
     NoResponse {
+        /// Physical UDP datagrams successfully sent across the current and latest previous socket.
+        packets_sent: u64,
+        /// Physical UDP datagrams received before validation across those two sockets.
+        packets_received: u64,
         /// Unique payload bytes accepted before the deadline expired.
         bytes: u64,
         /// The deadline that expired, ms.
@@ -232,6 +236,12 @@ pub fn diagnose(
             message: None,
         },
         ConnFaultKind::ConnectTimedOut { timeout_ms } => FailureClass::NoResponse {
+            packets_sent: s
+                .current_port_sent_packets
+                .saturating_add(s.sent_packets_before_last_port_change),
+            packets_received: s
+                .current_port_received_packets
+                .saturating_add(s.received_packets_before_last_port_change),
             bytes: s.received_sliced_bytes,
             elapsed_ms: *timeout_ms,
         },

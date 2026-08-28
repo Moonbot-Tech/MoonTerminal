@@ -1,8 +1,7 @@
 //! The give-up clock for a core whose FIRST startup stops making progress.
 //!
 //! MoonProto's init spine has no terminal failure of its own. The three heavy steps re-send
-//! themselves forever on timeout — `GetMarketsList` every 20 s, `UpdateMarketsList` every 15 s,
-//! `StrategySchema` every 30 s (`client/init/machine.rs`) — and the phases that wait for
+//! themselves forever on their 45 s timeout (`client/init/machine.rs`), and the phases that wait for
 //! authorization park indefinitely on `!client.is_authorized()`. Neither path returns an error, so
 //! `live::run` is never told to rebuild the client and the app-level reconnect in `feed::spawn` never
 //! starts. A core can therefore sit half-initialized — authorized, no market list, no strategies,
@@ -46,7 +45,7 @@ mod tests;
 /// `PendingEnginePoll::Timeout` arm): 34 × 300 ms of auth wait, a 12 s first attempt, then ten
 /// retries of 2 s + 12 s ≈ 162 s in total (`DELPHI_BASE_CHECK_UPDATE_AUTH_WAITS`,
 /// `DELPHI_BASE_CHECK_UPDATE_RETRIES`, `DEFAULT_PENDING_TIMEOUT_MS`). Five minutes clears that with
-/// margin, and is about ten full `StrategySchema` attempts. Against an outage that used to last the
+/// margin, and is about six full `StrategySchema` attempts. Against an outage that used to last the
 /// whole session, the detection delay costs nothing worth trading a false kill for.
 pub(super) const STARTUP_STALL: Duration = Duration::from_secs(300);
 

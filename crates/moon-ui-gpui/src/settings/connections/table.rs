@@ -154,8 +154,10 @@ fn status_dot(
                         core.fault.as_ref(),
                         &core.startup,
                     )?;
-                    Some(crate::conn_diag::fault_tooltip(
-                        &crate::conn_diag::fault_facts(&diag),
+                    Some(crate::panels::problem_diagnostic_text(
+                        &diag,
+                        core.fault.as_ref(),
+                        &core.startup,
                     ))
                 })
                 .flatten();
