@@ -152,6 +152,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         workspace_revision: workspace_revision.clone(),
         auto_workspace_layout_revision: auto_workspace_layout_revision.clone(),
         core_filter: HashSet::new(),
+        run_pending: Default::default(),
         core_filter_revision,
         workspace_focus: None,
         metrics: moon_core::metrics::spawn_sampler(),

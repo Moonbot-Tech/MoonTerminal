@@ -721,6 +721,17 @@ pub struct WindowLayout {
     /// Profit Monitor: whether active cores that closed no trade appear as zero rows.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_idle_cores: Option<bool>,
+    /// Profit Monitor: whether a row leads with the core's run status, and a restart button when
+    /// that core reported a stopped runtime.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_core_status: Option<bool>,
+    /// Profit Monitor: whether a row carries the start/stop control for its core's trading.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_trading_buttons: Option<bool>,
+    /// Profit Monitor: whether a group caption carries the start/stop control for every core it
+    /// names, sending one command per core.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_group_trading: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

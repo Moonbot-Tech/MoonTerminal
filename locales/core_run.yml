@@ -1,0 +1,75 @@
+# Shared core RUN control: whether a core is up and trading, and the buttons that change it.
+# Used by every surface that lists cores; see `controls::core_run`.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+# --- Runtime status slot ---
+core_run.status_started:
+  ru: "Ядро запущено"
+  en: "Core is running"
+  es: "El núcleo está en marcha"
+# Shown for a single stopped core and for a group where at least one core reported a stop.
+core_run.status_stopped:
+  ru: "Ядро остановлено"
+  en: "Core is stopped"
+  es: "El núcleo está detenido"
+# A caption stands for many cores, so it names how many of them reported a stop.
+core_run.status_stopped_group:
+  ru: "Остановлено ядер: %{n}"
+  en: "%{n} core(s) stopped"
+  es: "%{n} núcleo(s) detenido(s)"
+core_run.status_offline:
+  ru: "Нет связи с ядром"
+  en: "Core is unreachable"
+  es: "Núcleo inaccesible"
+core_run.status_unknown:
+  ru: "Ядро ещё не сообщило состояние"
+  en: "Core has not reported its state yet"
+  es: "El núcleo aún no ha informado su estado"
+# `restart_now` is Moonbot's own Restart Now: it starts the market runtime, leaves passive mode AND
+# starts the checked strategies. The tooltip says so — this button can begin trading.
+core_run.restart:
+  ru: "Запустить ядро (выйдет из пассивного режима и запустит отмеченные стратегии)"
+  en: "Start the core (leaves passive mode and starts checked strategies)"
+  es: "Iniciar el núcleo (sale del modo pasivo e inicia las estrategias marcadas)"
+
+# --- Trading slot: Moonbot's own Start/Stop of the strategy engine ---
+core_run.trading_start:
+  ru: "Запустить автоторговлю"
+  en: "Start trading"
+  es: "Iniciar el trading"
+core_run.trading_stop:
+  ru: "Остановить автоторговлю"
+  en: "Stop trading"
+  es: "Detener el trading"
+# A scope where some cores trade and some do not: the button starts the remaining ones.
+core_run.trading_start_partial:
+  ru: "Запустить автоторговлю ещё на %{n} ядрах"
+  en: "Start trading on %{n} more core(s)"
+  es: "Iniciar el trading en %{n} núcleo(s) más"
+# The same two actions when the control stands for a whole group or exchange row.
+core_run.trading_start_group:
+  ru: "Запустить автоторговлю на %{n} ядрах"
+  en: "Start trading on %{n} core(s)"
+  es: "Iniciar el trading en %{n} núcleo(s)"
+core_run.trading_stop_group:
+  ru: "Остановить автоторговлю на %{n} ядрах"
+  en: "Stop trading on %{n} core(s)"
+  es: "Detener el trading en %{n} núcleo(s)"
+# Wrapper for any state the CURRENT connection has not re-reported. The feed re-publishes both
+# halves from MoonProto's retained snapshot when a core returns, so this is usually a short window;
+# it lasts when the client itself was replaced. Shown faded rather than hidden — the value is still
+# the last thing the core said.
+core_run.unconfirmed:
+  ru: "%{state} · данные до переподключения, свежих нет"
+  en: "%{state} · from before the reconnect, nothing newer"
+  es: "%{state} · de antes de la reconexión, nada más reciente"
+# The same note without a state to wrap, for a surface that shows several dots at once.
+core_run.unconfirmed_short:
+  ru: "Данные до переподключения, свежих нет"
+  en: "From before the reconnect, nothing newer"
+  es: "De antes de la reconexión, nada más reciente"
+core_run.waiting:
+  ru: "Команда отправлена, ждём ответа ядра"
+  en: "Command sent, waiting for the core"
+  es: "Comando enviado, esperando al núcleo"

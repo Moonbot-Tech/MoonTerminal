@@ -1120,11 +1120,40 @@ pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {
 /// Returns:
 ///     A circular status marker whose diameter tracks the active UI scale.
 pub fn status_dot_sized(color: u32, size: f32, cx: &App) -> impl IntoElement {
+    dot(size, solid(color), cx)
+}
+
+/// Opacity a status colour carries when its source has not confirmed it on the current connection.
+///
+/// One value for every surface that draws such a state, so the same "second-hand" language cannot
+/// mean two different things in two windows.
+pub const STALE_ALPHA: f32 = 0.45;
+
+/// Draw a status dot whose colour is FADED, for a value the source no longer confirms.
+///
+/// The same dot at the same size in the same colour, at reduced opacity: a reader must still see
+/// WHICH state is being reported — a stale "running" is not the same fact as "unknown" — while the
+/// fade says the claim is second-hand. Anything that changed the hue instead would collide with the
+/// palette's own green/amber/red meanings.
+///
+/// Args:
+///     color: Theme-resolved RGB colour of the confirmed state.
+///     cx: Application context used to apply the UI scale.
+///
+/// Returns:
+///     A circular status marker at [`STALE_ALPHA`].
+pub fn status_dot_stale(color: u32, cx: &App) -> impl IntoElement {
+    dot(5.0, moon_alpha(color, STALE_ALPHA), cx)
+}
+
+/// The one geometry both status dots draw, so a faded dot cannot drift from the solid one it
+/// stands in for.
+fn dot(size: f32, fill: impl Into<gpui::Fill>, cx: &App) -> impl IntoElement {
     div()
         .w(ui_px(cx, size))
         .h(ui_px(cx, size))
         .rounded(ui_px(cx, 999.0))
-        .bg(solid(color))
+        .bg(fill)
 }
 
 /// Drawn width of a [`status_dot`], for a layout that must reserve its column.

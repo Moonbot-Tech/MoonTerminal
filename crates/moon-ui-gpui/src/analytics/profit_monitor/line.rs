@@ -16,10 +16,11 @@ use std::time::Instant;
 use super::rows::MonitorRow;
 use super::sections::SectionHead;
 use super::{
-    AVERAGE_ORDER_COLUMN_WIDTH, EXCHANGE_LOGO_SIZE, MIN_NAME_COLUMN_WIDTH, NAME_LOGO_GAP,
-    ProfitMonitorView, TABLE_COLUMN_GAP, TABLE_HORIZONTAL_PADDING, TRADES_COLUMN_WIDTH,
-    WIN_RATE_COLUMN_WIDTH,
+    AVERAGE_ORDER_COLUMN_WIDTH, EXCHANGE_LOGO_SIZE, NAME_LOGO_GAP, ProfitMonitorView,
+    TABLE_COLUMN_GAP, TABLE_HORIZONTAL_PADDING, TRADES_COLUMN_WIDTH, WIN_RATE_COLUMN_WIDTH,
+    name_min_width,
 };
+use crate::controls::core_run::RunSlots;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 
@@ -136,6 +137,7 @@ pub(super) fn row_id(occurrence: usize, index: usize, row: &MonitorRow) -> Eleme
 pub(super) fn section_header(
     head: &SectionHead,
     logo_gutter: bool,
+    run: Option<AnyElement>,
     select: Option<RowSelect>,
     selected: bool,
     palette: MoonPalette,
@@ -167,6 +169,7 @@ pub(super) fn section_header(
         .text_color(moon(palette.text))
         .when_some(select, attach_select)
         .tooltip(crate::panels::common::text_tooltip(head.name.clone()))
+        .children(run)
         .child(
             h_flex()
                 .flex_1()
@@ -217,6 +220,14 @@ pub(super) struct RowChrome {
     pub(super) profit_width: f32,
     /// What clicking this row does, or `None` when the preference is off.
     pub(super) select: Option<RowSelect>,
+    /// The leading run cell, already built, or the empty reservation standing in for it.
+    ///
+    /// Built by the caller because it needs `Backend`, which nothing else in this module reads;
+    /// `None` only when the run column is switched off entirely, and then no child is added at all
+    /// — a zero-width element would still collect the row's own column gap.
+    pub(super) run: Option<AnyElement>,
+    /// Slots the table reserves, which the Name column's minimum is reduced by.
+    pub(super) run_slots: RunSlots,
 }
 
 /// One row's participation in the terminal-wide core filter.
@@ -297,62 +308,64 @@ pub(super) fn table_row(
         element.border_t(px(1.0))
     })
     .when_some(chrome.select, attach_select);
-    row.child(
-        h_flex()
-            .flex_1()
-            .h_full()
-            .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
-            .gap(design::ui_px(cx, NAME_LOGO_GAP))
-            .overflow_hidden()
-            .text_ellipsis()
-            .whitespace_nowrap()
-            .when(role != RowRole::Plain, |name| {
-                name.border_l(px(2.0))
-                    .border_color(moon_alpha(palette.border_soft, 0.9))
-                    .pl(design::ui_px(cx, SECTION_MEMBER_INDENT))
-            })
-            .when_some(chrome.logo.clone(), |element, logo| {
-                element.child(
-                    img(logo)
-                        .flex_none()
-                        .w(logo_size)
-                        .h(logo_size)
-                        .rounded(design::ui_px(cx, 2.0)),
-                )
-            })
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    // No logo but the gutter is on: pad instead of adding an empty box, so a row
-                    // whose brand is unknown still starts its name where its neighbours do without
-                    // a second element in the layout tree. Same form the heading uses.
-                    .when(chrome.logo.is_none() && chrome.logo_gutter, |text| {
-                        text.pl(design::ui_px(cx, EXCHANGE_LOGO_SIZE + NAME_LOGO_GAP))
-                    })
-                    .child(name),
-            ),
-    )
-    .child(numeric_cell(profit, chrome.profit_width, cx).text_color(moon(profit_color)))
-    .when(show_trades, |element| {
-        element.child(numeric_cell(trades, TRADES_COLUMN_WIDTH, cx))
-    })
-    .when(show_win, |element| {
-        element.child(numeric_cell(
-            win_rate.unwrap_or_default(),
-            WIN_RATE_COLUMN_WIDTH,
-            cx,
-        ))
-    })
-    .when(show_average, |element| {
-        element.child(numeric_cell(
-            average_order.unwrap_or_default(),
-            AVERAGE_ORDER_COLUMN_WIDTH,
-            cx,
-        ))
-    })
+    let run_slots = chrome.run_slots;
+    row.children(chrome.run)
+        .child(
+            h_flex()
+                .flex_1()
+                .h_full()
+                .min_w(design::ui_px(cx, name_min_width(run_slots)))
+                .gap(design::ui_px(cx, NAME_LOGO_GAP))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .when(role != RowRole::Plain, |name| {
+                    name.border_l(px(2.0))
+                        .border_color(moon_alpha(palette.border_soft, 0.9))
+                        .pl(design::ui_px(cx, SECTION_MEMBER_INDENT))
+                })
+                .when_some(chrome.logo.clone(), |element, logo| {
+                    element.child(
+                        img(logo)
+                            .flex_none()
+                            .w(logo_size)
+                            .h(logo_size)
+                            .rounded(design::ui_px(cx, 2.0)),
+                    )
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        // No logo but the gutter is on: pad instead of adding an empty box, so a row
+                        // whose brand is unknown still starts its name where its neighbours do without
+                        // a second element in the layout tree. Same form the heading uses.
+                        .when(chrome.logo.is_none() && chrome.logo_gutter, |text| {
+                            text.pl(design::ui_px(cx, EXCHANGE_LOGO_SIZE + NAME_LOGO_GAP))
+                        })
+                        .child(name),
+                ),
+        )
+        .child(numeric_cell(profit, chrome.profit_width, cx).text_color(moon(profit_color)))
+        .when(show_trades, |element| {
+            element.child(numeric_cell(trades, TRADES_COLUMN_WIDTH, cx))
+        })
+        .when(show_win, |element| {
+            element.child(numeric_cell(
+                win_rate.unwrap_or_default(),
+                WIN_RATE_COLUMN_WIDTH,
+                cx,
+            ))
+        })
+        .when(show_average, |element| {
+            element.child(numeric_cell(
+                average_order.unwrap_or_default(),
+                AVERAGE_ORDER_COLUMN_WIDTH,
+                cx,
+            ))
+        })
 }
 
 /// Render one fixed-width numeric cell without allowing a value to create a second row.

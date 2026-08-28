@@ -2315,6 +2315,9 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor_group_sections",
         "profit_monitor_idle_cores",
         "profit_monitor_core_filter",
+        "profit_monitor_core_status",
+        "profit_monitor_trading_buttons",
+        "profit_monitor_group_trading",
     ] {
         assert!(
             settings.matches(key).count() == 2,
@@ -2334,6 +2337,9 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor.settings.group_sections",
         "profit_monitor.settings.idle_cores",
         "profit_monitor.settings.core_filter",
+        "profit_monitor.settings.core_status",
+        "profit_monitor.settings.trading_buttons",
+        "profit_monitor.settings.group_trading",
     ] {
         assert!(
             settings.contains(key),
@@ -2420,4 +2426,57 @@ fn every_report_filter_mutator_persists_its_change() {
             "{signature} changes a Report toolbar filter and must persist it"
         );
     }
+}
+
+/// The shared core-run control must stay WIRED into the Profit Monitor, its buttons must not double
+/// as row clicks, and a state the core has not re-reported must be drawn as such.
+///
+/// `moon-ui-gpui` is a binary crate, so a GPUI closure cannot be called from an integration test;
+/// this pins the wiring at the source level, the same technique the preference test above uses. The
+/// pure halves are covered by unit tests — `session::run_state::tests` for the decisions,
+/// `controls::core_run::pending::tests` for the waiting register, and
+/// `profit_monitor::tests::the_run_column_is_paid_for_by_the_name_column` for the width budget.
+///
+/// Breakage, one per assertion: a control drawn nowhere is a feature that exists only in the
+/// settings popup; a button that lets its click through re-filters every panel in the main window
+/// on a press meant to start one core; a column drawn without reserving its width on every line
+/// leaves the names misaligned with their own heading; and a value carried over an unreported
+/// reconnect drawn at full strength states as fact something no live connection has confirmed.
+#[test]
+fn the_run_column_stays_wired_and_marks_what_the_core_has_not_confirmed() {
+    let table = code_only(&read_src("analytics/profit_monitor/table.rs"));
+    let line = code_only(&read_src("analytics/profit_monitor/line.rs"));
+    let view = code_only(&read_src("controls/core_run/view.rs"));
+
+    assert!(
+        table.contains("let slots = run_slots(prefs);")
+            && table.contains("run_cell(scope, &backend, palette, app)")
+            && table.contains("reserved_cell(slots, cx)"),
+        "the table must resolve the run scopes once per render, build each cell in the item builder, and still reserve the column on the total footer"
+    );
+    assert!(
+        table.contains("RunKey::Core(row.primary_core)")
+            && table.contains("RunKey::Section(head.section)"),
+        "run cells must key on the core or the section, never on the entry index"
+    );
+    assert!(
+        line.contains("row.children(chrome.run)")
+            && line.contains(".children(run)")
+            && line.contains("name_min_width(run_slots)"),
+        "every line must draw the run cell before its name and spend the column out of the name column"
+    );
+    assert!(
+        view.matches("app.stop_propagation()").count() >= 3,
+        "both run buttons must stop their click, and the wrapper must stop the press under it"
+    );
+    assert_eq!(
+        view.matches("core_run.unconfirmed").count(),
+        3,
+        "all three drawn states — the status dot, the restart button and the trading button — must say when what they show predates a reconnect"
+    );
+    assert!(
+        view.contains("design::status_dot_stale(color, cx)")
+            && view.contains("icon.alpha(design::STALE_ALPHA)"),
+        "an unconfirmed state must be drawn faded rather than hidden or recoloured"
+    );
 }

@@ -26,8 +26,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use moon_core::feed::{ClientSettingsEdit, LevManageEdit, RuntimeState};
-use moon_core::session::CoreId;
+use moon_core::feed::{ClientSettingsEdit, LevManageEdit};
+use moon_core::session::{CoreId, CoreRunState};
 
 use crate::panels::{icon_checkbox, popup_group, popup_title};
 use crate::shell::core_settings::resolve_core_settings_write;
@@ -309,7 +309,9 @@ pub fn core_settings_content(
     let lm = cd.and_then(|d| d.lev_manage.clone());
     // Show labeled Running and Auto Detect dots for the active core. They moved from the header,
     // where the unlabeled dots were cramped beside the gear button.
-    let rt = cd.and_then(|d| d.runtime_state);
+    let run = core
+        .map(|c| b.session.core_run_state(c))
+        .unwrap_or_default();
 
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     let root = v_flex()
@@ -322,7 +324,7 @@ pub fn core_settings_content(
                 .items_center()
                 .gap(design::ui_px(cx, 8.0))
                 .child(popup_title(t!("core_settings.title"), p, cx))
-                .child(runtime_status(rt, p, cx)),
+                .child(runtime_status(run, p, cx)),
         );
 
     // Show a placeholder when the core or its settings snapshot is unavailable.
@@ -347,14 +349,13 @@ pub fn core_settings_content(
             .variant(MoonButtonVariant::Blue)
             .padding_x(7.0)
             .on_click(move |_, _w, app| {
-                let b = backend.read(app);
+                let active = backend.read(app).active_trade_core(&group);
                 // Guarded like Cancel All beside it: the popup's two destructive actions must not
                 // disagree about which core they act on.
-                if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
-                {
-                    if let Err(e) = b.session.restart_now(core) {
-                        log::warn!("restart_now failed: {e:#}");
-                    }
+                if let Some(core) = resolve_core_settings_write(seeded, active) {
+                    // Through the shared run control, so this button and the ones in the Profit
+                    // Monitor register the same pending intent instead of each tracking its own.
+                    crate::controls::core_run::restart(&backend, core, app);
                 }
             })
             .render()
@@ -771,23 +772,51 @@ pub fn core_settings_content(
 /// Builds labeled Running (`is_started`) and Auto Detect (`auto_detect_active`) status dots for the
 /// active core. Enabled states are green; inactive Auto Detect on a running core is amber; other
 /// inactive states are gray. These moved from unlabeled dots beside the header gear button.
-fn runtime_status(rt: Option<RuntimeState>, p: MoonPalette, cx: &App) -> impl IntoElement {
-    let ok = if p.is_light() { p.green_text } else { p.green };
-    let started = rt.map(|r| r.is_started).unwrap_or(false);
-    let auto = rt.map(|r| r.auto_detect_active).unwrap_or(false);
-    let started_color = if started { ok } else { p.text_muted };
-    let auto_color = if auto {
+///
+/// The state comes from the shared `CoreRunState` projection rather than from the raw store entry,
+/// so this popup and the Profit Monitor's run column cannot disagree about an offline core: there,
+/// both halves read as unknown however much the store still retains.
+fn runtime_status(run: CoreRunState, p: MoonPalette, cx: &App) -> impl IntoElement {
+    let ok = design::positive_color(p);
+    // Muted covers BOTH "reported as stopped" and "never reported": this popup has room for two
+    // dots and no third colour to spare, and the run column in the Profit Monitor is where the
+    // three states are told apart. What must not happen is a green dot for a core that said
+    // nothing, which is what reading the raw field with `unwrap_or(false)` used to risk.
+    let started_color = if run.started == Some(true) {
         ok
-    } else if started {
-        p.amber
     } else {
         p.text_muted
     };
-    let labeled = |color: u32, label: String, cx: &App| {
+    let auto_color = match (run.auto_detect, run.started) {
+        (Some(true), _) => ok,
+        (Some(false), Some(true)) => p.amber,
+        _ => p.text_muted,
+    };
+    // Both dots come from the same command, so one reconnect leaves both unconfirmed: the core came
+    // back, MoonProto repeats no resync, and until it reports again this is last connection's
+    // answer. Drawn faded and named in the tooltip — the same language the Profit Monitor's run
+    // column uses.
+    let faded = run.started.is_some() && !run.started_confirmed;
+    let hint = if faded {
+        Some(t!("core_run.unconfirmed_short").to_string())
+    } else {
+        None
+    };
+    let labeled = move |id: &'static str, color: u32, label: String, cx: &App| {
         h_flex()
+            // A stable literal, never the localized label: an id built from user-facing text
+            // changes under a live locale switch and can collide between two translations.
+            .id(id)
             .items_center()
             .gap(design::ui_px(cx, 4.0))
-            .child(design::status_dot(color, cx))
+            .when_some(hint.clone(), |row, hint| {
+                row.tooltip(crate::panels::common::text_tooltip(hint))
+            })
+            .child(if faded {
+                design::status_dot_stale(color, cx).into_any_element()
+            } else {
+                design::status_dot(color, cx).into_any_element()
+            })
             .child(
                 div()
                     .text_size(design::t_caption(cx))
@@ -799,11 +828,13 @@ fn runtime_status(rt: Option<RuntimeState>, p: MoonPalette, cx: &App) -> impl In
         .items_center()
         .gap(design::ui_px(cx, 10.0))
         .child(labeled(
+            "core-runtime-started",
             started_color,
             t!("core_settings.runtime_started").to_string(),
             cx,
         ))
         .child(labeled(
+            "core-runtime-auto",
             auto_color,
             t!("core_settings.runtime_auto").to_string(),
             cx,

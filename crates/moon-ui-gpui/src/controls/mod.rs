@@ -14,6 +14,8 @@
 //!   Report, Assets, Alerts, Analytics, and Core Status;
 //! - [`core_quick`] holds that picker's pure decisions — row toggling and the per-exchange
 //!   selection state;
+//! - [`core_run`] is the shared run control: whether a core (or a whole group of them) is up and
+//!   trading, plus the restart and start/stop buttons that change it;
 //! - [`core_groups`] holds the pure decisions behind its saved core groups;
 //! - [`core_group_dialogs`] owns the two modals that create and manage those groups;
 //! - [`core_host`] is the adapter each of its six consumers implements, plus the extras assembly
@@ -33,6 +35,7 @@ mod core_combo;
 mod core_group_dialogs;
 mod core_groups;
 mod core_host;
+pub(crate) mod core_run;
 mod core_quick;
 pub(crate) mod date_range;
 mod fmt;

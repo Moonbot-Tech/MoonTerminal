@@ -19,8 +19,8 @@ mod market_role;
 mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{
@@ -207,10 +207,10 @@ fn record_strategy_edit_resolution(
 }
 
 use account_reconciliation::{
-    AccountReconciliation, BALANCE_TRACE_LEVEL, balance_refresh_log_window,
+    balance_refresh_log_window, AccountReconciliation, BALANCE_TRACE_LEVEL,
 };
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
-use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
+use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
@@ -293,6 +293,17 @@ fn connection_target(
         .map(|network| network.transport_mode)
         .unwrap_or(TransportMode::V0);
     (CoreEndpoint { address, port }, transport)
+}
+
+/// Which run-state halves the MoonBot instance currently on the other end has reported.
+///
+/// Both are false until it speaks for itself, which is also the state a server restart returns to.
+#[derive(Default)]
+struct RunStateSeen {
+    /// The market runtime (`TRuntimeStateCommand`).
+    runtime: bool,
+    /// The global strategy engine (`TStratRuntimeState`).
+    trading: bool,
 }
 
 /// Run one core's live MoonProto event loop until shutdown or a terminal connection error.
@@ -446,6 +457,12 @@ pub(super) fn run(
     // Tracked separately from `identity_sent`: the two facts come from one payload but are gated
     // on different fields, so one can be publishable while the other is not.
     let mut version_sent = false;
+    // Which run-state halves the MoonBot instance CURRENTLY on the other end has reported.
+    //
+    // Not "has the terminal ever seen them": MoonProto keeps its retained state across a server
+    // restart, so the snapshot can hold a previous instance's answer, and the reconnect republish
+    // must not pass that off as this one's. Reset by `LifecycleEvent::ServerRestart`.
+    let mut run_state_seen = RunStateSeen::default();
     // The order table's publication throttle. One value, not an `Instant` plus a `bool`: the
     // loop below sleeps on the earliest of every deadline it owns, so "is it due" and "how long
     // until it is" have to come from the same state, or the two answers drift. See `deadline.rs`.
@@ -679,7 +696,15 @@ pub(super) fn run(
                     ConnStatus::Ready
                 }
                 LifecycleEvent::Reconnecting => ConnStatus::Stage("reconnecting…".into()),
-                LifecycleEvent::ServerRestart => ConnStatus::Stage("server restart…".into()),
+                LifecycleEvent::ServerRestart => {
+                    // A DIFFERENT MoonBot process now answers on this address. MoonProto keeps its
+                    // retained settings and strategy state across the event — it clears only news
+                    // and session profits — so everything known about the run state belongs to the
+                    // process that just went away, and the republish below must not resurrect it.
+                    let _ = tx.send(FeedMsg::RunStateForgotten);
+                    run_state_seen = RunStateSeen::default();
+                    ConnStatus::Stage("server restart…".into())
+                }
                 LifecycleEvent::ConnectFailed { error } => {
                     // The typed failure is the whole point of this arm. `ConnStatus::Failed` keeps
                     // only MoonProto's English `Display` text, which is a technical token for the
@@ -744,6 +769,33 @@ pub(super) fn run(
                         "core {} request kernel license state failed: {error}",
                         crate::feed::core_label(server.id)
                     );
+                }
+                // Re-publish the RUN state from MoonProto's retained snapshot.
+                //
+                // A reconnect (`Connected { fresh: false }`) repeats neither init nor the post-init
+                // resync, and the protocol has no request for either half — so nothing would
+                // re-report them. The library, however, KEEPS them: `SettingsState` has no reset at
+                // all and `StratsState::clear` is only reached when the strategy list itself is
+                // rebuilt, never from the reconnect path. Reading the snapshot here is therefore
+                // the whole recovery: the values return CONFIRMED rather than as a retained guess.
+                // Empty only when this is a replacement client, which is exactly when a guess would
+                // have been wrong anyway.
+                if let Some(state) = client.snapshot() {
+                    // Only the halves THIS MoonBot instance has already reported: the library keeps
+                    // its retained state across a server restart, so anything it holds that the
+                    // current instance never sent describes the previous one.
+                    if run_state_seen.runtime {
+                        if let Some(runtime) = state.settings().runtime_state.as_ref() {
+                            let _ = tx.send(FeedMsg::RuntimeState(
+                                convert::runtime_state_from_proto(runtime),
+                            ));
+                        }
+                    }
+                    if run_state_seen.trading {
+                        if let Some(running) = state.strats().strategies_running() {
+                            let _ = tx.send(FeedMsg::StrategiesRunning(running));
+                        }
+                    }
                 }
                 // Request the complete ClientSettings snapshot (TP/SL/sell/...). The core sends
                 // LevManage/RuntimeState after connection itself, so only refresh settings here.
@@ -1234,7 +1286,25 @@ pub(super) fn run(
             },
         );
         if let Some(state) = runtime_state {
+            run_state_seen.runtime = true;
             if tx.send(FeedMsg::RuntimeState(state)).is_err() {
+                break;
+            }
+        }
+        // The global strategy engine's run state (`TStratRuntimeState`), which is NOT part of the
+        // runtime state above: the core sends the two over different commands and at different
+        // moments. Read from the RETAINED snapshot on its own event, like every settings value
+        // here — the event carries the same flag, but the snapshot is the authority the terminal
+        // renders from, so nothing can drift if the core repeats or reorders them.
+        let strategies_running = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| matches!(ev, &Event::Strat(StratEvent::RuntimeState { .. })),
+            |state| state.strats().strategies_running(),
+        );
+        if let Some(running) = strategies_running {
+            run_state_seen.trading = true;
+            if tx.send(FeedMsg::StrategiesRunning(running)).is_err() {
                 break;
             }
         }

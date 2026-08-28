@@ -42,6 +42,7 @@ use super::refresh::{
     report_result_is_stale, BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency,
 };
 use super::ProfitLoadState;
+use crate::controls::core_run::{run_scope_rev, RunSlots};
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
 use crate::{design, Backend};
@@ -61,6 +62,12 @@ const HEADER_HEIGHT: f32 = 32.0;
 const CONTEXT_REFRESH_MS: u128 = 5_000;
 const SECOND_MS: u128 = 1_000;
 const MIN_NAME_COLUMN_WIDTH: f32 = 128.0;
+/// Floor the name column keeps however much the run column claims from it.
+///
+/// The run controls are paid for by the NAME column, so the minimum window width never grows —
+/// that is the whole constraint (`MIN_WINDOW_WIDTH` is exactly padding + name + gap + profit). This
+/// floor is what stops a future third slot from squeezing the name down to nothing instead.
+const NAME_COLUMN_FLOOR: f32 = 72.0;
 const PROFIT_COLUMN_WIDTH: f32 = 154.0;
 /// Extra profit-column width claimed by the `total(last)` form.
 ///
@@ -82,6 +89,39 @@ const AVERAGE_ORDER_COLUMN_WIDTH: f32 = 116.0;
 const TABLE_HORIZONTAL_PADDING: f32 = 10.0;
 const TABLE_COLUMN_GAP: f32 = 8.0;
 const MIN_WINDOW_WIDTH: f32 = 310.0;
+
+/// Return the run slots the current preferences reserve on every line of the table.
+///
+/// Reserved by the TABLE, not by the line: a caption offers less than a core row does, but both
+/// must claim the same width or the name column stops lining up with its own heading.
+///
+/// Args:
+///     prefs: Display preferences chosen in the popup.
+///
+/// Returns:
+///     The reserved slots; `RunSlots::any` is false when the column is off entirely.
+fn run_slots(prefs: MonitorPrefs) -> RunSlots {
+    RunSlots {
+        status: prefs.core_status,
+        // A group-only trading control still needs the row-level slot reserved, or the captions
+        // would carry a column the rows beneath them do not.
+        trading: prefs.trading_buttons || prefs.group_trading,
+    }
+}
+
+/// Return the name column's minimum width once the run column has taken its share.
+///
+/// Args:
+///     slots: Slots the table reserves.
+///
+/// Returns:
+///     Minimum design-reference width of the Name column.
+fn name_min_width(slots: RunSlots) -> f32 {
+    if !slots.any() {
+        return MIN_NAME_COLUMN_WIDTH;
+    }
+    (MIN_NAME_COLUMN_WIDTH - slots.width() - TABLE_COLUMN_GAP).max(NAME_COLUMN_FLOOR)
+}
 
 /// Read the current UTC instant through the terminal's shared system-clock source.
 ///
@@ -230,6 +270,13 @@ pub(crate) struct ProfitMonitorView {
     live: LiveContext,
     data: ProfitLoadState<ProfitMonitorSummary>,
     refresh_error: Option<ReadFail>,
+    /// Run-state token of every configured core, folded with the pending-intent register.
+    ///
+    /// The monitor observes `Backend` for this and nothing else, so the throttled backend
+    /// notification — which fires while the fleet is merely trading — costs one store lookup per
+    /// configured core and repaints only when a run cell would actually draw differently. Zero
+    /// while the run column is switched off, which is also when the fold is skipped entirely.
+    run_rev: u64,
     /// Newest close date and trade count already on screen, per report core.
     ///
     /// This is the arrival detector's whole memory. `None` means "no baseline": the next snapshot
@@ -355,6 +402,11 @@ impl ProfitMonitorView {
         let valuation = backend.read(cx).valuation_mode();
         let live = capture_live_context(backend.read(cx));
 
+        // The ONE Backend observation this window makes. Everything else it draws comes from the
+        // report database or from the five-second context sample; the run controls are the only
+        // part that has to follow live core state, and they are usually switched off.
+        cx.observe(&backend, |this, _backend, cx| this.sync_run_state(cx))
+            .detach();
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _, cx| {
             this.observe_report_generation(cx);
@@ -387,6 +439,9 @@ impl ProfitMonitorView {
             live,
             data: ProfitLoadState::default(),
             refresh_error: None,
+            // Left at zero: the first backend notification fills it, and `sync_run_state` already
+            // owns the "skip while the column is off" rule.
+            run_rev: 0,
             seen_trades: None,
             flash: crate::pulse::Arrivals::default(),
             scroll: MoonVirtualListScrollHandle::new(),
@@ -471,6 +526,23 @@ impl ProfitMonitorView {
                 self.reload(false, cx);
             }
         }
+    }
+
+    /// Repaint the table when a core's run state, or a pending run intent, changed.
+    ///
+    /// Args:
+    ///     cx: View context used to read the session and invalidate the cached body.
+    fn sync_run_state(&mut self, cx: &mut Context<Self>) {
+        if !run_slots(self.prefs).any() {
+            return;
+        }
+        let rev = run_scope_rev(&self.backend, self.live.core_order.iter().copied(), cx);
+        if rev == self.run_rev {
+            return;
+        }
+        self.run_rev = rev;
+        self.invalidate_content(cx);
+        cx.notify();
     }
 
     /// Arm the exact next wall-clock boundary for the selected period.
@@ -955,6 +1027,7 @@ impl ProfitMonitorView {
                     &self.scroll,
                     palette,
                     view,
+                    self.backend.clone(),
                     cx,
                 )
             }

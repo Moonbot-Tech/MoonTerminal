@@ -15,6 +15,7 @@ pub mod clock_skew;
 pub mod coordinator;
 pub mod core_time_offset;
 pub mod order_lines;
+pub mod run_state;
 pub mod store;
 
 mod commands;
@@ -27,6 +28,7 @@ pub use crate::feed::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
     CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
 };
+pub use run_state::{CoreRunState, RunSummary, TradingAction};
 pub use store::{BalanceState, CoreId, CoreStore};
 
 use std::collections::{HashMap, HashSet};

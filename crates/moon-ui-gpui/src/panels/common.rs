@@ -164,17 +164,59 @@ pub(crate) fn micro_button(
     width: f32,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    // `MoonButton::width` applies a raw `px`, so the caller hands it an already font-scaled value;
-    // see `design::font_w`.
-    MoonButton::new(SharedString::from(id))
+    micro_frame(SharedString::from(id), tip, variant, width, on_click)
         .label(glyph)
+        .selected(selected)
+        .render()
+}
+
+/// The same micro button carrying an ASSET instead of a glyph.
+///
+/// Shares [`micro_frame`] with [`micro_button`] rather than repeating its metrics, which is the
+/// drift that builder's own note warns about. The icon carries its own colour, so a Ghost frame —
+/// flat, like the settings gear — can still say green/amber/red without reaching for a filled
+/// variant to convey state.
+///
+/// Args:
+///     id: Stable element identity.
+///     icon: Already-coloured icon slot.
+///     tip: Tooltip text.
+///     variant: Button variant, normally `Ghost`.
+///     width: Scaled width, as [`micro_button`] takes.
+///     on_click: Click handler.
+///
+/// Returns:
+///     The rendered button.
+pub(crate) fn micro_icon_button(
+    id: impl Into<ElementId>,
+    icon: MoonButtonIconSlot,
+    tip: String,
+    variant: MoonButtonVariant,
+    width: f32,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    micro_frame(id, tip, variant, width, on_click)
+        .leading_icon(icon)
+        .render()
+}
+
+/// The frame both micro builders share: size, width, variant, tooltip and click.
+///
+/// `MoonButton::width` applies a raw `px`, so the caller hands it an already scaled value; see
+/// `design::font_w` and `design::ui_value`.
+fn micro_frame(
+    id: impl Into<ElementId>,
+    tip: String,
+    variant: MoonButtonVariant,
+    width: f32,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> MoonButton {
+    MoonButton::new(id)
         .size(MoonButtonSize::Micro)
         .width(width)
         .variant(variant)
-        .selected(selected)
         .tooltip(tip)
         .on_click(move |_, w: &mut Window, app: &mut App| on_click(w, app))
-        .render()
 }
 
 /// The variant a toggle takes for its current state.
