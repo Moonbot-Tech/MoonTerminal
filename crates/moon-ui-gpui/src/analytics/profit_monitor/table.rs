@@ -21,20 +21,22 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::format::{
-    format_amount, format_profit, format_trade_count, format_win_rate, profit_column_width,
+    ColumnFloor, ColumnMetrics, ProfitColumn, ProfitLen, format_amount, format_profit,
+    format_trade_count, format_win_rate, plan_profit_column, unit_ticker,
 };
 use super::line::{
-    RowChrome, RowRole, RowSelect, row_h_px, row_h_value, row_id, section_header,
-    table_row,
+    RowChrome, RowRole, RowSelect, row_h_px, row_h_value, row_id, section_header, table_row,
 };
 use super::rows::MonitorRow;
 use super::sections::MonitorEntry;
 use super::settings::MonitorPrefs;
 use super::{
     AVERAGE_ORDER_COLUMN_WIDTH, EXCHANGE_LOGO_SIZE, MonitorLayout, MonitorSort, MonitorSortColumn,
-    NAME_LOGO_GAP, ProfitMonitorView, TABLE_COLUMN_GAP, TABLE_HORIZONTAL_PADDING,
-    TRADES_COLUMN_WIDTH, WIN_RATE_COLUMN_WIDTH, name_min_width, run_slots, sort_arrow,
+    NAME_LOGO_GAP, PROFIT_MIN_COLUMN_WIDTH, ProfitMonitorView, TABLE_COLUMN_GAP,
+    TABLE_HORIZONTAL_PADDING, TRADES_COLUMN_WIDTH, WIN_RATE_COLUMN_WIDTH, name_min_width,
+    run_slots, sort_arrow,
 };
+
 use crate::Backend;
 use crate::controls::core_run::{RunKey, RunScope, RunSlots, reserved_cell, run_cell};
 use crate::design;
@@ -151,13 +153,196 @@ pub(super) fn split_body(
         .into_any_element()
 }
 
+/// Return the profit heading, which names the unit exactly when the cells stopped printing it.
+///
+/// Args:
+///     unit: Comparable exact unit, or `None` for an empty result.
+///     ticker_shown: Whether the cells below still carry their ticker.
+///
+/// Returns:
+///     Heading text for the profit column.
+fn profit_heading(unit: Option<ProfitUnit>, ticker_shown: bool) -> String {
+    match unit_ticker(unit).filter(|_| !ticker_shown) {
+        Some(ticker) => t!("profit_monitor.column.profit_with_unit", unit = ticker).to_string(),
+        None => t!("profit_monitor.column.profit").to_string(),
+    }
+}
+
+/// Return the sort arrow every heading budget reserves.
+///
+/// Reserved whether or not this column carries the arrow right now: sorting by the column would
+/// otherwise widen its heading, and the whole table would step sideways on a heading click. Taken
+/// from `sort_arrow`, which draws it, so the reserved glyph cannot drift from the drawn one; both
+/// arrows are one glyph after one space, so either serves as the measured stand-in.
+///
+/// Returns:
+///     The descending arrow, leading space included.
+fn sort_arrow_reserve() -> &'static str {
+    sort_arrow(
+        Some(MonitorSort {
+            column: MonitorSortColumn::Profit,
+            descending: true,
+        }),
+        MonitorSortColumn::Profit,
+    )
+}
+
+/// Return the design-reference width one heading occupies, sort arrow included.
+///
+/// MEASURED rather than counted in monospace cells: the headings are localized and the sort arrow
+/// is not a Latin glyph, so either can resolve through a fallback face whose advance is not the
+/// digit advance the values are counted in.
+///
+/// Args:
+///     title: Heading text.
+///     scale: Active UI geometry scale the fixed widths are stated against.
+///     cx: Application context used to measure text.
+///
+/// Returns:
+///     Design-reference width the heading needs.
+fn heading_width(title: &str, scale: f32, cx: &App) -> f32 {
+    let text = format!("{title}{}", sort_arrow_reserve());
+    design::mono_body_text_width(cx, &text, FontWeight::NORMAL.0) / scale
+}
+
+/// Return the room the profit column may take before the name column drops below its minimum.
+///
+/// Args:
+///     layout: Responsive selection of the fixed columns to its right.
+///     slots: Run-control slots reserved on the left of every line.
+///     width: Current window width in rendered pixels.
+///     scale: Active UI geometry scale the fixed widths are stated against.
+///
+/// Returns:
+///     Design-reference width, never below the floor the window promises the column.
+fn available_width(layout: MonitorLayout, slots: RunSlots, width: f32, scale: f32) -> f32 {
+    let mut used = 2.0 * TABLE_HORIZONTAL_PADDING + TABLE_COLUMN_GAP + name_min_width(slots);
+    if slots.any() {
+        used += slots.width() + TABLE_COLUMN_GAP;
+    }
+    for (shown, column) in [
+        (layout.trades, TRADES_COLUMN_WIDTH),
+        (layout.win_rate, WIN_RATE_COLUMN_WIDTH),
+        (layout.average_order, AVERAGE_ORDER_COLUMN_WIDTH),
+    ] {
+        if shown {
+            used += column + TABLE_COLUMN_GAP;
+        }
+    }
+    // The floor is a backstop, not a reservation: `MIN_WINDOW_WIDTH` is sized so a legal window
+    // always leaves more than this, and everything above the column's measured need already goes to
+    // the name. It only bites if a window somehow gets narrower than the OS minimum, and then a
+    // readable amount outranks a longer name.
+    (width / scale - used).max(PROFIT_MIN_COLUMN_WIDTH)
+}
+
+/// Everything one profit-column measurement needs from the view.
+///
+/// A value rather than ten positional arguments, half of which travel together while the rest are
+/// derived from `prefs`: the caller states what is on screen, and the measurement answers with a
+/// column.
+pub(super) struct ColumnRequest<'a> {
+    /// Display lines the table is about to draw.
+    pub(super) entries: &'a [MonitorEntry],
+    /// The window fold drawn in the footer, at its own larger type step.
+    pub(super) total: &'a MonitorRow,
+    /// Comparable exact unit shared by every value in the column.
+    pub(super) unit: Option<ProfitUnit>,
+    /// Display preferences, which decide the suffix and the run-control slots.
+    pub(super) prefs: MonitorPrefs,
+    /// Responsive selection of the other columns.
+    pub(super) layout: MonitorLayout,
+    /// Current window width in rendered pixels.
+    pub(super) width: f32,
+    /// Active UI geometry scale, resolved once by the caller that also sized `layout`.
+    pub(super) scale: f32,
+    /// How far the column was already pushed, and what it was pushed under.
+    pub(super) floor: ColumnFloor,
+}
+
+/// Size the profit column from the values this snapshot actually holds.
+///
+/// Measured, not assumed: a column sized for a worst case nobody is showing spends the name
+/// column's room on digits that are never drawn, and the name is what truncates. Every line the
+/// table will draw is measured — the footer on its own larger type step — and the widest form that
+/// fits the remaining room wins.
+///
+/// Args:
+///     request: The lines to measure, the room to measure them against, and the period floor.
+///     cx: Application context used to measure glyph advances.
+///
+/// Returns:
+///     The chosen column, and the floor to carry into the next measurement.
+pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColumn, ColumnFloor) {
+    let ColumnRequest {
+        entries,
+        total,
+        unit,
+        prefs,
+        layout,
+        width,
+        scale,
+        floor,
+    } = request;
+    let want_suffix = prefs.last_trade;
+    let slots = run_slots(prefs);
+    // ONE advance, measured once and multiplied: the whole window is monospaced, so every glyph in
+    // this column is the same width. Measured rather than assumed because the Font slider moves the
+    // text without moving the design units the columns are stated in. The heavier of the two row
+    // weights wins, because a section subtotal draws its amount semibold in the same column.
+    let row_char = design::mono_body_text_width(cx, "0", FontWeight::NORMAL.0).max(
+        design::mono_body_text_width(cx, "0", FontWeight::SEMIBOLD.0),
+    ) / scale;
+    let total_char = design::mono_title_text_width(cx, "0", FontWeight::SEMIBOLD.0) / scale;
+    let mut rows = ProfitLen::default();
+    for entry in entries {
+        let row = match entry {
+            MonitorEntry::Row { row, .. } | MonitorEntry::Subtotal { row, .. } => row,
+            MonitorEntry::Header(_) => continue,
+        };
+        rows.absorb(ProfitLen::measure(
+            row.profit,
+            row.last_profit.filter(|_| want_suffix),
+            unit,
+        ));
+    }
+    let ticker = unit_ticker(unit);
+    let heading = heading_width(&profit_heading(unit, true), scale, cx);
+    let metrics = ColumnMetrics {
+        row_char,
+        total_char,
+        heading,
+        // Only the ticker-less rungs are drawn under it, so a unit with no ticker neither builds
+        // nor measures a second heading it can never reach.
+        heading_with_unit: match ticker {
+            Some(_) => heading_width(&profit_heading(unit, false), scale, cx),
+            None => heading,
+        },
+        ticker: ticker.map_or(0, |ticker| ticker.chars().count()),
+        available: available_width(layout, slots, width, scale),
+    };
+    let column = plan_profit_column(
+        rows,
+        ProfitLen::measure(
+            total.profit,
+            total.last_profit.filter(|_| want_suffix),
+            unit,
+        ),
+        want_suffix,
+        &metrics,
+        floor.carried(unit, &metrics),
+    );
+    (column, ColumnFloor::taken(unit, &metrics, column))
+}
+
 /// Render the responsive monitor table and exact total footer.
 ///
 /// Args:
 ///     entries: Already sectioned, sorted display entries — captions, rows and subtotals.
 ///     total: The window's own fold, counting every core exactly once.
 ///     unit: Comparable exact unit, or `None` for an empty result.
-///     width: Current window width.
+///     column: Profit column already sized from this snapshot by [`profit_column`].
+///     layout: Responsive presentation selected from the current width.
 ///     sort: Explicit user-selected ordering, if any.
 ///     prefs: Display preferences chosen in the ⚙ popup.
 ///     flash: Live arrival stamps, keyed by the core that closed the trade.
@@ -174,7 +359,8 @@ pub(super) fn table(
     entries: Vec<MonitorEntry>,
     total: MonitorRow,
     unit: Option<ProfitUnit>,
-    width: f32,
+    column: ProfitColumn,
+    layout: MonitorLayout,
     sort: Option<MonitorSort>,
     prefs: MonitorPrefs,
     flash: &crate::pulse::Arrivals<CoreId>,
@@ -185,17 +371,17 @@ pub(super) fn table(
     backend: Entity<Backend>,
     cx: &App,
 ) -> AnyElement {
-    let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));
     let show_trades = layout.trades;
     let show_win = layout.win_rate;
     let show_average = layout.average_order;
     let sectioned = entries
         .iter()
         .any(|entry| matches!(entry, MonitorEntry::Header(_)));
-    // Both halves have to agree: the preference asks for the suffix, the width decides whether the
-    // column can hold it. Anything narrower would truncate a money value instead of dropping it.
-    let show_last = prefs.last_trade && layout.last_trade;
-    let profit_width = profit_column_width(show_last);
+    // Both halves already agreed when the column was sized: the preference asks for the suffix and
+    // the measurement decides whether it fits. Anything narrower would truncate a money value
+    // instead of dropping it.
+    let form = column.form;
+    let profit_width = column.width;
     // Resolved once per render rather than inside the row builder — that closure runs for every
     // visible row on every frame, and a lookup there would take the logo cache's global lock at
     // frame rate — and once per distinct EXCHANGE rather than once per row: two hundred cores on
@@ -303,6 +489,7 @@ pub(super) fn table(
     };
     let header = table_header(
         layout,
+        profit_heading(unit, form.ticker),
         profit_width,
         prefs.exchange_icons,
         slots,
@@ -365,8 +552,7 @@ pub(super) fn table(
             };
             let subtotal = matches!(entry, MonitorEntry::Subtotal { .. });
             let subtotal_tooltip = subtotal.then(|| name.clone());
-            let (profit, profit_sign) =
-                format_profit(row.profit, row.last_profit.filter(|_| show_last), unit);
+            let (profit, profit_sign) = format_profit(row.profit, row.last_profit, unit, form);
             table_row(
                 name,
                 profit,
@@ -430,7 +616,7 @@ pub(super) fn table(
     .border(false)
     .radius(0.0);
     let (total_profit, total_profit_sign) =
-        format_profit(total.profit, total.last_profit.filter(|_| show_last), unit);
+        format_profit(total.profit, total.last_profit, unit, form);
     let footer = table_row(
         t!("profit_monitor.grand_total").to_string(),
         total_profit,
@@ -486,6 +672,7 @@ pub(super) fn table(
 ///
 /// Args:
 ///     layout: Responsive presentation including visible-column selection.
+///     profit_title: Profit heading, which names the unit when the cells stopped printing it.
 ///     profit_width: Profit-column width the data rows are using.
 ///     logo_gutter: Whether the data rows reserve room for an exchange logo.
 ///     sort: Current explicit ordering.
@@ -498,6 +685,7 @@ pub(super) fn table(
 #[allow(clippy::too_many_arguments)]
 fn table_header(
     layout: MonitorLayout,
+    profit_title: String,
     profit_width: f32,
     logo_gutter: bool,
     run_slots: RunSlots,
@@ -570,7 +758,7 @@ fn table_header(
         )
         .child(sortable(
             "profit-monitor-heading-profit",
-            t!("profit_monitor.column.profit").to_string(),
+            profit_title,
             MonitorSortColumn::Profit,
             Some(profit_width),
             true,

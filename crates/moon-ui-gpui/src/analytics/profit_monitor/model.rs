@@ -11,7 +11,6 @@ use super::rows::{LiveContext, MonitorRow};
 
 const MINUTE_MS: u128 = 60_000;
 const TRADES_WIDTH: f32 = 390.0;
-pub(super) const LAST_TRADE_WIDTH: f32 = 500.0;
 const STACKED_CONTROLS_WIDTH: f32 = 460.0;
 const WIN_RATE_WIDTH: f32 = 620.0;
 const STATUS_LABEL_WIDTH: f32 = 700.0;
@@ -175,11 +174,6 @@ pub(super) struct MonitorLayout {
     pub(super) status_label: bool,
     /// Whether trade counts remain visible.
     pub(super) trades: bool,
-    /// Whether the profit cell has room for its `total(last)` suffix.
-    ///
-    /// This is a question about SPACE only; whether the user wants the suffix at all is
-    /// [`super::settings::MonitorPrefs::last_trade`], and the cell needs both.
-    pub(super) last_trade: bool,
     /// Whether win rate remains visible.
     pub(super) win_rate: bool,
     /// Whether average order remains visible.
@@ -195,17 +189,16 @@ impl MonitorLayout {
     ///
     /// Returns:
     ///     Name and Profit are always present; Trades appears at the scaled 390-design-pixel
-    ///     boundary. Controls stack and the clock drops seconds below scaled 460. The last-trade
-    ///     suffix appears at scaled 500 — the first width where the wider profit column still
-    ///     leaves the name its 128-unit minimum. Win rate appears at scaled 620, the status label
-    ///     at scaled 700, and Average order at scaled 760.
+    ///     boundary. Controls stack and the clock drops seconds below scaled 460. Win rate appears
+    ///     at scaled 620, the status label at scaled 700, and Average order at scaled 760. The
+    ///     `total(last)` suffix has no tier of its own: `table::profit_column` measures whether it
+    ///     fits the room this selection leaves, which is the only question a tier approximated.
     pub(super) fn for_width(width: f32, ui_scale: f32) -> Self {
         Self {
             inline_controls: width >= STACKED_CONTROLS_WIDTH * ui_scale,
             clock_seconds: width >= STACKED_CONTROLS_WIDTH * ui_scale,
             status_label: width >= STATUS_LABEL_WIDTH * ui_scale,
             trades: width >= TRADES_WIDTH * ui_scale,
-            last_trade: width >= LAST_TRADE_WIDTH * ui_scale,
             win_rate: width >= WIN_RATE_WIDTH * ui_scale,
             average_order: width >= AVERAGE_ORDER_WIDTH * ui_scale,
         }

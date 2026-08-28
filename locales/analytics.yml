@@ -35,6 +35,10 @@ profit_monitor.column.profit:
   ru: "Прибыль"
   en: "Profit"
   es: "Beneficio"
+profit_monitor.column.profit_with_unit:
+  ru: "Прибыль, %{unit}"
+  en: "Profit, %{unit}"
+  es: "Beneficio, %{unit}"
 profit_monitor.column.trades:
   ru: "Сделки"
   en: "Trades"

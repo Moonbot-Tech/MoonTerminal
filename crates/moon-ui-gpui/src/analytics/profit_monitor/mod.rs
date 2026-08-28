@@ -12,14 +12,15 @@ mod window;
 
 // The window's own lifecycle lives in `window.rs`; the toolbar and startup reach it through here,
 // so the module path callers use does not change when the file it lives in does.
-pub(crate) use window::{open, restore, ProfitMonitorOpenRequest};
+pub(crate) use window::{ProfitMonitorOpenRequest, open, restore};
 
 #[cfg(test)]
 mod tests;
 
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
@@ -30,7 +31,7 @@ use moon_core::db::analytics::{
     PreviousPeriodBasis, ProfitMonitorCore, ProfitMonitorSummary, Query,
 };
 use moon_core::db::valuation::ValuationMode;
-use moon_core::db::{FailKind, ProfitMetric, ReadFail, SideFilter};
+use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
 use moon_core::session::CoreId;
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize, MoonPalette, MoonSegmentItem,
@@ -38,23 +39,22 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::refresh::{
-    report_result_is_stale, BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency,
-};
 use super::ProfitLoadState;
-use crate::controls::core_run::{run_scope_rev, RunSlots};
+use super::refresh::{
+    BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, report_result_is_stale,
+};
+use crate::controls::core_run::{RunSlots, run_scope_rev};
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
-use crate::{design, Backend};
-#[cfg(test)]
-use model::LAST_TRADE_WIDTH;
+use crate::{Backend, design};
+use format::{ColumnFloor, ProfitColumn};
 use model::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn, context_change,
     duration_until_period_refresh, duration_until_wall_clock_boundary, monitor_zone, next_sort,
     retain_last_known_venues, sort_rows,
 };
-use rows::{GroupMode, LiveContext, RowLabels, fold_total, grouped_rows};
-use sections::SectionLabels;
+use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
+use sections::{MonitorEntry, SectionLabels};
 use settings::MonitorPrefs;
 use table::{centered_alert, centered_message, split_body};
 
@@ -65,17 +65,20 @@ const MIN_NAME_COLUMN_WIDTH: f32 = 128.0;
 /// Floor the name column keeps however much the run column claims from it.
 ///
 /// The run controls are paid for by the NAME column, so the minimum window width never grows —
-/// that is the whole constraint (`MIN_WINDOW_WIDTH` is exactly padding + name + gap + profit). This
-/// floor is what stops a future third slot from squeezing the name down to nothing instead.
+/// that is the whole constraint (`MIN_WINDOW_WIDTH` covers padding + name + gap + a printable
+/// profit column). This floor is what stops a future third slot from squeezing the name down to
+/// nothing instead.
 const NAME_COLUMN_FLOOR: f32 = 72.0;
-const PROFIT_COLUMN_WIDTH: f32 = 154.0;
-/// Extra profit-column width claimed by the `total(last)` form.
+/// Room the window guarantees the profit column, whatever the name column would rather have.
 ///
-/// The suffix is a second signed amount plus its brackets, so the cell needs the room BEFORE it is
-/// drawn — an ellipsis in a money column reads as a different number. Sized for the WIDEST quote,
-/// not the common one: `QuoteCurrency::display_decimals` returns 8 for BTC-like quotes, so
-/// `(-0.00000123)` is 13 monospace characters and a 60-unit allowance would truncate it.
-const PROFIT_LAST_TRADE_EXTRA: f32 = 90.0;
+/// The column is sized from its CONTENT (`table::profit_column`), so this is not the width it draws
+/// at, and it is not a reservation either: at every legal window width the budget leaves far more
+/// than this, and everything the values do not claim goes to the name. It is the backstop for a
+/// window narrower than the OS minimum, sized as ten monospace characters — `+999999.99`, the
+/// widest ordinary two-decimal amount — at the theme base with no Font-slider delta; a raised
+/// slider buys fewer characters here, which is the same trade every fixed column in this table
+/// makes. The ticker is the first thing the column drops, so it is deliberately not counted in.
+const PROFIT_MIN_COLUMN_WIDTH: f32 = 68.0;
 /// Design-reference logo edge drawn before a row's name.
 const EXCHANGE_LOGO_SIZE: f32 = 13.0;
 /// Gap between that logo and the name it belongs to.
@@ -293,6 +296,15 @@ pub(crate) struct ProfitMonitorView {
     /// running" flag — the same machine the News feed uses, so the two highlights cannot drift.
     flash: crate::pulse::Arrivals<CoreId>,
     scroll: MoonVirtualListScrollHandle,
+    /// Widest the profit column has been measured within the current period.
+    ///
+    /// The column is sized from the visible snapshot, so an ordinary refresh that shortens the
+    /// longest amount by one digit would otherwise pull every name in the table sideways. This
+    /// makes the width a RATCHET: it grows with the data and is released only when the thing being
+    /// measured changes — the period, the grouping, a display preference, or the currency itself.
+    /// Interior mutability because the body renders through `&self`, and the measurement is the
+    /// only state that render itself produces.
+    profit_width: Cell<ColumnFloor>,
     focus: FocusHandle,
 }
 
@@ -445,6 +457,7 @@ impl ProfitMonitorView {
             seen_trades: None,
             flash: crate::pulse::Arrivals::default(),
             scroll: MoonVirtualListScrollHandle::new(),
+            profit_width: Cell::default(),
             focus: cx.focus_handle(),
         };
         // Decode the logos before the first table frame needs them, off the render path — and only
@@ -571,6 +584,10 @@ impl ProfitMonitorView {
                     // keeps the visible rows: diffing across the boundary is comparing two
                     // different questions.
                     this.rebaseline_arrivals();
+                    // The wall-clock boundary replaces every value with another day's, so the
+                    // measured column is released here too — `reload(true, ..)` keeps the visible
+                    // rows and would otherwise carry yesterday's width into today.
+                    this.release_profit_width();
                     this.reload(true, cx);
                     this.start_clock_refresh(cx);
                 });
@@ -630,6 +647,10 @@ impl ProfitMonitorView {
     fn reload(&mut self, after_report: bool, cx: &mut Context<Self>) {
         if !after_report {
             self.rebaseline_arrivals();
+            // Same boundary the arrivals memory is dropped on: a new period, valuation mode or
+            // display zone asks a different question, so the measured column starts over instead of
+            // holding a width the answer no longer needs.
+            self.release_profit_width();
         }
         if self.db_active {
             if !after_report {
@@ -852,6 +873,7 @@ impl ProfitMonitorView {
             return;
         }
         self.group = group;
+        self.release_profit_width();
         self.invalidate_content(cx);
         self.backend.update(cx, |backend, _| {
             backend.layout.profit_monitor_group = Some(group.id().to_string());
@@ -955,6 +977,54 @@ impl ProfitMonitorView {
             .into_any_element()
     }
 
+    /// Size the profit column from this snapshot, never letting it shrink inside one period.
+    ///
+    /// Args:
+    ///     entries: Display lines the table is about to draw.
+    ///     total: The window fold drawn in the footer.
+    ///     unit: Exact comparable unit shared by every value in the column.
+    ///     layout: Responsive column selection the width has to be shared with.
+    ///     width: Current window width.
+    ///     scale: Active UI geometry scale, already resolved for `layout`.
+    ///     cx: Application context used to measure glyph advances.
+    ///
+    /// Returns:
+    ///     Chosen print form and the width the column claims this frame.
+    fn profit_column(
+        &self,
+        entries: &[MonitorEntry],
+        total: &MonitorRow,
+        unit: Option<ProfitUnit>,
+        layout: MonitorLayout,
+        width: f32,
+        scale: f32,
+        cx: &App,
+    ) -> ProfitColumn {
+        // The floor releases itself whenever the measurement it was taken under moved — another
+        // currency, another window width, another font size — so the ratchet cannot outlive the
+        // question it answered.
+        let (column, floor) = table::profit_column(
+            table::ColumnRequest {
+                entries,
+                total,
+                unit,
+                prefs: self.prefs,
+                layout,
+                width,
+                scale,
+                floor: self.profit_width.get(),
+            },
+            cx,
+        );
+        self.profit_width.set(floor);
+        column
+    }
+
+    /// Release the profit column's ratchet, so the next snapshot sizes it from scratch.
+    fn release_profit_width(&self) {
+        self.profit_width.set(ColumnFloor::default());
+    }
+
     /// Render the current typed load state.
     ///
     /// Args:
@@ -1015,11 +1085,17 @@ impl ProfitMonitorView {
                 } else {
                     sections::flat(rows, self.sort)
                 };
+                // Resolved once here because both the responsive tiers and the measured
+                // column are stated against it.
+                let scale = design::ui_value(cx, 1.0);
+                let layout = MonitorLayout::for_width(width, scale);
+                let column = self.profit_column(&entries, &total, *unit, layout, width, scale, cx);
                 table::table(
                     entries,
                     total,
                     *unit,
-                    width,
+                    column,
+                    layout,
                     self.sort,
                     self.prefs,
                     &self.flash,
