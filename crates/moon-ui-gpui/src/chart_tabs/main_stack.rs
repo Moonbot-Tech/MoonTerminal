@@ -8,9 +8,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use moon_ui::{
-    MoonPalette, MoonRect, MoonTabItem, MoonTabStrip, MoonVirtualListScrollHandle, v_flex,
-};
+use moon_ui::{MoonPalette, MoonTabItem, MoonTabStrip, MoonVirtualListScrollHandle, v_flex};
 
 use super::stack::grid;
 use super::stack::{
@@ -1513,12 +1511,12 @@ impl MainChartStack {
     /// back to the raw market key rather than rendering blank.
     ///
     /// Args:
-    ///     window: Window whose width the strip is laid out against.
+    ///     _window: Unused; the strip is now in-flow and sizes itself.
     ///     cx: Stack context, used to read each panel and to build the click handlers.
     ///
     /// Returns:
     ///     The row, or `None` when fewer than two charts are open.
-    fn render_tab_row(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_tab_row(&self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Vacated slots are retained placeholders in COMPRESS layout — they hold a position, not a
         // chart, so they get no tab.
         let live: Vec<(CoreId, String, SharedString)> = self
@@ -1544,14 +1542,10 @@ impl MainChartStack {
         let strip_h = crate::chart_tabs::chart_tab_strip_h(cx);
         let gap = 4.0_f32;
         let pad_l = 8.0_f32;
-        let mut total_w = pad_l;
         let items: Vec<MoonTabItem> = live
             .iter()
             .map(|(core, market, label)| {
-                let width = crate::design::tab_width(cx, label.chars().count(), false, true);
-                total_w += width + gap;
                 MoonTabItem::new(label.clone())
-                    .width(width)
                     .selected(active_key == Some((*core, market.as_str())))
                     .closable(true)
             })
@@ -1562,14 +1556,10 @@ impl MainChartStack {
                 .collect(),
         );
         let view = cx.entity();
-        // Lay the strip out at its OWN width rather than the window's: `MoonTabStrip` positions
-        // every tab absolutely and clips to the bounds it is given, so a stack wider than the
-        // window would simply lose its tail. Scrolling the row keeps every chart reachable.
-        let strip_w = total_w.max(f32::from(window.viewport_size().width).max(1.0));
         let strip = MoonTabStrip::new("main-chart-tab-row-strip")
             .padding_left(pad_l)
             .gap(gap)
-            .bounds(MoonRect::new(0.0, 0.0, strip_w, strip_h))
+            .overflow_menu(true)
             .items(items)
             .on_click({
                 let keys = keys.clone();
@@ -1606,13 +1596,6 @@ impl MainChartStack {
                 .flex_none()
                 .w_full()
                 .h(px(strip_h))
-                // `.relative()` is load-bearing: given explicit bounds, `MoonTabStrip` makes its own
-                // root ABSOLUTE and places itself against the nearest positioned ancestor. Without
-                // this the row would escape to `ChartTabs`'s relative root and paint over the
-                // Main/Add tab strip at the very top of the panel. The sibling strip wraps itself
-                // the same way for the same reason.
-                .relative()
-                .overflow_x_scroll()
                 .child(strip)
                 .into_any_element(),
         )

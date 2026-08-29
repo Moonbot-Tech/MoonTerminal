@@ -10,8 +10,8 @@ use moon_core::config::{
 };
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonHotkeyInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRect, MoonTabItem, MoonTabStrip,
-    MoonText, h_flex, v_flex,
+    MoonHotkeyInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem, MoonTabStrip, MoonText,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -64,45 +64,30 @@ impl SettingsView {
             ]);
 
         // Reuse the main window's chart-tab control (`MoonTabStrip` + `MoonTabItem`) for
-        // normal-case labels. Its tabs use absolute positioning and collapse to zero without
-        // explicit bounds; provide ample width and let the enclosing container clip it.
+        // normal-case labels. Overflow-menu defaults off, so a short group list stays chevron-free.
         let entity = cx.entity();
         let strip_h = design::fit_h_px(cx, 28.0, 13.0, 7.5);
         let items: Vec<MoonTabItem> = HotkeyGroup::ALL
             .iter()
-            .map(|g| {
-                let label = g.title();
-                // Size from label content like chart tabs, using roughly seven pixels per
-                // character plus padding.
-                let width = (label.chars().count() as f32 * 7.0 + 28.0).clamp(64.0, 168.0);
-                MoonTabItem::new(label)
-                    .width(width)
-                    .selected(self.hotkeys_group == *g)
-            })
+            .map(|g| MoonTabItem::new(g.title()).selected(self.hotkeys_group == *g))
             .collect();
-        let switcher = div()
-            .relative()
-            .w_full()
-            .h(strip_h)
-            .overflow_hidden()
-            .child(
-                MoonTabStrip::new("hotkeys-group-strip")
-                    .gap(4.0)
-                    .bounds(MoonRect::new(0.0, 0.0, 2000.0, f32::from(strip_h)))
-                    .items(items)
-                    .on_click(move |ix, _event, _window, app| {
-                        let Some(g) = HotkeyGroup::ALL.get(ix).copied() else {
-                            return;
-                        };
-                        entity.update(app, |this, c| {
-                            if this.hotkeys_group != g {
-                                this.hotkeys_group = g;
-                                c.notify();
-                            }
-                        });
-                    })
-                    .render(),
-            );
+        let switcher = div().w_full().h(strip_h).child(
+            MoonTabStrip::new("hotkeys-group-strip")
+                .gap(4.0)
+                .items(items)
+                .on_click(move |ix, _event, _window, app| {
+                    let Some(g) = HotkeyGroup::ALL.get(ix).copied() else {
+                        return;
+                    };
+                    entity.update(app, |this, c| {
+                        if this.hotkeys_group != g {
+                            this.hotkeys_group = g;
+                            c.notify();
+                        }
+                    });
+                })
+                .render(),
+        );
 
         let body = v_flex()
             .w_full()

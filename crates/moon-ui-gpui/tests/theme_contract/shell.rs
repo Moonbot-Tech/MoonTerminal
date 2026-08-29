@@ -1438,44 +1438,63 @@ fn the_main_tab_row_is_gated_and_addresses_charts_by_identity() {
     );
 }
 
-/// Protects every bounded `MoonTabStrip` from escaping the box that is meant to hold it.
+/// Protects the chart tab strips from going back to absolute layout plus overlay chrome.
 ///
-/// The plausible edit is wrapping a strip in a plain `div` — nothing about the call site suggests
-/// otherwise. But a strip given explicit `bounds` makes its OWN root absolute and positions itself
-/// against the nearest positioned ancestor, so an unpositioned wrapper silently hands it to
-/// whichever ancestor happens to be relative. In this panel that is `ChartTabs`'s root, and the row
-/// then paints over the Main/Add tab strip at the top of the window instead of sitting above the
-/// chart.
+/// The plausible edit is restoring `.bounds(MoonRect::new(0, 0, viewport, h))` and an
+/// `.absolute().right(...)` toolbar cluster: that is how the old strip was wired, and it reads as
+/// "give the widget a size." The widget then made its own root absolute, clipped overflow, and the
+/// toolbar painted on top of tab labels. Main's coin row wrapped the same strip in
+/// `overflow_x_scroll`, which jumped because the children were absolute.
+///
+/// The contract is: both call sites opt into the overflow menu, the strip yields with
+/// `flex_1`/`min_w_0`, and neighbouring chrome is a flex sibling rather than an overlay.
 #[test]
-fn a_bounded_tab_strip_sits_in_a_positioned_wrapper() {
-    for (rel, signature) in [
-        ("chart_tabs/main_stack.rs", "fn render_tab_row("),
-        (
-            "chart_tabs/strip.rs",
-            "fn render(&mut self, window: &mut Window",
-        ),
-    ] {
-        let source = read_src(rel);
-        let body = braced_body(&source, signature);
-        // Comments are stripped first, and that is load-bearing: the comment explaining WHY the
-        // wrapper is positioned names `.relative()` itself, so a raw search over the body stayed
-        // true with the actual call deleted — the assertion passed on the very edit it exists to
-        // catch.
-        let code: String = body
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            code.contains(".bounds(MoonRect::new("),
-            "{rel}: expected a bounded tab strip here"
-        );
-        assert!(
-            code.contains(".relative()"),
-            "{rel}: a bounded MoonTabStrip must live inside a positioned wrapper, or it anchors to \
-             an unrelated ancestor"
-        );
-    }
+fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
+    let strip = code_only(braced_body(
+        &read_src("chart_tabs/strip.rs"),
+        "fn render(&mut self, window: &mut Window",
+    ));
+    assert!(
+        strip.contains(".overflow_menu(true)"),
+        "the Main/Add strip must opt into the overflow chevron"
+    );
+    assert!(
+        !strip.contains(".bounds(MoonRect::new("),
+        "bounds() was the absolute-root workaround; the strip sizes in-flow"
+    );
+    assert!(
+        strip.contains("let right_cluster = h_flex()") && strip.contains(".flex_none()"),
+        "the right chrome cluster must be a flex sibling, not an overlay"
+    );
+    assert!(
+        !strip.contains("let right_cluster = div()"),
+        "restoring a div overlay for the cluster puts tab labels under the toolbar again"
+    );
+    assert!(
+        strip.contains(".flex_1()") && strip.contains(".min_w_0()"),
+        "the strip must yield remaining width to the cluster"
+    );
+    assert!(
+        strip.contains(".children(coin_dismiss)") && strip.contains(".children(fig_dismiss)"),
+        "dismiss layers must stay on the chart body so they cannot cover the in-row cluster"
+    );
+
+    let row = code_only(braced_body(
+        &read_src("chart_tabs/main_stack.rs"),
+        "fn render_tab_row(",
+    ));
+    assert!(
+        row.contains(".overflow_menu(true)"),
+        "the Main coin row must opt into the overflow chevron"
+    );
+    assert!(
+        !row.contains("overflow_x_scroll"),
+        "the strip scrolls itself; wrapping it in overflow_x_scroll was the jumpy path"
+    );
+    assert!(
+        !row.contains(".bounds(MoonRect::new("),
+        "the coin row must not restore the absolute-root bounds workaround"
+    );
 }
 
 /// Protects every path that removes a Main chart from doing its own teardown.
