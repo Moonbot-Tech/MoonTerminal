@@ -25,7 +25,7 @@ const HELPER_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const HELPER_COMMIT_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTED_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTHY_TIMEOUT: Duration = Duration::from_secs(90);
-const POLL_WINDOW_SECONDS: u64 = 30 * 60;
+const POLL_WINDOW_SECONDS: u64 = 15 * 60;
 const STARTUP_POLL_GAP_SECONDS: u64 = 5 * 60;
 const SERVER_DEADLINE_MARGIN_SECONDS: u64 = 60;
 const RATE_BACKOFF_SECONDS: [u64; 4] = [60 * 60, 2 * 60 * 60, 4 * 60 * 60, 8 * 60 * 60];
@@ -109,10 +109,10 @@ struct PollSchedule {
 }
 
 impl PollSchedule {
-    /// Create a schedule whose stable phase spreads processes across each UTC half-hour.
+    /// Create a schedule whose stable phase spreads processes across each UTC 15-minute window.
     ///
     /// Args:
-    ///     phase_seconds: Process-local offset within the half-hour window.
+    ///     phase_seconds: Process-local offset within the quarter-hour window.
     ///
     /// Returns:
     ///     A schedule with no recorded failures.
@@ -202,12 +202,12 @@ impl PollSchedule {
     }
 }
 
-/// Return the next stable UTC half-hour phase after both now and the startup minimum gap.
+/// Return the next stable UTC 15-minute phase after both now and the startup minimum gap.
 ///
 /// Args:
 ///     now_unix: Current completion time.
 ///     attempt_unix: Scan start time used for the minimum gap.
-///     phase_seconds: Process-local half-hour offset.
+///     phase_seconds: Process-local offset within the quarter-hour window.
 ///
 /// Returns:
 ///     The first eligible anchored deadline.
@@ -279,7 +279,7 @@ fn polling_continues_after(state: &UpdateState) -> bool {
 /// Pick one stable process-local phase without adding a runtime dependency.
 ///
 /// Returns:
-///     An offset inside one half-hour polling window.
+///     An offset inside one UTC 15-minute polling window.
 fn process_poll_phase() -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
