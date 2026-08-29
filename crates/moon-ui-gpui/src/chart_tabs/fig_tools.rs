@@ -172,15 +172,11 @@ impl ChartTabs {
             })
             .child(picker);
 
-        // The settings button and, hanging under it, the shared panel for this tool's defaults.
-        // Disarming the tool closes it rather than leaving it parked over the chart.
+        // The settings button stays in the cluster. The hanging defaults panel is painted by
+        // `render_fig_style_panel` after the chart-body dismiss layers so it hit-tests above them.
         let open = self.popup_shows(ChartPopup::FigStyle) && current.is_some();
         let settings = div()
             .relative()
-            // The dismiss layer under the cluster closes the panel on mouse-DOWN, and this button
-            // toggles on mouse-UP: without stopping the press here, pressing ⚙ while open would
-            // close and immediately reopen it, reading as a dead control. The panel itself already
-            // stops its own input inside `figstyle::shell`.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 MoonButton::new("fig-settings")
@@ -200,18 +196,6 @@ impl ChartTabs {
                         this.toggle_chart_popup(ChartPopup::FigStyle, cx)
                     }))
                     .render(),
-            )
-            .children(
-                open.then(|| {
-                    crate::figstyle::render_tool_defaults(
-                        &self.backend,
-                        tool,
-                        crate::figstyle::WorkspaceAuthority::Unscoped,
-                        Some(self.custom_color_cell()),
-                        cx,
-                    )
-                })
-                .flatten(),
             );
 
         h_flex()
@@ -219,5 +203,26 @@ impl ChartTabs {
             .gap(design::ui_px(cx, 2.0))
             .child(picker)
             .child(settings)
+    }
+
+    /// Hanging tool-defaults panel, painted after the chart-body dismiss layers.
+    ///
+    /// Disarming the tool closes it rather than leaving it parked over the chart.
+    pub(super) fn render_fig_style_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (draw_mode, tool, sells_zone) = {
+            let b = self.backend.read(cx);
+            (b.fig_draw_mode, b.fig_tool, b.sells_zone_armed())
+        };
+        let current = (draw_mode && !sells_zone).then_some(tool);
+        if !(self.popup_shows(ChartPopup::FigStyle) && current.is_some()) {
+            return None;
+        }
+        crate::figstyle::render_tool_defaults(
+            &self.backend,
+            tool,
+            crate::figstyle::WorkspaceAuthority::Unscoped,
+            Some(self.custom_color_cell()),
+            cx,
+        )
     }
 }

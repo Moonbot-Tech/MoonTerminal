@@ -8,7 +8,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
-    MoonRect, MoonTabItem, MoonTabStrip, h_flex, v_flex,
+    MoonTabItem, MoonTabStrip, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -63,9 +63,7 @@ impl Render for ChartTabs {
         let items = tabs
             .iter()
             .map(|(tab, label, _count, unread, detachable)| {
-                let width = design::tab_width(cx, label.chars().count(), *unread > 0, *detachable);
                 let mut item = MoonTabItem::new(label.clone())
-                    .width(width)
                     .selected(self.active == *tab)
                     .closable(*detachable);
                 if *unread > 0 {
@@ -75,16 +73,12 @@ impl Render for ChartTabs {
             })
             .collect::<Vec<_>>();
         let view = cx.entity();
-        // `MoonTabStrip` absolutely positions every tab and clips to its own bounds. Explicit
-        // bounds prevent its root from collapsing to zero size and leaving the flexible chart to
-        // consume the full height. The lower container clips window width to the panel width.
-        let strip_w = f32::from(window.viewport_size().width).max(1.0);
         // Match the strip height to `fit_height` so UI or font scaling keeps its underline aligned.
         let strip_h = chart_tab_strip_h(cx);
         let strip = MoonTabStrip::new("chart-tabs-strip")
             .padding_left(8.0)
             .gap(4.0)
-            .bounds(MoonRect::new(0.0, 0.0, strip_w, strip_h))
+            .overflow_menu(true)
             .items(items)
             .on_click({
                 let tab_keys = tab_keys.clone();
@@ -286,8 +280,7 @@ impl Render for ChartTabs {
             cx,
         );
         // The per-window market search sits left of scale and queries the active tab's cores.
-        // Absolutely position matches below its wrapper and place the cluster outside the strip's
-        // clipping layer so `overflow_hidden` cannot cut off the dropdown.
+        // The result list is lifted out of this field so it paints after the chart-body dismiss.
         let coin_popup = self.popup_shows(ChartPopup::Coin).then(|| {
             let server_context = {
                 let b = self.backend.read(cx);
@@ -325,33 +318,37 @@ impl Render for ChartTabs {
                 },
             )
             .absolute()
-            .top_full()
-            .right_0()
+            .top(px(strip_h))
+            .right(design::ui_px(cx, 6.0))
             .mt(px(2.0))
         });
         let coin_search_el = div()
-            .relative()
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 80.0))
-                    // `Focus` fires only on GAINING focus, so clicking a field that already has it
-                    // emits nothing and would leave a dismissed list closed. This reopens it, and
-                    // stops the event before the dismiss layer underneath closes it again.
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _ev, _window, cx| {
-                            this.open_coin_popup(cx);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .child(
-                        MoonInput::new("tabs-coin-search")
-                            .state(&self.coin_input)
-                            .cleanable(true)
-                            .small(),
-                    ),
+            .w(design::font_w_px(cx, 80.0))
+            // `Focus` fires only on GAINING focus, so clicking a field that already has it
+            // emits nothing and would leave a dismissed list closed. This reopens it, and
+            // stops the event before the dismiss layer underneath closes it again.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _ev, _window, cx| {
+                    this.open_coin_popup(cx);
+                    cx.stop_propagation();
+                }),
             )
-            .children(coin_popup);
+            .child(
+                MoonInput::new("tabs-coin-search")
+                    .state(&self.coin_input)
+                    .cleanable(true)
+                    .small(),
+            );
+        let fig_style_panel = self.render_fig_style_panel(cx).map(|panel| {
+            div()
+                .absolute()
+                .top(px(strip_h))
+                .right(design::ui_px(cx, 6.0))
+                .w(design::font_w_px(cx, 232.0))
+                .h(px(0.0))
+                .child(panel)
+        });
         // The tool-settings panel closes the same way the market list does: a layer below the
         // cluster catches every click that missed it. Without one the panel stays parked over the
         // chart until its own button is pressed again.
@@ -394,59 +391,56 @@ impl Render for ChartTabs {
         let coin_search_live = self.popup_shows(ChartPopup::Coin)
             || self.coin_input.read(cx).focus_handle(cx).is_focused(window);
         let ends_search = coin_search_live.then(|| common::coin_toolbar_press_handler(cx));
-        let right_cluster = div()
-            .absolute()
-            .right(design::ui_px(cx, 6.0))
-            .top(design::ui_px(cx, 4.0))
+        let right_cluster = h_flex()
+            .flex_none()
+            .items_center()
+            .pr(design::ui_px(cx, 6.0))
+            .gap(design::ui_px(cx, design::CHROME_GAP))
             .child(
-                h_flex()
-                    .items_center()
-                    .gap(design::ui_px(cx, design::CHROME_GAP))
-                    .child(
-                        design::chrome_section(cx)
-                            .when_some(ends_search.clone(), |this, end| {
-                                this.capture_any_mouse_down(end)
-                            })
-                            .child(fig_tools),
-                    )
-                    .child(design::chrome_divider(cx, p_strip))
-                    .child(design::chrome_section(cx).child(coin_search_el))
-                    .child(design::chrome_divider(cx, p_strip))
-                    .child(
-                        design::chrome_section(cx)
-                            .when_some(ends_search, |this, end| this.capture_any_mouse_down(end))
-                            .child(scale_dropdown)
-                            .children(gather_btn)
-                            .child(candle_btn)
-                            .child(graphics_btn)
-                            .child(labels_btn)
-                            .child(settings_btn),
-                    ),
+                design::chrome_section(cx)
+                    .when_some(ends_search.clone(), |this, end| {
+                        this.capture_any_mouse_down(end)
+                    })
+                    .child(fig_tools),
+            )
+            .child(design::chrome_divider(cx, p_strip))
+            .child(design::chrome_section(cx).child(coin_search_el))
+            .child(design::chrome_divider(cx, p_strip))
+            .child(
+                design::chrome_section(cx)
+                    .when_some(ends_search, |this, end| this.capture_any_mouse_down(end))
+                    .child(scale_dropdown)
+                    .children(gather_btn)
+                    .child(candle_btn)
+                    .child(graphics_btn)
+                    .child(labels_btn)
+                    .child(settings_btn),
             );
         v_flex()
             .size_full()
             .relative()
             .child(
-                // Clip only the tab strip to hide excess tabs. Keep the right cluster and dropdowns
-                // as separate children below so the strip height does not clip them.
-                div()
+                // Tabs yield (`flex_1 min_w_0`); the right chrome cluster is a real flex sibling,
+                // not an overlay. This row does not clip: hanging coin/figstyle layers are lifted.
+                h_flex()
                     .h(px(strip_h))
                     .w_full()
-                    .relative()
-                    .overflow_hidden()
-                    .child(strip),
+                    .min_w_0()
+                    .items_center()
+                    .child(div().flex_1().min_w_0().h_full().child(strip))
+                    .child(right_cluster),
             )
             .child(
                 div()
                     .flex_1()
                     .w_full()
                     .min_h(px(0.0))
-                    .child(self.active_element()),
+                    .relative()
+                    .child(self.active_element())
+                    .children(coin_dismiss)
+                    .children(fig_dismiss),
             )
-            // Keep `coin_dismiss` below the cluster: list rows handle their own clicks, while this
-            // layer catches clicks elsewhere and closes the list.
-            .children(coin_dismiss)
-            .children(fig_dismiss)
-            .child(right_cluster)
+            .children(coin_popup)
+            .children(fig_style_panel)
     }
 }
