@@ -119,6 +119,7 @@ fn axis_label(axis: WarnAxis) -> String {
         // The axis NAME, not the column heading: this list names a kind, and the heading carries a
         // unit ("АПИ (дн)") that would read as nonsense in a "Type" cell.
         WarnAxis::ApiExpiry => t!("core_status.axis_api"),
+        WarnAxis::ApiQuota => t!("core_status.axis_api_quota"),
     }
     .to_string()
 }
@@ -138,6 +139,10 @@ fn peak(episode: &WarnEpisode) -> String {
         // zero, so a key on its LAST DAY and one already dead are indistinguishable here, and
         // printing "expired" for both would label a still-valid key dead.
         WarnAxis::ApiExpiry => t!("core_status.api_days", n = episode.peak).to_string(),
+        // The FEWEST requests seen, with its own unit like the rows above. `peak` is a `u16`, which
+        // is why `API_QUOTA_WARN_MAX` stops at the same ceiling: a warning quota always fits, so
+        // this cell never shows a truncated count.
+        WarnAxis::ApiQuota => format!("{} {}", episode.peak, t!("core_status.requests")),
         WarnAxis::Unreachable => "—".to_string(),
     }
 }

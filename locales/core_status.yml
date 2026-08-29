@@ -213,6 +213,13 @@ core_status.col.api_key:
   ru: "АПИ (дн)"
   en: "API (d)"
   es: "API (d)"
+# Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
+# a dash. Named for the budget rather than the exchange, so the column still reads right the day a
+# second venue starts publishing a quota.
+core_status.col.api_quota:
+  ru: "АПИ лимит"
+  en: "API limit"
+  es: "Límite API"
 
 # --- By IP column header (the fixed caption row above the server tree) ---
 # CPU column: percentage plus the machine's logical-core count in parentheses.
@@ -246,6 +253,16 @@ core_status.axis_api:
   ru: "АПИ"
   en: "API"
   es: "API"
+# Unit for a request count in the Warnings peak column.
+core_status.requests:
+  ru: "запр."
+  en: "req."
+  es: "sol."
+# The quota axis named as a KIND in the Warnings episode list.
+core_status.axis_api_quota:
+  ru: "АПИ лимит"
+  en: "API limit"
+  es: "Límite API"
 
 # --- Detached-window chart legend ---
 core_status.chart_cpu:
@@ -324,6 +341,10 @@ core_status.warn_cfg.api:
   ru: "Истекает ключ API"
   en: "API key expiring"
   es: "Clave API por vencer"
+core_status.warn_cfg.api_quota:
+  ru: "Заканчивается лимит API"
+  en: "API quota running out"
+  es: "Cuota API agotándose"
 # Column captions on a warning row (above the controls).
 core_status.warn_cfg.col.on:
   ru: "Вкл"
@@ -367,6 +388,11 @@ core_status.warn_cfg.p.days:
   ru: "За"
   en: "Within"
   es: "En"
+# Floor for the API-quota warning: it fires while the remaining request count is at or below this.
+core_status.warn_cfg.p.min_requests:
+  ru: "Мин. запросов"
+  en: "Min requests"
+  es: "Solicitudes mín."
 # "no sound" option and the seconds unit in the alert popup.
 core_status.warn_cfg.sound_none:
   ru: "Нет"

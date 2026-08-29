@@ -1655,3 +1655,32 @@ fn the_layout_stays_off_the_stack() {
          stack overflows before the first frame"
     );
 }
+
+/// A `layout.toml` written before the API-quota axis existed must still load, and must load with
+/// the axis ARMED. Both sections below are copied verbatim from a real pre-change file: `warn_axes`
+/// carries no struct-level `#[serde(default)]`, so a field without its own default would make the
+/// whole document fail to parse and silently reset every window, table and warning setting the user
+/// has.
+#[test]
+fn a_layout_written_before_the_quota_axis_still_loads() {
+    let axes: WarnAxesCfg = toml::from_str(
+        "cpu = true\nmem = true\nconn = true\nping = true\nexch = true\napi = true\n",
+    )
+    .expect("an old warn_axes section must parse");
+    assert!(
+        axes.api_quota,
+        "a new axis arrives ON, like every other one in this struct"
+    );
+
+    let params: WarnParams = toml::from_str(
+        "[api]\nsound = \"yes_mast\"\ndays = 7\n\n[cpu]\nchart = true\npct = 90\nhold = 5\n",
+    )
+    .expect("an old warn_params section must parse");
+    assert_eq!(
+        params.api_quota,
+        ApiQuotaWarn::default(),
+        "the missing axis falls back to its default floor rather than to zero, which would warn on \
+         every quota ever published"
+    );
+    assert_eq!(params.api_quota.min, 5_000);
+}

@@ -58,6 +58,7 @@ fn foreign_warning_rows_cannot_crowd_out_effective_scope() {
         ping: true,
         exch: true,
         api: true,
+        api_quota: true,
     };
 
     let scoped = finalize_recent_warning_episodes(

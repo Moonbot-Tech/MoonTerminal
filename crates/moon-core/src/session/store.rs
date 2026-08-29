@@ -174,6 +174,10 @@ pub struct CoreData {
     /// does not clear it: the last successful answer is retained until the connection is replaced,
     /// so a core whose checks start failing keeps showing what it last reported.
     pub api_expiry: Option<crate::feed::ApiKeyExpiry>,
+    /// Remaining exchange API request quota, or `None` while this core has published none. Only
+    /// HyperLiquid cores publish it, and the counter belongs to the ADDRESS: two cores trading the
+    /// same account report the same number.
+    pub api_quota: Option<u64>,
     /// MoonBot build this core most recently reported, or `None`.
     ///
     /// The `FeedMsg::Status` arm drops it on any non-Ready status, so a replacement feed pointing
@@ -277,6 +281,9 @@ pub struct CoreData {
     /// Advances only when the API-key ANSWER changes — not when the same answer is re-received on
     /// the six-hourly poll, and not on the receipt stamp alone.
     pub api_expiry_rev: u64,
+    /// Advances only when the quota VALUE changes, so a core republishing the same number every
+    /// few minutes does not wake a reader.
+    pub api_quota_rev: u64,
     pub log_rev: u64,
     /// Total number of log lines ever pushed into `log`, including those the ring has since
     /// evicted.
@@ -339,6 +346,7 @@ impl CoreData {
             strategies_running: None,
             hedge_mode: None,
             api_expiry: None,
+            api_quota: None,
             server_version: None,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
@@ -369,6 +377,7 @@ impl CoreData {
             strategies_running_confirmed: false,
             hedge_mode_rev: 0,
             api_expiry_rev: 0,
+            api_quota_rev: 0,
             log_rev: 0,
             log_seq: 0,
             chart_alerts_rev: 0,
@@ -504,6 +513,11 @@ impl CoreData {
         // about a key this core no longer uses.
         if self.api_expiry.take().is_some() {
             self.api_expiry_rev = self.api_expiry_rev.wrapping_add(1);
+        }
+        // The quota belongs to the same replaced MoonBot's account, and for the same reason must
+        // not survive into a connection that may trade a different address.
+        if self.api_quota.take().is_some() {
+            self.api_quota_rev = self.api_quota_rev.wrapping_add(1);
         }
         // A replacement feed may point at a different MoonBot on a different clock, so last
         // connection's estimate carries no evidence about this one.
@@ -793,6 +807,14 @@ impl CoreData {
                 self.api_expiry = Some(expiry);
                 if changed {
                     self.api_expiry_rev = self.api_expiry_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::ApiQuota(left) => {
+                // Compare the VALUE: the core republishes the same quota every few minutes, and a
+                // rev bumped on receipt would wake every reader on an unchanged number.
+                if self.api_quota != left {
+                    self.api_quota = left;
+                    self.api_quota_rev = self.api_quota_rev.wrapping_add(1);
                 }
             }
             FeedMsg::EngineActions(results) => {

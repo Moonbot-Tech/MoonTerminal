@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use super::model::ServerKey;
 use super::ordering::{FlatLine, FlatSection};
 use super::presentation::{
-    api_expiry_level, api_expiry_text, connection_presentation, level_color, memory_u16, percent,
-    ping, version_behind_tooltip, version_color, version_text,
+    api_expiry_level, api_expiry_text, api_quota_level, api_quota_text, connection_presentation,
+    level_color, memory_u16, percent, ping, version_behind_tooltip, version_color, version_text,
 };
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
 use super::time_offset::{tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip};
@@ -67,6 +67,14 @@ fn columns() -> Vec<MoonDataTableColumn> {
         // numbers has to align on the digit. The three word forms ("-", "∞", "истёк") are short
         // enough to sit right without reading oddly.
         numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0),
+        // Beside the key it belongs with: both answer "can this core still trade", one by date and
+        // one by budget. Right-aligned like every other count, and wide enough for the seven digits
+        // a HyperLiquid address reports.
+        numeric(
+            "api_quota",
+            t!("core_status.col.api_quota").to_string(),
+            110.0,
+        ),
         // Left-aligned, unlike the metrics around it: the cell is a phrase ("за 8.4 с", "3/8 · 12.4 с"),
         // not a figure to align on the digit.
         MoonDataTableColumn::new("startup", t!("core_status.col.startup").to_string(), 110.0)
@@ -184,6 +192,10 @@ fn core_status_row(
         MoonDataCell::text(count(sys.logical_cpu_count)),
         MoonDataCell::text(api_expiry_text(r.api_key)).text_color(level_color(
             api_expiry_level(r.api_key, r.api_warn, r.api_notice),
+            p,
+        )),
+        MoonDataCell::text(api_quota_text(r.api_quota)).text_color(level_color(
+            api_quota_level(r.api_quota, r.api_quota_warn),
             p,
         )),
         MoonDataCell::element(startup_hover_cell(r)),

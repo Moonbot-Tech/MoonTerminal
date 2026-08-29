@@ -219,6 +219,7 @@ impl Backend {
             WarnAxis::Ping => b.ping,
             WarnAxis::ExchPing => b.exch,
             WarnAxis::ApiExpiry => b.api,
+            WarnAxis::ApiQuota => b.api_quota,
         }
     }
 }

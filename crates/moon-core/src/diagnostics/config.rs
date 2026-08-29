@@ -57,6 +57,9 @@ pub struct Channels {
     pub orders: String,
     pub assets: bool,
     pub markets: bool,
+    /// HyperLiquid request quota: what the core actually sends in `THLRequestLimitStateCommand`.
+    /// See `crate::hl_diag`.
+    pub hl_limit: bool,
     /// Coin-spelling SELECTOR, not a flag: `""` off, or a comma-separated list of coins
     /// (`"BONK,1000SATS"`) whose catalog spellings are dumped once per core. See
     /// `crate::coin_naming`.
@@ -111,6 +114,7 @@ impl DiagCfg {
             || c.detect
             || c.assets
             || c.markets
+            || c.hl_limit
             || !c.orders.trim().is_empty()
             || !c.coin_naming.trim().is_empty()
     }
@@ -138,6 +142,7 @@ impl DiagCfg {
         flag("channels.detect", self.channels.detect);
         flag("channels.assets", self.channels.assets);
         flag("channels.markets", self.channels.markets);
+        flag("channels.hl_limit", self.channels.hl_limit);
         // The string-valued switches carry their value: "orders" alone would not say which
         // market is being followed, and that is the whole content of the setting.
         let coin_naming = self.channels.coin_naming.trim();
@@ -190,6 +195,7 @@ pub fn apply_env(cfg: &mut DiagCfg, get: impl Fn(&str) -> Option<String>) {
     on("MOON_DETECT_DIAG", &mut cfg.channels.detect);
     on("MOON_ASSETS_DIAG", &mut cfg.channels.assets);
     on("MOON_MARKET_DIAG", &mut cfg.channels.markets);
+    on("MOON_HL_LIMIT_DIAG", &mut cfg.channels.hl_limit);
     // `MOON_MARKET_DIAG` and `MOON_RENDER_DIAG` have always been alternatives for the market
     // channel (`market::source::market_diag_enabled`), so the render switch keeps enabling it.
     if get("MOON_RENDER_DIAG").is_some() {

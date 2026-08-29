@@ -177,6 +177,8 @@ enum Unit {
     Sec,
     /// Days.
     Day,
+    /// A bare count of things, with the noun in the caption ("Мин. запросов").
+    Count,
 }
 
 /// One threshold control on a warning row: its caption, current value, bounds, and how to read/write
@@ -418,6 +420,31 @@ impl CoreStatusView {
                     max: moon_core::config::layout::API_WARN_MAX_DAYS,
                     step: 1,
                     unit: Unit::Day,
+                }],
+                cx,
+            ))
+            .child(self.warn_row(
+                "api_quota",
+                t!("core_status.warn_cfg.api_quota").to_string(),
+                false,
+                axes.api_quota,
+                |a, on| a.api_quota = on,
+                // No chart column, for the same reason as the key above: a standing number the core
+                // republishes every few minutes is not a per-second series.
+                None,
+                params.api_quota.sound.clone(),
+                |p, s| p.api_quota.sound = s,
+                vec![Param {
+                    cap: t!("core_status.warn_cfg.p.min_requests").into(),
+                    get: |p| p.api_quota.min,
+                    set: |p, v| p.api_quota.min = v,
+                    // A floor of 0 disarms the axis without turning it off: no quota can sit below
+                    // zero, so nothing ever warns. The step is coarse because the numbers are in
+                    // the thousands — a stepper of 1 would need 5000 clicks to reach the default.
+                    min: 0,
+                    max: moon_core::config::layout::API_QUOTA_WARN_MAX,
+                    step: 500,
+                    unit: Unit::Count,
                 }],
                 cx,
             ))
@@ -766,7 +793,7 @@ fn fmt_value(v: u16, unit: Unit) -> String {
         Unit::PctRel => format!("+{v}%"),
         Unit::Mult => format!("×{v}"),
         // Seconds and days move to the caption ("Окно (сек)"), so the value is just the number.
-        Unit::Sec | Unit::Day => v.to_string(),
+        Unit::Sec | Unit::Day | Unit::Count => v.to_string(),
     }
 }
 

@@ -26,6 +26,7 @@ fn sample(id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) -> CoreSa
             ..CoreSysStatus::default()
         },
         api_days: None,
+        api_quota: None,
     }
 }
 
@@ -41,6 +42,7 @@ fn sample_rtt(id: CoreId, ip: [u8; 4], rtt: Option<u32>) -> CoreSample {
             ..CoreSysStatus::default()
         },
         api_days: None,
+        api_quota: None,
     }
 }
 
@@ -56,6 +58,7 @@ fn sample_exch(id: CoreId, ip: [u8; 4], exch: Option<u16>) -> CoreSample {
             ..CoreSysStatus::default()
         },
         api_days: None,
+        api_quota: None,
     }
 }
 
@@ -81,6 +84,7 @@ fn sample_conn(id: CoreId, ip: [u8; 4], status: ConnStatus) -> CoreSample {
             ..CoreSysStatus::default()
         },
         api_days: None,
+        api_quota: None,
     }
 }
 
@@ -266,6 +270,7 @@ fn tick_emits_server_and_core_ring_samples() {
             ..CoreSysStatus::default()
         },
         api_days: None,
+        api_quota: None,
     };
     // Two cores, 500 MB each → used_sum 1000, free 500, total 1500.
     let result = engine.tick(&[mk(1, 30, 500, 10), mk(2, 20, 500, 20)], 1_000);
@@ -545,6 +550,7 @@ fn disabled_axis_records_no_episode() {
         ping: true,
         exch: true,
         api: true,
+        api_quota: true,
     });
     let ip = IpAddr::V4(Ipv4Addr::from(IP));
     for sec in 1..=(CPU_SUSTAIN_SECS as i64 + 4) {
@@ -653,4 +659,91 @@ fn replacing_the_key_closes_the_episode() {
     assert!(!engine.core_api_warn(1));
     assert_eq!(result.closed.len(), 1, "the episode closed");
     assert_eq!(result.closed[0].axis, WarnAxis::ApiExpiry);
+}
+
+/// Build one Ready sample carrying a specific remaining API request quota (`None` = the core
+/// publishes no quota, which every exchange but HyperLiquid does).
+fn sample_quota(id: CoreId, ip: [u8; 4], api_quota: Option<u64>) -> CoreSample {
+    CoreSample {
+        api_quota,
+        ..sample(id, ip, None, None)
+    }
+}
+
+/// The quota axis is a threshold like the key above, so it fires on the first sample at or below
+/// the floor. The boundary itself counts: a core sitting exactly ON the configured floor has
+/// reached it, and an exclusive comparison would leave that core silent forever at 5000.
+#[test]
+fn an_exhausted_quota_warns_on_the_first_sample() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(
+        &[
+            sample_quota(1, IP, Some(4_000)),
+            sample_quota(2, IP, Some(5_000)),
+        ],
+        1_000,
+    );
+
+    assert!(
+        engine.core_api_quota_warn(1),
+        "4000 is under the 5000 floor"
+    );
+    assert!(engine.core_api_quota_warn(2), "exactly at the floor counts");
+    assert_eq!(engine.open_episodes().len(), 2);
+}
+
+/// A healthy quota and a core that reports none must both stay silent. The second is the one that
+/// matters: every non-HyperLiquid core reports `None`, so a warning derived from the absence would
+/// light the whole fleet.
+#[test]
+fn a_healthy_or_absent_quota_never_warns() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(
+        &[
+            sample_quota(1, IP, Some(1_065_447)),
+            sample_quota(2, IP, None),
+        ],
+        1_000,
+    );
+
+    assert!(
+        !engine.core_api_quota_warn(1),
+        "a full quota is not a warning"
+    );
+    assert!(
+        !engine.core_api_quota_warn(2),
+        "no quota published is not an exhausted quota"
+    );
+    assert!(engine.open_episodes().is_empty());
+}
+
+/// Unlike an expiring key, a quota RECOVERS: a HyperLiquid address earns requests back with volume.
+/// The warning must therefore clear on its own once the count climbs back over the floor, and the
+/// episode must close — a rule copied from the key axis would leave it warning until a restart.
+#[test]
+fn a_recovering_quota_closes_its_episode() {
+    let mut engine = CoreWarnEngine::default();
+    engine.tick(&[sample_quota(1, IP, Some(900))], 1_000);
+    assert!(engine.core_api_quota_warn(1));
+
+    let result = engine.tick(&[sample_quota(1, IP, Some(20_000))], 2_000);
+
+    assert!(!engine.core_api_quota_warn(1));
+    assert_eq!(result.closed.len(), 1, "the episode closed");
+    assert_eq!(result.closed[0].axis, WarnAxis::ApiQuota);
+}
+
+/// The worst moment of a quota episode is its SMALLEST count, so `peak` must fall like the key
+/// axis and not climb like every measured one.
+#[test]
+fn the_quota_episode_records_its_lowest_count() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(&[sample_quota(1, IP, Some(4_800))], 1_000);
+    engine.tick(&[sample_quota(1, IP, Some(1_200))], 2_000);
+    engine.tick(&[sample_quota(1, IP, Some(3_000))], 3_000);
+
+    assert_eq!(engine.open_episodes()[0].peak, 1_200);
 }

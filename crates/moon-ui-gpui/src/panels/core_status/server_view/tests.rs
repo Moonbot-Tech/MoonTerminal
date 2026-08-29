@@ -24,6 +24,8 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
         api_notice: false,
+        api_quota: None,
+        api_quota_warn: false,
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,

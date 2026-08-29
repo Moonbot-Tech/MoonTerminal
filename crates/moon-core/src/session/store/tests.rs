@@ -760,3 +760,24 @@ fn a_server_restart_forgets_the_previous_instances_run_state() {
     assert_eq!(core.runtime_state_rev, runtime_rev);
     assert_eq!(core.strategies_running_rev, trading_rev);
 }
+
+/// The core republishes its API request quota every few minutes, usually with the same number. The
+/// revision must track the VALUE, or every reader watching it would rebuild on an unchanged quota
+/// several times an hour.
+#[test]
+fn an_unchanged_quota_does_not_bump_the_revision() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::ApiQuota(Some(1_065_447)));
+    let after_first = core.api_quota_rev;
+
+    core.apply(FeedMsg::ApiQuota(Some(1_065_447)));
+    assert_eq!(core.api_quota_rev, after_first, "same quota, later push");
+
+    core.apply(FeedMsg::ApiQuota(Some(1_065_400)));
+    assert_eq!(
+        core.api_quota_rev,
+        after_first + 1,
+        "a new number is a change"
+    );
+    assert_eq!(core.api_quota, Some(1_065_400));
+}

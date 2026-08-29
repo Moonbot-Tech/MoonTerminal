@@ -52,13 +52,14 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     cfg.channels.detect = true;
     cfg.channels.assets = true;
     cfg.channels.markets = true;
+    cfg.channels.hl_limit = true;
     cfg.channels.orders = "GateF/BTC".to_string();
     cfg.limits.log_ring_lines = 12_345;
     cfg.limits.balance_repeat_window_sec = 9;
     cfg.limits.market_trace_min_interval_ms = 250;
     apply(&cfg);
 
-    assert!(render() && detect() && assets() && markets() && orders());
+    assert!(render() && detect() && assets() && markets() && hl_limit() && orders());
     assert_eq!(
         with_orders_selector(|s| s.to_string()).as_deref(),
         Some("GateF/BTC")
@@ -70,7 +71,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     // Retraction matters as much as publication: a file edited back to `false` has to switch the
     // channel off, which a one-way `force_enable`-style flag could not do.
     apply(&DiagCfg::default());
-    assert!(!render() && !detect() && !assets() && !markets() && !orders());
+    assert!(!render() && !detect() && !assets() && !markets() && !hl_limit() && !orders());
     assert!(
         with_orders_selector(|_| ()).is_none(),
         "an off channel must not hand out a selector at all, so callers cannot accidentally follow \
