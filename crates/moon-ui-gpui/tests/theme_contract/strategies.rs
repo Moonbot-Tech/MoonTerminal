@@ -1019,22 +1019,32 @@ fn a_core_folder_row_marker_stays_passive() {
     );
 }
 
-/// The Strategies window seeds its tree expansion from the Auto workspace's selected core, not
-/// from an unconditional empty set.
+/// `strategies/state.rs::StrategiesView::new` restores the snapshot then additively re-seeds
+/// the Auto-selected core into that set.
 ///
-/// Plausible edit: reverting construction to the literal `expanded_cores: HashSet::new()` — the
-/// window would then always open fully collapsed even with a concrete Auto core selected on the
-/// rail, and the user has to re-find that server by hand every time.
+/// Mutation: restore `Some(s) => s.expanded_cores.clone()` without the following
+/// `seed_selected_core_into(...)` call, so a stored empty set is kept. After collapsing the
+/// selected Auto core, close and reopen Strategies; the core stays collapsed and the user
+/// re-finds the server by hand.
+///
+/// The construction-local `&mut expanded_cores` argument is what distinguishes restore-path
+/// seeding from the live observer (`&mut this.expanded_cores`) inside the same function.
 #[test]
 fn strategies_window_seeds_expansion_from_the_auto_workspace() {
-    let src = code_only(&read_src("strategies/state.rs"));
+    let ctor = code_only(&braced_body(
+        &read_src("strategies/state.rs"),
+        "pub(super) fn new(",
+    ));
     assert!(
-        src.contains("initial_expanded_cores("),
-        "construction must seed its expanded cores through initial_expanded_cores"
+        ctor.contains("Some(s) => s.expanded_cores.clone()")
+            && ctor.contains("None => HashSet::new()")
+            && ctor.contains("seed_selected_core_into(")
+            && ctor.contains("&mut expanded_cores,"),
+        "construction must restore the snapshot then additively seed the Auto-selected core"
     );
     assert!(
-        !src.contains("expanded_cores: HashSet::new()"),
-        "construction must not hard-code an empty expansion, or the Auto rail seed is dead code"
+        !ctor.contains("expanded_cores: HashSet::new()"),
+        "construction must not assign an empty expansion field, bypassing restore-and-seed"
     );
 }
 
@@ -1042,9 +1052,11 @@ fn strategies_window_seeds_expansion_from_the_auto_workspace() {
 ///
 /// The plausible edit is rebuilding `StrategiesView` from hard-coded defaults or moving its
 /// snapshot into `WindowLayout`. Closing the tool window would then forget expansion, selection,
-/// and filters, or a full application restart would incorrectly retain them. Treating `None` and
-/// an empty stored expansion as the same thing would re-seed Auto-rail cores after the user
-/// collapsed everything.
+/// and filters, or a full application restart would incorrectly retain them.
+///
+/// A stored empty expansion is not a reason to skip Auto-rail re-seed: construction restores
+/// the snapshot, then `seed_selected_core_into` additively inserts the selected core so the
+/// user does not re-find the server by hand after collapsing it and reopening the window.
 #[test]
 fn strategies_reopen_state_is_process_lifetime_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1081,7 +1093,9 @@ fn strategies_reopen_state_is_process_lifetime_only() {
     assert!(
         state.contains("let session = backend.read(cx).ui_session.strategies.clone();")
             && state.contains("Some(s) => s.expanded_cores.clone()")
-            && state.contains("None => initial_expanded_cores(")
+            && state.contains("None => HashSet::new()")
+            && state.contains("seed_selected_core_into(")
+            && state.contains("&mut expanded_cores,")
             && state.contains("input.default_value(s.search.clone())")
             && state.contains("b.ui_session.strategies = Some(snapshot)")
             && state.contains("this.reconcile_ui_folders(this.backend.read(cx).session.store())")
@@ -1098,8 +1112,10 @@ fn strategies_reopen_state_is_process_lifetime_only() {
             && read_src("strategies/versions.rs").contains("self.persist_session(cx)"),
         "Strategies mutation writers must share persist_session"
     );
+    let observer = code_only(&braced_body(&state, "cx.observe(&workspace_revision,"));
     assert!(
-        state.contains("this.expanded_cores.extend(initial_expanded_cores("),
+        observer.contains("seed_selected_core_into(")
+            && observer.contains("&mut this.expanded_cores,"),
         "the live window's workspace observer must stay additive while the window is open"
     );
     assert!(
@@ -1108,6 +1124,34 @@ fn strategies_reopen_state_is_process_lifetime_only() {
             && !layout.contains("StrategiesSessionState")
             && !session.contains("Serialize"),
         "process-lifetime UI state must not enter the serialized WindowLayout"
+    );
+}
+
+/// `strategies/window.rs::open` live-handle branch must expand the Auto-selected core.
+///
+/// Mutation: revert the existing-window branch to activate-only (drop downcast +
+/// `ensure_auto_selected_core_expanded`). Clicking Strategies while the window already exists
+/// then leaves the Auto-selected core collapsed, so the user extra-clicks the core row.
+///
+/// The live-handle half is everything before `tool_window_options`, which starts new-window
+/// construction. A call only on the create path would not catch this breakage.
+#[test]
+fn strategies_open_re_seeds_the_auto_core_on_an_existing_handle() {
+    let open = code_only(&braced_body(
+        &read_src("strategies/window.rs"),
+        "pub fn open(",
+    ));
+    let live = open
+        .split("tool_window_options")
+        .next()
+        .expect("open must create a new window after the live-handle branch");
+    assert!(
+        live.contains("ensure_auto_selected_core_expanded"),
+        "the existing-handle branch of open must expand the Auto-selected core before returning"
+    );
+    assert!(
+        live.contains("activate_window") && live.contains("downcast::<StrategiesView>"),
+        "the existing-handle branch must activate the live Strategies view, not only a window"
     );
 }
 
