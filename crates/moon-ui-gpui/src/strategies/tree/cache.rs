@@ -98,9 +98,10 @@ impl TreeCache {
 ///     identity/caption fields, `strategies_rev` (the strategy snapshot), and the rendered
 ///     open-order digest. A core appearing, disappearing or being renamed moves the list itself.
 ///   * per window field: venue grouping, the filter — search, kind, direction, EXCHANGE and
-///     active-only — the three expansion sets, the core/folder bulk-check switches, the UI-only
-///     folders, the selection, the staged checkboxes, the selected folder, and the
-///     deleted-strategy revision.
+///     active-only — the three expansion sets, the UI-only folders, the selection, the staged
+///     checkboxes, the selected folder, and the deleted-strategy revision. Folder/core bulk
+///     boxes are derived from those staged values plus the strategy snapshot, not hashed as
+///     their own set.
 ///
 /// `deleted` is represented by `deleted_rev` rather than hashed: it is a background load, so it
 /// arrives on a frame nothing else moved on, and only an explicit revision can see that.
@@ -154,7 +155,6 @@ pub(crate) fn data_sig(
     unordered(view.expanded_cores.iter()).hash(&mut h);
     unordered(view.expanded_folders.iter()).hash(&mut h);
     unordered(view.expanded_deleted.iter()).hash(&mut h);
-    unordered(view.folder_checks.iter()).hash(&mut h);
     unordered(view.ui_folders.iter()).hash(&mut h);
     unordered(view.sel.iter()).hash(&mut h);
     let staged = unordered(view.staged.iter());

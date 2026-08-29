@@ -588,9 +588,8 @@ impl FolderCounts {
 /// [`FolderCounts`], whose caption ignores search and active-only — the caption describes the
 /// folder, this describes one click.
 ///
-/// The switch itself keeps no memory of what a previous click covered ([`super::StrategiesView`]'s
-/// `folder_checks`), so changing the filter between two clicks deliberately changes what the second
-/// one acts on.
+/// Display and click both use this set, so changing the filter between two clicks deliberately
+/// changes what the second one acts on and what the box shows.
 ///
 /// Args:
 ///     rows: Live strategy rows of one core.
@@ -614,14 +613,37 @@ pub(super) fn subtree_check_targets(
         .collect()
 }
 
-/// Collect the folder rows a bulk click must carry with it.
+/// Whether a core or folder bulk checkbox should display as checked.
 ///
-/// A click on a folder acts on everything the row holds, and the tree draws nested folders as rows
-/// of their own: leaving their boxes alone would show a checked parent above unchecked children
-/// while the strategies under both were already staged.
+/// The box is a summary of the strategies [`subtree_check_targets`] returns: on only when that
+/// set is non-empty and every member's displayed checkbox is on. Displayed means the staged
+/// overlay when one exists, otherwise the core's acknowledged flag — the same `val` a strategy
+/// row paints, not the running-dot. Empty coverage (an empty folder, or a filter that hid every
+/// child) is unchecked. Partial coverage is also unchecked; there is no mixed mark.
 ///
-/// Derived from the same visible rows as [`subtree_check_targets`], so a search that hides a whole
-/// subfolder also leaves that folder's box out of the click.
+/// Args:
+///     targets: `(id, server checked flag)` from [`subtree_check_targets`].
+///     staged: Retained per-strategy overlay keyed by `(core, id)`.
+///     core: Core owning the row, used to look up staging.
+///
+/// Returns:
+///     `true` when every covered strategy currently shows checked.
+pub(super) fn subtree_displayed_all_checked(
+    targets: &[(u64, bool)],
+    staged: &HashMap<Key, bool>,
+    core: CoreId,
+) -> bool {
+    !targets.is_empty()
+        && targets
+            .iter()
+            .all(|(id, server)| staged.get(&(core, *id)).copied().unwrap_or(*server))
+}
+
+/// Collect the folder rows a bulk click used to carry when folder boxes were independent.
+///
+/// Kept under `cfg(test)` for the coverage tests that still pin this membership; production
+/// display now derives each folder box from descendant strategies, so the click no longer copies
+/// nested folder bits.
 ///
 /// Args:
 ///     rows: Live strategy rows of one core.
@@ -630,6 +652,7 @@ pub(super) fn subtree_check_targets(
 ///
 /// Returns:
 ///     Slash-joined paths of every folder strictly below `path`, each listed once.
+#[cfg(test)]
 pub(super) fn subtree_folder_paths(
     rows: &[StrategyRow],
     path: &[String],
