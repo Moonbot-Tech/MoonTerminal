@@ -12,9 +12,8 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonPalette, MoonText, MoonTheme, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem,
-    MoonTreeRowMeta, h_flex,
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonDisclosure, MoonPalette, MoonText, MoonTheme,
+    MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
 };
 
 use super::super::filter::PreparedFilter;
@@ -22,6 +21,7 @@ use super::super::logic::{
     FolderCounts, build_node, ensure_folder, strategy_core_is_visible, toggle,
 };
 use super::super::{Key, StrategiesView, moon_alpha};
+use super::checks;
 use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
 use moon_core::feed::StrategyRow;
@@ -94,6 +94,11 @@ const BADGE_TINY_LINE: f32 = 11.0;
 const BADGE_TINY_PAD_X: f32 = 4.0;
 const BADGE_TINY_MIN_W: f32 = 16.0;
 
+/// Gap a heading row leaves between its disclosure marker and the control after it, in design
+/// units. Read by [`disclosure_run`] as well, so the markerless rows reserve exactly what the
+/// heading spends.
+const HEADING_GAP: f32 = 5.0;
+
 /// Row height at the tree's local text step, in `Pixels`.
 ///
 /// The only caller of [`design::fit_h_px`] for a tree row — see [`ROW_H_BASE`] for why every row
@@ -138,6 +143,23 @@ fn row_badge_size(step: f32) -> MoonBadgeSize {
     }
 }
 
+/// Leading run a heading row spends on its disclosure marker and the gap after it.
+///
+/// Rows that carry no marker — strategies, and the deleted rows beside them — reserve the same run
+/// so their controls land one indent step RIGHT of their own folder's, instead of five design units
+/// LEFT of it. Derived from the two values `core_folder_row` actually renders with, so the columns
+/// cannot drift apart when either is nudged.
+///
+/// Args:
+///     app: Application context used to scale the design units.
+///     step: Local unscaled text-size step, which the marker rides like the row's text.
+///
+/// Returns:
+///     Scaled width of the marker box plus the heading row's control gap.
+fn disclosure_run(app: &App, step: f32) -> Pixels {
+    design::ui_px(app, design::DISCLOSURE_BOX + step) + design::ui_px(app, HEADING_GAP)
+}
+
 /// Data for one tree row, looked up by node ID from `render_row` and decorators.
 pub(crate) enum NodeData {
     /// Always-expanded, non-interactive heading for one canonical exchange section.
@@ -152,6 +174,8 @@ pub(crate) enum NodeData {
         total: usize,
         open_orders: usize,
         selected: bool,
+        /// The root row's own bulk-check switch, which is not a summary of `active`/`total`.
+        checked: bool,
     },
     Folder {
         core: CoreId,
@@ -161,6 +185,8 @@ pub(crate) enum NodeData {
         total: usize,
         /// Whether a click selected the folder for highlighting and Ctrl+C folder copying.
         selected: bool,
+        /// The folder's own bulk-check switch, which is not a summary of `active`/`total`.
+        checked: bool,
     },
     Strategy {
         core: CoreId,
@@ -402,6 +428,8 @@ fn build_core_root(
                 .selected_folder
                 .as_ref()
                 .is_some_and(|(selected_core, path)| *selected_core == core && path.is_empty()),
+            // The root's own switch lives under the empty path, which allocates nothing.
+            checked: view.folder_checks.contains(&(core, String::new())),
         },
     );
     Some(
@@ -432,13 +460,11 @@ fn build_core_subtree(
     }
     // Every selected row in this core shares the same drag payload.
     let selected_ids: Rc<[u64]> = view.drag_ids_for_core(core);
-    // Borrowed once per core so the per-folder probe below needs no owned key.
-    let open_folders: std::collections::HashSet<&str> = view
-        .expanded_folders
-        .iter()
-        .filter(|(c, _)| *c == core)
-        .map(|(_, p)| p.as_str())
-        .collect();
+    // Borrowed once per core so the per-folder probes below need no owned key.
+    let folders = FolderSets {
+        open: core_paths(&view.expanded_folders, core),
+        checked: core_paths(&view.folder_checks, core),
+    };
 
     // Build the folder tree from visible strategies plus empty UI-only folders.
     let mut root = build_node(matched.iter().copied());
@@ -453,7 +479,7 @@ fn build_core_subtree(
         counts,
         &order_counts,
         &selected_ids,
-        &open_folders,
+        &folders,
         &mut prefix,
         view,
         searching,
@@ -544,6 +570,28 @@ pub(crate) fn shape_sig(items: &[MoonTreeItem], expanded: &[SharedString], searc
     h.finish()
 }
 
+/// One core's folder-keyed row flags, borrowed for the length of that core's subtree build.
+///
+/// Both sets are keyed by the slash-joined path the tree already computes per folder, so a probe
+/// costs one hash of a borrowed string and no allocation.
+struct FolderSets<'a> {
+    /// Paths whose children are currently rendered.
+    open: std::collections::HashSet<&'a str>,
+    /// Paths whose bulk checkbox is switched on.
+    checked: std::collections::HashSet<&'a str>,
+}
+
+/// Borrow one core's paths out of a folder-keyed window set.
+fn core_paths(
+    set: &std::collections::HashSet<(CoreId, String)>,
+    core: CoreId,
+) -> std::collections::HashSet<&str> {
+    set.iter()
+        .filter(|(c, _)| *c == core)
+        .map(|(_, path)| path.as_str())
+        .collect()
+}
+
 /// Converts one folder node and its subtree.
 ///
 /// Every node reached here is visible, so recursion stops at a closed folder because
@@ -555,7 +603,7 @@ fn convert_node(
     counts: &FolderCounts,
     order_counts: &HashMap<u64, usize>,
     selected_ids: &Rc<[u64]>,
-    open_folders: &std::collections::HashSet<&str>,
+    folders: &FolderSets<'_>,
     prefix: &mut Vec<String>,
     view: &StrategiesView,
     searching: bool,
@@ -570,7 +618,9 @@ fn convert_node(
         // lookup on the same folder identity without repeated allocation.
         let path = prefix.join("/");
         let fid = id_folder(core, &path);
-        let fopen = searching || open_folders.contains(path.as_str());
+        let fopen = searching || folders.open.contains(path.as_str());
+        // Read before `path` is moved into the selection comparison below.
+        let fchecked = folders.checked.contains(path.as_str());
         let (active, total) = counts.for_path(&path);
         let mut fchildren = Vec::new();
         if fopen {
@@ -581,7 +631,7 @@ fn convert_node(
                 counts,
                 order_counts,
                 selected_ids,
-                open_folders,
+                folders,
                 prefix,
                 view,
                 searching,
@@ -600,6 +650,7 @@ fn convert_node(
                 active,
                 total,
                 selected: view.selected_folder.as_ref() == Some(&(core, path)),
+                checked: fchecked,
             },
         );
         out.push(
@@ -810,6 +861,7 @@ fn render_row(
             total,
             open_orders,
             selected,
+            checked,
         } => {
             let core = *core;
             let txt = if *open_orders > 0 {
@@ -822,6 +874,7 @@ fn render_row(
                 node_id,
                 entry.is_expanded(),
                 *selected,
+                *checked,
                 indent,
                 txt,
                 p.blue,
@@ -838,6 +891,7 @@ fn render_row(
             active,
             total,
             selected,
+            checked,
         } => {
             let core = *core;
             let path = path.clone();
@@ -847,6 +901,7 @@ fn render_row(
                 node_id,
                 entry.is_expanded(),
                 *selected,
+                *checked,
                 indent,
                 txt,
                 p.text_soft,
@@ -888,6 +943,8 @@ fn render_row(
                 view,
                 node_id,
                 entry.is_expanded(),
+                false,
+                // Deleted addresses no folder, so `core_folder_row` draws it no checkbox at all.
                 false,
                 indent,
                 format!("{}  {count}", rust_i18n::t!("strat.deleted_folder")),
@@ -980,6 +1037,20 @@ enum ToggleTarget {
     Deleted(CoreId),
 }
 
+impl ToggleTarget {
+    /// Return the core and folder segments this row acts on, or `None` for Deleted.
+    ///
+    /// One place deciding what a row addresses, so the context menu and the bulk checkbox cannot
+    /// disagree about which rows carry a folder identity at all.
+    fn folder_key(&self) -> Option<(CoreId, Vec<String>)> {
+        match self {
+            Self::Core(core) => Some((*core, Vec::new())),
+            Self::Folder(core, path) => Some((*core, path.clone())),
+            Self::Deleted(_) => None,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Render a clickable core, folder, or Deleted heading in the strategy tree.
 ///
@@ -991,6 +1062,7 @@ enum ToggleTarget {
 ///     row_id: The node's own tree id, used verbatim as this row's `ElementId`.
 ///     expanded: Whether the heading's children are visible.
 ///     selected: Whether to draw the selected-folder highlight.
+///     checked: The row's own bulk-check switch; ignored by a row that addresses no folder.
 ///     indent: Leading indentation for the tree depth.
 ///     text: Heading label and count summary.
 ///     color: Heading text color.
@@ -1006,6 +1078,7 @@ fn core_folder_row(
     row_id: SharedString,
     expanded: bool,
     selected: bool,
+    checked: bool,
     indent: Pixels,
     text: String,
     color: u32,
@@ -1017,10 +1090,20 @@ fn core_folder_row(
     let p = MoonPalette::active(app);
     // In this core/folder row type, only actual folders receive the egui-style context menu for
     // rename, copy, paste, create, and delete; core and Deleted headings do not.
+    // The bulk checkbox stages this row's own subtree, which the core root spells as the empty
+    // path. Deleted holds no live strategy, so it addresses no folder and carries no checkbox.
+    // Resolved once: the row renders on every repaint, and each resolve deep-clones the path.
+    let folder_key = target.folder_key();
+    let check_target = folder_key
+        .clone()
+        .map(|(core, path)| (core, path, checked));
     let menu = match &target {
-        ToggleTarget::Folder(c, path) => Some((*c, path.clone())),
+        ToggleTarget::Folder(..) => folder_key,
         ToggleTarget::Core(_) | ToggleTarget::Deleted(_) => None,
     };
+    // Taken before the row consumes `row_id`: the checkbox derives its own element id from this
+    // node's id for the same reason the row does — see the note on `.id(row_id)` below.
+    let check_row_id = row_id.clone();
     let view_click = view.clone();
     let view_menu = view.clone();
     h_flex()
@@ -1035,7 +1118,7 @@ fn core_folder_row(
         .pl(indent)
         .pr(design::ui_px(app, 6.0))
         .items_center()
-        .gap(design::ui_px(app, 5.0))
+        .gap(design::ui_px(app, HEADING_GAP))
         .cursor_pointer()
         .rounded(design::ui_px(app, 3.0))
         .when(selected, |s| s.bg(moon_alpha(p.amber, 0.14)))
@@ -1052,6 +1135,14 @@ fn core_folder_row(
                 .size(design::DISCLOSURE_GLYPH_MARKER + step)
                 .box_size(design::DISCLOSURE_BOX + step),
         )
+        .child(match check_target {
+            Some((core, path, checked)) => {
+                checks::bulk_check(view, &check_row_id, core, path, checked)
+            }
+            // Reserved rather than omitted, so this row's caption stays on the same control column
+            // as every sibling at its depth.
+            None => checks::bulk_check_slot(&check_row_id),
+        })
         .child(
             div().flex_1().min_w_0().truncate().child(
                 MoonText::new(text)
@@ -1206,7 +1297,7 @@ fn deleted_strategy_row(
         .w_full()
         .items_center()
         .gap(design::ui_px(app, 6.0))
-        .pl(indent)
+        .pl(indent + disclosure_run(app, step))
         .pr(design::ui_px(app, 2.0))
         .child(
             MoonText::new("✕")
@@ -1363,16 +1454,10 @@ fn strategy_row(
         .w_full()
         .items_center()
         .gap(design::ui_px(app, 6.0))
-        .pl(indent)
+        .pl(indent + disclosure_run(app, step))
         .pr(design::ui_px(app, 2.0))
         .child(
-            // Use a green tone for enabled/active. The default Info tone produced a pale blue box
-            // that was indistinguishable from empty on the light theme; Positive also makes the
-            // checkmark glyph green.
-            MoonCheckbox::new(SharedString::from(format!("chk-{core}-{id}")))
-                .checked(val)
-                .tone(MoonTone::Positive)
-                .size(MoonCheckboxSize::Compact)
+            checks::row_checkbox(SharedString::from(format!("chk:{}", id_strat(core, id))), val)
                 .on_change(move |ch: &bool, _window, app| {
                     let v = *ch;
                     view_chk.update(app, |this, cx| {
@@ -1380,11 +1465,7 @@ fn strategy_row(
                             return;
                         }
                         let before = this.staged.get(&key).copied();
-                        if v == server_checked {
-                            this.staged.remove(&key);
-                        } else {
-                            this.staged.insert(key, v);
-                        }
+                        this.stage_check(key, v, server_checked);
                         if before != this.staged.get(&key).copied() {
                             cx.notify();
                         }

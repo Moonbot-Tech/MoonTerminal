@@ -12,7 +12,7 @@ use moon_core::session::{CoreId, CoreStore};
 
 use super::filter::PreparedFilter;
 use super::rules::{Rules, Values};
-use super::tree::ops::path_segments;
+use super::tree::ops::{self, path_segments};
 use super::{Key, StrategiesView};
 use crate::Backend;
 
@@ -577,6 +577,77 @@ impl FolderCounts {
     pub(super) fn root(&self) -> (usize, usize) {
         self.root
     }
+}
+
+/// Collect the strategies one core or folder row's bulk checkbox covers.
+///
+/// Coverage is the whole subtree that PASSES THE FILTER, which is not the same set as the rows on
+/// screen: a collapsed core or folder draws none of its descendants and still covers all of them,
+/// exactly as its caption already counts them. What the filter removes is genuinely excluded, so a
+/// search or an active-only view narrows one click to the matching rows. That also differs from
+/// [`FolderCounts`], whose caption ignores search and active-only — the caption describes the
+/// folder, this describes one click.
+///
+/// The switch itself keeps no memory of what a previous click covered ([`super::StrategiesView`]'s
+/// `folder_checks`), so changing the filter between two clicks deliberately changes what the second
+/// one acts on.
+///
+/// Args:
+///     rows: Live strategy rows of one core.
+///     path: Folder segments, empty for the core root.
+///     filter: Prepared row predicate shared with the current tree build.
+///
+/// Returns:
+///     `(id, server checked flag)` for every covered strategy at or below `path`.
+pub(super) fn subtree_check_targets(
+    rows: &[StrategyRow],
+    path: &[String],
+    filter: &PreparedFilter,
+) -> Vec<(u64, bool)> {
+    // Through `ops` rather than a private path test of its own: that module owns segment splitting
+    // for the whole window, and a second copy here would be a second place for `"test"` to start
+    // swallowing `"testing"`. Filtering before the map keeps one pass and one allocation for a
+    // click that can cover a whole account.
+    rows.iter()
+        .filter(|row| ops::path_starts_with(&row.folder_path, path) && filter.matches(row))
+        .map(|row| (row.id, row.checked))
+        .collect()
+}
+
+/// Collect the folder rows a bulk click must carry with it.
+///
+/// A click on a folder acts on everything the row holds, and the tree draws nested folders as rows
+/// of their own: leaving their boxes alone would show a checked parent above unchecked children
+/// while the strategies under both were already staged.
+///
+/// Derived from the same visible rows as [`subtree_check_targets`], so a search that hides a whole
+/// subfolder also leaves that folder's box out of the click.
+///
+/// Args:
+///     rows: Live strategy rows of one core.
+///     path: Folder segments the click landed on, empty for the core root.
+///     filter: Prepared row predicate shared with the current tree build.
+///
+/// Returns:
+///     Slash-joined paths of every folder strictly below `path`, each listed once.
+pub(super) fn subtree_folder_paths(
+    rows: &[StrategyRow],
+    path: &[String],
+    filter: &PreparedFilter,
+) -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for row in rows {
+        if !ops::path_starts_with(&row.folder_path, path) || !filter.matches(row) {
+            continue;
+        }
+        let segments: Vec<&str> = path_segments(&row.folder_path).collect();
+        // Every ancestor below the clicked path, so an intermediate folder is carried even when no
+        // strategy sits directly in it.
+        for depth in path.len() + 1..=segments.len() {
+            out.insert(segments[..depth].join("/"));
+        }
+    }
+    out.into_iter().collect()
 }
 
 #[cfg(test)]
