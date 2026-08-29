@@ -45,6 +45,16 @@ pub(super) const COLS: &[ColDef] = &[
     ("pos", "Pos", 66.0, true),
 ];
 
+/// Return the displayed title for a Screener column key.
+///
+/// Footer filters resolve their labels through the same schema as the header so the two surfaces
+/// cannot drift back to different Moonbot terminology.
+pub(super) fn column_title(key: &str) -> &'static str {
+    COLS.iter()
+        .find(|column| column.0 == key)
+        .map_or("", |column| column.1)
+}
+
 /// Restore a visible Screener sort as `(key, descending)`.
 ///
 /// The historical Vol.-descending default remains preferred while that column is visible. If it is

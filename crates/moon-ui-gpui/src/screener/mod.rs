@@ -1,7 +1,7 @@
 //! Screener window: a Moonbot-style coin table.
 //!
 //! A separate singleton OS window, following the Strategies-window pattern, hosts a `MoonDataTable`
-//! for every market on connected exchanges. Headers control sorting, while Coin and DVol filters
+//! for every market on connected exchanges. Headers control sorting, while Market and Vol. filters
 //! sit in the footer. Multi-core data is grouped by the market-data provider returned by
 //! `MarketDataSource::provider_of`: cores on one exchange share a provider in deduplicated mode,
 //! while per-core mode keeps separate providers. Market columns are read once per provider group;
