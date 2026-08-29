@@ -69,15 +69,19 @@ pub fn header(
     // arbitrary server's money directly beside a pill that reads "the whole group". The figure is
     // HIDDEN rather than summed — the Assets panel owns the real cross-core total, on a surface
     // that says so, and a double-click on this dash still opens it.
-    let balance = {
+    //
+    // The emulator/real tag shares this same `scoped_core`: fetching `emu_mode` through a
+    // helper that calls `active_trade_core` first would read that arbitrary core even when the
+    // helper then discards it.
+    let (balance, trade_emu) = {
         let b = backend.read(cx);
         let scoped_core = if b.is_auto_overview_scope(group) {
             None
         } else {
             b.active_trade_core(group)
         };
-        scoped_core
-            .and_then(|c| b.session.store().core(c))
+        let core = scoped_core.and_then(|c| b.session.store().core(c));
+        let balance = core
             .map(|cd| {
                 (
                     cd.balance_state(),
@@ -85,7 +89,11 @@ pub fn header(
                     cd.assets.global.total_usdt,
                 )
             })
-            .filter(|(state, ..)| state.has_value())
+            .filter(|(state, ..)| state.has_value());
+        let trade_emu = core
+            .and_then(|cd| cd.client_settings.as_ref())
+            .map(|cs| cs.emu_mode);
+        (balance, trade_emu)
     };
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
@@ -126,6 +134,7 @@ pub fn header(
                     p,
                     cx,
                 ))
+                .children(header_trade_mode_tag(trade_emu))
                 .child({
                     let shell = shell.clone();
                     header_gear_popover(
@@ -263,6 +272,43 @@ pub fn header(
                     )
                 }),
         )
+}
+
+/// Header badge for the visible core's emulator vs real trading mode.
+///
+/// Sleep and Live already occupy chrome; emulator/real used to live only inside the
+/// core-settings popover (the checkbox plus the amber banner). This tag sits in the core
+/// cluster so it tracks the same core the pill names. It is a readout, not a toggle:
+/// changing `emu_mode` stays in the gear popover, next to the existing warning.
+///
+/// `emu_mode` is already Overview-gated by the caller (`header` shares `scoped_core` with
+/// the balance figure). `None` is a missing settings snapshot and must not render as Real.
+fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
+    let emu = emu_mode?;
+    let (label, tip) = if emu {
+        (
+            t!("header.trade_emu").to_string(),
+            t!("header.trade_emu_tip").to_string(),
+        )
+    } else {
+        (
+            t!("header.trade_real").to_string(),
+            t!("header.trade_real_tip").to_string(),
+        )
+    };
+    let tag = if emu {
+        MoonTag::warning().label(label)
+    } else {
+        MoonTag::new().label(label)
+    };
+    Some(
+        div()
+            .id("header-trade-mode")
+            .flex_none()
+            .tooltip(crate::panels::common::text_tooltip(tip))
+            .child(tag)
+            .into_any_element(),
+    )
 }
 
 /// Build the persisted workspace-mode control as a compact Auto toggle.
