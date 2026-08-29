@@ -2,8 +2,8 @@
 
 use chrono::{NaiveDate, TimeZone as _, Utc};
 
-use super::{Period, Tab, custom_bounds as zoned_custom_bounds, exact_secs_of_day, seed_period};
-use crate::controls::date_range::{Bound, MINUTE, field_of_exclusive, secs_of_dt};
+use super::{custom_bounds as zoned_custom_bounds, exact_secs_of_day, seed_period, Period, Tab};
+use crate::controls::date_range::{field_of_exclusive, secs_of_dt, Bound, MINUTE};
 
 /// Build a UTC timestamp out of a day and a clock time, the way the pickers hold their value.
 fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
@@ -80,6 +80,56 @@ fn yesterday_uses_the_previous_existing_civil_date() {
     assert_eq!(
         Period::Yesterday.range_at(now, chrono_tz::Pacific::Apia),
         (1_325_152_800, 1_325_239_200)
+    );
+}
+
+/// Dropping `Period::range_at`'s CurYear `.with_month(1)` step leaves `today.with_day(1)` like
+/// CurMonth, so the This year chip filters the current month, not the civil year.
+///
+/// Independent oracle: pin `now` at 2024-06-15 12:00 UTC. January 1 and tomorrow are literal
+/// `chrono::Utc` midnights, not values `range_at` computed. Exclusive end is tomorrow of the
+/// pinned civil day, not Report's open `None` upper bound. Apia repeats the same pin in a
+/// UTC+13 zone so January 1 is not UTC midnight.
+#[test]
+fn cur_year_range_starts_january_1_and_ends_tomorrow() {
+    let now = Utc
+        .with_ymd_and_hms(2024, 6, 15, 12, 0, 0)
+        .single()
+        .expect("valid UTC instant")
+        .timestamp();
+    let year_start = Utc
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("valid UTC instant")
+        .timestamp();
+    let tomorrow = Utc
+        .with_ymd_and_hms(2024, 6, 16, 0, 0, 0)
+        .single()
+        .expect("valid UTC instant")
+        .timestamp();
+
+    assert_eq!(
+        Period::CurYear.range_at(now, chrono_tz::UTC),
+        (year_start, tomorrow),
+        "CurYear is [Jan 1 00:00, tomorrow) of the pinned day, not the current month"
+    );
+
+    // 2024-06-15 12:00 UTC is 2024-06-16 01:00 in Pacific/Apia (UTC+13).
+    let apia_year_start = chrono_tz::Pacific::Apia
+        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        .single()
+        .expect("Apia Jan 1 midnight exists")
+        .timestamp();
+    let apia_tomorrow = chrono_tz::Pacific::Apia
+        .with_ymd_and_hms(2024, 6, 17, 0, 0, 0)
+        .single()
+        .expect("Apia Jun 17 midnight exists")
+        .timestamp();
+
+    assert_eq!(
+        Period::CurYear.range_at(now, chrono_tz::Pacific::Apia),
+        (apia_year_start, apia_tomorrow),
+        "CurYear uses the selected zone's January 1 and civil tomorrow"
     );
 }
 

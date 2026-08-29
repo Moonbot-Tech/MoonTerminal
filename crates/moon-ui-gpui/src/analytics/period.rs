@@ -49,8 +49,11 @@ pub(super) enum Period {
     Week,
     /// The current selected-zone calendar month from its first civil day.
     CurMonth,
+    /// The current selected-zone calendar year from January 1 of that civil year.
+    CurYear,
     /// A rolling 30 days.
     Month,
+    /// A rolling 365 days.
     Year,
     All,
     /// An arbitrary range from the "from"/"to" fields: `[from, to)` in UTC unix seconds;
@@ -62,12 +65,13 @@ pub(super) enum Period {
 }
 
 impl Period {
-    pub(super) const ALL: [Period; 7] = [
+    pub(super) const ALL: [Period; 8] = [
         Period::Today,
         Period::Yesterday,
         Period::Week,
         Period::CurMonth,
         Period::Month,
+        Period::CurYear,
         Period::Year,
         Period::All,
     ];
@@ -85,6 +89,7 @@ impl Period {
             Period::Yesterday => "p-yesterday",
             Period::Week => "p-week",
             Period::CurMonth => "p-cur-month",
+            Period::CurYear => "p-cur-year",
             Period::Month => "p-month",
             Period::Year => "p-year",
             Period::All => "p-all",
@@ -111,6 +116,7 @@ impl Period {
             Period::Yesterday => t!("analytics.period.yesterday"),
             Period::Week => t!("analytics.period.week"),
             Period::CurMonth => t!("analytics.period.cur_month"),
+            Period::CurYear => t!("analytics.period.cur_year"),
             Period::Month => t!("analytics.period.month"),
             Period::Year => t!("analytics.period.year"),
             Period::All => t!("analytics.period.all"),
@@ -167,6 +173,15 @@ impl Period {
                 // Resolve the current civil month's first date through the selected zone.
                 let start = today
                     .with_day(1)
+                    .and_then(|day| moon_core::util::display_time::day_start(day, zone))
+                    .unwrap_or(day0);
+                (start, tomorrow)
+            }
+            Period::CurYear => {
+                // January 1 of today's civil year in the selected zone, exclusive tomorrow.
+                let start = today
+                    .with_month(1)
+                    .and_then(|date| date.with_day(1))
                     .and_then(|day| moon_core::util::display_time::day_start(day, zone))
                     .unwrap_or(day0);
                 (start, tomorrow)
