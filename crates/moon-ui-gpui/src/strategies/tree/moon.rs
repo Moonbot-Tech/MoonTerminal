@@ -18,7 +18,8 @@ use moon_ui::{
 
 use super::super::filter::PreparedFilter;
 use super::super::logic::{
-    FolderCounts, build_node, ensure_folder, strategy_core_is_visible, toggle,
+    FolderCounts, build_node, ensure_folder, strategy_core_is_visible, subtree_check_targets,
+    subtree_displayed_all_checked, toggle,
 };
 use super::super::{Key, StrategiesView, moon_alpha};
 use super::checks;
@@ -174,7 +175,7 @@ pub(crate) enum NodeData {
         total: usize,
         open_orders: usize,
         selected: bool,
-        /// The root row's own bulk-check switch, which is not a summary of `active`/`total`.
+        /// Summary of covered strategies' displayed checkboxes, not of `active`/`total`.
         checked: bool,
     },
     Folder {
@@ -185,7 +186,7 @@ pub(crate) enum NodeData {
         total: usize,
         /// Whether a click selected the folder for highlighting and Ctrl+C folder copying.
         selected: bool,
-        /// The folder's own bulk-check switch, which is not a summary of `active`/`total`.
+        /// Summary of covered strategies' displayed checkboxes, not of `active`/`total`.
         checked: bool,
     },
     Strategy {
@@ -428,8 +429,12 @@ fn build_core_root(
                 .selected_folder
                 .as_ref()
                 .is_some_and(|(selected_core, path)| *selected_core == core && path.is_empty()),
-            // The root's own switch lives under the empty path, which allocates nothing.
-            checked: view.folder_checks.contains(&(core, String::new())),
+            // Filter-aware coverage, including when this core is collapsed and `matched` is empty.
+            checked: subtree_displayed_all_checked(
+                &subtree_check_targets(&cd.strategies, &[], filter),
+                &view.staged,
+                core,
+            ),
         },
     );
     Some(
@@ -463,7 +468,6 @@ fn build_core_subtree(
     // Borrowed once per core so the per-folder probes below need no owned key.
     let folders = FolderSets {
         open: core_paths(&view.expanded_folders, core),
-        checked: core_paths(&view.folder_checks, core),
     };
 
     // Build the folder tree from visible strategies plus empty UI-only folders.
@@ -482,6 +486,8 @@ fn build_core_subtree(
         &folders,
         &mut prefix,
         view,
+        &cd.strategies,
+        filter,
         searching,
         children,
         data,
@@ -570,15 +576,14 @@ pub(crate) fn shape_sig(items: &[MoonTreeItem], expanded: &[SharedString], searc
     h.finish()
 }
 
-/// One core's folder-keyed row flags, borrowed for the length of that core's subtree build.
+/// One core's folder-keyed expansion flags, borrowed for the length of that core's subtree build.
 ///
-/// Both sets are keyed by the slash-joined path the tree already computes per folder, so a probe
-/// costs one hash of a borrowed string and no allocation.
+/// Keyed by the slash-joined path the tree already computes per folder, so a probe costs one hash
+/// of a borrowed string and no allocation. Bulk-check display is derived per row from staged
+/// overlays, not retained here.
 struct FolderSets<'a> {
     /// Paths whose children are currently rendered.
     open: std::collections::HashSet<&'a str>,
-    /// Paths whose bulk checkbox is switched on.
-    checked: std::collections::HashSet<&'a str>,
 }
 
 /// Borrow one core's paths out of a folder-keyed window set.
@@ -606,6 +611,8 @@ fn convert_node(
     folders: &FolderSets<'_>,
     prefix: &mut Vec<String>,
     view: &StrategiesView,
+    strategies: &[StrategyRow],
+    filter: &PreparedFilter,
     searching: bool,
     out: &mut Vec<MoonTreeItem>,
     data: &mut HashMap<SharedString, NodeData>,
@@ -620,7 +627,11 @@ fn convert_node(
         let fid = id_folder(core, &path);
         let fopen = searching || folders.open.contains(path.as_str());
         // Read before `path` is moved into the selection comparison below.
-        let fchecked = folders.checked.contains(path.as_str());
+        let fchecked = subtree_displayed_all_checked(
+            &subtree_check_targets(strategies, prefix, filter),
+            &view.staged,
+            core,
+        );
         let (active, total) = counts.for_path(&path);
         let mut fchildren = Vec::new();
         if fopen {
@@ -634,6 +645,8 @@ fn convert_node(
                 folders,
                 prefix,
                 view,
+                strategies,
+                filter,
                 searching,
                 &mut fchildren,
                 data,
@@ -1062,7 +1075,7 @@ impl ToggleTarget {
 ///     row_id: The node's own tree id, used verbatim as this row's `ElementId`.
 ///     expanded: Whether the heading's children are visible.
 ///     selected: Whether to draw the selected-folder highlight.
-///     checked: The row's own bulk-check switch; ignored by a row that addresses no folder.
+///     checked: Summary of covered strategies; ignored by a row that addresses no folder.
 ///     indent: Leading indentation for the tree depth.
 ///     text: Heading label and count summary.
 ///     color: Heading text color.
@@ -1094,9 +1107,7 @@ fn core_folder_row(
     // path. Deleted holds no live strategy, so it addresses no folder and carries no checkbox.
     // Resolved once: the row renders on every repaint, and each resolve deep-clones the path.
     let folder_key = target.folder_key();
-    let check_target = folder_key
-        .clone()
-        .map(|(core, path)| (core, path, checked));
+    let check_target = folder_key.clone().map(|(core, path)| (core, path, checked));
     let menu = match &target {
         ToggleTarget::Folder(..) => folder_key,
         ToggleTarget::Core(_) | ToggleTarget::Deleted(_) => None,
@@ -1457,20 +1468,23 @@ fn strategy_row(
         .pl(indent + disclosure_run(app, step))
         .pr(design::ui_px(app, 2.0))
         .child(
-            checks::row_checkbox(SharedString::from(format!("chk:{}", id_strat(core, id))), val)
-                .on_change(move |ch: &bool, _window, app| {
-                    let v = *ch;
-                    view_chk.update(app, |this, cx| {
-                        if !strategy_core_is_visible(this.workspace_cores.as_deref(), key.0) {
-                            return;
-                        }
-                        let before = this.staged.get(&key).copied();
-                        this.stage_check(key, v, server_checked);
-                        if before != this.staged.get(&key).copied() {
-                            cx.notify();
-                        }
-                    });
-                }),
+            checks::row_checkbox(
+                SharedString::from(format!("chk:{}", id_strat(core, id))),
+                val,
+            )
+            .on_change(move |ch: &bool, _window, app| {
+                let v = *ch;
+                view_chk.update(app, |this, cx| {
+                    if !strategy_core_is_visible(this.workspace_cores.as_deref(), key.0) {
+                        return;
+                    }
+                    let before = this.staged.get(&key).copied();
+                    this.stage_check(key, v, server_checked);
+                    if before != this.staged.get(&key).copied() {
+                        cx.notify();
+                    }
+                });
+            }),
         )
         .child(
             MoonText::new("●")

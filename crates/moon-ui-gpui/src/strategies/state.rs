@@ -318,9 +318,6 @@ impl StrategiesView {
                 .as_ref()
                 .map(|s| s.expanded_folders.clone())
                 .unwrap_or_default(),
-            // Not restored with the browsing state beside it: a bulk switch is a step in an
-            // unfinished Start/Stop, like `staged`, rather than where the user was looking.
-            folder_checks: HashSet::new(),
             rules: Rules::load(),
             clipboard: None,
             pending_names: HashSet::new(),

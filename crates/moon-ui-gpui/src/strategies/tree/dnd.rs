@@ -238,14 +238,6 @@ impl StrategiesView {
                 log::warn!("move strategy folder failed: {error}");
                 return;
             }
-            // The bulk-check switches follow the folder, exactly as rename and delete carry theirs:
-            // nothing else collects them, so a moved folder would otherwise keep a switch on a path
-            // that no longer exists.
-            if let Some(name) = path.last() {
-                let mut moved_to = target.clone();
-                moved_to.push(name.clone());
-                self.move_row_checks(target_core, &path, Some(&moved_to));
-            }
         } else {
             let specs = {
                 let store = self.backend.read(cx).session.store();

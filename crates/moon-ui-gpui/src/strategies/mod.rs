@@ -143,14 +143,6 @@ pub struct StrategiesView {
     expanded_cores: HashSet<CoreId>,
     /// Expanded tree folders keyed by core and path.
     expanded_folders: HashSet<(CoreId, String)>,
-    /// Bulk-check switches of core and folder rows, keyed by core and slash-separated path; an
-    /// empty path is the core root.
-    ///
-    /// Deliberately NOT derived from the strategies below the row, because Moonbot keeps the two
-    /// independent: a folder reads unchecked while every strategy inside it is checked. Clicking
-    /// one stages every strategy the row covers and nothing else — Start/Stop still reads
-    /// `staged` and the server flags alone, so a folder's own switch never reaches a core.
-    folder_checks: HashSet<(CoreId, String)>,
     /// Field-dependency rules from `param_deps.toml`, hot-reloaded only with the opt-in environment flag.
     rules: Rules,
     /// Copied strategy or folder source data, retained for cross-core pasting.

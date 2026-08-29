@@ -1,14 +1,13 @@
 //! Checkboxes of the strategy tree: the per-strategy box and the bulk box on core and folder rows.
 //!
-//! The bulk switch is its own state, not a summary of the strategies below it — Moonbot keeps the
-//! two independent, so a folder reads unchecked while everything inside it is checked, and
-//! Start/Stop pays no attention to folders at all. Only the side effect crosses over: flipping the
-//! switch writes the same value into [`StrategiesView::staged`] for the rows it covers. Start/Stop
-//! reads that map and the server flags, never this one, so a folder's switch reaches no core.
+//! The bulk box is a summary of the strategies the row covers: on only when every visible child
+//! strategy currently shows checked, and off when the set is empty, mixed, or all unchecked.
+//! Clicking it writes that opposite value into [`StrategiesView::staged`] for every covered
+//! strategy. Start/Stop reads that map and the server flags, never a folder identity, so a
+//! folder's box reaches no core as its own flag.
 //!
-//! It also keeps no memory of what a previous click covered. That is what makes a stale switch
-//! harmless — the next click is a fresh bulk action over whatever the row covers then, not an undo
-//! of the last one.
+//! The next click is a fresh bulk action over whatever the row covers then — coverage is the live
+//! filter, not an undo of the last click, and the painted box is derived from the same set.
 //!
 //! Both boxes are built here so their tone, size and id convention cannot drift apart, and both
 //! stage through [`stage_value`], the one rule deciding what a click leaves in `staged`.
@@ -16,10 +15,9 @@
 use moon_ui::{MoonCheckbox, MoonCheckboxSize, MoonTone};
 
 use super::super::logic::{
-    strategy_core_is_visible, subtree_check_targets, subtree_folder_paths, toggle,
+    strategy_core_is_visible, subtree_check_targets, subtree_displayed_all_checked,
 };
 use super::super::*;
-use super::ops;
 
 #[cfg(test)]
 mod tests;
@@ -88,9 +86,9 @@ pub(super) fn bulk_check(
         })
         .child(
             row_checkbox(SharedString::from(format!("chk:{row_id}")), checked)
-                // The reported value is ignored on purpose: this switch is derived from nothing the
-                // widget knows, so the view flips its own retained state and cannot follow a stale
-                // widget value.
+                // The reported value is ignored on purpose: the painted box is derived from child
+                // strategy checkboxes, so the view recomputes the next bulk value itself and cannot
+                // follow a stale widget value.
                 .on_change(move |_: &bool, _window, app| {
                     view.update(app, |this, cx| {
                         this.toggle_row_check(core, &path, cx);
@@ -114,19 +112,22 @@ pub(super) fn bulk_check_slot(row_id: &SharedString) -> AnyElement {
     div()
         .flex_none()
         .invisible()
-        .child(row_checkbox(SharedString::from(format!("chk:{row_id}")), false))
+        .child(row_checkbox(
+            SharedString::from(format!("chk:{row_id}")),
+            false,
+        ))
         .into_any_element()
 }
 
 impl StrategiesView {
-    /// Flip one core or folder row's bulk checkbox and carry everything it covers with it.
+    /// Bulk-stage every strategy a core or folder row covers to the opposite of its current summary.
     ///
-    /// The click reaches two kinds of row: the strategies below it, which are staged, and the
-    /// nested FOLDER rows, whose own switches follow the clicked one. Without the second half a
-    /// checked folder would sit above unchecked subfolders whose strategies it had just staged.
+    /// The painted box is derived from those strategies, so the click asks for check-all when the
+    /// box is off and uncheck-all when it is on. Nested folder rows have no independent bit: the
+    /// next paint derives them from the same overlay.
     ///
-    /// A hidden Auto core is refused whole, exactly as the per-strategy checkbox refuses it: the
-    /// switch stays where it was rather than staging rows this workspace may not act on.
+    /// A hidden Auto core is refused whole, exactly as the per-strategy checkbox refuses it: staging
+    /// is left untouched rather than covering rows this workspace may not act on.
     ///
     /// Args:
     ///     core: Core owning the clicked row.
@@ -134,7 +135,7 @@ impl StrategiesView {
     ///     cx: View context used to read the store and publish the new staging.
     ///
     /// Returns:
-    ///     Nothing; a core missing from the store leaves both the switch and staging untouched.
+    ///     Nothing; a core missing from the store leaves staging untouched.
     pub(super) fn toggle_row_check(
         &mut self,
         core: CoreId,
@@ -144,39 +145,18 @@ impl StrategiesView {
         if !strategy_core_is_visible(self.workspace_cores.as_deref(), core) {
             return;
         }
-        let key = (core, ops::join_path(path));
-        let checked = !self.folder_checks.contains(&key);
         // Prepared before the store borrow, from the live filter: the click acts on what the row
         // covers NOW. That is a narrower set than the row's caption counts, which ignores search
         // and active-only on purpose — see `subtree_check_targets`.
         let filter = self.filter.prepare();
-        let (targets, mut folders) = {
+        let targets = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else {
                 return;
             };
-            (
-                subtree_check_targets(&cd.strategies, path, &filter),
-                subtree_folder_paths(&cd.strategies, path, &filter),
-            )
+            subtree_check_targets(&cd.strategies, path, &filter)
         };
-        // Empty UI-only folders draw a row too, and no strategy path can name them.
-        folders.extend(
-            self.ui_folders
-                .iter()
-                .filter(|(c, p)| {
-                    *c == core && p.as_str() != key.1 && ops::path_starts_with(p, path)
-                })
-                .map(|(_, p)| p.clone()),
-        );
-        toggle(&mut self.folder_checks, key);
-        for folder in folders {
-            if checked {
-                self.folder_checks.insert((core, folder));
-            } else {
-                self.folder_checks.remove(&(core, folder));
-            }
-        }
+        let checked = !subtree_displayed_all_checked(&targets, &self.staged, core);
         for (id, server_checked) in targets {
             self.stage_check((core, id), checked, server_checked);
         }
@@ -202,46 +182,4 @@ impl StrategiesView {
             }
         }
     }
-
-    /// Move one folder's bulk-check switches with it, or drop them when it is deleted.
-    ///
-    /// Called beside the UI-folder maintenance for the same reason it exists: deleting or renaming
-    /// an EMPTY folder moves no strategy, so no snapshot arrives and
-    /// [`Self::reconcile_row_checks`] never runs. Without this the switch would outlive the folder
-    /// and a folder recreated under the old name would come back already ticked.
-    ///
-    /// Args:
-    ///     core: Core owning the folder.
-    ///     old_path: Folder segments being renamed or deleted.
-    ///     new_path: Replacement segments, or `None` for a deletion.
-    ///
-    /// Returns:
-    ///     Nothing; switches below the folder follow it, and every other core is untouched.
-    pub(super) fn move_row_checks(
-        &mut self,
-        core: CoreId,
-        old_path: &[String],
-        new_path: Option<&[String]>,
-    ) {
-        if old_path.is_empty() {
-            return;
-        }
-        let moved: Vec<String> = self
-            .folder_checks
-            .iter()
-            .filter(|(c, path)| *c == core && ops::path_starts_with(path, old_path))
-            .map(|(_, path)| path.clone())
-            .collect();
-        let old_key = ops::join_path(old_path);
-        for path in moved {
-            self.folder_checks.remove(&(core, path.clone()));
-            if let Some(new_path) = new_path {
-                // `replacen` on the joined key, matching how `rename_ui_folder` rebases its own
-                // paths; membership was already decided segment by segment above.
-                let rebased = path.replacen(&old_key, &ops::join_path(new_path), 1);
-                self.folder_checks.insert((core, rebased));
-            }
-        }
-    }
-
 }

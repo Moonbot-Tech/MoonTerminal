@@ -4,9 +4,14 @@
 //! folder. Its algorithm and traversal order are independent of the accumulator, so agreement
 //! between them checks the result rather than restating the implementation.
 
+use std::collections::HashMap;
+
 use moon_core::feed::StrategyRow;
 
-use super::{FolderCounts, subtree_check_targets, subtree_folder_paths, visible_strategy_keys};
+use super::{
+    FolderCounts, subtree_check_targets, subtree_displayed_all_checked, subtree_folder_paths,
+    visible_strategy_keys,
+};
 use crate::strategies::filter::{PreparedFilter, StrategyFilter};
 use crate::strategies::tree::ops::path_segments;
 
@@ -385,7 +390,71 @@ fn a_hidden_subfolder_is_not_carried() {
     ];
 
     assert_eq!(
-        subtree_folder_paths(&rows, &["test".to_string()], &filter("s1", None, None, false)),
+        subtree_folder_paths(
+            &rows,
+            &["test".to_string()],
+            &filter("s1", None, None, false)
+        ),
         vec!["test/emulators".to_string()]
+    );
+}
+
+/// Displayed checkbox for one covered strategy: staged overlay when present, else the server flag.
+///
+/// Built here so the derive tests below never read the expected tick from
+/// [`subtree_displayed_all_checked`] itself.
+fn displayed_vals(
+    targets: &[(u64, bool)],
+    staged: &HashMap<(u64, u64), bool>,
+    core: u64,
+) -> Vec<bool> {
+    targets
+        .iter()
+        .map(|(id, server)| staged.get(&(core, *id)).copied().unwrap_or(*server))
+        .collect()
+}
+
+/// Folder box is on only when coverage is non-empty and every displayed value is true.
+///
+/// Count comparison, not iterator `.all` / `.any`, so the named production edit of swapping those
+/// two combinators cannot make the oracle agree with a wrong helper.
+fn expect_all_checked(displayed: &[bool]) -> bool {
+    !displayed.is_empty() && displayed.iter().filter(|v| **v).count() == displayed.len()
+}
+
+/// `logic.rs:subtree_displayed_all_checked` replacing `.all(` with `.any(` would tick a mixed
+/// folder while at least one visible child checkbox is empty.
+#[test]
+fn a_mixed_folder_displays_unchecked() {
+    let core = 11u64;
+    let empty: HashMap<(u64, u64), bool> = HashMap::new();
+
+    let mixed = [(1, true), (2, false)];
+    let mixed_shown = displayed_vals(&mixed, &empty, core);
+    assert_eq!(mixed_shown, vec![true, false]);
+    assert!(
+        !expect_all_checked(&mixed_shown),
+        "oracle: mixed coverage is not all-checked"
+    );
+    assert!(
+        !subtree_displayed_all_checked(&mixed, &empty, core),
+        "a mixed folder box must stay empty"
+    );
+
+    let all_on = [(1, true), (2, true)];
+    let all_shown = displayed_vals(&all_on, &empty, core);
+    assert_eq!(all_shown, vec![true, true]);
+    assert!(expect_all_checked(&all_shown));
+    assert!(subtree_displayed_all_checked(&all_on, &empty, core));
+
+    let mut overlay = HashMap::new();
+    overlay.insert((core, 2), false);
+    let overlay_mixed = [(1, true), (2, true)];
+    let overlay_shown = displayed_vals(&overlay_mixed, &overlay, core);
+    assert_eq!(overlay_shown, vec![true, false]);
+    assert!(!expect_all_checked(&overlay_shown));
+    assert!(
+        !subtree_displayed_all_checked(&overlay_mixed, &overlay, core),
+        "a staged-off child must uncheck the folder even when the server flags are all on"
     );
 }

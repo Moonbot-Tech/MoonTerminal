@@ -229,10 +229,6 @@ impl StrategiesView {
         let mut parts = ops::split_path(parent);
         parts.push(name.to_string());
         let key = ops::join_path(&parts);
-        // A new folder starts unchecked even when one of the same name was checked before it was
-        // deleted: bulk-check switches are carried by folder operations rather than swept, so this
-        // is where a reused name stops inheriting the old row's tick.
-        self.folder_checks.remove(&(core, key.clone()));
         self.ui_folders.insert((core, key));
         // Expand the core and parent chain, excluding the new folder itself, so it is immediately
         // visible.
