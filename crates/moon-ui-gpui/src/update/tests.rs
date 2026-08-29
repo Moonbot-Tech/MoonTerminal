@@ -11,31 +11,37 @@ use super::{
 
 /// Removing the five-minute startup gap would issue a duplicate request when an immediate scan
 /// lands just before this process's UTC phase; delaying by more than one window would exceed the
-/// promised 35-minute startup-edge discovery bound. The same phase is the lower bound after a
-/// transient failure, so local recovery cannot pull a request ahead of the regular cadence.
+/// promised 20-minute startup-edge discovery bound. The same phase is a lower bound after a
+/// transient failure, so local recovery cannot pull a request ahead of the regular cadence, but a
+/// 30-minute transient backoff may skip the next 15-minute slot.
 #[test]
 fn startup_scan_keeps_a_minimum_gap_without_missing_two_windows() {
     let attempt = 3_600;
     let completed = attempt + 1;
     let deadline = next_regular_poll(completed, attempt, 100);
-    assert_eq!(deadline, 5_500);
+    assert_eq!(deadline, 4_600);
     assert!(deadline >= attempt + STARTUP_POLL_GAP_SECONDS);
     assert!(deadline - completed <= POLL_WINDOW_SECONDS + STARTUP_POLL_GAP_SECONDS);
 
     let mut schedule = PollSchedule::new(100);
     assert_eq!(
         schedule.after_failure_hint(3_601, DiscoveryRetry::Transient, None),
-        5_500
+        5_401
     );
 }
 
 /// Replacing the explicit UTC phase with a fixed sleep from completion would drift forever when
-/// GitHub is slow. These fixed instants independently name the next half-hour phase.
+/// GitHub is slow. These fixed instants independently name the next quarter-hour phase, including
+/// :15 / :45 so a regression to an 1800-second window is visible.
 #[test]
 fn regular_polling_stays_on_its_utc_phase() {
     assert_eq!(next_regular_poll(3_700, 3_400, 600), 4_200);
     assert_eq!(next_regular_poll(5_999, 5_600, 600), 6_000);
-    assert_eq!(next_regular_poll(6_000, 5_600, 600), 7_800);
+    assert_eq!(next_regular_poll(6_000, 5_600, 600), 6_900);
+    assert_eq!(next_regular_poll(1, 0, 0), 900);
+    assert_eq!(next_regular_poll(900, 0, 0), 1_800);
+    assert_eq!(next_regular_poll(1_800, 1_500, 0), 2_700);
+    assert_eq!(next_regular_poll(2_700, 2_400, 0), 3_600);
 }
 
 /// Removing the idempotent claim would let a second startup path create a parallel discovery loop
