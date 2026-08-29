@@ -40,6 +40,24 @@ header.no_cores:
   ru: "нет ядер"
   en: "no cores"
   es: "sin núcleos"
+# Visible core's emulator vs real mode, in the header cluster beside the core pill.
+# Both states stay on the chrome so the operator does not have to open core settings.
+header.trade_emu:
+  ru: "Эмулятор"
+  en: "Emulator"
+  es: "Emulador"
+header.trade_real:
+  ru: "Реал"
+  en: "Real"
+  es: "Real"
+header.trade_emu_tip:
+  ru: "Режим эмулятора. Меняется в настройках ядра (шестерёнка)."
+  en: "Emulator mode. Change it in core settings (the gear)."
+  es: "Modo emulador. Se cambia en ajustes del núcleo (el engranaje)."
+header.trade_real_tip:
+  ru: "Реальный режим. Меняется в настройках ядра (шестерёнка)."
+  en: "Real mode. Change it in core settings (the gear)."
+  es: "Modo real. Se cambia en ajustes del núcleo (el engranaje)."
 # Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
 header.balance_tip:
   ru: "Двойной клик — открыть Активы"
