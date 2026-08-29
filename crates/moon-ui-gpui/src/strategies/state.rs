@@ -33,6 +33,33 @@ fn initial_expanded_cores(
     HashSet::from([core])
 }
 
+/// Insert the Auto-selected core into an existing expansion set without replacing it.
+///
+/// Opening or focusing Strategies from a rail that already names a server must show that
+/// server's strategies without an extra click. Other cores the user expanded stay expanded;
+/// an empty seed (Classic, Auto Overview, or a core outside the visible scope) is a no-op.
+///
+/// Args:
+///     expanded: Live or restored set of expanded cores.
+///     selected_core: Concrete Auto rail selection, or `None` for Classic and Auto Overview.
+///     workspace_cores: Cores the window may show, or `None` when it is not scope-bound.
+///
+/// Returns:
+///     Whether at least one core was newly inserted.
+fn seed_selected_core_into(
+    expanded: &mut HashSet<CoreId>,
+    selected_core: Option<CoreId>,
+    workspace_cores: Option<&[CoreId]>,
+) -> bool {
+    let seed = initial_expanded_cores(selected_core, workspace_cores);
+    if seed.is_empty() {
+        return false;
+    }
+    let added = seed.iter().any(|core| !expanded.contains(core));
+    expanded.extend(seed);
+    added
+}
+
 /// Resolve the singleton Auto owner's core roots and concrete rail selection together.
 ///
 /// One resolve for both answers: each `singleton_workspace()` call re-ranks the group's cores and
@@ -77,8 +104,8 @@ impl StrategiesView {
     /// Create the Strategies view and subscribe it to search, tree, backend, and window events.
     ///
     /// A process-lifetime snapshot restores browsing state after the window is closed and
-    /// reopened. The first open of a process, when that snapshot is still `None`, seeds expanded
-    /// cores from the Auto rail selection when it belongs to the visible workspace scope.
+    /// reopened. Construction then additively seeds the Auto rail's selected core when it belongs
+    /// to the visible workspace scope, so a collapsed snapshot still opens that server's list.
     ///
     /// Args:
     ///     backend: Shared state supplying strategy data and workspace scope.
@@ -122,10 +149,15 @@ impl StrategiesView {
         let workspace_cores = scope.as_ref().map(|(cores, _)| cores.clone());
         let selected_core = scope.and_then(|(_, selected)| selected);
         let initial_sig = strategies_sig(backend.read(cx), workspace_cores.as_deref());
-        let expanded_cores = match &session {
+        let mut expanded_cores = match &session {
             Some(s) => s.expanded_cores.clone(),
-            None => initial_expanded_cores(selected_core, workspace_cores.as_deref()),
+            None => HashSet::new(),
         };
+        seed_selected_core_into(
+            &mut expanded_cores,
+            selected_core,
+            workspace_cores.as_deref(),
+        );
 
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
@@ -181,10 +213,11 @@ impl StrategiesView {
             // selection. Existing expansions remain intact; returning to a manually collapsed core
             // re-opens it.
             let selected_core = scope.and_then(|(_, selected)| selected);
-            this.expanded_cores.extend(initial_expanded_cores(
+            seed_selected_core_into(
+                &mut this.expanded_cores,
                 selected_core,
                 this.workspace_cores.as_deref(),
-            ));
+            );
             this.last_sig = strategies_sig(this.backend.read(cx), this.workspace_cores.as_deref());
             this.tree_cache = None;
             this.last_tree_shape = None;
@@ -357,6 +390,30 @@ impl StrategiesView {
         self.backend.update(cx, |b, _| {
             b.ui_session.strategies = Some(snapshot);
         });
+    }
+
+    /// Expand the Auto-selected core in a live Strategies view without collapsing anything else.
+    ///
+    /// Used when focusing an already-open window. Construction seeds the same way before the
+    /// first paint; this path must also drop the tree cache so the next frame rebuilds the
+    /// selected core's subtree.
+    ///
+    /// Args:
+    ///     cx: View context used to persist the session and notify.
+    pub(super) fn ensure_auto_selected_core_expanded(&mut self, cx: &mut Context<Self>) {
+        let selected_core =
+            singleton_strategy_scope(self.backend.read(cx)).and_then(|(_, selected)| selected);
+        if !seed_selected_core_into(
+            &mut self.expanded_cores,
+            selected_core,
+            self.workspace_cores.as_deref(),
+        ) {
+            return;
+        }
+        self.tree_cache = None;
+        self.last_tree_shape = None;
+        self.persist_session(cx);
+        cx.notify();
     }
 
     // ── Selection ───────────────────────────────────────────────────────────
