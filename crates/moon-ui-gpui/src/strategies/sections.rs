@@ -189,6 +189,7 @@ impl StrategiesView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.selected_section != i {
                         this.selected_section = i;
+                        this.persist_session(cx);
                         cx.notify();
                     }
                     this.request_param_scroll(i, cx);

@@ -16,6 +16,7 @@ impl StrategiesView {
         let before_selected = self.selected;
         let before_anchor = self.anchor;
         let before_sel = self.sel.clone();
+        let before_folder = self.selected_folder.clone();
         if shift {
             if let Some(a) = self.anchor {
                 let ia = order.iter().position(|k| *k == a);
@@ -44,7 +45,10 @@ impl StrategiesView {
         self.selected = Some(key);
         // A strategy click clears folder selection so Ctrl+C copies the strategy selection again.
         self.selected_folder = None;
-        before_selected != self.selected || before_anchor != self.anchor || before_sel != self.sel
+        before_selected != self.selected
+            || before_anchor != self.anchor
+            || before_sel != self.sel
+            || before_folder != self.selected_folder
     }
 
     /// Make `key` the primary selection, replacing whatever was selected.
@@ -66,7 +70,7 @@ impl StrategiesView {
     ///
     /// Returns:
     ///     Whether the pending strategy was found and selected.
-    pub(super) fn sync_pending_select(&mut self, cx: &App) -> bool {
+    pub(super) fn sync_pending_select(&mut self, cx: &mut App) -> bool {
         let Some(request) = self.pending_select.clone() else {
             return false;
         };
@@ -99,6 +103,7 @@ impl StrategiesView {
         self.pending_scroll = Some(key);
         self.pending_select = None;
         self.clamp_selected_section(cx);
+        self.persist_session(cx);
         true
     }
 
@@ -128,6 +133,7 @@ impl StrategiesView {
         // to do nothing at all.
         if !self.core_shown_by_exchange(core, cx) {
             self.filter.exchange = None;
+            self.persist_session(cx);
         }
         let workspace_group = self
             .backend
@@ -179,6 +185,7 @@ impl StrategiesView {
             self.search
                 .update(cx, |st, cx| st.set_value(String::new(), window, cx));
         }
+        self.persist_session(cx);
     }
 
     /// Drain a `Backend::strategies_goto` request and reveal its strategy.
@@ -246,10 +253,11 @@ impl StrategiesView {
         self.expand_path(core, tree::ops::path_segments(&row.folder_path));
         self.focus_strategy(key);
         self.clamp_selected_section(cx);
+        self.persist_session(cx);
         Some(key)
     }
 
-    pub(super) fn clamp_selected_section(&mut self, cx: &App) -> bool {
+    pub(super) fn clamp_selected_section(&mut self, cx: &mut App) -> bool {
         let store = self.backend.read(cx).session.store();
         let Some(sections) = selected_sections(self, store) else {
             return false;
@@ -258,6 +266,7 @@ impl StrategiesView {
             return false;
         }
         self.selected_section = 0;
+        self.persist_session(cx);
         true
     }
 

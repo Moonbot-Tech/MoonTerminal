@@ -364,6 +364,7 @@ impl StrategiesView {
             st.set_value(name, window, cx);
             st.focus(window, cx);
         });
+        self.persist_session(cx);
         cx.notify();
     }
 }

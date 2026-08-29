@@ -1082,6 +1082,7 @@ fn core_folder_row(
                         this.selected_folder = None;
                     }
                 }
+                this.persist_session(cx);
                 cx.notify();
             });
         })
@@ -1318,6 +1319,7 @@ fn strategy_row(
                 let order = this.flat_order.clone();
                 if this.apply_click(key, &order, shift, cmd) {
                     this.clamp_selected_section(cx);
+                    this.persist_session(cx);
                     cx.notify();
                 }
             });
@@ -1331,6 +1333,7 @@ fn strategy_row(
                     if !this.sel.contains(&key) {
                         this.focus_strategy(key);
                         this.clamp_selected_section(cx);
+                        this.persist_session(cx);
                     }
                     this.open_menu(
                         ContextMenu {

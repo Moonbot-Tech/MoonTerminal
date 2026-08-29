@@ -21,6 +21,21 @@ use rust_i18n::t;
 /// onto their own line rather than squeezing the field toward nothing.
 const SEARCH_MIN_W: f32 = 90.0;
 
+/// Expand/collapse treats only currently visible cores as the tree the button controls.
+///
+/// A process snapshot can hold expansion for cores that left the Auto rail while the window was
+/// closed. Counting those leftover ids as "expanded" would make a visibly collapsed tree run the
+/// collapse branch on the first click.
+fn visible_tree_collapsed(
+    expanded_cores: &HashSet<CoreId>,
+    expanded_folders: &HashSet<(CoreId, String)>,
+    cores: &[(CoreId, String)],
+) -> bool {
+    cores.iter().all(|(core, _)| {
+        !expanded_cores.contains(core) && expanded_folders.iter().all(|(c, _)| c != core)
+    })
+}
+
 impl StrategiesView {
     /// Render the Strategies tree pane, its responsive filter row, and atomic action footer.
     ///
@@ -49,12 +64,18 @@ impl StrategiesView {
         let tree_el = self.moon_tree_el(node_data, cx);
 
         // Search and the strategy-kind, direction, and exchange filters.
-        let kind_text = self
-            .filter
-            .kind
-            .and_then(|k| pane.kinds.iter().find(|(o, _)| *o == k))
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| t!("strat.all_kinds").to_string());
+        // A restored ordinal whose rows have all left the visible tree must still name itself.
+        // Falling back to "all kinds" would leave an empty tree beside a trigger claiming nothing
+        // is filtered, the same trap the exchange caption documents below.
+        let kind_text = match self.filter.kind {
+            None => t!("strat.all_kinds").to_string(),
+            Some(k) => pane
+                .kinds
+                .iter()
+                .find(|(o, _)| *o == k)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| k.to_string()),
+        };
         let dir_text = match self.filter.dir {
             None => t!("strat.all_dirs").to_string(),
             Some(true) => "SHORT".to_string(),
@@ -81,7 +102,7 @@ impl StrategiesView {
                 }),
         };
 
-        let collapsed = self.expanded_cores.is_empty() && self.expanded_folders.is_empty();
+        let collapsed = visible_tree_collapsed(&self.expanded_cores, &self.expanded_folders, cores);
         let settings =
             self.settings_popover(super::settings::settings_trigger(self.settings_open), p, cx);
 
@@ -158,9 +179,13 @@ impl StrategiesView {
                                             let backend = this.backend.read(cx);
                                             let cores = visible_strategy_cores(this, backend);
                                             let store = backend.session.store();
-                                            let coll = this.expanded_cores.is_empty()
-                                                && this.expanded_folders.is_empty();
+                                            let coll = visible_tree_collapsed(
+                                                &this.expanded_cores,
+                                                &this.expanded_folders,
+                                                &cores,
+                                            );
                                             this.expand_collapse_toggle(&cores, store, coll);
+                                            this.persist_session(cx);
                                             cx.notify();
                                         }))
                                         .render(),
@@ -203,6 +228,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.kind.is_some() {
                                 this.filter.kind = None;
+                                this.persist_session(c);
                                 c.notify();
                             }
                         });
@@ -221,6 +247,7 @@ impl StrategiesView {
                             view.update(app, |this, c| {
                                 if this.filter.kind != Some(name_ord) {
                                     this.filter.kind = Some(name_ord);
+                                    this.persist_session(c);
                                     c.notify();
                                 }
                             });
@@ -259,6 +286,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.dir != val {
                                 this.filter.dir = val;
+                                this.persist_session(c);
                                 c.notify();
                             }
                         });
@@ -310,6 +338,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.exchange.is_some() {
                                 this.filter.exchange = None;
+                                this.persist_session(c);
                                 c.notify();
                             }
                         });
@@ -332,6 +361,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.exchange != Some(section) {
                                 this.filter.exchange = Some(section);
+                                this.persist_session(c);
                                 c.notify();
                             }
                         });

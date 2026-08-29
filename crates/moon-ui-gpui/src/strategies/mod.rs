@@ -19,6 +19,7 @@ mod params;
 mod rules;
 mod sections;
 mod selection;
+mod session;
 mod settings;
 mod split;
 mod state;
@@ -64,6 +65,8 @@ use filter::StrategyFilter;
 use logic::*;
 use rules::{Rules, Values};
 use settings::StrategiesPrefs;
+
+pub(crate) use session::StrategiesSessionState;
 
 pub type Key = (CoreId, u64);
 type FieldEditKey = (CoreId, u64, String);

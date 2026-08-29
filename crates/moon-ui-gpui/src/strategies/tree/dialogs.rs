@@ -461,6 +461,7 @@ impl StrategiesView {
                     )
                 {
                     self.add_ui_folder(core, &target, name.trim());
+                    self.persist_session(cx);
                 }
             }
             TreeOp::RenameFolder {
@@ -680,6 +681,7 @@ impl StrategiesView {
         self.expanded_cores.insert(core);
         // Select it after the core echoes it back.
         self.queue_pending_name(core, name, cx);
+        self.persist_session(cx);
         Ok(())
     }
 
@@ -720,6 +722,7 @@ impl StrategiesView {
         self.backend.read(cx).session.move_strategies(core, moves)?;
         // Rename an empty UI-only folder locally only after the move command succeeds.
         self.rename_ui_folder(core, old_path, new_name);
+        self.persist_session(cx);
         Ok(())
     }
 
@@ -773,6 +776,7 @@ impl StrategiesView {
         if self.selected.is_some_and(|key| deleted.contains(&key)) {
             self.selected = None;
         }
+        self.persist_session(cx);
         Ok(())
     }
 
@@ -815,6 +819,7 @@ impl StrategiesView {
             .session
             .delete_folder(core, ops::join_path(path))?;
         self.remove_ui_folder(core, path);
+        self.persist_session(cx);
         Ok(())
     }
 }

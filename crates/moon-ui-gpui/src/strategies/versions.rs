@@ -427,6 +427,7 @@ impl StrategiesView {
         } else {
             self.versions.pending_latest = true;
         }
+        self.persist_session(cx);
         cx.notify();
     }
 
