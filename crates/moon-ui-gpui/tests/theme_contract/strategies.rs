@@ -1038,6 +1038,79 @@ fn strategies_window_seeds_expansion_from_the_auto_workspace() {
     );
 }
 
+/// Protects the process boundary of Strategies browsing memory.
+///
+/// The plausible edit is rebuilding `StrategiesView` from hard-coded defaults or moving its
+/// snapshot into `WindowLayout`. Closing the tool window would then forget expansion, selection,
+/// and filters, or a full application restart would incorrectly retain them. Treating `None` and
+/// an empty stored expansion as the same thing would re-seed Auto-rail cores after the user
+/// collapsed everything.
+#[test]
+fn strategies_reopen_state_is_process_lifetime_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let main = fs::read_to_string(root.join("main.rs")).unwrap();
+    let startup = read_startup();
+    let state = read_src("strategies/state.rs");
+    let session = read_src("strategies/session.rs");
+    let selection = read_src("strategies/selection.rs");
+    let tree_mod = read_src("strategies/tree/mod.rs");
+    let moon = read_src("strategies/tree/moon.rs");
+    let actions = read_src("strategies/actions.rs");
+    let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
+    let layout = fs::read_to_string(
+        root.parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("moon-core")
+            .join("src")
+            .join("config")
+            .join("layout.rs"),
+    )
+    .unwrap();
+
+    assert!(
+        main.contains("ui_session: UiSessionState,")
+            && startup.contains("ui_session: UiSessionState::default(),"),
+        "Backend must create one process-lifetime UiSessionState at application startup"
+    );
+    assert!(
+        ui_session.contains("pub(crate) strategies: Option<StrategiesSessionState>"),
+        "Strategies session must be Option so None means never snapshotted this process"
+    );
+    assert!(
+        state.contains("let session = backend.read(cx).ui_session.strategies.clone();")
+            && state.contains("Some(s) => s.expanded_cores.clone()")
+            && state.contains("None => initial_expanded_cores(")
+            && state.contains("input.default_value(s.search.clone())")
+            && state.contains("b.ui_session.strategies = Some(snapshot)")
+            && state.contains("this.reconcile_ui_folders(this.backend.read(cx).session.store())")
+            && state.contains("this.clamp_selected_section(cx)"),
+        "Strategies construction and persist helper must share the Backend UI-session snapshot"
+    );
+    assert!(
+        selection.contains("self.persist_session(cx)")
+            && selection.contains("before_folder != self.selected_folder")
+            && tree_mod.contains("this.persist_session(cx)")
+            && tree_mod.contains("this.persist_session(c)")
+            && moon.contains("this.persist_session(cx)")
+            && actions.contains("self.persist_session(cx)")
+            && read_src("strategies/versions.rs").contains("self.persist_session(cx)"),
+        "Strategies mutation writers must share persist_session"
+    );
+    assert!(
+        state.contains("this.expanded_cores.extend(initial_expanded_cores("),
+        "the live window's workspace observer must stay additive while the window is open"
+    );
+    assert!(
+        !ui_session.contains("Serialize")
+            && !layout.contains("UiSessionState")
+            && !layout.contains("StrategiesSessionState")
+            && !session.contains("Serialize"),
+        "process-lifetime UI state must not enter the serialized WindowLayout"
+    );
+}
+
 /// `versions.rs::stage_version_into_current` must only stage restored fields, never dispatch them.
 ///
 /// Plausible edit: call `apply_field_edits` or `strategy_edit` directly from the restore path.

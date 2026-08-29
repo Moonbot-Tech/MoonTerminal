@@ -76,8 +76,9 @@ fn strategies_sig(b: &Backend, workspace_cores: Option<&[CoreId]>) -> u64 {
 impl StrategiesView {
     /// Create the Strategies view and subscribe it to search, tree, backend, and window events.
     ///
-    /// The initial Auto rail selection seeds the expanded core set when it belongs to the visible
-    /// workspace scope.
+    /// A process-lifetime snapshot restores browsing state after the window is closed and
+    /// reopened. The first open of a process, when that snapshot is still `None`, seeds expanded
+    /// cores from the Auto rail selection when it belongs to the visible workspace scope.
     ///
     /// Args:
     ///     backend: Shared state supplying strategy data and workspace scope.
@@ -95,8 +96,14 @@ impl StrategiesView {
         let prefs = StrategiesPrefs::restore(&backend.read(cx).layout);
         let display_zone =
             crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
-        let search = cx
-            .new(|cx| MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string()));
+        let session = backend.read(cx).ui_session.strategies.clone();
+        let search = cx.new(|cx| {
+            let input = MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string());
+            match &session {
+                Some(s) => input.default_value(s.search.clone()),
+                None => input,
+            }
+        });
         // Update the filter and redraw from search input events; render must not poll the input as
         // an event source.
         cx.subscribe(&search, |this, input, ev: &MoonInputEvent, cx| {
@@ -104,6 +111,7 @@ impl StrategiesView {
                 let value = input.read(cx).value().to_string();
                 if this.filter.search != value {
                     this.filter.search = value;
+                    this.persist_session(cx);
                     cx.notify();
                 }
             }
@@ -114,7 +122,10 @@ impl StrategiesView {
         let workspace_cores = scope.as_ref().map(|(cores, _)| cores.clone());
         let selected_core = scope.and_then(|(_, selected)| selected);
         let initial_sig = strategies_sig(backend.read(cx), workspace_cores.as_deref());
-        let expanded_cores = initial_expanded_cores(selected_core, workspace_cores.as_deref());
+        let expanded_cores = match &session {
+            Some(s) => s.expanded_cores.clone(),
+            None => initial_expanded_cores(selected_core, workspace_cores.as_deref()),
+        };
 
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
@@ -152,6 +163,7 @@ impl StrategiesView {
                 this.last_sig = sig;
                 this.sync_pending_select(cx);
                 this.clamp_selected_section(cx);
+                this.persist_session(cx);
                 cx.notify();
             }
         })
@@ -185,6 +197,7 @@ impl StrategiesView {
             // Otherwise a confirmation for the strategy this scope just left keeps showing over
             // whatever the new scope selects next (plan amendment A3).
             this.versions.clear_selection();
+            this.persist_session(cx);
             cx.notify();
         })
         .detach();
@@ -236,6 +249,11 @@ impl StrategiesView {
             .detach();
         }
 
+        cx.on_release(|this, app| {
+            this.persist_session(app);
+        })
+        .detach();
+
         cx.spawn(async move |view, cx| {
             cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
                 .await;
@@ -248,20 +266,29 @@ impl StrategiesView {
         })
         .detach();
 
-        Self {
+        let mut this = Self {
             backend,
             display_zone,
             search,
-            filter: StrategyFilter {
-                active_only: prefs.active_only,
-                ..StrategyFilter::default()
+            filter: match &session {
+                Some(s) => StrategyFilter {
+                    search: s.search.clone(),
+                    kind: s.kind,
+                    dir: s.dir,
+                    exchange: s.exchange,
+                    active_only: prefs.active_only,
+                },
+                None => StrategyFilter {
+                    active_only: prefs.active_only,
+                    ..StrategyFilter::default()
+                },
             },
             prefs,
             exchange_logos_ready: false,
             settings_open: false,
             workspace_cores,
-            selected: None,
-            sel: HashSet::new(),
+            selected: session.as_ref().and_then(|s| s.selected),
+            sel: session.as_ref().map(|s| s.sel.clone()).unwrap_or_default(),
             versions: versions::VersionsState {
                 collapsed: panels.versions_collapsed,
                 ..Default::default()
@@ -271,11 +298,14 @@ impl StrategiesView {
             deleted_gen: u64::MAX,
             deleted_rev: 0,
             deleted_inflight: false,
-            expanded_deleted: HashSet::new(),
-            anchor: None,
+            expanded_deleted: session
+                .as_ref()
+                .map(|s| s.expanded_deleted.clone())
+                .unwrap_or_default(),
+            anchor: session.as_ref().and_then(|s| s.anchor),
             flat_order: Vec::new(),
             tree_state,
-            selected_section: 0,
+            selected_section: session.as_ref().map(|s| s.selected_section).unwrap_or(0),
             staged: HashMap::new(),
             field_edits: HashMap::new(),
             last_edit_note_seq: HashMap::new(),
@@ -284,12 +314,18 @@ impl StrategiesView {
             field_colors: HashMap::new(),
             focused_field: None,
             expanded_cores,
-            expanded_folders: HashSet::new(),
+            expanded_folders: session
+                .as_ref()
+                .map(|s| s.expanded_folders.clone())
+                .unwrap_or_default(),
             rules: Rules::load(),
             clipboard: None,
             pending_names: HashSet::new(),
-            selected_folder: None,
-            ui_folders: HashSet::new(),
+            selected_folder: session.as_ref().and_then(|s| s.selected_folder.clone()),
+            ui_folders: session
+                .as_ref()
+                .map(|s| s.ui_folders.clone())
+                .unwrap_or_default(),
             op: None,
             op_input: None,
             op_input_init: String::new(),
@@ -302,7 +338,25 @@ impl StrategiesView {
             params_scroll: MoonVirtualListScrollHandle::new(),
             pending_param_scroll: None,
             focus: cx.focus_handle(),
-        }
+        };
+        // Observe does not run the backend callback at subscribe time, so a snapshot restored
+        // after the window was closed must be reconciled against the live store here.
+        this.reconcile_ui_folders(this.backend.read(cx).session.store());
+        this.clamp_selected_section(cx);
+        this
+    }
+
+    /// Copy browsing state onto the process-lifetime Backend snapshot.
+    ///
+    /// Called after user mutations of snapshotted fields, and from `on_release` as a backstop.
+    ///
+    /// Args:
+    ///     cx: App context used to write `Backend.ui_session.strategies`.
+    pub(super) fn persist_session(&self, cx: &mut App) {
+        let snapshot = StrategiesSessionState::capture(self);
+        self.backend.update(cx, |b, _| {
+            b.ui_session.strategies = Some(snapshot);
+        });
     }
 
     // ── Selection ───────────────────────────────────────────────────────────

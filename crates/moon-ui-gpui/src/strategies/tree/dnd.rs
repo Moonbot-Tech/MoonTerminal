@@ -123,6 +123,7 @@ impl StrategiesView {
         if let Some(name) = first_name {
             self.queue_pending_name(core, name, cx);
         }
+        self.persist_session(cx);
         cx.notify();
     }
 
@@ -200,6 +201,7 @@ impl StrategiesView {
             }
         }
         self.expanded_cores.insert(target_core);
+        self.persist_session(cx);
         cx.notify();
     }
 
@@ -260,6 +262,7 @@ impl StrategiesView {
             }
         }
         self.expanded_cores.insert(target_core);
+        self.persist_session(cx);
         cx.notify();
     }
 

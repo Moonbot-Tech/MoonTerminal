@@ -842,6 +842,7 @@ impl StrategiesView {
                                         this.versions.section = Some(section);
                                     } else {
                                         this.selected_section = section;
+                                        this.persist_session(cx);
                                     }
                                     this.focused_field = Some(field_for_edit.clone());
                                     this.set_params_full(false, cx);
