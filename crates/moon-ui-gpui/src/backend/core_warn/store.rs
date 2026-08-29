@@ -435,6 +435,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
         WarnAxis::Ping => "ping",
         WarnAxis::ExchPing => "exch_ping",
         WarnAxis::ApiExpiry => "api_expiry",
+        WarnAxis::ApiQuota => "api_quota",
     }
 }
 
@@ -446,6 +447,7 @@ fn axis_from(name: &str) -> WarnAxis {
         "ping" => WarnAxis::Ping,
         "exch_ping" => WarnAxis::ExchPing,
         "api_expiry" => WarnAxis::ApiExpiry,
+        "api_quota" => WarnAxis::ApiQuota,
         _ => WarnAxis::SysCpu,
     }
 }

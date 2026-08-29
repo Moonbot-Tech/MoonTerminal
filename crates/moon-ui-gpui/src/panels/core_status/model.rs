@@ -55,6 +55,13 @@ pub(super) struct CoreStatusRow {
     /// episode, no sound. Decided from the same classified state the cell prints, so the number
     /// and its colour cannot describe different keys.
     pub(super) api_notice: bool,
+    /// This core's remaining exchange API request quota, or `None` when the core publishes none.
+    /// Only HyperLiquid cores report one; the counter is address-level, so two cores on the same
+    /// account show the same number.
+    pub(super) api_quota: Option<u64>,
+    /// Whether the quota is at or below the configured floor, decided by the engine so the cell
+    /// colour and the episode agree.
+    pub(super) api_quota_warn: bool,
     /// MoonBot build most recently reported for this core, or `None`.
     ///
     /// `None` is UNINTERPRETABLE and must be rendered as a plain absence: the store clears the

@@ -1198,6 +1198,14 @@ pub enum FeedMsg {
     /// `ApiExpirationUpdated`. A failed check publishes nothing, so the store keeps the last
     /// known answer instead of falling back to "unknown" on one dropped request.
     ApiExpiry(ApiKeyExpiry),
+    /// Remaining exchange API request quota for this core's account, or `None` when the core
+    /// publishes none.
+    ///
+    /// Today only HyperLiquid cores report it (`THLRequestLimitStateCommand`), and the counter is
+    /// address-level: two cores on the same address report the same number. `None` is both "this
+    /// exchange does not publish a quota" and "the core has not answered yet" — the protocol draws
+    /// no distinction between them.
+    ApiQuota(Option<u64>),
     /// Batch of Engine-action results such as leverage, hedge, cancel-all, or transfer accumulated
     /// during one event-drain tick. The UI displays them as toasts in the active window.
     EngineActions(Vec<EngineActionResult>),

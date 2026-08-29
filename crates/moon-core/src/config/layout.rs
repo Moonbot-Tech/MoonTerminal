@@ -1094,6 +1094,9 @@ pub struct WarnAxesCfg {
     /// Expiring exchange API-key warning (per core).
     #[serde(default = "def_true")]
     pub api: bool,
+    /// Exhausting exchange API request quota warning (per core).
+    #[serde(default = "def_true")]
+    pub api_quota: bool,
 }
 
 impl Default for WarnAxesCfg {
@@ -1106,6 +1109,7 @@ impl Default for WarnAxesCfg {
             ping: true,
             exch: true,
             api: true,
+            api_quota: true,
         }
     }
 }
@@ -1310,6 +1314,9 @@ pub struct WarnParams {
     pub exch: LatWarn,
     /// Expiring exchange API-key axis.
     pub api: ApiWarn,
+    /// Exhausting API-request-quota axis.
+    #[serde(default)]
+    pub api_quota: ApiQuotaWarn,
 }
 
 /// CPU-warning parameters: drawn-on-chart, sound, sustained-CPU percent, and the sustain seconds.
@@ -1430,6 +1437,36 @@ impl Default for ApiWarn {
         Self {
             sound: None,
             days: 7,
+        }
+    }
+}
+
+/// Smallest API-request quota the warning can be armed at, and the popup stepper's ceiling.
+///
+/// The bound is `u16` rather than a round number because two structures downstream are `u16`: the
+/// alert popup's stepper (`Param`) and the episode's `peak`. Raising it past that would silently
+/// truncate the number an episode records about itself.
+pub const API_QUOTA_WARN_MAX: u16 = u16::MAX;
+
+/// Exhausting API-request-quota parameters: the alert sound and the quota the warning starts at.
+///
+/// Today only HyperLiquid cores report a quota, and the value is address-level rather than
+/// per-market. No `chart` field, for the same reason as [`ApiWarn`]: the quota is a standing state
+/// the terminal receives every few minutes, not a per-second series a badge could draw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApiQuotaWarn {
+    pub sound: Option<String>,
+    /// The warning is on while the remaining quota is at or below this many requests, and clears
+    /// when the quota climbs back above it. Unlike the day counts of [`ApiWarn`] this number is a
+    /// COUNT of requests: a HyperLiquid address earns quota with volume, so it moves both ways.
+    pub min: u16,
+}
+impl Default for ApiQuotaWarn {
+    fn default() -> Self {
+        Self {
+            sound: None,
+            min: 5000,
         }
     }
 }

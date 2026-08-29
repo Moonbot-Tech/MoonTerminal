@@ -100,3 +100,32 @@ fn an_unlimited_or_unknown_key_is_never_coloured() {
         LoadLevel::Normal
     );
 }
+
+/// The quota cell is a bare count for the same reason the day count is: the noun belongs to the
+/// heading. An absent quota is a plain dash — every core but a HyperLiquid one reports none, and
+/// rendering that as `0` would read as an exhausted budget on the whole fleet.
+#[test]
+fn a_quota_renders_as_a_bare_count_or_a_dash() {
+    assert_eq!(super::api_quota_text(Some(1_065_447)), "1065447");
+    assert_eq!(super::api_quota_text(Some(0)), "0", "a real zero is a zero");
+    assert_eq!(super::api_quota_text(None), "-");
+}
+
+/// The colour follows the engine's flag, but only while there is a number to colour. A core that
+/// stopped publishing must fall back to no colour even if the flag has not been rebuilt yet —
+/// otherwise a dash paints yellow and claims a budget nobody reported.
+#[test]
+fn a_quota_colours_only_while_it_has_a_number() {
+    use super::LoadLevel;
+    assert_eq!(
+        super::api_quota_level(Some(900), true),
+        LoadLevel::Warning,
+        "the engine warns and there is a number"
+    );
+    assert_eq!(super::api_quota_level(Some(900), false), LoadLevel::Normal);
+    assert_eq!(
+        super::api_quota_level(None, true),
+        LoadLevel::Normal,
+        "a stale flag must not colour an absence"
+    );
+}

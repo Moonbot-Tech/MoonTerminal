@@ -1988,6 +1988,10 @@ impl Backend {
                         api_days: core
                             .api_expiry
                             .and_then(|expiry| expiry.days_left_at(now_ms)),
+                        // Straight off the store: unlike the key's day count there is nothing to
+                        // age — the quota is whatever the core last published, and a core that
+                        // publishes none stays `None` and silent.
+                        api_quota: core.api_quota,
                     })
                 })
                 .collect()
@@ -2258,6 +2262,7 @@ impl Backend {
             ping: axes.ping,
             exch: axes.exch,
             api: axes.api,
+            api_quota: axes.api_quota,
         }
     }
 
@@ -2288,6 +2293,10 @@ impl Backend {
             // floored like the sustain counters above. The ceiling is the popup's own range: a
             // hand-edited `layout.toml` asking for 60 000 days would warn on every dated key.
             api_days: i32::from(p.api.days.min(moon_core::config::layout::API_WARN_MAX_DAYS)),
+            // No clamp, unlike the days above: `ApiQuotaWarn::min` is a `u16`, so the TYPE already
+            // holds it at `API_QUOTA_WARN_MAX` and a hand-edited `layout.toml` asking for more
+            // fails to parse instead of reaching here.
+            api_quota_min: u64::from(p.api_quota.min),
         }
     }
 
@@ -2302,6 +2311,7 @@ impl Backend {
             WarnAxis::Ping => &p.ping.sound,
             WarnAxis::ExchPing => &p.exch.sound,
             WarnAxis::ApiExpiry => &p.api.sound,
+            WarnAxis::ApiQuota => &p.api_quota.sound,
         };
         sound.clone().filter(|s| !s.trim().is_empty())
     }
@@ -2319,6 +2329,9 @@ impl Backend {
             // Never on a chart: an expiring key has no per-second history, so its badge would open
             // a card with an empty graph. It lives in Core Status and the Warnings list only.
             WarnAxis::ApiExpiry => false,
+            // Never on a chart either: the quota is a standing number the core republishes every
+            // few minutes, not a per-second series.
+            WarnAxis::ApiQuota => false,
         }
     }
 

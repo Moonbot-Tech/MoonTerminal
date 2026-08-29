@@ -86,7 +86,7 @@ impl GroupSortField {
 pub(super) fn restore_flat_sort(
     preference: Option<moon_core::config::TableSortPreference>,
 ) -> Option<(String, bool)> {
-    const KEYS: [&str; 14] = [
+    const KEYS: [&str; 15] = [
         "server",
         "core",
         "status",
@@ -98,6 +98,7 @@ pub(super) fn restore_flat_sort(
         "ping_exch",
         "cpus",
         "api_key",
+        "api_quota",
         "startup",
         "version",
         "tz_off",
@@ -412,6 +413,12 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
         // an expired key leads, and the two states with no number must trail the counts rather than
         // heading the column — a dash and an infinity are the LAST things to look at here.
         "api_key" => a.api_key.urgency().cmp(&b.api_key.urgency()),
+        // Smallest quota first, with the cores that publish none pushed to the tail rather than the
+        // head: an absent number is the last thing to look at, exactly as for `api_key` above.
+        "api_quota" => a
+            .api_quota
+            .unwrap_or(u64::MAX)
+            .cmp(&b.api_quota.unwrap_or(u64::MAX)),
         // Same rank the By-IP column sorts by, over the per-core cell, so the two modes cannot
         // disagree about which core is slower to come up.
         "startup" => startup_rank(Some(startup_cell(&a.status, &a.startup)))

@@ -133,6 +133,41 @@ pub(super) fn api_expiry_text(state: ApiKeyState) -> String {
     }
 }
 
+/// Format one core's remaining API request quota for its column.
+///
+/// A bare number for the same reason as [`api_expiry_text`]: the unit belongs to the heading. `-`
+/// covers both a core whose exchange publishes no quota at all and a HyperLiquid core that has not
+/// answered yet — the protocol does not separate those, so neither may this.
+///
+/// Args:
+///     quota: Remaining requests, when the core published a number.
+///
+/// Returns:
+///     Column text for the remaining quota.
+pub(super) fn api_quota_text(quota: Option<u64>) -> String {
+    match quota {
+        Some(left) => left.to_string(),
+        None => "-".to_string(),
+    }
+}
+
+/// Colour for the API-quota cell.
+///
+/// Args:
+///     quota: Remaining requests, when the core published a number.
+///     warn: Whether the engine currently warns about this quota.
+///
+/// Returns:
+///     Yellow while the engine warns, else no colour — and always `Normal` when there is no number,
+///     so a stale flag on a core that stopped publishing cannot paint an absence as a problem.
+pub(super) fn api_quota_level(quota: Option<u64>, warn: bool) -> LoadLevel {
+    if quota.is_some() && warn {
+        LoadLevel::Warning
+    } else {
+        LoadLevel::Normal
+    }
+}
+
 /// Format one core's reported MoonBot build for its column.
 ///
 /// No noun — that lives in the column heading, exactly as [`api_expiry_text`] drops "дн" and

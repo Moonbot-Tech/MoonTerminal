@@ -462,7 +462,7 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
         // Never reaches here: `warn_chart` reports false for this axis, so the chart read path
         // filters it out before clustering. An expiring key is a standing state with no per-second
         // history, so it has nothing to draw on a time axis.
-        WarnAxis::ApiExpiry => {}
+        WarnAxis::ApiExpiry | WarnAxis::ApiQuota => {}
     }
     if let Some(core) = episode.core_id {
         if !cluster.cores.contains(&core) {

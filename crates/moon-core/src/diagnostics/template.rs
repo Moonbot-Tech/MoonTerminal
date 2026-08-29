@@ -279,6 +279,24 @@ COST: moderate, throttled by `market_trace_min_interval_ms` below.
 ENV: MOON_MARKET_DIAG=1",
     },
     KeyDoc {
+        section: "channels",
+        key: "hl_limit",
+        default: "false",
+        doc: "HyperLiquid request quota -> `logs/hl_limit_diag.log`: the number each HyperLiquid core sends in
+`THLRequestLimitStateCommand`, with the core's name, its exchange code and a wall-clock stamp.
+Answers \"is the quota the terminal receives the same number the core shows in its own Info window\"
+— nothing in the terminal reads this value, so this channel is the only place it is visible.
+
+Switching this on writes one line per connected core straight away, reporting the value each core's
+snapshot already holds; after that only a change or a fresh command writes another. The core sends
+that command rarely, so a channel that waited for one could stay empty for hours.
+
+`requests_left=none` is not the same as zero: the protocol decodes the field as an unsigned number,
+and both its \"no value yet\" sentinel and ANY negative value collapse to none.
+COST: negligible — HyperLiquid cores send this rarely, and other exchanges never send it.
+ENV: MOON_HL_LIMIT_DIAG=1",
+    },
+    KeyDoc {
         section: "limits",
         key: "log_ring_lines",
         default: "5000",

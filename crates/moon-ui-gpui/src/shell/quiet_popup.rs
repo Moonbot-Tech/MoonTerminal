@@ -36,7 +36,7 @@ type AxisAccess = (
     fn(&QuietCfg) -> bool,
     fn(&mut QuietCfg, bool),
 );
-const AXES: [AxisAccess; 6] = [
+const AXES: [AxisAccess; 7] = [
     (
         "conn",
         "core_status.warn_cfg.conn",
@@ -72,6 +72,12 @@ const AXES: [AxisAccess; 6] = [
         "core_status.warn_cfg.api",
         |c| c.warn_bypass.api,
         |c, v| c.warn_bypass.api = v,
+    ),
+    (
+        "api_quota",
+        "core_status.warn_cfg.api_quota",
+        |c| c.warn_bypass.api_quota,
+        |c, v| c.warn_bypass.api_quota = v,
     ),
 ];
 

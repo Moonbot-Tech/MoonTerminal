@@ -37,6 +37,8 @@ pub struct QuietWarnBypass {
     pub exch: bool,
     /// Expiring exchange API-key warning.
     pub api: bool,
+    /// Exhausting exchange API request-quota warning.
+    pub api_quota: bool,
 }
 
 impl Default for QuietWarnBypass {
@@ -49,6 +51,7 @@ impl Default for QuietWarnBypass {
             ping: false,
             exch: false,
             api: false,
+            api_quota: false,
         }
     }
 }

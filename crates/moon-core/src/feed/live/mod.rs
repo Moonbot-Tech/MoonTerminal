@@ -580,6 +580,9 @@ pub(super) fn run(
     let mut strat_db_initial = true;
     // Monotonic per-core detect number used as the ingestion cursor for the UI detect feed.
     let mut detect_seq: u64 = 0;
+    // Last HyperLiquid quota written to `channels.hl_limit`, so the channel reports the value the
+    // snapshot HOLDS and not only the moments it changes. `None` means nothing written yet.
+    let mut hl_last_logged: Option<Option<u64>> = None;
     // The catch-up whose alive map this feed is waiting for, paired with its request ticket.
     // A `run()` local on purpose: a hard drop ends this loop and discards it, and the next `run()`
     // re-syncs from the writer's durable start state and reconciles again. Hoisting it into the
@@ -1403,6 +1406,56 @@ pub(super) fn run(
             run_state_seen.runtime = true;
             if tx.send(FeedMsg::RuntimeState(state)).is_err() {
                 break;
+            }
+        }
+        // Remaining exchange API request quota (HyperLiquid `THLRequestLimitStateCommand`). Read
+        // from the RETAINED snapshot on its own event, like every settings value above: the core
+        // republishes it every few minutes, so an event-driven read costs nothing between them.
+        let api_quota = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| {
+                matches!(
+                    ev,
+                    &Event::Settings(SettingsEvent::HyperliquidRequestLimitUpdated)
+                )
+            },
+            // Wrapped in `Some` on purpose: the inner `None` is a real answer — the protocol cannot
+            // represent a quota it failed to decode — and the helper would drop it as "nothing".
+            |state| Some(state.settings().hyperliquid_requests_left),
+        );
+        if let Some(left) = api_quota {
+            if tx.send(FeedMsg::ApiQuota(left)).is_err() {
+                break;
+            }
+        }
+        // Diagnostics (`channels.hl_limit`): the same number, written to its own file with the core
+        // and the exchange beside it. Unlike the publication above this reports the value the
+        // snapshot HOLDS, so switching the channel on mid-session answers immediately instead of
+        // waiting for the next command. Gated on the switch FIRST, so the off case costs one atomic
+        // load rather than a snapshot per batch.
+        if crate::hl_diag::enabled() {
+            if let Some(left) = client
+                .snapshot()
+                .map(|s| s.settings().hyperliquid_requests_left)
+            {
+                if api_quota.is_some() || hl_last_logged != Some(left) {
+                    hl_last_logged = Some(left);
+                    let exchange = client
+                        .server_info()
+                        .and_then(|i| i.exchange_code)
+                        .map(|c| c.stable_id().to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let value = match left {
+                        Some(v) => v.to_string(),
+                        None => "none".to_string(),
+                    };
+                    crate::hl_diag::line(&format!(
+                        "core={} exchange={exchange} requests_left={value} on_command={}",
+                        crate::feed::core_label(server.id),
+                        api_quota.is_some()
+                    ));
+                }
             }
         }
         // The global strategy engine's run state (`TStratRuntimeState`), which is NOT part of the

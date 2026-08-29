@@ -13,6 +13,8 @@
 //! - `Ping` — the client↔core UDP round-trip held ABOVE THE CORE'S OWN BASELINE (per core).
 //! - `ExchPing` — the core→exchange order-API latency held ABOVE THE CORE'S OWN BASELINE (per core).
 //! - `ApiExpiry` — the core's exchange API key is inside the configured expiry horizon (per core).
+//! - `ApiQuota` — the core's remaining exchange API request quota is at or below the configured
+//!   floor (per core). Only HyperLiquid cores report a quota.
 //!
 //! `SysCpu` and `MemGrowth` are ported verbatim from the panel so their displayed warnings do not
 //! change; `Unreachable` uses the same connectivity rule the panel showed, now sourced here (so it
@@ -61,6 +63,11 @@ const LATENCY_SUSTAIN_SECS: u32 = 3;
 const EPISODE_CAP: usize = 2048;
 /// An exchange API key warns from this many days before it expires, until it is replaced.
 const API_EXPIRY_WARN_DAYS: i32 = 7;
+
+/// Default floor for the API-request-quota warning, mirroring `ApiQuotaWarn::default().min`. Only a
+/// fallback for a `WarnTuning` built without the layout; the configured value is what the engine
+/// runs on.
+const API_QUOTA_WARN_MIN: u64 = 5000;
 
 /// Where a latency sample sits relative to its rolling baseline, higher = worse.
 ///
@@ -209,6 +216,8 @@ pub(crate) struct WarnEnabled {
     pub(crate) exch: bool,
     /// Expiring exchange API-key axis on.
     pub(crate) api: bool,
+    /// Exhausting API-request-quota axis on.
+    pub(crate) api_quota: bool,
 }
 
 impl Default for WarnEnabled {
@@ -221,6 +230,7 @@ impl Default for WarnEnabled {
             ping: true,
             exch: true,
             api: true,
+            api_quota: true,
         }
     }
 }
@@ -235,6 +245,7 @@ impl WarnEnabled {
             WarnAxis::Ping => self.ping,
             WarnAxis::ExchPing => self.exch,
             WarnAxis::ApiExpiry => self.api,
+            WarnAxis::ApiQuota => self.api_quota,
         }
     }
 }
@@ -265,6 +276,9 @@ pub(crate) struct WarnTuning {
     /// axis this one is a state, not a sustained measurement, so it fires on the first sample that
     /// crosses it and stays on until the key is replaced.
     pub(crate) api_days: i32,
+    /// Remaining API requests at or below which the quota warning starts. Like `api_days` this is
+    /// a state rather than a sustained measurement, so it has no hold.
+    pub(crate) api_quota_min: u64,
 }
 
 impl Default for WarnTuning {
@@ -283,6 +297,7 @@ impl Default for WarnTuning {
             exch_window: LATENCY_BASELINE_SECS,
             exch_hold: LATENCY_SUSTAIN_SECS,
             api_days: API_EXPIRY_WARN_DAYS,
+            api_quota_min: API_QUOTA_WARN_MIN,
         }
     }
 }
@@ -301,6 +316,9 @@ pub(crate) struct CoreSample {
     /// check has not answered, or it answered that the key has no expiration at all. Both must stay
     /// silent — a key with no expiry is not a key expiring today.
     pub(crate) api_days: Option<i32>,
+    /// Remaining exchange API requests, or `None` when there is nothing to judge: the core reports
+    /// no quota at all (every exchange but HyperLiquid) or has not answered yet.
+    pub(crate) api_quota: Option<u64>,
 }
 
 /// Which trend a warning episode tracks.
@@ -318,6 +336,9 @@ pub(crate) enum WarnAxis {
     ExchPing,
     /// The core's exchange API key is within the configured number of days of expiring (per core).
     ApiExpiry,
+    /// The core's remaining exchange API request quota is at or below the configured floor (per
+    /// core). Only HyperLiquid cores report one.
+    ApiQuota,
 }
 
 /// The subject a chart-history ring sample belongs to.
@@ -486,6 +507,8 @@ enum WarnKey {
     ExchPing(CoreId),
     /// One core's expiring exchange API key.
     ApiExpiry(CoreId),
+    /// One core's exhausting exchange API request quota.
+    ApiQuota(CoreId),
 }
 
 /// The warning axis a live key belongs to.
@@ -497,6 +520,7 @@ fn axis_of(key: &WarnKey) -> WarnAxis {
         WarnKey::Ping(_) => WarnAxis::Ping,
         WarnKey::ExchPing(_) => WarnAxis::ExchPing,
         WarnKey::ApiExpiry(_) => WarnAxis::ApiExpiry,
+        WarnKey::ApiQuota(_) => WarnAxis::ApiQuota,
     }
 }
 
@@ -505,7 +529,7 @@ fn axis_of(key: &WarnKey) -> WarnAxis {
 /// Every measured axis gets worse as its number climbs, so "worst seen" is the maximum. Days left
 /// on a key runs the other way: the worst moment of an episode is its smallest day count.
 fn peak_is_lowest(axis: WarnAxis) -> bool {
-    matches!(axis, WarnAxis::ApiExpiry)
+    matches!(axis, WarnAxis::ApiExpiry | WarnAxis::ApiQuota)
 }
 
 /// Whether an axis has a per-second history that a chart badge could draw.
@@ -514,7 +538,7 @@ fn peak_is_lowest(axis: WarnAxis) -> bool {
 /// axes ride the CPU/memory/ping rings, while an expiring key is a standing state with nothing to
 /// plot against time.
 pub(crate) fn axis_has_series(axis: WarnAxis) -> bool {
-    !matches!(axis, WarnAxis::ApiExpiry)
+    !matches!(axis, WarnAxis::ApiExpiry | WarnAxis::ApiQuota)
 }
 
 /// Backend warning engine: rolling per-core history, current warning state, and the episode log.
@@ -562,6 +586,9 @@ pub(crate) struct CoreWarnEngine {
     /// Cores whose exchange API key is at or inside the warning horizon, with the day count that
     /// triggered it (kept so the episode can record it without re-reading the store).
     api_warn: HashMap<CoreId, i32>,
+    /// Cores whose remaining API request quota is at or below the floor, with the count that
+    /// triggered it (kept so the episode can record it without re-reading the store).
+    api_quota_warn: HashMap<CoreId, u64>,
     /// Numeric detection thresholds, refreshed from the layout each tick.
     tuning: WarnTuning,
     /// Current per-core client↔core-ping colour severity (relative to its baseline and the axis
@@ -819,6 +846,21 @@ impl CoreWarnEngine {
                 self.api_warn.insert(sample.id, days);
             }
         }
+
+        // Exhausting API request quota: the same shape as the key above — a plain threshold on a
+        // standing value, judged for every core whether or not it is Ready. It differs in one
+        // respect: the quota can climb back (a HyperLiquid address earns requests with volume), so
+        // this warning CLEARS on its own once the count recovers, while an expiring key only stops
+        // warning when the key is replaced.
+        self.api_quota_warn.clear();
+        for sample in samples {
+            let Some(left) = sample.api_quota else {
+                continue;
+            };
+            if self.enabled.api_quota && left <= t.api_quota_min {
+                self.api_quota_warn.insert(sample.id, left);
+            }
+        }
     }
 
     /// Open new episodes, extend open ones, and close those whose warning cleared or subject left.
@@ -895,6 +937,16 @@ impl CoreWarnEngine {
             let peak = (*days).clamp(0, i32::from(u16::MAX)) as u16;
             active.insert(
                 WarnKey::ApiExpiry(*id),
+                (ip_of.get(id).copied(), Some(*id), peak),
+            );
+        }
+        // Quota peak is the requests left, clamped like the day count above. The threshold itself
+        // cannot exceed `u16::MAX` (`API_QUOTA_WARN_MAX`), so a warning quota always fits and the
+        // clamp only guards a hand-edited config.
+        for (id, left) in &self.api_quota_warn {
+            let peak = (*left).min(u64::from(u16::MAX)) as u16;
+            active.insert(
+                WarnKey::ApiQuota(*id),
                 (ip_of.get(id).copied(), Some(*id), peak),
             );
         }
@@ -1003,6 +1055,11 @@ impl CoreWarnEngine {
     /// Whether one core's exchange API key is inside the warning horizon (the API-key warning).
     pub(crate) fn core_api_warn(&self, id: CoreId) -> bool {
         self.api_warn.contains_key(&id)
+    }
+
+    /// Whether one core's remaining API request quota is at or below the floor (the quota warning).
+    pub(crate) fn core_api_quota_warn(&self, id: CoreId) -> bool {
+        self.api_quota_warn.contains_key(&id)
     }
 
     /// One core's current client↔core-ping colour severity (relative to its baseline and thresholds).

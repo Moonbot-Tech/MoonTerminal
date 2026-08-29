@@ -40,6 +40,7 @@ static RENDER: AtomicBool = AtomicBool::new(false);
 static DETECT: AtomicBool = AtomicBool::new(false);
 static ASSETS: AtomicBool = AtomicBool::new(false);
 static MARKETS: AtomicBool = AtomicBool::new(false);
+static HL_LIMIT: AtomicBool = AtomicBool::new(false);
 /// Fast path for the order channel: the selector itself sits behind a lock, and reading that lock
 /// on every order of every core would be the one diagnostic that costs something while OFF.
 static ORDERS_ON: AtomicBool = AtomicBool::new(false);
@@ -88,6 +89,12 @@ pub fn assets() -> bool {
 #[inline]
 pub fn markets() -> bool {
     MARKETS.load(Ordering::Relaxed)
+}
+
+/// HyperLiquid request-quota channel (`logs/hl_limit_diag.log`).
+#[inline]
+pub fn hl_limit() -> bool {
+    HL_LIMIT.load(Ordering::Relaxed)
 }
 
 /// Whether the order channel is following anything at all.
@@ -283,6 +290,7 @@ fn apply(cfg: &DiagCfg) {
     DETECT.store(cfg.channels.detect, Ordering::Relaxed);
     ASSETS.store(cfg.channels.assets, Ordering::Relaxed);
     MARKETS.store(cfg.channels.markets, Ordering::Relaxed);
+    HL_LIMIT.store(cfg.channels.hl_limit, Ordering::Relaxed);
     RING_LINES.store(cfg.limits.log_ring_lines, Ordering::Relaxed);
     BALANCE_WINDOW_SEC.store(cfg.limits.balance_repeat_window_sec, Ordering::Relaxed);
     MARKET_FLOOR_MS.store(cfg.limits.market_trace_min_interval_ms, Ordering::Relaxed);

@@ -91,6 +91,11 @@ impl CoreStatusView {
                 // Colour-only band, decided from the SAME classified state the cell prints -- so the
                 // number and its colour cannot describe different keys.
                 api_notice: api_axis_on && api_key.within_notice(),
+                api_quota: core.and_then(|core| core.api_quota),
+                // Read from the engine like every other warning flag, and NOT re-derived from the
+                // number beside it: the two would disagree for the tick between a fresh quota
+                // landing in the store and the engine's next pass over it.
+                api_quota_warn: b.warn.core_api_quota_warn(id),
                 server_version,
                 version_behind: server_version
                     .zip(fleet_newest)

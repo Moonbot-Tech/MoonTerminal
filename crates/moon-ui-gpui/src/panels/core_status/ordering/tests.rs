@@ -38,6 +38,8 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
         api_warn: false,
         api_notice: false,
+        api_quota: None,
+        api_quota_warn: false,
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
@@ -78,6 +80,8 @@ fn group(
             api_key: ApiKeyState::Unknown,
             api_warn: false,
             api_notice: false,
+            api_quota: None,
+            api_quota_warn: false,
             startup: CoreStartupStatus::default(),
             time_offset: CoreTimeOffsetStatus::default(),
             server_version: None,
@@ -345,4 +349,39 @@ fn flat_lines_partitions_each_input_row_once_by_venue_identity() {
         ],
         "unidentified cores lead, shared venue identities merge, and HIP-3 DEX identities stay distinct"
     );
+}
+
+/// Ascending by quota puts the emptiest budget first, and the cores that publish NO quota last.
+/// `Option`'s own ordering would do the opposite — `None` sorts below every `Some` — and would fill
+/// the head of the column with the twenty cores that never had a quota to run out of.
+#[test]
+fn an_absent_quota_sorts_behind_every_real_one() {
+    let mut low = row_with_key(1, None);
+    low.api_quota = Some(900);
+    let mut high = row_with_key(2, None);
+    high.api_quota = Some(1_065_447);
+    let none = row_with_key(3, None);
+
+    assert_eq!(compare_flat_rows(&low, &high, "api_quota"), Ordering::Less);
+    assert_eq!(
+        compare_flat_rows(&high, &none, "api_quota"),
+        Ordering::Less,
+        "a full quota still outranks no quota at all"
+    );
+    assert_eq!(
+        compare_flat_rows(&none, &low, "api_quota"),
+        Ordering::Greater
+    );
+}
+
+/// The column has to survive a restart: a sort saved on it must be restored, which only happens if
+/// its key is in the allow-list `restore_flat_sort` filters against.
+#[test]
+fn the_quota_column_is_a_restorable_sort() {
+    let restored = restore_flat_sort(Some(TableSortPreference {
+        column: "api_quota".to_string(),
+        ascending: true,
+    }));
+
+    assert_eq!(restored, Some(("api_quota".to_string(), true)));
 }
