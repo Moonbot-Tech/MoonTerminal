@@ -201,13 +201,20 @@ pub fn open(
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    // Focus an existing window.
+    // Focus an existing window and expand the Auto-selected core if it is collapsed.
     if let Some(handle) = backend.read(cx).strategies_window {
-        if handle
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok()
-        {
-            return;
+        match handle.update(cx, |root, window, _cx| {
+            window.activate_window();
+            root.view().clone().downcast::<StrategiesView>().ok()
+        }) {
+            Ok(Some(view)) => {
+                view.update(cx, |view, cx| {
+                    view.ensure_auto_selected_core_expanded(cx);
+                });
+                return;
+            }
+            Ok(None) => return,
+            Err(_) => {}
         }
     }
     // The tool window behaves as part of the terminal rather than a separate taskbar application.
