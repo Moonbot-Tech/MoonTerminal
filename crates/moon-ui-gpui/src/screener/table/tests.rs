@@ -4,7 +4,23 @@ use std::collections::HashSet;
 
 use moon_core::config::TableSortPreference;
 
-use super::{COLS, restore_sort};
+use super::{COLS, column_title, restore_sort};
+
+/// The footer labels must resolve from the same schema as the Market and Vol. headers.
+///
+/// Mutation: restore independent `Coin` or `DVol` footer literals. The footer would again disagree
+/// with the headers and the source assertion below would redden.
+#[test]
+fn screener_filter_labels_reuse_matching_column_titles() {
+    assert_eq!(column_title("market"), "Market");
+    assert_eq!(column_title("vol24"), "Vol.");
+
+    let view_source = include_str!("../view.rs");
+    assert!(view_source.contains("label(column_title(\"market\"))"));
+    assert!(view_source.contains("label(column_title(\"vol24\"))"));
+    assert!(!view_source.contains("label(\"Coin\")"));
+    assert!(!view_source.contains("label(\"DVol\")"));
+}
 
 /// `screener/table.rs:restore_sort` must translate MoonUI ascending into the existing `desc` flag.
 ///

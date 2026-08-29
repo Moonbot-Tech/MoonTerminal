@@ -20,7 +20,9 @@ use moon_core::session::CoreId;
 use crate::panels::{RenderGate, data_table_host};
 use crate::{Backend, design};
 
-use super::table::{COLS, ColDef, Entry, moon, moon_alpha, parse_vol, screener_row, sort_entries};
+use super::table::{
+    COLS, ColDef, Entry, column_title, moon, moon_alpha, parse_vol, screener_row, sort_entries,
+};
 
 const SCREENER_HEADER_H: f32 = 32.0;
 
@@ -514,7 +516,7 @@ impl ScreenerView {
             .child(menu)
     }
 
-    /// Build the bottom bar with Moonbot-style source, Coin, and DVol controls on the left and the
+    /// Build the bottom bar with Moonbot-style source, Market, and Vol. controls on the left and the
     /// filtered/total count plus column menu on the right.
     fn bottom_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let label = |text: &'static str| {
@@ -534,7 +536,7 @@ impl ScreenerView {
             .border_t(px(1.0))
             .border_color(moon_alpha(p.border, 1.0))
             .child(self.source_combo(cx))
-            .child(label("Coin"))
+            .child(label(column_title("market")))
             .child(
                 div().w(px(90.0)).child(
                     MoonInput::new("scr-coin")
@@ -543,7 +545,7 @@ impl ScreenerView {
                         .cleanable(true),
                 ),
             )
-            .child(label("DVol"))
+            .child(label(column_title("vol24")))
             .child(
                 div().w(px(90.0)).child(
                     MoonInput::new("scr-dvol")
