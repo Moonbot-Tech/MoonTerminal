@@ -4,6 +4,7 @@
 //! and [`super::logic`].
 
 pub(crate) mod cache;
+pub(crate) mod checks;
 pub(crate) mod dialogs;
 pub(crate) mod dnd;
 pub(crate) mod menu;

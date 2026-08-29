@@ -71,17 +71,29 @@ fn starts_with(path: &[String], prefix: &[String]) -> bool {
     path.len() >= prefix.len() && prefix.iter().zip(path).all(|(a, b)| a == b)
 }
 
+/// Returns whether a strategy's flat `folder_path` lies at or below a segment prefix.
+///
+/// The allocation-free form of [`starts_with`], for callers holding the raw wire path: it walks
+/// [`path_segments`] instead of materializing a `Vec<String>` per row, which is what a prefix
+/// tested against every row of a core costs otherwise.
+pub fn path_starts_with(folder_path: &str, prefix: &[String]) -> bool {
+    let mut segments = path_segments(folder_path);
+    prefix
+        .iter()
+        .all(|want| segments.next() == Some(want.as_str()))
+}
+
 /// Returns every row at or below a path prefix.
 pub fn rows_under<'a>(rows: &'a [StrategyRow], prefix: &[String]) -> Vec<&'a StrategyRow> {
     rows.iter()
-        .filter(|r| starts_with(&split_path(&r.folder_path), prefix))
+        .filter(|r| path_starts_with(&r.folder_path, prefix))
         .collect()
 }
 
 /// Returns whether any strategy row is at or below a path prefix without allocating a row list.
 pub fn has_row_under(rows: &[StrategyRow], prefix: &[String]) -> bool {
     rows.iter()
-        .any(|row| starts_with(&split_path(&row.folder_path), prefix))
+        .any(|row| path_starts_with(&row.folder_path, prefix))
 }
 
 /// Returns whether every affected strategy is disabled (`!checked`), as deletion requires.

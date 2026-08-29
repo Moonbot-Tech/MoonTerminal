@@ -722,6 +722,11 @@ impl StrategiesView {
         self.backend.read(cx).session.move_strategies(core, moves)?;
         // Rename an empty UI-only folder locally only after the move command succeeds.
         self.rename_ui_folder(core, old_path, new_name);
+        let mut new_path = old_path.to_vec();
+        if let Some(last) = new_path.last_mut() {
+            *last = new_name.to_string();
+        }
+        self.move_row_checks(core, old_path, Some(&new_path));
         self.persist_session(cx);
         Ok(())
     }
@@ -819,6 +824,7 @@ impl StrategiesView {
             .session
             .delete_folder(core, ops::join_path(path))?;
         self.remove_ui_folder(core, path);
+        self.move_row_checks(core, path, None);
         self.persist_session(cx);
         Ok(())
     }
