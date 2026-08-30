@@ -3,10 +3,11 @@
 
 use gpui::*;
 use moon_core::feed::ClientSettingsEdit;
+use moon_core::util::fmt::compact_order_size;
 use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
 use rust_i18n::t;
 
-use super::fmt::{fmt_adaptive, fmt_sell_pct, scroll_dy, wheel_step};
+use super::fmt::{fmt_sell_pct, scroll_dy, wheel_step};
 use crate::Backend;
 
 /// Base floor for a preset cell's fitted width.
@@ -147,7 +148,7 @@ fn labels(values: [f64; 6], fmt: impl Fn(f64) -> String) -> [String; 6] {
 /// Returns:
 ///     Six formatted order-size labels.
 pub(super) fn size_labels(values: [f64; 6]) -> [String; 6] {
-    labels(values, fmt_adaptive)
+    labels(values, compact_order_size)
 }
 
 /// Return the group's complete fixed-sell percentage labels.

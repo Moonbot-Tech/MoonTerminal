@@ -1,9 +1,14 @@
-//! Paste/Create target precedence plus UI-only folder occupancy and observer wiring.
+//! Paste/Create target precedence plus UI-only folder occupancy, observer wiring, and
+//! strategy-drag confinement oracles.
 
+use gpui::{Bounds, WindowId, point, px, size};
 use moon_core::feed::StrategyRow;
 use moon_core::session::CoreId;
 
-use super::{footer_labels_fit, keep_ui_folder, resolve_paste_target};
+use super::{
+    StratDrag, drag_chip_should_paint, footer_labels_fit, keep_ui_folder, resolve_paste_target,
+    strat_drag_event_should_stop, strat_drag_move_should_stop,
+};
 
 /// The source file, read at COMPILE time so the guard below cannot drift from it.
 const SRC: &str = include_str!("../ui.rs");
@@ -148,4 +153,192 @@ fn footer_labels_switch_atomically_at_the_inclusive_boundary() {
         fixed_chrome,
         buttons_and_staged_label
     ));
+}
+
+/// Independent tree rectangle used by the confinement oracles. Origin (10, 20), size 100×200, so
+/// the half-open far edge is x = 110 and y = 220.
+fn tree_field() -> Bounds<gpui::Pixels> {
+    Bounds::new(point(px(10.0), px(20.0)), size(px(100.0), px(200.0)))
+}
+
+/// Origin window id for confinement oracles; every same-window sample uses this.
+fn origin() -> WindowId {
+    WindowId::from(1)
+}
+
+/// Foreign window id; a sample here is the chart/second-window leak, never the origin.
+fn other_window() -> WindowId {
+    WindowId::from(2)
+}
+
+/// `drag_chip_should_paint`: same window + pointer inside the tree paints. Replacing the body
+/// with `true` reintroduces the chart duplicate and the params-pane leak.
+#[test]
+fn drag_chip_paints_only_inside_the_origin_tree_field() {
+    let tree = tree_field();
+    let origin = origin();
+
+    assert!(
+        drag_chip_should_paint(origin, origin, point(px(10.0), px(20.0)), Some(tree)),
+        "the inclusive origin corner is inside the folders-and-strategies field"
+    );
+    assert!(drag_chip_should_paint(
+        origin,
+        origin,
+        point(px(60.0), px(100.0)),
+        Some(tree)
+    ));
+    assert!(
+        !drag_chip_should_paint(origin, origin, point(px(120.0), px(100.0)), Some(tree)),
+        "a pointer to the right of the tree (versions/sections/params) must hide the chip"
+    );
+    assert!(
+        !drag_chip_should_paint(
+            origin,
+            other_window(),
+            point(px(60.0), px(100.0)),
+            Some(tree)
+        ),
+        "another window id with a pointer inside the rectangle is the chart leak"
+    );
+    assert!(
+        !drag_chip_should_paint(origin, origin, point(px(60.0), px(100.0)), None),
+        "missing bounds must hide, never leak, on the first frame before prepaint"
+    );
+    assert!(
+        !drag_chip_should_paint(origin, origin, point(px(110.0), px(20.0)), Some(tree)),
+        "x == origin.x + width is the half-open far edge and must hide"
+    );
+    assert!(!drag_chip_should_paint(
+        origin,
+        origin,
+        point(px(10.0), px(220.0)),
+        Some(tree)
+    ));
+}
+
+/// Deleting the helper call from `DragChip::render` would keep every oracle green while the
+/// production overlay painted globally again.
+#[test]
+fn drag_chip_render_consults_the_paint_gate() {
+    let start = SRC
+        .find("impl Render for DragChip")
+        .expect("DragChip::render must exist");
+    let body = &SRC[start..];
+    assert!(
+        body.contains("drag_chip_should_paint("),
+        "DragChip::render must call drag_chip_should_paint so the overlay cannot paint globally"
+    );
+    assert!(
+        body.contains("window.defer("),
+        "outside StratDrag must defer stop_active_drag until after overlay restore"
+    );
+    let before_defer = body
+        .split("window.defer(")
+        .next()
+        .expect("the deferred stop must exist");
+    assert!(
+        !before_defer.contains("stop_active_drag("),
+        "DragChip::render must not call stop_active_drag directly during overlay prepaint"
+    );
+}
+
+/// Every confined DragChip hides only through the same flag that schedules cancellation.
+///
+/// Removing `stop_when_outside` would let an unconfined payload disappear while staying active;
+/// removing the paint predicate would restore the cross-window duplicate artifact.
+#[test]
+fn confined_drag_preview_pairs_its_paint_gate_with_cancellation() {
+    let start = SRC
+        .find("impl Render for DragChip")
+        .expect("DragChip::render must exist");
+    let body = &SRC[start..];
+    let hide = body
+        .find("return div()")
+        .expect("the empty-chip hide path must exist");
+    let last_if = body[..hide]
+        .rfind("if ")
+        .expect("the empty-chip return must be conditioned");
+    let cond = &body[last_if..hide];
+    assert!(
+        cond.contains("stop_when_outside"),
+        "returning an empty chip must require the same flag that schedules drag cancellation"
+    );
+    assert!(
+        cond.contains("drag_chip_should_paint("),
+        "StratDrag must still hide via drag_chip_should_paint when outside the origin tree"
+    );
+}
+
+/// Interior StratDrag samples must keep the session so a same-core move or cross-core copy can
+/// still complete on a folder or core row.
+#[test]
+fn strat_drag_survives_inside_the_tree_field() {
+    let tree = tree_field();
+    let origin = origin();
+    assert!(
+        !strat_drag_move_should_stop(origin, origin, point(px(60.0), px(100.0)), Some(tree)),
+        "a pointer still inside strat-tree-scroll must not cancel the drag"
+    );
+    assert!(
+        !strat_drag_move_should_stop(origin, origin, point(px(10.0), px(20.0)), Some(tree)),
+        "the inclusive origin corner is a live interior sample"
+    );
+    assert!(
+        !strat_drag_move_should_stop(origin, origin, point(px(60.0), px(100.0)), None),
+        "missing bounds must not abort a drag that started before the first prepaint"
+    );
+}
+
+/// Leaving the live tree field, or sampling another window, must cancel StratDrag. Returning
+/// `false` here would hide the chip while the global drag continued across the screen.
+#[test]
+fn strat_drag_cancels_outside_the_tree_field() {
+    let tree = tree_field();
+    let origin = origin();
+    assert!(
+        strat_drag_move_should_stop(origin, origin, point(px(120.0), px(100.0)), Some(tree)),
+        "a move over params/versions must stop the strategy drag"
+    );
+    assert!(
+        strat_drag_move_should_stop(origin, origin, point(px(110.0), px(20.0)), Some(tree)),
+        "the half-open far edge is already outside the field"
+    );
+    assert!(
+        strat_drag_move_should_stop(
+            origin,
+            other_window(),
+            point(px(60.0), px(100.0)),
+            Some(tree)
+        ),
+        "a sample in another window must stop even when the pointer sits inside the rectangle"
+    );
+    assert!(
+        strat_drag_move_should_stop(origin, other_window(), point(px(60.0), px(100.0)), None),
+        "an origin-window mismatch must cancel even before tree bounds exist"
+    );
+}
+
+/// Event-time cancellation must read origin from the StratDrag payload. Passing the receiving
+/// window as both arguments would keep a second Strategies window from ever seeing a mismatch.
+#[test]
+fn strat_drag_event_uses_payload_origin_not_the_receiver() {
+    let tree = tree_field();
+    let drag = StratDrag {
+        core: 7,
+        ids: vec![9],
+        origin_window: origin(),
+    };
+    assert!(
+        strat_drag_event_should_stop(&drag, other_window(), point(px(60.0), px(100.0)), None),
+        "payload origin vs receiving window must cancel independently of bounds"
+    );
+    assert!(
+        !strat_drag_event_should_stop(&drag, origin(), point(px(60.0), px(100.0)), Some(tree)),
+        "same-window interior samples must keep the session"
+    );
+    assert!(
+        strat_drag_event_should_stop(&drag, origin(), point(px(120.0), px(100.0)), Some(tree)),
+        "same-window samples past the tree field must cancel"
+    );
 }

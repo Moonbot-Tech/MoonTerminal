@@ -31,6 +31,20 @@ fn compact_si_trims_the_fraction_but_never_the_mantissa() {
     assert_eq!(compact_si(999.0), adaptive(999.0));
 }
 
+/// Order-size labels keep meaningful fractions but use lowercase suffixes without forced zeros.
+///
+/// Returning [`compact_si`] unchanged breaks the suffix assertions, while fixed-decimal output
+/// breaks every exact-multiple assertion.
+#[test]
+fn compact_order_size_uses_lowercase_suffixes_without_forced_zeroes() {
+    assert_eq!(compact_order_size(999.0), "999");
+    assert_eq!(compact_order_size(1_000.0), "1k");
+    assert_eq!(compact_order_size(1_500.0), "1.5k");
+    assert_eq!(compact_order_size(10_000.0), "10k");
+    assert_eq!(compact_order_size(1_000_000.0), "1m");
+    assert_eq!(compact_order_size(2_300_000_000.0), "2.3b");
+}
+
 #[test]
 fn adaptive_thousands_intact() {
     assert_eq!(adaptive(25000.0), "25000");

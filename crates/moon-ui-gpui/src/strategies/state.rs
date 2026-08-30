@@ -368,6 +368,7 @@ impl StrategiesView {
             tree_cache: None,
             pane_cache: PaneCache::default(),
             pending_scroll: None,
+            tree_field_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
             params_scroll: MoonVirtualListScrollHandle::new(),
             pending_param_scroll: None,
             focus: cx.focus_handle(),

@@ -678,9 +678,9 @@ impl RenderState {
                     // Cursor values are foreground priority elements outside the label columns:
                     // they occupy fixed positions at the crosshair and receive an opaque backdrop.
                     // Place order size ABOVE the cursor line, left of and right-aligned to the
-                    // separator. Omit $/K-M suffixes and always show two decimals, such as "100.00".
+                    // separator. Omit `$` and use compact lowercase SI without forced zeroes.
                     if let Some(usd) = prospective_usd {
-                        let text = format!("{usd:.2}");
+                        let text = fmt_prospective_order_size(usd);
                         let m = self.draw_label_text(
                             ctx,
                             &text,

@@ -1,6 +1,40 @@
-//! Regression coverage for delayed Strategies tree modal authority.
+//! Regression coverage for delayed Strategies tree modal authority and tree-op dialog width.
 
-use super::{folder_delete_authorized, tree_op_authorized};
+use super::{
+    clamp_tree_op_dialog_width, folder_delete_authorized, tree_op_authorized,
+    tree_op_dialog_client_width, tree_op_field_width,
+};
+
+/// Viewport/padding arithmetic for the tree-op card, independent of the named production
+/// constants. Restoring `client_w - 2 * 16` inside `clamp_tree_op_dialog_width` makes a 320 px
+/// client yield a 288 px card and 256 px fields instead of 320/288. Dropping frame insets in
+/// `tree_op_dialog_client_width` keeps a 360 card on a 360 viewport with 20+20 client-frame
+/// insets, overflowing MoonUI's 320 px overlay. Changing PAD from 16 to 0 makes
+/// `tree_op_field_width(360.0)` return 360 instead of 328 and overflows MoonUI's 16 px pad.
+#[test]
+fn clamp_tree_op_dialog_width_fits_the_client_viewport_without_subtracting_content_pads() {
+    assert_eq!(tree_op_dialog_client_width(320.0, 0.0, 0.0), 320.0);
+    assert_eq!(tree_op_dialog_client_width(360.0, 20.0, 20.0), 320.0);
+    assert_eq!(clamp_tree_op_dialog_width(360.0, 1920.0), 360.0);
+    assert_eq!(clamp_tree_op_dialog_width(360.0, 320.0), 320.0);
+    assert_eq!(
+        clamp_tree_op_dialog_width(360.0, tree_op_dialog_client_width(360.0, 20.0, 20.0)),
+        320.0
+    );
+    assert_eq!(tree_op_field_width(360.0), 328.0);
+    assert_eq!(tree_op_field_width(320.0), 288.0);
+    assert_eq!(
+        tree_op_field_width(clamp_tree_op_dialog_width(360.0, 320.0)),
+        288.0
+    );
+    assert_eq!(
+        tree_op_field_width(clamp_tree_op_dialog_width(
+            360.0,
+            tree_op_dialog_client_width(360.0, 20.0, 20.0),
+        )),
+        288.0
+    );
+}
 
 /// `dialogs.rs:folder_delete_authorized` must compare generation, the complete child snapshot,
 /// and disabled state; removing any term can delete a folder changed behind its confirmation.

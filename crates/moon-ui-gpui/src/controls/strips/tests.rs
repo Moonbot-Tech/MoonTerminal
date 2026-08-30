@@ -3,7 +3,8 @@
 // NOT `use super::*`: the glob would pull in the `gpui::test` macro, and `#[test]` would
 // expand into itself (recursion limit).
 use super::{
-    SellClickAction, SizeClickAction, sell_click_action, size_click_action, wheel_step_dir,
+    SellClickAction, SizeClickAction, sell_click_action, size_click_action, size_labels,
+    wheel_step_dir,
 };
 use gpui::{Modifiers, Point, ScrollDelta};
 
@@ -81,6 +82,21 @@ fn fixed_sell_clicks_preserve_slot_and_edit_semantics() {
         SellClickAction::EngageMain
     );
     assert_eq!(sell_click_action(3, Some(4), 2), SellClickAction::Edit(3));
+}
+
+/// The production preset-label path must compact large values without mutating its inputs.
+///
+/// Routing `size_labels` back through raw adaptive formatting makes the final two literal labels
+/// fail while leaving the shared formatter's own tests green.
+#[test]
+fn order_size_labels_use_shared_compact_formatter() {
+    let values = [50.0, 100.0, 250.0, 500.0, 10_000.0, 1_000_000.0];
+
+    assert_eq!(
+        size_labels(values),
+        ["50", "100", "250", "500", "10k", "1m"].map(str::to_string)
+    );
+    assert_eq!(values, [50.0, 100.0, 250.0, 500.0, 10_000.0, 1_000_000.0]);
 }
 
 /// Both `strips.rs:size_strip` and `sell_strip` must route native MoonUI scroll callbacks through

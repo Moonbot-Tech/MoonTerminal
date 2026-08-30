@@ -36,7 +36,9 @@ pub(crate) use window::StrategyRevealRequest;
 pub use window::{RevealTarget, open, open_goto, reveal_name};
 use window::{STRATEGIES_HEADER_H, strategies_header};
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -188,6 +190,12 @@ pub struct StrategiesView {
     /// Selection alone does not bring a row on screen: only `MoonTreeState::scroll_to_item`
     /// does, and it needs the tree's item index, which exists only inside render.
     pending_scroll: Option<Key>,
+    /// Live `strat-tree-scroll` rectangle shared with an in-flight drag preview.
+    ///
+    /// Recreating this cell each frame would leave a mid-drag `DragChip` holding an empty
+    /// snapshot, hiding the chip forever after the first rebuild. One `Rc` is created in
+    /// [`StrategiesView::new`] and written from the tree wrapper's prepaint.
+    tree_field_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Retained scroll position of the full-mode parameter list, so a repaint or a mode round-trip
     /// does not jump the reader back to the top.
     params_scroll: MoonVirtualListScrollHandle,

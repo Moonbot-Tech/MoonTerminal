@@ -3,6 +3,9 @@
 //! [`super::dnd`], context menus in [`super::menu`], and pure path and collection logic
 //! in [`super::ops`].
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::super::*;
 use super::ops;
 use moon_ui::MoonButtonIconSlot;
@@ -121,11 +124,14 @@ pub(super) enum MenuTarget {
     DeletedStrategy(u64),
 }
 
-/// Drag-and-drop payload for strategies, containing the source core and IDs.
+/// Drag-and-drop payload for strategies, containing the source core, IDs, and originating window.
 #[derive(Clone)]
 pub(super) struct StratDrag {
     pub(super) core: CoreId,
     pub(super) ids: Vec<u64>,
+    /// Window that started this StratDrag. Event-time cancellation compares this against the
+    /// receiving window and must never pass the receiver as both arguments.
+    pub(super) origin_window: WindowId,
 }
 
 /// Drag-and-drop payload for a folder, containing its source core and path.
@@ -140,10 +146,110 @@ pub(super) struct DragChip {
     pub(super) label: SharedString,
     /// The tree's local text step, so the floating label matches the row it was dragged from.
     pub(super) step: f32,
+    /// Window that started this drag; other windows must not paint the chip.
+    pub(super) origin_window: WindowId,
+    /// Live folders-and-strategies field written by `strat-tree-scroll` prepaint.
+    pub(super) tree_field: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// When true, a failed paint gate also stops the process-global folder or strategy drag.
+    pub(super) stop_when_outside: bool,
+}
+
+/// Return whether a Strategies tree drag preview may paint at `pointer`.
+///
+/// GPUI stamps `App::active_drag` onto every window at the cursor. The chip is allowed only in
+/// the originating window and only while the cursor is inside the live `strat-tree-scroll`
+/// rectangle. Missing bounds hide rather than leak onto the first frame before prepaint.
+///
+/// Args:
+///     origin_window: Window that started the drag.
+///     paint_window: Window currently asked to paint the overlay.
+///     pointer: Cursor position in that paint window.
+///     tree_field: Latest `strat-tree-scroll` bounds, or `None` before the first prepaint.
+///
+/// Returns:
+///     `true` only when both windows match and `pointer` is strictly inside the half-open tree
+///     rectangle.
+pub(super) fn drag_chip_should_paint(
+    origin_window: WindowId,
+    paint_window: WindowId,
+    pointer: Point<Pixels>,
+    tree_field: Option<Bounds<Pixels>>,
+) -> bool {
+    origin_window == paint_window && tree_field.is_some_and(|bounds| bounds.contains(&pointer))
+}
+
+/// Return whether a StratDrag mouse-move must cancel the GPUI drag session.
+///
+/// An origin-window mismatch cancels independently of bounds. Same-window missing bounds defer
+/// only the rectangle decision: a move can land before prepaint writes the live field. Once
+/// bounds exist, leaving that rectangle cancels so the gesture cannot continue across versions,
+/// sections, params, or the chart.
+///
+/// Args:
+///     origin_window: Window that started the StratDrag.
+///     event_window: Window that received this drag-move sample.
+///     pointer: Cursor position for the sample.
+///     tree_field: Latest `strat-tree-scroll` bounds, or `None` before the first prepaint.
+///
+/// Returns:
+///     `true` when the production path must call `App::stop_active_drag`.
+pub(super) fn strat_drag_move_should_stop(
+    origin_window: WindowId,
+    event_window: WindowId,
+    pointer: Point<Pixels>,
+    tree_field: Option<Bounds<Pixels>>,
+) -> bool {
+    if origin_window != event_window {
+        return true;
+    }
+    let Some(bounds) = tree_field else {
+        return false;
+    };
+    !bounds.contains(&pointer)
+}
+
+/// Event-time StratDrag cancel decision. Origin comes from the payload, never from the receiving
+/// window twice.
+///
+/// Args:
+///     drag: Active StratDrag whose `origin_window` is the gesture's true start window.
+///     event_window: Window that received this drag-move sample.
+///     pointer: Cursor position for the sample.
+///     tree_field: Latest `strat-tree-scroll` bounds, or `None` before the first prepaint.
+///
+/// Returns:
+///     `true` when the production path must call `App::stop_active_drag`.
+pub(super) fn strat_drag_event_should_stop(
+    drag: &StratDrag,
+    event_window: WindowId,
+    pointer: Point<Pixels>,
+    tree_field: Option<Bounds<Pixels>>,
+) -> bool {
+    strat_drag_move_should_stop(drag.origin_window, event_window, pointer, tree_field)
 }
 
 impl Render for DragChip {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let paint_window = window.window_handle().window_id();
+        let pointer = window.mouse_position();
+        let tree_field = self.tree_field.get();
+        if self.stop_when_outside
+            && strat_drag_move_should_stop(self.origin_window, paint_window, pointer, tree_field)
+        {
+            // Overlay prepaint takes `App::active_drag` before this `Render::render` runs and
+            // restores it afterward (`moon-gpui` window draw), so a direct `stop_active_drag` is a
+            // no-op. Defer until the current effect cycle ends, after that restore.
+            window.defer(cx, |window, cx| {
+                cx.stop_active_drag(window);
+            });
+        }
+        // Both tree payloads opt into this shared paint gate, so neither preview can render
+        // outside its origin tree while the process-global drag is being stopped.
+        if self.stop_when_outside
+            && !drag_chip_should_paint(self.origin_window, paint_window, pointer, tree_field)
+        {
+            return div();
+        }
         let p = MoonPalette::active(cx);
         div()
             .px_2()
