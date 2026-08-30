@@ -490,3 +490,73 @@ hotkeys.fig_alert_hint:
   ru: "Заармить/разоружить chart-алерт по выделенной фигуре (ядро следит за пересечением цены)."
   en: "Arm/disarm a chart alert on the selected figure (the core watches for a price cross)."
   es: "Armar/desarmar una alerta de gráfico en la figura seleccionada (el núcleo vigila el cruce de precio)."
+
+hotkeys.pull.title:
+  ru: "Раскладка ядра"
+  en: "Core layout"
+  es: "Diseño del núcleo"
+hotkeys.pull.button:
+  ru: "Подтянуть раскладку с ядра"
+  en: "Pull layout from core"
+  es: "Extraer diseño del núcleo"
+hotkeys.pull.no_core:
+  ru: "Нет активного ядра — выберите ядро на графике, чтобы подтянуть его раскладку."
+  en: "No active core — pick a core on the chart to pull its layout."
+  es: "Sin núcleo activo — elige un núcleo en el gráfico para extraer su diseño."
+hotkeys.pull.pending:
+  ru: "Запрошено у ядра, ждём ответ..."
+  en: "Requested from the core, waiting for a reply..."
+  es: "Solicitado al núcleo, esperando respuesta..."
+hotkeys.pull.empty:
+  ru: "Ядро ещё не прислало свою раскладку хоткеев."
+  en: "The core has not reported a hotkey layout yet."
+  es: "El núcleo aún no ha informado un diseño de atajos."
+hotkeys.pull.live:
+  ru: "актуально"
+  en: "live"
+  es: "en vivo"
+hotkeys.pull.stale:
+  ru: "устарело"
+  en: "stale"
+  es: "desactualizado"
+hotkeys.pull.confirm:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"
+hotkeys.pull.cancel:
+  ru: "Отмена"
+  en: "Cancel"
+  es: "Cancelar"
+hotkeys.pull.applied:
+  ru: "Раскладка с ядра применена и сохранена."
+  en: "Core layout applied and saved."
+  es: "Diseño del núcleo aplicado y guardado."
+hotkeys.pull.nothing_to_apply:
+  ru: "Нет изменений для применения."
+  en: "Nothing to apply."
+  es: "No hay nada que aplicar."
+hotkeys.pull.verdict.empty:
+  ru: "не задано на ядре"
+  en: "unset on core"
+  es: "sin asignar en el núcleo"
+hotkeys.pull.verdict.unsupported:
+  ru: "клавиша ядра не распознана"
+  en: "core key not recognized"
+  es: "tecla del núcleo no reconocida"
+hotkeys.pull.verdict.unchanged:
+  ru: "совпадает"
+  en: "unchanged"
+  es: "sin cambios"
+hotkeys.pull.verdict.will_apply:
+  ru: "будет применено"
+  en: "will apply"
+  es: "se aplicará"
+hotkeys.pull.verdict.conflict:
+  ru: "конфликт — не будет применено"
+  en: "conflict — will not apply"
+  es: "conflicto — no se aplicará"
+
+hotkeys.ms_button_unresolved:
+  ru: "Стратегия «%{name}» не найдена среди Manual-стратегий ядра"
+  en: "Strategy \"%{name}\" not found among the core's Manual strategies"
+  es: "Estrategia «%{name}» no encontrada entre las estrategias Manual del núcleo"

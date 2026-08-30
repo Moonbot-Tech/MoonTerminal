@@ -40,9 +40,10 @@ use super::strategies::{
     strat_db_dump, strat_display_name, strat_kind_name,
 };
 use super::{
-    ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, CoreStartupStatus, CoreTimeOffsetStatus,
-    DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyEditPhase,
-    StrategyEditResult, StrategyEditRow, StrategyEditSnapshot, StrategyRow,
+    ConnStatus, CoreCmd, CoreConfigEditEvent, CoreEndpoint, CoreLogLine, CoreStartupStatus,
+    CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
+    SharedMoonClient, StrategyEditPhase, StrategyEditResult, StrategyEditRow, StrategyEditSnapshot,
+    StrategyRow,
 };
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::{DbMsg, ReportStart, ReportTx};
@@ -281,6 +282,7 @@ use convert::{
 use deadline::CoalescedDeadline;
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
+pub use shared_config::FieldMask;
 pub(in crate::feed) use shared_config::SharedConfigSequence;
 use startup_watchdog::{StartupStalled, StartupWatchdog};
 
@@ -630,10 +632,29 @@ pub(super) fn run(
     // for it.
     let mut init_completed = false;
     let mut startup_watchdog = StartupWatchdog::default();
+    // Stamps each `Submitted` row's wall-clock time (`SharedConfigSequence` has none of its own)
+    // and forwards the batch as `FeedMsg::CoreConfigEdit`. Returns `false` on a closed channel, the
+    // same break-on-send-error idiom every other publication in this loop follows.
+    let send_core_config_events = |batch: Vec<CoreConfigEditEvent>| -> bool {
+        for event in batch {
+            let event = match event {
+                CoreConfigEditEvent::Submitted(mut row) => {
+                    row.submitted_at_ms = now_ms_i64();
+                    CoreConfigEditEvent::Submitted(row)
+                }
+                other => other,
+            };
+            if tx.send(FeedMsg::CoreConfigEdit(event)).is_err() {
+                return false;
+            }
+        }
+        true
+    };
     loop {
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
         let mut orders_mutated = false;
+        let mut core_config_events = Vec::new();
         let command_drain = drain_commands(
             cmd_rx,
             &client,
@@ -646,9 +667,13 @@ pub(super) fn run(
             &mut strategy_placements,
             client_settings_sequence,
             shared_config_sequence,
+            &mut core_config_events,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
+        }
+        if !send_core_config_events(core_config_events) {
+            break;
         }
         // Publish an immediate best-effort order snapshot after a flagged command, bypassing the
         // event gate and 250 ms throttle. Some retained-order edits may already be visible locally,
@@ -1445,15 +1470,32 @@ pub(super) fn run(
             // provoke another compact echo, and burn the attempt budget on a write already in
             // flight. The other two events only mean the OVERLAY changed, which is why they
             // republish the projection above.
-            if events.iter().any(|ev| {
-                matches!(ev, &Event::Settings(SettingsEvent::SharedConfigUpdated))
-            }) {
+            if events
+                .iter()
+                .any(|ev| matches!(ev, &Event::Settings(SettingsEvent::SharedConfigUpdated)))
+            {
                 shared_config_sequence.observe_update();
             }
             if client_settings_sequence.is_idle() {
-                shared_config_sequence.drive(&client, server.id);
+                let mut core_config_events = Vec::new();
+                shared_config_sequence.drive(&client, server.id, &mut core_config_events);
+                if !send_core_config_events(core_config_events) {
+                    break;
+                }
             }
-            if tx.send(FeedMsg::CoreConfig(config)).is_err() {
+            // Provenance travels with the message: only a real `SharedConfigUpdated` full-snapshot
+            // echo may advance `core_config_recv_rev` in the store, for the same reason the write
+            // barrier above does not lift on a compact-overlay republication.
+            let from_full_snapshot = events
+                .iter()
+                .any(|ev| matches!(ev, &Event::Settings(SettingsEvent::SharedConfigUpdated)));
+            if tx
+                .send(FeedMsg::CoreConfig {
+                    config,
+                    from_full_snapshot,
+                })
+                .is_err()
+            {
                 break;
             }
         }

@@ -157,6 +157,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 synthetic: false,
                 chart_bundle: m.map(|m| m.chart_bundle.clone()).unwrap_or_default(),
                 default_alert_strategy: m.map(|m| m.default_alert_strategy).unwrap_or(0),
+                use_core_manual_config: m.is_some_and(|m| m.use_core_manual_config),
                 transport,
             }
         })
@@ -267,6 +268,7 @@ pub fn split(
                 color: s.color,
                 chart_bundle: s.chart_bundle.clone(),
                 default_alert_strategy: s.default_alert_strategy,
+                use_core_manual_config: s.use_core_manual_config,
                 transport: s.transport,
             })
             .collect(),

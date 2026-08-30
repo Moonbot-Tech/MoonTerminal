@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use crate::config::{MoveKind, MoveSide};
 use crate::data::OrderBookModel;
 use crate::feed::{
-    ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, NewStrategySpec,
+    ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, FieldMask, NewStrategySpec,
     OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
@@ -672,13 +672,32 @@ impl SessionManager {
         )
     }
 
-    /// Write the settings popup's complete projection to a core's safe-share configuration.
+    /// Write a core's safe-share configuration, restricted to the areas `touched` names.
     ///
     /// The feed rebuilds the packet from the core's freshest retained snapshot and waits for its
-    /// echo before sending another, so a caller may issue this per OK press without tracking the
-    /// core's own state.
-    pub fn edit_core_config(&self, core: CoreId, config: CoreConfig) -> Result<()> {
-        self.send_core_cmd(core, CoreCmd::EditCoreConfig(config), "edit core config")
+    /// echo before sending another, so a caller may issue this per OK press or per toolbar edit
+    /// without tracking the core's own state. `config` is still the COMPLETE projection — `touched`
+    /// only says which of its fields this edit actually asked to change; see
+    /// [`crate::feed::FieldMask`]. The gear popup passes [`FieldMask::RENDERED_SECTIONS`] so an OK
+    /// can never reach the manual block, checkbox on or off.
+    pub fn edit_core_config(
+        &self,
+        core: CoreId,
+        config: CoreConfig,
+        touched: FieldMask,
+    ) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::EditCoreConfig { config, touched },
+            "edit core config",
+        )
+    }
+
+    /// Request a fresh safe-share configuration read directly from the core, bypassing the
+    /// runtime's own background poll. The answer arrives as the usual `FeedMsg::CoreConfig`
+    /// full-snapshot echo.
+    pub fn refresh_shared_config(&self, core: CoreId) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::RefreshSharedConfig, "refresh shared config")
     }
 
     /// Synchronize every visible manual-exit control to one core without changing core-owned fields.

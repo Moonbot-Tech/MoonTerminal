@@ -107,6 +107,13 @@ pub struct ServerConfig {
     /// This is local terminal config because the protocol does not provide the core default.
     #[serde(default)]
     pub default_alert_strategy: u64,
+    /// Whether manual-trading order sizes/strategies/exits for this core are read from the
+    /// core's own shared config instead of the group-local settings. Defaults to `false`,
+    /// deliberately: turning this on by default would change the numbers a trader sizes orders
+    /// from on the first launch after an upgrade, and the group-local route must stay
+    /// byte-for-byte unchanged until the user opts in.
+    #[serde(default)]
+    pub use_core_manual_config: bool,
     /// MoonProto transport mode to connect with; `None` falls back to what the key encodes.
     ///
     /// See [`TransportVersion`] for why this is stored at all instead of always reading the key.

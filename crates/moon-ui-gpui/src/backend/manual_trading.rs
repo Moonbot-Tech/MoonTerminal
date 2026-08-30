@@ -9,10 +9,37 @@ use std::time::{Duration, Instant};
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, StrategyRow};
+use moon_core::feed::{ClientSettingsEdit, CoreConfigState, FieldMask, StrategyRow};
 use moon_core::session::CoreId;
+use moon_core::session::store::CoreData;
 
 use crate::Backend;
+
+/// Where the toolbar's visible manual-trading block (sizes, TP/SL, sell presets) is sourced from.
+///
+/// `GroupLocal` is reached only when the per-core opt-in is off or no chart core resolved — the
+/// exact, unconditional path every group-window toolbar has always used. `Core` is reached
+/// whenever the opt-in is on, regardless of whether the core has reported real values yet: an
+/// enabled-but-`Awaiting` core never silently falls back to group-local numbers, which would look
+/// exactly like the checkbox being off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ManualSource {
+    GroupLocal,
+    Core(CoreConfigState),
+}
+
+/// Combine two independent core-config arrivals (sizes from `core_config.manual`, exits from
+/// `client_settings`) into the ONE freshness state the toolbar shows for the whole manual-trading
+/// block. The weaker of the two always wins: a `Live` size beside an `Awaiting` exit is shown as
+/// `Awaiting`, never as a live number sitting beside a stale one with no marker.
+pub(crate) fn weaker_config_state(a: CoreConfigState, b: CoreConfigState) -> CoreConfigState {
+    use CoreConfigState::{Awaiting, Live, Stale};
+    match (a, b) {
+        (Awaiting, _) | (_, Awaiting) => Awaiting,
+        (Stale, _) | (_, Stale) => Stale,
+        (Live, Live) => Live,
+    }
+}
 
 /// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
 pub(crate) const MANUAL_STRATEGY_KIND: u8 = 12;
@@ -242,9 +269,209 @@ impl Backend {
             })
     }
 
-    /// Select an F1-F6 USD-equivalent preset for one group.
+    /// Whether `core` reads its manual-trading order sizes, strategies, and exits from its own
+    /// shared core config instead of the group-local settings.
+    pub(crate) fn core_manual_enabled(&self, core: CoreId) -> bool {
+        self.config
+            .servers
+            .iter()
+            .find(|server| server.id == core)
+            .is_some_and(|server| server.use_core_manual_config)
+    }
+
+    /// Set the per-core manual-config opt-in, mirroring the live edit into an open Settings preview
+    /// exactly like [`Self::update_group_trade`] (contract: `docs/ARCHITECTURE.md`'s preview-mirror
+    /// rule, `set_core_manual_enabled` never skips it).
+    pub(crate) fn set_core_manual_enabled(&mut self, core: CoreId, on: bool) {
+        if let Some(server) = self.config.servers.iter_mut().find(|s| s.id == core) {
+            server.use_core_manual_config = on;
+        }
+        if let Some(preview_server) = self
+            .preview
+            .as_mut()
+            .and_then(|preview| preview.servers.iter_mut().find(|s| s.id == core))
+        {
+            preview_server.use_core_manual_config = on;
+        }
+        self.config_dirty = true;
+    }
+
+    /// Resolve the core a group-local manual-trading write must instead reach, because the
+    /// group's active trading core has opted into the core route. `None` means the write proceeds
+    /// group-local exactly as before. This is the ONE choke point every group-local writer
+    /// (`set_order_size_sel`, `set_order_size_value`, `edit_group_exit`) checks, so a hotkey, a
+    /// strip click, a Settings-panel input, and a metric popup cannot reach three different
+    /// conclusions about which core (if any) a write must go to.
+    ///
+    /// Gates on [`Self::active_trade_core`] rather than the hover-aware chart display core the
+    /// toolbar renders from: the toolbar's own strips additionally go non-interactive against the
+    /// hover-aware core at render time (see [`Self::manual_display_matches_write`]), so the two
+    /// together close the gap even in the narrow case where hovering a different chart in the
+    /// same group briefly disagrees with this fallback.
+    pub(crate) fn manual_write_core(&self, group: &str) -> Option<CoreId> {
+        self.active_trade_core(group)
+            .filter(|&core| self.core_manual_enabled(core))
+    }
+
+    /// Whether a manual-trading control seeded from `display_core` would write to the source it
+    /// just showed.
+    ///
+    /// The toolbar's displayed core (`toolbar::effective_chart_display_core`) is hover-aware,
+    /// while every write targets [`Self::manual_write_core`], which is not: hovering a chart whose
+    /// core differs from the group's active trading core — with either or both opted into the
+    /// per-core route — can make the two disagree while the strip is still rendered as live. A
+    /// control this answers `false` for must go non-interactive rather than mutate a source other
+    /// than the one on screen (goal A2 FIX-3): a disabled control with a reason beats a live
+    /// control that silently writes elsewhere.
+    ///
+    /// Args:
+    ///     group: Window group whose manual-trading controls are being gated.
+    ///     display_core: The hover-aware core the toolbar is currently showing values from.
+    ///
+    /// Returns:
+    ///     `true` when the displayed source and the write target agree — both group-local, or the
+    ///     same core.
+    pub(crate) fn manual_display_matches_write(
+        &self,
+        group: &str,
+        display_core: Option<CoreId>,
+    ) -> bool {
+        let display_target = display_core.filter(|&core| self.core_manual_enabled(core));
+        display_target == self.manual_write_core(group)
+    }
+
+    /// Return the core's retained manual order-size preset block and its freshness, tolerant of a
+    /// stale-but-retained snapshot. `None` only while the core has never reported one at all.
+    pub(crate) fn core_manual_sizes(
+        &self,
+        core: CoreId,
+    ) -> Option<([f64; 6], usize, CoreConfigState)> {
+        let data = self.session.store().core(core)?;
+        let cfg = data.core_config.as_ref()?;
+        Some((
+            cfg.manual.order_sizes,
+            cfg.manual.order_size_sel.min(5),
+            data.core_config_state(),
+        ))
+    }
+
+    /// One resolver for the toolbar, hotkeys, and every metric popup: the effective F1-F6 sizes,
+    /// selected slot, and their source, so no caller reaches a different conclusion than another.
+    ///
+    /// `core` is the chart display core, or `None` with no chart addressed. `GroupLocal` is
+    /// returned only when the opt-in is off (or `core` is `None`); once it is on the source is
+    /// always `Core`, using a neutral placeholder while genuinely `Awaiting` rather than silently
+    /// reverting to group-local numbers that would look like the checkbox is off.
+    pub(crate) fn effective_order_size_state(
+        &self,
+        group: &str,
+        core: Option<CoreId>,
+    ) -> ([f64; 6], usize, ManualSource) {
+        if let Some(core) = core.filter(|&core| self.core_manual_enabled(core)) {
+            return match self.core_manual_sizes(core) {
+                Some((sizes, sel, state)) => (sizes, sel, ManualSource::Core(state)),
+                None => (
+                    DEFAULT_ORDER_SIZES_USD,
+                    2,
+                    ManualSource::Core(CoreConfigState::Awaiting),
+                ),
+            };
+        }
+        let (sizes, sel) = self.manual_order_size_state(group);
+        (sizes, sel, ManualSource::GroupLocal)
+    }
+
+    /// Resolve the group's F1-F6 USD-equivalent presets through the SAME source
+    /// [`Self::set_order_size_value`] / [`Self::set_order_size_sel`] will write to.
+    ///
+    /// Every wheel-step or inline-editor seed that feeds one of those writes reads THIS, never
+    /// [`Self::manual_order_size_state`] directly: a relative edit (Ctrl+wheel) must be computed
+    /// against the value about to be overwritten, not against the group's generation while the
+    /// write lands on the core's (goal A2 FIX-1).
+    ///
+    /// Args:
+    ///     group: Window group whose write-target presets are requested.
+    ///
+    /// Returns:
+    ///     The six presets and selected slot from [`Self::manual_write_core`]'s source, or the
+    ///     group-local generation while that source is `None`.
+    pub(crate) fn write_aligned_order_sizes(&self, group: &str) -> ([f64; 6], usize) {
+        let (sizes, sel, _source) =
+            self.effective_order_size_state(group, self.manual_write_core(group));
+        (sizes, sel)
+    }
+
+    /// Exit twin of [`Self::effective_order_size_state`]: the core's retained
+    /// `ClientSettings::group_exit_settings()` when the opt-in is on and available, else the
+    /// group-local exit generation. Reuses existing machinery entirely — no new projection.
+    pub(crate) fn effective_group_exit(
+        &self,
+        group: &str,
+        core: Option<CoreId>,
+    ) -> (GroupExitSettings, ManualSource) {
+        if let Some(core) = core.filter(|&core| self.core_manual_enabled(core)) {
+            let data = self.session.store().core(core);
+            return match data.and_then(|data| data.client_settings.as_ref()) {
+                Some(settings) => (
+                    settings.group_exit_settings(),
+                    // The exit half's freshness comes from `CoreData` itself, which owns the
+                    // latched `client_settings_stale` marker. A local approximation here would
+                    // miss that latch and read `Live` for a reconnect that reached `Ready` again
+                    // before a fresh snapshot arrived.
+                    ManualSource::Core(
+                        data.map_or(CoreConfigState::Awaiting, CoreData::client_settings_state),
+                    ),
+                ),
+                None => (
+                    GroupExitSettings::default(),
+                    ManualSource::Core(CoreConfigState::Awaiting),
+                ),
+            };
+        }
+        (self.group_exit_settings(group), ManualSource::GroupLocal)
+    }
+
+    /// Resolve the group's complete exit generation through the SAME source
+    /// [`Self::edit_group_exit`] will write to.
+    ///
+    /// Every TP/SL/S-slot reader that feeds a subsequent [`Self::edit_group_exit`] write — popup
+    /// seeding, the Extended-TP toggle, the stop-market checkbox, S-slot wheel and inline editing
+    /// — reads THIS, never [`Self::group_exit_settings`] directly, so it can never be computed
+    /// against a different generation than the one about to be overwritten (goal A2 FIX-2).
+    ///
+    /// Args:
+    ///     group: Window group whose write-target exit generation is requested.
+    ///
+    /// Returns:
+    ///     The exit generation from [`Self::manual_write_core`]'s source, or the group-local
+    ///     generation while that source is `None`.
+    pub(crate) fn write_aligned_group_exit(&self, group: &str) -> GroupExitSettings {
+        self.effective_group_exit(group, self.manual_write_core(group)).0
+    }
+
+    /// Select an F1-F6 USD-equivalent preset for one group, or the group's active core when its
+    /// per-core opt-in is on: the choke point re-targets the write onto the core's own shared
+    /// config rather than the group-local settings.
     pub(crate) fn set_order_size_sel(&mut self, group: &str, ix: usize) {
         if ix >= 6 {
+            return;
+        }
+        if let Some(core) = self.manual_write_core(group) {
+            let Some(data) = self.session.store().core(core) else {
+                return;
+            };
+            // A `None` `core_config` REFUSES rather than inventing defaults for the other ~90
+            // fields a whole-projection write would otherwise have to guess.
+            let Some(mut cfg) = data.core_config.clone() else {
+                return;
+            };
+            cfg.manual.order_size_sel = ix;
+            if let Err(error) =
+                self.session
+                    .edit_core_config(core, cfg, FieldMask::EMPTY.with_order_size_sel())
+            {
+                log::warn!("set order size sel failed: core={core}: {error:#}");
+            }
             return;
         }
         self.update_group_trade(group, |trade| trade.order_size_sel = ix);
@@ -256,14 +483,52 @@ impl Backend {
         sizes[sel]
     }
 
-    /// Convert a target core's group-local USD amount into that core's base currency.
+    /// Resolve the USD-equivalent order size for a real order about to reach `core`, refusing
+    /// rather than guessing when the core route is on but has not yet reported a real value.
+    ///
+    /// Unlike [`Self::effective_order_size_state`] (which renders a neutral placeholder while
+    /// `Awaiting`, correct for a toolbar that must draw six cells regardless), a placeholder here
+    /// would size a real order from `DEFAULT_ORDER_SIZES_USD` while the user believes it is sized
+    /// from their configured core. `None` therefore means "do not place this order", not "show 0".
+    fn effective_order_size_usd_for_order(&self, group: &str, core: CoreId) -> Option<f64> {
+        if self.core_manual_enabled(core) {
+            let (sizes, sel, _state) = self.core_manual_sizes(core)?;
+            Some(sizes[sel])
+        } else {
+            Some(self.manual_order_size_usd(group))
+        }
+    }
+
+    /// Exit twin of [`Self::effective_order_size_usd_for_order`]: the core's own retained exit
+    /// generation when the core route is on, refusing rather than sending a blank/default exit
+    /// when the core has never reported `ClientSettings`.
+    fn effective_group_exit_for_order(
+        &self,
+        group: &str,
+        core: CoreId,
+    ) -> Option<GroupExitSettings> {
+        if self.core_manual_enabled(core) {
+            let settings = self
+                .session
+                .store()
+                .core(core)
+                .and_then(|data| data.client_settings.as_ref())?;
+            Some(settings.group_exit_settings())
+        } else {
+            Some(self.group_exit_settings(group))
+        }
+    }
+
+    /// Convert a target core's effective USD amount — group-local, or the core's own when the
+    /// per-core opt-in is on (display and order must never be able to disagree) — into that
+    /// core's base currency.
     pub(crate) fn manual_order_size_base(&self, core: CoreId) -> Option<(f64, f64)> {
         let server = self
             .config
             .servers
             .iter()
             .find(|server| server.id == core)?;
-        let usd = self.manual_order_size_usd(&server.group);
+        let usd = self.effective_order_size_usd_for_order(&server.group, core)?;
         let base = self.session.core_base(core)?;
         let size = usd_to_base_amount(
             usd,
@@ -277,7 +542,11 @@ impl Backend {
         self.manual_order_size_base(core).map(|(_, usd)| usd)
     }
 
-    /// Resolve group-owned exit settings and either the visible USD size or a FireTest override.
+    /// Resolve the effective exit settings and either the visible USD size or a FireTest override.
+    ///
+    /// Both `exit` and the size (through [`Self::manual_order_size_base`]) come from the SAME
+    /// effective resolver the display uses, gated on the per-core flag: a trader sizing from a
+    /// number the order does not use is the worst failure this goal can ship.
     pub(crate) fn manual_order_terms(
         &self,
         core: CoreId,
@@ -288,7 +557,7 @@ impl Backend {
             .servers
             .iter()
             .find(|server| server.id == core)?;
-        let exit = self.group_exit_settings(&server.group);
+        let exit = self.effective_group_exit_for_order(&server.group, core)?;
         let (size_base, size_usd) = match size_base_override {
             Some(size) if size.is_finite() && size > 0.0 => (size, None),
             Some(_) => return None,
@@ -304,15 +573,30 @@ impl Backend {
         })
     }
 
-    /// Return one group-local USD-equivalent F1-F6 preset.
-    pub(crate) fn order_size_value(&self, group: &str, ix: usize) -> f64 {
-        let (sizes, _) = self.manual_order_size_state(group);
-        sizes[ix.min(sizes.len().saturating_sub(1))]
-    }
-
-    /// Write one group-local USD-equivalent F1-F6 preset.
+    /// Write one USD-equivalent F1-F6 preset, group-local or (per-core opt-in on) through the
+    /// core's own shared config. The zero/non-finite guard above is client-side and applies
+    /// identically to both routes, so a core-side `NotApplied` stays reserved for a genuine core
+    /// refusal rather than a request already known to be bad.
     pub(crate) fn set_order_size_value(&mut self, group: &str, ix: usize, value: f64) {
         if ix >= 6 || !(value.is_finite() && value > 0.0) {
+            return;
+        }
+        if let Some(core) = self.manual_write_core(group) {
+            let Some(data) = self.session.store().core(core) else {
+                return;
+            };
+            // A `None` `core_config` REFUSES — the same principle as the money path, and the only
+            // way to avoid inventing defaults for the other ~90 fields.
+            let Some(mut cfg) = data.core_config.clone() else {
+                return;
+            };
+            cfg.manual.order_sizes[ix] = value;
+            if let Err(error) =
+                self.session
+                    .edit_core_config(core, cfg, FieldMask::EMPTY.with_order_size_slot(ix))
+            {
+                log::warn!("set order size value failed: core={core}: {error:#}");
+            }
             return;
         }
         self.update_group_trade(group, |trade| trade.order_sizes_usd[ix] = value);
@@ -326,13 +610,34 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    /// Return one visible S1-S6 percentage for a group.
-    pub(crate) fn fixed_sell_pct(&self, group: &str, ix: usize) -> f64 {
-        self.group_exit_settings(group).fixed_sell_pcts[ix.min(5)]
-    }
-
-    /// Apply a visible ClientSettings edit to the group's local source of truth.
+    /// Apply a visible ClientSettings edit to the group's local source of truth, or (per-core
+    /// opt-in on) to the group's active core's own exit generation through the EXISTING
+    /// `sync_group_exit` command path — TP/SL/S1-S6 stay on the `ClientSettingsEdit` channel,
+    /// unchanged. Refuses rather than guessing while the core has not reported `ClientSettings`
+    /// yet: editing a synthesized default exit and pushing it would overwrite whatever the core
+    /// actually has.
     pub(crate) fn edit_group_exit(&mut self, group: &str, edit: ClientSettingsEdit) -> bool {
+        if let Some(core) = self.manual_write_core(group) {
+            let Some(settings) = self
+                .session
+                .store()
+                .core(core)
+                .and_then(|data| data.client_settings.as_ref())
+            else {
+                return false;
+            };
+            let mut exit = settings.group_exit_settings();
+            if !apply_group_exit_edit(&mut exit, edit) {
+                return false;
+            }
+            return match self.session.sync_group_exit(core, exit) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("edit group exit failed: core={core}: {error:#}");
+                    false
+                }
+            };
+        }
         let mut exit = self.group_exit_settings(group);
         if !apply_group_exit_edit(&mut exit, edit) {
             return false;
@@ -369,6 +674,13 @@ impl Backend {
             .iter()
             .filter(|server| server.active && live_ids.contains(&server.id))
         {
+            // A core reading its own manual config keeps its own exit generation. Pushing the
+            // group's local exit here would overwrite the very core values the checkbox exists to
+            // respect, within one tick, regardless of what the order path does.
+            if server.use_core_manual_config {
+                self.group_exit_sync.remove(&server.id);
+                continue;
+            }
             let exit = self.group_exit_settings(&server.group);
             let (revision, ready, matches) = self
                 .session

@@ -14,7 +14,7 @@ use std::collections::hash_map::Entry;
 use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState, MoonSliderEvent, MoonSliderState};
 
-use moon_core::feed::CoreConfig;
+use moon_core::feed::{CoreConfig, FieldMask};
 
 use crate::shell::Shell;
 use crate::shell::core_settings::resolve_core_settings_write;
@@ -131,7 +131,15 @@ impl Shell {
             cx.notify();
             return;
         };
-        if let Err(error) = b.session.edit_core_config(core, draft.clone()) {
+        // The popup renders exactly four sections — AutoStart, BtcBlink, General, Leverage — and
+        // may write only those: the manual block belongs to the toolbar, never to a page this
+        // popup does not draw. Naming the mask here, rather than deriving it from what changed, is
+        // what makes an OK unable to reach the manual block AT ALL, checkbox on or off — not merely
+        // unlikely to in the common case.
+        if let Err(error) =
+            b.session
+                .edit_core_config(core, draft.clone(), FieldMask::RENDERED_SECTIONS)
+        {
             log::warn!("core config edit failed: {error:#}");
         }
         // The blacklist-delta filter has a client-side half that moonproto applies to its own

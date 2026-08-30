@@ -288,3 +288,7 @@ conn.tip.arb:
   ru: "Арбитраж"
   en: "Arbitrage"
   es: "Arbitraje"
+conn.use_core_manual_config:
+  ru: "Ручная торговля по настройкам ядра"
+  en: "Manual trading from the core's own settings"
+  es: "Trading manual desde la configuración propia del núcleo"

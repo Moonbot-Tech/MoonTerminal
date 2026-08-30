@@ -1,7 +1,8 @@
 use moonproto::shared_config::SharedConfig;
 
 use super::{
-    apply_core_config, core_config_from_proto, SequenceAction, SharedConfigSequence, MAX_ATTEMPTS,
+    FieldMask, MAX_ATTEMPTS, SequenceAction, SharedConfigSequence, apply_core_config,
+    core_config_from_proto,
 };
 use crate::feed::{AutoStartSettings, CoreConfig};
 
@@ -14,7 +15,8 @@ fn edit_from(cfg: &SharedConfig, mutate: impl FnOnce(&mut AutoStartSettings)) ->
 
 /// Extract the next full config or fail with the unexpected action.
 fn next_config(sequence: &mut SharedConfigSequence, base: &SharedConfig) -> SharedConfig {
-    match sequence.next_action(base) {
+    let mut events = Vec::new();
+    match sequence.next_action(base, &mut events) {
         SequenceAction::Send { config, .. } => *config,
         SequenceAction::Idle => panic!("expected a shared config send"),
     }
@@ -30,7 +32,10 @@ fn unchanged_work_time_window_is_not_rewritten() {
     base.trading.auto_start.work_time_to = 0.9999;
 
     let mut sequence = SharedConfigSequence::new();
-    sequence.enqueue(edit_from(&base, |s| s.auto_stop_loss = 250.0));
+    sequence.enqueue(
+        edit_from(&base, |s| s.auto_stop_loss = 250.0),
+        FieldMask::RENDERED_SECTIONS,
+    );
     let sent = next_config(&mut sequence, &base);
 
     assert_eq!(sent.trading.auto_start.work_time_to, 0.9999);
@@ -43,7 +48,10 @@ fn changed_work_time_window_is_written() {
     base.trading.auto_start.work_time_to = 0.9999;
 
     let mut sequence = SharedConfigSequence::new();
-    sequence.enqueue(edit_from(&base, |s| s.work_time_to_min = 720));
+    sequence.enqueue(
+        edit_from(&base, |s| s.work_time_to_min = 720),
+        FieldMask::RENDERED_SECTIONS,
+    );
     let sent = next_config(&mut sequence, &base);
 
     assert!((sent.trading.auto_start.work_time_to - 0.5).abs() < f64::EPSILON);
@@ -55,9 +63,13 @@ fn changed_work_time_window_is_written() {
 fn edit_already_reflected_is_dropped_without_a_send() {
     let base = SharedConfig::default();
     let mut sequence = SharedConfigSequence::new();
-    sequence.enqueue(edit_from(&base, |_| {}));
+    sequence.enqueue(edit_from(&base, |_| {}), FieldMask::RENDERED_SECTIONS);
 
-    assert!(matches!(sequence.next_action(&base), SequenceAction::Idle));
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&base, &mut events),
+        SequenceAction::Idle
+    ));
 }
 
 /// Regression target: removing the echo barrier lets a second OK press build on the pre-edit
@@ -66,12 +78,19 @@ fn edit_already_reflected_is_dropped_without_a_send() {
 fn send_waits_for_the_core_echo() {
     let base = SharedConfig::default();
     let mut sequence = SharedConfigSequence::new();
-    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9));
+    sequence.enqueue(
+        edit_from(&base, |s| s.errors_level = 9),
+        FieldMask::RENDERED_SECTIONS,
+    );
     let sent = next_config(&mut sequence, &base);
-    sequence.observe_send_success(&sent, 1);
+    sequence.observe_send_success(&sent, 1, FieldMask::RENDERED_SECTIONS);
 
     // The core has not echoed yet, so the still-stale base must produce no second send.
-    assert!(matches!(sequence.next_action(&base), SequenceAction::Idle));
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&base, &mut events),
+        SequenceAction::Idle
+    ));
 
     sequence.observe_update();
     let echoed = {
@@ -80,7 +99,7 @@ fn send_waits_for_the_core_echo() {
         cfg
     };
     assert!(matches!(
-        sequence.next_action(&echoed),
+        sequence.next_action(&echoed, &mut events),
         SequenceAction::Idle
     ));
 }
@@ -91,23 +110,29 @@ fn send_waits_for_the_core_echo() {
 fn unconfirmed_edit_is_dropped_after_three_attempts() {
     let base = SharedConfig::default();
     let mut sequence = SharedConfigSequence::new();
-    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9));
+    sequence.enqueue(
+        edit_from(&base, |s| s.errors_level = 9),
+        FieldMask::RENDERED_SECTIONS,
+    );
 
     for _ in 0..MAX_ATTEMPTS {
         let sent = next_config(&mut sequence, &base);
         // Attempts are charged to a SENT packet, so a test that only plans one would loop forever.
-        sequence.observe_send_success(&sent, 1);
+        sequence.observe_send_success(&sent, 1, FieldMask::RENDERED_SECTIONS);
         sequence.observe_update();
     }
-    assert!(matches!(sequence.next_action(&base), SequenceAction::Idle));
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&base, &mut events),
+        SequenceAction::Idle
+    ));
 }
 
-/// Regression target: a field added to [`CoreConfig`] but forgotten in `apply_core_config` reads
-/// back with the core's old value, so the echo never matches what was queued and every OK press
-/// burns the retry budget before being dropped. Round-tripping the whole projection catches that
-/// the moment the field is added rather than on a live core.
+/// Regression target: a field added to one of the four popup-rendered `CoreConfig` sections but
+/// forgotten in `apply_core_config` reads back with the core's old value, so the echo never
+/// matches what was queued and every OK press burns the retry budget before being dropped.
 #[test]
-fn every_projected_field_survives_a_write_and_read_back() {
+fn every_rendered_field_survives_a_write_and_read_back() {
     let base = SharedConfig::default();
     let mut wanted = core_config_from_proto(&base);
 
@@ -137,6 +162,67 @@ fn every_projected_field_survives_a_write_and_read_back() {
     wanted.leverage.lev_control = "x2".to_string();
 
     let mut written = base.clone();
-    apply_core_config(&mut written, &wanted);
-    assert_eq!(core_config_from_proto(&written), wanted);
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+    let round_tripped = core_config_from_proto(&written);
+    assert_eq!(round_tripped.auto_start, wanted.auto_start);
+    assert_eq!(round_tripped.btc_blink, wanted.btc_blink);
+    assert_eq!(round_tripped.general, wanted.general);
+    assert_eq!(round_tripped.leverage, wanted.leverage);
+}
+
+/// Regression target: omitting `apply_manual` from `apply_core_config` loses a newly projected
+/// manual order-size field, so the toolbar cannot send the preset the trader selected.
+#[test]
+fn every_touched_manual_field_survives_a_write_and_read_back() {
+    let base = SharedConfig::default();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.manual.order_sizes[2] = 187.5;
+    wanted.manual.order_size_sel = 2;
+
+    let mut written = base.clone();
+    let touched = FieldMask::EMPTY
+        .with_order_size_slot(2)
+        .with_order_size_sel();
+    apply_core_config(&mut written, &wanted, touched);
+
+    let round_tripped = core_config_from_proto(&written);
+    assert_eq!(round_tripped.manual.order_sizes[2], 187.5);
+    assert_eq!(round_tripped.manual.order_size_sel, 2);
+}
+
+/// Regression target: making `apply_core_config` ignore `FieldMask::RENDERED_SECTIONS` writes the
+/// popup's stale manual order size, so pressing OK reverts a toolbar change made after the draft
+/// was seeded.
+#[test]
+fn popup_commit_mask_preserves_manual_order_size_changed_after_seed() {
+    let base = SharedConfig::default();
+    let mut popup_draft = core_config_from_proto(&base);
+    popup_draft.general.take_profit_on = true;
+
+    let mut latest = base.clone();
+    latest.ui.hotkeys_config.o_size[4] = 640.0;
+    apply_core_config(&mut latest, &popup_draft, FieldMask::RENDERED_SECTIONS);
+
+    assert!(latest.trading.use_g_take_profit);
+    assert_eq!(latest.ui.hotkeys_config.o_size[4], 640.0);
+}
+
+/// Regression target: making `apply_core_config` ignore the narrow order-size mask lets a second
+/// queued toolbar edit restore the first preset's stale value, so a trader's first order-size edit
+/// is silently discarded before it can be used for an order.
+#[test]
+fn two_queued_narrow_order_size_edits_keep_both_values() {
+    let base = SharedConfig::default();
+    let mut first = core_config_from_proto(&base);
+    first.manual.order_sizes[0] = 125.0;
+    let mut second = core_config_from_proto(&base);
+    second.manual.order_sizes[1] = 250.0;
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(first, FieldMask::EMPTY.with_order_size_slot(0));
+    sequence.enqueue(second, FieldMask::EMPTY.with_order_size_slot(1));
+
+    let sent = next_config(&mut sequence, &base);
+    assert_eq!(sent.ui.hotkeys_config.o_size[0], 125.0);
+    assert_eq!(sent.ui.hotkeys_config.o_size[1], 250.0);
 }

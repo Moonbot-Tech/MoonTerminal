@@ -15,6 +15,7 @@ pub mod types;
 
 pub use conn_verdict::{Diagnosis, FailureClass, diagnose};
 pub use core_label::{clear_core_name, core_label, set_core_name};
+pub use live::FieldMask;
 pub use news::{NewsItem, NewsSnapshot};
 pub use types::*;
 
@@ -434,8 +435,18 @@ pub enum CoreCmd {
     /// the core's echo like [`CoreCmd::EditClientSettings`].
     ///
     /// Carries the whole projection rather than one tab: the gear popup commits every tab under one
-    /// OK, and the transport sends a complete snapshot per write regardless.
-    EditCoreConfig(CoreConfig),
+    /// OK, and the transport sends a complete snapshot per write regardless. `touched` names which
+    /// of `config`'s fields this edit actually asked to change — set by the caller, never derived —
+    /// so `apply_core_config` writes only those; see [`FieldMask`].
+    EditCoreConfig {
+        config: CoreConfig,
+        touched: FieldMask,
+    },
+    /// Request the core's current safe-share configuration and return immediately; the answer
+    /// arrives as the usual `FeedMsg::CoreConfig` full-snapshot echo. Fire-and-forget, for a
+    /// one-shot refresh such as a hotkey pull that must observe the core's OWN value rather than
+    /// wait for the runtime's own background poll.
+    RefreshSharedConfig,
     /// Synchronize complete visible group exit settings through the per-core serializer.
     SyncGroupExit(crate::config::GroupExitSettings),
     /// Toggle account hedge mode for dual-side positions. This performs a live exchange action

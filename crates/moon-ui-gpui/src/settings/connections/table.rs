@@ -409,6 +409,7 @@ impl SettingsView {
                     synthetic: false,
                     chart_bundle: String::new(),
                     default_alert_strategy: 0,
+                    use_core_manual_config: false,
                     // No key yet, so no mode to seed: pasting one fills this in.
                     transport: None,
                 });

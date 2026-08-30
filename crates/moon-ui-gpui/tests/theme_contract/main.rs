@@ -19,6 +19,7 @@ mod chart;
 mod core_pick;
 mod core_status;
 mod naming;
+mod shared_config;
 mod shell;
 mod shot;
 mod startup;

@@ -97,7 +97,7 @@ pub fn header(
     };
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
-    let manual = crate::controls::manual_strategy_controls(group, &backend, p, cx);
+    let manual = crate::controls::manual_strategy_controls(group, &backend, chrome_width, p, cx);
     let update_state = updater.read(cx).state();
     h_flex()
         .w_full()

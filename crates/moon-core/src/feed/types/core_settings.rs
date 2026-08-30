@@ -8,6 +8,11 @@
 //! module projects the slice of that snapshot the gear popup renders; adding a tab means adding
 //! fields here and to `feed::live::shared_config`'s read/write pair, never touching the transport.
 //!
+//! [`CoreConfig::manual`] is the one exception to "adding a tab": it is a BLOCK, not a UI tab —
+//! nothing renders it as a gear-popup page. It still follows the same "one field per protocol
+//! section rather than per UI tab" rule below, because the manual-trading toolbar and header
+//! controls need the same comparable, transport-agnostic shape every other section gets.
+//!
 //! Nothing here depends on moonproto: the mapping between these types and the wire sections lives
 //! in `feed::live::shared_config`, so the UI layer stays transport-agnostic like the rest of
 //! `feed::types`.
@@ -27,6 +32,9 @@ pub struct CoreConfig {
     pub general: GeneralSettings,
     /// `trading.auto_manage_lev` and `trading.auto_lev_control`.
     pub leverage: LeverageSettings,
+    /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
+    /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
+    pub manual: ManualSettings,
 }
 
 /// Automatic start, stop, restart, and panic-sell rules — the Moonbot "AutoStart" settings tab.
@@ -219,6 +227,255 @@ pub struct LeverageSettings {
     ///
     /// Carried so a round trip cannot drop it; the terminal renders no editor for it yet.
     pub lev_control: String,
+}
+
+/// Manual-strategy quick-button visibility and hotkeys, from moonproto `ManualStratsConfig`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreStratButtons {
+    /// Whether the core shows its manual-strategy quick-buttons at all.
+    pub use_buttons: bool,
+    /// Visibility of each of the 10 button slots.
+    pub show_button: [bool; 10],
+    /// Hotkey assignment for each of the 10 button slots, as a raw Delphi `TShortCut`.
+    pub hot_keys: [u16; 10],
+}
+
+/// One platform-level hotkey action the core assigns a single key to, decoupled from moonproto so
+/// this crate never carries a pre-built localized label: `moon-core` cannot localize
+/// (`rust_i18n::i18n!` is declared once in `moon-ui-gpui/src/main.rs`), so a hotkey action reaches
+/// the UI as this enum and is captioned there, the same discipline [`crate::feed::ConnFaultKind`]
+/// follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreHotkeyAction {
+    CancelBuy,
+    PanicSell,
+    JoinSells,
+    SwitchCharts,
+    ReloadBook,
+    NewLong,
+    NewShort,
+    SplitOrder,
+    ShiftBuyUp,
+    ShiftBuyDown,
+    ShiftSellUp,
+    ShiftSellDown,
+    MakeShot,
+    MakeShotBot,
+    ReloadChart,
+    ScalePlus,
+    ScaleMinus,
+    SellPlus,
+    SellMinus,
+    SpyMode,
+    ShowCharts,
+    SplitOrderX,
+    SwitchFigure,
+    FitSells,
+    PanicSellOne,
+    CancelAllBuys,
+    Broadcast,
+}
+
+/// Number of single-key ([`CoreHotkeyAction`]) hotkey slots on [`CoreHotkeyLayout::named`].
+pub const CORE_HOTKEY_ACTION_COUNT: usize = 27;
+
+/// Core keyboard-shortcut layout from moonproto `HotkeysConfig`, decoupled from moonproto.
+///
+/// Raw values are the wire `TShortCut` (`u16`, low byte VK code, high byte Delphi shift mask);
+/// decoding them into a `gpui::Keystroke` string is a later phase's job, not this projection's —
+/// this type only carries the numbers through so a later phase can decode, preview, and diff them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreHotkeyLayout {
+    /// Buy order-size preset hotkeys, 6 slots, mirroring [`ManualSettings::order_sizes`].
+    pub order_size: [u16; 6],
+    /// Sell-price preset hotkeys, 6 slots.
+    pub sell_preset: [u16; 6],
+    /// Every other single-key hotkey the core assigns, keyed by action.
+    pub named: [(CoreHotkeyAction, u16); CORE_HOTKEY_ACTION_COUNT],
+}
+
+/// Core-owned manual-trading configuration projected from moonproto `SharedConfig`, decoupled from
+/// moonproto: this is the terminal-owned, comparable shape the manual-trading feature reads and
+/// diffs against, since `moonproto::SharedConfig` itself has no `PartialEq`.
+#[derive(Debug, Clone)]
+pub struct ManualSettings {
+    /// Buy order-size presets (6 slots, in quote currency) from `ui.hotkeys_config.o_size`.
+    ///
+    /// A non-finite or negative entry is carried through AS-IS: this is a read of a core-owned
+    /// value, and repairing it here would make the terminal disagree with the core's own screen.
+    pub order_sizes: [f64; 6],
+    /// Selected buy-size preset slot, 0-based, from `ui.hotkeys_config.b_num` (1-based on the
+    /// wire, clamped into `0..=5` here so a corrupt or unfilled config cannot index out of bounds).
+    pub order_size_sel: usize,
+    /// User-defined manual-strategy names, slots 1..10, from `trading.manual_strats_names`.
+    pub strat_names: [String; 10],
+    /// Manual-strategy button visibility and hotkeys from `trading.manual_strats_config`.
+    pub strat_buttons: CoreStratButtons,
+    /// Platform hotkey layout from `ui.hotkeys_config`.
+    pub core_hotkeys: CoreHotkeyLayout,
+    /// Whether the core ignores a manual strategy's own sell price in favor of global settings,
+    /// from `trading.ignore_strat_sell_price`.
+    pub ignore_strat_sell_price: bool,
+    /// Whether take-profit calculations include leverage, from `trading.use_lev_for_take`.
+    pub use_lev_for_take: bool,
+}
+
+/// Hand-written: a core holding one non-finite `order_sizes` preset must still compare equal to
+/// itself. A `derive`d `PartialEq` uses IEEE `f64` equality, where `NaN != NaN`, so
+/// `feed::live::shared_config::edit_satisfied` would then be PERMANENTLY false for that core and
+/// every gear-popup OK on it would burn all three `MAX_ATTEMPTS` and hit the give-up log — the
+/// same reason `session/store.rs`'s compare-then-bump and `shell/core_settings/draft.rs`'s
+/// `draft == seed` need this on the type rather than only at one call site. This is therefore an
+/// equality-of-snapshots test, not an IEEE numeric comparison: `total_cmp` orders `NaN` as equal to
+/// `NaN` (and total-orders signed zeros and other IEEE edge cases), which is exactly "the same bytes
+/// came back" rather than "the same real number".
+impl PartialEq for ManualSettings {
+    fn eq(&self, other: &Self) -> bool {
+        self.order_sizes
+            .iter()
+            .zip(other.order_sizes.iter())
+            .all(|(a, b)| a.total_cmp(b).is_eq())
+            && self.order_size_sel == other.order_size_sel
+            && self.strat_names == other.strat_names
+            && self.strat_buttons == other.strat_buttons
+            && self.core_hotkeys == other.core_hotkeys
+            && self.ignore_strat_sell_price == other.ignore_strat_sell_price
+            && self.use_lev_for_take == other.use_lev_for_take
+    }
+}
+
+/// Trust classification for a core's manual-config projection, mirroring
+/// [`crate::session::store::BalanceState`] (same `has_value()`/`is_current()`/`code()` contracts,
+/// same reason for `code()`) but without an `Unpriced` arm: a shared config carries no derived
+/// valuation that pricing could invalidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreConfigState {
+    /// A projection exists, the connection is ready, and no stale marker remains.
+    Live,
+    /// A projection exists but the connection is not ready or became stale since the last one.
+    Stale,
+    /// No projection has ever arrived for this core.
+    Awaiting,
+}
+
+impl CoreConfigState {
+    /// Whether there is a usable projection to render.
+    pub fn has_value(self) -> bool {
+        matches!(self, CoreConfigState::Live | CoreConfigState::Stale)
+    }
+
+    /// Whether the store classifies the projection as current enough to show without a stale
+    /// marker.
+    pub fn is_current(self) -> bool {
+        matches!(self, CoreConfigState::Live)
+    }
+
+    /// Stable small integer for hashing this state into a render signature.
+    ///
+    /// Exists so consumers do not invent their own numbering: the exhaustive match keeps a new
+    /// variant a compile error here rather than a silently unhashed state somewhere downstream.
+    pub fn code(self) -> u64 {
+        match self {
+            CoreConfigState::Live => 1,
+            CoreConfigState::Stale => 2,
+            CoreConfigState::Awaiting => 3,
+        }
+    }
+}
+
+/// Coarse AREA of the projection that differs from what was requested. Names a surface, carries no
+/// value — used when the difference cannot be pinned to an exact field, which is every area but
+/// the manual money fields below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreConfigArea {
+    AutoStart,
+    BtcBlink,
+    General,
+    Leverage,
+    Manual,
+}
+
+/// An EXACT field mismatch, with both the requested and the core's actual value typed. Only the
+/// money fields — order-size presets and the selected slot — get this resolution; every other area
+/// is reported at [`CoreConfigArea`] granularity instead.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CoreConfigMismatch {
+    OrderSizeSlot {
+        slot: usize,
+        requested: f64,
+        actual: f64,
+    },
+    OrderSizeSel {
+        requested: usize,
+        actual: usize,
+    },
+}
+
+/// What a shared-config echo disagreed with the terminal about, restricted to the fields THIS edit
+/// actually asked to change — never the whole projection; see `feed::live::shared_config`'s module
+/// doc and [`crate::feed::live::FieldMask`]. `moon-core` cannot localize (`rust_i18n::i18n!` is
+/// declared once in `moon-ui-gpui/src/main.rs`), so this reaches the UI as typed data and is
+/// captioned there, the same discipline [`crate::feed::ConnFaultKind`] and [`CoreHotkeyAction`]
+/// follow.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CoreConfigRejection {
+    /// One or more coarse sections still differ.
+    Areas(Vec<CoreConfigArea>),
+    /// One or more exact money-field mismatches.
+    Fields(Vec<CoreConfigMismatch>),
+}
+
+/// Phase of a core-config edit that has not yet reached a terminal outcome, mirroring
+/// [`StrategyEditPhase`]'s shape: a resolution is a one-time fact carried by
+/// [`CoreConfigEditEvent::Resolved`], never a phase a retained row sits in, so `Confirmed` is not a
+/// variant here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreConfigEditPhase {
+    Pending,
+    /// The core never reflected this edit after `MAX_ATTEMPTS` sends. Replaces goal A's
+    /// `TimedOut`: upstream's transport retries on a monotonic echo timeout rather than owning its
+    /// own wall clock, so the terminal state is exhausting the retry budget, not a bare timeout.
+    GaveUp,
+}
+
+/// Terminal outcome of one echo comparison for a queued core-config edit.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CoreConfigEditResult {
+    /// The core's snapshot now matches everything requested.
+    Confirmed,
+    /// The echo still disagrees on fields this edit touched; the queue keeps retrying up to
+    /// `MAX_ATTEMPTS` — this is NOT the terminal state.
+    NotApplied(CoreConfigRejection),
+    /// The retry budget is exhausted; the edit is dropped from the queue.
+    GaveUp,
+}
+
+/// One core-config edit's retained state, for the toolbar and popup's per-cell notices.
+///
+/// Boxed everywhere it travels through [`crate::feed::FeedMsg`]: [`ManualSettings`] alone makes
+/// [`CoreConfig`] the largest field among this crate's other message payloads, and embedding it
+/// unboxed here would make it `FeedMsg`'s own largest arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreConfigEditRow {
+    pub phase: CoreConfigEditPhase,
+    pub submitted_at_ms: i64,
+    /// The projection this edit asked the core to hold.
+    pub config: CoreConfig,
+    /// The most recent rejection this edit received, if any. Retained across a retry's own
+    /// `Submitted` event and cleared only by [`CoreConfigEditResult::Confirmed`] or a fresh user
+    /// edit — never by a retry of the same edit; this is a store-arm rule, applied in
+    /// `session::store`.
+    pub mismatches: Option<CoreConfigRejection>,
+}
+
+/// Core-config edit lifecycle event, published alongside [`crate::feed::FeedMsg::CoreConfig`] so
+/// the UI can show a submitted-but-unconfirmed edit and its eventual verdict.
+#[derive(Debug, Clone)]
+pub enum CoreConfigEditEvent {
+    /// A queued edit (or coalesced batch) was just sent and is awaiting its echo.
+    Submitted(Box<CoreConfigEditRow>),
+    /// The most recently submitted edit reached one echo's verdict.
+    Resolved(CoreConfigEditResult),
 }
 
 /// Report profit counters from moonproto `TProfitStateCommand`, shown as the "now" lines beside the

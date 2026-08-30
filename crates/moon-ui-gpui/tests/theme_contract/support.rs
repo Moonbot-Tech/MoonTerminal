@@ -41,6 +41,22 @@ pub fn read_src(rel: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
+/// Read one `moon-core` source file for a cross-crate static contract, normalizing line endings.
+///
+/// `moon-ui-gpui` has no library target, so this integration target owns static contracts that
+/// span the UI binary and its sibling core crate. Normalize here for the same reason as
+/// [`read_src`]: a CRLF checkout must not make a line-based source assertion silently miss.
+pub fn read_core_src(rel: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("moon-core")
+        .join("src")
+        .join(rel);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    text.replace("\r\n", "\n")
+}
+
 /// Read the whole of startup as one text: `startup.rs` plus `startup/boot.rs`.
 ///
 /// Startup was split when the login window arrived — the window can only exist inside `App::run`,

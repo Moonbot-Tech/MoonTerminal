@@ -22,7 +22,9 @@ use crate::shell::core_settings::draft::{
     TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS, parse_num,
 };
 
-use super::widgets::{caption, def_alert_strategy_row, flag, num, slider, stretch_field};
+use super::widgets::{
+    caption, core_manual_checkbox, def_alert_strategy_row, flag, num, slider, stretch_field,
+};
 use super::{SettingsWidgets, TabCtx, TextEditors};
 
 /// Editors this tab owns; see [`super::field_specs`] for the tuple's shape.
@@ -123,7 +125,11 @@ pub(super) fn general_tab(
     on_toggle_blacklist: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let TabCtx {
-        backend, group, p, ..
+        backend,
+        group,
+        p,
+        seeded,
+        ..
     } = *ctx;
     let core = backend.read(cx).active_trade_core(group);
     let g = &draft.general;
@@ -369,13 +375,22 @@ pub(super) fn general_tab(
         "core-frame-actions",
         t!("core_settings.frame_actions").to_string(),
     )
-    .child(v_flex().w_full().gap(gap).children(def_alert_strategy_row(
-        core,
-        editors.def_strategy,
-        backend,
-        p,
-        cx,
-    )));
+    .child(
+        v_flex()
+            .w_full()
+            .gap(gap)
+            .children(def_alert_strategy_row(
+                core,
+                editors.def_strategy,
+                backend,
+                p,
+                cx,
+            ))
+            // Per-core manual-config opt-in: terminal-local state persisted in the server config,
+            // like the default-alert-strategy row above it, and deliberately outside the OK
+            // contract for the same reason.
+            .children(core_manual_checkbox(seeded, backend, cx)),
+    );
 
     h_flex()
         .w_full()
