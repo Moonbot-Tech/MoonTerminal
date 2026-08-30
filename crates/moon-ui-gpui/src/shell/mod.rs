@@ -135,17 +135,7 @@ pub(crate) struct Shell {
     tp_input: Entity<MoonInputState>,
     sl_input: Entity<MoonInputState>,
     lev_input: Entity<MoonInputState>,
-    /// Core-settings popup sliders for global TP, trailing, and V-Stop.
-    /// Their `CORE_*_BOUNDS` ranges are fixed, values are seeded on open, and subscriptions in
-    /// `new` commit changes.
-    gtp_slider: Entity<MoonSliderState>,
-    trailing_slider: Entity<MoonSliderState>,
-    vstop_slider: Entity<MoonSliderState>,
-    /// Core-settings fields for global TP, trailing, integer-percent V-Stop, and blacklist text.
-    /// Values are seeded on open and committed by subscriptions in `new` on Blur or Enter.
-    gtp_input: Entity<MoonInputState>,
-    trailing_input: Entity<MoonInputState>,
-    vstop_input: Entity<MoonInputState>,
+    /// Core-settings blacklist editor, staged into the popup's draft on Blur or Enter.
     blacklist_input: Entity<MoonInputState>,
     /// Separate multiline state for the expanded blacklist editor.
     ///
@@ -196,6 +186,26 @@ pub(crate) struct Shell {
     /// Whether the core-settings coin blacklist uses its fixed-height multiline editor instead of
     /// the collapsed single-line field.
     core_settings_bl_expanded: bool,
+    /// Tab selected in the core-settings popup, retained across openings.
+    core_settings_tab: core_settings_popup::CoreSettingsTab,
+    /// Staged settings both tabs edit, committed by OK and dropped by Cancel or a core switch.
+    ///
+    /// `None` also covers "the core's full configuration has not arrived yet", which is what the
+    /// waiting placeholder renders against.
+    core_settings_draft: Option<moon_core::feed::CoreConfig>,
+    /// The draft as it was seeded, so an UNTOUCHED popup can follow the core instead of writing a
+    /// stale page back over a change made elsewhere while it was open.
+    core_settings_seed: Option<moon_core::feed::CoreConfig>,
+    /// Popup numeric editors, created on first render of each field and dropped with the draft.
+    ///
+    /// Each entry remembers the [`Self::core_settings_seed_gen`] it last took a value from, so a
+    /// re-seed reaches it exactly once instead of on every repaint.
+    core_settings_inputs: std::collections::HashMap<&'static str, (u64, Entity<MoonInputState>)>,
+    /// Popup sliders, created on first render of each row and dropped with the draft. Unlike the
+    /// editors they follow the draft on every render, so they need no generation of their own.
+    core_settings_sliders: std::collections::HashMap<&'static str, Entity<MoonSliderState>>,
+    /// Advances whenever the popup's draft is seeded from a core.
+    core_settings_seed_gen: u64,
     /// Whether the header quiet-mode ("sleep") settings popover is open.
     quiet_settings_open: bool,
     /// `HH:MM` editor for the quiet-mode schedule start; seeded on open, committed on edit.

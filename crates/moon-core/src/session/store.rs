@@ -9,9 +9,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::applog::LogLine;
 use crate::feed::{
-    AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, DetectRow, EngineActionResult,
-    FeedMsg, LevManageState, LicenseState, NewsSnapshot, OrderRow, RuntimeState,
-    STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
+    AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, CoreConfig, DetectRow,
+    EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState,
+    RuntimeState, STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
     StrategyEditRow, StrategyRow, StrategySchemaModel, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
@@ -157,8 +157,11 @@ pub struct CoreData {
     /// Core client-settings snapshot, including TP, SL, sell, and iceberg settings, or `None` until
     /// it arrives.
     pub client_settings: Option<ClientSettings>,
-    /// Core leverage-management snapshot, or `None` until it arrives.
-    pub lev_manage: Option<LevManageState>,
+    /// Projection of the core's full safe-share configuration, or `None` until the background
+    /// request answers. The gear popup's tabs read it; see `feed::live::shared_config`.
+    pub core_config: Option<CoreConfig>,
+    /// Core report profit counters, or `None` until the core publishes them.
+    pub profit_state: Option<ProfitState>,
     /// Core runtime and passive-mode state, or `None` until it arrives.
     pub runtime_state: Option<RuntimeState>,
     /// Whether the core's global strategy engine is running, or `None` until it reports.
@@ -261,7 +264,8 @@ pub struct CoreData {
     pub transfer_rev: u64,
     pub license_rev: u64,
     pub client_settings_rev: u64,
-    pub lev_manage_rev: u64,
+    pub core_config_rev: u64,
+    pub profit_state_rev: u64,
     pub runtime_state_rev: u64,
     /// Advances when `strategies_running` changes, including its first arrival.
     pub strategies_running_rev: u64,
@@ -341,7 +345,8 @@ impl CoreData {
             transfer_assets: TransferAssetsSnapshot::default(),
             license: None,
             client_settings: None,
-            lev_manage: None,
+            core_config: None,
+            profit_state: None,
             runtime_state: None,
             strategies_running: None,
             hedge_mode: None,
@@ -370,7 +375,8 @@ impl CoreData {
             transfer_rev: 0,
             license_rev: 0,
             client_settings_rev: 0,
-            lev_manage_rev: 0,
+            core_config_rev: 0,
+            profit_state_rev: 0,
             runtime_state_rev: 0,
             strategies_running_rev: 0,
             runtime_state_confirmed: false,
@@ -718,10 +724,16 @@ impl CoreData {
                     self.client_settings_rev = self.client_settings_rev.wrapping_add(1);
                 }
             }
-            FeedMsg::LevManage(lev) => {
-                if self.lev_manage.as_ref() != Some(&lev) {
-                    self.lev_manage = Some(lev);
-                    self.lev_manage_rev = self.lev_manage_rev.wrapping_add(1);
+            FeedMsg::CoreConfig(config) => {
+                if self.core_config.as_ref() != Some(&config) {
+                    self.core_config = Some(config);
+                    self.core_config_rev = self.core_config_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::ProfitState(profit) => {
+                if self.profit_state != Some(profit) {
+                    self.profit_state = Some(profit);
+                    self.profit_state_rev = self.profit_state_rev.wrapping_add(1);
                 }
             }
             FeedMsg::RuntimeState(state) => {
@@ -745,6 +757,15 @@ impl CoreData {
                 if self.strategies_running.take().is_some() || self.strategies_running_confirmed {
                     self.strategies_running_confirmed = false;
                     self.strategies_running_rev = self.strategies_running_rev.wrapping_add(1);
+                }
+                // The configuration and the report counters describe the departed process too, and
+                // the gear popup seeds an editable draft from the first: keeping them would let an
+                // OK press write the old instance's whole AutoStart page into its replacement.
+                if self.core_config.take().is_some() {
+                    self.core_config_rev = self.core_config_rev.wrapping_add(1);
+                }
+                if self.profit_state.take().is_some() {
+                    self.profit_state_rev = self.profit_state_rev.wrapping_add(1);
                 }
             }
             FeedMsg::StrategiesRunning(running) => {

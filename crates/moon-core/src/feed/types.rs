@@ -1,8 +1,13 @@
 //! Domain types sent from the backend to the UI. They are independent of moonproto so the UI and
 //! rendering layer do not need to know about the transport.
 
+mod core_settings;
 mod core_status;
 
+pub use core_settings::{
+    day_fraction_to_minutes, minutes_to_day_fraction, AutoStartSettings, BtcBlinkSettings,
+    CoreConfig, GeneralSettings, LeverageSettings, ProfitState,
+};
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,
     CoreStartupState, CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
@@ -862,20 +867,6 @@ impl ClientSettings {
     }
 }
 
-/// Core leverage-management settings from moonproto `LevManage`, kept as a separate snapshot as in
-/// Moonbot.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct LevManageState {
-    pub auto_max_order: bool,
-    pub auto_lev_up: bool,
-    pub auto_isolated: bool,
-    pub auto_cross: bool,
-    pub auto_fix_lev: bool,
-    pub fix_lev: i32,
-    pub tlg_report: bool,
-    pub lev_control: String,
-}
-
 /// Core runtime state from moonproto `RuntimeState`: whether the market runtime is running and
 /// automatic detection is active. Passive mode is specifically `is_started=true` with
 /// `auto_detect_active=false`; a false value alone does not identify passive mode.
@@ -914,21 +905,10 @@ pub enum ClientSettingsEdit {
     UseStopMarket(bool),
     /// Panic on price drop through `panic_if_price_drop`.
     PanicIfPriceDrop(bool),
-    /// Global take-profit enabled state and percentage through
-    /// `use_g_take_profit`/`g_take_profit`.
-    GlobalTakeProfit { on: bool, pct: f64 },
-    /// Trailing-stop percentage through `trailing_drop`.
-    TrailingDrop(f32),
-    /// Buy-order iceberg mode through `buy_iceberg`.
-    BuyIceberg(bool),
-    /// Sell-order iceberg mode through `sell_iceberg`.
-    SellIceberg(bool),
     /// Order signing through `sign_orders`.
     SignOrders(bool),
     /// Core emulator mode through `emu_mode`.
     EmuMode(bool),
-    /// Default VStop BID-volume drop level as an integer percentage through `vol_drop_level`.
-    VolDropLevel(i32),
     /// Manual-strategy enabled state and ID through
     /// `use_manual_strategy`/`manual_strategy_id`. Disabling preserves the ID so toggling it again
     /// restores the same strategy.
@@ -943,24 +923,6 @@ pub enum ResetProfitKind {
     Session,
     /// All accumulated time.
     All,
-}
-
-/// Targeted leverage-management edit for moonproto `LevManage`, applied to the retained snapshot
-/// and sent through `settings().manage_leverage`.
-#[derive(Debug, Clone, Copy)]
-pub enum LevManageEdit {
-    /// Fix the target leverage by setting `auto_fix_lev=true` and `fix_lev=n`.
-    FixLev(i32),
-    /// Automatic maximum order size through `auto_max_order`.
-    AutoMaxOrder(bool),
-    /// Automatic leverage increase through `auto_lev_up`.
-    AutoLevUp(bool),
-    /// Isolated margin through `auto_isolated`, mutually exclusive with cross margin.
-    AutoIsolated(bool),
-    /// Cross margin through `auto_cross`, mutually exclusive with isolated margin.
-    AutoCross(bool),
-    /// Telegram reporting through `tlg_report`.
-    TlgReport(bool),
 }
 
 /// Connection status for a core.
@@ -1173,10 +1135,17 @@ pub enum FeedMsg {
     /// Core client-settings snapshot for TP, SL, sell, iceberg, and related settings, sent on
     /// `ClientSettingsUpdated`.
     ClientSettings(ClientSettings),
-    /// Core leverage-management snapshot sent on `LevManageUpdated`.
-    LevManage(LevManageState),
     /// Core runtime and passive-mode state sent on `RuntimeStateUpdated`.
     RuntimeState(RuntimeState),
+    /// Projection of the core's full safe-share configuration, sent on `SharedConfigUpdated`.
+    ///
+    /// The runtime requests that snapshot on its own after `Ready` and retries until it arrives, so
+    /// this costs no extra request; it carries the settings the compact `ClientSettings` snapshot
+    /// has no room for, such as the whole AutoStart page.
+    CoreConfig(CoreConfig),
+    /// Core report profit counters sent on `ProfitStateUpdated`, shown beside the AutoStart loss
+    /// caps and reset through [`CoreCmd::ResetProfit`].
+    ProfitState(ProfitState),
     /// Forget everything known about the core's run state: a DIFFERENT MoonBot process now answers
     /// on this connection (`LifecycleEvent::ServerRestart`, a changed `PeerAppToken`).
     ///

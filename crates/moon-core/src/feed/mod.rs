@@ -430,11 +430,14 @@ pub enum CoreCmd {
     /// The feed patches the retained settings snapshot through its helper and sends it in full
     /// with `settings().send`.
     EditClientSettings(ClientSettingsEdit),
+    /// Complete settings write against the core's full safe-share configuration, serialized behind
+    /// the core's echo like [`CoreCmd::EditClientSettings`].
+    ///
+    /// Carries the whole projection rather than one tab: the gear popup commits every tab under one
+    /// OK, and the transport sends a complete snapshot per write regardless.
+    EditCoreConfig(CoreConfig),
     /// Synchronize complete visible group exit settings through the per-core serializer.
     SyncGroupExit(crate::config::GroupExitSettings),
-    /// Targeted leverage-management edit. The feed patches the retained snapshot and sends it
-    /// through `settings().manage_leverage`.
-    EditLevManage(LevManageEdit),
     /// Toggle account hedge mode for dual-side positions. This performs a live exchange action
     /// through the Engine API's `account().set_hedge_mode`.
     SetHedgeMode(bool),
@@ -672,10 +675,12 @@ pub fn spawn(
             }
             let mut backoff = BACKOFF_MIN;
             let mut client_settings_sequence = live::ClientSettingsSequence::new();
+            let mut shared_config_sequence = live::SharedConfigSequence::new();
             let mut market_role = live::MarketRoleState::default();
             loop {
                 let started = Instant::now();
                 client_settings_sequence.prepare_reconnect();
+                shared_config_sequence.prepare_reconnect();
                 match live::run(
                     &server,
                     chart_memory_percent,
@@ -686,6 +691,7 @@ pub fn spawn(
                     reports.as_ref(),
                     thread_client.clone(),
                     &mut client_settings_sequence,
+                    &mut shared_config_sequence,
                     &mut market_role,
                     &latest_market_role,
                 ) {

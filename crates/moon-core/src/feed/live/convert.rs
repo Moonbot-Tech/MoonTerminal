@@ -11,8 +11,8 @@ use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ApiKeyExpiry, ClientSettings, ClientSettingsEdit, ConnFault, ConnFaultKind, CoreIdentityFacts,
     CoreInitStep, CoreStartupState, CoreStartupStatus, CoreSysStatus, EngineActionKind,
-    EngineActionResult, LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow,
-    OrderTrace, OrderTracePoint, RuntimeState, WalletKind,
+    EngineActionResult, LicenseState, NewsSnapshot, OrderRow,
+    OrderTrace, OrderTracePoint, ProfitState, RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
@@ -123,23 +123,23 @@ pub(super) fn client_settings_from_proto(c: &moonproto::ClientSettingsCommand) -
     }
 }
 
-pub(super) fn lev_manage_from_proto(l: &moonproto::LevManage) -> LevManageState {
-    LevManageState {
-        auto_max_order: l.auto_max_order,
-        auto_lev_up: l.auto_lev_up,
-        auto_isolated: l.auto_isolated,
-        auto_cross: l.auto_cross,
-        auto_fix_lev: l.auto_fix_lev,
-        fix_lev: l.fix_lev,
-        tlg_report: l.tlg_report,
-        lev_control: l.lev_control.clone(),
-    }
-}
-
 pub(super) fn runtime_state_from_proto(s: &moonproto::RuntimeStateCommand) -> RuntimeState {
     RuntimeState {
         is_started: s.is_started,
         auto_detect_active: s.auto_detect_active,
+    }
+}
+
+/// Project the core's report profit counters shown beside the AutoStart loss caps.
+///
+/// The two pairs are the core's own trade-window and hourly counters; they come from the report
+/// database rather than from balances, so they can legitimately disagree with the header P&L.
+pub(super) fn profit_state_from_proto(s: &moonproto::ProfitStateCommand) -> ProfitState {
+    ProfitState {
+        total_profit: s.rep_total_profit,
+        total_trades: s.rep_total_trades,
+        hourly_profit: s.rep_trades_total,
+        hourly_trades: s.rep_count_trades,
     }
 }
 
@@ -616,48 +616,18 @@ pub(super) fn apply_client_settings_edit(
             };
             s.set_fixed_sell_preset_price(slot, price);
         }
-        // Core behavior defaults from the core-settings popup: direct public snapshot fields.
+        // Core behavior defaults still owned by the compact channel. The exit rules, icebergs and
+        // blacklist moved to the safe-share channel with the settings popup's General tab, which is
+        // the only place that edited them; `emu_mode` stayed because that channel is the ONLY one
+        // carrying it (see `shared_config::absorb`).
         ClientSettingsEdit::UseStopMarket(on) => s.use_stop_market = on,
         ClientSettingsEdit::PanicIfPriceDrop(on) => s.panic_if_price_drop = on,
-        ClientSettingsEdit::GlobalTakeProfit { on, pct } => {
-            s.use_g_take_profit = on;
-            s.g_take_profit = pct;
-        }
-        ClientSettingsEdit::TrailingDrop(pct) => s.trailing_drop = pct,
-        ClientSettingsEdit::BuyIceberg(on) => s.buy_iceberg = on,
-        ClientSettingsEdit::SellIceberg(on) => s.sell_iceberg = on,
         ClientSettingsEdit::SignOrders(on) => s.sign_orders = on,
         ClientSettingsEdit::EmuMode(on) => s.emu_mode = on,
-        ClientSettingsEdit::VolDropLevel(n) => s.vol_drop_level = n,
         ClientSettingsEdit::ManualStrategy { on, id } => {
             s.use_manual_strategy = on;
             s.manual_strategy_id = id;
         }
-    }
-}
-
-pub(super) fn apply_lev_manage_edit(l: &mut moonproto::LevManage, edit: LevManageEdit) {
-    match edit {
-        LevManageEdit::FixLev(n) => {
-            l.auto_fix_lev = true;
-            l.fix_lev = n;
-        }
-        LevManageEdit::AutoMaxOrder(on) => l.auto_max_order = on,
-        LevManageEdit::AutoLevUp(on) => l.auto_lev_up = on,
-        // Margin modes are mutually exclusive flags: enabling one disables the other.
-        LevManageEdit::AutoIsolated(on) => {
-            l.auto_isolated = on;
-            if on {
-                l.auto_cross = false;
-            }
-        }
-        LevManageEdit::AutoCross(on) => {
-            l.auto_cross = on;
-            if on {
-                l.auto_isolated = false;
-            }
-        }
-        LevManageEdit::TlgReport(on) => l.tlg_report = on,
     }
 }
 

@@ -126,6 +126,27 @@ impl ClientSettingsSequence {
         self.pending_confirmation = Some((client_settings_from_proto(settings), mutation_count));
     }
 
+    /// Whether every queued compact write has been echoed by the core.
+    ///
+    /// The safe-share sequence beside this one asks before sending: `build_shared_config` overlays
+    /// the RETAINED compact snapshot, so a full-config packet built while a compact edit is still
+    /// in flight carries that edit's pre-change values and reverts it on arrival.
+    ///
+    /// KNOWN LIMIT: this queue has no attempt cap, so a compact mutation the core never reflects
+    /// keeps the gate shut for the rest of the connection and safe-share writes queue up behind it.
+    /// Reverting a trading control the user just set is the worse failure of the two, which is why
+    /// the gate is strict; a cap belongs here rather than in the caller.
+    ///
+    /// The gate is deliberately ONE-WAY. A compact write issued while a safe-share packet is still
+    /// unechoed can revert the fields the two channels share (`g_take_profit`, `trailing_drop`,
+    /// `vol_drop_level`, the blacklist), and the symmetric gate would fix that — but this queue also
+    /// carries MANUAL ORDERS, and holding those behind a settings echo is a worse trade than a
+    /// window of a few hundred milliseconds in which the toolbar and the settings popup are driven
+    /// at once. Closing it properly means merging the two queues, not gating this one.
+    pub(in crate::feed) fn is_idle(&self) -> bool {
+        self.queue.is_empty() && !self.waiting_for_echo
+    }
+
     /// Allow the next plan after a ClientSettingsUpdated echo.
     pub(super) fn observe_update(&mut self) {
         self.waiting_for_echo = false;
