@@ -50,9 +50,6 @@ impl Shell {
     /// [`Self::reconcile_metric_popup`] takes a stale popup off the screen, but only at the next
     /// render, and repaints pass three stacked throttles. A slider drag inside that window would
     /// otherwise continue changing the no-longer-visible core or leverage market.
-    ///
-    /// Distinct from [`Self::commit_client_edit`], which the core-settings gear popup uses for
-    /// core-owned settings and resolves against the active core at event time.
     pub(super) fn commit_metric_edit(
         &self,
         metric: controls::TradeMetric,
@@ -273,24 +270,5 @@ impl Shell {
                 slider.update(app, |st, c| st.set_value(val, window, c));
             });
         });
-    }
-
-    /// Send a core-settings-popover edit to the core that popover's editors were seeded from.
-    ///
-    /// One guard for all six of `init.rs`'s subscriptions — the Global TP, Trailing and V-Stop
-    /// sliders and their fields. Each carries a value seeded when the popup opened, so the write is
-    /// refused once the active core no longer matches; see
-    /// [`super::core_settings::resolve_core_settings_write`].
-    pub(super) fn commit_client_edit(&self, edit: ClientSettingsEdit, cx: &mut Context<Self>) {
-        let b = self.backend.read(cx);
-        let Some(core) = super::core_settings::resolve_core_settings_write(
-            self.core_settings_target,
-            b.active_trade_core(&self.group),
-        ) else {
-            return;
-        };
-        if let Err(error) = b.session.edit_client_settings(core, edit) {
-            log::warn!("toolbar client settings edit failed: {error:#}");
-        }
     }
 }

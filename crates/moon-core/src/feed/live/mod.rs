@@ -15,6 +15,7 @@ mod convert;
 mod deadline;
 mod dirty;
 mod market_role;
+mod shared_config;
 mod startup_watchdog;
 #[cfg(test)]
 mod tests;
@@ -273,12 +274,14 @@ use account_reconciliation::{
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
 use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
 use convert::{
-    build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
-    runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
+    build_order_rows, client_settings_from_proto, license_state_from_proto,
+    profit_state_from_proto, runtime_state_from_proto, settings_event_snapshot,
+    sys_status_from_proto,
 };
 use deadline::CoalescedDeadline;
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
+pub(in crate::feed) use shared_config::SharedConfigSequence;
 use startup_watchdog::{StartupStalled, StartupWatchdog};
 
 /// What to do with an arriving report alive map.
@@ -385,6 +388,7 @@ struct RunStateSeen {
 ///     reports: Optional report-database channel.
 ///     client_slot: Shared active-client slot cleared when this attempt ends.
 ///     client_settings_sequence: Reconnect-safe manual-settings sequence.
+///     shared_config_sequence: Reconnect-safe safe-share configuration sequence.
 ///     market_role: Market-provider role retained between attempts.
 ///     latest_market_role: Latest successfully queued role, independent of the bounded backlog.
 ///
@@ -403,6 +407,7 @@ pub(super) fn run(
     reports: Option<&ReportTx>,
     client_slot: SharedMoonClient,
     client_settings_sequence: &mut ClientSettingsSequence,
+    shared_config_sequence: &mut SharedConfigSequence,
     market_role: &mut MarketRoleState,
     latest_market_role: &LatestMarketRole,
 ) -> anyhow::Result<()> {
@@ -630,6 +635,7 @@ pub(super) fn run(
             &mut local_strat_edits,
             &mut strategy_placements,
             client_settings_sequence,
+            shared_config_sequence,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
@@ -793,6 +799,10 @@ pub(super) fn run(
                     // process that just went away, and the republish below must not resurrect it.
                     let _ = tx.send(FeedMsg::RunStateForgotten);
                     run_state_seen = RunStateSeen::default();
+                    // Queued settings describe the process that went away. This event does not
+                    // return from `run`, so `prepare_reconnect` never fires for it — without this
+                    // an unsent OK would land on the REPLACEMENT instance.
+                    shared_config_sequence.forget_queue();
                     ConnStatus::Stage("server restart…".into())
                 }
                 LifecycleEvent::ConnectFailed { error } => {
@@ -1373,23 +1383,6 @@ pub(super) fn run(
                 break;
             }
         }
-        let lev_manage = settings_event_snapshot(
-            &events,
-            &client,
-            |ev| matches!(ev, &Event::Settings(SettingsEvent::LevManageUpdated)),
-            |state| {
-                state
-                    .settings()
-                    .lev_manage
-                    .as_ref()
-                    .map(lev_manage_from_proto)
-            },
-        );
-        if let Some(lev) = lev_manage {
-            if tx.send(FeedMsg::LevManage(lev)).is_err() {
-                break;
-            }
-        }
         let runtime_state = settings_event_snapshot(
             &events,
             &client,
@@ -1405,6 +1398,69 @@ pub(super) fn run(
         if let Some(state) = runtime_state {
             run_state_seen.runtime = true;
             if tx.send(FeedMsg::RuntimeState(state)).is_err() {
+                break;
+            }
+        }
+        // Full safe-share configuration. The runtime requests it in the background after Ready
+        // and retries until it arrives, so reading it here adds no request of its own; it carries
+        // the settings pages the compact snapshot above has no room for.
+        //
+        // Built through `build_shared_config`, NOT read from the retained full snapshot: that
+        // builder overlays whatever compact settings arrived after it, and it is what every write
+        // and echo comparison uses. Projecting the raw snapshot instead would show — and then let
+        // OK write back — values already superseded by a coin blacklisted from the context menu or
+        // a take profit changed on the toolbar.
+        //
+        // Hence the compact events in the predicate too: they change the overlay, so they change
+        // this projection even when no new full snapshot arrived.
+        let core_config = events
+            .iter()
+            .any(|ev| {
+                matches!(
+                    ev,
+                    &Event::Settings(
+                        SettingsEvent::SharedConfigUpdated
+                            | SettingsEvent::ClientSettingsUpdated
+                            | SettingsEvent::LevManageUpdated
+                    )
+                )
+            })
+            .then(|| client.settings().build_shared_config().ok())
+            .flatten()
+            .map(|cfg| shared_config::core_config_from_proto(&cfg));
+        if let Some(config) = core_config {
+            // Only a FULL snapshot lifts the write barrier. The core re-broadcasts both snapshots
+            // after applying a write, and the compact one can arrive in an earlier batch: treating
+            // it as the echo would replan the whole config against a still-unconfirmed base,
+            // provoke another compact echo, and burn the attempt budget on a write already in
+            // flight. The other two events only mean the OVERLAY changed, which is why they
+            // republish the projection above.
+            if events.iter().any(|ev| {
+                matches!(ev, &Event::Settings(SettingsEvent::SharedConfigUpdated))
+            }) {
+                shared_config_sequence.observe_update();
+            }
+            if client_settings_sequence.is_idle() {
+                shared_config_sequence.drive(&client, server.id);
+            }
+            if tx.send(FeedMsg::CoreConfig(config)).is_err() {
+                break;
+            }
+        }
+        let profit_state = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| matches!(ev, &Event::Settings(SettingsEvent::ProfitStateUpdated)),
+            |state| {
+                state
+                    .settings()
+                    .profit_state
+                    .as_ref()
+                    .map(profit_state_from_proto)
+            },
+        );
+        if let Some(profit) = profit_state {
+            if tx.send(FeedMsg::ProfitState(profit)).is_err() {
                 break;
             }
         }

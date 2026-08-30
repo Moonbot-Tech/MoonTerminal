@@ -388,6 +388,218 @@ core_settings.cancel_all_confirm:
   ru: "Точно? Отменить все"
   en: "Sure? Cancel all"
   es: "¿Seguro? Cancelar todo"
+core_settings.auto_fix_lev:
+  ru: "Авто плечо"
+  en: "Auto leverage"
+  es: "Apalancamiento auto"
+core_settings.lev_config:
+  ru: "Config:"
+  en: "Config:"
+  es: "Config:"
+core_settings.gen_stops_frame:
+  ru: "Настройки стопа и трейлинга"
+  en: "Stop and trailing settings"
+  es: "Ajustes de stop y trailing"
+core_settings.gen_tp_line:
+  ru: "Тейк Профит: [покупка] +%{v}%"
+  en: "Take profit: [entry] +%{v}%"
+  es: "Take profit: [entrada] +%{v}%"
+core_settings.gen_trailing_line:
+  ru: "Трейлинг стоп: продать если цена < [пик] %{v}%"
+  en: "Trailing stop: sell when price < [peak] %{v}%"
+  es: "Trailing stop: vender si precio < [pico] %{v}%"
+core_settings.gen_vstop_line:
+  ru: "V-Stop: продать если объём BID на [buy] падает на %{v}%"
+  en: "V-Stop: sell when BID volume at [buy] drops by %{v}%"
+  es: "V-Stop: vender si el volumen BID en [buy] cae %{v}%"
+core_settings.tab_general:
+  ru: "Основные"
+  en: "General"
+  es: "General"
+core_settings.tab_autostart:
+  ru: "Автостарт"
+  en: "AutoStart"
+  es: "Inicio automático"
+core_settings.ok:
+  ru: "OK"
+  en: "OK"
+  es: "OK"
+core_settings.cancel:
+  ru: "Отмена"
+  en: "Cancel"
+  es: "Cancelar"
+core_settings.as_waiting:
+  ru: "Ждём настройки ядра…"
+  en: "Waiting for the core configuration…"
+  es: "Esperando la configuración del núcleo…"
+core_settings.as_launch:
+  ru: "Включать при запуске"
+  en: "Enable on launch"
+  es: "Activar al iniciar"
+core_settings.as_start:
+  ru: "Старт"
+  en: "Start"
+  es: "Inicio"
+core_settings.as_detect:
+  ru: "Автодетект"
+  en: "Auto-detect"
+  es: "Autodetección"
+core_settings.as_strats:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+core_settings.as_remember:
+  ru: "Или запоминать и включать в том же состоянии"
+  en: "Or remember and restore the same state"
+  es: "O recordar y restaurar el mismo estado"
+core_settings.as_update:
+  ru: "Автообновление версии бота"
+  en: "Auto-update the bot version"
+  es: "Actualización automática del bot"
+core_settings.as_wait_sells:
+  ru: "Ждать, если есть открытые sell"
+  en: "Wait if open sells exist"
+  es: "Esperar si hay ventas abiertas"
+core_settings.as_work_time:
+  ru: "Рабочее время"
+  en: "Working time"
+  es: "Horario de trabajo"
+core_settings.as_loss_trades_title:
+  ru: "Стоп по убытку за сделки"
+  en: "Stop on loss over trades"
+  es: "Parar por pérdida en operaciones"
+core_settings.as_loss_hours_title:
+  ru: "Стоп по убытку за часы"
+  en: "Stop on loss over hours"
+  es: "Parar por pérdida en horas"
+core_settings.as_loss_if:
+  ru: "Стоп если общий минус больше, чем"
+  en: "Stop if total loss exceeds"
+  es: "Parar si la pérdida total supera"
+core_settings.as_per:
+  ru: "за"
+  en: "over"
+  es: "en"
+core_settings.as_trades:
+  ru: "сделок"
+  en: "trades"
+  es: "operaciones"
+core_settings.as_hours:
+  ru: "часов"
+  en: "hours"
+  es: "horas"
+core_settings.as_minutes:
+  ru: "минут"
+  en: "minutes"
+  es: "minutos"
+core_settings.as_also_panic:
+  ru: "Также включить Паник Селл на всех ордерах"
+  en: "Also panic-sell every order"
+  es: "También venta de pánico en todas las órdenes"
+core_settings.as_ignore_emu:
+  ru: "Не учитывать эмулятор"
+  en: "Ignore the emulator"
+  es: "Ignorar el emulador"
+core_settings.as_and_trades_gt:
+  ru: "и сделок >"
+  en: "and trades >"
+  es: "y operaciones >"
+core_settings.as_reset_session_every:
+  ru: "Автосброс сессии раз в"
+  en: "Auto-reset the session every"
+  es: "Reiniciar la sesión cada"
+core_settings.as_session_cap:
+  ru: "Кап сессии"
+  en: "Session cap"
+  es: "Tope de sesión"
+core_settings.as_now:
+  ru: "Сейчас: %{sum}$ · %{trades} сделок"
+  en: "Now: %{sum}$ · %{trades} trades"
+  es: "Ahora: %{sum}$ · %{trades} operaciones"
+core_settings.as_now_unknown:
+  ru: "Сейчас: —"
+  en: "Now: —"
+  es: "Ahora: —"
+core_settings.as_reset_session:
+  ru: "Сброс сессии"
+  en: "Reset session"
+  es: "Reiniciar sesión"
+core_settings.as_reset_all:
+  ru: "Сброс за всё время"
+  en: "Reset all time"
+  es: "Reiniciar todo"
+core_settings.as_panic_btc_title:
+  ru: "Паник селл по BTC"
+  en: "Panic sell on BTC"
+  es: "Venta de pánico por BTC"
+core_settings.as_panic_btc:
+  ru: "Общий Паник Селл при изменении курса BTC"
+  en: "Global panic sell when BTC moves"
+  es: "Venta de pánico global cuando BTC se mueve"
+core_settings.as_btc_fell:
+  ru: "BTC за час упал более, чем (%)"
+  en: "BTC fell over an hour by more than (%)"
+  es: "BTC cayó en una hora más de (%)"
+core_settings.as_btc_rose:
+  ru: "или вырос более, чем (%)"
+  en: "or rose by more than (%)"
+  es: "o subió más de (%)"
+core_settings.as_panic_market_title:
+  ru: "Паник селл по рынку"
+  en: "Panic sell on the market"
+  es: "Venta de pánico por el mercado"
+core_settings.as_panic_market:
+  ru: "Общий Паник Селл при среднем падении всего рынка"
+  en: "Global panic sell on an average market drop"
+  es: "Venta de pánico global por caída media del mercado"
+core_settings.as_market_fell:
+  ru: "Рынок за час упал более, чем (%)"
+  en: "Market fell over an hour by more than (%)"
+  es: "El mercado cayó en una hora más de (%)"
+core_settings.as_restart_if:
+  ru: "Рестарт если"
+  en: "Restart if"
+  es: "Reiniciar si"
+core_settings.as_market_gt:
+  ru: "рынок >"
+  en: "market >"
+  es: "mercado >"
+core_settings.as_errors_title:
+  ru: "Сторож ошибок"
+  en: "Error watchdog"
+  es: "Vigilante de errores"
+core_settings.as_errors_stop:
+  ru: "Авто стоп если уровень ошибок ≥"
+  en: "Auto-stop if the error level reaches"
+  es: "Parada automática si el nivel de errores alcanza"
+core_settings.as_ping_title:
+  ru: "Сторож пинга"
+  en: "Ping watchdog"
+  es: "Vigilante de ping"
+core_settings.as_ping_stop:
+  ru: "Авто стоп если пинг >"
+  en: "Auto-stop if the ping exceeds"
+  es: "Parada automática si el ping supera"
+core_settings.as_restart_after:
+  ru: "Рестарт через"
+  en: "Restart after"
+  es: "Reiniciar tras"
+core_settings.as_blink_title:
+  ru: "Подсветка курса BTC"
+  en: "BTC rate highlight"
+  es: "Resaltado del precio de BTC"
+core_settings.as_blink:
+  ru: "Подсвечивать курс BTC при изменении"
+  en: "Highlight the BTC rate when it moves"
+  es: "Resaltar el precio de BTC cuando cambia"
+core_settings.as_alarm:
+  ru: "Звук при изменении курса BTC"
+  en: "Sound when the BTC rate moves"
+  es: "Sonido cuando cambia el precio de BTC"
+core_settings.as_alarm_no:
+  ru: "№ звука"
+  en: "Sound no."
+  es: "N.º de sonido"
 
 # --- Chart tab / detached chart window ---
 chartwin.tab_title:

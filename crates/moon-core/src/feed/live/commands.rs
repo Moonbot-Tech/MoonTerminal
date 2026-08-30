@@ -8,8 +8,8 @@ use moonproto::{MoonClient, StrategyFields, StrategyKind, StrategySchema, Strate
 
 use super::account_reconciliation::BALANCE_TRACE_LEVEL;
 use super::client_settings::{ClientSettingsSequence, ManualOrder};
-use super::convert::apply_lev_manage_edit;
 use super::market_role::MarketRoleState;
+use super::shared_config::SharedConfigSequence;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
@@ -382,6 +382,7 @@ pub(super) fn drain_commands(
     local_strat_edits: &mut LocalStratEdits,
     strategy_placements: &mut StrategyPlacementGuard,
     client_settings_sequence: &mut ClientSettingsSequence,
+    shared_config_sequence: &mut SharedConfigSequence,
 ) -> CommandDrain {
     apply_latest_market_role(
         latest_market_role,
@@ -914,33 +915,11 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::EditClientSettings(edit)) => {
                 client_settings_sequence.enqueue_edit(edit);
             }
+            Ok(CoreCmd::EditCoreConfig(edit)) => {
+                shared_config_sequence.enqueue(edit);
+            }
             Ok(CoreCmd::SyncGroupExit(exit)) => {
                 client_settings_sequence.enqueue_group_exit(exit);
-            }
-            Ok(CoreCmd::EditLevManage(edit)) => {
-                match client
-                    .snapshot()
-                    .and_then(|s| s.settings().lev_manage.clone())
-                {
-                    Some(mut lev) => {
-                        apply_lev_manage_edit(&mut lev, edit);
-                        if let Err(error) = client.settings().manage_leverage(&lev) {
-                            log::warn!(
-                                "core {} manage leverage failed: {error}",
-                                crate::feed::core_label(server.id)
-                            );
-                        } else {
-                            log::info!(
-                                "core {} lev edit {edit:?} sent",
-                                crate::feed::core_label(server.id)
-                            );
-                        }
-                    }
-                    None => log::warn!(
-                        "core {} edit lev manage ignored: no snapshot yet",
-                        crate::feed::core_label(server.id)
-                    ),
-                }
             }
             Ok(CoreCmd::SetHedgeMode(on)) => {
                 // This performs a REAL exchange action through the Engine API. Ignore the ticket;
@@ -1049,6 +1028,12 @@ pub(super) fn drain_commands(
                     server.id,
                 );
                 *orders_mutated |= client_settings_sequence.drive(client, server.id);
+                // Held back while a compact settings write is unechoed: a full-config packet
+                // built on the stale retained snapshot would revert it. See
+                // `ClientSettingsSequence::is_idle`.
+                if client_settings_sequence.is_idle() {
+                    shared_config_sequence.drive(client, server.id);
+                }
                 return CommandDrain::QueueEmpty;
             }
             Err(TryRecvError::Disconnected) => {
@@ -1066,6 +1051,9 @@ pub(super) fn drain_commands(
                 server.id,
             );
             *orders_mutated |= client_settings_sequence.drive(client, server.id);
+            if client_settings_sequence.is_idle() {
+                shared_config_sequence.drive(client, server.id);
+            }
             return CommandDrain::BudgetExhausted;
         }
     }

@@ -645,15 +645,7 @@ impl Backend {
         self.last_main_input.get(group).copied()
     }
 
-    /// Return the core-local toggle for excluding blacklisted markets from delta calculations.
-    pub(crate) fn exclude_bl_delta(&self, core: CoreId) -> bool {
-        self.exclude_bl_delta.get(&core).copied().unwrap_or(false)
-    }
 
-    /// Remember whether a core excludes blacklisted markets from deltas; the caller sends the command.
-    pub(crate) fn set_exclude_bl_delta(&mut self, core: CoreId, on: bool) {
-        self.exclude_bl_delta.insert(core, on);
-    }
 
     /// Return Main's configured inactivity-close timeout in seconds, where zero disables it.
     pub(crate) fn main_idle_close_secs(&self) -> u32 {

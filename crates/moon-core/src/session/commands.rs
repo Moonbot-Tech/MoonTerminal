@@ -8,8 +8,8 @@ use anyhow::{anyhow, Result};
 use crate::config::{MoveKind, MoveSide};
 use crate::data::OrderBookModel;
 use crate::feed::{
-    ClientSettingsEdit, CoreCmd, FeedWakeTx, LevManageEdit, NewStrategySpec, OrderLinePriceKind,
-    OrderStopKind, OrderStopsForm, ResetProfitKind, WalletKind,
+    ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, NewStrategySpec,
+    OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
 use crate::venue::CoreVenue;
@@ -648,6 +648,15 @@ impl SessionManager {
         )
     }
 
+    /// Write the settings popup's complete projection to a core's safe-share configuration.
+    ///
+    /// The feed rebuilds the packet from the core's freshest retained snapshot and waits for its
+    /// echo before sending another, so a caller may issue this per OK press without tracking the
+    /// core's own state.
+    pub fn edit_core_config(&self, core: CoreId, config: CoreConfig) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::EditCoreConfig(config), "edit core config")
+    }
+
     /// Synchronize every visible manual-exit control to one core without changing core-owned fields.
     pub fn sync_group_exit(
         &self,
@@ -659,11 +668,6 @@ impl SessionManager {
             CoreCmd::SyncGroupExit(exit),
             "sync group exit settings",
         )
-    }
-
-    /// Apply a targeted leverage-management edit, such as fixed leverage from the toolbar.
-    pub fn edit_lev_manage(&self, core: CoreId, edit: LevManageEdit) -> Result<()> {
-        self.send_core_cmd(core, CoreCmd::EditLevManage(edit), "edit lev manage")
     }
 
     /// Toggle account hedge mode for dual-side positions. This performs a live exchange action.

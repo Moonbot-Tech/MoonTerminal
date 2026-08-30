@@ -210,7 +210,7 @@ impl Render for Shell {
         // popover itself anchors the content to its button.
         let core_settings_content = self
             .core_settings_open
-            .then(|| self.core_settings_popup_content(p, cx));
+            .then(|| self.core_settings_popup_content(p, window, cx));
 
         // Same rule for the quiet-mode popup: build its body only while it is up, since
         // `MoonPopover` takes content eagerly and this runs on every header repaint.

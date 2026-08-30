@@ -458,10 +458,6 @@ struct Backend {
     /// value. It stops advancing when the window loses focus or the mouse stops, then charts close
     /// after the configured delay. See Shell's `on_mouse_move`.
     last_main_input: std::collections::HashMap<String, std::time::Instant>,
-    /// Per-core local toggle for excluding blacklisted markets from market-delta calculation.
-    /// The core provides no readback for this local Active Lib action, so the UI retains the choice;
-    /// the default is disabled.
-    exclude_bl_delta: std::collections::HashMap<CoreId, bool>,
     /// Singleton debug-window handle used for deduplication and focus.
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     debug_window: Option<WindowHandle<Root>>,

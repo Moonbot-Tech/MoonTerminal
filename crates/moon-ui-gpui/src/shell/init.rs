@@ -453,12 +453,6 @@ impl Shell {
         let tp_input = cx.new(|cx| MoonInputState::new(window, cx));
         let sl_input = cx.new(|cx| MoonInputState::new(window, cx));
         let lev_input = cx.new(|cx| MoonInputState::new(window, cx));
-        let gtp_slider = mk_slider(cx, core_settings_popup::CORE_GTP_BOUNDS, 0.5);
-        let trailing_slider = mk_slider(cx, core_settings_popup::CORE_TRAILING_BOUNDS, -0.1);
-        let vstop_slider = mk_slider(cx, core_settings_popup::CORE_VSTOP_BOUNDS, 0.0);
-        let gtp_input = cx.new(|cx| MoonInputState::new(window, cx));
-        let trailing_input = cx.new(|cx| MoonInputState::new(window, cx));
-        let vstop_input = cx.new(|cx| MoonInputState::new(window, cx));
         let blacklist_input = cx.new(|cx| MoonInputState::new(window, cx));
         let def_strategy_input = cx.new(|cx| {
             MoonInputState::new(window, cx)
@@ -517,103 +511,20 @@ impl Shell {
             &lev_input,
         );
 
-        // Core-settings popup fields commit on Blur or Enter. Global TP writes
-        // `GlobalTakeProfit { on: true, pct }`, because the field implies that it is enabled;
-        // trailing writes `TrailingDrop`. Empty or nonnumeric input is ignored.
-        cx.subscribe(&gtp_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
+        // Both blacklist editors STAGE into the popup's draft on Blur or Enter; nothing here writes
+        // to the core, because everything below the popup's tab strip commits under its OK.
+        let stage_bl = |this: &mut Self, ev: &MoonInputEvent, cx: &mut Context<Self>| {
+            if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                this.stage_blacklist_text(cx);
             }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>()
-                && v.is_finite()
-            {
-                this.commit_client_edit(
-                    ClientSettingsEdit::GlobalTakeProfit { on: true, pct: v },
-                    cx,
-                );
-            }
-        })
-        .detach();
-        cx.subscribe(&trailing_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>()
-                && v.is_finite()
-            {
-                this.commit_client_edit(ClientSettingsEdit::TrailingDrop(v), cx);
-            }
-        })
-        .detach();
-
-        // Core-settings sliders send edits to the active core and update their fields live, matching
-        // the toolbar metric popups.
-        cx.subscribe(&gtp_slider, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let v = v.end();
-                this.commit_client_edit(
-                    ClientSettingsEdit::GlobalTakeProfit {
-                        on: true,
-                        pct: v as f64,
-                    },
-                    cx,
-                );
-                this.live_set_field(this.gtp_input.clone(), controls::fmt_field2(v), cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&trailing_slider, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let v = v.end();
-                this.commit_client_edit(ClientSettingsEdit::TrailingDrop(v), cx);
-                this.live_set_field(
-                    this.trailing_input.clone(),
-                    controls::fmt_field2_signed(v),
-                    cx,
-                );
-            }
-        })
-        .detach();
-        // V-Stop maps integer-percent `vol_drop_level`: slider changes send an edit and update the
-        // integer field.
-        cx.subscribe(&vstop_slider, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let n = v.end().round() as i32;
-                this.commit_client_edit(ClientSettingsEdit::VolDropLevel(n), cx);
-                this.live_set_field(this.vstop_input.clone(), format!("{n}"), cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&vstop_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            if let Ok(n) = inp.read(cx).value().trim().parse::<i32>() {
-                this.commit_client_edit(ClientSettingsEdit::VolDropLevel(n), cx);
-            }
-        })
-        .detach();
-        // Commit blacklist text on Blur or Enter through one path shared by the single-line and
-        // expanded multiline editors. Preserve the active core's current enabled flag.
-        let commit_bl = |this: &mut Self,
-                         inp: Entity<MoonInputState>,
-                         ev: &MoonInputEvent,
-                         cx: &mut Context<Self>| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            let text = inp.read(cx).value().to_string();
-            this.commit_blacklist_text(text, cx);
         };
-        cx.subscribe(
-            &blacklist_input,
-            move |this, inp, ev: &MoonInputEvent, cx| commit_bl(this, inp, ev, cx),
-        )
+        cx.subscribe(&blacklist_input, move |this, _inp, ev: &MoonInputEvent, cx| {
+            stage_bl(this, ev, cx)
+        })
         .detach();
-        cx.subscribe(
-            &blacklist_area,
-            move |this, inp, ev: &MoonInputEvent, cx| commit_bl(this, inp, ev, cx),
-        )
+        cx.subscribe(&blacklist_area, move |this, _inp, ev: &MoonInputEvent, cx| {
+            stage_bl(this, ev, cx)
+        })
         .detach();
 
         // Focus the window root immediately so hotkeys, including F keys, work even when Main is
@@ -663,12 +574,12 @@ impl Shell {
             tp_input,
             sl_input,
             lev_input,
-            gtp_slider,
-            trailing_slider,
-            vstop_slider,
-            gtp_input,
-            trailing_input,
-            vstop_input,
+            core_settings_tab: core_settings_popup::CoreSettingsTab::default(),
+            core_settings_draft: None,
+            core_settings_seed: None,
+            core_settings_inputs: std::collections::HashMap::new(),
+            core_settings_sliders: std::collections::HashMap::new(),
+            core_settings_seed_gen: 0,
             blacklist_input,
             blacklist_area,
             def_strategy_input,

@@ -1650,24 +1650,32 @@ fn the_movers_suggestion_offers_each_market_once() {
 /// call itself deleted.
 #[test]
 fn core_settings_writes_all_go_through_the_seeded_target_guard() {
-    let popup = code_only(&read_src("shell/core_settings_popup.rs"));
-    let reads = popup.matches("active_trade_core(&group)").count();
-    let guarded = popup.matches("resolve_core_settings_write(seeded").count();
-    assert!(
-        reads > 0,
-        "expected at least one active-core read in core_settings_popup.rs"
-    );
-    assert_eq!(
-        guarded, reads,
-        "every core_settings_popup.rs handler reading the active core must pass it through \
-         resolve_core_settings_write(seeded, ..); found {reads} active-core reads but only \
-         {guarded} guarded by the seeded-target check"
-    );
+    // The popup is split across a frame and its tabs; a handler moved into one of the tab modules
+    // must not escape this check, which is exactly what happened when the tabs were introduced.
+    for module in [
+        "shell/core_settings_popup.rs",
+        "shell/core_settings_popup/widgets.rs",
+        "shell/core_settings_popup/general.rs",
+        "shell/core_settings_popup/autostart.rs",
+    ] {
+        let src = code_only(&read_src(module));
+        // `(&group)` is the HANDLER shape and the one this guards: an event callback owns a cloned
+        // `String` and borrows it at commit time. A render-time read of the core to draw from takes
+        // the `&str` straight out of `TabCtx` and reads `(group)`, needs no seeded-target check, and
+        // must not be counted here — counting it made this assertion fail on a pure read.
+        let reads = src.matches("active_trade_core(&group)").count();
+        let guarded = src.matches("resolve_core_settings_write(seeded").count();
+        assert_eq!(
+            guarded, reads,
+            "every {module} handler reading the active core must pass it through \
+             resolve_core_settings_write(seeded, ..); found {reads} active-core reads but only \
+             {guarded} guarded by the seeded-target check"
+        );
+    }
 
     let core_settings = code_only(&read_src("shell/core_settings.rs"));
     for signature in [
         "pub(super) fn reconcile_core_settings_popup(",
-        "pub(super) fn commit_blacklist_text(",
         "pub(super) fn core_settings_cancel_all_click(",
     ] {
         let body = braced_body(&core_settings, signature);
@@ -1677,11 +1685,13 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
         );
     }
 
-    let metrics = code_only(&read_src("shell/metrics.rs"));
-    let commit = braced_body(&metrics, "pub(super) fn commit_client_edit(");
+    // The OK press is the one write that carries the whole staged draft, so it is the one that must
+    // never fall back to whatever core is active when the button is clicked.
+    let draft = code_only(&read_src("shell/core_settings/draft.rs"));
+    let commit = braced_body(&draft, "pub(crate) fn commit_core_draft(");
     assert!(
-        commit.contains("core_settings::resolve_core_settings_write("),
-        "commit_client_edit must resolve its write address through resolve_core_settings_write, \
+        commit.contains("resolve_core_settings_write("),
+        "commit_core_draft must resolve its write address through resolve_core_settings_write, \
          not a bare b.active_trade_core(&self.group)"
     );
 }
