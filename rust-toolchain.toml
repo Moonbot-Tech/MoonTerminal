@@ -1,0 +1,9 @@
+# dtolnay/rust-toolchain does NOT set RUSTUP_TOOLCHAIN. It runs `rustup toolchain
+# install <ver>` then `rustup default <ver>`, which only sets rustup's LOWEST-priority
+# override. Real precedence, highest to lowest: `+toolchain` CLI shorthand,
+# RUSTUP_TOOLCHAIN, a directory `rustup override`, this file, then the default. So THIS
+# FILE governs both local machines and CI (it outranks the action's `rustup default`);
+# the CI action's real job is only to guarantee the pinned version is installed first.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

@@ -44,8 +44,8 @@ permissions:
 # deliberate commit that can be reverted on its own when a new compiler breaks a dep. Dependabot
 # does not propose that raise: it is told to ignore this action in .github/dependabot.yml, because
 # the action is versioned by branches its author creates ahead of the Rust releases they name, so
-# its "latest" resolves to a toolchain rustup cannot download. Move all five sites together —
-# three here, two in release.yml, which never re-runs these gates.
+# its "latest" resolves to a toolchain rustup cannot download. Move all six sites together —
+# three here, two in release.yml, and rust-toolchain.toml, which never re-runs these gates.
 on:
   push:
     branches: [main]
