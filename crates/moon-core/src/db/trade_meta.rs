@@ -31,7 +31,7 @@ use rusqlite::Connection;
 
 use super::read_fail::read_fail;
 use super::report_read::{record_identity_expr, report_value_i64, report_value_text};
-use super::{read_sources_res, ChartTradeRecord, ReadResult};
+use super::{ChartTradeRecord, ReadResult, read_sources_res};
 
 #[cfg(test)]
 mod tests;

@@ -142,7 +142,11 @@ impl Shell {
         // Seed from the SAME resolution the write (`edit_group_exit`) will target, not the
         // group-local getter: showing the group's percentage while editing overwrites the core's
         // would let the user "confirm" a value that was never on screen (goal A2 FIX-2).
-        let cur = self.backend.read(cx).write_aligned_group_exit(&group).fixed_sell_pcts[ix];
+        let cur = self
+            .backend
+            .read(cx)
+            .write_aligned_group_exit(&group)
+            .fixed_sell_pcts[ix];
         self.sell_edit = Some((group, ix));
         let input = self.sell_input.clone();
         let value = controls::fmt_adaptive(cur);

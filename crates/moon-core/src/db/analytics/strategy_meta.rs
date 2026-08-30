@@ -19,10 +19,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{types::Value, Connection};
+use rusqlite::{Connection, types::Value};
 
-use crate::db::read_fail::read_fail_on;
 use crate::db::ReadResult;
+use crate::db::read_fail::read_fail_on;
 
 /// Metadata for one numeric strategy/core identity.
 #[derive(Clone, Debug, Default)]

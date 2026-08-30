@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::{identity_rate, RateOrientation, RatePriceBasis, ResolvedRate};
+use super::{RateOrientation, RatePriceBasis, ResolvedRate, identity_rate};
 
 #[cfg(test)]
 mod tests;

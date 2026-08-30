@@ -14,7 +14,7 @@ use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
 use crate::feed::{
-    order_edit, trade, CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment,
+    CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment, order_edit, trade,
 };
 use crate::util::now_unix_ms as now_ms;
 

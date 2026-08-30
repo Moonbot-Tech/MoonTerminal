@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use super::provider::{validated_market_rate, FetchFailure, SpotCandle, SpotRateSource};
-use super::{identity_rate, RateOrientation, RatePriceBasis, ResolvedRate};
+use super::provider::{FetchFailure, SpotCandle, SpotRateSource, validated_market_rate};
+use super::{RateOrientation, RatePriceBasis, ResolvedRate, identity_rate};
 use crate::db::QuoteCurrency;
 
 #[cfg(test)]

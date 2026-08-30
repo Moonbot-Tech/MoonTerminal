@@ -49,7 +49,11 @@ fn distinct_arrivals_spanning_real_time_do_adopt() {
     // rounding to bucket 4 (4 * BUCKET_SECS = 3_600 seconds), a real and ordinary UTC+1 offset.
     const RAW_MS: i64 = 3_600_000;
 
-    assert_eq!(est.observe(RAW_MS, 0), None, "only 1 distinct arrival so far");
+    assert_eq!(
+        est.observe(RAW_MS, 0),
+        None,
+        "only 1 distinct arrival so far"
+    );
     assert_eq!(
         est.observe(RAW_MS + 25_000, 25_000),
         None,

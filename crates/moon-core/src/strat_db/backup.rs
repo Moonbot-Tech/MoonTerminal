@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::{fs::File, io::Read as _};
 
-use crate::backup_store::{timestamp_prefix, ExactPublication, SnapshotStore};
-use crate::backups::{due_slot_ms, DueOutcome, DAY_MS, RETAIN_PERIODS};
+use crate::backup_store::{ExactPublication, SnapshotStore, timestamp_prefix};
+use crate::backups::{DAY_MS, DueOutcome, RETAIN_PERIODS, due_slot_ms};
 use crate::config::paths;
 use crate::util::{now_unix_ms_i64, utc_stamp_compact};
 
@@ -153,13 +153,13 @@ fn backup_due_into(
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
         Ok(_) => anyhow::bail!("strategy database source is not a file: {}", src.display()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DueOutcome::SourceMissing)
+            return Ok(DueOutcome::SourceMissing);
         }
         Err(error) => {
             return Err(anyhow::Error::from(error).context(format!(
                 "strategy database is not readable: {}",
                 src.display()
-            )))
+            )));
         }
     }
     let (store, staging) = assemble_snapshot(src, backups)?;

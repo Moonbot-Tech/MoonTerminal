@@ -1,5 +1,5 @@
 use super::*;
-use moon_core::market::candles::{candle_intersects_window, CandleSeries};
+use moon_core::market::candles::{CandleSeries, candle_intersects_window};
 
 /// Builds one volume-only candle for a deterministic visibility scenario.
 fn candle(t_open_ms: f64, volume: f32) -> ChartCandle {

@@ -165,7 +165,10 @@ fn a_recreated_replica_forgets_the_verdict() {
     forget_core(1);
     insert(&conn, 1, 1, false);
     learn_from(&conn, true);
-    assert!(cores().is_empty(), "the wiped core is judged on its new rows");
+    assert!(
+        cores().is_empty(),
+        "the wiped core is judged on its new rows"
+    );
 }
 
 /// A proven core stays proven. Its history keeps the rows that proved it however the live table
@@ -195,7 +198,10 @@ fn a_source_without_row_ids_is_read_once() {
 
     insert(&conn, 1, 2, true);
     learn_from(&conn, false);
-    assert!(cores().is_empty(), "an unbounded source cannot say what is new");
+    assert!(
+        cores().is_empty(),
+        "an unbounded source cannot say what is new"
+    );
 
     // A core that never appeared is still examined, since only the examined ones are skipped.
     insert(&conn, 2, 1, true);
@@ -263,5 +269,9 @@ fn a_wipe_re_arms_the_legacy_sweep() {
 
     forget_core(5);
     learn_coin_m_cores(&conn, &sources);
-    assert_eq!(cores(), BTreeSet::from([5]), "the legacy rows prove it again");
+    assert_eq!(
+        cores(),
+        BTreeSet::from([5]),
+        "the legacy rows prove it again"
+    );
 }

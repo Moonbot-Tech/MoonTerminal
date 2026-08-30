@@ -74,8 +74,9 @@ fn target_group(
             Some((true, false, 0.0, 0.0))
         } else {
             log::warn!(
-                "core {} order form {uid} {kind:?}: возврат к глобальному без уровня стратегии/дефолта — оставляем fixed"
-            , crate::feed::core_label(server_id));
+                "core {} order form {uid} {kind:?}: возврат к глобальному без уровня стратегии/дефолта — оставляем fixed",
+                crate::feed::core_label(server_id)
+            );
             resolve(Some(true))
         };
     }
@@ -258,8 +259,9 @@ pub(super) fn update_order_stops_form(
                 );
             } else {
                 log::warn!(
-                    "core {} order form {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
-                , crate::feed::core_label(server_id));
+                    "core {} order form {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed",
+                    crate::feed::core_label(server_id)
+                );
             }
         }
 

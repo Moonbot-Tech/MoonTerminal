@@ -36,14 +36,14 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, DockArea, MoonDataTableState, MoonInputState, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState,
+    DockArea, MoonDataTableState, MoonInputState, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 
+use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
-use crate::Backend;
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup};
 use moon_core::session::CoreId;
 use rust_i18n::t;

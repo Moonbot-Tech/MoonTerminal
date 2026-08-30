@@ -7,8 +7,8 @@ use std::sync::atomic::{self, AtomicUsize};
 use rayon::prelude::*;
 
 use super::{
-    accepts, aggregate_order, lift_is_measurable, lift_order, mean_quality, slots_are_full,
-    summary, Quality, ScoreSet,
+    Quality, ScoreSet, accepts, aggregate_order, lift_is_measurable, lift_order, mean_quality,
+    slots_are_full, summary,
 };
 
 /// Deterministic total-order key used only to rank a common candidate pool.

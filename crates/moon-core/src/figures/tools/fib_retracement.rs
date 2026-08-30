@@ -7,9 +7,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::kind::FigureKind;
-use super::super::levels::{fmt_ratio, price_at, Emphasis, Level, FIB_LEVELS};
+use super::super::levels::{Emphasis, FIB_LEVELS, Level, fmt_ratio, price_at};
 use super::super::node::FigNode;
-use super::super::proj::{seg_dist, Proj, PxPoint};
+use super::super::proj::{Proj, PxPoint, seg_dist};
 use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
 use super::{FigureTool, ToolDef, ToolSetting, ToolShape};
 

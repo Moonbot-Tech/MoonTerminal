@@ -47,6 +47,9 @@ mod ui_session;
 // The UI-control atlas, kept OUT of this repository: a crawl that is not published, plus the
 // trade fixtures it runs against. `build.rs` defines `uidoc` only when the overlay is on disk, so
 // a clone without it compiles this crate unchanged and no feature promises what is missing.
+// rustfmt resolves this #[path] target before it evaluates #[cfg(uidoc)], so a clone without
+// the overlay hard-errors on `cargo fmt` unless this is skipped.
+#[rustfmt::skip]
 #[cfg(uidoc)]
 #[path = "../../../private/uidoc/mod.rs"]
 mod uidoc;

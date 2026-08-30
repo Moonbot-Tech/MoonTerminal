@@ -46,9 +46,11 @@ fn ordered_quote_iterator_covers_every_persisted_identity() {
         currencies.last().map(|currency| currency.ordinal()),
         Some(20)
     );
-    assert!(currencies
-        .windows(2)
-        .all(|pair| pair[0].ordinal() + 1 == pair[1].ordinal()));
+    assert!(
+        currencies
+            .windows(2)
+            .all(|pair| pair[0].ordinal() + 1 == pair[1].ordinal())
+    );
 }
 
 /// Plausible regression: removing the currency key from `QuoteBreakdown::from_groups` must fail

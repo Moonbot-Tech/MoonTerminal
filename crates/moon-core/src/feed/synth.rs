@@ -12,7 +12,7 @@
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use super::news::{NewsItem, NewsSnapshot, NEWS_RING_CAP};
+use super::news::{NEWS_RING_CAP, NewsItem, NewsSnapshot};
 use super::{
     ConnStatus, CoreCmd, DetectRow, ExchangeId, FeedMsg, FeedTx, Level, MarketDirty,
     MarketDirtyFlags, OrderBook, Side, Tick,
@@ -100,9 +100,8 @@ pub fn run(
     // `MOON_SYNTH_MARKET_NAMES` names the markets explicitly instead of generating `SYNTH0..N`.
     // The fixture bench needs it: its candles and trades belong to one real market name, and a
     // chart opened on `SYNTH0` would find neither.
-    let markets: Vec<String> = named_markets().unwrap_or_else(|| {
-        (0..n).map(|i| format!("SYNTH{i}")).collect()
-    });
+    let markets: Vec<String> =
+        named_markets().unwrap_or_else(|| (0..n).map(|i| format!("SYNTH{i}")).collect());
     let n = markets.len();
     log::info!(
         "synth-фид: {windows} окон × {charts} панелей, {n} рынков, {tps} тик/с, {bookhz} стак/с"
@@ -131,7 +130,9 @@ pub fn run(
         is_started: !env_flag("MOON_SYNTH_STOPPED"),
         auto_detect_active: true,
     }));
-    let _ = tx.send(FeedMsg::StrategiesRunning(!env_flag("MOON_SYNTH_TRADING_OFF")));
+    let _ = tx.send(FeedMsg::StrategiesRunning(!env_flag(
+        "MOON_SYNTH_TRADING_OFF",
+    )));
 
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
     //

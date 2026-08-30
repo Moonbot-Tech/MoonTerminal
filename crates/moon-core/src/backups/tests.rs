@@ -1,8 +1,8 @@
 //! Daily schedule and strategy-readiness regression tests.
 
 use super::*;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 
 /// Removing the exact-noon `>=` boundary would leave the new day's slots pending until tomorrow.
 #[test]
@@ -72,9 +72,11 @@ fn pending_readiness_tracks_runtime_topology() {
     let ready_generation = coordinator.strategy_claim().unwrap();
     coordinator.update_expected(HashSet::from([10, 30]));
 
-    assert!(coordinator
-        .with_current_topology(ready_generation, || ())
-        .is_none());
+    assert!(
+        coordinator
+            .with_current_topology(ready_generation, || ())
+            .is_none()
+    );
     assert_eq!(coordinator.strategy_claim(), None);
     coordinator.strategy_commit(30);
     assert!(coordinator.strategy_claim().is_some());

@@ -1,9 +1,8 @@
 use super::super::schema::{
-    default_ui_font_delta, default_ui_scale, ServersFile, SettingsFile, UiThemeMode,
-    SCHEMA_VERSION,
+    SCHEMA_VERSION, ServersFile, SettingsFile, UiThemeMode, default_ui_font_delta, default_ui_scale,
 };
-use super::{merge, split, Merged};
-use crate::config::{CoreGroup, GroupConfig, Language, DEFAULT_ORDER_SIZES_USD};
+use super::{Merged, merge, split};
+use crate::config::{CoreGroup, DEFAULT_ORDER_SIZES_USD, GroupConfig, Language};
 use crate::market::MarketDataMode;
 
 /// Merge a settings file carrying nothing but the two scaling knobs.
@@ -276,11 +275,11 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
     );
 }
 
-
 /// Merge a one-server pair of files: `servers.enc` carries the key, `settings.toml` the metadata.
 fn merged_server(key: &str, meta_toml: &str) -> crate::config::ServerConfig {
     let entry: crate::config::schema::ServerEntry =
-        toml::from_str(&format!("uid = 7\nname = \"alpha\"\nkey = \"{key}\"")).expect("server entry fixture must parse");
+        toml::from_str(&format!("uid = 7\nname = \"alpha\"\nkey = \"{key}\""))
+            .expect("server entry fixture must parse");
     let meta: crate::config::schema::ServerMeta =
         toml::from_str(meta_toml).expect("server meta fixture must parse");
     let merged = merge(

@@ -107,7 +107,8 @@ fn a_percentage_stop_level_is_not_drawn_as_a_price() {
     // A short takes the percent to the other side of the entry, on both price scales.
     let short = stop_loss_line_price(entry, true, false, 10.65, true).expect("percent resolves");
     assert!((short - entry * 1.1065).abs() < 1e-12);
-    let short_mid = stop_loss_line_price(100.0, true, false, 10.65, true).expect("percent resolves");
+    let short_mid =
+        stop_loss_line_price(100.0, true, false, 10.65, true).expect("percent resolves");
     assert!((short_mid - 110.65).abs() < 1e-9, "got {short_mid}");
 }
 
@@ -129,7 +130,10 @@ fn an_unfilled_order_reads_its_stop_level_as_a_percent() {
     let price = stop_loss_line_price(10.0, false, false, 9.0, false).expect("percent resolves");
     assert!((price - 10.0 * (1.0 - 0.09)).abs() < 1e-9, "got {price}");
     // Once the same order fills, that value IS a plausible price and is drawn as one.
-    assert_eq!(stop_loss_line_price(10.0, false, false, 9.0, true), Some(9.0));
+    assert_eq!(
+        stop_loss_line_price(10.0, false, false, 9.0, true),
+        Some(9.0)
+    );
 }
 
 /// A stop price the CORE resolved is drawn exactly where the core put it.
@@ -156,9 +160,15 @@ fn a_core_resolved_stop_price_is_drawn_as_reported() {
         Some(140.039_52)
     );
     // Long, stop 90% below entry: distant but still on the protective side, and inside the band.
-    assert_eq!(stop_loss_line_price(2.0, false, false, 0.2, true), Some(0.2));
+    assert_eq!(
+        stop_loss_line_price(2.0, false, false, 0.2, true),
+        Some(0.2)
+    );
     // A fixed level is an absolute price the trader chose, on either side.
-    assert_eq!(stop_loss_line_price(2.0, false, true, 55.0, true), Some(55.0));
+    assert_eq!(
+        stop_loss_line_price(2.0, false, true, 55.0, true),
+        Some(55.0)
+    );
     // No entry to reason against: draw the enabled stop where the core reported it rather than
     // dropping the line (a listing-sell before its position price arrives).
     assert_eq!(

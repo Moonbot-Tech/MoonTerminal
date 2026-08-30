@@ -3,8 +3,8 @@
 use rusqlite::Connection;
 
 use super::{
-    best_range, improvement_margin, read_tuner_rows, scan_time_rows, tuner_source_on,
-    visit_time_rows, HourStat, Query, ReadResult,
+    HourStat, Query, ReadResult, best_range, improvement_margin, read_tuner_rows, scan_time_rows,
+    tuner_source_on, visit_time_rows,
 };
 
 /// WorkingTime: one strategy time range. `Day` is a time-of-day window (minutes 0..1439,

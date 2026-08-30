@@ -305,8 +305,8 @@ mod runs;
 #[cfg(test)]
 mod tests;
 
-use caption::book_zone_left;
 pub(in crate::chartdx) use caption::CaptionBox;
+use caption::book_zone_left;
 pub(in crate::chartdx) use captions::{CAPTION_PLATES, CaptionBar, CaptionGeomInput};
 /// The caption editor lives outside the chart and needs exactly one thing from the text pass:
 /// the real formatter, applied to sample values.

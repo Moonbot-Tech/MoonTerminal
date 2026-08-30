@@ -71,7 +71,13 @@ fn name_validation_refuses_path_traversal() {
 fn describe_rejects_a_mixed_fixture() {
     let dir = scratch("mixed");
     let path = dir.join("klines.sqlite");
-    seed_klines(&path, &[("200:00000000", "ACEUSDT", 1), ("200:00000000", "BTCUSDT", 1)]);
+    seed_klines(
+        &path,
+        &[
+            ("200:00000000", "ACEUSDT", 1),
+            ("200:00000000", "BTCUSDT", 1),
+        ],
+    );
 
     let err = describe(&path).expect_err("two markets must fail");
     assert!(
@@ -86,7 +92,13 @@ fn describe_rejects_a_mixed_fixture() {
 fn describe_reads_the_single_pair() {
     let dir = scratch("single");
     let path = dir.join("klines.sqlite");
-    seed_klines(&path, &[("200:00000000", "ACEUSDT", 1), ("200:00000000", "ACEUSDT", 5)]);
+    seed_klines(
+        &path,
+        &[
+            ("200:00000000", "ACEUSDT", 1),
+            ("200:00000000", "ACEUSDT", 5),
+        ],
+    );
 
     let (exchange, market) = describe(&path).expect("single pair");
     assert_eq!(exchange, "200:00000000");
@@ -264,7 +276,10 @@ fn committed_fixture_is_readable() {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .expect("count");
-    assert!(rows > 100, "bench should carry a dense day, got {rows} trades");
+    assert!(
+        rows > 100,
+        "bench should carry a dense day, got {rows} trades"
+    );
     assert_eq!(cores, 1, "the bench is one core");
     assert_eq!(coins, 1, "the bench is one coin");
 

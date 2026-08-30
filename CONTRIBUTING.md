@@ -100,15 +100,16 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - `main` has no branch protection and no required checks: a direct push is public and untested
   the instant it lands, with CI reporting only afterwards. Branch from fresh `main`, open a PR,
   squash-merge — history stays linear.
-- **CI runs neither `fmt` nor `clippy`.** Run `cargo clippy` yourself before pushing, and format
-  **only the files you touched** — `rustfmt --config skip_children=true <files>`. The committed
-  tree is not rustfmt-clean, so `make fmt` (`cargo fmt --all`) silently reformats files your
-  change never touched and buries the real diff. Read the formatter's own diff too: with two
-  editions in the workspace it also reorders `use` blocks it had no business touching — revert
-  those hunks.
-- Three CI gates, all on every PR and all meant to be green before you merge: the Windows
-  `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`, and
-  `Dependency audit (cargo-deny)`. They run in parallel. The macOS job is diagnostic
+- **CI runs `fmt`, not `clippy`.** Run `cargo clippy` yourself before pushing. The tree **is**
+  rustfmt-clean: `cargo fmt --all` is the correct command, `rustfmt.toml`
+  (`style_edition = "2024"`) is the authority, and CI enforces it via the `Fmt` job — which does
+  not need the optional `private/uidoc` overlay to pass; `cargo fmt` must (and does) work without
+  it. Blame history across the tree-wide reformat is preserved by `.git-blame-ignore-revs` —
+  enable it locally with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
+- Five CI gates, all on every PR and all meant to be green before you merge: the Windows
+  `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`,
+  `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
+  `cargo fmt --all -- --check`. They run in parallel. The macOS job is diagnostic
   (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
   enforcement: with no branch protection nothing stops a red merge except you reading the checks.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.

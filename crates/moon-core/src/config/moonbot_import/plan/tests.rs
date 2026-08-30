@@ -134,10 +134,11 @@ fn theme_mode_and_hotkeys_mapped() {
     assert!(expected_empty > 0, "фикстура должна содержать пустые слоты");
 
     // ReloadBook is assigned but has no action, so it enters unsupported_hotkeys with a reason.
-    assert!(plan
-        .unsupported_hotkeys
-        .iter()
-        .any(|u| u.name == "Reload Book" && u.reason.contains("нет такого действия")));
+    assert!(
+        plan.unsupported_hotkeys
+            .iter()
+            .any(|u| u.name == "Reload Book" && u.reason.contains("нет такого действия"))
+    );
 }
 
 #[test]
@@ -160,20 +161,23 @@ fn colors_mapped_per_theme_side() {
     assert!(find(&plan.chart, "theme.bg.light").unwrap().same);
 
     // CandleRed with alpha 0x80 goes to unsupported rather than being silently discarded.
-    assert!(plan
-        .unsupported
-        .iter()
-        .any(|u| u.name.starts_with("CandleRed") && u.reason.contains("alpha")));
+    assert!(
+        plan.unsupported
+            .iter()
+            .any(|u| u.name.starts_with("CandleRed") && u.reason.contains("alpha"))
+    );
     // An unknown key goes to unsupported.
-    assert!(plan
-        .unsupported
-        .iter()
-        .any(|u| u.name.starts_with("Unknown")));
+    assert!(
+        plan.unsupported
+            .iter()
+            .any(|u| u.name.starts_with("Unknown"))
+    );
     // An invalid color value goes to unsupported.
-    assert!(plan
-        .unsupported
-        .iter()
-        .any(|u| u.name.starts_with("BuyOrder") && u.reason.contains("не разобрано")));
+    assert!(
+        plan.unsupported
+            .iter()
+            .any(|u| u.name.starts_with("BuyOrder") && u.reason.contains("не разобрано"))
+    );
     // The Charts section has no mapping table and goes entirely to unsupported.
     assert!(plan.unsupported.iter().any(|u| u.name.contains("Charts")));
 }
@@ -188,10 +192,11 @@ fn core_items_and_range_checks() {
     let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
 
     assert!(find(&plan.group_items, "group.order_sizes_usd").is_none());
-    assert!(plan
-        .warnings
-        .iter()
-        .any(|warning| warning.contains("OSize")));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|warning| warning.contains("OSize"))
+    );
     let sel = find(&plan.group_items, "group.order_size_sel").unwrap();
     assert_eq!(sel.value, PlannedValue::OrderSizeSel(3));
     assert_eq!(sel.new, "F4");

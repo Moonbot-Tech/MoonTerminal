@@ -518,13 +518,15 @@ impl Shell {
                 this.stage_blacklist_text(cx);
             }
         };
-        cx.subscribe(&blacklist_input, move |this, _inp, ev: &MoonInputEvent, cx| {
-            stage_bl(this, ev, cx)
-        })
+        cx.subscribe(
+            &blacklist_input,
+            move |this, _inp, ev: &MoonInputEvent, cx| stage_bl(this, ev, cx),
+        )
         .detach();
-        cx.subscribe(&blacklist_area, move |this, _inp, ev: &MoonInputEvent, cx| {
-            stage_bl(this, ev, cx)
-        })
+        cx.subscribe(
+            &blacklist_area,
+            move |this, _inp, ev: &MoonInputEvent, cx| stage_bl(this, ev, cx),
+        )
         .detach();
 
         // Focus the window root immediately so hotkeys, including F keys, work even when Main is

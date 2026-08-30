@@ -613,8 +613,7 @@ impl ReportPanel {
         });
         let to = cx.new(|cx| {
             let mut state = date_range::bound_picker(Bound::To, window, cx);
-            if let Some(value) =
-                to_query.and_then(|secs| date_range::dt_of_secs(secs, bound_zone))
+            if let Some(value) = to_query.and_then(|secs| date_range::dt_of_secs(secs, bound_zone))
             {
                 state.set_value(Some(value), window, cx);
             }

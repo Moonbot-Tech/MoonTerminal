@@ -9,7 +9,7 @@
 //! damaged or hostile, and `m_cost` is an allocation request — an unchecked one turns opening a
 //! config into an out-of-memory abort.
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use argon2::{Algorithm, Argon2, Params, Version};
 use zeroize::Zeroizing;
 

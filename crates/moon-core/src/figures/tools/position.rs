@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::kind::FigureKind;
 use super::super::node::FigNode;
-use super::super::proj::{seg_dist, Proj, PxPoint};
+use super::super::proj::{Proj, PxPoint, seg_dist};
 use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText};
 use super::{FigureTool, ToolDef, ToolShape};
 

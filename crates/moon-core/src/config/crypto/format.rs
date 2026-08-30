@@ -14,7 +14,7 @@
 //! Those files are still produced by every build before key slots existed, and they are still
 //! sitting in `backups/settings/`, so the reader keeps understanding them permanently.
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 
 use super::slots::Header;
 

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rusqlite::Connection;
 
-use super::{current_rate_sql, CurrentRate, CurrentRates, ValuationMode, FRESHNESS_MS};
+use super::{CurrentRate, CurrentRates, FRESHNESS_MS, ValuationMode, current_rate_sql};
 
 /// Wall clock the fixtures treat as "now".
 const NOW_MS: i64 = 1_800_000_000_000;

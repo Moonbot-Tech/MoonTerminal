@@ -35,8 +35,8 @@ A SessionStart hook injects this file, and `CONTRIBUTING.md` beside it, into eve
 
 6. `cargo test --workspace` is green on your machine before the push, not just on CI afterwards.
 7. Run `cargo clippy` — CI does not (→ `CONTRIBUTING.md` § Commits and PRs).
-8. Format only the files you touched: `rustfmt --config skip_children=true <files>`. The committed
-   tree is not rustfmt-clean, so `make fmt` reformats unrelated files into your diff.
+8. The tree is rustfmt-clean: run `cargo fmt --all` (or `make fmt`) before you push
+   (→ `CONTRIBUTING.md` § Commits and PRs).
 9. Read `git status` before every push; never `git add -f` — fix the over-broad ignore instead.
 10. Never commit `Cargo.lock` carrying local sibling `path` entries — it breaks every other
     machine and all of CI (→ `CONTRIBUTING.md` § Dependencies and the lockfile).

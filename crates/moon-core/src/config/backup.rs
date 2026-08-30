@@ -9,8 +9,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use crate::backup_store::{timestamp_prefix, ExactPublication, SnapshotStore};
-use crate::backups::{due_slot_ms, DueOutcome, DAY_MS, RETAIN_PERIODS};
+use crate::backup_store::{ExactPublication, SnapshotStore, timestamp_prefix};
+use crate::backups::{DAY_MS, DueOutcome, RETAIN_PERIODS, due_slot_ms};
 use crate::util::{now_unix_ms_i64, utc_stamp_compact};
 
 use super::paths;

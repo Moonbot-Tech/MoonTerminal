@@ -116,11 +116,13 @@ fn eligibility_rejects_duplicate_windows_assets() {
 /// bytes that are downloaded.
 #[test]
 fn asset_url_is_bound_to_the_repository_tag_and_exact_name() {
-    assert!(validate_download_url(
-        "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.21/MoonTerminal.exe",
-        "v0.21"
-    )
-    .is_ok());
+    assert!(
+        validate_download_url(
+            "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.21/MoonTerminal.exe",
+            "v0.21"
+        )
+        .is_ok()
+    );
     assert!(validate_download_url(
         "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/v0.24.1/MoonTerminal.exe",
         "v0.24.1"

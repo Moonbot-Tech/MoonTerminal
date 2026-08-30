@@ -6,8 +6,8 @@
 //! first consumer would make the second reach sideways into a feature module for a primitive that
 //! belongs to neither.
 
-use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
+use rusqlite::functions::FunctionFlags;
 use unicode_casefold::UnicodeCaseFold;
 
 /// Fold a strategy name for locale-independent Unicode caseless matching.

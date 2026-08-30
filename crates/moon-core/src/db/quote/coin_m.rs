@@ -241,12 +241,7 @@ pub(super) fn learn(
 ///     src: The legacy source.
 ///     predicates: COIN-M guards over the alias `d`.
 ///     known: Knowledge to extend.
-fn learn_legacy(
-    conn: &Connection,
-    src: &ReadSource,
-    predicates: &[String],
-    known: &mut Knowledge,
-) {
+fn learn_legacy(conn: &Connection, src: &ReadSource, predicates: &[String], known: &mut Knowledge) {
     if known.legacy_swept {
         return;
     }

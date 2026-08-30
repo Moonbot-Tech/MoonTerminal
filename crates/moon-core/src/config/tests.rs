@@ -59,7 +59,11 @@ fn a_plaintext_config_carries_every_core_it_was_given() {
     }
     // Breakage: a counter fixed at 2 hands the next core a uid that is already in use here.
     let mut counter = config.next_uid.clone();
-    assert_eq!(counter.issue(), 4, "the counter must start above the highest uid given");
+    assert_eq!(
+        counter.issue(),
+        4,
+        "the counter must start above the highest uid given"
+    );
 }
 
 /// Breakage: a malformed list silently configuring fewer cores than asked for shows up as empty

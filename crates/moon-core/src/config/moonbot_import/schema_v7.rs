@@ -4,8 +4,8 @@
 //! An unread tail in a KNOWN block is allowed as an append-only extension of the same version;
 //! an unknown kind is skipped by size, while a repeated known block is an error.
 
-use super::reader::{IniSection, Reader};
 use super::ImportError;
+use super::reader::{IniSection, Reader};
 
 /// Actions of the UI block's 27 positional shortcut slots, ordered exactly as in spec section 6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,7 +405,7 @@ pub(super) mod build {
         b.push(1u8); // ConfirmClose
         b.push(0u8); // NewMarketsOnTop
         b.extend_from_slice(&5i32.to_le_bytes()); // CoinsSortOrder
-                                                  // HotkeysPublic
+        // HotkeysPublic
         b.push(1u8); // Filled
         b.push(2u8); // ver
         for s in order_sizes {

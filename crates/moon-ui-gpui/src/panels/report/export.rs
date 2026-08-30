@@ -149,10 +149,22 @@ pub(super) fn run(
         anyhow::bail!("нет колонок для экспорта");
     }
     match fmt {
-        Format::Csv => write_csv(path, &idx, &table.core_uids, &table.rows, axis, display_zone)?,
-        Format::Xlsx => {
-            write_xlsx(path, &idx, &table.core_uids, &table.rows, axis, display_zone)?
-        }
+        Format::Csv => write_csv(
+            path,
+            &idx,
+            &table.core_uids,
+            &table.rows,
+            axis,
+            display_zone,
+        )?,
+        Format::Xlsx => write_xlsx(
+            path,
+            &idx,
+            &table.core_uids,
+            &table.rows,
+            axis,
+            display_zone,
+        )?,
     }
     Ok(table.rows.len())
 }
@@ -202,7 +214,13 @@ fn write_csv(
             }
             first = false;
             let val = row.get(*i).unwrap_or(&Value::Null);
-            out.push_str(&csv_field(&field_text(name, val, axis, core_uid, display_zone)));
+            out.push_str(&csv_field(&field_text(
+                name,
+                val,
+                axis,
+                core_uid,
+                display_zone,
+            )));
         }
         out.push_str("\r\n");
     }
@@ -257,7 +275,11 @@ pub(super) fn field_text(
         // takes the selected zone with no correction. Export must agree with the grid exactly, or
         // the same trade reads as two different times depending on where you looked at it.
         let replicated = col != "last_update_at";
-        let zone = if replicated { axis.zone() } else { display_zone };
+        let zone = if replicated {
+            axis.zone()
+        } else {
+            display_zone
+        };
         let project = |secs: i64| {
             let secs = if replicated {
                 axis.to_utc(secs, core_uid)

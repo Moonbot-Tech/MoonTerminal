@@ -49,7 +49,11 @@ fn frozen_startup_is_reported() {
         "the first sighting only marks"
     );
     assert!(
-        !dog.observe(&stuck, start + STARTUP_STALL - Duration::from_millis(1), false),
+        !dog.observe(
+            &stuck,
+            start + STARTUP_STALL - Duration::from_millis(1),
+            false
+        ),
         "one poll short of the budget"
     );
     assert!(dog.observe(&stuck, start + STARTUP_STALL, false));

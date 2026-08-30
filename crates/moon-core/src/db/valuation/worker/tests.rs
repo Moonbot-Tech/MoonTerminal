@@ -729,26 +729,30 @@ fn exact_prefetch_misses_are_not_requested_again_per_row() {
 
     let prefetched = prefetch_rates(&store, &source, &axis(), std::slice::from_ref(&input))
         .expect("prefetch exact routes");
-    assert!(prefetched
-        .canonical_exact_missing
-        .contains(&(input.quote_ordinal, minute)));
+    assert!(
+        prefetched
+            .canonical_exact_missing
+            .contains(&(input.quote_ordinal, minute))
+    );
     source.calls.lock().expect("clear prefetch calls").clear();
 
     assert!(matches!(
         prepare_trade(&store, &source, &axis(), &input, true),
         PrepareResult::Deferred { .. }
     ));
-    assert!(source
-        .calls
-        .lock()
-        .expect("read preparation calls")
-        .iter()
-        .all(|(provider, symbol, start, end)| {
-            !matches!(*provider, "binance_spot" | "bybit_spot")
-                || !matches!(symbol.as_str(), "USDCUSDT" | "USDTUSDC")
-                || *start != minute
-                || *end != minute
-        }));
+    assert!(
+        source
+            .calls
+            .lock()
+            .expect("read preparation calls")
+            .iter()
+            .all(|(provider, symbol, start, end)| {
+                !matches!(*provider, "binance_spot" | "bybit_spot")
+                    || !matches!(symbol.as_str(), "USDCUSDT" | "USDTUSDC")
+                    || *start != minute
+                    || *end != minute
+            })
+    );
 }
 
 /// A persisted retry that becomes due must consume a newly retained successor without any new
@@ -909,9 +913,11 @@ fn empty_replacement_reconciles_rows_after_outbox_acknowledgement() {
         )
         .expect("seed historical report row");
     super::super::init_report_outbox(&reports).expect("initialize empty report outbox");
-    assert!(super::super::read_outbox(&reports, 10)
-        .expect("read acknowledged outbox")
-        .is_empty());
+    assert!(
+        super::super::read_outbox(&reports, 10)
+            .expect("read acknowledged outbox")
+            .is_empty()
+    );
     let attach = format!(
         "ATTACH DATABASE '{}' AS valuation",
         path.to_string_lossy()

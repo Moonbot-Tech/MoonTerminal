@@ -1,6 +1,6 @@
 //! Contract for compact UTC timestamps used in snapshot directory names.
 
-use super::{local_utc_offset_ms, utc_stamp_compact, STAMP_MAX, STAMP_MIN};
+use super::{STAMP_MAX, STAMP_MIN, local_utc_offset_ms, utc_stamp_compact};
 
 /// The timestamp has fixed width and a separator at a fixed offset.
 ///

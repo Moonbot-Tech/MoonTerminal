@@ -101,9 +101,11 @@ fn exact_publication_accepts_only_a_domain_validated_winner() {
     let invalid_staging = store.create_staging().unwrap();
     std::fs::write(invalid_staging.join("data"), b"new").unwrap();
 
-    assert!(store
-        .publish_exact(&invalid_staging, "20260804-120000", |_| false)
-        .is_err());
+    assert!(
+        store
+            .publish_exact(&invalid_staging, "20260804-120000", |_| false)
+            .is_err()
+    );
     assert!(existing.exists());
 
     let valid_staging = store.create_staging().unwrap();

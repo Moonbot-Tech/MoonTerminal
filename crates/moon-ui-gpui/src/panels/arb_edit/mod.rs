@@ -67,7 +67,6 @@ impl ArbEditState {
         });
         on_change(cfg, cx);
     }
-
 }
 
 /// Open the arbitrage roster window.

@@ -872,7 +872,12 @@ impl SettingsView {
                 .store()
                 .core(core)
                 .and_then(|d| d.core_config.as_ref())
-                .map(|c| (c.manual.core_hotkeys.clone(), c.manual.strat_buttons.hot_keys))?;
+                .map(|c| {
+                    (
+                        c.manual.core_hotkeys.clone(),
+                        c.manual.strat_buttons.hot_keys,
+                    )
+                })?;
             let base = b
                 .preview
                 .as_ref()
@@ -1015,9 +1020,12 @@ impl SettingsView {
         let b = self.backend.read(cx);
         let core_data = b.session.store().core(core);
         let state = core_data.map(|d| d.core_config_state());
-        let manual = core_data
-            .and_then(|d| d.core_config.as_ref())
-            .map(|c| (c.manual.core_hotkeys.clone(), c.manual.strat_buttons.hot_keys));
+        let manual = core_data.and_then(|d| d.core_config.as_ref()).map(|c| {
+            (
+                c.manual.core_hotkeys.clone(),
+                c.manual.strat_buttons.hot_keys,
+            )
+        });
 
         let pending = self.core_pull.is_some_and(|(pending_core, baseline)| {
             pending_core == core

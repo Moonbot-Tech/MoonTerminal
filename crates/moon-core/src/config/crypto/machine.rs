@@ -7,9 +7,9 @@
 //! left that key behind in the keyring. Creation now happens only where a key is actually being
 //! established: writing a new file, or adding this machine to one that was just unlocked.
 
-use anyhow::{anyhow, Context};
-use base64::engine::general_purpose::STANDARD as B64;
+use anyhow::{Context, anyhow};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 

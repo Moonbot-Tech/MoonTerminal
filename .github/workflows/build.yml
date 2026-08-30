@@ -3,11 +3,12 @@ name: build
 permissions:
   contents: read
 
-# Five jobs, four of which gate a merge:
+# Six jobs, five of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
 #   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
 #   Audit        — cargo-deny over the committed lockfile. Blocking.
 #   Tour         — deterministic interactive and AI documentation. Blocking.
+#   Fmt          — `cargo fmt --all -- --check`. Blocking.
 #   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
 #                  backend on a native runner, which Windows cannot do at all: no
 #                  macOS SDK and no Apple linker. Reaches both architectures the release
@@ -44,8 +45,8 @@ permissions:
 # deliberate commit that can be reverted on its own when a new compiler breaks a dep. Dependabot
 # does not propose that raise: it is told to ignore this action in .github/dependabot.yml, because
 # the action is versioned by branches its author creates ahead of the Rust releases they name, so
-# its "latest" resolves to a toolchain rustup cannot download. Move all five sites together —
-# three here, two in release.yml, which never re-runs these gates.
+# its "latest" resolves to a toolchain rustup cannot download. Move all six sites together —
+# three here, two in release.yml, and rust-toolchain.toml, which never re-runs these gates.
 on:
   push:
     branches: [main]
@@ -227,3 +228,14 @@ jobs:
       - name: Build complete site from sources
         run: make tour-site TOUR_SITE_OUT="${{ runner.temp }}/moonterminal-site"
       - run: make tour-test
+
+  fmt:
+    name: Formatting (cargo fmt)
+    runs-on: ubuntu-latest
+    # Deliberately NOT cached, for the same reason the audit and tour jobs are not:
+    # `Swatinem/rust-cache` would become a further writer competing for the repository's
+    # 10 GB Actions quota, and this job compiles nothing worth caching.
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check formatting
+        run: cargo fmt --all -- --check

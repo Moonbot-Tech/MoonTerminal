@@ -125,12 +125,16 @@ fn retention_keeps_every_snapshot_in_the_latest_seven_periods() {
     let removed = prune(&backups, current, &["settings.toml"], &expected);
 
     assert_eq!(removed, 1);
-    assert!(!backups
-        .join(utc_stamp_compact(current - 7 * DAY_MS))
-        .exists());
-    assert!(backups
-        .join(utc_stamp_compact(current - 6 * DAY_MS))
-        .exists());
+    assert!(
+        !backups
+            .join(utc_stamp_compact(current - 7 * DAY_MS))
+            .exists()
+    );
+    assert!(
+        backups
+            .join(utc_stamp_compact(current - 6 * DAY_MS))
+            .exists()
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 

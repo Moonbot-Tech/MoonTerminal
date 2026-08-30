@@ -253,11 +253,11 @@ fn version_group_rank(version: GroupVersion) -> (u8, u32) {
 /// Rank a server's rolled-up clock offset: an agreed offset first, ordered by the offset itself,
 /// then disagreement, then nothing ever measured.
 ///
-    /// `Mixed` outranks `Absent` for the same reason [`version_group_rank`] orders them that way: a
-    /// mixed group has something to look at by expanding it, while an absent one does not.
-    ///
-    /// Args:
-    ///     group: Rollup state for one server's core clock offsets.
+/// `Mixed` outranks `Absent` for the same reason [`version_group_rank`] orders them that way: a
+/// mixed group has something to look at by expanding it, while an absent one does not.
+///
+/// Args:
+///     group: Rollup state for one server's core clock offsets.
 ///
 /// Returns:
 ///     Sort category and offset within the uniform category.

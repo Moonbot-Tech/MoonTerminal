@@ -3,7 +3,7 @@
 use chrono_tz::UTC;
 
 use super::{
-    centred_start_x, fit_tail, header_strip, Gaps, HeaderInputs, LeadGap, Measured, RunStyle,
+    Gaps, HeaderInputs, LeadGap, Measured, RunStyle, centred_start_x, fit_tail, header_strip,
 };
 
 /// Build a complete independently chosen snapshot, so the expected strip contents do not reuse

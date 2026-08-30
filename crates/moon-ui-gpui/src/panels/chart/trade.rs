@@ -386,7 +386,8 @@ impl ChartPanel {
                     // Either no pane holds the pointer, or the one that does reports no control
                     // zone at all — a book enabled but measured to zero width. Stated as the one
                     // fact both share: there was no zone to be inside of.
-                    (true, None) => "the order-book zone, which resolved to nothing here".to_string(),
+                    (true, None) =>
+                        "the order-book zone, which resolved to nothing here".to_string(),
                     (false, _) => "every pane".to_string(),
                 }
             );

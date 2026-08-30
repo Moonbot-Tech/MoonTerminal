@@ -6,8 +6,8 @@ use moon_core::db::analytics::DayCell;
 use moon_core::db::{FailKind, ReadFail};
 
 use super::{
-    apply_calendar_results, day_window, fmt_amount, fmt_duration_short, fmt_volume, hour_start,
-    next_day, previous_day, resolve_calendar_date, ProfitLoadState, DAY_ROWS,
+    DAY_ROWS, ProfitLoadState, apply_calendar_results, day_window, fmt_amount, fmt_duration_short,
+    fmt_volume, hour_start, next_day, previous_day, resolve_calendar_date,
 };
 use crate::load_state::{LoadState, Note};
 

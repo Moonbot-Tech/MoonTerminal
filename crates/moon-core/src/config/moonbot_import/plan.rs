@@ -13,7 +13,7 @@
 //!   until an explicit mapping table exists (spec section 9);
 //! - do not silently discard meaningful color alpha; send the item to `unsupported`.
 
-use super::schema_v7::{MoonBotConfig, ShortcutAction, SHORTCUT_ACTIONS};
+use super::schema_v7::{MoonBotConfig, SHORTCUT_ACTIONS, ShortcutAction};
 use super::shortcut::{self, DecodedShortcut};
 use crate::config::hotkeys::{HotkeysConfig, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
 use crate::config::orders::OrdersStyleSet;

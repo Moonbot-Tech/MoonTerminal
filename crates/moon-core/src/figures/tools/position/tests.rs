@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{build, ctx, TestProj};
+use crate::figures::tools::tests::{TestProj, build, ctx};
 
 /// A long: opened at 100, taken at 120, and — by default — cut at 90.
 fn long() -> Position {
@@ -132,14 +132,16 @@ fn a_body_drag_keeps_the_ratio() {
 #[test]
 fn a_position_is_not_alertable() {
     assert!(!FigureTool::Position.def().alertable);
-    assert!(crate::alert_blob::encode(
-        &FigureKind::Position(long()),
-        [1, 2, 3, 4],
-        1.0,
-        crate::figures::LineKind::Solid,
-        0.0,
-        0,
-        1,
-    )
-    .is_none());
+    assert!(
+        crate::alert_blob::encode(
+            &FigureKind::Position(long()),
+            [1, 2, 3, 4],
+            1.0,
+            crate::figures::LineKind::Solid,
+            0.0,
+            0,
+            1,
+        )
+        .is_none()
+    );
 }

@@ -3,7 +3,7 @@
 
 use rusqlite::Connection;
 
-use super::{detect_text, query_trade_meta, ChartTradeRecord};
+use super::{ChartTradeRecord, detect_text, query_trade_meta};
 
 /// The comment shape the core actually writes: one detect line, then its own health.
 ///
@@ -146,9 +146,11 @@ fn a_row_that_only_shares_the_number_is_refused() {
         None
     );
     // The coin is matched case-insensitively, the way every other coin predicate here is.
-    assert!(query_trade_meta(&conn, &record(7, 11, "btc", 100, 200))
-        .expect("read trade meta")
-        .is_some());
+    assert!(
+        query_trade_meta(&conn, &record(7, 11, "btc", 100, 200))
+            .expect("read trade meta")
+            .is_some()
+    );
 }
 
 /// A trade the core wrote nothing about reads as nothing to print.

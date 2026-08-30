@@ -11,7 +11,7 @@
 //! provider it covers ALL exchange markets (`subscribe_all_trades` -> `TradeStorageScope::All`
 //! plus automatic candles), so these columns need no per-market subscriptions.
 
-use moonproto::{state::DerivedDeltaSnapshot, MoonTime};
+use moonproto::{MoonTime, state::DerivedDeltaSnapshot};
 
 use crate::session::CoreId;
 

@@ -117,7 +117,7 @@ impl SessionManager {
                 Vec::new()
             };
             markets.sort(); // Stable ordering allows direct comparison with `last_cmd`.
-                            // Order books are the subset of markets with current demand; removal is immediate.
+            // Order books are the subset of markets with current demand; removal is immediate.
             let mut orderbook_markets: Vec<String> = if is_prov {
                 let obk = orderbook_pm.get(&id);
                 markets

@@ -727,7 +727,6 @@ impl crate::controls::CoreComboHost for ReportPanel {
 }
 
 impl ReportPanel {
-
     /// The time axis every replicated report timestamp in this window is read through.
     ///
     /// Answers from the CACHED axis rather than rebuilding one: this is called from the render

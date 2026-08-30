@@ -11,9 +11,10 @@ fn hyperliquid_parses_string_prices_at_numeric_millisecond_times() {
     assert_eq!(bars[0].t_open_ms, 1_787_505_300_000.0);
     assert_eq!(bars[0].open, 77_317.0);
     assert_eq!(bars[0].volume, 28.83589);
-    assert!(bars
-        .iter()
-        .all(|bar| bar.low <= bar.open && bar.high >= bar.close));
+    assert!(
+        bars.iter()
+            .all(|bar| bar.low <= bar.open && bar.high >= bar.close)
+    );
 }
 
 /// `rest/hyperliquid.rs:classify` calling an HTTP 500 an unknown symbol permanently caches an

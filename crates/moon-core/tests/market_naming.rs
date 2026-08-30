@@ -12,8 +12,8 @@
 //! - the exchange-aware path and the shape-recognition path must agree on the coin, because the
 //!   Log panel only ever has the latter.
 
-use moon_core::symbol::parse::{market_names_for, split_market};
 use moon_core::symbol::Exchange;
+use moon_core::symbol::parse::{market_names_for, split_market};
 
 /// `(exchange ordinal, market name)` rows of the fixture.
 fn fixture() -> Vec<(u8, String)> {

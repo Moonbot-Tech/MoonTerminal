@@ -1,7 +1,7 @@
 //! Adding a switch to a file the user already has, without disturbing anything in it.
 
 use super::*;
-use crate::diagnostics::config::{parse, DiagCfg};
+use crate::diagnostics::config::{DiagCfg, parse};
 use crate::diagnostics::template;
 
 /// A file as an older release would have written it, then edited by hand: one switch turned on, one
@@ -51,7 +51,10 @@ fn a_file_that_does_not_parse_is_never_written() {
 #[test]
 fn the_missing_key_arrives_with_its_documentation() {
     let (merged, added) = merge_missing(OLD_AND_EDITED).expect("keys are missing");
-    assert!(added.contains(&"log.market_sources".to_string()), "{added:?}");
+    assert!(
+        added.contains(&"log.market_sources".to_string()),
+        "{added:?}"
+    );
     assert!(
         merged.contains("market_sources = false"),
         "the key itself must be written"
@@ -66,7 +69,10 @@ fn the_missing_key_arrives_with_its_documentation() {
 #[test]
 fn a_section_introduced_later_is_added_whole() {
     let (merged, added) = merge_missing(OLD_AND_EDITED).expect("keys are missing");
-    assert!(added.contains(&"limits.log_ring_lines".to_string()), "{added:?}");
+    assert!(
+        added.contains(&"limits.log_ring_lines".to_string()),
+        "{added:?}"
+    );
     let cfg = parse(&merged).expect("the merged file must parse");
     assert_eq!(cfg.limits, DiagCfg::default().limits);
     assert!(

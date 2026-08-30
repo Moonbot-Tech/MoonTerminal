@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{build, ctx, TestProj};
+use crate::figures::tools::tests::{TestProj, build, ctx};
 
 fn tri() -> Triangle {
     Triangle {
@@ -83,7 +83,13 @@ fn a_sloped_base_keeps_the_apex_perpendicular_and_the_height_equal() {
     let apex = drag_apex(a, b);
     let mid = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
     let (base, up) = ((b.0 - a.0, b.1 - a.1), (apex.0 - mid.0, apex.1 - mid.1));
-    assert!((base.0 * up.0 + base.1 * up.1).abs() < 1e-3, "apex is not perpendicular to the base");
+    assert!(
+        (base.0 * up.0 + base.1 * up.1).abs() < 1e-3,
+        "apex is not perpendicular to the base"
+    );
     let (base_len, up_len) = (base.0.hypot(base.1), up.0.hypot(up.1));
-    assert!((base_len - up_len).abs() < 1e-3, "height {up_len} does not match base {base_len}");
+    assert!(
+        (base_len - up_len).abs() < 1e-3,
+        "height {up_len} does not match base {base_len}"
+    );
 }

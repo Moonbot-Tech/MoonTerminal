@@ -1,6 +1,6 @@
 use super::{
-    effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from, unified_from_mode,
-    ProjectionMode, Query, StrategyMask,
+    ProjectionMode, Query, StrategyMask, effective_sid_expr, quote_breakdown_on,
+    strategies_attached, unified_from, unified_from_mode,
 };
 use std::collections::HashSet;
 

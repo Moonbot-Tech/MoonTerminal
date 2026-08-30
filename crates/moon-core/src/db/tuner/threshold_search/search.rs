@@ -30,7 +30,7 @@ use rayon::prelude::*;
 
 use super::super::{range_pick, round_pair_outward};
 use super::handle::SearchHandle;
-use crate::db::metrics::{improvement_margin, Tally};
+use crate::db::metrics::{Tally, improvement_margin};
 
 #[cfg(test)]
 mod tests;
@@ -416,11 +416,7 @@ impl Search {
                     let mut hi = ne;
                     while lo + 1 < hi {
                         let m = (lo + hi) / 2;
-                        if *v >= e[m] {
-                            lo = m
-                        } else {
-                            hi = m
-                        }
+                        if *v >= e[m] { lo = m } else { hi = m }
                     }
                     lo.min(ne - 1) as u16
                 }

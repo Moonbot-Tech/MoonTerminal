@@ -37,10 +37,10 @@ pub use node::FigNode;
 pub use proj::Proj;
 pub use sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
 pub use store::{FigureKey, FigureStore};
-pub use style::{DrawStyle, LineKind, DEFAULT_FILL_ALPHA};
+pub use style::{DEFAULT_FILL_ALPHA, DrawStyle, LineKind};
 pub use tools::{
-    apply_settings, build_figure, drag_figure, pick_figure, pick_handle, settings_of, FigureTool,
-    Grab, GrabMode, ToolDef, ToolSetting, ToolSettings, ToolShape,
+    FigureTool, Grab, GrabMode, ToolDef, ToolSetting, ToolSettings, ToolShape, apply_settings,
+    build_figure, drag_figure, pick_figure, pick_handle, settings_of,
 };
 
 use serde::{Deserialize, Serialize};

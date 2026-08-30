@@ -55,12 +55,16 @@ fn merge_dedups_and_read_filters() {
     assert_eq!(rows.len(), 2, "дедуп по t_open внутри дня");
     assert_eq!(rows[0].open, 9.0, "поздняя заливка авторитетнее");
     // Rows from another kind or market are not visible.
-    assert!(cache
-        .read_range("7:0", "BTCUSDT", 5, day, day + DAY_MS)
-        .is_some_and(|r| r.is_empty()));
-    assert!(cache
-        .read_range("7:0", "ETHUSDT", 1, day, day + DAY_MS)
-        .is_some_and(|r| r.is_empty()));
+    assert!(
+        cache
+            .read_range("7:0", "BTCUSDT", 5, day, day + DAY_MS)
+            .is_some_and(|r| r.is_empty())
+    );
+    assert!(
+        cache
+            .read_range("7:0", "ETHUSDT", 1, day, day + DAY_MS)
+            .is_some_and(|r| r.is_empty())
+    );
     let _ = std::fs::remove_file(&path);
 }
 

@@ -177,12 +177,16 @@ fn retention_keeps_every_snapshot_in_the_latest_seven_utc_periods() {
     let removed = prune(&backups, current);
 
     assert_eq!(removed, 1);
-    assert!(!backups
-        .join(utc_stamp_compact(current - 7 * DAY_MS))
-        .exists());
-    assert!(backups
-        .join(utc_stamp_compact(current - 6 * DAY_MS))
-        .exists());
+    assert!(
+        !backups
+            .join(utc_stamp_compact(current - 7 * DAY_MS))
+            .exists()
+    );
+    assert!(
+        backups
+            .join(utc_stamp_compact(current - 6 * DAY_MS))
+            .exists()
+    );
     assert!(backups.join(retained_manual).exists());
     assert!(backups.join("2026-08-04").exists());
     let _ = std::fs::remove_dir_all(root);

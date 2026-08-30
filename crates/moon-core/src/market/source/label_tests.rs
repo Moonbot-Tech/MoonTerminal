@@ -4,7 +4,7 @@
 //! from the connected exchanges), not invented — the whole point of this type is that the core's
 //! spelling is not derivable from the market name.
 
-use super::{pick_market_for_coin, pick_market_for_identity, MarketLabel};
+use super::{MarketLabel, pick_market_for_coin, pick_market_for_identity};
 use crate::symbol::Exchange;
 
 /// A catalog-sourced label, as `market_labels` builds one.

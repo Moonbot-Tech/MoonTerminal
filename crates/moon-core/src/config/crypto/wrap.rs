@@ -9,14 +9,14 @@
 
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use anyhow::{anyhow, Context};
-use base64::engine::general_purpose::STANDARD as B64;
+use anyhow::{Context, anyhow};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use zeroize::Zeroizing;
 
 use super::format::NONCE_LEN;
 use super::kdf::{self, KdfParams};
-use super::slots::{Slot, KIND_MACHINE, KIND_PASSWORD};
+use super::slots::{KIND_MACHINE, KIND_PASSWORD, Slot};
 use crate::util::now_unix_ms_i64;
 
 /// Build a cipher from a 32-byte key.

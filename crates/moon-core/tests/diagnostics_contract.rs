@@ -152,7 +152,10 @@ fn no_diagnostic_log_file_is_opened_by_relative_path() {
             else {
                 continue;
             };
-            let name: String = line[start + skip..].chars().take_while(|c| *c != '"').collect();
+            let name: String = line[start + skip..]
+                .chars()
+                .take_while(|c| *c != '"')
+                .collect();
             if !name.ends_with(".log") || name.contains('/') || name.contains('\\') {
                 continue;
             }

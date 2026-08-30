@@ -186,19 +186,11 @@ pub(super) fn month_start(y: i32, m: u32, zone: chrono_tz::Tz) -> i64 {
 }
 
 pub(super) fn next_month(y: i32, m: u32) -> (i32, u32) {
-    if m == 12 {
-        (y + 1, 1)
-    } else {
-        (y, m + 1)
-    }
+    if m == 12 { (y + 1, 1) } else { (y, m + 1) }
 }
 
 fn prev_month(y: i32, m: u32) -> (i32, u32) {
-    if m == 1 {
-        (y - 1, 12)
-    } else {
-        (y, m - 1)
-    }
+    if m == 1 { (y - 1, 12) } else { (y, m - 1) }
 }
 
 /// Return the number of civil dates in a month from adjacent `NaiveDate` values.
@@ -355,11 +347,7 @@ pub(super) fn fmt_amount(v: f64, complete: bool) -> String {
         return "—".to_string();
     }
     let s = moon_core::util::fmt::compact(v, 2);
-    if complete {
-        s
-    } else {
-        format!("~{s}")
-    }
+    if complete { s } else { format!("~{s}") }
 }
 
 /// Format a short duration as at most two units: "45s", "1m 29s", "2h 15m", "3d 4h".

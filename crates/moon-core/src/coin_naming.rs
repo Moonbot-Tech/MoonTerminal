@@ -48,7 +48,11 @@ pub fn enabled() -> bool {
 /// rather than a scan of its market universe on every reconciliation.
 pub fn queries_for(core: u64) -> Option<Vec<String>> {
     let selector = crate::diagnostics::with_coin_naming_selector(str::to_string)?;
-    if swept().lock().unwrap_or_else(|e| e.into_inner()).done(&selector, core) {
+    if swept()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .done(&selector, core)
+    {
         return None;
     }
     let queries: Vec<String> = selector

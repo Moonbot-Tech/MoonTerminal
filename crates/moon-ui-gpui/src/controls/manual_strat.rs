@@ -131,8 +131,7 @@ pub fn manual_strategy_controls(
                     } else {
                         raw_name.clone()
                     };
-                    let key_label =
-                        shortcut_display(decode_shortcut(m.strat_buttons.hot_keys[i]));
+                    let key_label = shortcut_display(decode_shortcut(m.strat_buttons.hot_keys[i]));
                     (i, raw_name, sid, name_label, numeric_label, key_label)
                 })
                 .collect::<Vec<_>>()

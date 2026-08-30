@@ -26,12 +26,12 @@
 use std::sync::Arc;
 
 use moon_core::figures::{
-    build_figure, BuildCtx, FigNode, Figure, GeomSink, LabelPlace, LabelText, LineKind, Stroke,
+    BuildCtx, FigNode, Figure, GeomSink, LabelPlace, LabelText, LineKind, Stroke, build_figure,
 };
 
 use crate::layers::{
-    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT, SEG_CLAMP_NONE,
-    SEG_EXTEND_NONE, SEG_EXTEND_RAY, TIME_UNBOUNDED,
+    LineInstance, MARKER_SHAPE_KNOT, MarkerInstance, SEG_CLAMP_NONE, SEG_EXTEND_NONE,
+    SEG_EXTEND_RAY, SegInstance, TIME_UNBOUNDED, ZoneInstance,
 };
 
 /// Opacity of an idle (inactive) figure.

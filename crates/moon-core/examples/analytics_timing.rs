@@ -14,10 +14,10 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use moon_core::db::analytics::{
-    strategy_base_data, summary_data, undated_closes, GroupStat, Query,
-};
 use moon_core::db::ProfitScope;
+use moon_core::db::analytics::{
+    GroupStat, Query, strategy_base_data, summary_data, undated_closes,
+};
 
 /// Run one closure `repeats` times and print its best and median wall-clock cost.
 ///

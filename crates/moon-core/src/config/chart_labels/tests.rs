@@ -169,7 +169,9 @@ fn the_default_is_the_shipped_working_layout() {
         "the roster colours the spread by its sign, and only where the spread is worth acting on"
     );
     assert!(
-        cfg.rows[..cfg.used_rows()].iter().all(|r| r.name.is_empty()),
+        cfg.rows[..cfg.used_rows()]
+            .iter()
+            .all(|r| r.name.is_empty()),
         "every shipped module is named by its PRESET, so the popup speaks the reader's language"
     );
 }
@@ -495,7 +497,9 @@ fn every_preset_fits_a_row_and_is_named() {
 #[test]
 fn a_preset_row_carries_its_fields_band_and_name() {
     let mut cfg = ChartLabelsCfg::empty();
-    let ix = cfg.push_preset(LabelPreset::Position).expect("there is room");
+    let ix = cfg
+        .push_preset(LabelPreset::Position)
+        .expect("there is room");
     let row = &cfg.rows[ix];
     assert_eq!(row.preset, Some(LabelPreset::Position));
     assert_eq!(row.zone, LabelPreset::Position.zone());
@@ -508,7 +512,9 @@ fn a_preset_row_carries_its_fields_band_and_name() {
 #[test]
 fn a_preset_names_the_row_until_the_user_names_it_themselves() {
     let mut cfg = ChartLabelsCfg::empty();
-    let ix = cfg.push_preset(LabelPreset::Funding).expect("there is room");
+    let ix = cfg
+        .push_preset(LabelPreset::Funding)
+        .expect("there is room");
     let row = &mut cfg.rows[ix];
     assert!(row.name.is_empty(), "no localized string is stored");
     assert_eq!(row.title_key(), Some(LabelPreset::Funding.locale_key()));
@@ -1310,7 +1316,11 @@ fn a_label_timeframe_resolves_auto_against_the_chart() {
         "a fixed choice ignores the chart"
     );
     assert_eq!(LabelTf::Auto.resolved(7 * 60_000), LabelTf::M5);
-    assert_eq!(LabelTf::Auto.resolved(0), LabelTf::M5, "total, and never the setting");
+    assert_eq!(
+        LabelTf::Auto.resolved(0),
+        LabelTf::M5,
+        "total, and never the setting"
+    );
 }
 
 /// The caption's timeframes are the chart's timeframes. Two hand-written tables of the same six

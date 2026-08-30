@@ -13,7 +13,7 @@ use std::time::Instant;
 use super::*;
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::Columns;
-use crate::db::tuner::{FieldClass, FIELDS};
+use crate::db::tuner::{FIELDS, FieldClass};
 
 /// Deterministic value generator, independent of the search's own PRNG so a fixture does not
 /// shift when that stream changes.

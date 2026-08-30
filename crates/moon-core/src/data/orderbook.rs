@@ -240,11 +240,7 @@ fn push_side(out: &mut Vec<RawLevel>, levels: &[crate::feed::Level], is_ask: boo
             neighbor - levels[i].price
         } else {
             let width = (l.price.abs() * 0.0005).max(1e-6);
-            if is_ask {
-                width
-            } else {
-                -width
-            }
+            if is_ask { width } else { -width }
         }
         .clamp(-f32::MAX, f32::MAX);
         // A degenerate span (duplicate price or neighboring prices collapsed to the same f32)
@@ -254,11 +250,7 @@ fn push_side(out: &mut Vec<RawLevel>, levels: &[crate::feed::Level], is_ask: boo
         // their neighbors, leaving black gaps wherever holes in the price ladder exceeded 1e-6.
         let span = if span == 0.0 {
             let w = (l.price.abs() * 1e-7).max(f32::MIN_POSITIVE);
-            if is_ask {
-                w
-            } else {
-                -w
-            }
+            if is_ask { w } else { -w }
         } else {
             span
         };

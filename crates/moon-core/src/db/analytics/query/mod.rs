@@ -1,7 +1,7 @@
 //! Selection filters and the unified report source (`Query`, `unified_from`).
 
-use rusqlite::types::Value;
 use rusqlite::Connection;
+use rusqlite::types::Value;
 
 use super::super::report_axis::ReportAxis;
 use super::super::valuation::ValuationMode;
@@ -149,20 +149,22 @@ impl Query {
     ///
     /// Returns:
     ///     The axis to use, or a SQLite-shaped error carrying the original reason.
-    pub(in crate::db) fn resolved_axis_sql(&self, conn: &Connection) -> rusqlite::Result<ReportAxis> {
-        self.resolved_axis(conn)
-            .map_err(|fail| {
-                // Deliberately NOT `DatabaseCorrupt`: `writer_should_stop` treats that code as a
-                // reason to halt the writer, and an unreadable offset table is a READ-side refusal,
-                // not a corrupt database the process must stop for.
-                rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error {
-                        code: rusqlite::ErrorCode::Unknown,
-                        extended_code: 1,
-                    },
-                    Some(format!("report time axis: {fail}")),
-                )
-            })
+    pub(in crate::db) fn resolved_axis_sql(
+        &self,
+        conn: &Connection,
+    ) -> rusqlite::Result<ReportAxis> {
+        self.resolved_axis(conn).map_err(|fail| {
+            // Deliberately NOT `DatabaseCorrupt`: `writer_should_stop` treats that code as a
+            // reason to halt the writer, and an unreadable offset table is a READ-side refusal,
+            // not a corrupt database the process must stop for.
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::Unknown,
+                    extended_code: 1,
+                },
+                Some(format!("report time axis: {fail}")),
+            )
+        })
     }
 
     /// Build the period predicate that compares this query's bounds against the replica's own

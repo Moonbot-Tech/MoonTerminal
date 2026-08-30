@@ -12,8 +12,8 @@ use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, CoreConfig, CoreConfigEditEvent,
     CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigState, DetectRow,
     EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
-    StrategyEditNote, StrategyEditOutcome, StrategyEditPhase, StrategyEditRow, StrategyRow,
-    StrategySchemaModel, TransferAssetsSnapshot, STRATEGY_EDIT_NOTE_CAP,
+    STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
+    StrategyEditRow, StrategyRow, StrategySchemaModel, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;

@@ -431,7 +431,10 @@ impl LabelTf {
         }
         LabelTf::ALL
             .into_iter()
-            .find(|tf| tf.minutes().is_some_and(|min| i64::from(min) * 60_000 == chart_tf_ms))
+            .find(|tf| {
+                tf.minutes()
+                    .is_some_and(|min| i64::from(min) * 60_000 == chart_tf_ms)
+            })
             .unwrap_or(LabelTf::M5)
     }
 

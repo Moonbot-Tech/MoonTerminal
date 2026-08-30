@@ -213,7 +213,6 @@ impl KlineRoute {
             Self::Hyperliquid => 500,
         }
     }
-
 }
 
 /// Return the one-minute-bar route this venue is served by, if this build knows one.

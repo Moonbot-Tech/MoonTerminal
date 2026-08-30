@@ -76,11 +76,7 @@ impl NewsItem {
             crate::config::Language::Es => self.es.as_str(),
             crate::config::Language::En => self.en.as_str(),
         };
-        if text.is_empty() {
-            &self.en
-        } else {
-            text
-        }
+        if text.is_empty() { &self.en } else { text }
     }
 
     /// Merge a later frame with the same `meta.id` into this original row: replace the translated

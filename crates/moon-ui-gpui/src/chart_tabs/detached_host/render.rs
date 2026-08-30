@@ -264,9 +264,7 @@ impl Render for DetachedChartHost {
                                 self,
                                 "detached-chart-labels",
                                 MoonButton::new("detached-labels-settings")
-                                    .leading_icon(MoonButtonIconSlot::new(
-                                        "icons/chart-labels.svg",
-                                    ))
+                                    .leading_icon(MoonButtonIconSlot::new("icons/chart-labels.svg"))
                                     .tooltip(t!("chart_labels.tip").to_string())
                                     .size(MoonButtonSize::Micro)
                                     .variant(if labels_popup_open {

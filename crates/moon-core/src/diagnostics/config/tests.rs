@@ -11,7 +11,9 @@ fn fields_of_default() -> Vec<(String, String)> {
     let table: toml::Table = text.parse().expect("serialized defaults re-parse");
     let mut out = Vec::new();
     for (section, item) in &table {
-        let Some(keys) = item.as_table() else { continue };
+        let Some(keys) = item.as_table() else {
+            continue;
+        };
         for key in keys.keys() {
             out.push((section.clone(), key.clone()));
         }
@@ -96,7 +98,9 @@ fn the_environment_only_ever_turns_a_switch_on() {
     assert!(cfg.channels.render);
 
     let mut cfg = DiagCfg::default();
-    apply_env(&mut cfg, |v| (v == "MOON_RENDER_DIAG").then(|| "1".to_string()));
+    apply_env(&mut cfg, |v| {
+        (v == "MOON_RENDER_DIAG").then(|| "1".to_string())
+    });
     assert!(cfg.channels.render, "the variable must enable the channel");
 }
 
@@ -128,9 +132,7 @@ fn the_render_variable_also_enables_the_market_channel() {
 #[test]
 fn an_empty_order_selector_from_the_environment_follows_everything() {
     let mut cfg = DiagCfg::default();
-    apply_env(&mut cfg, |v| {
-        (v == "MOON_ORDER_DIAG").then(String::new)
-    });
+    apply_env(&mut cfg, |v| (v == "MOON_ORDER_DIAG").then(String::new));
     assert_eq!(
         cfg.channels.orders, "1",
         "an empty value matched every market in the old selector; mapping it to the empty string \

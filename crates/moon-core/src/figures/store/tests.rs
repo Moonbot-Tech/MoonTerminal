@@ -128,9 +128,11 @@ fn ids_continue_after_a_load_instead_of_colliding() {
 
 #[test]
 fn a_broken_file_loads_as_empty_rather_than_failing() {
-    assert!(FigureStore::from_json("{not json")
-        .figures(1, "X")
-        .is_empty());
+    assert!(
+        FigureStore::from_json("{not json")
+            .figures(1, "X")
+            .is_empty()
+    );
     assert!(FigureStore::from_json("").figures(1, "X").is_empty());
 }
 

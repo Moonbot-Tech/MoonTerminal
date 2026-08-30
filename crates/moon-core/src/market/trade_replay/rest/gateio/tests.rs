@@ -43,9 +43,11 @@ fn gate_spot_scales_seconds_and_rejects_an_open_window() {
 
     assert_eq!(closed[0].t_open_ms, 1_787_508_780_000.0);
     assert_eq!(filtered.len() + 1, closed.len());
-    assert!(!filtered
-        .iter()
-        .any(|bar| bar.t_open_ms == closed[0].t_open_ms));
+    assert!(
+        !filtered
+            .iter()
+            .any(|bar| bar.t_open_ms == closed[0].t_open_ms)
+    );
 }
 
 /// `rest/gateio.rs:parse_futures_row` reading `v` as volume treats a contract count as base volume,

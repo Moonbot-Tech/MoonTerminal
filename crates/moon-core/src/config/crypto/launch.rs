@@ -22,9 +22,9 @@
 //! string layout. Parameters travel with the hash so they can be raised without invalidating
 //! existing files.
 
-use anyhow::{anyhow, Context};
-use base64::engine::general_purpose::STANDARD as B64;
+use anyhow::{Context, anyhow};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 
 use super::kdf::{self, KdfParams};
 

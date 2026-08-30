@@ -27,8 +27,8 @@ use std::time::{Duration, Instant};
 use super::gate::ReplayGate;
 use super::venue_caps::{bybit_category, kline_route};
 use super::{
-    pages, rest, ReplayWindow, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome,
-    TradeReplaySeries, TradeReplaySource,
+    ReplayWindow, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries,
+    TradeReplaySource, pages, rest,
 };
 use crate::market::candles::ChartCandle;
 use crate::market::kline_cache::{KlineCache, MergeItem};
@@ -198,7 +198,7 @@ fn serve(
     match remember_lookup(cache, &key, request.identity) {
         Some(Remembered::Ready(series)) => return TradeReplayOutcome::Ready(series),
         Some(Remembered::Empty) => {
-            return TradeReplayOutcome::Empty(TradeReplayEmpty::NoDataInWindow)
+            return TradeReplayOutcome::Empty(TradeReplayEmpty::NoDataInWindow);
         }
         None => {}
     }
@@ -251,7 +251,7 @@ fn serve(
                 return TradeReplayOutcome::Failed(TradeReplayFailure::UnknownSymbol);
             }
             Err(rest::FetchError::Transient(diagnostic)) => {
-                return TradeReplayOutcome::Failed(TradeReplayFailure::Transient { diagnostic })
+                return TradeReplayOutcome::Failed(TradeReplayFailure::Transient { diagnostic });
             }
         }
     }

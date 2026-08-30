@@ -1,6 +1,6 @@
 //! What a MoonBot key can and cannot say about the transport mode.
 
-use super::{seeded_transport, transport_from_key, TransportVersion};
+use super::{TransportVersion, seeded_transport, transport_from_key};
 
 /// A key is the seed for the mode, not a requirement for having one: an empty field and a
 /// mistyped key must both come back as "nothing to seed" rather than as `V0`, or every core
@@ -64,5 +64,9 @@ fn an_unset_mode_is_taken_from_the_key() {
         transport_from_key("not-a-key"),
         "with nothing stored the key decides, whatever it says"
     );
-    assert_eq!(seeded_transport(None, ""), None, "an empty key names nothing");
+    assert_eq!(
+        seeded_transport(None, ""),
+        None,
+        "an empty key names nothing"
+    );
 }

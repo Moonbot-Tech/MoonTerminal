@@ -235,7 +235,9 @@ fn sort_rows(state: &CoinsState, rows: &mut [CoinRow]) {
                 (false, true) => std::cmp::Ordering::Greater,
                 (true, false) => std::cmp::Ordering::Less,
                 (true, true) => {
-                    let numeric = left.partial_cmp(&right).unwrap_or(std::cmp::Ordering::Equal);
+                    let numeric = left
+                        .partial_cmp(&right)
+                        .unwrap_or(std::cmp::Ordering::Equal);
                     if desc { numeric.reverse() } else { numeric }
                 }
             };

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 mod figures;
 
-use crate::market::candles::{resample, ChartCandle};
+use crate::market::candles::{ChartCandle, resample};
 
 /// Directory holding the committed fixture sets inside the working tree.
 const FIXTURES_DIR: &str = "fixtures";
@@ -53,8 +53,10 @@ static ACTIVE: std::sync::OnceLock<ChartFixture> = std::sync::OnceLock::new();
 pub type WindowPrices = (Option<f32>, Option<(f32, f32)>);
 
 /// Repacked candle rows grouped by their destination chunk, then by in-day offset.
-type RegroupedChunks =
-    std::collections::BTreeMap<(String, String, u32, i64), std::collections::BTreeMap<u32, RowValues>>;
+type RegroupedChunks = std::collections::BTreeMap<
+    (String, String, u32, i64),
+    std::collections::BTreeMap<u32, RowValues>,
+>;
 
 /// One packed candle row without its leading offset: five `f32` fields.
 type RowValues = [u8; ROW_BYTES - 4];
@@ -209,11 +211,7 @@ impl ChartFixture {
 /// which covers 15 days instead of the 1-minute base's 2 — depth matters more than resolution once
 /// a bar is wider than the base.
 fn base_kind_for(tf_ms: i64) -> u32 {
-    if tf_ms < 300_000 {
-        1
-    } else {
-        5
-    }
+    if tf_ms < 300_000 { 1 } else { 5 }
 }
 
 /// Copy the named fixture to a private directory and make it this process's data root.
@@ -366,7 +364,11 @@ fn relocate_to_now(db_dir: &Path) -> anyhow::Result<i64> {
         [shift_secs],
     )?;
 
-    shift_candles(&db_dir.join("klines.sqlite"), shift_secs * 1_000, now_secs * 1_000)?;
+    shift_candles(
+        &db_dir.join("klines.sqlite"),
+        shift_secs * 1_000,
+        now_secs * 1_000,
+    )?;
     Ok(shift_secs)
 }
 
@@ -520,7 +522,11 @@ fn newest_close(klines: &Path) -> anyhow::Result<f32> {
 fn locate(name: &str) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("MOON_FIXTURE_DIR") {
         let dir = PathBuf::from(dir);
-        let candidate = if dir.ends_with(name) { dir } else { dir.join(name) };
+        let candidate = if dir.ends_with(name) {
+            dir
+        } else {
+            dir.join(name)
+        };
         return candidate.is_dir().then_some(candidate);
     }
     let exe = std::env::current_exe().ok()?;

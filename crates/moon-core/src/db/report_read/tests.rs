@@ -798,7 +798,10 @@ fn coarse_closed_range_keeps_open_rows_outside_its_date_predicate() {
     let mut sql = "SELECT coin FROM orders_rep r WHERE 1=1".to_string();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     super::append_row_scope(&mut sql, &mut params, &filter, &cols);
-    let refs = params.iter().map(|param| param.as_ref()).collect::<Vec<_>>();
+    let refs = params
+        .iter()
+        .map(|param| param.as_ref())
+        .collect::<Vec<_>>();
     let coins = conn
         .prepare(&sql)
         .expect("prepare coarse-range row predicate")

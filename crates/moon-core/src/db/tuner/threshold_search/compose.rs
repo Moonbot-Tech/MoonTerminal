@@ -31,19 +31,19 @@
 use std::cmp::Ordering;
 use std::ops::Range;
 
+use super::ComposeDecision;
 use super::handle::SearchHandle;
 use super::search::Search;
-use super::ComposeDecision;
 use crate::db::metrics::improvement_margin;
 
 mod ranking;
 
+use ranking::{
+    RankingKey, ScoredMask, beam_candidates, inner_winner, mask_order, ranking_key_order,
+    ranking_keys,
+};
 #[cfg(test)]
 use ranking::{adaptive_width, worst_fold};
-use ranking::{
-    beam_candidates, inner_winner, mask_order, ranking_key_order, ranking_keys, RankingKey,
-    ScoredMask,
-};
 
 #[cfg(test)]
 mod tests;

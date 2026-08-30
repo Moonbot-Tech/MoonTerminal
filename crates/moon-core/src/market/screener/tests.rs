@@ -21,7 +21,9 @@ fn every_screener_delta_uses_its_matching_range_period() {
     }));
 
     assert_eq!(
-        [row.d_24h, row.d_3h, row.d_1h, row.d_15m, row.d_1m, row.d_72h],
+        [
+            row.d_24h, row.d_3h, row.d_1h, row.d_15m, row.d_1m, row.d_72h
+        ],
         [1_440.0, 180.0, 60.0, 15.0, 1.0, 4_320.0]
     );
 }

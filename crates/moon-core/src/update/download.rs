@@ -4,11 +4,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use super::release::{validate_download_url, AvailableRelease, MAX_EXECUTABLE_BYTES};
 use super::GitHubReleaseClient;
+use super::release::{AvailableRelease, MAX_EXECUTABLE_BYTES, validate_download_url};
 
 #[cfg(test)]
 mod tests;

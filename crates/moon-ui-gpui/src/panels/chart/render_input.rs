@@ -443,7 +443,13 @@ pub(super) fn mouse_down_right(
     // The same rectangle as the left button, opening the coin in a COMPARISON tab instead. Checked
     // before the menus for the same reason: the name is not part of the plot they act on.
     if within
-        && this.try_open_arb_venue(pos, e.position, super::arb_open::ArbOpen::Compare, window, cx)
+        && this.try_open_arb_venue(
+            pos,
+            e.position,
+            super::arb_open::ArbOpen::Compare,
+            window,
+            cx,
+        )
     {
         this.suppress_rmb_up = true;
         cx.notify();

@@ -11,8 +11,8 @@
 //! per core group, through [`crate::db::ReportAxis::from_utc`] and
 //! [`crate::db::ReportAxis::groups`].
 
-use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
+use rusqlite::functions::FunctionFlags;
 
 use crate::db::ReportAxis;
 

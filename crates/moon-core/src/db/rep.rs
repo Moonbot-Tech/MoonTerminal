@@ -24,8 +24,8 @@ use moonproto::{
     MoonReports, ReportAliveMapComplete, ReportRow as RepRow, ReportRowsDeleted, ReportSchema,
     ReportSyncCheckpoint, ReportSyncComplete, ReportSyncPage, ReportValue,
 };
-use rusqlite::types::Value;
 use rusqlite::Connection;
+use rusqlite::types::Value;
 
 pub(crate) mod core_offset;
 

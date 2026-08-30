@@ -118,11 +118,7 @@ fn zone_suffix(bytes: &[u8], end: usize) -> usize {
     while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'.') {
         pos += 1;
     }
-    if pos == end + 1 {
-        end
-    } else {
-        pos
-    }
+    if pos == end + 1 { end } else { pos }
 }
 
 /// End index of a dotted-quad IPv4 literal starting at `i`.

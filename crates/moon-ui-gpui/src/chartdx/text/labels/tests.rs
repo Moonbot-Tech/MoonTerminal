@@ -223,7 +223,10 @@ fn a_long_detect_line_is_cut() {
 fn a_caption_keeps_its_prefix_beside_its_value() {
     let cfg = cfg_of(&[ChartLabelField::Funding]);
     let mut state = LabelState::default();
-    state.update(&Rc::new(cfg), &Rc::new(ArbViewCfg::default()), LabelInputs {
+    state.update(
+        &Rc::new(cfg),
+        &Rc::new(ArbViewCfg::default()),
+        LabelInputs {
             context: Some(moon_core::market::MarketContextReadout {
                 funding_pct: Some(3.9),
                 funding_at_ms: Some(1),
@@ -383,7 +386,10 @@ fn the_venue_name_is_the_lines_prefix() {
     };
 
     let line = texts.first().expect("one venue prints");
-    assert_eq!(line.prefix, "BinanceF ", "the reference terminal's spelling");
+    assert_eq!(
+        line.prefix, "BinanceF ",
+        "the reference terminal's spelling"
+    );
     assert!(line.text.contains("+1.00%"), "{:?}", line.text);
     assert!(!line.text.contains("BinanceF"), "{:?}", line.text);
 }
@@ -411,16 +417,26 @@ fn the_column_lines_its_cells_up() {
     assert_eq!(lines.len(), 2);
     let name_widths: Vec<usize> = lines.iter().map(|l| l.prefix.chars().count()).collect();
     assert_eq!(
-        name_widths[0], name_widths[1],
+        name_widths[0],
+        name_widths[1],
         "the name column is one width: {:?}",
         lines.iter().map(|l| l.prefix.clone()).collect::<Vec<_>>()
     );
-    assert!(lines[0].prefix.starts_with("BinanceF"), "{:?}", lines[0].prefix);
-    assert!(lines[1].prefix.starts_with("UpBit "), "{:?}", lines[1].prefix);
+    assert!(
+        lines[0].prefix.starts_with("BinanceF"),
+        "{:?}",
+        lines[0].prefix
+    );
+    assert!(
+        lines[1].prefix.starts_with("UpBit "),
+        "{:?}",
+        lines[1].prefix
+    );
 
     let value_widths: Vec<usize> = lines.iter().map(|l| l.text.chars().count()).collect();
     assert_eq!(
-        value_widths[0], value_widths[1],
+        value_widths[0],
+        value_widths[1],
         "price and percent columns are one width each: {:?}",
         lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
     );
@@ -1119,7 +1135,10 @@ fn the_volume_total_is_the_sum_of_the_two_sides() {
 
     assert!(bought.contains("12"), "{bought:?}");
     assert!(sold.contains("4"), "{sold:?}");
-    assert!(total.contains("16"), "12k bought plus 4k sold is 16k: {total:?}");
+    assert!(
+        total.contains("16"),
+        "12k bought plus 4k sold is 16k: {total:?}"
+    );
     assert!(share.contains("75"), "{share:?}");
 }
 
@@ -1177,12 +1196,18 @@ fn the_heading_names_the_period_without_any_reading() {
     cfg.rows[0] = row;
 
     let text = texts_of(&cfg, LabelInputs::default()).remove(0);
-    assert!(!text.is_empty(), "the heading prints with no volumes at all");
+    assert!(
+        !text.is_empty(),
+        "the heading prints with no volumes at all"
+    );
 
     let mut trades = cfg.clone();
     trades.rows[0].parts[0].span = moon_core::config::LabelSpan::Trades(500);
     let text = texts_of(&trades, LabelInputs::default()).remove(0);
-    assert!(text.contains("500"), "a trade span names its count: {text:?}");
+    assert!(
+        text.contains("500"),
+        "a trade span names its count: {text:?}"
+    );
 }
 
 /// The bar states the side's share of the whole, and a silent market draws none.

@@ -12,8 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonIconSlot, MoonButtonSize,
-    MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette,
-    MoonTooltipView,
+    MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonTooltipView,
 };
 
 use crate::Backend;

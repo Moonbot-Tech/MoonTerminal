@@ -9,10 +9,7 @@ use rusqlite::Connection;
 
 /// Allocate one process-unique data root outside the working tree.
 fn fixture_root() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "moonterminal-axis-cache-{}",
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("moonterminal-axis-cache-{}", std::process::id()))
 }
 
 /// `strat_db/stats.rs::core_axis` -- flattening malformed `core_time_offset` rows into an empty
@@ -65,7 +62,11 @@ fn malformed_offset_rows_compute_but_never_write_the_strategy_stats_cache() {
     drop(strategies);
 
     let versions = versions_with_stats(7, 44);
-    assert_eq!(versions.len(), 1, "the attached replica must still compute visible statistics");
+    assert_eq!(
+        versions.len(),
+        1,
+        "the attached replica must still compute visible statistics"
+    );
     assert_eq!(versions[0].trades, 1);
     assert_eq!(versions[0].profit, 7.5);
 

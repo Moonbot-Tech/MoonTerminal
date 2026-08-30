@@ -224,8 +224,7 @@ pub(super) fn medium_col_name_w(scfg: &DetectSizeCfg) -> f32 {
     } else {
         medium_zone_base(scfg)
     };
-    ((inner_w(scfg, MEDIUM_PAD_L, MEDIUM_PAD_R) - 2.0 * MEDIUM_GAP - zone_base)
-        * COLUMN_NAME_SHARE)
+    ((inner_w(scfg, MEDIUM_PAD_L, MEDIUM_PAD_R) - 2.0 * MEDIUM_GAP - zone_base) * COLUMN_NAME_SHARE)
         .max(NAME_MIN_W)
 }
 
@@ -526,8 +525,8 @@ fn cluster<'a>(
     // charging the name half the area for standing next to one is what left it cut with the card
     // half empty. Two growable fields in one cluster still halve it, because then they really do
     // compete.
-    let share = (name_w / slots.clone().filter(|s| grows(s.field)).count().max(1) as f32)
-        .max(NAME_MIN_W);
+    let share =
+        (name_w / slots.clone().filter(|s| grows(s.field)).count().max(1) as f32).max(NAME_MIN_W);
     let chips: Vec<AnyElement> = slots
         .filter_map(|s| {
             chip(
@@ -813,7 +812,11 @@ fn medium_layout(
     let chart_on = scfg.chart != DetectChart::None;
     let col_name_w = medium_col_name_w(scfg);
     // Overlay corners sit inside the zone instead, two to a row.
-    let over_name_w = split_name_w(if chart_on { medium_zone_base(scfg) } else { 0.0 });
+    let over_name_w = split_name_w(if chart_on {
+        medium_zone_base(scfg)
+    } else {
+        0.0
+    });
     // Each side column takes its top row from the first three slots and bottom row from the rest.
     let column = |right: bool| -> Div {
         let top = cluster(

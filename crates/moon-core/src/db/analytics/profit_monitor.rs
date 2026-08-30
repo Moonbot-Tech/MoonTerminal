@@ -5,7 +5,7 @@ mod tests;
 
 use rusqlite::Connection;
 
-use super::{min_closedate, scope_decision_on, scoped, unified_from_mode, Query, ScopeDecision};
+use super::{Query, ScopeDecision, min_closedate, scope_decision_on, scoped, unified_from_mode};
 use crate::db::read_fail::read_fail_on;
 use crate::db::{ProfitScope, ReadFail, ReadResult};
 

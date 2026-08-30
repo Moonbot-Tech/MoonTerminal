@@ -41,14 +41,16 @@ fn reducer_selects_the_greatest_strictly_newer_release() {
             patch: 1,
         }
     );
-    assert!(greatest_eligible(
-        &[fixture_release("v0.21")],
-        baseline,
-        None,
-        &mut BTreeMap::new(),
-    )
-    .unwrap()
-    .is_none());
+    assert!(
+        greatest_eligible(
+            &[fixture_release("v0.21")],
+            baseline,
+            None,
+            &mut BTreeMap::new(),
+        )
+        .unwrap()
+        .is_none()
+    );
 }
 
 /// Treating two spellings of one numeric version as independent candidates would make asset
@@ -187,9 +189,11 @@ fn not_modified_without_a_cached_representation_fails_closed() {
     );
     let error = discovery.scan_at(1_000).unwrap_err();
     assert_eq!(error.retry(), DiscoveryRetry::Protocol);
-    assert!(error
-        .to_string()
-        .contains("without a matching cached validator"));
+    assert!(
+        error
+            .to_string()
+            .contains("without a matching cached validator")
+    );
     assert_eq!(server.finish().len(), 1);
 }
 

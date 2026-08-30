@@ -320,8 +320,7 @@ fn paste_key_affix(
                 this.backend.update(ctx, |b, bcx| {
                     if let Some(pv) = b.preview.as_mut() {
                         if let Some(s) = pv.servers.get_mut(i) {
-                            s.transport =
-                                moon_core::config::seeded_transport(s.transport, &text);
+                            s.transport = moon_core::config::seeded_transport(s.transport, &text);
                             s.key = Secret::new(text.clone());
                             bcx.notify();
                         }
@@ -648,9 +647,7 @@ fn proto_dropdown(
 
     let view_weak = weak.clone();
     MoonDropdown::new(ids.proto.clone())
-        .label(cur.map_or(SharedString::from("-"), |v| {
-            SharedString::from(v.label())
-        }))
+        .label(cur.map_or(SharedString::from("-"), |v| SharedString::from(v.label())))
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::Micro)
@@ -804,8 +801,7 @@ pub(super) fn server_row(
             ),
         )
         .child(
-            SettingsView::cell(52.0, false)
-                .child(proto_dropdown(view, weak, i, row_key, ids, cx)),
+            SettingsView::cell(52.0, false).child(proto_dropdown(view, weak, i, row_key, ids, cx)),
         )
         .child(
             SettingsView::cell(110.0, false)

@@ -5,10 +5,10 @@ mod tests;
 
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{types::Value, Connection};
+use rusqlite::{Connection, types::Value};
 
 use super::groups::group_quote_scope;
-use super::strategy_meta::{read_metadata, StrategyMetadata, SummaryMetadata};
+use super::strategy_meta::{StrategyMetadata, SummaryMetadata, read_metadata};
 use super::{CoreSeries, DayPoint, GroupStat, KindCore, KindStat, PeriodStats, Query, TopTrade};
 use crate::db::metrics::profit_factor;
 use crate::db::read_fail::{read_fail, read_fail_on};
@@ -594,7 +594,7 @@ fn read_with_window(
         .iter()
         .enumerate()
         .filter(|(_, (profit, trades))| *trades > 0 && *profit > 0.0)
-        .max_by(|left, right| left.1 .0.total_cmp(&right.1 .0))
+        .max_by(|left, right| left.1.0.total_cmp(&right.1.0))
         .map(|(hour, (profit, trades))| (hour as u32, *profit, *trades));
     let core_days = finish_cores(&accumulator.cores, &accumulator.days);
     let kinds = if include_kinds {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::figures::kind::FigureKind;
 use crate::figures::levels::FIB_LEVELS;
-use crate::figures::tools::tests::{build, ctx, TestProj};
+use crate::figures::tools::tests::{TestProj, build, ctx};
 
 /// A fall from 100 at T0 to 80 ten seconds later.
 fn fib() -> FibRetracement {
