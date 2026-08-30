@@ -78,7 +78,8 @@ pub struct ServerConfig {
     /// What to accept from the core (client-side filter).
     #[serde(default)]
     pub feed: FeedFlags,
-    /// Base64 Moonbot key containing host/port/transport; there are no separate fields.
+    /// Base64 Moonbot key containing host and port; there are no separate fields for those.
+    /// It also names a transport mode, but only as the seed for [`ServerConfig::transport`].
     #[serde(default)]
     pub key: Secret,
     /// Group is the name of the window containing the core. Color/icon belong to GroupConfig.
@@ -106,6 +107,110 @@ pub struct ServerConfig {
     /// This is local terminal config because the protocol does not provide the core default.
     #[serde(default)]
     pub default_alert_strategy: u64,
+    /// MoonProto transport mode to connect with; `None` falls back to what the key encodes.
+    ///
+    /// See [`TransportVersion`] for why this is stored at all instead of always reading the key.
+    #[serde(default)]
+    pub transport: Option<TransportVersion>,
+}
+
+/// MoonProto transport mode, mirroring MoonBot's `V0 / V1 / V2` radio in Moon Proto settings.
+///
+/// The mode is ALSO encoded in the exported key, and that is where a core's value comes from the
+/// first time its key is read ([`transport_from_key`]). It is stored separately because the two
+/// switches move independently after that: MoonBot lets the user change the mode on the core
+/// without issuing a new key, and a terminal that could only read the key would force a re-export
+/// of every core's key to follow. Both sides simply have to agree on the same number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportVersion {
+    V0,
+    V1,
+    V2,
+}
+
+impl TransportVersion {
+    /// Every mode, in the order MoonBot lists its radio buttons.
+    pub const ALL: [Self; 3] = [Self::V0, Self::V1, Self::V2];
+
+    /// MoonBot's own label for this mode, used verbatim in the UI: it is a protocol number
+    /// rather than a word, so it is neither localized nor renamed.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::V0 => "V0",
+            Self::V1 => "V1",
+            Self::V2 => "V2",
+        }
+    }
+}
+
+impl From<TransportVersion> for moonproto::TransportMode {
+    fn from(v: TransportVersion) -> Self {
+        match v {
+            TransportVersion::V0 => Self::V0,
+            TransportVersion::V1 => Self::V1,
+            TransportVersion::V2 => Self::V2,
+        }
+    }
+}
+
+impl From<moonproto::TransportMode> for TransportVersion {
+    /// MoonProto's mode is an open `u8` wrapper; anything outside the three named modes cannot
+    /// be represented here and reads as `V0`, exactly as `TransportMode::from_byte` does.
+    fn from(mode: moonproto::TransportMode) -> Self {
+        if mode == moonproto::TransportMode::V1 {
+            Self::V1
+        } else if mode == moonproto::TransportMode::V2 {
+            Self::V2
+        } else {
+            Self::V0
+        }
+    }
+}
+
+/// Read the transport mode a MoonBot key was exported with.
+///
+/// Lives beside the key rather than in `feed`, because it answers a question about a stored
+/// config value: what this core's key says before anything connects. Legacy exports carry no
+/// network block at all, so they return `None` and leave the choice to the user.
+///
+/// Args:
+///     key: Base64 MoonBot key export, as stored in `servers.enc`.
+///
+/// Returns:
+///     The exported mode, or `None` when the key is empty, unparsable, or a legacy export.
+pub fn transport_from_key(key: &str) -> Option<TransportVersion> {
+    if key.trim().is_empty() {
+        return None;
+    }
+    let info = moonproto::parse_key_info(key)?;
+    info.network
+        .map(|n| TransportVersion::from(n.transport_mode))
+}
+
+/// Seed a core's transport mode from its key, ONCE: a mode already set is never overwritten.
+///
+/// Deliberately not "whatever the newest key says". The key field emits a change per KEYSTROKE, so
+/// a rule that re-reads the key on every edit would let one Backspace-and-retype swap a pinned V1
+/// for the key's V0 and reconnect the core on a protocol it does not speak — and a rule comparing
+/// the new key against "the previous key" compares against the previous keystroke, which is the
+/// same defect wearing a disguise. Nor is the newest key a better authority in the first place:
+/// the case this whole field exists for is a core whose switch was moved WITHOUT a new key, so a
+/// key that keeps claiming V0 is exactly the stale opinion the user overrode.
+///
+/// The mode therefore comes from the key while the terminal has no answer of its own — a core
+/// being added, or an older config on first load — and belongs to the user from then on. Pointing
+/// a row at a different core is the one case that needs a hand: the dropdown beside the field is
+/// how it gets one.
+///
+/// Args:
+///     current: Mode stored for this core, or `None` while it has never been set.
+///     key: Base64 MoonBot key to read a mode from when there is nothing stored.
+///
+/// Returns:
+///     The stored mode when there is one, otherwise whatever the key names.
+pub fn seeded_transport(current: Option<TransportVersion>, key: &str) -> Option<TransportVersion> {
+    current.or_else(|| transport_from_key(key))
 }
 
 /// User-selected order for every core list in the application.
@@ -281,3 +386,6 @@ pub fn default_log_retention_days() -> u32 {
 
 #[cfg(test)]
 mod core_sort_parse_tests;
+
+#[cfg(test)]
+mod transport_tests;

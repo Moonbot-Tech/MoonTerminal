@@ -21,7 +21,8 @@ use rust_i18n::t;
 
 use super::{ConnRow, ConnRowIds, SettingsView, build_conn, sync_groups_from_servers};
 use crate::design;
-use moon_core::config::{AppConfig, FeedFlags, Secret, ServerConfig};
+use crate::panels::common::{RadioMark, radio_items};
+use moon_core::config::{AppConfig, FeedFlags, Secret, ServerConfig, TransportVersion};
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
@@ -264,7 +265,10 @@ fn srv_check(
 /// Build a Paste glyph control beside the key field, styled like its built-in affixes.
 ///
 /// Clicking reads a nonempty key from the clipboard and updates both input state and
-/// `servers[i].key`; `set_value` does not emit Change, so the draft is updated directly.
+/// `servers[i].key`; `set_value` does not emit Change, so the draft is updated directly. Pasting
+/// is also when the key gets to speak for `servers[i].transport`, as MoonBot fills its own radio
+/// on paste -- but only while that row has no mode of its own, which is what
+/// `config::seeded_transport` decides and documents.
 ///
 /// Args:
 ///     weak: Weak owner used to update the Settings draft.
@@ -316,6 +320,8 @@ fn paste_key_affix(
                 this.backend.update(ctx, |b, bcx| {
                     if let Some(pv) = b.preview.as_mut() {
                         if let Some(s) = pv.servers.get_mut(i) {
+                            s.transport =
+                                moon_core::config::seeded_transport(s.transport, &text);
                             s.key = Secret::new(text.clone());
                             bcx.notify();
                         }
@@ -403,6 +409,8 @@ impl SettingsView {
                     synthetic: false,
                     chart_bundle: String::new(),
                     default_alert_strategy: 0,
+                    // No key yet, so no mode to seed: pasting one fills this in.
+                    transport: None,
                 });
                 sync_groups_from_servers(&p.servers, &mut p.groups);
                 bcx.notify();
@@ -413,6 +421,7 @@ impl SettingsView {
         // Every row just got a fresh key, so any open popup now names a row that no longer exists.
         // Shut it rather than leave it pointing at nothing.
         self.feed_open = None;
+        self.proto_open = None;
         self.picking = None;
         self.focused_conn_row = None;
         // The hint MOVES with this row: it pointed at this button, and the thing the newcomer needs
@@ -445,6 +454,7 @@ impl SettingsView {
         self.conn = rows;
         // See `add_server`: the keys the open menu was named by are gone.
         self.feed_open = None;
+        self.proto_open = None;
         self.picking = None;
         self.focused_conn_row = None;
         cx.notify();
@@ -552,6 +562,111 @@ fn feed_popover(
         })
 }
 
+/// Build the MoonProto transport selector for one server row.
+///
+/// The mode is seeded from the core's own key (`config::seeded_transport`) and is the user's
+/// from then on, mirroring MoonBot's `V0 / V1 / V2` radio: MoonBot lets a core's switch move
+/// without issuing a new key, so a terminal that could only read the key would force a re-export
+/// of every key to follow one switch. A dash means nothing is pinned yet -- no key, or a legacy
+/// export that carries no mode -- and the connection then follows the key, as before.
+///
+/// The choice lands in the DRAFT, like every other field here: it takes effect on Save, which
+/// respawns the core by itself because `session::conn_sig` hashes the mode.
+///
+/// Args:
+///     view: Settings state read for the row's current draft value.
+///     weak: Weak owner the select handler closes over.
+///     i: Draft index of the server being edited.
+///     ids: Precomputed element ids for the row.
+///     cx: Application context.
+///
+/// Returns:
+///     A compact dropdown bound to draft `servers[i].transport`.
+fn proto_dropdown(
+    view: &SettingsView,
+    weak: &WeakEntity<SettingsView>,
+    i: usize,
+    row_key: u64,
+    ids: &ConnRowIds,
+    cx: &App,
+) -> impl IntoElement {
+    let cur = {
+        let b = view.backend.read(cx);
+        b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .servers
+            .get(i)
+            .and_then(|s| s.transport)
+    };
+    let open = view.proto_open == Some(row_key);
+
+    // Only the OPEN row pays for menu items, exactly as `feed_popover` above: three items, three
+    // boxed handlers and a `Vec` per row per frame is what `SettingsView::feed_open` exists to
+    // avoid, and a wheel notch over the page rebuilds every row.
+    let items = if open {
+        // WEAK, not a strong entity, for the reason stated on `server_row`: MoonUI keeps this
+        // handler for the element's whole life, and a strong handle would leak the Settings
+        // window.
+        let weak_select = weak.clone();
+        // `Option<TransportVersion>` is the item value, so an unset row marks nothing as current
+        // instead of pretending it is pinned to V0. Key and label are both the mode's own
+        // `&'static str`, so neither allocates.
+        radio_items(
+            TransportVersion::ALL.into_iter().map(|v| {
+                (
+                    Some(v),
+                    SharedString::from(v.label()),
+                    SharedString::from(v.label()),
+                )
+            }),
+            cur,
+            RadioMark::Check,
+            move |app, v| {
+                let _ = weak_select.update(app, |this, ctx| {
+                    let changed = this.backend.update(ctx, |b, bcx| {
+                        let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) else {
+                            return false;
+                        };
+                        if s.transport == v {
+                            return false;
+                        }
+                        s.transport = v;
+                        bcx.notify();
+                        true
+                    });
+                    if changed {
+                        ctx.notify();
+                    }
+                });
+            },
+        )
+    } else {
+        Vec::new()
+    };
+
+    let view_weak = weak.clone();
+    MoonDropdown::new(ids.proto.clone())
+        .label(cur.map_or(SharedString::from("-"), |v| {
+            SharedString::from(v.label())
+        }))
+        .trigger_caret(true)
+        .trigger_variant(MoonButtonVariant::Neutral)
+        .trigger_size(MoonButtonSize::Micro)
+        .trigger_width_scaled(52.0)
+        .menu_width_scaled(96.0)
+        .menu_size(MoonMenuSize::Compact)
+        .items(items)
+        .open(open)
+        // Controlled mode leaves the repaint to us, as on the feed menu beside it.
+        .on_open_change(move |now_open, _window, app| {
+            let _ = view_weak.update(app, |this, cx| {
+                this.proto_open = now_open.then_some(row_key);
+                cx.notify();
+            });
+        })
+}
+
 /// Render a server row ported from egui's `servers_panel`.
 ///
 /// A free function, not a method: `MoonVirtualList`'s row factory is `'static` and outlives the
@@ -559,8 +674,8 @@ fn feed_popover(
 /// SettingsView` and leak the window -- the same cycle `strategies/tree/moon.rs::moon_tree_el`
 /// guards for `MoonTree`. Every interactive child below reaches `SettingsView` only through `weak`.
 ///
-/// Columns contain active and window toggles, name, key, group, chart bundle, feed flags,
-/// color, delete, reconnect, and status controls.
+/// Columns contain active and window toggles, name, key, transport mode, group, chart bundle,
+/// feed flags, color, delete, reconnect, and status controls.
 ///
 /// Args:
 ///     view: Current Settings state, read (never mutated) while building the row.
@@ -686,6 +801,10 @@ pub(super) fn server_row(
                     )
                     .child(paste_key_affix(weak, i, row_key, row.key.clone(), p)),
             ),
+        )
+        .child(
+            SettingsView::cell(52.0, false)
+                .child(proto_dropdown(view, weak, i, row_key, ids, cx)),
         )
         .child(
             SettingsView::cell(110.0, false)
@@ -839,6 +958,16 @@ impl SettingsView {
                 true,
                 8.0,
                 t!("conn.tip.key").to_string().into(),
+                p,
+                cx,
+            ))
+            .child(Self::col_head_tip(
+                "h-proto",
+                &t!("conn.col.proto"),
+                52.0,
+                false,
+                0.0,
+                t!("conn.tip.proto").to_string().into(),
                 p,
                 cx,
             ))

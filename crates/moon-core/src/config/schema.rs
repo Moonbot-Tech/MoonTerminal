@@ -13,7 +13,7 @@ use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
-use super::servers::{self, CoreSortMode, FeedFlags};
+use super::servers::{self, CoreSortMode, FeedFlags, TransportVersion};
 use super::toml_io::ConfigLoad;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
@@ -188,7 +188,9 @@ pub(crate) fn resolve_ui_theme_mode(
 ///
 /// host/port are NOT stored because they are encoded in the Moonbot key itself (see
 /// `parse_key_info` in feed/live/mod.rs). Older servers.enc files with host/port fields still
-/// load: serde ignores unknown fields and connection details come from the key.
+/// load: serde ignores unknown fields and connection details come from the key. The transport
+/// mode is the one connection detail the key only SEEDS -- it is kept in `ServerMeta::transport`,
+/// because MoonBot lets a core's own V0/V1/V2 switch move without issuing a new key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerEntry {
     /// Stable core identifier (see `ServerConfig::uid`). A 0 in older files is assigned
@@ -234,6 +236,10 @@ pub struct ServerMeta {
     /// Default alert strategy (id of type "Alerts"); see `ServerConfig::default_alert_strategy`.
     #[serde(default)]
     pub default_alert_strategy: u64,
+    /// MoonProto transport mode (`V0`/`V1`/`V2`); see `ServerConfig::transport`. Absent in older
+    /// files and while no key has been read, in which case the key decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<TransportVersion>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

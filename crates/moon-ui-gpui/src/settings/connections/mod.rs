@@ -58,7 +58,7 @@ pub(super) struct ConnRow {
     color: Entity<MoonColorPickerState>,
 }
 
-/// The nine per-row element-id strings the row factory used to rebuild with `format!` on every
+/// The ten per-row element-id strings the row factory used to rebuild with `format!` on every
 /// frame. Built once in [`build_conn`] and read from thereafter, so `server_row` allocates none of
 /// them.
 ///
@@ -71,6 +71,7 @@ pub(super) struct ConnRowIds {
     pub(super) group: SharedString,
     pub(super) bundle: SharedString,
     pub(super) feed: SharedString,
+    pub(super) proto: SharedString,
     pub(super) act: SharedString,
     pub(super) win: SharedString,
     pub(super) del: SharedString,
@@ -113,6 +114,7 @@ impl ConnRowIds {
             group: SharedString::from(format!("group-{ident}")),
             bundle: SharedString::from(format!("bundle-{ident}")),
             feed: SharedString::from(format!("feed-{ident}")),
+            proto: SharedString::from(format!("proto-{ident}")),
             act: SharedString::from(format!("act-{ident}")),
             win: SharedString::from(format!("win-{ident}")),
             del: SharedString::from(format!("del-{ident}")),
@@ -259,7 +261,14 @@ pub(super) fn build_conn(
                         row_key,
                         s.key.expose().to_string(),
                         |s| s.key.expose().to_string(),
-                        |s, v| s.key = Secret::new(v),
+                        |s, v| {
+                            // Typing or Ctrl+V into the field fills a row's transport mode the
+                            // same way the Paste glyph does, and by the same once-only rule: this
+                            // runs per KEYSTROKE, so anything that re-reads an already-set mode
+                            // would rewrite it mid-edit. See `config::seeded_transport`.
+                            s.transport = moon_core::config::seeded_transport(s.transport, &v);
+                            s.key = Secret::new(v);
+                        },
                         false,
                     );
                     st.update(cx, |st, c| st.set_masked(true, window, c));
@@ -352,9 +361,9 @@ impl SettingsView {
     /// Handle a visible-range change from the Connections virtual list.
     ///
     /// On every visible-range change: blur a focused input whose row scrolled out of range, so a
-    /// keystroke can never target an unmounted field; close the feed-flag menu or the icon picker
-    /// when the row or group heading that owns it left the range, so scrolling back cannot
-    /// resurrect a controlled popup nothing dismissed.
+    /// keystroke can never target an unmounted field; close the feed-flag menu, the transport-mode
+    /// menu or the icon picker when the row or group heading that owns it left the range, so
+    /// scrolling back cannot resurrect a controlled popup nothing dismissed.
     ///
     /// Args:
     ///     range: Currently mounted entry range.
@@ -385,6 +394,14 @@ impl SettingsView {
             let visible = visible_at(self.conn_entry_index(key));
             if !visible {
                 self.feed_open = None;
+                changed = true;
+            }
+        }
+
+        if let Some(key) = self.proto_open {
+            let visible = visible_at(self.conn_entry_index(key));
+            if !visible {
+                self.proto_open = None;
                 changed = true;
             }
         }
