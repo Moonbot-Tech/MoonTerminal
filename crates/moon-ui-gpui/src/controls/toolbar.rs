@@ -1,7 +1,9 @@
 //! Compose the trading toolbar: size, leverage with an exchange max-order readout, stop loss, TP/S
 //! slots, and Live controls.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_core::feed::{CoreConfigArea, CoreConfigRejection, CoreConfigState};
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
@@ -13,6 +15,8 @@ use moon_ui::{
 use super::metric::{metric_button, sl_toggle};
 use super::strips::{self, sell_strip, size_strip};
 use super::{MaxOrderReadout, TradeMetric, fmt_field2, fmt_field2_signed};
+use crate::backend::ManualSource;
+use crate::panels::common::text_tooltip;
 use crate::shell::Shell;
 use crate::{Backend, design};
 use moon_core::util::fmt;
@@ -66,17 +70,26 @@ fn strip_text(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
 /// itself; keeping the grouping in one place is what stops a gap or ordering tweak from being
 /// applied to Size and forgotten on Sell, a drift that only shows up once a window is narrow enough
 /// to render the two differently.
+///
+/// `tip`, when present, attaches a tooltip to the whole group WITHOUT affecting its measured
+/// width — the freshness/rejection marker for a core-sourced manual block goes here rather than
+/// into the caption text itself, which `row_fit` has already measured and budgeted by the time
+/// this runs. `id` gives the group the stable element identity a tooltip requires.
 fn captioned_strip(
+    id: &'static str,
     caption: Option<SharedString>,
     p: MoonPalette,
     strip: impl IntoElement,
+    tip: Option<SharedString>,
     cx: &App,
 ) -> impl IntoElement {
     h_flex()
+        .id(id)
         .flex_none()
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .children(caption.map(|text| strip_caption(text, p)))
         .child(strip)
+        .when_some(tip, |el, tip| el.tooltip(text_tooltip(tip)))
 }
 
 /// Button widths for this row — the ONE home of these numbers.
@@ -400,6 +413,100 @@ pub(crate) fn manual_strategy_core(
         .or(active_core)
 }
 
+/// Resolve the chart core whose manual-trading config governs the toolbar's size/exit block —
+/// deliberately NOT [`crate::Backend::active_trade_core`], which never answers `None` for a group
+/// with live cores (it falls through to that group's first core) and so cannot express "no chart
+/// is addressed right now". With no chart in front of the user this answers `None`, and the
+/// toolbar then shows group-local values with no core marker — the honest answer.
+///
+/// This is deliberately NOT the core an order would route to (that is
+/// [`effective_manual_strategy_core`]) — goal A had two different "which core" rules in this
+/// area and merging them was the bug that doc comment exists to prevent.
+///
+/// Priority: the hovered chart in this group, then the group's Main chart target, then the
+/// remembered Classic selection. Pure and arg-taking, the same shape as [`manual_strategy_core`]
+/// and for the same reason its own test exists.
+pub(crate) fn chart_display_core(
+    hovered: Option<CoreId>,
+    hovered_in_group: bool,
+    main_target: Option<CoreId>,
+    remembered: Option<CoreId>,
+) -> Option<CoreId> {
+    hovered
+        .filter(|_| hovered_in_group)
+        .or(main_target)
+        .or(remembered)
+}
+
+/// Resolve [`chart_display_core`] against live backend state.
+///
+/// Reads `hovered_chart` through [`crate::panels::ChartPanel::active_target`] rather than
+/// `target_at_cursor`: the latter answers `None` the instant the pointer leaves the hovered pane,
+/// even while `hovered_chart` itself is still set, which would make the gate flicker away and back
+/// on ordinary pane-to-pane pointer movement. `active_target` stays with the panel regardless of
+/// pane-level hover, which is also what makes a DETACHED window keep naming its core: the `Pane` is
+/// owned by the `ChartEngine` inside the `ChartPanel`, and a detached window re-hosts the same
+/// entity, so nothing about the toolbar's group window needs to know the chart left it.
+pub(crate) fn effective_chart_display_core(
+    backend: &Entity<Backend>,
+    group: &str,
+    cx: &App,
+) -> Option<CoreId> {
+    let hovered_core = backend
+        .read(cx)
+        .hovered_chart
+        .clone()
+        .and_then(|weak| weak.upgrade())
+        .and_then(|chart| chart.read(cx).active_target())
+        .map(|(core, _)| core);
+    let b = backend.read(cx);
+    chart_display_core(
+        hovered_core,
+        hovered_core.is_some_and(|core| b.core_belongs_to_group(group, core)),
+        b.main_chart_target(group).map(|(core, _)| core),
+        b.layout
+            .active_trade_core_by_group
+            .get(group)
+            .copied()
+            .filter(|&core| b.core_belongs_to_group(group, core)),
+    )
+}
+
+/// Caption naming one coarse [`CoreConfigArea`] the core rejected, for a
+/// [`CoreConfigRejection::Areas`] this branch cannot pin to one cell (see `strips::size_cell_edits`'s
+/// doc). `moon-core` cannot localize, so the mapping lives here like every other caption of a
+/// `moon-core` enum in this module.
+fn area_caption(area: CoreConfigArea) -> String {
+    let key = match area {
+        CoreConfigArea::AutoStart => "toolbar.core_config_area_auto_start",
+        CoreConfigArea::BtcBlink => "toolbar.core_config_area_btc_blink",
+        CoreConfigArea::General => "toolbar.core_config_area_general",
+        CoreConfigArea::Leverage => "toolbar.core_config_area_leverage",
+        CoreConfigArea::Manual => "toolbar.core_config_area_manual",
+    };
+    t!(key).to_string()
+}
+
+/// Whole-strip tooltip naming a [`CoreConfigRejection::Areas`] the display core's one retained
+/// edit carries, or `None` while nothing is rejected at area granularity. Field-level rejections
+/// (order-size slots/selection) are captioned per cell instead, by `strips::size_cell_edits`.
+fn manual_area_rejection_tip(mismatches: Option<&CoreConfigRejection>) -> Option<SharedString> {
+    let Some(CoreConfigRejection::Areas(areas)) = mismatches else {
+        return None;
+    };
+    if areas.is_empty() {
+        return None;
+    }
+    let areas = areas
+        .iter()
+        .map(|&area| area_caption(area))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(SharedString::from(
+        t!("toolbar.core_config_areas_rejected", areas = areas).to_string(),
+    ))
+}
+
 /// Resolve the core whose manual-strategy state governs the toolbar and any open metric popup.
 pub(crate) fn effective_manual_strategy_core(
     backend: &Entity<Backend>,
@@ -480,16 +587,26 @@ pub fn toolbar(
         None => (None, None, None),
     };
     let manual_core = effective_manual_strategy_core(backend, group, cx);
+    // The core whose manual config governs the toolbar's sizes and exits, independent of
+    // manual-strategy applicability above: a chart can be addressed for one without being
+    // addressed for the other, and neither gate may be built from the other's result — see
+    // `chart_display_core`'s doc.
+    let display_core = effective_chart_display_core(backend, group, cx);
     let (
         follow,
         overview,
         focus_core,
+        write_matches_display,
         size_values,
         size_sel,
+        size_state,
+        display_manual,
+        core_config_edit,
         tp_value,
         tp_engaged,
         sl_value,
         sl_on,
+        exit_state,
         lev_value,
         sell_pcts,
         sell_slot,
@@ -510,8 +627,40 @@ pub fn toolbar(
         } else {
             b.active_trade_core(group)
         };
-        let (size_values, size_sel) = b.manual_order_size_state(group);
-        let exit = b.group_exit_settings(group);
+        // Whether a click, double-click, or Ctrl+wheel on the size/sell strips right now would
+        // write to the same source this row just displayed. `display_core` is hover-aware while
+        // the write always targets `manual_write_core` (-> `active_trade_core`, never hover-aware),
+        // so hovering a different chart in the same group can make the two disagree while the
+        // strip still renders as live. `false` here disables both strips below (goal A2 FIX-3).
+        let write_matches_display = b.manual_display_matches_write(group, display_core);
+        // Sizes: [`Backend::effective_order_size_state`] is the one resolver every manual-trading
+        // reader shares, so the row cannot reach a different "which core, which source" conclusion
+        // than the choke point every write goes through. `GroupLocal` covers BOTH "no chart is
+        // addressed" and "the display core has not opted in" — with the opt-in off this row shows
+        // group-local values exactly as upstream `259c848e` did, never core-sourced numbers with no
+        // marker.
+        let (size_values, size_sel, size_source) =
+            b.effective_order_size_state(group, display_core);
+        let size_state = match size_source {
+            ManualSource::Core(state) => Some(state),
+            ManualSource::GroupLocal => None,
+        };
+        // The display core's retained data, when the resolver above actually routed to one.
+        let manual_display_core =
+            display_core.filter(|_| matches!(size_source, ManualSource::Core(_)));
+        let display_data = manual_display_core.and_then(|core| b.session.store().core(core));
+        let display_manual = display_data
+            .and_then(|d| d.core_config.as_ref())
+            .map(|c| c.manual.clone());
+        // The display core's one retained core-config write attempt, for per-cell notices.
+        let core_config_edit = display_data.and_then(|d| d.core_config_edit.clone());
+        // Exits (TP/SL/sell presets): the exit twin of the sizes resolver above, independently
+        // freshness-tracked from sizes — see `weaker_config_state`'s doc.
+        let (exit, exit_source) = b.effective_group_exit(group, display_core);
+        let exit_state = match exit_source {
+            ManualSource::Core(state) => Some(state),
+            ManualSource::GroupLocal => None,
+        };
         // The TP button always shows its own `take_profit_pct`, even while an S slot is engaged;
         // selecting a slot must not replace the value displayed by TP.
         let tp_value = format!("{}%", fmt_field2(exit.take_profit_pct as f32));
@@ -538,17 +687,29 @@ pub fn toolbar(
             b.follow,
             overview,
             focus_core,
+            write_matches_display,
             size_values,
             size_sel,
+            size_state,
+            display_manual,
+            core_config_edit,
             tp_value,
             tp_engaged,
             sl_value,
             sl_on,
+            exit_state,
             lev_value,
             sell_pcts,
             sell_slot,
             manual_on,
         )
+    };
+    // The one honest freshness state for the whole manual-trading block (sizes + TP/SL + sell
+    // prices): `None` when no chart is addressed (today's exact behaviour, no marker at all),
+    // otherwise the WEAKER of the two independent arrivals — see `weaker_config_state`'s doc.
+    let manual_block_state = match (size_state, exit_state) {
+        (Some(a), Some(b)) => Some(crate::backend::weaker_config_state(a, b)),
+        _ => None,
     };
     let p = MoonPalette::active(cx);
     // `p.blue` in both themes, not the light theme's `p.accent`: the light Blue button uses
@@ -574,8 +735,56 @@ pub fn toolbar(
     // labels' fate read them. One computation, one source.
     crate::diag::record_us(&crate::diag::TOOLBAR_DATA_US, phase_us);
     let phase_us = crate::diag::timer();
-    let size_cells = strips::FittedCells::fit(cx, strips::size_labels(size_values));
+    // Per-slot write-attempt notice from the display core's one retained edit row. Baked into the
+    // label BEFORE fitting so the row budget measures the same text the strip renders, exactly
+    // like every other cell value on this row.
+    let size_edits = strips::size_cell_edits(
+        core_config_edit.as_ref(),
+        display_manual.as_ref(),
+        SIZE_UNIT,
+    );
+    let mut size_label_values = size_values;
+    for (value, edit) in size_label_values.iter_mut().zip(size_edits.iter()) {
+        if let Some(override_value) = edit.as_ref().and_then(|e| e.display_override) {
+            *value = override_value;
+        }
+    }
+    let mut size_label_strs = strips::size_labels(size_label_values);
+    for (label, edit) in size_label_strs.iter_mut().zip(size_edits.iter()) {
+        if let Some(edit) = edit {
+            label.push_str(edit.suffix);
+        }
+    }
+    let size_cells = strips::FittedCells::fit(cx, size_label_strs);
+    let size_edit_tooltips: [Option<SharedString>; 6] =
+        std::array::from_fn(|i| size_edits[i].as_ref().map(|edit| edit.tooltip.clone()));
     let sell_cells = strips::FittedCells::fit(cx, strips::sell_labels(sell_pcts));
+    // The manual-trading block's own freshness tooltip: what the numbers are sourced from and how
+    // fresh they are (requirement: an explicit Awaiting/Stale state rather than a live-looking
+    // number with no marker). The reason the strips went non-interactive (goal A2 FIX-3) takes
+    // priority over everything else — it explains why nothing on this row can be clicked, not just
+    // how fresh the shown numbers are. A coarse area-level rejection on the display core's one
+    // retained edit is next — it is the more urgent, more specific fact. Field-level (money)
+    // rejections are captioned per cell instead.
+    let manual_block_tip = (!write_matches_display)
+        .then(|| SharedString::from(t!("toolbar.core_manual_mismatch").to_string()))
+        .or_else(|| {
+            manual_area_rejection_tip(
+                core_config_edit
+                    .as_ref()
+                    .and_then(|row| row.mismatches.as_ref()),
+            )
+        })
+        .or_else(|| {
+            manual_block_state.map(|state| {
+                let key = match state {
+                    CoreConfigState::Live => "toolbar.core_manual_live",
+                    CoreConfigState::Stale => "toolbar.core_manual_stale",
+                    CoreConfigState::Awaiting => "toolbar.core_manual_awaiting",
+                };
+                SharedString::from(t!(key).to_string())
+            })
+        });
     // The exchange's own cap on a single order, kept permanently on the row rather than only inside
     // the leverage popover: it bounds every order the row above it composes, and a cap you have to
     // open a popup to see is a cap you check after sizing rather than before. Compact here, exact in
@@ -637,6 +846,7 @@ pub fn toolbar(
         // leverage scales it, the stop bounds it, and TP/S define its target exit.
         .child(
             section().child(captioned_strip(
+                "toolbar-size-caption",
                 fit.size_caption,
                 p,
                 size_strip(
@@ -648,9 +858,14 @@ pub fn toolbar(
                         .map(|(_, i)| i),
                     size_input,
                     backend.clone(),
-                    group.to_string(),
+                    // `None` disables the strip when the displayed core and the write target
+                    // disagree (goal A2 FIX-3) — a live control must not mutate a source other
+                    // than the one this row just showed.
+                    write_matches_display.then(|| group.to_string()),
                     SIZE_UNIT,
+                    size_edit_tooltips,
                 ),
+                manual_block_tip.clone(),
                 cx,
             )),
         )
@@ -730,13 +945,22 @@ pub fn toolbar(
                     .map(|(_, i)| i),
                 sell_input,
                 backend.clone(),
-                // Manual strategy mode disables all click, wheel, and double-click interaction.
-                (!manual_on).then(|| group.to_string()),
+                // Manual strategy mode disables all click, wheel, and double-click interaction;
+                // so does a displayed core disagreeing with the write target (goal A2 FIX-3) — a
+                // live control must not mutate a source other than the one this row just showed.
+                (!manual_on && write_matches_display).then(|| group.to_string()),
             );
             // MoonUI dims disabled cells once. An outer opacity would multiply that alpha in
             // manual-strategy mode and make the strip substantially darker than the disabled TP
             // button beside it.
-            let sell_block = captioned_strip(fit.sell_caption, p, strip, cx);
+            let sell_block = captioned_strip(
+                "toolbar-sell-caption",
+                fit.sell_caption,
+                p,
+                strip,
+                manual_block_tip.clone(),
+                cx,
+            );
             section()
                 .child(metric_button(
                     TradeMetric::Tp,

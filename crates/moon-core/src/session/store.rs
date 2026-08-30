@@ -9,10 +9,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::applog::LogLine;
 use crate::feed::{
-    AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, CoreConfig, DetectRow,
-    EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState,
-    RuntimeState, STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
-    StrategyEditRow, StrategyRow, StrategySchemaModel, TransferAssetsSnapshot,
+    AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, CoreConfig, CoreConfigEditEvent,
+    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigState, DetectRow,
+    EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
+    StrategyEditNote, StrategyEditOutcome, StrategyEditPhase, StrategyEditRow, StrategyRow,
+    StrategySchemaModel, TransferAssetsSnapshot, STRATEGY_EDIT_NOTE_CAP,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -157,9 +158,22 @@ pub struct CoreData {
     /// Core client-settings snapshot, including TP, SL, sell, and iceberg settings, or `None` until
     /// it arrives.
     pub client_settings: Option<ClientSettings>,
+    /// Whether a non-`Ready` status occurred after the latest `client_settings` message, under the
+    /// same asymmetric clear-on-arrival rule as [`Self::assets_stale`]: reaching `Ready` alone does
+    /// not clear it, only the next `FeedMsg::ClientSettings` does.
+    pub client_settings_stale: bool,
     /// Projection of the core's full safe-share configuration, or `None` until the background
     /// request answers. The gear popup's tabs read it; see `feed::live::shared_config`.
     pub core_config: Option<CoreConfig>,
+    /// Whether a non-`Ready` status occurred after the latest `FeedMsg::CoreConfig`, under the same
+    /// asymmetric clear-on-arrival rule as [`Self::assets_stale`]: reaching `Ready` alone does not
+    /// clear it, only the next `FeedMsg::CoreConfig` does (full snapshot or compact-overlay
+    /// republication alike — either proves the projection was freshly rebuilt).
+    pub core_config_stale: bool,
+    /// Most recently submitted core-config edit's retained state, for the toolbar and popup's
+    /// per-cell notices, or `None` while none is in flight. See `core_config_edit_rev`'s doc and
+    /// the retained-row rule on [`FeedMsg::CoreConfigEdit`]'s handling below.
+    pub core_config_edit: Option<CoreConfigEditRow>,
     /// Core report profit counters, or `None` until the core publishes them.
     pub profit_state: Option<ProfitState>,
     /// Core runtime and passive-mode state, or `None` until it arrives.
@@ -265,6 +279,19 @@ pub struct CoreData {
     pub license_rev: u64,
     pub client_settings_rev: u64,
     pub core_config_rev: u64,
+    /// Advances on every FULL-SNAPSHOT arrival of `FeedMsg::CoreConfig`, even when the projected
+    /// value is byte-identical to what is already retained.
+    ///
+    /// Separate from the compare-then-bump `core_config_rev` on purpose: a one-shot pull (the
+    /// hotkey pull) needs to tell "the core answered with an unchanged value" from "the core never
+    /// answered", which a revision that only advances on a CHANGE cannot express. A
+    /// compact-overlay republication (`ClientSettingsUpdated` / `LevManageUpdated`) still refreshes
+    /// the rendered values but must NOT advance this — see `FeedMsg::CoreConfig::from_full_snapshot`.
+    pub core_config_recv_rev: u64,
+    /// Advances on EVERY `FeedMsg::CoreConfigEdit`, unconditionally — including a `Pending ->
+    /// GaveUp` transition, which repaints a per-cell notice without moving any data revision of
+    /// its own.
+    pub core_config_edit_rev: u64,
     pub profit_state_rev: u64,
     pub runtime_state_rev: u64,
     /// Advances when `strategies_running` changes, including its first arrival.
@@ -345,7 +372,10 @@ impl CoreData {
             transfer_assets: TransferAssetsSnapshot::default(),
             license: None,
             client_settings: None,
+            client_settings_stale: false,
             core_config: None,
+            core_config_stale: false,
+            core_config_edit: None,
             profit_state: None,
             runtime_state: None,
             strategies_running: None,
@@ -376,6 +406,8 @@ impl CoreData {
             license_rev: 0,
             client_settings_rev: 0,
             core_config_rev: 0,
+            core_config_recv_rev: 0,
+            core_config_edit_rev: 0,
             profit_state_rev: 0,
             runtime_state_rev: 0,
             strategies_running_rev: 0,
@@ -586,9 +618,12 @@ impl CoreData {
             FeedMsg::Status(s) => {
                 // Any non-Ready status marks the retained snapshot stale, so a reconnect cannot
                 // promote pre-outage figures on the strength of the status alone. What clears the
-                // marker is documented on `assets_stale` — including what it does NOT prove.
+                // marker is documented on `assets_stale` — including what it does NOT prove. The
+                // same asymmetric latch covers the core-config and client-settings projections.
                 if !matches!(s, ConnStatus::Ready) {
                     self.assets_stale = true;
+                    self.core_config_stale = true;
+                    self.client_settings_stale = true;
                 }
                 // Reaching Ready is the ONLY thing that erases the retained reason. A core that is
                 // working has nothing to explain, and leaving the last failure behind would put a
@@ -719,16 +754,79 @@ impl CoreData {
                 }
             }
             FeedMsg::ClientSettings(settings) => {
+                // Arrival alone proves this projection was freshly rebuilt, independent of whether
+                // the rebuilt value differs from what was retained — the same asymmetry
+                // `assets_stale` documents.
+                self.client_settings_stale = false;
                 if self.client_settings.as_ref() != Some(&settings) {
                     self.client_settings = Some(settings);
                     self.client_settings_rev = self.client_settings_rev.wrapping_add(1);
                 }
             }
-            FeedMsg::CoreConfig(config) => {
+            FeedMsg::CoreConfig {
+                config,
+                from_full_snapshot,
+            } => {
+                // Unlike `assets_stale`/`client_settings_stale`, this message has THREE triggers
+                // and `build_shared_config` OVERLAYS the compact two onto the RETAINED full
+                // snapshot (see `feed::live::mod`'s publication comment). So on two of the three a
+                // republication still carries the pre-outage manual block, and clearing the stale
+                // marker there would mark that stale data Live before a real full snapshot has
+                // landed since the reconnect. Only a real full-snapshot arrival may clear it — the
+                // same distinction `core_config_recv_rev` already draws, for the same reason.
+                if from_full_snapshot {
+                    self.core_config_recv_rev = self.core_config_recv_rev.wrapping_add(1);
+                    self.core_config_stale = false;
+                }
                 if self.core_config.as_ref() != Some(&config) {
                     self.core_config = Some(config);
                     self.core_config_rev = self.core_config_rev.wrapping_add(1);
                 }
+            }
+            FeedMsg::CoreConfigEdit(event) => {
+                match event {
+                    CoreConfigEditEvent::Submitted(row) => {
+                        let CoreConfigEditRow {
+                            phase,
+                            submitted_at_ms,
+                            config,
+                            mismatches: _,
+                        } = *row;
+                        // A retry of the SAME edit reapplies the identical projection: keep the
+                        // last rejection it received so a `NotApplied` that reached the UI on a
+                        // previous attempt is not wiped by this attempt's own `Submitted`. A
+                        // genuinely different projection (a new user edit queued, or scope grown by
+                        // coalescing) is treated as fresh — see the store-arm rule in
+                        // `feed::live::shared_config`'s module doc.
+                        let mismatches = self
+                            .core_config_edit
+                            .as_ref()
+                            .filter(|existing| existing.config == config)
+                            .and_then(|existing| existing.mismatches.clone());
+                        self.core_config_edit = Some(CoreConfigEditRow {
+                            phase,
+                            submitted_at_ms,
+                            config,
+                            mismatches,
+                        });
+                    }
+                    CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed) => {
+                        self.core_config_edit = None;
+                    }
+                    CoreConfigEditEvent::Resolved(CoreConfigEditResult::NotApplied(rejection)) => {
+                        if let Some(row) = self.core_config_edit.as_mut() {
+                            row.mismatches = Some(rejection);
+                        }
+                    }
+                    CoreConfigEditEvent::Resolved(CoreConfigEditResult::GaveUp) => {
+                        if let Some(row) = self.core_config_edit.as_mut() {
+                            row.phase = CoreConfigEditPhase::GaveUp;
+                        }
+                    }
+                }
+                // Unconditional: a `Pending -> GaveUp` transition repaints a per-cell notice
+                // without moving any data revision of its own.
+                self.core_config_edit_rev = self.core_config_edit_rev.wrapping_add(1);
             }
             FeedMsg::ProfitState(profit) => {
                 if self.profit_state != Some(profit) {
@@ -760,9 +858,17 @@ impl CoreData {
                 }
                 // The configuration and the report counters describe the departed process too, and
                 // the gear popup seeds an editable draft from the first: keeping them would let an
-                // OK press write the old instance's whole AutoStart page into its replacement.
+                // OK press write the old instance's whole AutoStart page into its replacement. A
+                // different MoonBot process must blank the manual block the same way, for the same
+                // reason: the "never clear the projection across a reconnect" rule applies to
+                // RECONNECTS only, never to a replacement instance signalled by this message.
                 if self.core_config.take().is_some() {
                     self.core_config_rev = self.core_config_rev.wrapping_add(1);
+                }
+                // An edit in flight against the departed process can never be confirmed by its
+                // replacement's echo, so its notice must not linger on screen.
+                if self.core_config_edit.take().is_some() {
+                    self.core_config_edit_rev = self.core_config_edit_rev.wrapping_add(1);
                 }
                 if self.profit_state.take().is_some() {
                     self.profit_state_rev = self.profit_state_rev.wrapping_add(1);
@@ -923,6 +1029,30 @@ impl CoreData {
             BalanceState::Stale
         } else {
             BalanceState::Live
+        }
+    }
+
+    /// Best available trust classification for this core's full safe-share configuration
+    /// projection (`core_config`), mirroring [`Self::balance_state`]'s shape.
+    pub fn core_config_state(&self) -> CoreConfigState {
+        if self.core_config.is_none() {
+            CoreConfigState::Awaiting
+        } else if self.core_config_stale || !matches!(self.status, ConnStatus::Ready) {
+            CoreConfigState::Stale
+        } else {
+            CoreConfigState::Live
+        }
+    }
+
+    /// Best available trust classification for this core's compact client-settings snapshot
+    /// (`client_settings`), mirroring [`Self::balance_state`]'s shape.
+    pub fn client_settings_state(&self) -> CoreConfigState {
+        if self.client_settings.is_none() {
+            CoreConfigState::Awaiting
+        } else if self.client_settings_stale || !matches!(self.status, ConnStatus::Ready) {
+            CoreConfigState::Stale
+        } else {
+            CoreConfigState::Live
         }
     }
 }

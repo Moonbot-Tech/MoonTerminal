@@ -169,7 +169,11 @@ impl TradeMetric {
     /// Return the current group or core value for seeding this metric's slider and input.
     ///
     /// Leverage depends on both the scope-gated core and the Main chart's current market and is
-    /// read from that core's asset state.
+    /// read from that core's asset state. TP and SL read through
+    /// [`Backend::write_aligned_group_exit`] rather than the plain group-local getter: this seed
+    /// feeds a popup whose edits go out through `edit_group_exit`, so it must be resolved against
+    /// the SAME source that write will target (goal A2 FIX-2) — a core opted into the per-core
+    /// route must not have its popup seeded from the group's generation.
     ///
     /// Args:
     ///     b: Backend providing group exits plus the scope-gated leverage core and its state.
@@ -179,8 +183,8 @@ impl TradeMetric {
     ///     The current metric value, or `None` when the leverage target is absent.
     pub fn current(self, b: &Backend, group: &str) -> Option<f32> {
         match self {
-            TradeMetric::Tp => Some(b.group_exit_settings(group).take_profit_pct as f32),
-            TradeMetric::Sl => Some(b.group_exit_settings(group).stop_loss_pct),
+            TradeMetric::Tp => Some(b.write_aligned_group_exit(group).take_profit_pct as f32),
+            TradeMetric::Sl => Some(b.write_aligned_group_exit(group).stop_loss_pct),
             TradeMetric::Lev => {
                 let core = scoped_lev_core(b, group)?;
                 // Read the Main chart market's leverage from the per-core map, which includes every
@@ -632,7 +636,10 @@ pub fn metric_popup_content(
                         return;
                     }
                     backend.update(app, |b, _| {
-                        let cur = b.group_exit_settings(&group).take_profit_pct;
+                        // Preserve the pct the write is about to target, not the group-local one:
+                        // toggling Extended must not carry the group's percentage into the core
+                        // alongside the requested mode (goal A2 FIX-2).
+                        let cur = b.write_aligned_group_exit(&group).take_profit_pct;
                         b.edit_group_exit(
                             &group,
                             ClientSettingsEdit::TakeProfit {
@@ -666,10 +673,12 @@ pub fn metric_popup_content(
 
     if matches!(metric, TradeMetric::Sl) {
         // `use_stop_market` sells with a market order when the stop triggers instead of placing a
-        // stop-limit order. This control moved here from the core-settings popup.
+        // stop-limit order. This control moved here from the core-settings popup. Read through
+        // `write_aligned_group_exit` so the checkbox shows the value the toggle below is actually
+        // about to overwrite, not the group-local one (goal A2 FIX-2).
         let stop_market_on = {
             let b = backend.read(cx);
-            b.group_exit_settings(group).use_stop_market
+            b.write_aligned_group_exit(group).use_stop_market
         };
         let backend = backend.clone();
         let group = group.to_string();

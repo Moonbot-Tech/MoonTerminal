@@ -6,7 +6,10 @@ mod core_status;
 
 pub use core_settings::{
     day_fraction_to_minutes, minutes_to_day_fraction, AutoStartSettings, BtcBlinkSettings,
-    CoreConfig, GeneralSettings, LeverageSettings, ProfitState,
+    CoreConfig, CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult,
+    CoreConfigEditRow, CoreConfigMismatch, CoreConfigRejection, CoreConfigState, CoreHotkeyAction,
+    CoreHotkeyLayout, CoreStratButtons, GeneralSettings, LeverageSettings, ManualSettings,
+    ProfitState, CORE_HOTKEY_ACTION_COUNT,
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,
@@ -1137,12 +1140,27 @@ pub enum FeedMsg {
     ClientSettings(ClientSettings),
     /// Core runtime and passive-mode state sent on `RuntimeStateUpdated`.
     RuntimeState(RuntimeState),
-    /// Projection of the core's full safe-share configuration, sent on `SharedConfigUpdated`.
+    /// Projection of the core's full safe-share configuration, sent on `SharedConfigUpdated`,
+    /// `ClientSettingsUpdated`, or `LevManageUpdated` — the projection overlays the compact
+    /// snapshots, so any of the three can change it even with no new full snapshot.
     ///
     /// The runtime requests that snapshot on its own after `Ready` and retries until it arrives, so
     /// this costs no extra request; it carries the settings the compact `ClientSettings` snapshot
     /// has no room for, such as the whole AutoStart page.
-    CoreConfig(CoreConfig),
+    CoreConfig {
+        config: CoreConfig,
+        /// Whether this arrival came from a real `SharedConfigUpdated` full-snapshot echo, rather
+        /// than a compact-overlay republication (`ClientSettingsUpdated` / `LevManageUpdated`).
+        /// `session::store::CoreData::core_config_recv_rev` must advance ONLY when this is `true`:
+        /// a one-shot pull acknowledging the LATTER would let an unrelated compact event confirm a
+        /// refresh of the manual block that never actually happened.
+        from_full_snapshot: bool,
+    },
+    /// Lifecycle event for a queued core-config write: submitted-and-awaiting-echo, or the verdict
+    /// one echo reached. Published beside [`Self::CoreConfig`] by
+    /// `feed::live::shared_config::SharedConfigSequence`, for the toolbar and popup's per-cell
+    /// notices.
+    CoreConfigEdit(CoreConfigEditEvent),
     /// Core report profit counters sent on `ProfitStateUpdated`, shown beside the AutoStart loss
     /// caps and reset through [`CoreCmd::ResetProfit`].
     ProfitState(ProfitState),

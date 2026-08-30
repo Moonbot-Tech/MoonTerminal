@@ -234,10 +234,16 @@ impl Shell {
         }
     }
 
-    /// Return the group's current extended-TP mode for edits entered in the TP field.
+    /// Return the extended-TP mode for edits entered in the TP field, read through the SAME
+    /// source those edits will write to.
+    ///
+    /// Not the plain group-local getter: a `TakeProfit` edit carries this mode alongside its pct
+    /// (see [`Self::seed_metric_popup`] and the TP field's blur/Enter handler in `shell::init`),
+    /// and if the write targets a core opted into the per-core route, reading the group's mode
+    /// here would carry the wrong mode into that core alongside the edit (goal A2 FIX-2).
     pub(super) fn active_tp_extended(&self, cx: &App) -> bool {
         let b = self.backend.read(cx);
-        b.group_exit_settings(&self.group).take_profit_mode
+        b.write_aligned_group_exit(&self.group).take_profit_mode
             == moon_core::config::TakeProfitMode::Extended
     }
 

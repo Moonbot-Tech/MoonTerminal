@@ -41,6 +41,7 @@ use crate::media::icons::IconSet;
 use moon_core::config::{AppConfig, CoreSortMode, Language};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::market::MarketDataMode;
+use moon_core::session::CoreId;
 
 use badges::BadgesEd;
 use common::{
@@ -169,6 +170,10 @@ pub struct SettingsView {
     open_lines: HashSet<&'static str>,
     /// Active Hotkeys sub-tab, matching Moonbot's hotkey pages.
     hotkeys_group: hotkeys::HotkeyGroup,
+    /// Core and `core_config_recv_rev` baseline of an in-flight "pull hotkey layout from core"
+    /// request, or `None` when none is pending. The baseline is the revision seen when the pull
+    /// was requested; the request is settled once the store's revision has moved past it.
+    core_pull: Option<(CoreId, u64)>,
     /// Storage-tab state: `storage.toml` configuration plus a background size/count snapshot.
     storage: storage::StorageEd,
     /// Group-icon cache for the Connections tab.
@@ -470,6 +475,7 @@ impl SettingsView {
             core_sort,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
+            core_pull: None,
             storage: storage::build(),
             icons: IconSet::discover(),
             picking: None,

@@ -745,6 +745,7 @@ impl AppConfig {
                 synthetic,
                 chart_bundle: String::new(),
                 default_alert_strategy: 0,
+                use_core_manual_config: false,
                 transport: servers::transport_from_key(&key),
             })
             .collect();
@@ -922,13 +923,17 @@ impl AppConfig {
     /// reconnect.
     pub fn structural_sig(&self) -> String {
         // Chart bundles and manual-trading values are local presentation/behavior settings.
-        // Changing them does not reconnect cores or rebuild sessions.
+        // Changing them does not reconnect cores or rebuild sessions. `use_core_manual_config`
+        // joins this neutralization for the same reason: it is a terminal-local routing choice
+        // over an already-open connection, not a fact about the connection itself, so toggling
+        // it must never reconnect the core.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
             .map(|s| ServerConfig {
                 chart_bundle: String::new(),
                 default_alert_strategy: 0,
+                use_core_manual_config: false,
                 ..s.clone()
             })
             .collect();

@@ -2,8 +2,10 @@
 //!
 //! This module owns the slot enums (`HotkeySlot`/`MouseSlot`), the slot-to-`HotkeysConfig`
 //! field mapping (getters, setters, and IDs), and `parse_hotkey`; [`tab`] contains the
-//! `SettingsView` implementation that builds the tab and its editor rows.
+//! `SettingsView` implementation that builds the tab and its editor rows. [`pull`] holds the
+//! pure preview/apply logic behind the "pull layout from core" button.
 
+mod pull;
 mod tab;
 
 use gpui::*;
@@ -356,5 +358,41 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::DrawChannel => "draw-channel".into(),
         HotkeySlot::FigDelete => "fig-delete".into(),
         HotkeySlot::FigAlert => "fig-alert".into(),
+    }
+}
+
+/// Compact identity label for one hotkey slot — the same title `group_rows` gives this slot's own
+/// editor row, e.g. `"F3"` or the localized action name. Lets the pull preview name each row this
+/// way too, so two visually identical `F1 -> F2 will apply` rows can be told apart.
+fn slot_label(slot: HotkeySlot) -> String {
+    match slot {
+        HotkeySlot::OrderSize(i) => format!("F{}", i + 1),
+        HotkeySlot::SellPreset(i) => format!("S{}", i + 1),
+        HotkeySlot::ManualStrategy(i) => t!("hotkeys.manual_strategy", n = i + 1).to_string(),
+        HotkeySlot::CancelBuy => t!("hotkeys.cancel_buy").to_string(),
+        HotkeySlot::PanicSell => t!("hotkeys.panic_sell").to_string(),
+        HotkeySlot::PanicSellOne => t!("hotkeys.panic_sell_one").to_string(),
+        HotkeySlot::CancelAllBuys => t!("hotkeys.cancel_all_buys").to_string(),
+        HotkeySlot::JoinSells => t!("hotkeys.join_sells").to_string(),
+        HotkeySlot::SwitchCharts => t!("hotkeys.switch_charts").to_string(),
+        HotkeySlot::NewLong => t!("hotkeys.new_long").to_string(),
+        HotkeySlot::NewShort => t!("hotkeys.new_short").to_string(),
+        HotkeySlot::SplitOrder => t!("hotkeys.split_order").to_string(),
+        HotkeySlot::SplitOrderX => t!("hotkeys.split_order_x").to_string(),
+        HotkeySlot::SellsToRect => t!("hotkeys.sells_to_rect").to_string(),
+        HotkeySlot::ShiftBuyUp => t!("hotkeys.shift_buy_up").to_string(),
+        HotkeySlot::ShiftBuyDown => t!("hotkeys.shift_buy_down").to_string(),
+        HotkeySlot::ShiftSellUp => t!("hotkeys.shift_sell_up").to_string(),
+        HotkeySlot::ShiftSellDown => t!("hotkeys.shift_sell_down").to_string(),
+        HotkeySlot::ScalePlus => t!("hotkeys.scale_plus").to_string(),
+        HotkeySlot::ScaleMinus => t!("hotkeys.scale_minus").to_string(),
+        HotkeySlot::SwitchFigure => t!("hotkeys.switch_figure").to_string(),
+        HotkeySlot::ChartShot => t!("hotkeys.chart_shot").to_string(),
+        HotkeySlot::DrawHline => t!("hotkeys.draw_hline").to_string(),
+        HotkeySlot::DrawSegment => t!("hotkeys.draw_segment").to_string(),
+        HotkeySlot::DrawTriangle => t!("hotkeys.draw_triangle").to_string(),
+        HotkeySlot::DrawChannel => t!("hotkeys.draw_channel").to_string(),
+        HotkeySlot::FigDelete => t!("hotkeys.fig_delete").to_string(),
+        HotkeySlot::FigAlert => t!("hotkeys.fig_alert").to_string(),
     }
 }

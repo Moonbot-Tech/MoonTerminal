@@ -13,7 +13,9 @@ use super::shared_config::SharedConfigSequence;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
-use crate::feed::{order_edit, trade, CoreCmd, LatestMarketRole, MarketRoleAssignment};
+use crate::feed::{
+    order_edit, trade, CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment,
+};
 use crate::util::now_unix_ms as now_ms;
 
 #[cfg(test)]
@@ -370,7 +372,9 @@ fn rebuild_sync(
 /// `SetMarket` queue entries are wake/order markers; their payloads can be stale behind an action
 /// backlog, so the shared authoritative snapshot is adopted before and after the batch. The return
 /// value tells the live loop whether it disconnected, emptied the queue, or must poll again without
-/// blocking.
+/// blocking. `core_config_events` collects any shared-config edit lifecycle events a queue-drain
+/// send produced; the caller sends them as `FeedMsg::CoreConfigEdit` and stamps their clock, the
+/// same as the events an event-batch-driven `SharedConfigSequence::drive` produces.
 pub(super) fn drain_commands(
     cmd_rx: &Receiver<CoreCmd>,
     client: &MoonClient,
@@ -383,6 +387,7 @@ pub(super) fn drain_commands(
     strategy_placements: &mut StrategyPlacementGuard,
     client_settings_sequence: &mut ClientSettingsSequence,
     shared_config_sequence: &mut SharedConfigSequence,
+    core_config_events: &mut Vec<CoreConfigEditEvent>,
 ) -> CommandDrain {
     apply_latest_market_role(
         latest_market_role,
@@ -915,8 +920,16 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::EditClientSettings(edit)) => {
                 client_settings_sequence.enqueue_edit(edit);
             }
-            Ok(CoreCmd::EditCoreConfig(edit)) => {
-                shared_config_sequence.enqueue(edit);
+            Ok(CoreCmd::EditCoreConfig { config, touched }) => {
+                shared_config_sequence.enqueue(config, touched);
+            }
+            Ok(CoreCmd::RefreshSharedConfig) => {
+                if let Err(error) = client.settings().refresh_shared_config() {
+                    log::warn!(
+                        "core {} refresh shared config failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                }
             }
             Ok(CoreCmd::SyncGroupExit(exit)) => {
                 client_settings_sequence.enqueue_group_exit(exit);
@@ -1047,7 +1060,7 @@ pub(super) fn drain_commands(
                 // built on the stale retained snapshot would revert it. See
                 // `ClientSettingsSequence::is_idle`.
                 if client_settings_sequence.is_idle() {
-                    shared_config_sequence.drive(client, server.id);
+                    shared_config_sequence.drive(client, server.id, core_config_events);
                 }
                 return CommandDrain::QueueEmpty;
             }
@@ -1067,7 +1080,7 @@ pub(super) fn drain_commands(
             );
             *orders_mutated |= client_settings_sequence.drive(client, server.id);
             if client_settings_sequence.is_idle() {
-                shared_config_sequence.drive(client, server.id);
+                shared_config_sequence.drive(client, server.id, core_config_events);
             }
             return CommandDrain::BudgetExhausted;
         }

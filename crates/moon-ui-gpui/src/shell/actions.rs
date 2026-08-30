@@ -38,7 +38,10 @@ impl Shell {
         let Some((group, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
             return;
         };
-        let cur = self.backend.read(cx).order_size_value(&group, ix);
+        // Seed from the SAME resolution the write (`set_order_size_value`) will target, not the
+        // group-local getter: showing the group's number while editing overwrites the core's would
+        // let the user "confirm" a value that was never on screen (goal A2 FIX-1).
+        let cur = self.backend.read(cx).write_aligned_order_sizes(&group).0[ix];
         self.size_edit = Some((group, ix));
         let input = self.size_input.clone();
         let value = controls::fmt_adaptive(cur);
@@ -136,7 +139,10 @@ impl Shell {
         let Some((group, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
             return;
         };
-        let cur = self.backend.read(cx).fixed_sell_pct(&group, ix);
+        // Seed from the SAME resolution the write (`edit_group_exit`) will target, not the
+        // group-local getter: showing the group's percentage while editing overwrites the core's
+        // would let the user "confirm" a value that was never on screen (goal A2 FIX-2).
+        let cur = self.backend.read(cx).write_aligned_group_exit(&group).fixed_sell_pcts[ix];
         self.sell_edit = Some((group, ix));
         let input = self.sell_input.clone();
         let value = controls::fmt_adaptive(cur);

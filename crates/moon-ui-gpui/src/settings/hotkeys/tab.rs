@@ -4,21 +4,25 @@
 //! the draft.
 
 use gpui::*;
+use moon_core::config::moonbot_import::shortcut;
 use moon_core::config::{
     HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, MoveKind, ORDER_SIZE_KEYS,
     SELL_PRESET_KEYS, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
+use moon_core::feed::CoreConfigState;
+use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonHotkeyInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem, MoonTabStrip, MoonText,
-    h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
+    MoonHotkeyInput, MoonKbd, MoonKbdSize, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTabItem,
+    MoonTabStrip, MoonText, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
+use super::pull::{PullRow, PullVerdict, apply_core_hotkeys, preview_core_hotkeys};
 use super::{
     HotkeyGroup, HotkeySlot, MouseSlot, MoveKindSlot, mouse_slot_id, mouse_slot_value,
     mouse_slot_wip, move_kind_slot_id, move_kind_slot_value, parse_hotkey, set_mouse_slot_value,
-    set_move_kind_slot_value, set_slot_value, slot_id, slot_value,
+    set_move_kind_slot_value, set_slot_value, slot_id, slot_label, slot_value,
 };
 use crate::design;
 use crate::settings::SettingsView;
@@ -439,6 +443,7 @@ impl SettingsView {
                         cx,
                     )
                 })
+                .chain(self.core_pull_section(&hotkeys, cx))
                 .collect(),
         }
     }
@@ -811,5 +816,304 @@ impl SettingsView {
         if changed {
             cx.notify();
         }
+    }
+
+    /// Resolves the core whose layout the "pull" button addresses: the group's active trade
+    /// core, the same resolution the header's manual-strategy cluster already uses.
+    ///
+    /// The Hotkeys tab has no owning window group of its own (unlike the toolbar or header, which
+    /// render inside one group's window) — Settings is one shared window. `Backend::
+    /// singleton_workspace` is the existing resolver for exactly this situation: it is the same
+    /// "last focused live Auto group" the Strategies and Analytics windows already use to answer
+    /// group-shaped questions from an unscoped window (`strategies/window.rs`,
+    /// `analytics/tuner/mod.rs`).
+    fn core_pull_target(&self, cx: &Context<Self>) -> Option<CoreId> {
+        let b = self.backend.read(cx);
+        let group = b.singleton_workspace()?.group;
+        b.active_trade_core(&group)
+    }
+
+    /// Requests an on-purpose refresh and arms the `Pending` state for `core`.
+    ///
+    /// Fire-and-forget: completion arrives as a `SharedConfigUpdated` -> `FeedMsg::CoreConfig`,
+    /// bumping `core_config_recv_rev` unconditionally even when the arriving config is
+    /// byte-identical to what is already retained — which is exactly why `Pending` polls
+    /// `core_config_recv_rev` here rather than the compare-then-bump `core_config_rev`; the
+    /// latter would never clear on an identical echo.
+    fn request_core_pull(&mut self, core: CoreId, cx: &mut Context<Self>) {
+        let baseline = self
+            .backend
+            .read(cx)
+            .session
+            .store()
+            .core(core)
+            .map(|d| d.core_config_recv_rev)
+            .unwrap_or(0);
+        if let Err(error) = self.backend.read(cx).session.refresh_shared_config(core) {
+            self.status = Some((crate::settings::StatusMsg::Text(error.to_string()), true));
+        }
+        self.core_pull = Some((core, baseline));
+        cx.notify();
+    }
+
+    /// Applies every `WillApply` row of the CURRENT preview (rebuilt fresh here, not reused from
+    /// render — the two are the same computation over the same draft, so they cannot disagree)
+    /// and writes `hotkeys.toml` immediately.
+    ///
+    /// This bypasses the tab's usual preview/Save cycle on purpose: `HotkeysConfig::save()` is a
+    /// separate file with its own saver, no `config_dirty` involved. Writing both
+    /// `config.hotkeys` and `preview.hotkeys` keeps them in sync so a LATER "Settings > Save"
+    /// click (which starts from `preview`) cannot silently roll the pull back to what the draft
+    /// looked like when the window opened.
+    fn confirm_core_pull(&mut self, core: CoreId, cx: &mut Context<Self>) {
+        let outcome = self.backend.update(cx, |b, bcx| {
+            let (layout, manual_strategy_keys) = b
+                .session
+                .store()
+                .core(core)
+                .and_then(|d| d.core_config.as_ref())
+                .map(|c| (c.manual.core_hotkeys.clone(), c.manual.strat_buttons.hot_keys))?;
+            let base = b
+                .preview
+                .as_ref()
+                .map(|p| p.hotkeys.clone())
+                .unwrap_or_else(|| b.config.hotkeys.clone());
+            let rows = preview_core_hotkeys(&base, &layout, &manual_strategy_keys);
+            let mut hotkeys = base;
+            let changed = apply_core_hotkeys(&mut hotkeys, &rows);
+            if changed {
+                b.config.hotkeys = hotkeys.clone();
+                if let Some(p) = b.preview.as_mut() {
+                    p.hotkeys = hotkeys.clone();
+                }
+                bcx.notify();
+            }
+            Some((changed, hotkeys))
+        });
+        match outcome {
+            Some((true, hotkeys)) => match hotkeys.save() {
+                Ok(()) => {
+                    self.status = Some((
+                        crate::settings::StatusMsg::Key("hotkeys.pull.applied"),
+                        false,
+                    ))
+                }
+                Err(e) => {
+                    self.status = Some((crate::settings::StatusMsg::Text(e.to_string()), true))
+                }
+            },
+            Some((false, _)) => {
+                self.status = Some((
+                    crate::settings::StatusMsg::Key("hotkeys.pull.nothing_to_apply"),
+                    false,
+                ))
+            }
+            None => {}
+        }
+        self.core_pull = None;
+        cx.notify();
+    }
+
+    /// One preview row: the slot's own identity label (without it, two visually identical `F1 ->
+    /// F2 will apply` rows give no indication of what they each change), the terminal's current
+    /// key (`MoonHotkeyInput`, read-only), the core's incoming key (`MoonKbd`), and the verdict.
+    fn core_pull_row(&self, row: &PullRow, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        let id = format!("core-pull-{}", slot_id(row.slot));
+        let (verdict_text, verdict_color): (String, u32) = match row.verdict {
+            PullVerdict::Empty => (t!("hotkeys.pull.verdict.empty").to_string(), p.text_muted),
+            PullVerdict::Unsupported => {
+                (t!("hotkeys.pull.verdict.unsupported").to_string(), p.amber)
+            }
+            PullVerdict::Unchanged => (
+                t!("hotkeys.pull.verdict.unchanged").to_string(),
+                p.text_muted,
+            ),
+            PullVerdict::WillApply => (
+                t!("hotkeys.pull.verdict.will_apply").to_string(),
+                p.green_text,
+            ),
+            PullVerdict::Conflict => (t!("hotkeys.pull.verdict.conflict").to_string(), p.red_text),
+        };
+
+        h_flex()
+            .w_full()
+            .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
+            .gap(design::ui_px(cx, 10.0))
+            .items_center()
+            .child(
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, 96.0))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(slot_label(row.slot)),
+            )
+            .child(
+                MoonHotkeyInput::new(format!("{id}-current"))
+                    .value(parse_hotkey(&row.current))
+                    .placeholder(t!("hotkeys.unassigned").to_string())
+                    .disabled(true)
+                    .compact()
+                    .width(140.0),
+            )
+            .child(
+                MoonText::new("->")
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(11.0)
+                    .line_height(14.0)
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .child(
+                MoonKbd::new(shortcut::display(row.core_decoded))
+                    .size(MoonKbdSize::Compact)
+                    .outline(matches!(
+                        row.verdict,
+                        PullVerdict::Empty | PullVerdict::Unsupported
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(verdict_color, 1.0))
+                    .child(verdict_text),
+            )
+            .into_any_element()
+    }
+
+    /// The "pull layout from core" button and, once a layout has arrived, its preview diff.
+    /// Placed after the ManualStrategy rows and gated on nothing else: it is always visible on
+    /// this sub-tab, which is what lets a resolved core's Live/Stale/Awaiting state stay legible
+    /// without the user having to click anything first.
+    fn core_pull_section(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> Vec<AnyElement> {
+        let p = MoonPalette::active(cx);
+        let mut out: Vec<AnyElement> = vec![
+            div()
+                .w_full()
+                .h(design::ui_px(cx, 1.0))
+                .bg(rgba_from(p.border, 1.0))
+                .into_any_element(),
+            MoonText::new(t!("hotkeys.pull.title").to_string())
+                .uppercase(false)
+                .mono(true)
+                .font_size(11.0)
+                .line_height(14.0)
+                .color(p.text)
+                .render()
+                .into_any_element(),
+        ];
+
+        let Some(core) = self.core_pull_target(cx) else {
+            out.push(self.pull_hint(t!("hotkeys.pull.no_core").to_string(), &p, cx));
+            return out;
+        };
+
+        let b = self.backend.read(cx);
+        let core_data = b.session.store().core(core);
+        let state = core_data.map(|d| d.core_config_state());
+        let manual = core_data
+            .and_then(|d| d.core_config.as_ref())
+            .map(|c| (c.manual.core_hotkeys.clone(), c.manual.strat_buttons.hot_keys));
+
+        let pending = self.core_pull.is_some_and(|(pending_core, baseline)| {
+            pending_core == core
+                && self
+                    .backend
+                    .read(cx)
+                    .session
+                    .store()
+                    .core(core)
+                    .map(|d| d.core_config_recv_rev)
+                    == Some(baseline)
+        });
+
+        let freshness = match state {
+            Some(CoreConfigState::Live) => {
+                Some((t!("hotkeys.pull.live").to_string(), p.green_text))
+            }
+            Some(CoreConfigState::Stale) => Some((t!("hotkeys.pull.stale").to_string(), p.amber)),
+            _ => None,
+        };
+
+        let mut header = h_flex()
+            .w_full()
+            .items_center()
+            .gap(design::ui_px(cx, 10.0))
+            .child(
+                MoonButton::new("hotkeys-pull-request")
+                    .outline()
+                    .small()
+                    .width(180.0)
+                    .loading(pending)
+                    .label(t!("hotkeys.pull.button").to_string())
+                    .on_click(cx.listener(move |this, _, _, cx| this.request_core_pull(core, cx))),
+            );
+        if let Some((text, color)) = freshness {
+            header = header.child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(color, 1.0))
+                    .child(text),
+            );
+        }
+        out.push(header.into_any_element());
+
+        if pending {
+            out.push(self.pull_hint(t!("hotkeys.pull.pending").to_string(), &p, cx));
+            return out;
+        }
+
+        let Some((layout, manual_strategy_keys)) = manual else {
+            out.push(self.pull_hint(t!("hotkeys.pull.empty").to_string(), &p, cx));
+            return out;
+        };
+
+        let rows = preview_core_hotkeys(hotkeys, &layout, &manual_strategy_keys);
+        let any_will_apply = rows.iter().any(|r| r.verdict == PullVerdict::WillApply);
+        for row in &rows {
+            out.push(self.core_pull_row(row, cx));
+        }
+        out.push(
+            h_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    MoonButton::new("hotkeys-pull-confirm")
+                        .primary()
+                        .small()
+                        .width(130.0)
+                        .disabled(!any_will_apply)
+                        .label(t!("hotkeys.pull.confirm").to_string())
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.confirm_core_pull(core, cx)),
+                        ),
+                )
+                .child(
+                    MoonButton::new("hotkeys-pull-cancel")
+                        .outline()
+                        .small()
+                        .width(110.0)
+                        .label(t!("hotkeys.pull.cancel").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.core_pull = None;
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        );
+        out
+    }
+
+    /// Small muted status line shared by the "no core" / "empty" / "pending" states.
+    fn pull_hint(&self, text: String, p: &MoonPalette, cx: &Context<Self>) -> AnyElement {
+        div()
+            .text_size(design::t_caption(cx))
+            .text_color(rgba_from(p.text_muted, 1.0))
+            .child(text)
+            .into_any_element()
     }
 }

@@ -12,7 +12,9 @@ pub(crate) mod server_chart;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use manual_trading::{MANUAL_STRATEGY_KIND, ManualOrderTerms, PanicLocal};
+pub(crate) use manual_trading::{
+    MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource, PanicLocal, weaker_config_state,
+};
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
 
 use std::collections::{HashMap, HashSet};

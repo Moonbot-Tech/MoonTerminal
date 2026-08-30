@@ -118,6 +118,38 @@ pub(super) fn def_alert_strategy_row(
     )
 }
 
+/// Builds the per-core manual-config opt-in checkbox for the popup's core.
+///
+/// UNLIKE [`cs_checkbox`] and every other control on this tab, this writes through
+/// `Backend::set_core_manual_enabled` rather than a `ClientSettings`/core-config command: the flag
+/// is per-core LOCAL terminal config, not something the core itself needs to acknowledge or the OK
+/// button needs to stage. It therefore addresses `seeded` directly — the popup's own core — rather
+/// than resolving through [`resolve_core_settings_write`], which exists to protect a value read at
+/// RENDER time from the active trade core. Both rules answer "which core", but from different
+/// premises: this checkbox must follow the popup it is drawn in, never the chart, or a user could
+/// open a popup for core A, watch the active core change to B mid-render, and have the checkbox
+/// silently start describing B.
+pub(super) fn core_manual_checkbox(
+    seeded: Option<CoreId>,
+    backend: &Entity<Backend>,
+    cx: &App,
+) -> Option<AnyElement> {
+    let core = seeded?;
+    let checked = backend.read(cx).core_manual_enabled(core);
+    let backend = backend.clone();
+    Some(
+        MoonCheckbox::new("core-manual-config")
+            .label(t!("conn.use_core_manual_config").to_string())
+            .checked(checked)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let on = *ch;
+                backend.update(app, |bk, _| bk.set_core_manual_enabled(core, on));
+            })
+            .into_any_element(),
+    )
+}
+
 /// Builds a `ClientSettings` checkbox for the popup's core. `edit` constructs its boolean variant.
 ///
 /// The box the user clicks was drawn from `checked`, read at RENDER time from the core that was
