@@ -84,6 +84,9 @@ fn normalize_if_condition(line: &str) -> String {
 /// `COMPILING_JOBS` skip that trigger instead.
 const AUDIT_JOB: &str = "audit";
 
+/// The formatting gate's job key, separate from compilation and test gates.
+const FMT_JOB: &str = "fmt";
+
 fn workspace_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -425,6 +428,57 @@ fn the_audit_job_is_a_gate_that_actually_runs_cargo_deny() {
              the regression this gate exists for merge unnoticed: `{command}`"
         );
     }
+}
+
+/// Breakage guarded: changing `.github/workflows/build.yml`'s `fmt` job `run:` command from
+/// `cargo fmt --all -- --check` to `cargo fmt`, or adding a job-level `if:` that skips a
+/// trigger, lets a future PR silently stop enforcing the formatting gate while the CI suite
+/// stays green.
+#[test]
+fn the_fmt_job_is_a_gate_that_actually_runs_cargo_fmt() {
+    let text = workflow_text();
+    let body = job_body(&text, FMT_JOB)
+        .unwrap_or_else(|| panic!("build.yml must keep an `{FMT_JOB}:` formatting job"));
+
+    // `continue-on-error: false` is equivalent to omitting the key, so judge the value, not the
+    // key's presence — same convention as `the_audit_job_is_a_gate_that_actually_runs_cargo_deny`.
+    for line in &body {
+        let Some(value) = line.trim().strip_prefix("continue-on-error:") else {
+            continue;
+        };
+        assert_eq!(
+            value.trim(),
+            "false",
+            "job `{FMT_JOB}` runs the formatting gate, so a failure must block: `{}`",
+            line.trim()
+        );
+    }
+
+    // A job-level key sits at four spaces, same as `the_gating_jobs_stay_gates_not_probes`.
+    // Unlike `GATING_JOBS`, `fmt` legitimately has no `if:` at all — it compiles nothing and
+    // costs seconds, so unlike the compiling jobs it has no reason to skip the weekly
+    // `schedule:` trigger (which exists for `audit`), and it must run on every trigger.
+    let skipped = body.iter().find(|line| line.starts_with("    if:"));
+    assert!(
+        skipped.is_none(),
+        "job `{FMT_JOB}` must run unconditionally — the weekly schedule trigger exists for it: `{}`",
+        skipped.map(|l| l.trim()).unwrap_or_default()
+    );
+
+    let command_line = body
+        .iter()
+        .find(|line| line.trim().starts_with("run:"))
+        .unwrap_or_else(|| panic!("job `{FMT_JOB}` must run cargo fmt"));
+    let command = command_line
+        .trim()
+        .strip_prefix("run:")
+        .expect("matched by the find() above")
+        .trim();
+    assert_eq!(
+        command, "cargo fmt --all -- --check",
+        "job `{FMT_JOB}` must run the documented formatting check, not a command that leaves \
+         unformatted code able to merge: `{command}`"
+    );
 }
 
 /// Breakage guarded: a well-meaning reorder in `.github/workflows/build.yml`'s lockfile contract

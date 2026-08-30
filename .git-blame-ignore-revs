@@ -1,0 +1,7 @@
+# Commits listed here are skipped by `git blame` when it is configured to read this file:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Use it for mechanical, whole-tree changes (formatting sweeps) that would otherwise bury
+# every line's real last-touch author under one reformat commit.
+
+# chore(fmt): reformat the tree under style_edition 2024
+a933eae493dbfae623dbc66b30095303d893f44f
