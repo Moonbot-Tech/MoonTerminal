@@ -105,7 +105,7 @@ fn parsed_network_selects_the_connection_endpoint() {
         transport_mode: TransportMode::V2,
     };
 
-    let (endpoint, transport) = connection_target(Some(&network));
+    let (endpoint, transport) = connection_target(Some(&network), None);
 
     assert_eq!(
         endpoint,
@@ -115,6 +115,38 @@ fn parsed_network_selects_the_connection_endpoint() {
         }
     );
     assert_eq!(transport, TransportMode::V2);
+}
+
+/// `live/mod.rs:connection_target` must let the configured transport outrank the key's. MoonBot
+/// moves its own V0/V1/V2 switch without issuing a new key, and reading only the key is what
+/// forced a re-export of every core's key to follow one core's switch.
+#[test]
+fn the_configured_transport_outranks_the_key() {
+    let network = ImportedNetworkConfig {
+        ip_version: ImportedIpVersion::V4,
+        address: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))),
+        port: 4321,
+        transport_mode: TransportMode::V2,
+    };
+
+    let (endpoint, transport) =
+        connection_target(Some(&network), Some(crate::config::TransportVersion::V1));
+
+    assert_eq!(transport, TransportMode::V1);
+    assert_eq!(
+        endpoint.port, 4321,
+        "the endpoint still comes from the key; only the mode is overridden"
+    );
+}
+
+/// A legacy export carries no network block, so the configured mode is the only thing that can
+/// answer; without it the V0 fallback would connect a V1/V2 core to nothing.
+#[test]
+fn a_keyless_network_still_honors_the_configured_transport() {
+    let (endpoint, transport) = connection_target(None, Some(crate::config::TransportVersion::V2));
+
+    assert_eq!(transport, TransportMode::V2);
+    assert_eq!(endpoint.port, 3000, "legacy exports keep the 3000 fallback");
 }
 
 /// `live/mod.rs:should_publish_assets` removing the Balance-event bypass would leave the header's

@@ -132,6 +132,11 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 dirty = true;
                 next_uid.issue()
             };
+            // Same once-only rule the Settings key field applies, through the same function: an
+            // older config that predates the field gets its mode from the key it already has,
+            // while a stored choice outranks the key it was seeded from.
+            let transport =
+                servers::seeded_transport(m.and_then(|m| m.transport), e.key.expose());
             ServerConfig {
                 // Runtime CoreId equals the stable uid, NOT a position, so it survives server
                 // additions/removals/reordering without recreating windows, subscriptions, or layout.
@@ -152,6 +157,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 synthetic: false,
                 chart_bundle: m.map(|m| m.chart_bundle.clone()).unwrap_or_default(),
                 default_alert_strategy: m.map(|m| m.default_alert_strategy).unwrap_or(0),
+                transport,
             }
         })
         .collect();
@@ -261,6 +267,7 @@ pub fn split(
                 color: s.color,
                 chart_bundle: s.chart_bundle.clone(),
                 default_alert_strategy: s.default_alert_strategy,
+                transport: s.transport,
             })
             .collect(),
     };

@@ -45,8 +45,8 @@ pub struct CoreSession {
     pub id: CoreId,
     pub name: String,
     pub group: String,
-    /// Signature of the connection-relevant key, feed, and synthetic fields used to start this
-    /// feed thread. `reconcile` restarts the core only when this changes; changes to its name,
+    /// Signature of the connection-relevant key, transport, feed, and synthetic fields used to
+    /// start this feed thread. `reconcile` restarts the core only when this changes; changes to its name,
     /// group, market, or color do not require a restart.
     conn_sig: u64,
     handle: FeedHandle,
@@ -73,6 +73,10 @@ fn conn_sig(server: &ServerConfig) -> u64 {
     ]
     .hash(&mut h);
     server.synthetic.hash(&mut h);
+    // The transport mode is chosen at ClientConfig time, so switching it needs a fresh feed
+    // thread exactly as a new key does -- without this the dropdown would change nothing until
+    // the next restart.
+    server.transport.hash(&mut h);
     h.finish()
 }
 
@@ -192,3 +196,6 @@ fn orderbook_kind_for_exchange(ex: ExchangeId) -> OrderBookKind {
         _ => OrderBookKind::Futures,
     }
 }
+
+#[cfg(test)]
+mod tests;

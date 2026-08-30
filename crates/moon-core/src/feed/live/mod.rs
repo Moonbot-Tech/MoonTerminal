@@ -44,7 +44,7 @@ use super::{
     DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyEditPhase,
     StrategyEditResult, StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
-use crate::config::ServerConfig;
+use crate::config::{ServerConfig, TransportVersion};
 use crate::db::{DbMsg, ReportStart, ReportTx};
 use crate::session::core_time_offset::{OffsetEstimator, OffsetSource};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
@@ -338,14 +338,21 @@ impl Drop for ClientSlotGuard {
 
 /// Resolve the connection endpoint and transport carried by a parsed MoonBot key.
 ///
+/// The configured transport outranks the key's: MoonBot's own V0/V1/V2 switch moves without
+/// issuing a new key, so a core that was flipped after its export is reachable only by following
+/// the local choice. The key still answers when nothing is configured -- a legacy export carries
+/// no network block at all, and that is what the V0 fallback is for.
+///
 /// Args:
 ///     network: Optional network metadata from `moonproto::parse_key_info`.
+///     transport: Configured transport mode for this core, or `None` to follow the key.
 ///
 /// Returns:
 ///     Decoded endpoint plus transport, with the same localhost/3000/V0 fallbacks used for legacy
 ///     exports.
 fn connection_target(
     network: Option<&moonproto::ImportedNetworkConfig>,
+    transport: Option<TransportVersion>,
 ) -> (CoreEndpoint, TransportMode) {
     let address = network
         .and_then(|network| network.address)
@@ -354,9 +361,11 @@ fn connection_target(
         .map(|network| network.port)
         .filter(|port| *port != 0)
         .unwrap_or(3000);
-    let transport = network
-        .map(|network| network.transport_mode)
-        .unwrap_or(TransportMode::V0);
+    let transport = transport.map(TransportMode::from).unwrap_or_else(|| {
+        network
+            .map(|network| network.transport_mode)
+            .unwrap_or(TransportMode::V0)
+    });
     (CoreEndpoint { address, port }, transport)
 }
 
@@ -418,9 +427,10 @@ pub(super) fn run(
     let info = moonproto::parse_key_info(server.key.expose())
         .ok_or_else(|| anyhow::anyhow!("не удалось разобрать ключ Moonbot (server.key)"))?;
 
-    // 2. Derive the endpoint from the key, which embeds host/port/transport; the config no longer
-    //    has separate fields for them.
-    let (endpoint, transport) = connection_target(info.network.as_ref());
+    // 2. Derive the endpoint from the key, which embeds host and port; the config no longer has
+    //    separate fields for those. The transport mode is the exception: the key only seeds it,
+    //    and a configured mode wins (see `connection_target`).
+    let (endpoint, transport) = connection_target(info.network.as_ref(), server.transport);
     let address = endpoint.address;
     let port = endpoint.port;
     let host = address.to_string();

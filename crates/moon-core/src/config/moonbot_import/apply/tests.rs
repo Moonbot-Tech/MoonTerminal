@@ -122,6 +122,7 @@ fn selected_cores_update_their_unique_groups() {
             synthetic: false,
             chart_bundle: String::new(),
             default_alert_strategy: 0,
+            transport: None,
         });
     }
     let plan = plan_with(

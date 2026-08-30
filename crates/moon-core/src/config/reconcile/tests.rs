@@ -1,8 +1,10 @@
 use super::super::schema::{
-    default_ui_font_delta, default_ui_scale, ServersFile, SettingsFile, SCHEMA_VERSION,
+    default_ui_font_delta, default_ui_scale, ServersFile, SettingsFile, UiThemeMode,
+    SCHEMA_VERSION,
 };
 use super::{merge, split, Merged};
-use crate::config::{CoreGroup, GroupConfig, DEFAULT_ORDER_SIZES_USD};
+use crate::config::{CoreGroup, GroupConfig, Language, DEFAULT_ORDER_SIZES_USD};
+use crate::market::MarketDataMode;
 
 /// Merge a settings file carrying nothing but the two scaling knobs.
 fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
@@ -271,5 +273,94 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
     assert_eq!(
         split_settings.core_groups, groups,
         "split must carry the merged groups through unchanged"
+    );
+}
+
+
+/// Merge a one-server pair of files: `servers.enc` carries the key, `settings.toml` the metadata.
+fn merged_server(key: &str, meta_toml: &str) -> crate::config::ServerConfig {
+    let entry: crate::config::schema::ServerEntry =
+        toml::from_str(&format!("uid = 7\nname = \"alpha\"\nkey = \"{key}\"")).expect("server entry fixture must parse");
+    let meta: crate::config::schema::ServerMeta =
+        toml::from_str(meta_toml).expect("server meta fixture must parse");
+    let merged = merge(
+        ServersFile {
+            servers: vec![entry],
+        },
+        SettingsFile {
+            servers: vec![meta],
+            ..Default::default()
+        },
+        None,
+    );
+    merged
+        .servers
+        .into_iter()
+        .next()
+        .expect("the merged config keeps its only server")
+}
+
+/// The stored transport mode is the user's choice and must outrank the key it was seeded from.
+/// MoonBot moves a core's own V0/V1/V2 switch without issuing a new key, so re-reading the key on
+/// every load would silently undo the switch the user made here, which is the whole point of the
+/// control.
+#[test]
+fn a_stored_transport_outranks_the_key() {
+    let server = merged_server("", "uid = 7\nname = \"alpha\"\ntransport = \"v2\"");
+    assert_eq!(server.transport, Some(crate::config::TransportVersion::V2));
+}
+
+/// Nothing stored and nothing readable in the key leaves the choice unset, and the connection
+/// then follows the key exactly as it did before this field existed. A default of `V0` here would
+/// pin every legacy core to V0 the first time its config was rewritten.
+#[test]
+fn an_unreadable_key_leaves_the_transport_unset() {
+    for key in ["", "not-a-key"] {
+        let server = merged_server(key, "uid = 7\nname = \"alpha\"");
+        assert_eq!(
+            server.transport, None,
+            "key {key:?} names no mode, so nothing may be pinned"
+        );
+    }
+}
+
+/// `split` must carry the mode back into `settings.toml`; without it the choice would live for
+/// one session and the next load would fall back to the key. It also pins the on-disk spelling:
+/// `settings.toml` is hand-edited, and a renamed variant would read as "unset" on the next load.
+#[test]
+fn the_transport_survives_a_split() {
+    let server = merged_server("", "uid = 7\nname = \"alpha\"\ntransport = \"v1\"");
+    let (_, meta) = split(
+        std::slice::from_ref(&server),
+        &[],
+        &[],
+        Language::default(),
+        MarketDataMode::default(),
+        true,
+        false,
+        false,
+        360,
+        true,
+        0,
+        true,
+        14,
+        default_ui_font_delta(),
+        UiThemeMode::default(),
+        default_ui_scale(),
+        100,
+        crate::config::CoreSortMode::default(),
+        crate::db::valuation::ValuationMode::default(),
+        8,
+    );
+
+    assert_eq!(
+        meta.servers.first().and_then(|m| m.transport),
+        Some(crate::config::TransportVersion::V1),
+        "a saved config must keep the mode the user chose"
+    );
+    let text = toml::to_string(&meta).expect("settings must serialize");
+    assert!(
+        text.contains("transport = \"v1\""),
+        "the mode must persist as its MoonBot name, got: {text}"
     );
 }

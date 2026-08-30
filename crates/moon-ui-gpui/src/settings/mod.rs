@@ -188,6 +188,12 @@ pub struct SettingsView {
     /// delete (`connections::NEXT_ROW_KEY` explains why) -- otherwise a replacement row could open
     /// its menu by inheritance.
     feed_open: Option<u64>,
+    /// Row key of the connections row whose transport-mode menu is open, or `None`.
+    ///
+    /// CONTROLLED for the same reason as [`Self::feed_open`], one row above: its three items are
+    /// a `Vec` plus one boxed handler each, and building them for every row of a 56-row list on
+    /// every frame is exactly the per-frame allocation that flag was introduced to remove.
+    proto_open: Option<u64>,
     /// Row key of the connections row whose input currently has keyboard focus, or `None`.
     ///
     /// Tracked so `connections::on_conn_visible_range` can blur a focused input the instant its row
@@ -468,6 +474,7 @@ impl SettingsView {
             icons: IconSet::discover(),
             picking: None,
             feed_open: None,
+            proto_open: None,
             focused_conn_row: None,
             conn_scroll: MoonVirtualListScrollHandle::new(),
             conn_entries: Rc::new(Vec::new()),

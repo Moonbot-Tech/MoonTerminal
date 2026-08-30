@@ -1,6 +1,6 @@
 //! Primary server configuration split across two files below [`paths::data_dir`]:
-//! - `servers.enc` in the data root (encrypted): uid/name/key as portable secrets; host, port, and
-//!   transport are encoded in the Moonbot key itself;
+//! - `servers.enc` in the data root (encrypted): uid/name/key as portable secrets; host and port
+//!   are encoded in the Moonbot key itself, and so is the transport mode the key seeds;
 //! - `cfg/settings.toml` (plaintext): schema version, groups, and per-server metadata such as
 //!   active/show_window/feed flags, group, market, and color, joined to servers by uid.
 //!
@@ -90,7 +90,9 @@ pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use quiet::{QuietCfg, QuietWarnBypass};
 pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
-pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};
+pub use servers::{
+    seeded_transport, ChartBucket, CoreSortMode, FeedFlags, ServerConfig, TransportVersion,
+};
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
 // Keep the counter private to `config` so external code cannot construct or replace it.
@@ -743,6 +745,7 @@ impl AppConfig {
                 synthetic,
                 chart_bundle: String::new(),
                 default_alert_strategy: 0,
+                transport: servers::transport_from_key(&key),
             })
             .collect();
         let mut config = Self {
