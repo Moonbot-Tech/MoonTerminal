@@ -326,8 +326,14 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         // element listeners at all. Every window-root `on_key_down` is then skipped and the press
         // vanishes without a trace. Pairing this line with the root's own says which happened.
         crate::hotkeys::trace_key_intercepted(ev, window, cx);
+        // The typing rule reaches this path too, and it needs it most: an interceptor runs BEFORE
+        // actions and before either window root, so a Tab pressed to leave a text field would
+        // cancel a live order before the field ever saw the key. Spelled inline rather than
+        // through the resolver — this path holds no `KeyDownEvent` and resolves no binding — and
+        // placed after the key test so a non-Tab press, which is most of them, never pays for it.
         if ev.keystroke.key == "tab"
             && ev.keystroke.modifiers == Modifiers::default()
+            && !window.is_text_input_active()
             && crate::hotkeys::cancel_hovered_order(&tab_backend, cx)
         {
             cx.stop_propagation();

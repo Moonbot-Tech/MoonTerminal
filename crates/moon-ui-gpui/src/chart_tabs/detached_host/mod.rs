@@ -444,9 +444,12 @@ impl DetachedChartHost {
             cx.stop_propagation();
             return;
         }
+        // As in the group window: the resolver owns the rule, this only answers whether a focused
+        // field is taking text.
+        let typing = window.is_text_input_active();
         let action = {
             let b = self.backend.read(cx);
-            crate::hotkeys::resolve(ev, &b.preview.as_ref().unwrap_or(&b.config).hotkeys)
+            crate::hotkeys::resolve(ev, &b.preview.as_ref().unwrap_or(&b.config).hotkeys, typing)
         };
         let Some(action) = action else {
             return;

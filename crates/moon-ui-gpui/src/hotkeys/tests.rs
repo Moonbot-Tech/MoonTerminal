@@ -132,3 +132,49 @@ fn the_hotkey_channel_prefix_still_matches_this_module() {
         module_path!()
     );
 }
+
+/// Pins the line between a press the focused field consumes and one that still reaches a binding.
+///
+/// Plausible breakage: the rule is rewritten as "anything without a modifier", which takes Escape
+/// and the function keys — where the order-size and sell-preset defaults live — away from a user
+/// whose caret sits in a search box; or the modifier cut goes, and an Option press on macOS, which
+/// DOES carry a character, stops firing the `alt-` bindings that are most of the shipped keymap.
+/// Both read as "the gate works" from the bug it was written for.
+#[test]
+fn only_the_presses_a_field_consumes_belong_to_it() {
+    use super::belongs_to_the_field;
+    use gpui::Keystroke;
+
+    // `with_simulated_ime` fills `key_char` the way GPUI itself models a press, so these assert
+    // against the runtime's own table rather than against hand-spelled fixtures.
+    for raw in ["t", "1", "shift-a", "space", "tab"] {
+        let key = Keystroke::parse(raw).unwrap().with_simulated_ime();
+        assert!(
+            belongs_to_the_field(&key),
+            "{raw} is what the field is being typed into"
+        );
+    }
+    // Windows reports no character for Tab, which is the whole reason the rule names the key as
+    // well: read without the simulated fill, this is the press that platform delivers.
+    assert!(
+        belongs_to_the_field(&Keystroke::parse("tab").unwrap()),
+        "tab belongs to the form even where the platform reports no character for it"
+    );
+    for raw in ["escape", "f1", "shift-f7", "delete"] {
+        let key = Keystroke::parse(raw).unwrap().with_simulated_ime();
+        assert!(
+            !belongs_to_the_field(&key),
+            "{raw} reports no character, so it stays bound"
+        );
+    }
+    // The modifier cut, which only these can pin: a press that DOES carry a character and is a
+    // binding anyway — Option on macOS, AltGr on Windows. `->` is GPUI's syntax for spelling out
+    // what the platform reported, because `with_simulated_ime` deliberately fills none of these.
+    for raw in ["alt-c->c", "ctrl-alt-e->e", "cmd-k->k"] {
+        let key = Keystroke::parse(raw).unwrap();
+        assert!(
+            !belongs_to_the_field(&key),
+            "{raw} is a binding, and the character is the one the user did not ask for"
+        );
+    }
+}
