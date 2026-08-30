@@ -1055,22 +1055,81 @@ fn display_preferences_separate_unset_from_disabled() {
     let restored = super::MonitorPrefs::restore(&layout);
     assert!(restored.idle_cores && !restored.group_sections);
 
-    // The three run controls SEND COMMANDS to cores, so every one of them ships off: a profit
-    // window that grew a Stop button in an update is one mis-click away from stopping a fleet.
+    // The run controls SEND COMMANDS to cores, so every one of them ships off: a profit window
+    // that grew a Stop button in an update is one mis-click away from stopping a fleet.
     let defaults = super::MonitorPrefs::default();
-    assert!(!defaults.core_status && !defaults.trading_buttons && !defaults.group_trading);
+    assert!(
+        !defaults.core_status
+            && !defaults.trading_buttons
+            && !defaults.auto_buttons
+            && !defaults.group_controls
+            && !defaults.header_controls
+    );
     layout.profit_monitor_core_status = Some(true);
-    layout.profit_monitor_group_trading = Some(true);
+    layout.profit_monitor_auto_buttons = Some(true);
     let restored = super::MonitorPrefs::restore(&layout);
-    assert!(restored.core_status && restored.group_trading && !restored.trading_buttons);
+    assert!(restored.core_status && restored.auto_buttons && !restored.trading_buttons);
+    assert!(
+        !restored.group_controls && !restored.header_controls,
+        "the scope modifiers say where the chosen controls ALSO appear, and are never implied"
+    );
+
+    // The per-group preference was widened from trading alone to every enabled control, and the
+    // key it replaced had shipped saying BOTH "the trading control exists" and "captions carry
+    // it" — the old `run_slots` reserved the column for it alone. Carrying over only the modifier
+    // would leave that profile with no control and no column: a feature gone in an update.
+    let mut legacy = moon_core::config::layout::WindowLayout::default();
+    legacy.profit_monitor_group_trading = Some(true);
+    let carried = super::MonitorPrefs::restore(&legacy);
+    assert!(
+        carried.group_controls && carried.trading_buttons,
+        "the retired key must carry over as both the control and the scope it was shown in"
+    );
+    assert!(
+        super::run_slots(carried).trading,
+        "and the column it needs must still be reserved"
+    );
+    assert!(
+        !carried.auto_buttons && !carried.header_controls,
+        "it must not hand out controls it never stood for"
+    );
+
+    // The carry-over is written back at once, which is what makes it happen exactly once: the key
+    // it came from has no writer in the new model, so an unpersisted migration would re-apply at
+    // every launch and undo the first thing the user does with the control it handed them.
+    assert!(
+        carried.persist_migration(&mut legacy),
+        "the carried-over preference must be persisted when it is derived"
+    );
+    assert_eq!(legacy.profit_monitor_group_controls, Some(true));
+    assert_eq!(legacy.profit_monitor_trading_buttons, Some(true));
+    assert!(
+        !carried.persist_migration(&mut legacy),
+        "and only the first time"
+    );
+
+    // From here the ordinary rows own both keys, including turning what was carried over back off.
+    legacy.profit_monitor_trading_buttons = Some(false);
+    legacy.profit_monitor_group_controls = Some(false);
+    let after = super::MonitorPrefs::restore(&legacy);
+    assert!(
+        !after.trading_buttons && !after.group_controls,
+        "a choice made after the migration must survive the next restore"
+    );
 }
 
-/// `profit_monitor/mod.rs:run_slots` must reserve the trailing slot for EITHER trading preference,
-/// and `name_min_width` must pay for the whole column out of the Name column.
+/// `profit_monitor/mod.rs:run_slots` must reserve a slot for the CONTROL that fills it and for
+/// nothing else, and `name_min_width` must pay for the run column out of the Name column down to
+/// its floor.
 ///
-/// Breakage: reserving the slot only for the per-core preference makes a group-only configuration
-/// draw captions wider than the rows beneath them; taking the width from anywhere but Name raises
-/// `MIN_WINDOW_WIDTH`, which is exactly the constraint this column was fitted into.
+/// The Name column pays until it reaches `NAME_COLUMN_FLOOR`; past that the remainder comes out of
+/// the slack `MIN_WINDOW_WIDTH` already holds, which is why the loop below asserts the total rather
+/// than the subtraction.
+///
+/// Breakage: letting a scope modifier reserve a column gives every row an empty slot for a button
+/// that lives only in the heading; letting a control fail to reserve one leaves a caption carrying
+/// a column the rows beneath it do not. Taking the width from anywhere but Name and that slack
+/// raises `MIN_WINDOW_WIDTH`, which is exactly the constraint this column was fitted into.
 #[test]
 fn the_run_column_is_paid_for_by_the_name_column() {
     let mut prefs = super::MonitorPrefs::default();
@@ -1080,19 +1139,41 @@ fn the_run_column_is_paid_for_by_the_name_column() {
         super::MIN_NAME_COLUMN_WIDTH
     );
 
-    // Either trading preference reserves the same trailing slot.
+    // One control, one slot: the two are chosen independently.
     prefs.trading_buttons = true;
-    let per_core = super::run_slots(prefs);
-    prefs.trading_buttons = false;
-    prefs.group_trading = true;
-    assert_eq!(super::run_slots(prefs), per_core);
-    assert!(per_core.trading && !per_core.status);
+    let trading = super::run_slots(prefs);
+    assert!(trading.trading && !trading.status && !trading.auto);
+
+    let auto = super::run_slots(super::MonitorPrefs {
+        auto_buttons: true,
+        ..super::MonitorPrefs::default()
+    });
+    assert!(auto.auto && !auto.trading);
+
+    // The scope modifiers reserve NOTHING on their own: they only decide which lines fill a slot
+    // some control already asked for.
+    let modifiers_only = super::run_slots(super::MonitorPrefs {
+        group_controls: true,
+        header_controls: true,
+        ..super::MonitorPrefs::default()
+    });
+    assert!(
+        !modifiers_only.any(),
+        "a scope modifier without a control must not widen the column"
+    );
 
     // Every combination still fits the unchanged minimum window width.
-    for (status, trading) in [(true, false), (false, true), (true, true)] {
+    for (status, trading, auto) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
         let slots = super::run_slots(super::MonitorPrefs {
             core_status: status,
             trading_buttons: trading,
+            auto_buttons: auto,
             ..super::MonitorPrefs::default()
         });
         let used = super::name_min_width(slots)

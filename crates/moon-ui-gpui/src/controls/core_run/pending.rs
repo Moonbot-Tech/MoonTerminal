@@ -1,8 +1,9 @@
 //! The "asked, waiting for the core to agree" register behind every run control.
 //!
-//! `restart_now` and `strategies start/stop` are INTENTS: MoonProto queues the command and the core
-//! answers later with a fresh runtime state. Without this register a pressed button looks like a
-//! button that did nothing for as long as that round trip takes, and the user presses it again.
+//! `restart_now`, `strategies start/stop` and `set_auto_detect_active` are INTENTS: MoonProto
+//! queues the command and the core answers later with a fresh state. Without this register a
+//! pressed button looks like a button that did nothing for as long as that round trip takes, and
+//! the user presses it again.
 //!
 //! It lives on `Backend` — one register per process, not one per window — so every surface drawing
 //! a run cell shows the same outstanding intent, and none of them offers to send it twice. The
@@ -18,6 +19,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use moon_core::session::{CoreId, CoreRunState};
+
+use super::RunKey;
 
 #[cfg(test)]
 mod tests;
@@ -36,6 +39,8 @@ pub(crate) enum RunAsk {
     Restart,
     /// Start (`true`) or stop (`false`) the global strategy engine.
     Trading(bool),
+    /// Turn AutoDetect on (`true`) or off (`false`).
+    AutoDetect(bool),
 }
 
 impl RunAsk {
@@ -44,6 +49,7 @@ impl RunAsk {
         match self {
             Self::Restart => RunHalf::Runtime,
             Self::Trading(_) => RunHalf::Trading,
+            Self::AutoDetect(_) => RunHalf::Auto,
         }
     }
 
@@ -62,17 +68,26 @@ impl RunAsk {
             // Restart asks the market runtime to come up; the core answers by reporting it started.
             Self::Restart => state.started == Some(true) && state.started_confirmed,
             Self::Trading(on) => state.trading == Some(on) && state.trading_confirmed,
+            // AutoDetect rides the runtime-state command, so the runtime flag is what confirms it.
+            Self::AutoDetect(on) => state.auto_detect == Some(on) && state.started_confirmed,
         }
     }
 }
 
-/// One of the two halves a core reports separately.
+/// Which SLOT of a run cell an intent belongs to.
+///
+/// Not quite "which command reported it": AutoDetect arrives inside the same
+/// `TRuntimeStateCommand` as the runtime itself, yet it needs its own key here. A core can be
+/// waiting on a restart and on an AutoDetect flip at the same time, drawn by two different slots,
+/// and one shared key would let either press erase the other's waiting face.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RunHalf {
     /// The market runtime (`TRuntimeStateCommand`).
     Runtime,
     /// The global strategy engine (`TStratRuntimeState`).
     Trading,
+    /// AutoDetect / passive mode, carried by the runtime-state command.
+    Auto,
 }
 
 /// One outstanding intent.
@@ -80,20 +95,30 @@ pub(crate) enum RunHalf {
 pub(crate) struct Ask {
     /// What was asked.
     pub(crate) kind: RunAsk,
-    /// Whether the press came from a control standing for MANY cores.
+    /// WHICH control sent it, by the identity of the line it sits on.
     ///
-    /// A group caption and the rows under it command the same cores, so without this a press on
-    /// one row would put the caption — which nobody touched — into the waiting face, and a group
-    /// press that skipped the cores already in the asked-for state would leave the caption looking
-    /// idle. The press says which control is waiting; the register only carries it.
-    pub(crate) from_group: bool,
+    /// A group caption, the rows under it and the table's own heading all command the same cores,
+    /// so without this a press on one of them would put the others — which nobody touched — into
+    /// the waiting face, while a press that skipped the cores already in the asked-for state would
+    /// leave the pressed control looking idle. A bare "came from a group" bit was not enough once
+    /// two group-level controls could overlap. The press says who is waiting; the register only
+    /// carries it.
+    pub(crate) from: RunKey,
     at: Instant,
 }
 
 /// Outstanding run intents, keyed by core and half.
 ///
-/// Keyed by half as well as by core because the two arrive over different commands: both can be
-/// outstanding at once on one core, and each slot may only show the wait it owns.
+/// Keyed by half as well as by core because a core can have one outstanding intent per SLOT at
+/// once, and each slot may only show the wait it owns.
+///
+/// ONE ask per key, and that is the register's stated bound: when two controls that overlap on a
+/// core — a group caption and the table-wide heading — are pressed within the timeout, the newer
+/// press owns the waiting face and the older control returns to pressable while its own command is
+/// still in flight. Pressing it again re-sends the same value, which the core folds into the state
+/// it is already moving to; the cost is a duplicate datagram, not a wrong action. Holding both
+/// would mean a list per key and a lookup per drawn cell, which is the wrong trade for a 5 s
+/// cosmetic window.
 #[derive(Default)]
 pub(crate) struct RunPending {
     asks: HashMap<(CoreId, RunHalf), Ask>,
@@ -114,14 +139,14 @@ impl RunPending {
     /// Args:
     ///     core: Core the command went to.
     ///     kind: What was asked.
-    ///     from_group: Whether the press came from a control standing for many cores.
+    ///     from: Identity of the control that pressed it.
     ///     now: Current instant.
-    pub(crate) fn arm(&mut self, core: CoreId, kind: RunAsk, from_group: bool, now: Instant) {
+    pub(crate) fn arm(&mut self, core: CoreId, kind: RunAsk, from: RunKey, now: Instant) {
         self.asks.insert(
             (core, kind.half()),
             Ask {
                 kind,
-                from_group,
+                from,
                 at: now,
             },
         );

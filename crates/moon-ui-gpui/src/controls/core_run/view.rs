@@ -1,18 +1,18 @@
-//! The rendered run cell: a fixed-width pair of slots that never changes size with its content.
+//! The rendered run cell: a fixed-width row of slots that never changes size with its content.
 //!
 //! Size stability is the whole reason the slots are drawn rather than skipped. A button that
 //! appears when a core stops would move every name in the table at the moment the user most wants
 //! to read it, so an idle slot draws a dot (or nothing) at exactly the width the busy slot takes.
 //! A line with nothing to command at all takes [`reserved_cell`], which is the same width empty.
 //!
-//! Both buttons STOP PROPAGATION. These cells sit inside table lines that are themselves click
+//! Every button STOPS PROPAGATION. These cells sit inside table lines that are themselves click
 //! targets — in the Profit Monitor a row click re-filters every panel in the main window — and a
 //! `MoonButton` only occludes its parent while it is disabled.
 
 use std::time::Instant;
 
 use gpui::*;
-use moon_core::session::{CoreId, RunSummary, TradingAction};
+use moon_core::session::{AutoAction, CoreId, RunSummary, TradingAction};
 use moon_ui::{MoonButtonIconSlot, MoonButtonVariant, MoonPalette, h_flex};
 use rust_i18n::t;
 
@@ -40,7 +40,7 @@ pub(crate) fn run_cell(
     if !scope.reserve.any() {
         return None;
     }
-    // Read ONCE for both slots, and once per cell: this runs inside a virtual-list item builder the
+    // Read ONCE for every slot, and once per cell: this runs inside a virtual-list item builder the
     // hosting table can drive at 10 Hz, and each core costs a store lookup.
     let state = CellState::read(scope, backend, cx);
     let mut cell = h_flex()
@@ -48,14 +48,25 @@ pub(crate) fn run_cell(
         .w(scope.reserve.width_px(cx))
         .gap(design::ui_px(cx, super::SLOT_GAP))
         .items_center();
-    // Reserved decides the GEOMETRY, offered decides the content: a line that fills neither slot
+    // Reserved decides the GEOMETRY, offered decides the content: a line that fills no slot at all
     // still holds them open, or its name would start left of the lines around it.
     if scope.reserve.status {
-        cell = cell.child(status_slot(scope, &state, backend, palette, cx));
+        cell = cell.child(if scope.offers.status {
+            status_slot(scope, &state, backend, palette, cx)
+        } else {
+            slot_frame(cx).into_any_element()
+        });
     }
     if scope.reserve.trading {
-        cell = cell.child(if scope.offers_trading {
+        cell = cell.child(if scope.offers.trading {
             trading_slot(scope, &state, backend, palette, cx)
+        } else {
+            slot_frame(cx).into_any_element()
+        });
+    }
+    if scope.reserve.auto {
+        cell = cell.child(if scope.offers.auto {
+            auto_slot(scope, &state, backend, palette, cx)
         } else {
             slot_frame(cx).into_any_element()
         });
@@ -80,7 +91,7 @@ pub(crate) fn reserved_cell(slots: RunSlots, cx: &App) -> Option<AnyElement> {
         .then(|| div().flex_none().w(slots.width_px(cx)).into_any_element())
 }
 
-/// Everything both slots need, read once per cell.
+/// Everything the slots need, read once per cell.
 struct CellState {
     /// The scope's folded run state.
     summary: RunSummary,
@@ -90,6 +101,8 @@ struct CellState {
     waiting_restart: bool,
     /// Whether the trading slot is waiting on a start/stop it sent, anywhere in scope.
     waiting_trading: bool,
+    /// Whether the AutoDetect slot is waiting on a flip it sent, anywhere in scope.
+    waiting_auto: bool,
 }
 
 impl CellState {
@@ -97,8 +110,8 @@ impl CellState {
     ///
     /// One store lookup per core, and the pending register is consulted only when something is
     /// actually outstanding — the usual case is an empty register, and asking it costs a clock
-    /// read per cell. The two halves are tracked separately, because a core can be waiting on both
-    /// at once and each slot may only show the wait it owns.
+    /// read per cell. Each slot's wait is tracked separately, because a core can be waiting on all
+    /// three at once and a slot may only show the wait it owns.
     ///
     /// Args:
     ///     scope: The cell's scope.
@@ -106,47 +119,65 @@ impl CellState {
     ///     cx: Application context used to read the session.
     ///
     /// Returns:
-    ///     Everything the two slots decide from.
+    ///     Everything the slots decide from.
     fn read(scope: &RunScope, backend: &Entity<Backend>, cx: &App) -> Self {
         let backend = backend.read(cx);
         let now = (!backend.run_pending.is_empty()).then(Instant::now);
         let mut summary = RunSummary::default();
         let mut waiting_restart = false;
         let mut waiting_trading = false;
+        let mut waiting_auto = false;
         let mut first = None;
         // Whether this cell stands for many cores, which decides whose waiting face it may show.
         let group = scope.cores.len() > 1;
+        // Loop-invariant, and each one also gates the probe below: a slot this cell never draws
+        // costs no register lookup, and neither does one that is already known to be waiting.
+        let may_restart = scope.allows_restart();
+        let probe_trading = scope.reserve.trading && scope.offers.trading;
+        let probe_auto = scope.reserve.auto && scope.offers.auto;
         for core in scope.cores.iter() {
             let state = backend.session.core_run_state(*core);
             summary.add(state);
             first.get_or_insert((*core, state));
             if let Some(now) = now {
                 let pending = &backend.run_pending;
-                // A restart is only ever offered on a single-core cell, so a member's own restart
-                // must not blank a group caption's folded dot.
-                waiting_restart |= !group
-                    && pending
-                        .active(*core, RunHalf::Runtime, state, now)
-                        .is_some();
                 // A single-core control shows ANY outstanding ask for its core — including one a
                 // group press armed, or it would stay pressable and re-send the same command. A
-                // caption shows only what its own press armed, or one row's press would blank the
-                // group control nobody touched.
-                waiting_trading |= pending
-                    .active(*core, RunHalf::Trading, state, now)
-                    .is_some_and(|ask| !group || ask.from_group);
+                // control standing for MANY shows only what it armed itself, matched by identity:
+                // one row's press must not blank the group control nobody touched, and a caption
+                // and the table-wide heading overlap on the same cores while being two controls.
+                let waits = |half| {
+                    pending
+                        .active(*core, half, state, now)
+                        .is_some_and(|ask| !group || ask.from == scope.key)
+                };
+                // The restart slot is the exception: it exists only on a cell standing for one
+                // core, so there is no second control whose press it could be showing.
+                if may_restart && !waiting_restart {
+                    waiting_restart = pending
+                        .active(*core, RunHalf::Runtime, state, now)
+                        .is_some();
+                }
+                if probe_trading && !waiting_trading {
+                    waiting_trading = waits(RunHalf::Trading);
+                }
+                if probe_auto && !waiting_auto {
+                    waiting_auto = waits(RunHalf::Auto);
+                }
             }
         }
         Self {
             summary,
             // A caption standing for six cores has no single runtime to restart, and the protocol
-            // has no "restart these six" to offer.
+            // has no "restart these six" to offer. A table-wide cell declines it outright — see
+            // `RunScope::allows_restart`.
             restart: first
-                .filter(|_| scope.cores.len() == 1)
+                .filter(|_| may_restart)
                 .filter(|(_, state)| state.needs_restart())
                 .map(|(core, state)| (core, state.started_confirmed)),
             waiting_restart,
             waiting_trading,
+            waiting_auto,
         }
     }
 }
@@ -250,7 +281,7 @@ fn status_slot(
         .into_any_element()
 }
 
-/// Build the trailing slot: start or stop the strategy engine across the scope.
+/// Build the middle slot: start or stop the strategy engine across the scope.
 ///
 /// Args:
 ///     scope: The cell's scope.
@@ -317,6 +348,7 @@ fn trading_slot(
     // Weak for the same two reasons as the restart button above.
     let target = backend.downgrade();
     let cores = scope.cores.clone();
+    let key = scope.key;
     // An unconfirmed value still decides what the button offers — a control that went blank on
     // every reconnect is the regression this replaced — but the tooltip says the core has not
     // re-reported since.
@@ -339,7 +371,106 @@ fn trading_slot(
             move |_window, app| {
                 app.stop_propagation();
                 if let Some(backend) = target.upgrade() {
-                    actions::set_trading(&backend, &cores, start, app);
+                    actions::set_trading(&backend, &cores, key, start, app);
+                }
+            },
+        ),
+        cx,
+    )
+}
+
+/// Build the trailing slot: turn AutoDetect on or off across the scope.
+///
+/// Drawn as the STATE rather than as the action — a green ring when the scope is detecting, a red
+/// one when it is passive — because AutoDetect is a two-way switch with no natural "next step"
+/// glyph, and because this is the one run control a user reads at a glance across a whole table.
+/// What the press will do is in the tooltip, the way every other toggle in this window says it.
+///
+/// The amber face means a SPLIT scope, which a single-core cell can never show; the core-settings
+/// popup spends its own amber on "passive on a running core", a state this slot paints red because
+/// it has a second colour to spend and that popup does not.
+///
+/// Args:
+///     scope: The cell's scope.
+///     state: State read once for this cell.
+///     backend: Shared terminal state the button commands.
+///     palette: Active MoonUI palette.
+///     cx: Application context used to scale geometry.
+///
+/// Returns:
+///     The slot's element.
+fn auto_slot(
+    scope: &RunScope,
+    state: &CellState,
+    backend: &Entity<Backend>,
+    palette: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    if state.waiting_auto {
+        return waiting_slot(scope, RunSlot::Auto, palette, cx);
+    }
+    let summary = state.summary;
+    let many = scope.cores.len() > 1;
+    // Nothing reported leaves an empty slot rather than a switch whose face would be a guess — the
+    // same rule the trading slot follows, and the same reason: an offline scope reports nothing.
+    let (icon, color, tip, on, stale) = match summary.auto_action() {
+        AutoAction::Unknown => return slot_frame(cx).into_any_element(),
+        AutoAction::Disable => (
+            "icons/circle-check.svg",
+            design::positive_color(palette),
+            if many {
+                t!("core_run.auto_off_group", n = summary.needing_auto_off)
+            } else {
+                t!("core_run.auto_off")
+            },
+            false,
+            summary.auto_on_stale > 0,
+        ),
+        // Part of the scope detects and part does not: the press turns the rest on, and the amber
+        // says the face describes a split state rather than a uniform one.
+        AutoAction::Enable if summary.auto_mixed() => (
+            "icons/circle-x.svg",
+            palette.amber,
+            t!("core_run.auto_on_partial", n = summary.needing_auto_on),
+            true,
+            summary.auto_off_stale > 0,
+        ),
+        AutoAction::Enable => (
+            "icons/circle-x.svg",
+            design::danger_color(palette),
+            if many {
+                t!("core_run.auto_on_group", n = summary.needing_auto_on)
+            } else {
+                t!("core_run.auto_on")
+            },
+            true,
+            summary.auto_off_stale > 0,
+        ),
+    };
+    // Weak for the same two reasons as the buttons above.
+    let target = backend.downgrade();
+    let cores = scope.cores.clone();
+    let key = scope.key;
+    let icon = MoonButtonIconSlot::new(icon).color(color);
+    guarded(
+        crate::panels::micro_icon_button(
+            scope.slot_element_id(RunSlot::Auto),
+            if stale {
+                icon.alpha(design::STALE_ALPHA)
+            } else {
+                icon
+            },
+            if stale {
+                t!("core_run.unconfirmed", state = tip).to_string()
+            } else {
+                tip.to_string()
+            },
+            MoonButtonVariant::Ghost,
+            design::ui_value(cx, SLOT_W),
+            move |_window, app| {
+                app.stop_propagation();
+                if let Some(backend) = target.upgrade() {
+                    actions::set_auto_detect(&backend, &cores, key, on, app);
                 }
             },
         ),

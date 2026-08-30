@@ -17,7 +17,7 @@ fn state(started: Option<bool>, trading: Option<bool>) -> CoreRunState {
 fn an_intent_waits_for_the_state_it_asked_for() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(7, RunAsk::Trading(true), false, now);
+    pending.arm(7, RunAsk::Trading(true), RunKey::Core(7), now);
 
     assert_eq!(
         pending
@@ -38,7 +38,7 @@ fn an_intent_waits_for_the_state_it_asked_for() {
 fn an_unconfirmed_value_does_not_answer() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(7, RunAsk::Trading(true), false, now);
+    pending.arm(7, RunAsk::Trading(true), RunKey::Core(7), now);
 
     let mut stale = state(None, Some(true));
     stale.trading_confirmed = false;
@@ -56,8 +56,8 @@ fn an_unconfirmed_value_does_not_answer() {
 fn the_halves_are_independent() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(7, RunAsk::Restart, false, now);
-    pending.arm(7, RunAsk::Trading(false), false, now);
+    pending.arm(7, RunAsk::Restart, RunKey::Core(7), now);
+    pending.arm(7, RunAsk::Trading(false), RunKey::Core(7), now);
 
     // The strategy engine answered; the runtime has not.
     let answered_trading = state(Some(false), Some(false));
@@ -78,7 +78,7 @@ fn the_halves_are_independent() {
 fn unanswered_intent_expires() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(7, RunAsk::Restart, false, now);
+    pending.arm(7, RunAsk::Restart, RunKey::Core(7), now);
     let waiting = state(Some(false), None);
 
     let almost = now + PENDING_TIMEOUT - Duration::from_millis(1);
@@ -109,8 +109,8 @@ fn unknown_core_is_not_pending() {
 fn rearming_replaces_the_ask() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(7, RunAsk::Trading(true), false, now);
-    pending.arm(7, RunAsk::Trading(false), false, now);
+    pending.arm(7, RunAsk::Trading(true), RunKey::Core(7), now);
+    pending.arm(7, RunAsk::Trading(false), RunKey::Core(7), now);
     assert_eq!(
         pending
             .active(7, RunHalf::Trading, state(None, Some(true)), now)
@@ -127,7 +127,7 @@ fn revision_tracks_register_changes() {
     let mut pending = RunPending::default();
     let start = pending.rev();
 
-    pending.arm(7, RunAsk::Restart, false, now);
+    pending.arm(7, RunAsk::Restart, RunKey::Core(7), now);
     let armed = pending.rev();
     assert_ne!(armed, start);
 
@@ -145,7 +145,7 @@ fn revision_tracks_register_changes() {
 fn a_sweep_that_leaves_entries_releases_its_claim() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(1, RunAsk::Restart, false, now);
+    pending.arm(1, RunAsk::Restart, RunKey::Core(7), now);
     assert!(pending.claim_sweep(), "the first press schedules the sweep");
     assert!(
         !pending.claim_sweep(),
@@ -156,7 +156,7 @@ fn a_sweep_that_leaves_entries_releases_its_claim() {
     pending.arm(
         2,
         RunAsk::Trading(true),
-        true,
+        RunKey::Section(0),
         now + PENDING_TIMEOUT - Duration::from_secs(2),
     );
 
@@ -171,28 +171,88 @@ fn a_sweep_that_leaves_entries_releases_its_claim() {
     );
 }
 
-/// The register carries WHICH control pressed, so a caption and the rows under it do not share a
+/// The register carries WHICH control pressed, by identity, so overlapping controls do not share a
 /// waiting face.
 ///
-/// Breakage: without it, one row's press blanks the group control nobody touched, and a group press
-/// that skipped the cores already in the asked-for state leaves that control looking idle.
+/// Breakage: without it, one row's press blanks the group control nobody touched; with a mere
+/// "came from a group" bit, a caption's press also blanks the table-wide heading above it, since
+/// both stand for many cores and both command this one.
 #[test]
-fn an_ask_remembers_whether_a_group_control_sent_it() {
+fn an_ask_remembers_which_control_sent_it() {
     let now = Instant::now();
     let mut pending = RunPending::default();
-    pending.arm(7, RunAsk::Trading(true), false, now);
+    pending.arm(7, RunAsk::Trading(true), RunKey::Core(7), now);
     assert_eq!(
         pending
             .active(7, RunHalf::Trading, state(None, Some(false)), now)
-            .map(|ask| ask.from_group),
-        Some(false)
+            .map(|ask| ask.from),
+        Some(RunKey::Core(7))
     );
 
-    pending.arm(7, RunAsk::Trading(true), true, now);
+    pending.arm(7, RunAsk::Trading(true), RunKey::Section(2), now);
+    let from = pending
+        .active(7, RunHalf::Trading, state(None, Some(false)), now)
+        .map(|ask| ask.from);
+    assert_eq!(from, Some(RunKey::Section(2)));
+    assert_ne!(
+        from,
+        Some(RunKey::Fleet),
+        "a caption's press must be distinguishable from the heading's, not merely from a row's"
+    );
+}
+
+/// A restart and an AutoDetect flip ride the SAME core command, and must still be tracked apart.
+///
+/// Breakage: keying AutoDetect on `RunHalf::Runtime` makes each press evict the other's entry, so
+/// one of the two slots hands its button back while its command is still in flight; answering it
+/// from `trading_confirmed` would take the confirmation from a command that never carried it.
+#[test]
+fn auto_detect_waits_on_its_own_key() {
+    let now = Instant::now();
+    let mut pending = RunPending::default();
+    pending.arm(7, RunAsk::Restart, RunKey::Core(7), now);
+    pending.arm(7, RunAsk::AutoDetect(true), RunKey::Core(7), now);
+
+    let stopped_and_passive = CoreRunState {
+        online: true,
+        started: Some(false),
+        started_confirmed: true,
+        auto_detect: Some(false),
+        trading: None,
+        trading_confirmed: false,
+    };
     assert_eq!(
         pending
-            .active(7, RunHalf::Trading, state(None, Some(false)), now)
-            .map(|ask| ask.from_group),
-        Some(true)
+            .active(7, RunHalf::Runtime, stopped_and_passive, now)
+            .map(|ask| ask.kind),
+        Some(RunAsk::Restart),
+        "arming the AutoDetect flip must not evict the restart"
+    );
+    assert_eq!(
+        pending
+            .active(7, RunHalf::Auto, stopped_and_passive, now)
+            .map(|ask| ask.kind),
+        Some(RunAsk::AutoDetect(true)),
+    );
+
+    let detecting = CoreRunState {
+        auto_detect: Some(true),
+        ..stopped_and_passive
+    };
+    assert_eq!(
+        pending.active(7, RunHalf::Auto, detecting, now),
+        None,
+        "the core reported the mode it was asked for"
+    );
+    let unconfirmed = CoreRunState {
+        started_confirmed: false,
+        ..detecting
+    };
+    assert_eq!(
+        pending
+            .active(7, RunHalf::Auto, unconfirmed, now)
+            .map(|ask| ask.kind),
+        Some(RunAsk::AutoDetect(true)),
+        "AutoDetect travels in the runtime-state command, so that is the confirmation it needs"
     );
 }

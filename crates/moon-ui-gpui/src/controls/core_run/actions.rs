@@ -1,8 +1,10 @@
 //! What a run button does once it is pressed: send the intent, remember that we are waiting, and
 //! arrange for the waiting state to expire on its own.
 //!
-//! Both actions are deliberately unconfirmed. They are reversible by the button beside them, and a
-//! confirmation step on a control that lives in a table row would be a modal per row.
+//! All three actions are deliberately unconfirmed: a confirmation step on a control that lives in
+//! a table row would be a modal per row, and each action can be asked for again in the opposite
+//! direction. What a second press does NOT restore is a mixed scope — a group whose cores disagreed
+//! is uniform once either direction was pressed, exactly as Moonbot's own group Start/Stop behaves.
 //!
 //! Only REACHABLE cores are commanded. The per-core command channel outlives a disconnect — a feed
 //! thread retries in place — so a command queued for a core that is down is not dropped but
@@ -15,6 +17,7 @@ use std::time::Instant;
 use gpui::{App, Entity};
 use moon_core::session::CoreId;
 
+use super::RunKey;
 use super::pending::{PENDING_TIMEOUT, RunAsk};
 use crate::Backend;
 
@@ -34,10 +37,10 @@ pub(crate) fn restart(backend: &Entity<Backend>, core: CoreId, app: &mut App) {
         }
         match backend.session.restart_now(core) {
             Ok(()) => {
-                // Restart is only ever offered by a single-core control.
+                // Restart is only ever offered by a single-core control, which is that core's own.
                 backend
                     .run_pending
-                    .arm(core, RunAsk::Restart, false, Instant::now());
+                    .arm(core, RunAsk::Restart, RunKey::Core(core), Instant::now());
                 log::info!("core {core}: restart requested from a run control");
                 expire_later(backend, cx);
             }
@@ -55,11 +58,13 @@ pub(crate) fn restart(backend: &Entity<Backend>, core: CoreId, app: &mut App) {
 /// Args:
 ///     backend: Shared terminal state.
 ///     cores: Every core the pressed control stands for.
+///     from: Identity of the pressed control, so only it shows the waiting face.
 ///     on: Whether to start (`true`) or stop (`false`) trading.
 ///     app: Application context used to send and to arm the waiting state.
 pub(crate) fn set_trading(
     backend: &Entity<Backend>,
     cores: &Rc<[CoreId]>,
+    from: RunKey,
     on: bool,
     app: &mut App,
 ) {
@@ -91,11 +96,8 @@ pub(crate) fn set_trading(
         let now = Instant::now();
         // Which control pressed this, so the waiting face appears on that control and not on its
         // neighbour commanding the same cores.
-        let from_group = cores.len() > 1;
         for core in &sent {
-            backend
-                .run_pending
-                .arm(*core, RunAsk::Trading(on), from_group, now);
+            backend.run_pending.arm(*core, RunAsk::Trading(on), from, now);
         }
         log::info!(
             "trading {} requested for {}/{} core(s) that needed it, {} in scope",
@@ -106,6 +108,65 @@ pub(crate) fn set_trading(
         );
         // Only when something was actually armed: an expiry timer owed to nothing would block the
         // next real press from getting one.
+        if !sent.is_empty() {
+            expire_later(backend, cx);
+        }
+        cx.notify();
+    });
+}
+
+/// Turn AutoDetect on or off across a whole scope.
+///
+/// The same shape as [`set_trading`] — reachable cores only, skip the ones already in the asked-for
+/// state, arm only what was accepted — because the failure modes are the same. What differs is the
+/// confirmation it reads: AutoDetect travels inside the runtime-state command, so `started_confirmed`
+/// is what says the value came from this connection.
+///
+/// Args:
+///     backend: Shared terminal state.
+///     cores: Every core the pressed control stands for.
+///     from: Identity of the pressed control, so only it shows the waiting face.
+///     on: Whether detection should be active (`true`) or the cores should go passive.
+///     app: Application context used to send and to arm the waiting state.
+pub(crate) fn set_auto_detect(
+    backend: &Entity<Backend>,
+    cores: &Rc<[CoreId]>,
+    from: RunKey,
+    on: bool,
+    app: &mut App,
+) {
+    let cores = cores.clone();
+    backend.update(app, |backend, cx| {
+        let targets: Vec<CoreId> = cores
+            .iter()
+            .copied()
+            .filter(|core| {
+                let state = backend.session.core_run_state(*core);
+                state.online && !(state.auto_detect == Some(on) && state.started_confirmed)
+            })
+            .collect();
+        if targets.is_empty() {
+            log::info!(
+                "auto detect {} skipped: none of the {} core(s) in scope needs it",
+                if on { "on" } else { "off" },
+                cores.len()
+            );
+            return;
+        }
+        let sent = backend.session.set_auto_detect_many(&targets, on);
+        let now = Instant::now();
+        for core in &sent {
+            backend
+                .run_pending
+                .arm(*core, RunAsk::AutoDetect(on), from, now);
+        }
+        log::info!(
+            "auto detect {} requested for {}/{} core(s) that needed it, {} in scope",
+            if on { "on" } else { "off" },
+            sent.len(),
+            targets.len(),
+            cores.len()
+        );
         if !sent.is_empty() {
             expire_later(backend, cx);
         }

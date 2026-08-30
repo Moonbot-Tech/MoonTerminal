@@ -50,10 +50,24 @@ pub(super) struct MonitorPrefs {
     pub(super) core_filter: bool,
     /// Whether a row leads with its core's run status, and a restart button when it is stopped.
     pub(super) core_status: bool,
-    /// Whether a row carries the start/stop control for its own core's trading.
+    /// Whether the start/stop control for the strategy engine is shown at all.
     pub(super) trading_buttons: bool,
-    /// Whether a group caption carries that control for every core the group names.
-    pub(super) group_trading: bool,
+    /// Whether the AutoDetect on/off switch is shown at all.
+    pub(super) auto_buttons: bool,
+    /// Whether a group caption ALSO carries whichever of those controls are on, acting on every
+    /// core the group names.
+    ///
+    /// A modifier rather than a control of its own: which buttons exist is decided once, above,
+    /// and this says where else they appear. The alternative — one preference per control per
+    /// scope — is what this replaced, and it grew a checkbox for every combination nobody asked
+    /// to configure separately.
+    pub(super) group_controls: bool,
+    /// Whether the table HEADING also carries them, acting on every core the table commands.
+    ///
+    /// The same modifier one scope wider. It is its own opt-in and never implied by the others:
+    /// one press there reaches the whole window. Restart is not among them — see
+    /// `table::fleet_scope`.
+    pub(super) header_controls: bool,
 }
 
 impl Default for MonitorPrefs {
@@ -77,13 +91,15 @@ impl Default for MonitorPrefs {
             group_sections: true,
             idle_cores: false,
             core_filter: true,
-            // The three run controls are OFF by default, and for a stronger reason than
-            // `idle_cores` is: they SEND COMMANDS to cores. A profit window that quietly grew a
-            // Stop button after an update is a window whose next mis-click stops a fleet's
-            // trading. Someone who wants them switches them on and knows they are there.
+            // Every run control is OFF by default, and for a stronger reason than `idle_cores`
+            // is: they SEND COMMANDS to cores. A profit window that quietly grew a Stop button
+            // after an update is a window whose next mis-click stops a fleet's trading. Someone
+            // who wants them switches them on and knows they are there.
             core_status: false,
             trading_buttons: false,
-            group_trading: false,
+            auto_buttons: false,
+            group_controls: false,
+            header_controls: false,
         }
     }
 }
@@ -103,7 +119,57 @@ impl MonitorPrefs {
                 (row.set)(&mut prefs, saved);
             }
         }
+        prefs.migrate_group_trading(layout);
         prefs
+    }
+
+    /// Write a carried-over legacy preference back, so it is carried over exactly once.
+    ///
+    /// [`Self::migrate_group_trading`] reads a key the new model has no writer for, so without
+    /// this it would re-fire on every restore and undo the first thing the user does with the
+    /// carried-over control — unticking it, on a control that sends commands to cores. Persisting
+    /// both bits the moment they are derived hands ownership back to the ordinary preference rows.
+    ///
+    /// Args:
+    ///     layout: Persisted window layout to update.
+    ///
+    /// Returns:
+    ///     Whether anything was written, so the caller can mark the layout dirty.
+    pub(super) fn persist_migration(&self, layout: &mut WindowLayout) -> bool {
+        if layout.profit_monitor_group_controls.is_some()
+            || layout.profit_monitor_group_trading != Some(true)
+        {
+            return false;
+        }
+        layout.profit_monitor_group_controls = Some(self.group_controls);
+        layout.profit_monitor_trading_buttons = Some(self.trading_buttons);
+        true
+    }
+
+    /// Carry a profile written before the run controls were re-cut into control + scope.
+    ///
+    /// The retired `profit_monitor_group_trading` said BOTH things at once: that the trading
+    /// control exists, and that group captions carry it — the old `run_slots` reserved the column
+    /// for it on its own. Restoring it as the modifier alone would leave a profile that had the
+    /// control only on captions with no control at all and no column to draw it in, which is a
+    /// feature disappearing in an update rather than a rename.
+    ///
+    /// The new model cannot express "captions only", so the honest carry-over is both bits: the
+    /// control the profile had, in the place it had it, plus the rows it did not ask for and can
+    /// switch off in one click. Applied only while the new key is unwritten — and
+    /// [`Self::persist_migration`] writes that key immediately, so this runs once per profile and
+    /// can never override a choice made since.
+    ///
+    /// Args:
+    ///     layout: Persisted window layout being restored.
+    fn migrate_group_trading(&mut self, layout: &WindowLayout) {
+        if layout.profit_monitor_group_controls.is_some() {
+            return;
+        }
+        if layout.profit_monitor_group_trading == Some(true) {
+            self.group_controls = true;
+            self.trading_buttons = true;
+        }
     }
 }
 
@@ -155,7 +221,7 @@ const INTERACTION_GROUP: &str = "profit_monitor.settings.interaction";
 const CORE_CONTROL_GROUP: &str = "profit_monitor.settings.core_control";
 
 /// Every preference, in the order the popup shows them.
-const PREF_ROWS: [PrefRow; 9] = [
+const PREF_ROWS: [PrefRow; 11] = [
     PrefRow {
         id: "exchange-icons",
         releases_cores: false,
@@ -237,14 +303,34 @@ const PREF_ROWS: [PrefRow; 9] = [
         store: |layout, value| layout.profit_monitor_trading_buttons = Some(value),
     },
     PrefRow {
-        id: "group-trading",
+        id: "auto-buttons",
         releases_cores: false,
         group: CORE_CONTROL_GROUP,
-        label: "profit_monitor.settings.group_trading",
-        read: |prefs| prefs.group_trading,
-        set: |prefs, value| prefs.group_trading = value,
-        saved: |layout| layout.profit_monitor_group_trading,
-        store: |layout, value| layout.profit_monitor_group_trading = Some(value),
+        label: "profit_monitor.settings.auto_buttons",
+        read: |prefs| prefs.auto_buttons,
+        set: |prefs, value| prefs.auto_buttons = value,
+        saved: |layout| layout.profit_monitor_auto_buttons,
+        store: |layout, value| layout.profit_monitor_auto_buttons = Some(value),
+    },
+    PrefRow {
+        id: "group-controls",
+        releases_cores: false,
+        group: CORE_CONTROL_GROUP,
+        label: "profit_monitor.settings.group_controls",
+        read: |prefs| prefs.group_controls,
+        set: |prefs, value| prefs.group_controls = value,
+        saved: |layout| layout.profit_monitor_group_controls,
+        store: |layout, value| layout.profit_monitor_group_controls = Some(value),
+    },
+    PrefRow {
+        id: "header-controls",
+        releases_cores: false,
+        group: CORE_CONTROL_GROUP,
+        label: "profit_monitor.settings.header_controls",
+        read: |prefs| prefs.header_controls,
+        set: |prefs, value| prefs.header_controls = value,
+        saved: |layout| layout.profit_monitor_header_controls,
+        store: |layout, value| layout.profit_monitor_header_controls = Some(value),
     },
 ];
 
