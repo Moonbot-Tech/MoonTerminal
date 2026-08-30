@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use super::{cell_f32, FetchError};
+use super::{FetchError, cell_f32};
 use crate::market::candles::ChartCandle;
 use crate::market::trade_replay::venue_caps::KlineRoute;
 

@@ -658,10 +658,7 @@ static FRAME_LATENCY_MAX_US: AtomicU64 = AtomicU64::new(0);
 ///
 /// `dirty_to_draw` is `None` for a frame whose first invalidation happened before tracing was
 /// switched on; such a frame still counts toward the draw figures, which do not depend on it.
-pub fn note_frame_draw(
-    draw: std::time::Duration,
-    dirty_to_draw: Option<std::time::Duration>,
-) {
+pub fn note_frame_draw(draw: std::time::Duration, dirty_to_draw: Option<std::time::Duration>) {
     let us = draw.as_micros() as u64;
     bump(&FRAME_DRAWS);
     bump_by(&FRAME_DRAW_US, us);

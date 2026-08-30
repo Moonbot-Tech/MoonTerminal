@@ -1,10 +1,10 @@
 //! Registry contract, generic drag/pick behaviour, and the test doubles every tool test uses.
 
 use super::*;
+use crate::figures::Figure;
 use crate::figures::proj::Proj;
 use crate::figures::sink::{GeomSink, LabelPlace, LabelText, Stroke};
 use crate::figures::style::LineKind;
-use crate::figures::Figure;
 
 /// Linear projection standing in for a chart pane: 1 px per 1000 ms, 1 px per 0.5 price, with
 /// price growing UPWARD (y decreasing), as on the real chart.

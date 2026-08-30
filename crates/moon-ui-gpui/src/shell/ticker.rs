@@ -6,7 +6,7 @@
 
 use gpui::*;
 
-use moon_ui::{v_flex, MoonInput, MoonPalette, MoonWindowFrame};
+use moon_ui::{MoonInput, MoonPalette, MoonWindowFrame, v_flex};
 use rust_i18n::t;
 
 use crate::chart_tabs::coin_search;

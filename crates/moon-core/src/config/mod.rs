@@ -91,7 +91,7 @@ pub use quiet::{QuietCfg, QuietWarnBypass};
 pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
-    seeded_transport, ChartBucket, CoreSortMode, FeedFlags, ServerConfig, TransportVersion,
+    ChartBucket, CoreSortMode, FeedFlags, ServerConfig, TransportVersion, seeded_transport,
 };
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};

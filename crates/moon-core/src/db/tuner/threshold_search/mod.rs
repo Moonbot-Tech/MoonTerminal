@@ -17,20 +17,20 @@ mod search;
 #[cfg(test)]
 mod tests;
 
-pub use compose::{composition_budget, ComposeBudget};
+pub use compose::{ComposeBudget, composition_budget};
 pub use handle::SearchHandle;
-pub use search::{heavy_search_supported, HEAVY_SEARCH_MIN_CORES};
+pub use search::{HEAVY_SEARCH_MIN_CORES, heavy_search_supported};
 
 use std::cmp::Ordering;
 use std::sync::Arc;
 
 use rusqlite::Connection;
 
-use super::{FieldClass, FIELDS};
+use super::{FIELDS, FieldClass};
+use crate::db::ReadResult;
 use crate::db::analytics::Query;
 use crate::db::metrics::Tally;
 use crate::db::read_fail::read_fail_on;
-use crate::db::ReadResult;
 
 /// Minimum accepted restart count. Shared with the UI so displayed and executed counts agree.
 pub const RESTARTS_MIN: usize = 1;
@@ -101,11 +101,7 @@ pub fn edges_max() -> usize {
 /// — a given machine only ever exercises one of them. The same shape as [`restarts_max_for`], on
 /// purpose: one question, one idiom.
 fn edges_max_for(heavy: bool) -> usize {
-    if heavy {
-        EDGES_MAX
-    } else {
-        EDGES_MAX_LIGHT
-    }
+    if heavy { EDGES_MAX } else { EDGES_MAX_LIGHT }
 }
 
 /// Final range for one field.

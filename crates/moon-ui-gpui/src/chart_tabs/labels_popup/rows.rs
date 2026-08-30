@@ -373,7 +373,11 @@ fn edit_row<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &m
     let Some(row) = entity.read(app).labels_cfg(app).rows.get(ix).cloned() else {
         return;
     };
-    let title = format!("{}: {}", t!("chart_labels.row_edit"), row_display_name(&row));
+    let title = format!(
+        "{}: {}",
+        t!("chart_labels.row_edit"),
+        row_display_name(&row)
+    );
     open_module_editor(entity, window, app, row, title, move |cfg, edited| {
         // Past the used run the slot is blank, and writing there would bring back a module
         // somebody else removed while the editor was up.
@@ -393,7 +397,9 @@ fn new_row<T: LabelsPopupHost>(entity: &Entity<T>, window: &mut Window, app: &mu
     let title = t!("chart_labels.new_row").to_string();
     open_module_editor(entity, window, app, row, title, |cfg, edited| {
         if cfg.push_prepared(edited).is_none() {
-            log::warn!("подписи чарта: новый модуль не добавлен — нет свободного слота или он пуст");
+            log::warn!(
+                "подписи чарта: новый модуль не добавлен — нет свободного слота или он пуст"
+            );
         }
     });
 }

@@ -67,6 +67,9 @@ fn detect_view_roundtrip_preserves_every_assignable_field() {
         cfg.large.slots[0].field = field;
         let text = cfg.to_share_string().expect("serialize");
         let back = DetectViewCfg::parse_share(&text).expect("parse");
-        assert_eq!(back.large.slots[0].field, field, "{field:?} lost in transit");
+        assert_eq!(
+            back.large.slots[0].field, field,
+            "{field:?} lost in transit"
+        );
     }
 }

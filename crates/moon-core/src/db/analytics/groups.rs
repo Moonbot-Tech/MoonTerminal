@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use super::super::metrics::{profit_factor, winrate};
 use super::super::read_fail::read_fail_on;
 use super::super::{QuoteCurrency, QuoteScope, ReadFail, ReadResult};
-use super::{raw_money_projection_on, scope_decision_on, unified_from, unified_from_mode, Query};
+use super::{Query, raw_money_projection_on, scope_decision_on, unified_from, unified_from_mode};
 
 /// Aggregate for a strategy-and-core or coin group.
 ///

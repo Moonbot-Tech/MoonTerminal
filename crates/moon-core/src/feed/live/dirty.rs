@@ -4,10 +4,10 @@
 
 use std::collections::HashMap;
 
+use moonproto::Event;
 use moonproto::state::{
     CoinCardCandlesEvent, MarketHistoryEvent, MarketsEvent, OrderBookEvent, TradesEvent,
 };
-use moonproto::Event;
 
 use crate::feed::{MarketDirty, MarketDirtyFlags};
 

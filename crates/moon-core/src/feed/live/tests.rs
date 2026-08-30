@@ -66,13 +66,15 @@ fn failed_market_role_send_does_not_change_the_authoritative_snapshot() {
         .unwrap();
     drop(data_rx);
 
-    assert!(cmd_tx
-        .send(CoreCmd::SetMarket {
-            provider: false,
-            markets: Vec::new(),
-            orderbook_markets: Vec::new(),
-        })
-        .is_err());
+    assert!(
+        cmd_tx
+            .send(CoreCmd::SetMarket {
+                provider: false,
+                markets: Vec::new(),
+                orderbook_markets: Vec::new(),
+            })
+            .is_err()
+    );
     let mut market_role = MarketRoleState::default();
     let mut force_market_sample = false;
     let latest = commands::lock_and_adopt_latest_market_role(

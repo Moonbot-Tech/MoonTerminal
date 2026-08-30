@@ -10,7 +10,6 @@ use rust_i18n::t;
 use std::time::Duration;
 
 use super::add_stack::detect_cap::resolved_max_charts_evict;
-use crate::chart_tabs::labels_popup::LabelsPopupHost as _;
 use super::apply_all::{self, ApplyAll, ApplyAllRequest};
 use super::common::{
     CoinPopupHost, LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting,
@@ -18,6 +17,7 @@ use super::common::{
 use super::popup_slot::ChartPopup;
 use super::{AddChartStack, chart_pane_label, coin_search};
 use crate::Backend;
+use crate::chart_tabs::labels_popup::LabelsPopupHost as _;
 use crate::persistence::chart_persist::{self, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;

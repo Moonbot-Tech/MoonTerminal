@@ -37,8 +37,8 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
-use super::read_fail::read_fail;
 use super::ReadResult;
+use super::read_fail::read_fail;
 use crate::symbol::parse_coin_list;
 
 /// Timestamps at or below this are storage sentinels, not dates.

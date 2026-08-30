@@ -39,7 +39,14 @@ fn seed(rows: &[(i64, f64, f64, i64, f64, &str)]) -> Connection {
 /// One margin row: the core posted `notional / leverage`, plus the fee already baked in.
 fn margin_row(uid: i64, lev: i64) -> (i64, f64, f64, i64, f64, &'static str) {
     let (bq, bp) = (100.0, 2.0);
-    (uid, bq, bp, lev, bq * bp / lev as f64 * 1.0002, "Sell Price")
+    (
+        uid,
+        bq,
+        bp,
+        lev,
+        bq * bp / lev as f64 * 1.0002,
+        "Sell Price",
+    )
 }
 
 /// One notional row: the core posted the whole traded value.

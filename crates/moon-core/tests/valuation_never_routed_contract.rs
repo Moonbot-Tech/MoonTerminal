@@ -191,7 +191,11 @@ fn trade_values_upsert_still_stores_the_raw_closedate() {
     assert!(
         contains_lines(
             &valuation_mod,
-            &["ALGORITHM_VERSION,", "input.closedate,", "input.quote_ordinal,"]
+            &[
+                "ALGORITHM_VERSION,",
+                "input.closedate,",
+                "input.quote_ordinal,"
+            ]
         ),
         "store_trade_value's upsert must bind the raw input.closedate as the persisted cache \
          identity, not a value corrected through the axis"

@@ -166,7 +166,11 @@ impl ChartPanel {
         // reset above just took that draft — the pane's coin changed under it, or the tool did — a
         // fresh one starts from this node alone: a derived vertex in it would be a point the user
         // never aimed at.
-        let derived = if self.fig_draft.is_some() { derived } else { &[] };
+        let derived = if self.fig_draft.is_some() {
+            derived
+        } else {
+            &[]
+        };
         let draft = match self.fig_draft.as_mut() {
             Some(d) => d,
             None => {

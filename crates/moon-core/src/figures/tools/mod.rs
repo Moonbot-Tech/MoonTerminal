@@ -25,18 +25,18 @@ mod triangle;
 pub use channel::Channel;
 pub use fib_retracement::FibRetracement;
 pub use hline::HLine;
-pub use mb_fib::{MbFib, MB_FIB_LEVELS, MB_FIB_RATIOS};
+pub use mb_fib::{MB_FIB_LEVELS, MB_FIB_RATIOS, MbFib};
 pub use position::Position;
 pub use ray::Ray;
 pub use rect::Rect;
 pub use segment::Segment;
 pub use triangle::Triangle;
 
+use super::Figure;
 use super::kind::FigureKind;
 use super::node::FigNode;
-use super::proj::{hline_dist, pt_dist, Proj, PxPoint};
+use super::proj::{Proj, PxPoint, hline_dist, pt_dist};
 use super::sink::{BuildCtx, GeomSink};
-use super::Figure;
 
 /// What a drag is holding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

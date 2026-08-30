@@ -20,19 +20,19 @@ mod tests;
 // consumer could otherwise read the class without being able to name its type.
 pub(crate) use current::current_rate_sql;
 use current::publish_current_rates;
-pub use current::{pin_current_rates, RatePin, ValuationMode};
 pub(crate) use current::{CurrentRate, CurrentRates, FRESHNESS_MS};
+pub use current::{RatePin, ValuationMode, pin_current_rates};
 pub(crate) use health::FaultCause;
 pub use health::{FailureKind, StageHealth, ValuationFault, ValuationStage, ValuationStatus};
 pub(crate) use provider::{HttpSpotRateSource, SpotRateSource};
-pub use worker::{spawn_worker, ValuationHandle};
+pub use worker::{ValuationHandle, spawn_worker};
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use super::read_fail::{self, ReadResult};
 

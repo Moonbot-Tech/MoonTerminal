@@ -823,7 +823,7 @@ fn value_every_row(c: &Connection, rate: f64) {
 #[test]
 fn prefer_usdt_pins_a_single_quote_scope_to_the_converted_unit() {
     const RATE: f64 = 60_000.0; // One BTC in USDT.
-                                // A BTC-quoted core, alone in the period: the scope has exactly one quote.
+    // A BTC-quoted core, alone in the period: the scope has exactly one quote.
     let btc = Exec {
         quote: 0,
         ..charged(2.0, 1.0, 1.5, 0.0004)

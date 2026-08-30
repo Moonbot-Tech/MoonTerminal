@@ -2,8 +2,8 @@
 
 use chrono::{NaiveDate, TimeZone as _, Utc};
 
-use super::{custom_bounds as zoned_custom_bounds, exact_secs_of_day, seed_period, Period, Tab};
-use crate::controls::date_range::{field_of_exclusive, secs_of_dt, Bound, MINUTE};
+use super::{Period, Tab, custom_bounds as zoned_custom_bounds, exact_secs_of_day, seed_period};
+use crate::controls::date_range::{Bound, MINUTE, field_of_exclusive, secs_of_dt};
 
 /// Build a UTC timestamp out of a day and a clock time, the way the pickers hold their value.
 fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {

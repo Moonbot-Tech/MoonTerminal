@@ -302,11 +302,7 @@ pub fn sanitize_label(name: &str) -> String {
             }
         })
         .collect();
-    if s.is_empty() {
-        "core".to_string()
-    } else {
-        s
-    }
+    if s.is_empty() { "core".to_string() } else { s }
 }
 
 /// Daily-rotating file writer for one log source. Writes to `logs/<date>_<label>.log`

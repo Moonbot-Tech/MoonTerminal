@@ -187,12 +187,16 @@ fn a_stage_inside_its_backoff_refuses_an_early_attempt() {
 
     let eligible_at = now + delay.as_millis() as i64;
     assert!(!status.wait_for(ValuationStage::Outbox, now + 1).is_zero());
-    assert!(!status
-        .wait_for(ValuationStage::Outbox, eligible_at - 1)
-        .is_zero());
-    assert!(status
-        .wait_for(ValuationStage::Outbox, eligible_at)
-        .is_zero());
+    assert!(
+        !status
+            .wait_for(ValuationStage::Outbox, eligible_at - 1)
+            .is_zero()
+    );
+    assert!(
+        status
+            .wait_for(ValuationStage::Outbox, eligible_at)
+            .is_zero()
+    );
     assert!(
         status
             .wait_for(ValuationStage::Reconcile, now + 1)

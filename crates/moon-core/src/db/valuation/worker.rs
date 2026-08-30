@@ -36,7 +36,7 @@ use rusqlite::Connection;
 use super::health::{
     self, FailureKind, FaultCause, ValuationFault, ValuationStage, ValuationStatus,
 };
-use super::provider::{resolve_latest_rate, resolve_rate_batch, FetchFailure};
+use super::provider::{FetchFailure, resolve_latest_rate, resolve_rate_batch};
 use super::resolver::resolve_historical_rate;
 use super::{
     HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput, TradeSource,

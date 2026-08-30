@@ -29,8 +29,8 @@ mod cache;
 mod collect;
 mod columns;
 mod render;
-mod settings;
 mod roster_width;
+mod settings;
 mod table;
 #[cfg(test)]
 mod tests;

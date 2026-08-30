@@ -359,7 +359,10 @@ impl TradeWindowView {
     /// Args:
     ///     cx: View context.
     fn drain_panel_labels(&mut self, cx: &mut Context<Self>) {
-        let Some(cfg) = self.panel.update(cx, |panel, _| panel.take_pending_labels()) else {
+        let Some(cfg) = self
+            .panel
+            .update(cx, |panel, _| panel.take_pending_labels())
+        else {
             return;
         };
         self.backend.update(cx, |b, bcx| {

@@ -49,7 +49,10 @@ fn derived_nodes_report_only_real_changes() {
 fn placing_a_node_retires_the_derived_set() {
     let mut d = started(FigureTool::Triangle);
     assert!(d.set_drag_rest(vec![FigNode::new(5_000.0, 130.0)]));
-    assert!(d.place(FigNode::new(10_000.0, 100.0)).is_none(), "two of three vertices");
+    assert!(
+        d.place(FigNode::new(10_000.0, 100.0)).is_none(),
+        "two of three vertices"
+    );
     let preview = d.preview().expect("two vertices preview a triangle");
     assert!(matches!(preview.kind, FigureKind::Triangle(_)));
     // The derived node is gone: clearing it again reports no change.

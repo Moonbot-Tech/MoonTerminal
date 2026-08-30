@@ -6,11 +6,11 @@ use std::fmt;
 use anyhow::anyhow;
 use ureq::http::{HeaderMap, HeaderValue};
 
-use super::release::{
-    eligible_release, AvailableRelease, BuildIdentity, GitHubRelease, ReleaseVersion,
-    UpdateEligibility,
-};
 use super::GitHubReleaseClient;
+use super::release::{
+    AvailableRelease, BuildIdentity, GitHubRelease, ReleaseVersion, UpdateEligibility,
+    eligible_release,
+};
 use crate::util::time::now_unix_secs;
 
 const RELEASES_PER_PAGE: usize = 100;

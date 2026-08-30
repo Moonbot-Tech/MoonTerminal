@@ -6,9 +6,9 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonInput, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSlider, MoonSliderState, MoonToggle, MoonToggleLabelSide, MoonToggleSize,
+    MoonSlider, MoonSliderState, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex, v_flex,
 };
 
 use moon_core::feed::ClientSettingsEdit;

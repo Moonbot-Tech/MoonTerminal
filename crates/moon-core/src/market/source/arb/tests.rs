@@ -66,8 +66,14 @@ fn the_readers_own_core_wins_over_a_fresher_donor() {
 #[test]
 fn a_tie_goes_to_the_lowest_core_id() {
     // Cores live in a `HashMap`; without this two panes on one coin could print two prices.
-    let a = MarketDataSource::arb_dedupe(vec![raw(9, "", 1.0, 1_000, 5), raw(9, "", 2.0, 1_000, 4)], 1);
-    let b = MarketDataSource::arb_dedupe(vec![raw(9, "", 2.0, 1_000, 4), raw(9, "", 1.0, 1_000, 5)], 1);
+    let a = MarketDataSource::arb_dedupe(
+        vec![raw(9, "", 1.0, 1_000, 5), raw(9, "", 2.0, 1_000, 4)],
+        1,
+    );
+    let b = MarketDataSource::arb_dedupe(
+        vec![raw(9, "", 2.0, 1_000, 4), raw(9, "", 1.0, 1_000, 5)],
+        1,
+    );
     assert_eq!(a[0].donor, 4);
     assert_eq!(b[0].donor, 4);
 }
@@ -108,8 +114,8 @@ fn print_order_does_not_depend_on_the_order_cores_were_read_in() {
 /// loop included, when it happens.
 #[test]
 fn reads_and_client_churn_do_not_deadlock() {
-    use std::sync::mpsc;
     use std::sync::Arc;
+    use std::sync::mpsc;
 
     let source = Arc::new(MarketDataSource::new(crate::market::MarketStore::shared(
         0.0,
@@ -184,7 +190,14 @@ fn forgetting_a_core_drops_its_picks_and_the_donor_roster() {
 
     // The quotes name their donor, so every coin's entry is rebuilt rather than filtered.
     assert!(book.coins.is_empty());
-    assert!(!book.markets.contains_key(&("ENA".to_string(), "USDT".to_string(), 4)));
-    assert!(book.markets.contains_key(&("ENA".to_string(), "USDT".to_string(), 5)));
+    assert!(
+        !book
+            .markets
+            .contains_key(&("ENA".to_string(), "USDT".to_string(), 4))
+    );
+    assert!(
+        book.markets
+            .contains_key(&("ENA".to_string(), "USDT".to_string(), 5))
+    );
     assert!(book.donors.is_none());
 }

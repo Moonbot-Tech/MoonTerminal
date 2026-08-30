@@ -47,7 +47,7 @@
 //! Both directions are implemented for it, into [`crate::figures::tools::MbFib`] — a tool of its
 //! own rather than a reading of ours, for the reasons in that module.
 
-use crate::figures::tools::{Channel, HLine, MbFib, Segment, Triangle, MB_FIB_LEVELS};
+use crate::figures::tools::{Channel, HLine, MB_FIB_LEVELS, MbFib, Segment, Triangle};
 use crate::figures::{DrawStyle, FigNode, FigureKind, LineKind};
 
 /// Figure type in the blob.
@@ -196,9 +196,9 @@ pub fn encode(
             out.extend_from_slice(&f.a.to_le_bytes()); // @48
             out.extend_from_slice(&f.b.to_le_bytes()); // @56
             out.extend_from_slice(&unix_ms_to_tdatetime(f.time_ms).to_le_bytes()); // @64
-                                                                                   // @72, @80 and @88 are zero in every sample, including across samples whose geometry
-                                                                                   // differs, so they are written back as the constants they were read as rather than
-                                                                                   // guessed at.
+            // @72, @80 and @88 are zero in every sample, including across samples whose geometry
+            // differs, so they are written back as the constants they were read as rather than
+            // guessed at.
             out.extend_from_slice(&0f64.to_le_bytes());
             out.extend_from_slice(&0f64.to_le_bytes());
             out.push(0u8);

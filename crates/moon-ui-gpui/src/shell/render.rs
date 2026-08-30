@@ -294,9 +294,7 @@ impl Render for Shell {
                 this.modifier_watch.interrupt();
             }))
             // ── Header ──────────────────────────────────────────────
-            .children(chrome_stubbed().then(|| {
-                div().w_full().h(px(design::header_height(cx)))
-            }))
+            .children(chrome_stubbed().then(|| div().w_full().h(px(design::header_height(cx)))))
             .children((!chrome_stubbed()).then(|| {
                 let _t = crate::diag::scope(&crate::diag::SHELL_HEADER_US);
                 terminal_chrome::header(
@@ -317,9 +315,7 @@ impl Render for Shell {
             }))
             // Trading toolbar: fixed-height size, leverage, risk, exit, Live, and window-launch
             // sections. It is one chrome row rather than a dock panel.
-            .children(chrome_stubbed().then(|| {
-                div().w_full().h(px(design::toolbar_height(cx)))
-            }))
+            .children(chrome_stubbed().then(|| div().w_full().h(px(design::toolbar_height(cx)))))
             .children((!chrome_stubbed()).then(|| {
                 let _t = crate::diag::scope(&crate::diag::SHELL_TOOLBAR_US);
                 controls::toolbar(

@@ -1,6 +1,6 @@
 use moonproto::ExchangeCode;
 
-use super::{arb_alias, arb_row_matches, venue, Brand, CoreVenue, MarketKind, Venue, ARB_VENUES};
+use super::{ARB_VENUES, Brand, CoreVenue, MarketKind, Venue, arb_alias, arb_row_matches, venue};
 use crate::symbol::Exchange;
 
 /// The ordinals are wire values, so the oracle is moonproto's own constants rather than the

@@ -224,7 +224,16 @@ pub(super) fn report_data_row(
             } else if cname == "deleted" {
                 cells.push(deleted_cell(ri, val));
             } else {
-                cells.push(report_data_cell(ri, cname, val, quote, p, axis, core_uid, display_zone));
+                cells.push(report_data_cell(
+                    ri,
+                    cname,
+                    val,
+                    quote,
+                    p,
+                    axis,
+                    core_uid,
+                    display_zone,
+                ));
             }
         }
     }

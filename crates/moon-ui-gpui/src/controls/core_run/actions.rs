@@ -97,7 +97,9 @@ pub(crate) fn set_trading(
         // Which control pressed this, so the waiting face appears on that control and not on its
         // neighbour commanding the same cores.
         for core in &sent {
-            backend.run_pending.arm(*core, RunAsk::Trading(on), from, now);
+            backend
+                .run_pending
+                .arm(*core, RunAsk::Trading(on), from, now);
         }
         log::info!(
             "trading {} requested for {}/{} core(s) that needed it, {} in scope",

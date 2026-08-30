@@ -793,8 +793,8 @@ fn restore_from_wire_or_memory(
 /// The wire does not distinguish `explicitly disabled` from `not set` (both are zeroes), so the
 /// strategy flag would otherwise mask our OFF in the table.
 /// Key: (core, uid) → [Option<target flag>; 3].
-fn stop_overrides_map(
-) -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>> {
+fn stop_overrides_map()
+-> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>> {
     static MEM: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>>,
     > = std::sync::OnceLock::new();
@@ -834,8 +834,8 @@ pub(super) fn stop_override(
 /// (fixed, level, spread|vol). It lives until process exit and holds only a handful of entries
 /// per session because writes occur only when a stop is manually disabled from the order table
 /// or the order-edit form.
-fn stop_memory(
-) -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>> {
+fn stop_memory()
+-> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>> {
     static MEM: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>>,
     > = std::sync::OnceLock::new();

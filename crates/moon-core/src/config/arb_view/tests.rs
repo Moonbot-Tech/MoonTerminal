@@ -190,7 +190,10 @@ fn a_deployer_takes_the_name_its_core_supplied() {
     named.dex_name = "hyna".to_string();
 
     let rows = cfg.arrange(std::slice::from_ref(&named));
-    assert_eq!(rows[0].label, "HL_hyna", "the terminal's prefix, the core's word");
+    assert_eq!(
+        rows[0].label, "HL_hyna",
+        "the terminal's prefix, the core's word"
+    );
 
     let unnamed = [quote(deployer.code(), 101.0)];
     let rows = cfg.arrange(&unnamed);

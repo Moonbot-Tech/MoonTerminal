@@ -647,8 +647,6 @@ impl Backend {
         self.last_main_input.get(group).copied()
     }
 
-
-
     /// Return Main's configured inactivity-close timeout in seconds, where zero disables it.
     pub(crate) fn main_idle_close_secs(&self) -> u32 {
         self.preview

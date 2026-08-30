@@ -30,7 +30,7 @@ use std::sync::{Mutex, MutexGuard};
 use zeroize::Zeroizing;
 
 use format::Parsed;
-use slots::{Header, Slot, KIND_MACHINE, KIND_PASSWORD};
+use slots::{Header, KIND_MACHINE, KIND_PASSWORD, Slot};
 
 /// Why the encrypted config could not be opened.
 #[derive(Debug)]

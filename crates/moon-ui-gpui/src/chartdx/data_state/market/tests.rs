@@ -80,7 +80,11 @@ fn a_measuring_period_is_dropped_without_a_pointer() {
     );
 
     let with = super::resolve_span_keys(&[live, measured], Some(1_700_000_000_000));
-    assert_eq!(with.len(), 2, "both periods are read once the pointer lands");
+    assert_eq!(
+        with.len(),
+        2,
+        "both periods are read once the pointer lands"
+    );
     assert!(with.contains(&(VolumeSpan::Millis(60_000), VolumeAt::Now)));
     assert!(with.contains(&(
         VolumeSpan::Millis(60_000),
@@ -119,7 +123,10 @@ fn a_pointer_refresh_leaves_the_live_edge_entries_alone() {
     super::merge_readouts(&mut held, vec![(new_point, 3u32)]);
 
     assert!(held.contains(&(live, 1)), "the live-edge reading survives");
-    assert!(!held.iter().any(|(key, _)| *key == old_point), "the stale point is gone");
+    assert!(
+        !held.iter().any(|(key, _)| *key == old_point),
+        "the stale point is gone"
+    );
     assert!(held.contains(&(new_point, 3)), "the fresh point is in");
 }
 

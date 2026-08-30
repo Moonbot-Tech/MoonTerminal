@@ -160,11 +160,7 @@ static STRATEGY_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub(crate) fn due_slot_ms(now_ms: i64) -> i64 {
     let day = now_ms.div_euclid(DAY_MS) * DAY_MS;
     let noon = day + NOON_MS;
-    if now_ms >= noon {
-        noon
-    } else {
-        noon - DAY_MS
-    }
+    if now_ms >= noon { noon } else { noon - DAY_MS }
 }
 
 /// Compute the wall-clock delay from `now_ms` to the next 12:00 UTC occurrence.

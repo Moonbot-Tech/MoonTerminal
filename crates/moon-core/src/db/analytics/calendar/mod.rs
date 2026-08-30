@@ -2,11 +2,11 @@
 
 use rusqlite::Connection;
 
-use super::super::read_fail::read_fail_on;
 use super::super::ReadResult;
+use super::super::read_fail::read_fail_on;
 use super::{
-    min_closedate, scope_decision_on, scoped, unified_from_mode, ProjectionMode, Query,
-    ScopeDecision,
+    ProjectionMode, Query, ScopeDecision, min_closedate, scope_decision_on, scoped,
+    unified_from_mode,
 };
 use crate::db::{ProfitScope, ProfitUnit};
 
@@ -184,7 +184,11 @@ fn funding_by_bucket(
 ///     cells: Cells to enrich, in place.
 ///     funding: Bucket sums from [`funding_by_bucket`].
 ///     money: Whether this projection sums money at all.
-fn apply_funding(cells: &mut [DayCell], funding: &std::collections::HashMap<i64, f64>, money: bool) {
+fn apply_funding(
+    cells: &mut [DayCell],
+    funding: &std::collections::HashMap<i64, f64>,
+    money: bool,
+) {
     for cell in cells.iter_mut() {
         if !money {
             continue;
@@ -417,7 +421,9 @@ fn calendar_total_from(
     // deduplicated month against a doubled one.
     if projection != ProjectionMode::Percent {
         let span = (q.to - q.from).max(1);
-        let funding: f64 = funding_by_bucket(conn, &q, projection, span)?.values().sum();
+        let funding: f64 = funding_by_bucket(conn, &q, projection, span)?
+            .values()
+            .sum();
         totals.funding = Some(funding);
         totals.profit += funding;
     }
@@ -722,7 +728,11 @@ fn hour_profile_one(
 ) -> ReadResult<[HourStat; 24]> {
     const CTX: &str = "analytics: hour_profile";
     let mut q = base.clone();
-    q.from = if from < 0 { min_closedate(conn, &q.resolved_axis(conn)?)? } else { from };
+    q.from = if from < 0 {
+        min_closedate(conn, &q.resolved_axis(conn)?)?
+    } else {
+        from
+    };
     q.to = to;
     let decision = scope_decision_on(conn, &q)?;
     let Some(projection) = decision.projection() else {

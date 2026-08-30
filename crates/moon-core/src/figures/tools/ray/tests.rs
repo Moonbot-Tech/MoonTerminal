@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{build, ctx, TestProj};
+use crate::figures::tools::tests::{TestProj, build, ctx};
 
 /// A ray pointing up and to the right: origin at `T0`, aimed through a point 10 s later and 20
 /// higher. In test pixels that is `(0, 0)` aimed through `(10, -40)`.

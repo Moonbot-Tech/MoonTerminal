@@ -328,8 +328,14 @@ fn caption_list(
             match full {
                 // A full module says so on the trigger rather than offering a catalogue that cannot
                 // be picked from: the count IS the reason, so it is what the label shows.
-                true => format!("{}  {used}/{CHART_LABEL_PARTS}", t!("chart_labels.row_full")),
-                false => format!("{}  {used}/{CHART_LABEL_PARTS}", t!("chart_labels.add_part")),
+                true => format!(
+                    "{}  {used}/{CHART_LABEL_PARTS}",
+                    t!("chart_labels.row_full")
+                ),
+                false => format!(
+                    "{}  {used}/{CHART_LABEL_PARTS}",
+                    t!("chart_labels.add_part")
+                ),
             },
             full,
             picker_open.as_deref() == Some("le-add"),

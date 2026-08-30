@@ -3,18 +3,18 @@
 //! Metadata binds to a server through a stable `uid`. Older files without uids bind once by
 //! `name` and immediately receive a fresh uid; subsequent renames no longer lose their settings.
 
-use super::core_groups::{sanitize_core_groups, CoreGroup};
+use super::ServerConfig;
+use super::core_groups::{CoreGroup, sanitize_core_groups};
 use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::schema::{
-    clamp_chart_memory_percent, clamp_chart_stack_height, repair_ui_font_delta, repair_ui_scale,
-    ServerEntry, ServerMeta, ServersFile, SettingsFile, UiThemeMode, COREID_UID_VERSION,
-    SCHEMA_VERSION,
+    COREID_UID_VERSION, SCHEMA_VERSION, ServerEntry, ServerMeta, ServersFile, SettingsFile,
+    UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height, repair_ui_font_delta,
+    repair_ui_scale,
 };
 use super::servers::{self, CoreSortMode};
 use super::uid_counter::UidCounter;
-use super::ServerConfig;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
 
@@ -135,8 +135,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
             // Same once-only rule the Settings key field applies, through the same function: an
             // older config that predates the field gets its mode from the key it already has,
             // while a stored choice outranks the key it was seeded from.
-            let transport =
-                servers::seeded_transport(m.and_then(|m| m.transport), e.key.expose());
+            let transport = servers::seeded_transport(m.and_then(|m| m.transport), e.key.expose());
             ServerConfig {
                 // Runtime CoreId equals the stable uid, NOT a position, so it survives server
                 // additions/removals/reordering without recreating windows, subscriptions, or layout.

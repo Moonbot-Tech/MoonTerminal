@@ -20,8 +20,8 @@ mod widgets;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    h_flex, rgba_from, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputState,
-    MoonPalette, MoonSliderState, MoonTabItem, MoonTabStrip,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputState, MoonPalette, MoonSliderState,
+    MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -29,9 +29,9 @@ use moon_core::feed::{ClientSettingsEdit, CoreConfig};
 use moon_core::session::CoreId;
 
 use crate::panels::popup_title;
-use crate::shell::core_settings::resolve_core_settings_write;
 use crate::shell::Shell;
-use crate::{design, Backend};
+use crate::shell::core_settings::resolve_core_settings_write;
+use crate::{Backend, design};
 
 /// Unscaled content width shared with the popover host.
 ///

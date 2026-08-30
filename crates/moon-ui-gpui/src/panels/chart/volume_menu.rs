@@ -175,12 +175,7 @@ fn open_menu(
 }
 
 /// Put a finished row set on screen.
-fn install_menu(
-    items: Vec<MoonMenuItem>,
-    pos: Point<Pixels>,
-    window: &mut Window,
-    app: &mut App,
-) {
+fn install_menu(items: Vec<MoonMenuItem>, pos: Point<Pixels>, window: &mut Window, app: &mut App) {
     window.open_fitted_moon_context_menu(
         app,
         "chart-volume-menu",
@@ -209,7 +204,9 @@ fn edit_row(
 }
 
 /// The module's volume captions, which is what every setting here writes to.
-fn volume_parts(row: &mut ChartLabelRow) -> impl Iterator<Item = &mut moon_core::config::ChartLabelPart> {
+fn volume_parts(
+    row: &mut ChartLabelRow,
+) -> impl Iterator<Item = &mut moon_core::config::ChartLabelPart> {
     row.parts
         .iter_mut()
         .filter(|part| part.field.in_volume_block())
@@ -281,7 +278,9 @@ fn build_items(
         .map(|p| (p.span, p.window))
         .unwrap_or((LabelSpan::Window, LabelWindow::default()));
     let mut items: Vec<MoonMenuItem> = Vec::new();
-    items.push(MoonMenuItem::label(t!("chart_labels.menu.period").to_string()));
+    items.push(MoonMenuItem::label(
+        t!("chart_labels.menu.period").to_string(),
+    ));
     // Sorted HERE rather than trusted from the constant: the list is picked by length, and the one
     // time it was assembled by hand it read `30м` then `2м`.
     let mut periods = QUICK_PERIODS;
@@ -309,7 +308,9 @@ fn build_items(
         ));
     }
     items.push(MoonMenuItem::separator());
-    items.push(MoonMenuItem::label(t!("chart_labels.menu.trades").to_string()));
+    items.push(MoonMenuItem::label(
+        t!("chart_labels.menu.trades").to_string(),
+    ));
     for trades in QUICK_TRADES {
         items.push(span_item(
             &panel,

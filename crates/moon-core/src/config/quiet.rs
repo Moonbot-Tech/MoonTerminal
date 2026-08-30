@@ -243,11 +243,7 @@ pub fn in_window(now_min: u16, from_min: u16, to_min: u16) -> bool {
 /// "the NEXT 07:00" means to someone switching sleep on at 07:00.
 pub fn minutes_until(now_min: u16, target_min: u16) -> u16 {
     let delta = (target_min + DAY_MINUTES - now_min) % DAY_MINUTES;
-    if delta == 0 {
-        DAY_MINUTES
-    } else {
-        delta
-    }
+    if delta == 0 { DAY_MINUTES } else { delta }
 }
 
 /// Parse an operator-typed time of day into minutes since midnight.

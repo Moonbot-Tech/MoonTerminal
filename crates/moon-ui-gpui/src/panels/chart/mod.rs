@@ -14,7 +14,6 @@
 //! [`render_input`].
 
 mod arb_open;
-mod volume_menu;
 mod click_series;
 mod figures;
 mod geom;
@@ -28,6 +27,7 @@ pub(crate) mod shot;
 mod tests;
 mod trade;
 mod trade_history_hover;
+mod volume_menu;
 mod warn;
 
 use std::collections::HashSet;

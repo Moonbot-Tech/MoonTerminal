@@ -21,8 +21,8 @@ mod startup_watchdog;
 mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{
@@ -270,10 +270,10 @@ fn record_strategy_edit_resolution(
 }
 
 use account_reconciliation::{
-    balance_refresh_log_window, AccountReconciliation, BALANCE_TRACE_LEVEL,
+    AccountReconciliation, BALANCE_TRACE_LEVEL, balance_refresh_log_window,
 };
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
-use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
+use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
 use convert::{
     build_order_rows, client_settings_from_proto, license_state_from_proto,
     profit_state_from_proto, runtime_state_from_proto, settings_event_snapshot,

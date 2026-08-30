@@ -11,7 +11,7 @@ use moonproto::MoonClient;
 
 use super::convert::{apply_client_settings_edit, client_settings_from_proto};
 use crate::config::{GroupExitSettings, TakeProfitMode};
-use crate::feed::{trade, ClientSettingsEdit};
+use crate::feed::{ClientSettingsEdit, trade};
 
 /// One manual order waiting behind its group-settings generation.
 #[derive(Clone, Debug)]

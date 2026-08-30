@@ -353,11 +353,9 @@ impl ChartTabs {
                     continue;
                 }
                 let labelled = ms.labelled_search(s.id, &wanted, coin_search::COIN_MATCH_LIMIT);
-                if let Some(found) = moon_core::market::pick_market_for_identity(
-                    &labelled,
-                    &wanted,
-                    &anchor.quote,
-                ) {
+                if let Some(found) =
+                    moon_core::market::pick_market_for_identity(&labelled, &wanted, &anchor.quote)
+                {
                     used.insert(provider);
                     out.push((s.id, found.to_string()));
                 }

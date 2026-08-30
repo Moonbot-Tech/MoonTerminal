@@ -9,8 +9,8 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonScrollableElement, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
 use super::super::AnalyticsView;
+use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
 use super::{date_of, now_ym, split_i18n};
 use crate::design;
 use crate::design::{moon, moon_alpha};

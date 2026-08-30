@@ -550,11 +550,7 @@ impl OrderLineStore {
                 // fill, every stop would be drawn back across the pre-fill window, claiming a stop
                 // existed where none did. A late start says less than it could; an early one lies.
                 let fill = wire_line_start(r.entry_fill_time_ms, floor_ms, now_ms);
-                if fill > 1.0 {
-                    fill
-                } else {
-                    sell_start_ms
-                }
+                if fill > 1.0 { fill } else { sell_start_ms }
             };
             // The same wire fill, kept as the ENTRY line's own END so the chart can stop that line
             // where the leg ceased instead of running it on to the pane edge. Gated on `f`:

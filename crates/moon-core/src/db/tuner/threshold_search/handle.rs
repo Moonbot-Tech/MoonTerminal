@@ -12,8 +12,8 @@
 //! comparing against the wrong denominator the moment more than one search runs behind the same
 //! handle. Whoever drops a unit of work says so; nobody has to infer it.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// Shared control and progress signals of one search run.
 ///

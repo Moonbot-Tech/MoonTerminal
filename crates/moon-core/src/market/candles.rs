@@ -233,11 +233,7 @@ pub fn first_full_bucket_ms(oldest_ms: f64, tf_ms: i64) -> i64 {
     let tf = tf_ms.max(1);
     let oldest = oldest_ms as i64;
     let floor = oldest.div_euclid(tf) * tf;
-    if floor == oldest {
-        floor
-    } else {
-        floor + tf
-    }
+    if floor == oldest { floor } else { floor + tf }
 }
 
 /// Returns the native CoinCard-history timeframe in minutes for a series timeframe.
@@ -486,9 +482,7 @@ pub fn compose_with_coarse(
         // candle twice and made the volume band count that bucket twice.
         for c in layer.rows.iter() {
             let fills_a_hole = holes.iter().any(|&(start, end)| {
-                end - start >= layer.tf_ms
-                    && c.t_open_ms + layer.tf_ms > start
-                    && c.t_open_ms < end
+                end - start >= layer.tf_ms && c.t_open_ms + layer.tf_ms > start && c.t_open_ms < end
             });
             if fills_a_hole {
                 fillers.push((*c, layer.tf_ms as f32));

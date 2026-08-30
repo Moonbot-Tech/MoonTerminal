@@ -131,8 +131,7 @@ impl ChartDataState {
                 // throttle and read everything again — at the pointer's rate.
                 pr.label_volume_spans
                     .retain(|(_, at)| matches!(at, VolumeAt::Now));
-                pr.label_volume_spans
-                    .extend(rows_keys.iter().copied());
+                pr.label_volume_spans.extend(rows_keys.iter().copied());
                 // The LIVE-EDGE entries are re-read on the ordinary path; replacing the whole set
                 // here would drop them until the next market revision, which on a quiet coin is a
                 // visible blank.
@@ -1299,12 +1298,12 @@ impl ChartDataState {
                 || wants_windows
                 || wants_arb
                 || !wanted_keys.is_empty())
-                .then(|| {
-                    st.panes
-                        .get(*idx)
-                        .and_then(|pr| pr.core.map(|core| (core, pr.market.clone())))
-                })
-                .flatten();
+            .then(|| {
+                st.panes
+                    .get(*idx)
+                    .and_then(|pr| pr.core.map(|core| (core, pr.market.clone())))
+            })
+            .flatten();
             let context = target
                 .as_ref()
                 .filter(|_| wants_context)
@@ -1502,15 +1501,14 @@ pub(in crate::chartdx) fn read_volume_sets(
     Vec<((VolumeSpan, VolumeAt), LiqSpanReadout)>,
 ) {
     let started = std::time::Instant::now();
-    let rows: Vec<((VolumeSpan, VolumeAt), VolumeSpanReadout)> =
-        resolve_span_keys(keys, cursor_ms)
-            .into_iter()
-            .filter_map(|(span, at)| {
-                source
-                    .market_volume_span(core, market, span, at)
-                    .map(|readout| ((span, at), readout))
-            })
-            .collect();
+    let rows: Vec<((VolumeSpan, VolumeAt), VolumeSpanReadout)> = resolve_span_keys(keys, cursor_ms)
+        .into_iter()
+        .filter_map(|(span, at)| {
+            source
+                .market_volume_span(core, market, span, at)
+                .map(|readout| ((span, at), readout))
+        })
+        .collect();
     // Only the periods something prints the liquidation figure over: that ring is its own read, and
     // a block showing volume alone must not order it.
     let liq: Vec<((VolumeSpan, VolumeAt), LiqSpanReadout)> = keys

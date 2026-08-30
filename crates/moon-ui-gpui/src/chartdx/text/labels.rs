@@ -421,9 +421,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::Venue => non_empty(&inputs.venue).map(|t| (t, None)),
         ChartLabelField::Quote => non_empty(&inputs.quote).map(|t| (t, None)),
         ChartLabelField::OrderStrategy => non_empty(&inputs.strategy).map(|t| (t, None)),
-        ChartLabelField::DetectStrategy => {
-            non_empty(&inputs.detect_strategy).map(|t| (t, None))
-        }
+        ChartLabelField::DetectStrategy => non_empty(&inputs.detect_strategy).map(|t| (t, None)),
         // The line is the core's own text and can be a sentence. It is cut to what a caption can be
         // read as at all; the chart's own width budget truncates whatever still does not fit, but
         // that budget measures a string it has already been handed, so an unbounded one would be
@@ -475,24 +473,15 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 DeltaSign::Negative
             };
             let min = part.resolved_style().color_min_pct;
-            (
-                super::fmt_pct(pct),
-                colored_sign(min, f64::from(pct), sign),
-            )
+            (super::fmt_pct(pct), colored_sign(min, f64::from(pct), sign))
         }),
         ChartLabelField::LastPrice => inputs
             .last_price
             .filter(|p| p.is_finite() && *p > 0.0)
             .map(|p| (fmt::adaptive(f64::from(p)), None)),
-        ChartLabelField::Delta1h => inputs
-            .delta_1h
-            .and_then(|v| signed_pct_label(part, v)),
-        ChartLabelField::Delta24h => inputs
-            .delta_24h
-            .and_then(|v| signed_pct_label(part, v)),
-        ChartLabelField::OpenPnlPct => stats
-            .pnl_pct()
-            .and_then(|v| signed_pct_label(part, v)),
+        ChartLabelField::Delta1h => inputs.delta_1h.and_then(|v| signed_pct_label(part, v)),
+        ChartLabelField::Delta24h => inputs.delta_24h.and_then(|v| signed_pct_label(part, v)),
+        ChartLabelField::OpenPnlPct => stats.pnl_pct().and_then(|v| signed_pct_label(part, v)),
         ChartLabelField::OpenPnlMoney => stats.has_position.then(|| {
             let (text, sign) = fmt::signed_amount(stats.pnl_quote, MONEY_DECIMALS);
             (text, Some(sign))
@@ -539,18 +528,12 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             fmt_tf_countdown(part.tf.remaining_ms(inputs.chart_tf_ms, inputs.now_ms)),
             None,
         )),
-        ChartLabelField::OpenOrders => (stats.open_orders > 0).then(|| {
-            (
-                stats.open_orders.to_string(),
-                None,
-            )
-        }),
-        ChartLabelField::Exposure => stats.has_exposure.then(|| {
-            (
-                plain(&fmt::compact_si(stats.exposure)),
-                None,
-            )
-        }),
+        ChartLabelField::OpenOrders => {
+            (stats.open_orders > 0).then(|| (stats.open_orders.to_string(), None))
+        }
+        ChartLabelField::Exposure => stats
+            .has_exposure
+            .then(|| (plain(&fmt::compact_si(stats.exposure)), None)),
         // Expanded before this point, into its own run range: one caption, a dozen lines. Reaching
         // here would mean the expansion was skipped, and a single line saying "arbitrage" is not
         // what the caption is for.
@@ -560,10 +543,8 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .as_ref()
             .filter(|f| !f.tags.is_empty())
             .map(|f| (tags_text(&f.tags), None)),
-        ChartLabelField::Bid => figure(inputs, |f| f.bid)
-            .map(price_label),
-        ChartLabelField::Ask => figure(inputs, |f| f.ask)
-            .map(price_label),
+        ChartLabelField::Bid => figure(inputs, |f| f.bid).map(price_label),
+        ChartLabelField::Ask => figure(inputs, |f| f.ask).map(price_label),
         // The spread needs BOTH sides and a sane pair: a crossed book — which a stale snapshot can
         // show for a moment — would otherwise print a negative spread as if it were an arbitrage.
         ChartLabelField::Spread => inputs.figures.as_ref().and_then(|f| {
@@ -572,8 +553,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             let (text, _) = fmt::pct(pct, 2)?;
             Some((text, None))
         }),
-        ChartLabelField::MarkPrice => figure(inputs, |f| f.mark)
-            .map(price_label),
+        ChartLabelField::MarkPrice => figure(inputs, |f| f.mark).map(price_label),
         // The deviation is read against the price the CHART is drawing, so the caption cannot
         // disagree with the candle beside it.
         ChartLabelField::MarkDelta => {
@@ -581,10 +561,10 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             let last = f64::from(inputs.last_price.filter(|p| p.is_finite() && *p > 0.0)?);
             signed_pct_label(part, (mark - last) / last * 100.0)
         }
-        ChartLabelField::PriceStep => figure(inputs, |f| f.price_step)
-            .map(price_label),
-        ChartLabelField::Volume24h => figure(inputs, |f| f.vol_24h)
-            .map(|v| (plain(&fmt::compact_si(v)), None)),
+        ChartLabelField::PriceStep => figure(inputs, |f| f.price_step).map(price_label),
+        ChartLabelField::Volume24h => {
+            figure(inputs, |f| f.vol_24h).map(|v| (plain(&fmt::compact_si(v)), None))
+        }
         ChartLabelField::WindowDelta => window(inputs, part)
             .and_then(|w| w.delta_pct)
             .and_then(|v| fmt::pct(v, 2))
@@ -612,7 +592,12 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .map(|v| volume_amount(part, v, v.sell_quote, v.sell_base))
             .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowTrades => volume(inputs, part)
-            .map(|v| (marked(fmt::compact_si(f64::from(v.trades)), v.complete), None))
+            .map(|v| {
+                (
+                    marked(fmt::compact_si(f64::from(v.trades)), v.complete),
+                    None,
+                )
+            })
             .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowLiquidations => liquidations(inputs, part)
             .map(|liq| {
@@ -650,46 +635,45 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .map(|f| f.max_order)
             .filter(|m| m.value.is_finite() && m.value > 0.0)
             .map(|m| (plain(&fmt::compact_si(m.value)), None)),
-        ChartLabelField::ExchPosSize => inputs
-            .figures
-            .as_ref()
-            .and_then(|f| f.pos_size)
-            .map(|v| {
-                let sign = if v >= 0.0 {
-                    DeltaSign::Positive
-                } else {
-                    DeltaSign::Negative
-                };
-                (plain(&fmt::compact_si(v)), Some(sign))
-            }),
-        ChartLabelField::LiqPrice => figure(inputs, |f| f.liq_price)
-            .map(price_label),
+        ChartLabelField::ExchPosSize => inputs.figures.as_ref().and_then(|f| f.pos_size).map(|v| {
+            let sign = if v >= 0.0 {
+                DeltaSign::Positive
+            } else {
+                DeltaSign::Negative
+            };
+            (plain(&fmt::compact_si(v)), Some(sign))
+        }),
+        ChartLabelField::LiqPrice => figure(inputs, |f| f.liq_price).map(price_label),
         ChartLabelField::Leverage => inputs
             .figures
             .as_ref()
             .and_then(|f| f.leverage_x)
             .map(|v| (format!("x{v}"), None)),
-        ChartLabelField::MarginMode => inputs.figures.as_ref().and_then(|f| f.isolated).map(|iso| {
-            let key = if iso {
-                "chart_labels.margin.isolated"
-            } else {
-                "chart_labels.margin.cross"
-            };
-            (t!(key).to_string(), None)
-        }),
+        ChartLabelField::MarginMode => {
+            inputs.figures.as_ref().and_then(|f| f.isolated).map(|iso| {
+                let key = if iso {
+                    "chart_labels.margin.isolated"
+                } else {
+                    "chart_labels.margin.cross"
+                };
+                (t!(key).to_string(), None)
+            })
+        }
         // A zero prints NOTHING. The core leaves this counter at zero on part of its venues while
         // MoonBot itself shows a figure there, so a printed `+0` would state "traded to break even"
         // about a coin that was nothing of the sort. Judged on the ROUNDED value, which is also
         // what hides a counter arriving in a unit two decimals cannot show — a coin-margined core
         // reports fractions of a BTC.
-        ChartLabelField::SessionPnl => inputs
-            .figures
-            .as_ref()
-            .and_then(|f| f.core_pnl)
-            .and_then(|v| {
-                let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
-                (sign != DeltaSign::Zero).then_some((text, Some(sign)))
-            }),
+        ChartLabelField::SessionPnl => {
+            inputs
+                .figures
+                .as_ref()
+                .and_then(|f| f.core_pnl)
+                .and_then(|v| {
+                    let (text, sign) = fmt::signed_amount(v, MONEY_DECIMALS);
+                    (sign != DeltaSign::Zero).then_some((text, Some(sign)))
+                })
+        }
         // A zero DOES print here, unlike the counter above: the core states this one as a snapshot
         // of its own, so a zero is "nothing earned since the reset" and absence is "this core does
         // not publish it" — the readout already carries that difference as `None`.
@@ -697,26 +681,24 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         // The sign is dropped once the amount rounds to zero. `signed_amount` picks its prefix from
         // the ROUNDED value, so a loss of a third of a cent would otherwise render `+0` — a minus
         // wearing a plus. Bare `0` states the same magnitude without claiming a direction.
-        ChartLabelField::SessionProfit => inputs
-            .figures
-            .as_ref()
-            .and_then(|f| f.session)
-            .map(|v| match fmt::signed_amount(v, MONEY_DECIMALS) {
-                (_, DeltaSign::Zero) => ("0".to_string(), Some(DeltaSign::Zero)),
-                (text, sign) => (text, Some(sign)),
-            }),
-        ChartLabelField::CoinBalance => figure(inputs, |f| f.coin_balance)
-            .map(|v| (plain(&fmt::compact_si(v)), None)),
+        ChartLabelField::SessionProfit => {
+            inputs.figures.as_ref().and_then(|f| f.session).map(|v| {
+                match fmt::signed_amount(v, MONEY_DECIMALS) {
+                    (_, DeltaSign::Zero) => ("0".to_string(), Some(DeltaSign::Zero)),
+                    (text, sign) => (text, Some(sign)),
+                }
+            })
+        }
+        ChartLabelField::CoinBalance => {
+            figure(inputs, |f| f.coin_balance).map(|v| (plain(&fmt::compact_si(v)), None))
+        }
         ChartLabelField::PosSize => (stats.pos_size != 0.0).then(|| {
             let sign = if stats.pos_size >= 0.0 {
                 DeltaSign::Positive
             } else {
                 DeltaSign::Negative
             };
-            (
-                plain(&fmt::compact_si(stats.pos_size)),
-                Some(sign),
-            )
+            (plain(&fmt::compact_si(stats.pos_size)), Some(sign))
         }),
     }
 }
@@ -775,9 +757,21 @@ fn push_arb_rows(
     // `design::mono` — so padding with spaces aligns them exactly, and it does so inside the two
     // runs the line already has instead of adding a run per column. That is what makes the prices
     // line up under each other the way the reference terminal's column does.
-    let name_w = cells.iter().map(|c| c.label.chars().count()).max().unwrap_or(0);
-    let price_w = cells.iter().map(|c| c.price.chars().count()).max().unwrap_or(0);
-    let pct_w = cells.iter().map(|c| c.pct.chars().count()).max().unwrap_or(0);
+    let name_w = cells
+        .iter()
+        .map(|c| c.label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let price_w = cells
+        .iter()
+        .map(|c| c.price.chars().count())
+        .max()
+        .unwrap_or(0);
+    let pct_w = cells
+        .iter()
+        .map(|c| c.pct.chars().count())
+        .max()
+        .unwrap_or(0);
     for (n, cell) in cells.into_iter().enumerate() {
         // The venue's NAME is this line's prefix: it is the word, the rest is the figure, and a
         // value-only colour then paints the price and the spread while the venue stays readable.

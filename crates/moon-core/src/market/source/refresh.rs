@@ -11,9 +11,9 @@ use crate::market::SharedMarketStore;
 use crate::session::CoreId;
 
 use super::{
-    bump_generation, bump_market_revisions, cadence_phase_ms, cadence_slot, market_diag,
-    market_diag_due, market_diag_enabled, market_diag_floor, MarketDataSource,
-    MarketDataSourceInner, ORDERBOOK_PULL_PERIOD_MS,
+    MarketDataSource, MarketDataSourceInner, ORDERBOOK_PULL_PERIOD_MS, bump_generation,
+    bump_market_revisions, cadence_phase_ms, cadence_slot, market_diag, market_diag_due,
+    market_diag_enabled, market_diag_floor,
 };
 
 impl MarketDataSource {

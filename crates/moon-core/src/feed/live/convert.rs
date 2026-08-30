@@ -11,8 +11,8 @@ use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ApiKeyExpiry, ClientSettings, ClientSettingsEdit, ConnFault, ConnFaultKind, CoreIdentityFacts,
     CoreInitStep, CoreStartupState, CoreStartupStatus, CoreSysStatus, EngineActionKind,
-    EngineActionResult, LicenseState, NewsSnapshot, OrderRow,
-    OrderTrace, OrderTracePoint, ProfitState, RuntimeState, WalletKind,
+    EngineActionResult, LicenseState, NewsSnapshot, OrderRow, OrderTrace, OrderTracePoint,
+    ProfitState, RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat

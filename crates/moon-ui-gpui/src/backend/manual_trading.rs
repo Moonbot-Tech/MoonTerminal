@@ -446,7 +446,8 @@ impl Backend {
     ///     The exit generation from [`Self::manual_write_core`]'s source, or the group-local
     ///     generation while that source is `None`.
     pub(crate) fn write_aligned_group_exit(&self, group: &str) -> GroupExitSettings {
-        self.effective_group_exit(group, self.manual_write_core(group)).0
+        self.effective_group_exit(group, self.manual_write_core(group))
+            .0
     }
 
     /// Select an F1-F6 USD-equivalent preset for one group, or the group's active core when its

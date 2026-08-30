@@ -32,7 +32,7 @@ use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 pub use config::DiagCfg;
-pub use filter::{filter_string, CHART_INPUT_TARGET, DEFAULT_BASE_FILTER, HOTKEYS_TARGET};
+pub use filter::{CHART_INPUT_TARGET, DEFAULT_BASE_FILTER, HOTKEYS_TARGET, filter_string};
 
 use crate::config::paths;
 
@@ -112,9 +112,7 @@ pub fn with_orders_selector<R>(f: impl FnOnce(&str) -> R) -> Option<R> {
     if !orders() {
         return None;
     }
-    let guard = ORDERS_SELECTOR
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
+    let guard = ORDERS_SELECTOR.read().unwrap_or_else(|e| e.into_inner());
     Some(f(guard.as_str()))
 }
 
@@ -371,7 +369,10 @@ fn plan_write(state: &FileState, raw: Option<&str>) -> Option<(String, String)> 
         FileState::Absent => Some((template::render(), "создан".to_string())),
         FileState::Parsed(_) => {
             let (merged, added) = upgrade::merge_missing(raw?)?;
-            Some((merged, format!("добавлены новые параметры: {}", added.join(", "))))
+            Some((
+                merged,
+                format!("добавлены новые параметры: {}", added.join(", ")),
+            ))
         }
         // Never write over a file we could not read: whatever is in it is the user's, and a
         // template written on top would destroy their settings along with their comments.

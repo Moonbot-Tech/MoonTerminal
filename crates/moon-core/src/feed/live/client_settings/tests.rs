@@ -1,6 +1,6 @@
 use super::{
-    client_settings_from_proto, ClientSettingsSequence, GroupExitSettings, ManualOrder,
-    SequenceAction, TakeProfitMode,
+    ClientSettingsSequence, GroupExitSettings, ManualOrder, SequenceAction, TakeProfitMode,
+    client_settings_from_proto,
 };
 use crate::feed::ClientSettingsEdit;
 

@@ -293,10 +293,12 @@ impl Shell {
             .collect();
         let sliders = core_settings_popup::slider_specs(&draft)
             .into_iter()
-            .map(|(id, bounds, value, stage, mirror)| core_settings_popup::SliderRow {
-                state: self.core_settings_slider(id, bounds, value, stage, mirror, window, cx),
-                id,
-            })
+            .map(
+                |(id, bounds, value, stage, mirror)| core_settings_popup::SliderRow {
+                    state: self.core_settings_slider(id, bounds, value, stage, mirror, window, cx),
+                    id,
+                },
+            )
             .collect();
         core_settings_popup::SettingsWidgets { fields, sliders }
     }

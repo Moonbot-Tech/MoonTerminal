@@ -15,7 +15,7 @@
 
 use super::*;
 use crate::db::tuner::threshold_search::SearchHandle;
-use crate::db::tuner::{FieldClass, FIELDS};
+use crate::db::tuner::{FIELDS, FieldClass};
 
 /// A handle no test cancels, for the searches that are meant to run to completion.
 fn uncancelled() -> SearchHandle {

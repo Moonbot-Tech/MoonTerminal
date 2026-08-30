@@ -288,7 +288,9 @@ fn one_current_stream_preserves_every_summary_field() {
     for row in rows {
         conn.execute(
             "INSERT INTO orders_rep VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9,1)",
-            rusqlite::params![row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8],
+            rusqlite::params![
+                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8
+            ],
         )
         .expect("summary fixture row");
     }
@@ -794,8 +796,8 @@ fn mixed_quote_summary_becomes_usdt_only_after_complete_coverage() {
         3_600,
         &crate::db::ReportAxis::identity_core_local(),
     )
-        .expect("scan compatible previous period")
-        .0;
+    .expect("scan compatible previous period")
+    .0;
     assert_eq!(
         (direct_previous.profit, direct_previous.n),
         (7.0, 1),
@@ -1060,7 +1062,8 @@ fn corrupt_replica_surfaces_error_not_empty() {
             wide.to,
             86_400,
             &crate::db::ReportAxis::identity_core_local(),
-        ).is_err(),
+        )
+        .is_err(),
         "скан периода обязан вернуть ошибку, а не усечённую статистику"
     );
 
@@ -1119,7 +1122,12 @@ fn min_closedate_uses_the_axis_converted_instant_not_the_smaller_raw_value() {
             (UNMEASURED_CORE, TRUE_INSTANT + 50_000, 2.0, "BTCUSDT"),
             // The behind core's clock reads 4h earlier, so the SAME true instant lands on a
             // strictly SMALLER raw closedate than the unmeasured core's.
-            (BEHIND_CORE, TRUE_INSTANT + i64::from(BEHIND_OFFSET_SECS), 3.0, "ETHUSDT"),
+            (
+                BEHIND_CORE,
+                TRUE_INSTANT + i64::from(BEHIND_OFFSET_SECS),
+                3.0,
+                "ETHUSDT",
+            ),
             (
                 BEHIND_CORE,
                 TRUE_INSTANT + 50_000 + i64::from(BEHIND_OFFSET_SECS),

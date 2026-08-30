@@ -252,7 +252,9 @@ fn render_labels_popup<T: LabelsPopupHost>(
 /// module editor previews a countdown caption set to `Авто` as the period that tab will really
 /// print. Asking through that trait rather than re-deriving the answer keeps ONE resolution rule
 /// for "which candle settings does this tab follow"; every implementor already provides it.
-pub(crate) trait LabelsPopupHost: LayoutPopupHost + super::candle_popup::CandlePopupHost {
+pub(crate) trait LabelsPopupHost:
+    LayoutPopupHost + super::candle_popup::CandlePopupHost
+{
     /// The target's per-tab override, or `None` to follow the global default.
     fn labels_override(&self, cx: &App) -> Option<ChartLabelsCfg>;
 

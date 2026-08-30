@@ -528,13 +528,7 @@ impl ChartPanel {
         let Some((core, market)) = self.report_trades.target.clone() else {
             return;
         };
-        self.load_history_scope(
-            core,
-            market,
-            self.report_trades.scope.clone(),
-            false,
-            cx,
-        );
+        self.load_history_scope(core, market, self.report_trades.scope.clone(), false, cx);
     }
 
     /// Retry the currently captured exact target without consulting global active-core state.
@@ -548,13 +542,7 @@ impl ChartPanel {
         let Some((core, market)) = self.report_trades.target.clone() else {
             return;
         };
-        self.load_history_scope(
-            core,
-            market,
-            self.report_trades.scope.clone(),
-            true,
-            cx,
-        );
+        self.load_history_scope(core, market, self.report_trades.scope.clone(), true, cx);
     }
 }
 

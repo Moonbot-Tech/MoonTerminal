@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{build, ctx, TestProj};
+use crate::figures::tools::tests::{TestProj, build, ctx};
 
 fn line() -> HLine {
     HLine { price: 100.0 }

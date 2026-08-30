@@ -30,8 +30,8 @@
 
 use crate::feed::{ConnStatus, RuntimeState};
 
-use super::store::{CoreData, CoreId};
 use super::SessionManager;
+use super::store::{CoreData, CoreId};
 
 #[cfg(test)]
 mod tests;

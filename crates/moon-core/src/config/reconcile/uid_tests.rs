@@ -1,9 +1,9 @@
 //! Durable uid allocation tests.
 
 use super::{ensure_uids, next_free_uid};
+use crate::config::ServerConfig;
 use crate::config::schema::{ServersFile, SettingsFile};
 use crate::config::uid_counter::UidCounter;
-use crate::config::ServerConfig;
 
 /// Build a server fixture with matching runtime and durable ids.
 fn server(uid: u64) -> ServerConfig {

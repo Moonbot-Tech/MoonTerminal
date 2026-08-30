@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{build, ctx, TestProj};
+use crate::figures::tools::tests::{TestProj, build, ctx};
 
 fn channel() -> Channel {
     Channel {
@@ -63,8 +63,9 @@ fn it_draws_both_lines_and_labels_both_prices_when_hot() {
         prices,
         vec![LabelText::Price(100.0), LabelText::Price(110.0)]
     );
-    assert!(hot
-        .labels
-        .iter()
-        .all(|(_, p, _)| *p == LabelPlace::RightEdge));
+    assert!(
+        hot.labels
+            .iter()
+            .all(|(_, p, _)| *p == LabelPlace::RightEdge)
+    );
 }

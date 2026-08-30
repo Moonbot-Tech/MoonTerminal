@@ -16,14 +16,14 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use moonproto::shared_config::SharedConfig;
 use moonproto::MoonClient;
+use moonproto::shared_config::SharedConfig;
 
 use crate::feed::{
-    day_fraction_to_minutes, minutes_to_day_fraction, AutoStartSettings, BtcBlinkSettings,
-    CoreConfig, CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult,
-    CoreConfigEditRow, CoreConfigMismatch, CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout,
-    CoreStratButtons, GeneralSettings, LeverageSettings, ManualSettings,
+    AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
+    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigMismatch,
+    CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
+    LeverageSettings, ManualSettings, day_fraction_to_minutes, minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.

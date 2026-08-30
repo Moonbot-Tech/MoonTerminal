@@ -5,8 +5,8 @@
 //! searches remain unchanged because no token is present in their thread-local context.
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Connection;
 

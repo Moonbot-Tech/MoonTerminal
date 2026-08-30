@@ -827,7 +827,10 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
 fn every_window_root_restores_focus_when_nothing_holds_it() {
     for (name, path) in [
         ("group window", "shell/render.rs"),
-        ("detached chart window", "chart_tabs/detached_host/render.rs"),
+        (
+            "detached chart window",
+            "chart_tabs/detached_host/render.rs",
+        ),
         ("strategies window", "strategies/mod.rs"),
         ("trade window", "trade_window/render.rs"),
         ("analytics window", "analytics/render.rs"),
@@ -877,7 +880,7 @@ fn every_coin_search_exit_releases_the_keyboard() {
         ),
         ("open selection in a new tab", "chart_tabs/strip.rs", 1),
         ("report coin filter", "panels/report/render.rs", 2), // pick, dismiss
-        ("header ticker picker", "shell/ticker.rs", 3), // pick, hover-out, dismiss
+        ("header ticker picker", "shell/ticker.rs", 3),       // pick, hover-out, dismiss
     ] {
         let raw = read_src(path);
         let src = code_only(&raw);

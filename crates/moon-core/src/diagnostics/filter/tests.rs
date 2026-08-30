@@ -22,12 +22,7 @@ fn built(spec: &str) -> env_filter::Filter {
 
 /// Whether `spec` admits a record at `level` from `target`.
 fn allows(spec: &str, target: &str, level: log::Level) -> bool {
-    built(spec).enabled(
-        &log::Metadata::builder()
-            .level(level)
-            .target(target)
-            .build(),
-    )
+    built(spec).enabled(&log::Metadata::builder().level(level).target(target).build())
 }
 
 /// The maximum level `spec` can emit, which is what `log::set_max_level` is given.
@@ -202,7 +197,10 @@ fn a_rejected_filter_does_not_take_the_area_switches_with_it() {
 fn an_empty_escape_hatch_adds_no_stray_separator() {
     let spec = compose(&DiagCfg::default(), None);
     assert_eq!(spec, DEFAULT_BASE_FILTER);
-    assert!(!spec.ends_with(','), "a trailing comma parses as an empty directive");
+    assert!(
+        !spec.ends_with(','),
+        "a trailing comma parses as an empty directive"
+    );
 }
 
 #[test]
@@ -216,7 +214,11 @@ fn every_directive_names_a_target_the_terminal_can_actually_emit() {
     // indistinguishable from one that is simply quiet.
     let spec = compose(&DiagCfg::default(), None);
     assert!(
-        allows(&spec, "moonterminal::panels::chart::trade", log::Level::Info),
+        allows(
+            &spec,
+            "moonterminal::panels::chart::trade",
+            log::Level::Info
+        ),
         "the manual-order trail must reach the log at info: {spec}"
     );
     assert!(
@@ -239,7 +241,11 @@ fn every_directive_names_a_target_the_terminal_can_actually_emit() {
     cfg.log.chart_input = true;
     let spec = compose(&cfg, None);
     assert!(
-        allows(&spec, "moonterminal::panels::chart::trade", log::Level::Debug),
+        allows(
+            &spec,
+            "moonterminal::panels::chart::trade",
+            log::Level::Debug
+        ),
         "log.chart_input must raise the chart subtree it names: {spec}"
     );
     assert!(
@@ -262,7 +268,11 @@ fn the_hotkey_area_raises_dispatch_tracing_and_nothing_else() {
         "and must not drag the chart channel on with it: {spec}"
     );
     assert!(
-        !allows(&compose(&DiagCfg::default(), None), "moonterminal::hotkeys", log::Level::Debug),
+        !allows(
+            &compose(&DiagCfg::default(), None),
+            "moonterminal::hotkeys",
+            log::Level::Debug
+        ),
         "off by default, like every other area"
     );
 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use rusqlite::Connection;
 
 use crate::db::read_fail::read_fail;
-use crate::db::report_axis::{OffsetSegment, MAX_OFFSET_SECS, MIN_OFFSET_SECS};
+use crate::db::report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment};
 use crate::db::{FailKind, ReadFail, ReadResult};
 
 const TABLE: &str = "core_time_offset";

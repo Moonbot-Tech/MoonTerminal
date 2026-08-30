@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use super::super::read_fail::read_fail_on;
 use super::super::ReadResult;
+use super::super::read_fail::read_fail_on;
 
 /// How close `spentbtc × leverage` must sit to the notional to count as a margin row.
 ///
@@ -67,9 +67,7 @@ pub(in crate::db) fn margin_cores(conn: &Connection) -> ReadResult<HashSet<u64>>
     let cell = MARGIN_CORES.get_or_init(|| Mutex::new(None));
     // A panicking prober would poison the lock; the cached value is a plain set that cannot be
     // left inconsistent, so recovering it is safe and beats failing every later volume read.
-    let mut slot = cell
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut slot = cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some((taken, cores)) = slot.as_ref() {
         if taken.elapsed() < CACHE_TTL {
             return Ok(cores.clone());
@@ -135,7 +133,11 @@ fn probe(conn: &Connection) -> ReadResult<HashSet<u64>> {
         let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
             })
             .map_err(|e| read_fail_on(conn, CTX, e))?;
         for row in rows {
@@ -170,7 +172,9 @@ pub(in crate::db) fn notional_factor_expr(alias: &str, margin: &HashSet<u64>) ->
         .map(|c| (*c as i64).to_string())
         .collect::<Vec<_>>()
         .join(",");
-    format!("(CASE WHEN {alias}.core_uid IN ({list}) THEN MAX(COALESCE({alias}.lev, 1), 1) ELSE 1 END)")
+    format!(
+        "(CASE WHEN {alias}.core_uid IN ({list}) THEN MAX(COALESCE({alias}.lev, 1), 1) ELSE 1 END)"
+    )
 }
 
 #[cfg(test)]

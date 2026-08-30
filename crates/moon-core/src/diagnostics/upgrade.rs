@@ -17,7 +17,7 @@
 
 use toml_edit::{DocumentMut, Item, Table, Value};
 
-use super::template::{comment, KEYS, SECTIONS};
+use super::template::{KEYS, SECTIONS, comment};
 
 /// Insert every documented key the file lacks, each with its comment, at the end of its section.
 ///

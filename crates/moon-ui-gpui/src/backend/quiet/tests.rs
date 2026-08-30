@@ -63,5 +63,8 @@ fn the_system_zone_is_not_resolved_when_it_is_not_wanted() {
         Some("America/New_York"),
     );
     assert_eq!(zone, Tz::America__New_York);
-    assert!(!asked, "the platform must not be queried for a discarded value");
+    assert!(
+        !asked,
+        "the platform must not be queried for a discarded value"
+    );
 }

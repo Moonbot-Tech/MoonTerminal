@@ -3,14 +3,14 @@
 use std::time::{Duration, Instant};
 
 use moon_core::config::{
-    GroupExitSettings, GroupTradeSettings, TakeProfitMode, DEFAULT_ORDER_SIZES_USD,
+    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
 use moon_core::feed::{ClientSettingsEdit, StrategyRow};
 
 use super::{
-    apply_group_exit_edit, effective_manual_strat_state, effective_panic_armed,
-    panic_local_settled, panic_press_absorbed, update_group_trade_pair, usd_to_base_amount,
-    MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL, PANIC_TOGGLE_DEBOUNCE,
+    MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL, PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit,
+    effective_manual_strat_state, effective_panic_armed, panic_local_settled, panic_press_absorbed,
+    update_group_trade_pair, usd_to_base_amount,
 };
 
 /// Build a strategy row carrying only the kind used by manual-state validation.

@@ -2,13 +2,13 @@
 
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
-use crate::market::source::{max_order_notional, MarketLabel, MarketLimits};
+use crate::market::source::{MarketLabel, MarketLimits, max_order_notional};
 use crate::session::CoreId;
 
 use super::{
-    rows_to_ticks, ArbQuote, ArbVenue, CoinTag, DetectSnapshot, LatestPriceError,
-    MarketContextReadout, MarketDataSource, MarketFiguresReadout, MarketRevisions,
-    MarketTickerReadout, MarketWindowsReadout,
+    ArbQuote, ArbVenue, CoinTag, DetectSnapshot, LatestPriceError, MarketContextReadout,
+    MarketDataSource, MarketFiguresReadout, MarketRevisions, MarketTickerReadout,
+    MarketWindowsReadout, rows_to_ticks,
 };
 use crate::market::candles::ChartCandle;
 

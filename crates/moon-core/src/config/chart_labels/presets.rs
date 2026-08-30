@@ -128,10 +128,7 @@ impl LabelPreset {
                 ChartLabelField::WindowLiquidations,
             ],
             LabelPreset::Scale => &[ChartLabelField::ScaleBadge],
-            LabelPreset::Session => &[
-                ChartLabelField::SessionPnl,
-                ChartLabelField::SessionProfit,
-            ],
+            LabelPreset::Session => &[ChartLabelField::SessionPnl, ChartLabelField::SessionProfit],
             LabelPreset::Detect => &[
                 ChartLabelField::DetectStrategy,
                 ChartLabelField::DetectMsg,

@@ -32,20 +32,20 @@ mod summary_stream;
 pub(crate) mod time_zone;
 
 pub use calendar::{
-    calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, CellTotals, DayCell, HourStat,
+    CalendarPeriod, CellTotals, DayCell, HourStat, calendar_cells, calendar_hours, hourly_profiles,
 };
-pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindStat, TopTrade};
-pub use profit_monitor::{profit_monitor, ProfitMonitorCore, ProfitMonitorSummary};
+pub use groups::{GroupStat, KindCore, KindStat, TopTrade, coin_groups, strategies_for_coins};
+pub use profit_monitor::{ProfitMonitorCore, ProfitMonitorSummary, profit_monitor};
 pub use query::{PreviousPeriodBasis, Query};
 
 use groups::groups;
 pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
 use query::ProjectionMode;
 use query::WHERE_UNDATED;
+pub(in crate::db) use query::{ProjectionMode as ResolvedProjectionMode, unified_from_mode};
 pub(in crate::db) use query::{
     attach_strategies, effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from,
 };
-pub(in crate::db) use query::{unified_from_mode, ProjectionMode as ResolvedProjectionMode};
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by
 /// `closedate`, including profit factor, maximum drawdown, streaks, and duration.
@@ -793,9 +793,7 @@ fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<
             "SELECT {core_expr}, MIN(closedate) FROM {} WHERE closedate > 0 GROUP BY {core_expr}",
             src.table
         );
-        let mut statement = conn
-            .prepare(&sql)
-            .map_err(|e| read_fail_on(conn, CTX, e))?;
+        let mut statement = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
         let rows = statement
             .query_map([], |r| {
                 Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?))
@@ -895,8 +893,8 @@ fn scan_period(
         peak = peak.max(cum);
         st.max_dd = st.max_dd.max(peak - cum);
 
-        let start =
-            crate::util::display_time::bucket_start(close_utc, bucket, axis.zone()).unwrap_or(close_utc);
+        let start = crate::util::display_time::bucket_start(close_utc, bucket, axis.zone())
+            .unwrap_or(close_utc);
         match days.last_mut() {
             Some(d) if d.start == start => {
                 d.profit += profit;

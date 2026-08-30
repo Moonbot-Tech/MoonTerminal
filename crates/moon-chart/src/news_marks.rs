@@ -15,7 +15,7 @@
 //! Sizes are in LOGICAL pixels: the caller multiplies by the device pixel ratio so a mark stays the
 //! same visual size on a HiDPI screen, exactly like the chart's other markers.
 
-use crate::layers::{MarkerInstance, MARKER_ANCHOR_BOTTOM};
+use crate::layers::{MARKER_ANCHOR_BOTTOM, MarkerInstance};
 
 /// Half-height of the gem in logical pixels; it is taller than wide, which reads as a marker rather
 /// than as a trade dot.

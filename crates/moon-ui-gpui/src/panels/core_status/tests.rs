@@ -4,7 +4,7 @@
 //! live beside that engine now.
 
 use super::ordering::natural_cmp;
-use super::{mode_ctx_id, CoreStatusMode};
+use super::{CoreStatusMode, mode_ctx_id};
 
 /// `mod.rs:CoreStatusMode::default` must remain By IP; changing it to Flat makes every newly opened
 /// Core Status panel bypass the server overview.

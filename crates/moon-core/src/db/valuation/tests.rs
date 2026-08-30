@@ -308,10 +308,12 @@ fn attachment_waits_for_file_family_replacement() {
     ));
 
     drop(replacement);
-    assert!(done_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("attachment resumes after replacement")
-        .expect("attach healthy lifecycle fixture"));
+    assert!(
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("attachment resumes after replacement")
+            .expect("attach healthy lifecycle fixture")
+    );
     worker.join().expect("join attachment thread");
     std::fs::remove_dir_all(root).expect("remove lifecycle fixture");
 }
@@ -460,9 +462,11 @@ fn report_outbox_obeys_transaction_commit_and_rollback() {
         stage_row(&transaction, TradeSource::Typed, 7, 11).expect("stage rolled-back row");
         transaction.rollback().expect("roll back report mutation");
     }
-    assert!(read_outbox(&conn, 10)
-        .expect("read empty outbox")
-        .is_empty());
+    assert!(
+        read_outbox(&conn, 10)
+            .expect("read empty outbox")
+            .is_empty()
+    );
 
     {
         let transaction = conn.transaction().expect("begin committed report mutation");

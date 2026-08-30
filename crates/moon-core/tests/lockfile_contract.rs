@@ -121,7 +121,8 @@ fn deny_toml_path() -> PathBuf {
 /// between `allow-git = [` and the next `]`.
 fn deny_allow_git() -> Vec<String> {
     let path = deny_toml_path();
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let start = text
         .find("allow-git = [")
         .expect("deny.toml must declare an `allow-git` allow-list under [sources]");

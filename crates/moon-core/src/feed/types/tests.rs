@@ -172,7 +172,10 @@ fn every_hip3_dex_name_keys_its_own_venue() {
 
     // The plain venue is `dex = 0`, and no named DEX may land on it.
     assert_eq!(super::ExchangeId::with_dex(13, "").dex, 0);
-    assert_eq!(super::ExchangeId::new(13), super::ExchangeId::with_dex(13, ""));
+    assert_eq!(
+        super::ExchangeId::new(13),
+        super::ExchangeId::with_dex(13, "")
+    );
     assert!(
         !ids.contains(&0),
         "a named DEX must not key as the plain venue"

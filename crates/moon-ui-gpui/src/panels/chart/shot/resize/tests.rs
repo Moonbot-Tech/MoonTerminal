@@ -1,8 +1,8 @@
 //! Unit coverage for the shot's final-size normalization rule.
 
 use super::{
-    ascent_fallback_px, fitted, lead_px, normalize, strip_height, RgbFrame, FONT_MAX_PX,
-    FONT_MIN_PX, HEADER_RESERVE_PX, NORMALIZED_MAX_PX,
+    FONT_MAX_PX, FONT_MIN_PX, HEADER_RESERVE_PX, NORMALIZED_MAX_PX, RgbFrame, ascent_fallback_px,
+    fitted, lead_px, normalize, strip_height,
 };
 
 /// `resize.rs:normalize` must return a small capture byte-for-byte; otherwise the hotkey silently

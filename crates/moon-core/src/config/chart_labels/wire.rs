@@ -19,9 +19,9 @@ use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
 
 use super::{
-    ChartLabelField, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelFlow,
-    LabelPreset, LabelStyle, LabelWindow, LabelZone, PnlBasis, CHART_LABEL_PARTS,
-    CHART_LABEL_ROWS,
+    CHART_LABEL_PARTS, CHART_LABEL_ROWS, ChartLabelField, ChartLabelPart, ChartLabelRow,
+    ChartLabelsCfg, LabelAlign, LabelFlow, LabelPreset, LabelStyle, LabelWindow, LabelZone,
+    PnlBasis,
 };
 
 /// One row as it appears in a file.
@@ -94,7 +94,10 @@ struct RowWire {
     /// deserialized as ONE value — inside `layout.toml`, part of a document that also holds every
     /// window position — so an unknown name here would take the reader's entire caption set down
     /// with it. It costs the row its NAME instead: captions, order, band and styling all survive.
-    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_lenient_preset")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient_preset"
+    )]
     preset: Option<LabelPreset>,
     zone: LabelZone,
     align: LabelAlign,

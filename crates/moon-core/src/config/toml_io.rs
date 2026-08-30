@@ -5,8 +5,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Config-load outcome used by the caller to decide whether writing back is safe.
 ///

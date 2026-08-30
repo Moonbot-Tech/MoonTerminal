@@ -91,7 +91,11 @@ pub fn seed(core: CoreId, market: &str, window: SeedWindow) -> usize {
         // Each tool gets its own horizontal band so nothing lands on top of anything else.
         let left = 0.05 + 0.10 * index as f64;
         let kind = figure_for(*slot, &window, left);
-        store.add(core, market, Figure::new(kind, style_for(index), created_ms));
+        store.add(
+            core,
+            market,
+            Figure::new(kind, style_for(index), created_ms),
+        );
     }
     store.save();
     SLOTS.len()

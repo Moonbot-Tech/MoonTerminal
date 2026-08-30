@@ -38,7 +38,9 @@ fn addresses_logged_by_dependencies_never_reach_the_buffer() {
     }
     // The masked lines must still be readable diagnostics, and an address-free line untouched.
     assert!(lines.iter().any(|l| l.contains("BAD HMAC")));
-    assert!(lines
-        .iter()
-        .any(|l| l == "live connect core=BB1 market=BTCUSDT transport=V0"));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "live connect core=BB1 market=BTCUSDT transport=V0")
+    );
 }

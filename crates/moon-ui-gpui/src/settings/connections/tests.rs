@@ -1,8 +1,8 @@
 //! Deterministic regression coverage for the Connections hierarchy.
 
-use super::entries::{flatten_entries, ConnEntry, EntryLabels};
+use super::entries::{ConnEntry, EntryLabels, flatten_entries};
 use super::sync_groups_from_servers;
-use super::tab::{pending_server_indices, visible_group_rows, ServerRowMeta};
+use super::tab::{ServerRowMeta, pending_server_indices, visible_group_rows};
 use crate::core_order::CoreOrder;
 use moon_core::config::{
     AppConfig, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,

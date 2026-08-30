@@ -1,5 +1,5 @@
-use super::super::schema::{default_ui_font_delta, default_ui_scale, SettingsFile};
-use super::{load_or_default, load_or_default_status, ConfigLoad};
+use super::super::schema::{SettingsFile, default_ui_font_delta, default_ui_scale};
+use super::{ConfigLoad, load_or_default, load_or_default_status};
 use std::path::{Path, PathBuf};
 
 /// Bind the absent-file branch in [`load_or_default`] to `defaults_for_absent_file`.

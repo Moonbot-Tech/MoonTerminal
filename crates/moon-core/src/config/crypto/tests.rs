@@ -29,8 +29,8 @@ fn build_file(plain: &[u8], machine_key: Option<&[u8; 32]>, password: Option<&st
 /// The shipped 64 MiB derivation is not what these tests are checking, and paying it twice per
 /// password test would dominate the suite's runtime.
 fn test_password_slot(file_key: &[u8; 32], password: &str) -> Slot {
-    use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
 
     let salt = [3u8; kdf::SALT_LEN];
     let params = kdf::KdfParams {

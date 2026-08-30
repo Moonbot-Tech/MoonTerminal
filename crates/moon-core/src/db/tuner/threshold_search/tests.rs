@@ -5,9 +5,9 @@
 //! than through a database — the SQL they sit next to is exercised by the tuner's own DB tests.
 
 use super::{
+    ComposeDecision, EDGES_MAX, EDGES_MAX_LIGHT, RESTARTS_MAX, RESTARTS_MAX_LIGHT, RESTARTS_MIN,
     chronological_order, compose, composed_set, edges_max_for, fold_cuts, restarts_max_for,
-    train_split, ComposeDecision, EDGES_MAX, EDGES_MAX_LIGHT, RESTARTS_MAX, RESTARTS_MAX_LIGHT,
-    RESTARTS_MIN,
+    train_split,
 };
 use crate::db::tuner::FIELDS;
 

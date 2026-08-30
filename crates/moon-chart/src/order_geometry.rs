@@ -7,9 +7,9 @@ const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
 const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
 
 use crate::layers::{
-    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT,
-    SEG_CLAMP_NONE, SEG_CLAMP_PLOT, SEG_EXTEND_EDGE, SEG_EXTEND_NONE, SEG_PATTERN_DASH_DOT_DOT,
-    SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
+    LineInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT, MarkerInstance, SEG_CLAMP_NONE,
+    SEG_CLAMP_PLOT, SEG_EXTEND_EDGE, SEG_EXTEND_NONE, SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT,
+    SEG_PATTERN_SOLID, SegInstance, ZoneInstance,
 };
 
 use moon_core::config::{ChartGraphicsCfg, LineStyle, OrdersStyle};

@@ -279,9 +279,7 @@ impl MarketDataSource {
             let snapshot = self.core_client(from)?.snapshot_versioned()?;
             last_or_ask(&snapshot.markets().get(market)?)
         };
-        self.provider_of(core)
-            .and_then(read)
-            .or_else(|| read(core))
+        self.provider_of(core).and_then(read).or_else(|| read(core))
     }
 
     /// Keep one row per venue: the reader's OWN core first, then the freshest quote.
@@ -299,8 +297,10 @@ impl MarketDataSource {
                     let better = match (kept.donor == core, row.donor == core) {
                         (true, false) => false,
                         (false, true) => true,
-                        _ => (row.at_ms, std::cmp::Reverse(row.donor))
-                            > (kept.at_ms, std::cmp::Reverse(kept.donor)),
+                        _ => {
+                            (row.at_ms, std::cmp::Reverse(row.donor))
+                                > (kept.at_ms, std::cmp::Reverse(kept.donor))
+                        }
                     };
                     if better {
                         *kept = row;
@@ -465,10 +465,13 @@ impl MarketDataSource {
             .collect();
         let market =
             super::pick_market_for_identity(&labelled, coin_key, &label.quote).map(str::to_string);
-        book.lock()
-            .expect("arb book poisoned")
-            .markets
-            .insert(cache_key, MarketPick { at_ms: now, market: market.clone() });
+        book.lock().expect("arb book poisoned").markets.insert(
+            cache_key,
+            MarketPick {
+                at_ms: now,
+                market: market.clone(),
+            },
+        );
         market
     }
 

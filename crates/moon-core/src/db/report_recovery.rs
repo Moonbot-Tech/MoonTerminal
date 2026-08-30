@@ -426,7 +426,7 @@ fn pending_snapshots(recovery_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
             return Err(anyhow::Error::from(error).context(format!(
                 "read recovery directory {}",
                 recovery_root.display()
-            )))
+            )));
         }
     };
     let mut pending = Vec::new();
@@ -604,11 +604,11 @@ fn copy_and_verify(source: &Path, staging: &Path) -> anyhow::Result<SnapshotFile
                 present: false,
                 size_bytes: 0,
                 sha256: String::new(),
-            })
+            });
         }
         Err(error) => {
             return Err(anyhow::Error::from(error)
-                .context(format!("read report source {}", source.display())))
+                .context(format!("read report source {}", source.display())));
         }
     };
     let destination = staging.join(&name);

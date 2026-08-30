@@ -409,20 +409,16 @@ fn cal_cell(
                         None => fmt_volume(volume),
                     })
                 }))
-                .children(
-                    t.funding
-                        .filter(|funding| *funding != 0.0)
-                        .map(|funding| {
-                            div()
-                                .text_size(design::t_caption(cx))
-                                .text_color(moon(sign_color(p, funding)))
-                                .child(format!(
-                                    "{} {}",
-                                    t!("analytics.cal.funding_short"),
-                                    fmt_signed(funding)
-                                ))
-                        }),
-                )
+                .children(t.funding.filter(|funding| *funding != 0.0).map(|funding| {
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(sign_color(p, funding)))
+                        .child(format!(
+                            "{} {}",
+                            t!("analytics.cal.funding_short"),
+                            fmt_signed(funding)
+                        ))
+                }))
                 .children(
                     t.avg_duration_secs()
                         .map(|secs| muted(format!("~{}", fmt_duration_short(secs)))),

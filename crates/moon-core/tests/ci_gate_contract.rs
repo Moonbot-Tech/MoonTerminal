@@ -772,9 +772,11 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
         String::from_utf8_lossy(&patch.stderr)
     );
     assert!(!run_release_validator(&root, "v0.24").status.success());
-    assert!(!run_release_validator(&root, "v18446744073709551616.0.0")
-        .status
-        .success());
+    assert!(
+        !run_release_validator(&root, "v18446744073709551616.0.0")
+            .status
+            .success()
+    );
 
     commit_fixture(&root, "patch-nine");
     run_git(&root, &["tag", "v0.24.9"]);
@@ -792,14 +794,18 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
     run_git(&root, &["checkout", "--detach", "v0.24.9"]);
     let patch_nine = run_release_validator(&root, "v0.24.9");
     assert!(!patch_nine.status.success());
-    assert!(String::from_utf8_lossy(&patch_nine.stderr)
-        .contains("only the greatest canonical stable tag"));
+    assert!(
+        String::from_utf8_lossy(&patch_nine.stderr)
+            .contains("only the greatest canonical stable tag")
+    );
 
     run_git(&root, &["checkout", "--detach", "v0.21.0"]);
     let alias = run_release_validator(&root, "v0.21.0");
     assert!(!alias.status.success());
-    assert!(String::from_utf8_lossy(&alias.stderr)
-        .contains("release tag aliases an existing stable version"));
+    assert!(
+        String::from_utf8_lossy(&alias.stderr)
+            .contains("release tag aliases an existing stable version")
+    );
     std::fs::remove_dir_all(root).expect("remove release-policy fixture");
 }
 

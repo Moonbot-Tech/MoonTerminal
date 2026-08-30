@@ -1,7 +1,7 @@
 //! Read layer for the Reports window: filters, source projection, sort/merge, and aggregates.
 
-use rusqlite::types::Value;
 use rusqlite::Connection;
+use rusqlite::types::Value;
 
 use super::name_fold::{install_unicode_casefold, strategy_name_casefold};
 use super::read_fail::read_fail;
@@ -1230,7 +1230,10 @@ pub(in crate::db) fn record_identity_expr(src: &ReadSource) -> String {
     } else {
         "0"
     };
-    format!("COALESCE(NULLIF({}, 0), {fallback_id}, 0)", rec_id_expr(src))
+    format!(
+        "COALESCE(NULLIF({}, 0), {fallback_id}, 0)",
+        rec_id_expr(src)
+    )
 }
 
 /// Rows of one strategy that a report purge can address, plus the ones it cannot.
@@ -1713,9 +1716,13 @@ fn query_reports_attempt(
             run_row_pass(conn, pass, include_valuation, RowScope::Closed, pass.limit)
         }
         RowScope::Open => run_row_pass(conn, pass, include_valuation, RowScope::Open, pass.limit),
-        RowScope::OpenIfCurrent => {
-            run_row_pass(conn, pass, include_valuation, RowScope::OpenIfCurrent, pass.limit)
-        }
+        RowScope::OpenIfCurrent => run_row_pass(
+            conn,
+            pass,
+            include_valuation,
+            RowScope::OpenIfCurrent,
+            pass.limit,
+        ),
         // Both combined scopes split into the same two passes; they differ only in whether the
         // open half is filtered to the cores whose window still reaches the present.
         RowScope::ClosedAndOpen | RowScope::ClosedAndOpenIfCurrent => {

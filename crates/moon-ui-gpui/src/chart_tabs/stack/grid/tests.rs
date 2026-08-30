@@ -79,9 +79,17 @@ fn a_tab_without_an_order_book_divides_a_narrower_window() {
     let mut input = measured(2, false, 10);
     input.cross_extent = 430.0; // one 240-wide column, but three 140-wide ones
     input.min_cross = super::MIN_COLUMN_W;
-    assert_eq!(effective_columns(input), 1, "with the book: no room to divide");
+    assert_eq!(
+        effective_columns(input),
+        1,
+        "with the book: no room to divide"
+    );
     input.min_cross = super::MIN_COLUMN_W_NO_BOOK;
-    assert_eq!(effective_columns(input), 2, "without it: the divider applies");
+    assert_eq!(
+        effective_columns(input),
+        2,
+        "without it: the divider applies"
+    );
 }
 
 /// A narrow window cannot hold three charts side by side, so the divider working up on its own

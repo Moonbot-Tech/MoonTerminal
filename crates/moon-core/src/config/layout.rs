@@ -14,9 +14,9 @@ mod serde_compat;
 use serde_compat::{
     de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
     de_candle_volume_scale, de_candle_volume_style, de_clock_zone, de_connector_thickness,
-    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map, de_lenient_seed,
-    de_lenient_true, de_lenient_u32, de_marker_scale, de_strategies_tree_text_step,
-    de_table_sort_map, de_trade_volume_alpha,
+    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
+    de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
+    de_strategies_tree_text_step, de_table_sort_map, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -1601,8 +1601,11 @@ impl WindowLayout {
         value: crate::market::candles::CandleViewCfg,
     ) -> bool {
         // No kind ships its own candles: every one of them follows Main until it is given a value.
-        let split =
-            self.split_defaults(|d| &mut d.candle_view, |l, k| l.candle_view_for(k), |_| false);
+        let split = self.split_defaults(
+            |d| &mut d.candle_view,
+            |l, k| l.candle_view_for(k),
+            |_| false,
+        );
         let moved = match self.kind_defaults_mut(kind) {
             Some(d) => std::mem::replace(&mut d.candle_view, Some(value)) != Some(value),
             None => std::mem::replace(&mut self.candle_view, value) != value,

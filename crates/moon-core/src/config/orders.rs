@@ -280,11 +280,7 @@ impl Default for OrdersStyleSet {
 impl OrdersStyleSet {
     /// Set for the active theme: `light=true` → light, otherwise dark.
     pub fn get(&self, light: bool) -> &OrdersStyle {
-        if light {
-            &self.light
-        } else {
-            &self.dark
-        }
+        if light { &self.light } else { &self.dark }
     }
     pub fn get_mut(&mut self, light: bool) -> &mut OrdersStyle {
         if light {

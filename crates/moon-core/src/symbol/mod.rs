@@ -81,11 +81,7 @@ pub fn strip_contract_suffix(coin: &str) -> &str {
     }
     let known = suffix.eq_ignore_ascii_case("RP")
         || (suffix.len() == 4 && suffix.bytes().all(|b| b.is_ascii_digit()));
-    if known {
-        base
-    } else {
-        coin
-    }
+    if known { base } else { coin }
 }
 
 /// THE comparison key for "is this coin the one that list names?".

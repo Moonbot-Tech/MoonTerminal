@@ -11,9 +11,9 @@
 use rusqlite::Connection;
 
 use super::analytics::{
-    coin_groups_from_source, strategies_for_coins_on, GroupStat, HourStat, Query,
+    GroupStat, HourStat, Query, coin_groups_from_source, strategies_for_coins_on,
 };
-use super::metrics::{improvement_margin, winrate, Tally};
+use super::metrics::{Tally, improvement_margin, winrate};
 use super::read_fail::read_fail_on;
 use super::{ReadFail, ReadResult};
 
@@ -25,14 +25,14 @@ mod strategy_read;
 pub mod threshold_search;
 mod time;
 
-pub use fields::{slot_type_for, FieldClass, FieldSpec, FIELDS};
+pub use fields::{FIELDS, FieldClass, FieldSpec, slot_type_for};
 pub use strategy_read::{
-    strategy_cores, strategy_current_values, strategy_current_values_opt, strategy_filters,
-    StratFilters,
+    StratFilters, strategy_cores, strategy_current_values, strategy_current_values_opt,
+    strategy_filters,
 };
 pub use time::{
-    format_week_span, format_working_time, slider_profiles, suggest_time, SliderProfiles, TimeAxes,
-    TimeSuggest, TimeWindow,
+    SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,
+    slider_profiles, suggest_time,
 };
 
 /// Range for one field; `None` means the bound is unset.
@@ -477,8 +477,7 @@ fn visit_time_rows(
     mut visit: impl FnMut(i64, i64, f64),
 ) -> ReadResult<()> {
     let axis = q.resolved_axis(conn)?;
-    super::analytics::time_zone::install(conn, &axis)
-        .map_err(|e| read_fail_on(conn, ctx, e))?;
+    super::analytics::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, ctx, e))?;
     let sql = format!(
         "SELECT mt_core_minute_of_week({OPEN_TS}) / 1440 AS wd,
                 mt_core_minute_of_day({OPEN_TS}) AS mn,
@@ -551,8 +550,7 @@ fn variant_stats_from_source(
         return Ok(Vec::new());
     }
     let axis = q.resolved_axis(conn)?;
-    super::analytics::time_zone::install(conn, &axis)
-        .map_err(|e| read_fail_on(conn, CTX, e))?;
+    super::analytics::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, CTX, e))?;
     let sql = variant_stats_sql(src, variants);
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
