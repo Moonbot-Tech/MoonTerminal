@@ -970,6 +970,21 @@ pub(super) fn drain_commands(
                     );
                 }
             }
+            Ok(CoreCmd::SetAutoDetect(on)) => {
+                // Passive mode off/on; the new value reaches the store via RuntimeStateUpdated,
+                // the same command that carries `is_started`.
+                if let Err(error) = client.settings().set_auto_detect_active(on) {
+                    log::warn!(
+                        "core {} set_auto_detect_active({on}) failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                } else {
+                    log::info!(
+                        "core {} set_auto_detect_active({on}) sent",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
             Ok(CoreCmd::ResetProfit(kind)) => {
                 let proto_kind = match kind {
                     crate::feed::ResetProfitKind::Session => {

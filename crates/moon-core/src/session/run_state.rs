@@ -1,16 +1,19 @@
-//! The one answer to "is this core running, and is it trading" — plus what a control offering to
-//! change that may show.
+//! The one answer to "is this core running, is it detecting, and is it trading" — plus what a
+//! control offering to change any of that may show.
 //!
 //! Everything here is pure and lives in `moon-core` rather than in a window, because more than one
 //! surface asks the question — today the Profit Monitor's run column and the core-settings popup,
 //! with the Core Status panel next — and each answering it from raw [`CoreData`] fields is how they
 //! come to disagree. A caller reads
 //! [`SessionManager::core_run_state`](super::SessionManager::core_run_state) and gets a value that
-//! already knows the two rules that are easy to get wrong:
+//! already knows the rules that are easy to get wrong:
 //!
-//! - the core reports its market runtime (`TRuntimeStateCommand`) and its strategy engine
-//!   (`TStratRuntimeState`) over SEPARATE commands, so either half can be known while the other is
-//!   not. `None` is a real third state and never a `false`;
+//! - the core reports its market runtime (`TRuntimeStateCommand`, which also carries AutoDetect)
+//!   and its strategy engine (`TStratRuntimeState`) over SEPARATE commands, so either half can be
+//!   known while the other is not. `None` is a real third state and never a `false`;
+//! - AutoDetect is not a free-standing flag: passive mode is `is_started=true` with
+//!   `auto_detect_active=false` (`feed::types::RuntimeState`), so a `false` on a core whose runtime
+//!   is stopped identifies nothing and must not be read as "passive";
 //! - a core that is not `Ready` has only STALE knowledge, and an offline core reports every half as
 //!   unknown — a control must not offer "Stop trading" for a core it cannot reach;
 //! - a core that came BACK is a third case. MoonProto repeats neither init nor its post-init
@@ -130,10 +133,11 @@ pub struct CoreRunState {
     pub started_confirmed: bool,
     /// Whether automatic detection is active (`not PassiveMode`), or `None` when unknown.
     ///
-    /// Carried because it arrives in the same command as [`Self::started`] and a reader that needed
-    /// it would otherwise reach past this type into the raw snapshot. The core-settings popup shows
-    /// it as a status dot; no control changes it yet — the protocol's
-    /// `settings().set_auto_detect_active` has no terminal command behind it.
+    /// Arrives in the same command as [`Self::started`], so [`Self::started_confirmed`] answers for
+    /// this half too — there is no second confirmation flag to keep, and inventing one would let
+    /// two fields that cannot disagree drift apart. The core-settings popup shows it as a status
+    /// dot; the run control's auto slot both shows and changes it, through
+    /// `Session::set_auto_detect`.
     pub auto_detect: Option<bool>,
     /// Whether the global strategy engine is running (`IsRunningStrat`), or `None` when unknown.
     pub trading: Option<bool>,
@@ -196,6 +200,21 @@ pub enum TradingAction {
     Unknown,
 }
 
+/// What the AutoDetect control offers for one core or one set of them.
+///
+/// A separate enum from [`TradingAction`] even though the shape matches: these are two different
+/// commands with two different meanings, and one enum shared between them would let a caller pass
+/// a trading decision to the AutoDetect action without the compiler noticing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutoAction {
+    /// Detection is off (or partly off): offer to turn it on.
+    Enable,
+    /// Detection is active everywhere in scope: offer to turn it off.
+    Disable,
+    /// Nothing in scope has reported: offer nothing actionable.
+    Unknown,
+}
+
 /// The folded run state of a SET of cores, as a group caption or an exchange row acts on it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RunSummary {
@@ -229,6 +248,26 @@ pub struct RunSummary {
     pub needing_start: usize,
     /// How many reachable cores are not already stopped.
     pub needing_stop: usize,
+    /// How many reported AutoDetect as active.
+    pub auto_on: usize,
+    /// How many reported it as off — the core is in passive mode.
+    pub auto_off: usize,
+    /// Of the cores reporting AutoDetect as active, how many said so on a previous connection.
+    ///
+    /// Split by value like the runtime counters above, and derived from the same
+    /// `started_confirmed`: AutoDetect travels in the runtime-state command, so there is nothing
+    /// else that could confirm it.
+    pub auto_on_stale: usize,
+    /// Of the cores reporting AutoDetect as off, how many said so on a previous connection.
+    pub auto_off_stale: usize,
+    /// How many reachable cores are not already detecting.
+    ///
+    /// What a press REACHES, which is deliberately wider than what votes on the control's face: a
+    /// core that has reported nothing is still connected and is still commanded, exactly as the
+    /// trading counters above work.
+    pub needing_auto_on: usize,
+    /// How many reachable cores are not already passive.
+    pub needing_auto_off: usize,
 }
 
 impl RunSummary {
@@ -269,11 +308,25 @@ impl RunSummary {
         let trading_stale = !state.trading_confirmed;
         self.trading_on_stale += usize::from(state.trading == Some(true) && trading_stale);
         self.trading_off_stale += usize::from(state.trading == Some(false) && trading_stale);
+        // AutoDetect votes asymmetrically, and deliberately: `auto_detect_active=true` says the
+        // core is detecting whatever its runtime is doing, while a `false` identifies passive mode
+        // ONLY together with a started runtime (`feed::types::RuntimeState`). A stopped core's
+        // `false` therefore votes for nothing at all — the same reading the core-settings popup's
+        // dot has always used, and what keeps the two surfaces from describing one core two ways.
+        let passive = state.auto_detect == Some(false) && state.started == Some(true);
+        self.auto_on += usize::from(state.auto_detect == Some(true));
+        self.auto_off += usize::from(passive);
+        self.auto_on_stale += usize::from(state.auto_detect == Some(true) && started_stale);
+        self.auto_off_stale += usize::from(passive && started_stale);
         if state.online {
             self.needing_start +=
                 usize::from(!(state.trading == Some(true) && state.trading_confirmed));
             self.needing_stop +=
                 usize::from(!(state.trading == Some(false) && state.trading_confirmed));
+            self.needing_auto_on +=
+                usize::from(!(state.auto_detect == Some(true) && state.started_confirmed));
+            self.needing_auto_off +=
+                usize::from(!(state.auto_detect == Some(false) && state.started_confirmed));
         }
     }
 
@@ -300,5 +353,32 @@ impl RunSummary {
     ///     Whether both a trading and a stopped core reported.
     pub fn trading_mixed(self) -> bool {
         self.trading_on > 0 && self.trading_off > 0
+    }
+
+    /// Return what the AutoDetect control offers for this scope.
+    ///
+    /// The same rule [`Self::trading_action`] follows, for the same reason: with a mixed set, the
+    /// press that finishes the job is the one that turns the remaining cores ON, while an Off whose
+    /// own state is already true for half the scope reads as a no-op. A scope where NOTHING
+    /// interpretable was reported offers no control at all — not a switch whose face would be a
+    /// guess. What a press then reaches is a wider set than what voted on it; see
+    /// [`Self::needing_auto_on`].
+    ///
+    /// Returns:
+    ///     The offered action.
+    pub fn auto_action(self) -> AutoAction {
+        match (self.auto_on, self.auto_off) {
+            (0, 0) => AutoAction::Unknown,
+            (_, 0) => AutoAction::Disable,
+            _ => AutoAction::Enable,
+        }
+    }
+
+    /// Whether only PART of the scope is detecting, which the control says in its tooltip.
+    ///
+    /// Returns:
+    ///     Whether both a detecting and a passive core reported.
+    pub fn auto_mixed(self) -> bool {
+        self.auto_on > 0 && self.auto_off > 0
     }
 }

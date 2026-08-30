@@ -248,3 +248,106 @@ fn the_needing_counters_count_what_a_press_reaches() {
     assert_eq!(scope.needing_stop, 2);
     assert_eq!(scope.online, 3);
 }
+
+/// Fold a set of cores described by their runtime half.
+///
+/// The tuple is `(online, started, auto_detect, confirmed)`: AutoDetect travels in the runtime-state
+/// command, so its confirmation is the runtime one and a test must be able to set them apart — and
+/// its meaning depends on `started`, which is the rule the tests below pin.
+fn auto_scope(states: &[(bool, Option<bool>, Option<bool>, bool)]) -> RunSummary {
+    RunSummary::fold(
+        states
+            .iter()
+            .map(|(online, started, auto, confirmed)| CoreRunState {
+                online: *online,
+                started: *started,
+                started_confirmed: *confirmed,
+                auto_detect: *auto,
+                trading: None,
+                trading_confirmed: false,
+            }),
+    )
+}
+
+/// The AutoDetect decision follows the same rule as trading: turn the remaining cores ON, and
+/// offer Off only when the whole scope is already detecting.
+///
+/// Breakage: offering Off for a mixed scope gives a press whose own state is already true for half
+/// its targets, and answering Unknown with a command fires blind at cores whose mode nobody knows.
+#[test]
+fn auto_detect_offers_the_opposite_action() {
+    let all_on = auto_scope(&[
+        (true, Some(true), Some(true), true),
+        (true, Some(true), Some(true), true),
+    ]);
+    assert_eq!(all_on.auto_action(), AutoAction::Disable);
+    assert!(!all_on.auto_mixed());
+
+    let all_off = auto_scope(&[
+        (true, Some(true), Some(false), true),
+        (true, Some(true), Some(false), true),
+    ]);
+    assert_eq!(all_off.auto_action(), AutoAction::Enable);
+
+    let mixed = auto_scope(&[
+        (true, Some(true), Some(true), true),
+        (true, Some(true), Some(false), true),
+    ]);
+    assert_eq!(mixed.auto_action(), AutoAction::Enable);
+    assert!(mixed.auto_mixed());
+
+    let silent = auto_scope(&[(true, None, None, false), (false, None, None, false)]);
+    assert_eq!(silent.auto_action(), AutoAction::Unknown);
+}
+
+/// Passive mode is `is_started=true` with `auto_detect_active=false`; a `false` on a STOPPED core
+/// identifies nothing and must not vote.
+///
+/// Breakage: counting it makes a stopped core read as passive and hands the user a control offering
+/// to "turn detection on" for a runtime that is not running — and makes this projection disagree
+/// with the core-settings popup, which has always drawn that case as unknown.
+#[test]
+fn a_stopped_core_does_not_report_passive_mode() {
+    let stopped = auto_scope(&[(true, Some(false), Some(false), true)]);
+    assert_eq!(stopped.auto_off, 0, "a stopped false identifies nothing");
+    assert_eq!(stopped.auto_on, 0);
+    assert_eq!(
+        stopped.auto_action(),
+        AutoAction::Unknown,
+        "with nothing interpretable in scope the control offers nothing"
+    );
+
+    // A `true` is meaningful whatever the runtime is doing, which is how the popup reads it too.
+    let stopped_detecting = auto_scope(&[(true, Some(false), Some(true), true)]);
+    assert_eq!(stopped_detecting.auto_on, 1);
+    assert_eq!(stopped_detecting.auto_action(), AutoAction::Disable);
+}
+
+/// AutoDetect staleness is the RUNTIME confirmation, split by value, and the needing counters count
+/// every reachable core the press would actually change.
+///
+/// Breakage: reading the trading confirmation instead fades a dot on the wrong evidence; counting
+/// `auto_off` on the Enable press under-reports it, because a core that reported nothing is still
+/// connected and is still commanded.
+#[test]
+fn auto_detect_staleness_and_reach() {
+    let scope = auto_scope(&[
+        // detecting, but from before the reconnect
+        (true, Some(true), Some(true), false),
+        // passive, confirmed: Enable reaches it
+        (true, Some(true), Some(false), true),
+        // connected, never reported: both presses reach it
+        (true, None, None, false),
+        // offline, which `CoreRunState::from_core` projects as all-unknown: it reaches nothing.
+        (false, None, None, false),
+    ]);
+    assert_eq!(scope.auto_on, 1);
+    assert_eq!(scope.auto_off, 1);
+    assert_eq!(scope.auto_on_stale, 1);
+    assert_eq!(scope.auto_off_stale, 0, "that one was confirmed");
+    assert_eq!(
+        scope.needing_auto_on, 3,
+        "the unconfirmed detector, the passive core and the silent one"
+    );
+    assert_eq!(scope.needing_auto_off, 2);
+}

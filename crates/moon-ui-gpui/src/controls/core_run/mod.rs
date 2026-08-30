@@ -1,4 +1,5 @@
-//! The shared core RUN control: is this core up, is it trading, and the two buttons that change it.
+//! The shared core RUN control: is this core up, is it detecting, is it trading, and the buttons
+//! that change all three.
 //!
 //! One implementation for every surface that lists cores. The Profit Monitor is the first consumer;
 //! the Core Status panel and the core-settings popup are the next, and none of them re-derives the
@@ -14,7 +15,10 @@
 //!   There is NO stop counterpart, so a running core simply shows a status dot;
 //! - `strategies start/stop` — the global strategy engine, reported back as `strategies_running`.
 //!   This is Moonbot's own Start/Stop, NOT "run the ticked rows" — the checkbox set is never
-//!   produced here, though the protocol packet carries whatever delta MoonProto still owes.
+//!   produced here, though the protocol packet carries whatever delta MoonProto still owes;
+//! - `set_auto_detect_active` — Moonbot's AutoDetect, the inverse of passive mode, reported back
+//!   inside the same runtime state as `is_started`. This one DOES have both directions, so it is
+//!   drawn as a state the press flips rather than as an action the core may already be in.
 
 mod actions;
 mod pending;
@@ -38,7 +42,7 @@ use crate::design;
 /// column of them lines up with the row heights around it.
 const SLOT_W: f32 = 18.0;
 
-/// Gap between the two slots.
+/// Gap between two adjacent slots.
 const SLOT_GAP: f32 = 3.0;
 
 /// Which slots a surface reserves on every line of its table.
@@ -50,14 +54,16 @@ const SLOT_GAP: f32 = 3.0;
 pub(crate) struct RunSlots {
     /// The leading slot: a runtime status dot, or the restart button when the runtime is stopped.
     pub(crate) status: bool,
-    /// The trailing slot: start/stop the global strategy engine.
+    /// The middle slot: start/stop the global strategy engine.
     pub(crate) trading: bool,
+    /// The trailing slot: turn AutoDetect on or off.
+    pub(crate) auto: bool,
 }
 
 impl RunSlots {
     /// Whether any slot is present.
     pub(crate) fn any(self) -> bool {
-        self.status || self.trading
+        self.status || self.trading || self.auto
     }
 
     /// Return the column's design-reference width, gaps included.
@@ -65,7 +71,7 @@ impl RunSlots {
     /// Returns:
     ///     Width in design units; zero when the column is switched off entirely.
     pub(crate) fn width(self) -> f32 {
-        let slots = usize::from(self.status) + usize::from(self.trading);
+        let slots = usize::from(self.status) + usize::from(self.trading) + usize::from(self.auto);
         slots as f32 * SLOT_W + slots.saturating_sub(1) as f32 * SLOT_GAP
     }
 
@@ -125,23 +131,44 @@ pub(crate) struct RunScope {
     pub(crate) key: RunKey,
     /// Cores this cell stands for; one for a core row, many for a group caption or exchange row.
     ///
-    /// Its LENGTH is also what decides how much the cell offers: exactly one core can be
-    /// restarted, while a caption standing for six shows their folded status and acts on trading
-    /// only. That is a property of the scope, not a flag a caller could set inconsistently.
+    /// Its LENGTH is the first thing that decides how much the cell offers: exactly one core can
+    /// be restarted, while a caption standing for six shows their folded status and commands the
+    /// rest only. That much is a property of the scope, never a flag a caller could set
+    /// inconsistently — [`Self::allows_restart`] reads it rather than overriding it.
     pub(crate) cores: Rc<[CoreId]>,
     /// Slots every line of the hosting table reserves, so its columns line up.
     pub(crate) reserve: RunSlots,
-    /// Whether THIS line fills the reserved trading slot.
+    /// Slots THIS line actually fills, always a subset of [`Self::reserve`].
     ///
-    /// The one bit that varies per line: rows and captions carry separate preferences, and a
-    /// reserved slot a line does not fill is drawn empty at its reserved width rather than skipped.
-    pub(crate) offers_trading: bool,
+    /// The one thing that varies per line, and the same shape as the reservation because the
+    /// question is the same one asked twice: the table decides which columns exist, the line
+    /// decides which of them it speaks for. A reserved slot a line does not offer is drawn empty
+    /// at its reserved width rather than skipped, or the names would stop lining up.
+    pub(crate) offers: RunSlots,
+}
+
+impl RunScope {
+    /// Whether the status slot may offer its RESTART button rather than only the folded dot.
+    ///
+    /// DERIVED, never a field: exactly one core can be restarted, the line has to be drawing the
+    /// status slot at all, and a table-wide cell offers it for none of them — "restart the fleet"
+    /// is not an action any surface offers, and the single-core guard alone would hand it over on
+    /// a table holding exactly one core, or on a one-core group's caption. As a set of fields the
+    /// illegal combinations were representable; as a rule they are not.
+    ///
+    /// Returns:
+    ///     Whether this cell's status slot may draw the restart button.
+    pub(crate) fn allows_restart(&self) -> bool {
+        self.offers.status && !matches!(self.key, RunKey::Fleet) && self.cores.len() == 1
+    }
 }
 
 /// Which identity space a run cell's key belongs to.
 ///
-/// Two spaces share one frame — cores and captions — and their numbers overlap: core uid 0 and
-/// section 0 both exist. The variant is what keeps their element ids apart without allocating.
+/// Four spaces share one frame — cores, their repeats, captions and the table itself — and their
+/// numbers overlap: core uid 0 and section 0 both exist. The variant is what keeps their element
+/// ids apart without allocating, and what tells two controls commanding the same cores apart in
+/// the pending register.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RunKey {
     /// A row standing for one core, keyed by its uid.
@@ -154,6 +181,8 @@ pub(crate) enum RunKey {
     Repeat(usize),
     /// A group caption, keyed by its stable position among the drawn sections.
     Section(usize),
+    /// The one cell standing for a whole TABLE — its heading — of which a surface has exactly one.
+    Fleet,
 }
 
 /// One addressable slot of a run cell.
@@ -164,8 +193,10 @@ pub(crate) enum RunKey {
 pub(crate) enum RunSlot {
     /// The leading status/restart slot.
     Status,
-    /// The trailing trading slot.
+    /// The middle trading slot.
     Trading,
+    /// The trailing AutoDetect slot.
+    Auto,
 }
 
 impl RunScope {
@@ -182,18 +213,26 @@ impl RunScope {
         match (self.key, slot) {
             (RunKey::Core(core), RunSlot::Status) => ("core-run-status", core).into(),
             (RunKey::Core(core), RunSlot::Trading) => ("core-run-trading", core).into(),
+            (RunKey::Core(core), RunSlot::Auto) => ("core-run-auto", core).into(),
             (RunKey::Repeat(line), RunSlot::Status) => {
                 ("core-run-repeat-status", line as u64).into()
             }
             (RunKey::Repeat(line), RunSlot::Trading) => {
                 ("core-run-repeat-trading", line as u64).into()
             }
+            (RunKey::Repeat(line), RunSlot::Auto) => ("core-run-repeat-auto", line as u64).into(),
             (RunKey::Section(section), RunSlot::Status) => {
                 ("core-run-section-status", section as u64).into()
             }
             (RunKey::Section(section), RunSlot::Trading) => {
                 ("core-run-section-trading", section as u64).into()
             }
+            (RunKey::Section(section), RunSlot::Auto) => {
+                ("core-run-section-auto", section as u64).into()
+            }
+            (RunKey::Fleet, RunSlot::Status) => "core-run-fleet-status".into(),
+            (RunKey::Fleet, RunSlot::Trading) => "core-run-fleet-trading".into(),
+            (RunKey::Fleet, RunSlot::Auto) => "core-run-fleet-auto".into(),
         }
     }
 }

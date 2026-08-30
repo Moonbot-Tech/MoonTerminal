@@ -95,11 +95,35 @@ impl SessionManager {
     /// Returns:
     ///     The cores whose command channel accepted the intent, in the order given.
     pub fn set_trading_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+        self.send_many(cores, &format!("set trading {on}"), |core| {
+            self.set_trading(core, on)
+        })
+    }
+
+    /// Send one scope command per core and report which channels accepted it.
+    ///
+    /// The shared half of every "act on a whole scope" operation: a core whose command channel is
+    /// gone is skipped and named in the log rather than aborting the scope, and the caller gets
+    /// back exactly the cores it may now show as waiting.
+    ///
+    /// Args:
+    ///     cores: Cores to command, in the order the caller wants them tried.
+    ///     action: Log label for a core that could not be reached.
+    ///     send: The per-core command.
+    ///
+    /// Returns:
+    ///     The cores whose command channel accepted the intent, in the order given.
+    fn send_many(
+        &self,
+        cores: &[CoreId],
+        action: &str,
+        send: impl Fn(CoreId) -> Result<()>,
+    ) -> Vec<CoreId> {
         let mut sent = Vec::with_capacity(cores.len());
         for core in cores {
-            match self.set_trading(*core, on) {
+            match send(*core) {
                 Ok(()) => sent.push(*core),
-                Err(error) => log::warn!("set trading {on} on core {core} failed: {error:#}"),
+                Err(error) => log::warn!("{action} on core {core} failed: {error:#}"),
             }
         }
         sent
@@ -687,6 +711,39 @@ impl SessionManager {
     /// Start or restart the core runtime from the core-settings popup.
     pub fn restart_now(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::RestartNow, "restart now")
+    }
+
+    /// Turn one core's AutoDetect on or off — Moonbot's passive mode, inverted.
+    ///
+    /// The command is an intent: the core answers with a new runtime state, which is what any
+    /// indicator must follow. Unlike [`Self::restart_now`] it is reversible and starts nothing.
+    ///
+    /// Args:
+    ///     core: Core to command.
+    ///     on: Whether detection should be active (`true`) or the core should go passive.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel.
+    pub fn set_auto_detect(&self, core: CoreId, on: bool) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::SetAutoDetect(on), "set auto detect")
+    }
+
+    /// Turn AutoDetect on or off across a whole scope — a saved group, an exchange row, a window.
+    ///
+    /// One command per core, like [`Self::set_trading_many`], and for the same reason: that is
+    /// what the protocol offers. A core whose command channel is gone is skipped and named in the
+    /// log rather than aborting the scope.
+    ///
+    /// Args:
+    ///     cores: Cores to command.
+    ///     on: Whether detection should be active.
+    ///
+    /// Returns:
+    ///     The cores whose command channel accepted the intent, in the order given.
+    pub fn set_auto_detect_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+        self.send_many(cores, &format!("set auto detect {on}"), |core| {
+            self.set_auto_detect(core, on)
+        })
     }
 
     /// Reset the core's session or all-time profit counter.

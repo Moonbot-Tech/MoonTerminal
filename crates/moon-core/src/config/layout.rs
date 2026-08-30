@@ -728,10 +728,24 @@ pub struct WindowLayout {
     /// Profit Monitor: whether a row carries the start/stop control for its core's trading.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_trading_buttons: Option<bool>,
-    /// Profit Monitor: whether a group caption carries the start/stop control for every core it
-    /// names, sending one command per core.
+    /// Profit Monitor: superseded by [`Self::profit_monitor_group_controls`], which widened this
+    /// from "trading on group captions" to "every enabled run control on group captions".
+    ///
+    /// Still READ, never written: the key shipped, and a profile that set it must keep its group
+    /// captions commanding cores across the rename.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_group_trading: Option<bool>,
+    /// Profit Monitor: whether a row carries the AutoDetect on/off switch for its own core.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_auto_buttons: Option<bool>,
+    /// Profit Monitor: whether a group caption also carries whichever run controls are enabled,
+    /// commanding every core the group names with one command each.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_group_controls: Option<bool>,
+    /// Profit Monitor: whether the table heading carries the trading and AutoDetect controls for
+    /// every core the table commands at once.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_header_controls: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

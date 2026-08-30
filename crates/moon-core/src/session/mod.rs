@@ -28,7 +28,7 @@ pub use crate::feed::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
     CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL,
 };
-pub use run_state::{CoreRunState, RunSummary, TradingAction};
+pub use run_state::{AutoAction, CoreRunState, RunSummary, TradingAction};
 pub use store::{BalanceState, CoreId, CoreStore};
 
 use std::collections::{HashMap, HashSet};

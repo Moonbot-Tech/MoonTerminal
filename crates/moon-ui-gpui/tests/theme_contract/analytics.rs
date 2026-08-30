@@ -2339,14 +2339,36 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor_idle_cores",
         "profit_monitor_core_filter",
         "profit_monitor_core_status",
-        "profit_monitor_trading_buttons",
-        "profit_monitor_group_trading",
+        "profit_monitor_auto_buttons",
+        "profit_monitor_header_controls",
     ] {
         assert!(
             settings.matches(key).count() == 2,
             "{key} must be both restored and saved by its own row in the preference table"
         );
     }
+    // Two keys carry mentions beyond their own row, because the retired per-group key is carried
+    // over into both of them and then written back once. They keep the row (restored + saved) and
+    // add the carry-over; what pins the rest is the structure below, not a count.
+    for key in [
+        "profit_monitor_group_controls",
+        "profit_monitor_trading_buttons",
+    ] {
+        assert!(
+            settings.matches(key).count() >= 2,
+            "{key} must still be both restored and saved by its own row"
+        );
+    }
+    assert!(
+        settings.contains("fn migrate_group_trading(")
+            && settings.contains("fn persist_migration(")
+            && construction.contains("prefs.persist_migration(&mut backend.layout)"),
+        "the retired per-group key must be carried over AND written back, or the carry-over re-applies at every launch and undoes the user's first edit"
+    );
+    assert!(
+        !settings.contains("profit_monitor_group_trading = "),
+        "the retired key is read by the migration alone and never written"
+    );
     assert!(
         write_pref.contains("backend.layout_dirty = true")
             && write_pref.contains("self.invalidate_content(cx)")
@@ -2362,7 +2384,9 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor.settings.core_filter",
         "profit_monitor.settings.core_status",
         "profit_monitor.settings.trading_buttons",
-        "profit_monitor.settings.group_trading",
+        "profit_monitor.settings.auto_buttons",
+        "profit_monitor.settings.group_controls",
+        "profit_monitor.settings.header_controls",
     ] {
         assert!(
             settings.contains(key),
@@ -2474,13 +2498,28 @@ fn the_run_column_stays_wired_and_marks_what_the_core_has_not_confirmed() {
     assert!(
         table.contains("let slots = run_slots(prefs);")
             && table.contains("run_cell(scope, &backend, palette, app)")
-            && table.contains("reserved_cell(slots, cx)"),
+            && table.contains("run: reserved_cell(slots, cx)"),
         "the table must resolve the run scopes once per render, build each cell in the item builder, and still reserve the column on the total footer"
     );
     assert!(
         table.contains("RunKey::Core(row.primary_core)")
             && table.contains("RunKey::Section(head.section)"),
         "run cells must key on the core or the section, never on the entry index"
+    );
+    let control = code_only(&read_src("controls/core_run/mod.rs"));
+    assert!(
+        table.contains("fn fleet_scope(")
+            && table.contains("key: RunKey::Fleet")
+            && table.contains(".children(run_cell)")
+            && table.contains("fleet_scope(&run_scopes, slots, prefs.header_controls)"),
+        "the heading's table-wide controls must be their own opt-in, built from the scopes the row pass already resolved"
+    );
+    assert!(
+        control.contains("fn allows_restart(&self) -> bool {")
+            && control.contains(
+                "self.offers.status && !matches!(self.key, RunKey::Fleet) && self.cores.len() == 1"
+            ),
+        "the restart offer must be DERIVED, so no caller can hand a table-wide cell a fleet restart"
     );
     assert!(
         line.contains("row.children(chrome.run)")
@@ -2489,13 +2528,13 @@ fn the_run_column_stays_wired_and_marks_what_the_core_has_not_confirmed() {
         "every line must draw the run cell before its name and spend the column out of the name column"
     );
     assert!(
-        view.matches("app.stop_propagation()").count() >= 3,
-        "both run buttons must stop their click, and the wrapper must stop the press under it"
+        view.matches("app.stop_propagation()").count() >= 4,
+        "every run button must stop its click, and the wrapper must stop the press under it"
     );
     assert_eq!(
         view.matches("core_run.unconfirmed").count(),
-        3,
-        "all three drawn states — the status dot, the restart button and the trading button — must say when what they show predates a reconnect"
+        4,
+        "all four drawn states — the status dot, the restart button, the trading button and the AutoDetect switch — must say when what they show predates a reconnect"
     );
     assert!(
         view.contains("design::status_dot_stale(color, cx)")

@@ -66,8 +66,9 @@ const MIN_NAME_COLUMN_WIDTH: f32 = 128.0;
 ///
 /// The run controls are paid for by the NAME column, so the minimum window width never grows —
 /// that is the whole constraint (`MIN_WINDOW_WIDTH` covers padding + name + gap + a printable
-/// profit column). This floor is what stops a future third slot from squeezing the name down to
-/// nothing instead.
+/// profit column). This floor is what stops the third slot, now that there is one, from squeezing
+/// the name down to nothing instead; past it the remainder comes out of the slack in
+/// `MIN_WINDOW_WIDTH`.
 const NAME_COLUMN_FLOOR: f32 = 72.0;
 /// Room the window guarantees the profit column, whatever the name column would rather have.
 ///
@@ -104,11 +105,12 @@ const MIN_WINDOW_WIDTH: f32 = 310.0;
 /// Returns:
 ///     The reserved slots; `RunSlots::any` is false when the column is off entirely.
 fn run_slots(prefs: MonitorPrefs) -> RunSlots {
+    // One preference per CONTROL decides which slots exist at all; the group and heading
+    // preferences only decide which LINES fill them, so neither can reserve a column on its own.
     RunSlots {
         status: prefs.core_status,
-        // A group-only trading control still needs the row-level slot reserved, or the captions
-        // would carry a column the rows beneath them do not.
-        trading: prefs.trading_buttons || prefs.group_trading,
+        trading: prefs.trading_buttons,
+        auto: prefs.auto_buttons,
     }
 }
 
@@ -411,6 +413,14 @@ impl ProfitMonitorView {
             .as_ref()
             .and_then(|(id, descending)| MonitorSort::from_layout(id, *descending));
         let prefs = MonitorPrefs::restore(&backend.read(cx).layout);
+        // A preference carried over from a retired key is written back the moment it is read: the
+        // key it came from has no writer in the current model, so leaving it unwritten would
+        // re-apply the carry-over at every launch and undo the user's first edit to it.
+        backend.update(cx, |backend, _| {
+            if prefs.persist_migration(&mut backend.layout) {
+                backend.layout_dirty = true;
+            }
+        });
         let valuation = backend.read(cx).valuation_mode();
         let live = capture_live_context(backend.read(cx));
 

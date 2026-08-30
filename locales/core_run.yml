@@ -1,4 +1,5 @@
-# Shared core RUN control: whether a core is up and trading, and the buttons that change it.
+# Shared core RUN control: whether a core is up, detecting and trading, and the buttons that
+# change all three.
 # Used by every surface that lists cores; see `controls::core_run`.
 # rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
@@ -56,6 +57,32 @@ core_run.trading_stop_group:
   ru: "Остановить автоторговлю на %{n} ядрах"
   en: "Stop trading on %{n} core(s)"
   es: "Detener el trading en %{n} núcleo(s)"
+# --- AutoDetect slot: Moonbot's AutoDetect, the inverse of passive mode ---
+# The face shows the STATE (green ring detecting, red ring passive); the tooltip says what the
+# press will do, so the two never say the same thing twice.
+core_run.auto_on:
+  ru: "Включить автодетект"
+  en: "Turn AutoDetect on"
+  es: "Activar AutoDetect"
+core_run.auto_off:
+  ru: "Выключить автодетект"
+  en: "Turn AutoDetect off"
+  es: "Desactivar AutoDetect"
+# A scope where some cores detect and some are passive: the press turns the remaining ones on.
+core_run.auto_on_partial:
+  ru: "Включить автодетект ещё на %{n} ядрах"
+  en: "Turn AutoDetect on for %{n} more core(s)"
+  es: "Activar AutoDetect en %{n} núcleo(s) más"
+# The same two actions when the control stands for a whole group, an exchange row or the table.
+core_run.auto_on_group:
+  ru: "Включить автодетект на %{n} ядрах"
+  en: "Turn AutoDetect on for %{n} core(s)"
+  es: "Activar AutoDetect en %{n} núcleo(s)"
+core_run.auto_off_group:
+  ru: "Выключить автодетект на %{n} ядрах"
+  en: "Turn AutoDetect off for %{n} core(s)"
+  es: "Desactivar AutoDetect en %{n} núcleo(s)"
+
 # Wrapper for any state the CURRENT connection has not re-reported. The feed re-publishes both
 # halves from MoonProto's retained snapshot when a core returns, so this is usually a short window;
 # it lasts when the client itself was replaced. Shown faded rather than hidden — the value is still

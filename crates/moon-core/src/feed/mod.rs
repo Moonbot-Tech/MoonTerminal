@@ -509,6 +509,13 @@ pub enum CoreCmd {
     /// `settings().restart_now()`. It starts the market runtime, leaves passive mode, and starts
     /// checked strategies. The protocol has no stop operation.
     RestartNow,
+    /// Turn the core's AutoDetect on or off through moonproto
+    /// `settings().set_auto_detect_active()` — Moonbot's passive mode, the inverse of this flag.
+    ///
+    /// Unlike [`Self::RestartNow`] this one IS reversible, and it changes nothing else: it neither
+    /// starts the market runtime nor touches the strategy engine. The core answers with a fresh
+    /// `RuntimeStateUpdated`, which is where `auto_detect_active` comes back from.
+    SetAutoDetect(bool),
     /// Reset the core's session or all-time profit counter through moonproto
     /// `settings().reset_profit`.
     ResetProfit(ResetProfitKind),

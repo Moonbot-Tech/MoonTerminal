@@ -443,26 +443,31 @@ pub(super) fn table(
             .enumerate()
             .map(|(index, entry)| {
                 let cores = entry.scope_cores()?;
-                let (key, trading) = match entry {
+                let (key, offers) = match entry {
                     // A core saved into several groups is drawn once per group, so only its first
                     // line may key on the core itself — exactly what `row_id` does for the row.
                     MonitorEntry::Row {
                         row, occurrence: 0, ..
-                    } => (RunKey::Core(row.primary_core), prefs.trading_buttons),
-                    MonitorEntry::Row { .. } => (RunKey::Repeat(index), prefs.trading_buttons),
-                    // A caption always gets its cell — the folded status dot is worth showing even
-                    // when the group's own trading control is switched off. Either preference may
-                    // be on without the other.
-                    MonitorEntry::Header(head) => {
-                        (RunKey::Section(head.section), prefs.group_trading)
-                    }
+                    } => (RunKey::Core(row.primary_core), slots),
+                    MonitorEntry::Row { .. } => (RunKey::Repeat(index), slots),
+                    // A caption carries the CHOSEN controls, or none of them: the group preference
+                    // says where the controls the user picked also appear, and that includes the
+                    // status dot — a caption commanding nothing must not keep a column of its own.
+                    MonitorEntry::Header(head) => (
+                        RunKey::Section(head.section),
+                        if prefs.group_controls {
+                            slots
+                        } else {
+                            RunSlots::default()
+                        },
+                    ),
                     MonitorEntry::Subtotal { .. } => return None,
                 };
                 (!cores.is_empty()).then_some(RunScope {
                     key,
                     cores,
                     reserve: slots,
-                    offers_trading: trading,
+                    offers,
                 })
             })
             .collect()
@@ -487,12 +492,19 @@ pub(super) fn table(
     } else {
         Vec::new()
     };
+    // The heading's own run cell commands EVERY core the table is showing. Built here, where the
+    // entries are still the plain vector, and passed in already rendered: the heading itself owns
+    // no backend and must not learn to.
+    let fleet = fleet_scope(&run_scopes, slots, prefs.header_controls)
+        .and_then(|scope| run_cell(&scope, &backend, palette, cx))
+        .or_else(|| reserved_cell(slots, cx));
     let header = table_header(
         layout,
         profit_heading(unit, form.ticker),
         profit_width,
         prefs.exchange_icons,
         slots,
+        fleet,
         sort,
         view.clone(),
         palette,
@@ -642,9 +654,10 @@ pub(super) fn table(
             flash: None,
             profit_width,
             select: None,
-            // The total commands nothing — it is every core at once, and "restart the fleet" is not
-            // a button this window offers. It keeps the reserved width, or its label stops lining
-            // up with the names above it, exactly like the logo gutter beside it.
+            // The total commands nothing. Every core at once is what the HEADING offers, under its
+            // own preference and without a restart; repeating it on a fold that is only a sum would
+            // put two "all cores" controls in one window. It keeps the reserved width, or its label
+            // stops lining up with the names above it, exactly like the logo gutter beside it.
             run: reserved_cell(slots, cx),
             run_slots: slots,
         },
@@ -668,6 +681,54 @@ pub(super) fn table(
         .into_any_element()
 }
 
+/// Build the scope of the heading's own run cell: every core ANY line of the table commands.
+///
+/// The one cell in the window that acts on the whole table, which is why it is assembled here and
+/// not in the per-line pass: its scope is the union of every line's own scope, deduplicated, so a
+/// core saved into three groups is commanded once and a group caption can never reach a core its
+/// own heading does not. Taken from `scope_cores` for exactly that reason — a caption stands for
+/// its configured members, which in Core mode include cores that closed no trade and therefore
+/// have no row.
+///
+/// Restart is deliberately withheld — "restart the fleet" is not an action this window offers, and
+/// the scope's own single-core guard would still hand it over on a table holding exactly one core.
+/// The status slot draws its folded dot, which reports rather than commands.
+///
+/// Cost: one store lookup per core in the union, once per BODY build — like the flash, selection
+/// and logo passes beside it, and like them not per frame. Taken from the scopes the per-line pass
+/// already resolved rather than walking the entries a second time.
+///
+/// Args:
+///     scopes: The per-line run scopes, already resolved for this render.
+///     slots: Slots the table reserves, which decide what the cell may fill.
+///     enabled: The `header_controls` preference; the cell exists only when it is on.
+///
+/// Returns:
+///     The heading's scope, or `None` when the table commands nothing — the preference is off, no
+///     control slot is reserved, or no core is in scope.
+fn fleet_scope(scopes: &[Option<RunScope>], slots: RunSlots, enabled: bool) -> Option<RunScope> {
+    if !enabled || !(slots.trading || slots.auto) {
+        return None;
+    }
+    let mut seen = HashSet::with_capacity(scopes.len());
+    let mut cores: Vec<CoreId> = Vec::with_capacity(scopes.len());
+    for scope in scopes.iter().flatten() {
+        for core in scope.cores.iter() {
+            if seen.insert(*core) {
+                cores.push(*core);
+            }
+        }
+    }
+    (!cores.is_empty()).then(|| RunScope {
+        key: RunKey::Fleet,
+        cores: cores.into(),
+        reserve: slots,
+        // Every reserved slot, the status dot included: this cell exists only because the heading
+        // preference asked for it. The restart button is withheld by `allows_restart` alone.
+        offers: slots,
+    })
+}
+
 /// Render the fixed clickable header whose geometry mirrors the data rows.
 ///
 /// Args:
@@ -675,6 +736,9 @@ pub(super) fn table(
 ///     profit_title: Profit heading, which names the unit when the cells stopped printing it.
 ///     profit_width: Profit-column width the data rows are using.
 ///     logo_gutter: Whether the data rows reserve room for an exchange logo.
+///     run_slots: Slots every line of the table reserves.
+///     run_cell: The heading's own run cell, already rendered — the table-wide controls, or the
+///         reserved width with nothing in it.
 ///     sort: Current explicit ordering.
 ///     view: Monitor entity receiving heading clicks.
 ///     palette: Active MoonUI palette.
@@ -689,6 +753,7 @@ fn table_header(
     profit_width: f32,
     logo_gutter: bool,
     run_slots: RunSlots,
+    run_cell: Option<AnyElement>,
     sort: Option<MonitorSort>,
     view: Entity<ProfitMonitorView>,
     palette: MoonPalette,
@@ -738,9 +803,10 @@ fn table_header(
         .bg(moon(palette.table_head))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
-        // The run column has no sortable heading: it is a control, not a value. It keeps its width
-        // here so the Name heading starts where the names below it do.
-        .children(reserved_cell(run_slots, cx))
+        // The run column has no sortable heading: it is a control, not a value — and here it is
+        // literally one, commanding every core in the table. Either way it keeps its width, so the
+        // Name heading starts where the names below it do.
+        .children(run_cell)
         .child(
             sortable(
                 "profit-monitor-heading-name",

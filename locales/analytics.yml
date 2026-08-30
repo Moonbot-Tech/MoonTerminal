@@ -140,14 +140,24 @@ profit_monitor.settings.core_status:
   ru: "Статус ядра и кнопка запуска"
   en: "Core run status and start button"
   es: "Estado del núcleo y botón de inicio"
+# The first three say WHICH controls exist; the last two say where else they appear.
 profit_monitor.settings.trading_buttons:
-  ru: "Старт/стоп автоторговли у ядра"
-  en: "Start/stop trading on a core"
-  es: "Iniciar/detener trading de un núcleo"
-profit_monitor.settings.group_trading:
-  ru: "Старт/стоп автоторговли на всю группу"
-  en: "Start/stop trading for a whole group"
-  es: "Iniciar/detener trading de un grupo"
+  ru: "Старт/стоп автоторговли"
+  en: "Start/stop trading"
+  es: "Iniciar/detener trading"
+profit_monitor.settings.auto_buttons:
+  ru: "Автодетект вкл/выкл"
+  en: "AutoDetect on/off"
+  es: "AutoDetect on/off"
+profit_monitor.settings.group_controls:
+  ru: "Эти кнопки — и у групп"
+  en: "The same controls on group captions"
+  es: "Los mismos controles en los títulos de grupo"
+# One press there reaches every core the table commands, which is why it is its own opt-in.
+profit_monitor.settings.header_controls:
+  ru: "Эти кнопки — и в шапке, на все ядра"
+  en: "The same controls in the heading, for every core"
+  es: "Los mismos controles en el encabezado, para todos los núcleos"
 
 analytics.window_title:
   ru: "MoonTerminal — Аналитика"
