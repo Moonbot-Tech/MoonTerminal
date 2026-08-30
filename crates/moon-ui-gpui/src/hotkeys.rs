@@ -244,8 +244,74 @@ pub fn trace_key_arrived(ev: &KeyDownEvent) {
     );
 }
 
+/// Whether this press is one the focused text field itself consumes.
+///
+/// The question the typing gate turns on, and it is narrower than "is anything focused". A field
+/// only takes a press the platform turned into TEXT, and the character travels its own way there —
+/// `WM_CHAR` on Windows, the input context on macOS — so the two never negotiate: resolving a
+/// binding for such a press runs the action AND costs the character, because the window then
+/// reports the key handled and `translate_accelerator` skips the `TranslateMessage` that would
+/// have produced it. Typing a coin name into the search box armed a drawing tool and swallowed the
+/// letter; that is the whole bug.
+///
+/// `key_char` is the test, because it is the platform's own answer to "did this press produce a
+/// character" — layout, dead keys and IME included, which no list of key names could track. Tab is
+/// named on top of it for Windows, which reports no character for Tab where macOS reports `\t`;
+/// both hand it to the form. Enter is the same split and is deliberately left alone: macOS calls it
+/// a character, Windows does not, and no shipped binding sits on it either way.
+///
+/// The modifier cut is the deliberate half. Ctrl, Alt or Cmd usually means no character at all —
+/// Windows drops control characters and routes an Alt press as `WM_SYSKEYDOWN`, which reaches no
+/// input handler — but not always: macOS reports a character for Option combinations, and Windows
+/// does for AltGr, which arrives as control plus alt. Those presses are still left to their
+/// bindings, because most of the shipped keymap is `alt-` (`moon_core::config::HotkeysConfig`) and
+/// giving Option back to the field would take the trading keys away on the very platform where
+/// Option is how you press them. A binding wins there; a user who needs the character rebinds.
+///
+/// What stays alive mid-word follows from the same test rather than from a list: Escape, the
+/// function keys — which is where the order-size and sell-preset defaults live — and every
+/// modified binding. None of them takes anything from the field. Caps Lock and lone modifiers
+/// never arrive as a press at all and are gated where they are recognised, in
+/// [`resolve_modifiers`].
+///
+/// Split out from [`resolve`] so the rule can be unit-tested without a `Window`.
+///
+/// Args:
+///     keystroke: The press as delivered to the window.
+///
+/// Returns:
+///     Whether the field, rather than a binding, is what this press is for.
+fn belongs_to_the_field(keystroke: &Keystroke) -> bool {
+    let modifiers = keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform {
+        return false;
+    }
+    keystroke.key_char.is_some() || keystroke.key == "tab"
+}
+
 /// Resolve a key-down event to the action bound to it.
-pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+///
+/// `typing` withholds every binding the focused field consumes, and it is a parameter for the same
+/// reason [`resolve_modifiers`] takes one: the policy belongs to this module, not to each window
+/// that calls it. A third window root cannot inherit the resolver and miss the rule — the
+/// signature asks for the answer.
+///
+/// Args:
+///     ev: The press as delivered to the window root.
+///     hk: The window's effective hotkey configuration.
+///     typing: Whether the focused element is taking typed text right now.
+///
+/// Returns:
+///     The bound action, or `None` when nothing is bound or the press is the field's.
+pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig, typing: bool) -> Option<HotkeyAction> {
+    if typing && belongs_to_the_field(&ev.keystroke) {
+        // Its own line, and the reason this is logged rather than silently dropped: `log.hotkeys`
+        // already separates a key that reached the root from one that matched no binding, and a
+        // suppressed press otherwise looks exactly like an unbound one. The report that comes back
+        // is "my hotkey stopped working", with nothing to tell the two apart.
+        log::debug!("key {} belongs to the focused text field", ev.keystroke);
+        return None;
+    }
     let action = resolve_binding(&ev.keystroke, hk);
     match &action {
         Some(action) => log::debug!("key {} resolved to {action:?}", ev.keystroke),

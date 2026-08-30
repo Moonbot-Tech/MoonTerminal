@@ -1817,3 +1817,82 @@ fn bare_key_bindings_ignore_a_refocused_state_and_a_mouse_gesture() {
         }
     }
 }
+
+/// Pins that every keyboard path which can reach a binding answers the typing question.
+///
+/// Derived rather than listed, because the failure this guards is a path nobody remembered: a
+/// third window root calls `hotkeys::resolve` and inherits the resolver without the answer it
+/// needs, or the app-level interceptor — which runs BEFORE actions and before every root, and so
+/// no root gate can cover — loses its own check and cancels a live order on the Tab that was meant
+/// to leave a search field.
+#[test]
+fn every_binding_path_answers_the_typing_question() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+    let mut resolvers = 0;
+    for path in sources {
+        // Normalized like `read_src`, and for its reason: a checkout with CRLF would make the
+        // statement slice below end at a line break that is not there on this machine.
+        let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        let source = code_only(&text);
+        // Both resolvers, so the test's name holds: the modifier path already takes the flag as a
+        // parameter, and a third root could just as easily inherit that one without it.
+        let calls: Vec<&str> = source
+            .match_indices("hotkeys::resolve")
+            .map(|(at, _)| &source[at..])
+            .collect();
+        if calls.is_empty() {
+            // A root that imported the name instead of spelling the path would slip past the scan
+            // above, so the import is banned rather than handled.
+            assert!(
+                !source.contains("use crate::hotkeys::resolve"),
+                "{} must call the resolver by its full path, which is what this scan reads",
+                path.display()
+            );
+            continue;
+        }
+        resolvers += 1;
+        assert!(
+            source.contains("let typing = window.is_text_input_active();"),
+            "{} must read the typing state from the window it received",
+            path.display()
+        );
+        for call in calls {
+            // Balanced parens, not "up to the next `;`": one root passes its config through
+            // `as_ref()`, and a resolver written as a trailing expression carries no semicolon at
+            // all — either would slice the argument list somewhere it does not end.
+            let Some(open) = call.find('(') else {
+                continue;
+            };
+            let mut depth = 0usize;
+            let mut args = &call[open + 1..];
+            for (at, ch) in call[open..].char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            args = &call[open + 1..open + at];
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                args.contains("typing"),
+                "{} must resolve with the live typing state, not a constant",
+                path.display()
+            );
+        }
+    }
+    assert!(
+        resolvers >= 2,
+        "expected both window roots to resolve hotkeys"
+    );
+    assert!(
+        code_only(&read_src("startup/boot.rs")).contains("is_text_input_active()"),
+        "the app-level keystroke interceptor must not act on a press a field is taking"
+    );
+}

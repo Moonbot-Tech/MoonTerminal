@@ -178,10 +178,14 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
+        // Read before the backend borrow, and handed to the resolver rather than acted on here:
+        // withholding the bindings a focused field consumes is the resolver's rule, exactly as it
+        // is for Caps Lock and lone modifiers below.
+        let typing = window.is_text_input_active();
         let action = {
             let b = self.backend.read(cx);
             let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;
-            crate::hotkeys::resolve(ev, hk)
+            crate::hotkeys::resolve(ev, hk, typing)
         };
         let Some(action) = action else {
             return;
