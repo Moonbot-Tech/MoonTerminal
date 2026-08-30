@@ -2,7 +2,7 @@
 //!
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! would shadow the built-in `#[test]` attribute and make it expand recursively (CONTRIBUTING.md).
-use crate::chartdx::text::cursor_ref_price;
+use crate::chartdx::text::{cursor_ref_price, fmt_prospective_order_size};
 
 const LAST: f32 = 100.0;
 const BOOK: Option<(f32, f32)> = Some((99.5, 100.5));
@@ -39,4 +39,27 @@ fn a_one_sided_book_reads_the_same_from_either_direction() {
     let one_sided = Some((100.5, 100.5));
     assert_eq!(cursor_ref_price(one_sided, LAST, 110.0), 100.5);
     assert_eq!(cursor_ref_price(one_sided, LAST, 90.0), 100.5);
+}
+
+/// The chart-specific order-size helper must preserve meaningful fractions without fixed zeros.
+///
+/// Replacing the shared formatter with fixed hundredths makes these literal display contracts red.
+#[test]
+fn prospective_order_size_label_uses_shared_compact_formatter() {
+    assert_eq!(fmt_prospective_order_size(1_500.0), "1.5k");
+    assert_eq!(fmt_prospective_order_size(10_000.0), "10k");
+    assert_eq!(fmt_prospective_order_size(1_000_000.0), "1m");
+    assert_eq!(fmt_prospective_order_size(50.0), "50");
+}
+
+/// The retained chart render path must call the chart-specific compact order-size helper.
+///
+/// Restoring the former fixed-hundredths expression fails this source-wiring oracle even when the
+/// helper's direct tests remain green.
+#[test]
+fn prepare_wires_compact_order_size_label() {
+    let source = include_str!("prepare.rs");
+
+    assert!(source.contains("let text = fmt_prospective_order_size(usd);"));
+    assert!(!source.contains("format!(\"{usd:.2}\")"));
 }

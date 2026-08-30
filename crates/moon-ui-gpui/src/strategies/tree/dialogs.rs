@@ -104,9 +104,149 @@ fn op_has_close_button(op: &TreeOp) -> bool {
     )
 }
 
+/// Design-reference width of the Strategies tree-operation dialog, in unscaled pixels.
+const TREE_OP_DIALOG_W: f32 = 360.0;
+
+/// Unscaled horizontal padding MoonUI Dialog applies on each side (`Edges::all(px(16.))`).
+///
+/// Subtract this only when converting the outer card (`MoonDialog::w`) into trigger/menu field
+/// width. The outer-card clamp uses the client viewport after window-frame insets, not these pads:
+/// MoonUI leaves the content pad unscaled while the card grows with the Font slider.
+const TREE_OP_DIALOG_PAD: f32 = 16.0;
+
+/// Client width MoonUI Dialog uses as overlay bounds: viewport minus window-frame insets.
+///
+/// Args:
+///     viewport_w: Window viewport width, in rendered pixels.
+///     pad_left: MoonUI `window_paddings` left inset, in rendered pixels.
+///     pad_right: MoonUI `window_paddings` right inset, in rendered pixels.
+///
+/// Returns:
+///     Viewport width minus both frame insets, floored at 0.
+fn tree_op_dialog_client_width(viewport_w: f32, pad_left: f32, pad_right: f32) -> f32 {
+    (viewport_w - pad_left - pad_right).max(0.0)
+}
+
+/// Clamp a desired tree-op dialog outer-card width to the MoonUI client viewport.
+///
+/// `MoonDialog::w` is the outer card, so this must not subtract DialogContent padding. Restoring
+/// `client_w - 2 * TREE_OP_DIALOG_PAD` here shrinks a 320 px client to a 288 px card and then 256 px
+/// fields, crowding the kind label, caret, and footer.
+///
+/// Args:
+///     desired: Font-scaled design-reference card width, in rendered pixels.
+///     client_w: Client viewport width after window-frame insets, in rendered pixels.
+///
+/// Returns:
+///     `desired`, or `client_w` when that is smaller, floored at 0.
+fn clamp_tree_op_dialog_width(desired: f32, client_w: f32) -> f32 {
+    desired.min(client_w.max(0.0))
+}
+
+/// Width available to dropdowns and name fields inside the padded tree-op dialog card.
+///
+/// Args:
+///     dialog_w: Outer card width passed to `MoonDialog::w`.
+///
+/// Returns:
+///     `dialog_w` minus both unscaled DialogContent pads, floored at 0.
+fn tree_op_field_width(dialog_w: f32) -> f32 {
+    (dialog_w - 2.0 * TREE_OP_DIALOG_PAD).max(0.0)
+}
+
+/// Horizontal insets matching MoonUI `window_paddings(window).left/right`.
+///
+/// MoonUI Dialog subtracts these from `viewport_size` before placing the outer card. `moon_ui`
+/// does not re-export `window_paddings`; this uses the same `window_decorations` and
+/// `client_inset` inputs. Server decorations (Windows) are zero; client-side frames keep the
+/// inset on untiled sides. The Linux 12 px fallback is MoonUI's `SHADOW_SIZE` when the inset
+/// has not been set yet.
+///
+/// Args:
+///     window: Window whose decorations and client inset feed the overlay bounds.
+///
+/// Returns:
+///     `(left, right)` frame insets in rendered pixels.
+fn tree_op_window_frame_pads(window: &Window) -> (f32, f32) {
+    match window.window_decorations() {
+        Decorations::Server => (0.0, 0.0),
+        Decorations::Client { tiling } => {
+            let inset = window
+                .client_inset()
+                .unwrap_or(if cfg!(target_os = "linux") {
+                    px(12.0)
+                } else {
+                    px(0.0)
+                })
+                .as_f32();
+            (
+                if tiling.left { 0.0 } else { inset },
+                if tiling.right { 0.0 } else { inset },
+            )
+        }
+    }
+}
+
+/// Font-scale the tree-op dialog card and clamp it to the current client viewport.
+///
+/// Pair the card with `font_w`, not `ui_px`: MoonDropdown's scaled trigger uses the Font slider,
+/// while UI scale only grows control height. The outer card is clamped once to MoonUI's client
+/// width (`viewport - window_paddings.left/right`); DialogContent's unscaled 16 px pads are
+/// subtracted only for trigger/menu field width.
+///
+/// Args:
+///     window: Window whose client viewport bounds the card.
+///     cx: Application context used to read the Font-slider scale.
+///
+/// Returns:
+///     Rendered pixel width for `dialog.w(px(...))`.
+fn tree_op_dialog_width(window: &Window, cx: &App) -> f32 {
+    let (pad_left, pad_right) = tree_op_window_frame_pads(window);
+    clamp_tree_op_dialog_width(
+        design::font_w(cx, TREE_OP_DIALOG_W),
+        tree_op_dialog_client_width(window.viewport_size().width.as_f32(), pad_left, pad_right),
+    )
+}
+
+/// Wrap a tree-op name `MoonInput` so it fills the padded card without overflowing it.
+///
+/// MoonInput does not implement Styled; its inner Input always renders `size_full()`, so without
+/// a parent that is both `w_full` and `min_w_0` the field can take a min-content size larger than
+/// the card.
+///
+/// Args:
+///     id: Element id for the name field (`create-name`, `folder-name`, or `rename-name`).
+///     input: Shared input state already constructed for this dialog opening.
+///
+/// Returns:
+///     A full-width, shrinkable slot containing the small name field.
+fn tree_op_name_input(
+    id: impl Into<SharedString>,
+    input: &Entity<MoonInputState>,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .min_w_0()
+        .child(MoonInput::new(id).state(input).small())
+}
+
+/// Build the tree-op dialog body for the current `TreeOp`.
+///
+/// Create, folder, and rename fields share one width contract: the card is font-scaled and
+/// clamped to the MoonUI client viewport, dropdowns use the padded rendered width, and name
+/// inputs sit in a `w_full`/`min_w_0` slot. The kind menu is a MoonUI Root popup and is not
+/// clipped here.
+///
+/// Args:
+///     view: Strategies view that owns the current operation and input state.
+///     window: Window used to measure the client viewport for field widths.
+///     cx: Application context for palette, session, and font scale.
+///
+/// Returns:
+///     The body element, or `None` when no operation is open.
 fn op_dialog_body(
     view: Entity<StrategiesView>,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut App,
 ) -> Option<AnyElement> {
     let p = MoonPalette::active(cx);
@@ -170,8 +310,10 @@ fn op_dialog_body(
                         }),
                 );
             }
+            let field_w = tree_op_field_width(tree_op_dialog_width(window, cx));
             let mut body = v_flex()
                 .w_full()
+                .min_w_0()
                 .gap_2()
                 .child(
                     div()
@@ -179,19 +321,21 @@ fn op_dialog_body(
                         .child(t!("dialogs.folder_prefix", path = target_label).to_string()),
                 )
                 .child(
-                    MoonDropdown::new("create-kind")
-                        .label(kind_name)
-                        .trigger_caret(true)
-                        .trigger_variant(MoonButtonVariant::Soft)
-                        .trigger_size(MoonButtonSize::Action)
-                        .trigger_width_scaled(320.0)
-                        .menu_width_scaled(320.0)
-                        .menu_size(MoonMenuSize::Compact)
-                        .menu_max_height_ui(240.0)
-                        .items(kind_items),
+                    div().w_full().min_w_0().child(
+                        MoonDropdown::new("create-kind")
+                            .label(kind_name)
+                            .trigger_caret(true)
+                            .trigger_variant(MoonButtonVariant::Soft)
+                            .trigger_size(MoonButtonSize::Action)
+                            .trigger_width(field_w)
+                            .menu_width(field_w)
+                            .menu_size(MoonMenuSize::Compact)
+                            .menu_max_height_ui(240.0)
+                            .items(kind_items),
+                    ),
                 );
             if let Some(input) = input {
-                body = body.child(MoonInput::new("create-name").state(&input).small());
+                body = body.child(tree_op_name_input("create-name", &input));
             }
             Some(body.into_any_element())
         }
@@ -201,20 +345,20 @@ fn op_dialog_body(
             } else {
                 target
             };
-            let mut body = v_flex().w_full().gap_2().child(
+            let mut body = v_flex().w_full().min_w_0().gap_2().child(
                 div()
                     .text_color(moon(p.text_muted))
                     .child(t!("dialogs.into_prefix", path = target_label).to_string()),
             );
             if let Some(input) = input {
-                body = body.child(MoonInput::new("folder-name").state(&input).small());
+                body = body.child(tree_op_name_input("folder-name", &input));
             }
             Some(body.into_any_element())
         }
         TreeOp::RenameFolder { .. } => {
-            let mut body = v_flex().w_full().gap_2();
+            let mut body = v_flex().w_full().min_w_0().gap_2();
             if let Some(input) = input {
-                body = body.child(MoonInput::new("rename-name").state(&input).small());
+                body = body.child(tree_op_name_input("rename-name", &input));
             }
             Some(body.into_any_element())
         }
@@ -506,13 +650,25 @@ impl StrategiesView {
         Ok(true)
     }
 
+    /// Open the shared MoonUI Root dialog for the current tree operation.
+    ///
+    /// The card is font-scaled and clamped to the MoonUI client viewport so kind and name fields
+    /// stay inside the padded dialog at supported Font-slider values and in a narrow Strategies
+    /// window.
+    ///
+    /// Args:
+    ///     window: Native owner used to present the unique dialog.
+    ///     cx: View context used to build dialog state and content.
+    ///
+    /// Returns:
+    ///     Nothing; the dialog stays open until confirm, cancel, or overlay dismiss.
     fn open_op_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_op_input(window, cx);
         let view = cx.entity();
         window.open_unique_moon_dialog(
             "strategies-tree-op-dialog",
             cx,
-            move |dialog, _window, cx| {
+            move |dialog, window, cx| {
                 let p = MoonPalette::active(cx);
                 let cancel_view = view.clone();
                 let close_view = view.clone();
@@ -539,7 +695,7 @@ impl StrategiesView {
                     .unwrap_or(true);
 
                 dialog
-                    .w(px(360.0))
+                    .w(px(tree_op_dialog_width(window, cx)))
                     .close_button(close_button)
                     .overlay(true)
                     .overlay_closable(true)

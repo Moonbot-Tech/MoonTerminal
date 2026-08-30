@@ -624,6 +624,115 @@ fn strategy_filter_rows_wrap_fitted_controls_and_pin_their_right_hand_controls()
     }
 }
 
+/// New Strategy kind/name controls must size to the padded card, never a scaled 320 trigger
+/// inside an unscaled 360 dialog. Restoring `MoonInput::new("create-name")` as a direct v_flex
+/// child, or `trigger_width_scaled(320.0)` next to `dialog.w(px(360.0))`, recreates the overflow.
+/// Restoring `client_w - 2.0 * TREE_OP_DIALOG_PAD` inside `clamp_tree_op_dialog_width` double-
+/// subtracts DialogContent pads (`MoonDialog::w` is the outer card) and reddens the clamp-body
+/// check below; dropping `window_decorations` / `client_inset` from the frame helper ignores
+/// MoonUI `window_paddings` left/right on decorated windows.
+///
+/// Scoped to `op_dialog_body` / `open_op_dialog` so the fitted toolbar dropdowns in tree/mod.rs
+/// and tree/ui.rs cannot satisfy or break these checks.
+#[test]
+fn new_strategy_dialog_controls_stay_inside_the_scaled_card() {
+    let src = read_src("strategies/tree/dialogs.rs");
+    let body = code_only(braced_body(&src, "fn op_dialog_body("));
+    let create = code_only(braced_body(&body, "core, target, kind, .."));
+    let helper = code_only(braced_body(&src, "fn tree_op_name_input("));
+    let open = code_only(braced_body(&src, "fn open_op_dialog("));
+    let confirm = code_only(braced_body(&src, "fn confirm_op_dialog("));
+    let footer = code_only(braced_body(&src, "fn op_dialog_footer("));
+
+    let input_at = helper
+        .find("MoonInput::new(")
+        .expect("tree_op_name_input must construct MoonInput");
+    let slot = &helper[..input_at];
+    assert!(
+        slot.contains(".w_full()") && slot.contains("min_w_0()"),
+        "the name field must sit in a w_full/min_w_0 slot, not as a direct v_flex child"
+    );
+
+    assert!(
+        create.contains("tree_op_name_input(") && create.contains("\"create-name\""),
+        "CreateStrategy must host create-name through the shared min_w_0 slot"
+    );
+    assert!(
+        !create.contains("MoonInput::new(\"create-name\")"),
+        "CreateStrategy must not mount MoonInput as a direct v_flex child"
+    );
+    assert!(
+        body.contains("tree_op_name_input(")
+            && body.contains("\"folder-name\"")
+            && body.contains("\"rename-name\""),
+        "folder and rename name fields share the same contained input slot"
+    );
+
+    assert!(
+        create.contains(".trigger_width(field_w)")
+            && create.contains(".menu_width(field_w)")
+            && create.contains("tree_op_field_width("),
+        "kind dropdown must use rendered trigger/menu widths from tree_op_field_width"
+    );
+    assert!(
+        !create.contains("trigger_width_scaled(320.0)")
+            && !create.contains("menu_width_scaled(320.0)"),
+        "kind dropdown must not pin a font-scaled 320 px trigger/menu"
+    );
+    assert!(
+        !create.contains("overflow_hidden"),
+        "the kind menu is a MoonUI Root popup and must not be clipped on the dropdown wrap"
+    );
+
+    let clamp = code_only(braced_body(&src, "fn clamp_tree_op_dialog_width("));
+    let field = code_only(braced_body(&src, "fn tree_op_field_width("));
+    let width = code_only(braced_body(&src, "fn tree_op_dialog_width("));
+    let client = code_only(braced_body(&src, "fn tree_op_dialog_client_width("));
+    let frame = code_only(braced_body(&src, "fn tree_op_window_frame_pads("));
+    assert!(
+        !clamp.contains("TREE_OP_DIALOG_PAD"),
+        "outer-card clamp must not subtract DialogContent pads; MoonDialog::w is the outer card"
+    );
+    assert!(
+        field.contains("TREE_OP_DIALOG_PAD") && field.contains("2.0"),
+        "field width must subtract both DialogContent pads from the outer card"
+    );
+    assert!(
+        width.contains("tree_op_window_frame_pads(")
+            && width.contains("tree_op_dialog_client_width(")
+            && !width.contains("TREE_OP_DIALOG_PAD"),
+        "card budget must come from MoonUI window_paddings left/right, not raw viewport minus DialogContent pads"
+    );
+    assert!(
+        client.contains("pad_left") && client.contains("pad_right"),
+        "client width must subtract both window-frame insets"
+    );
+    assert!(
+        frame.contains("window_decorations(") && frame.contains("client_inset("),
+        "frame insets must follow MoonUI window_paddings: decorations plus client_inset"
+    );
+
+    let open_packed: String = open.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        open.contains("tree_op_dialog_width("),
+        "open_op_dialog must size the card with tree_op_dialog_width"
+    );
+    assert!(
+        !open_packed.contains("dialog.w(px(360.0))") && !open.contains(".w(px(360.0))"),
+        "open_op_dialog must not pin the card at unscaled 360 px"
+    );
+
+    let confirm_packed: String = confirm.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        confirm_packed.contains("ifname.trim().is_empty(){returnOk(false);}"),
+        "empty-name Create must still reject with Ok(false) and keep the dialog open"
+    );
+    assert!(
+        footer.contains("MoonNotification::warning(t!(\"dialogs.name_required\")"),
+        "the footer must still warn with dialogs.name_required when validation rejects"
+    );
+}
+
 /// Strategies settings must own the two boolean and one numeric optional layout preferences, each
 /// with one writer; bypassing their persisted setters would make popup edits or explicit reveals
 /// diverge across restart.

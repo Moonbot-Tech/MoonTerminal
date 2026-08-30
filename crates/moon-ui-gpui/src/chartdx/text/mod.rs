@@ -124,6 +124,11 @@ fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
 }
 
+/// Formats a prospective order size with compact lowercase SI suffixes for the cursor label.
+fn fmt_prospective_order_size(usd: f64) -> String {
+    moon_core::util::fmt::compact_order_size(usd)
+}
+
 /// Returns the current chart theme's positive or negative color for a signed percentage.
 fn pct_hsla(v: f32, positive: u32, negative: u32) -> Hsla {
     color(if v >= 0.0 { positive } else { negative })

@@ -722,6 +722,9 @@ impl StrategiesView {
         // for the duration of one drag gesture, so a mid-drag preference change is not a concern
         // the row renderer above has to guard against.
         let step = self.prefs.tree_text_step;
+        let tree_field = self.tree_field_bounds.clone();
+        let strat_field = tree_field.clone();
+        let folder_field = tree_field;
 
         // ── Row rendering ──
         let row_data = data.clone();
@@ -734,33 +737,45 @@ impl StrategiesView {
             render_row(&row_data, &row_view, entry, meta, app)
         })
         // ── DnD: strategies ──
-        .draggable::<StratDrag, DragChip, _, _>(
-            {
-                let data = data.clone();
-                move |entry, _meta| match data.get(entry.item().id()) {
-                    Some(NodeData::Strategy {
-                        core, id, drag_ids, ..
-                    }) => Some(StratDrag {
-                        core: *core,
-                        ids: drag_ids
-                            .as_ref()
-                            .map_or_else(|| vec![*id], |ids| ids.to_vec()),
-                    }),
-                    _ => None,
-                }
-            },
-            move |drag: &StratDrag, _pos, _window, app| {
-                let n = drag.ids.len();
-                app.new(|_| DragChip {
-                    label: SharedString::from(if n > 1 {
-                        format!("{n}×")
-                    } else {
-                        "≡".to_string()
-                    }),
-                    step,
+        // Custom decorator (not `Tree::draggable`) so the payload can capture the originating
+        // window. MoonTree's value closure does not receive `Window`.
+        .row_decorator({
+            let data = data.clone();
+            let strat_field = strat_field.clone();
+            move |row, entry, _meta, window, _app| {
+                let Some(NodeData::Strategy {
+                    core, id, drag_ids, ..
+                }) = data.get(entry.item().id())
+                else {
+                    return row;
+                };
+                let origin_window = window.window_handle().window_id();
+                let payload = StratDrag {
+                    core: *core,
+                    ids: drag_ids
+                        .as_ref()
+                        .map_or_else(|| vec![*id], |ids| ids.to_vec()),
+                    origin_window,
+                };
+                let tree_field = strat_field.clone();
+                row.on_drag(payload, move |drag: &StratDrag, _pos, _window, app| {
+                    let n = drag.ids.len();
+                    let origin_window = drag.origin_window;
+                    let tree_field = tree_field.clone();
+                    app.new(move |_| DragChip {
+                        label: SharedString::from(if n > 1 {
+                            format!("{n}×")
+                        } else {
+                            "≡".to_string()
+                        }),
+                        step,
+                        origin_window,
+                        tree_field,
+                        stop_when_outside: true,
+                    })
                 })
-            },
-        )
+            }
+        })
         // ── DnD: folders ──
         .draggable::<FolderDrag, DragChip, _, _>(
             {
@@ -778,10 +793,17 @@ impl StrategiesView {
                     _ => None,
                 }
             },
-            move |_drag: &FolderDrag, _pos, _window, app| {
-                app.new(|_| DragChip {
+            move |_drag: &FolderDrag, _pos, window, app| {
+                let origin_window = window.window_handle().window_id();
+                let tree_field = folder_field.clone();
+                app.new(move |_| DragChip {
                     label: SharedString::from("▣"),
                     step,
+                    origin_window,
+                    tree_field,
+                    // Folder drags share the application-global overlay, so the preview must hide
+                    // and stop when it leaves this tree or paints in another native window.
+                    stop_when_outside: true,
                 })
             },
         )
@@ -792,7 +814,7 @@ impl StrategiesView {
             let data = data.clone();
             let view = view.clone();
             move |row, entry, _meta, _w, app| {
-                let Some((core, target)) = drop_dest(&data, entry) else {
+                let Some((core, target)) = data.get(entry.item().id()).and_then(drop_dest) else {
                     return row;
                 };
                 let p = MoonPalette::active(app);
@@ -828,11 +850,14 @@ impl StrategiesView {
 }
 
 /// Resolves a core-root or folder drop target as `(target core, path)`.
-fn drop_dest(
-    data: &HashMap<SharedString, NodeData>,
-    entry: &MoonTreeEntry,
-) -> Option<(CoreId, Vec<String>)> {
-    match data.get(entry.item().id())? {
+///
+/// Args:
+///     node: Row data for the hovered tree entry.
+///
+/// Returns:
+///     The destination core and folder path, or `None` for rows that must not accept a drop.
+pub(super) fn drop_dest(node: &NodeData) -> Option<(CoreId, Vec<String>)> {
+    match node {
         NodeData::Exchange { .. } => None,
         NodeData::Core { core, .. } => Some((*core, Vec::new())),
         NodeData::Folder { core, path, .. } => Some((*core, path.clone())),

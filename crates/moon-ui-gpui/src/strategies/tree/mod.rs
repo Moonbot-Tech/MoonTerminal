@@ -13,14 +13,34 @@ pub(crate) mod ops;
 pub(in crate::strategies) mod pane_cache;
 pub(crate) mod ui;
 
+#[cfg(test)]
+mod tests;
+
 use super::*;
 
 use moon_ui::{MoonButtonIconSlot, MoonDisclosureDirection};
 use rust_i18n::t;
 
+use ui::FolderDrag;
+
 /// Floor for the search field, in design units. Below it the row wraps its two trailing controls
 /// onto their own line rather than squeezing the field toward nothing.
 const SEARCH_MIN_W: f32 = 90.0;
+
+/// Cancel a folder drag as soon as its pointer leaves the Strategies tree field.
+///
+/// GPUI keeps drag payloads application-global, while folder destinations belong only to this
+/// tree. Binding the typed listener to the field preserves strategy drags and every row-local
+/// folder drop rule while preventing an escaped folder payload from remaining active.
+fn constrain_folder_drag_to_tree(tree: Div) -> Div {
+    tree.on_drag_move(
+        |event: &DragMoveEvent<FolderDrag>, window: &mut Window, cx: &mut App| {
+            if !event.bounds.contains(&event.event.position) {
+                cx.stop_active_drag(window);
+            }
+        },
+    )
+}
 
 /// Expand/collapse treats only currently visible cores as the tree the button controls.
 ///
@@ -197,13 +217,38 @@ impl StrategiesView {
             .child(div().w_full().h(px(1.0)).bg(border))
             // Tree; MoonTree handles its own virtualization and scrolling.
             .child(
-                div()
+                constrain_folder_drag_to_tree(div())
                     .id("strat-tree-scroll")
                     .flex_1()
                     .w_full()
                     .min_h_0()
                     .p(px(8.0))
-                    .child(tree_el),
+                    .relative()
+                    .child({
+                        let bounds_cell = self.tree_field_bounds.clone();
+                        canvas(
+                            move |bounds, _window, _app| {
+                                bounds_cell.set(Some(bounds));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
+                    })
+                    .child(tree_el)
+                    .on_drag_move(cx.listener(
+                        |this, event: &DragMoveEvent<ui::StratDrag>, window, cx| {
+                            let event_window = window.window_handle().window_id();
+                            if ui::strat_drag_event_should_stop(
+                                event.drag(cx),
+                                event_window,
+                                event.event.position,
+                                this.tree_field_bounds.get(),
+                            ) {
+                                cx.stop_active_drag(window);
+                            }
+                        },
+                    )),
             )
             // Bottom action bar.
             .child(div().w_full().h(px(1.0)).bg(border))

@@ -46,6 +46,22 @@ pub fn compact_si(v: f64) -> String {
     adaptive(v)
 }
 
+/// Format an order size with compact lowercase SI suffixes and no forced fractional zeros.
+///
+/// This preserves [`compact_si`]'s magnitude and meaningful-fraction policy while keeping the
+/// lowercase `k`/`m`/`b`/`t` convention specific to order-size labels.
+pub fn compact_order_size(v: f64) -> String {
+    let mut label = compact_si(v);
+    let Some(suffix) = label.as_bytes().last().copied() else {
+        return label;
+    };
+    if matches!(suffix, b'K' | b'M' | b'B' | b'T') {
+        label.pop();
+        label.push(char::from(suffix.to_ascii_lowercase()));
+    }
+    label
+}
+
 /// Format to `decimals` places and trim trailing zeros. When formatting includes a decimal point
 /// (`decimals > 0` for the current finite callers, which pass 1–3), AT LEAST one fractional digit
 /// remains ("45.20" → "45.2", "45.00" → "45.0", "10000.000" → "10000.0"). With
