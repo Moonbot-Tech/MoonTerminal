@@ -38,6 +38,30 @@ fn failed_helper_readiness_terminates_before_transaction_cleanup() {
     );
 }
 
+/// Moving `update.rs:prepare_install`'s diagnostic read after abandoned-transaction cleanup
+/// deletes the helper's reason first, restoring the opaque readiness failure with no runtime
+/// signal that the user-facing diagnostic regressed.
+#[test]
+fn helper_failure_reason_is_read_before_its_own_cleanup() {
+    let update = code_only(&read_src("update.rs"));
+    let prepare = braced_body(&update, "fn prepare_install(candidate: AvailableRelease)");
+    let failure = prepare
+        .find("if let Err(error) = ready")
+        .expect("helper readiness must retain an explicit failure branch");
+    let annotate = prepare[failure..]
+        .find("annotate_helper_failure(")
+        .map(|offset| failure + offset)
+        .expect("failed readiness must read the recorded helper reason");
+    let cleanup = prepare[failure..]
+        .find("cleanup_abandoned_transaction(")
+        .map(|offset| failure + offset)
+        .expect("failed readiness transaction must be cleaned");
+    assert!(
+        annotate < cleanup,
+        "the recorded reason must be read before cleanup deletes its file"
+    );
+}
+
 /// Letting `ready` alone authorize replacement would allow a late helper to replace the exe after
 /// the UI timed out; the helper must require the old app's nonce-bound commit before parent exit.
 #[test]
@@ -59,6 +83,22 @@ fn helper_replacement_requires_ready_then_commit_then_parent_exit() {
     assert!(
         ready_wait < commit_write && ready_write < commit_wait && commit_wait < parent_wait,
         "replacement authority must cross the ready/commit handshake before parent exit"
+    );
+}
+
+/// Removing `update.rs:run_helper`'s parent-image binding before readiness or mutation would let
+/// a renamed manifest target an arbitrary file in the install directory before its real identity
+/// is proven.
+#[test]
+fn helper_binds_the_real_parent_image_before_readiness_or_mutation() {
+    let update = code_only(&read_src("update.rs"));
+    let helper = braced_body(&update, "fn run_helper(manifest_path: &Path, nonce: &str)");
+    assert!(
+        helper.find("open_parent(").unwrap()
+            < helper.find("write_marker(&transaction.ready").unwrap()
+            && helper.find("open_parent(").unwrap()
+                < helper.find("install_after_parent_exit(").unwrap(),
+        "the real parent-process-image binding must run before readiness or mutation"
     );
 }
 

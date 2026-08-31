@@ -1,7 +1,7 @@
 //! Process-wide update state and the acknowledged Windows replacement helper.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,6 +23,9 @@ mod tests;
 const MANIFEST_VERSION: u32 = 2;
 const HELPER_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const HELPER_COMMIT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Cap on the best-effort helper-failure diagnostic: the surfaced string is a tooltip
+/// (`chrome/terminal_chrome.rs`, `locales/update.yml`'s `update.failed`), so keep it bounded.
+const MAX_HELPER_REASON_BYTES: usize = 512;
 const STARTED_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTHY_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_WINDOW_SECONDS: u64 = 15 * 60;
@@ -425,6 +428,9 @@ impl UpdateController {
             let result = executor
                 .spawn(async move { prepare_install(candidate) })
                 .await;
+            if let Err(error) = &result {
+                log::error!("update install failed: {error:#}");
+            }
             cx.update(|cx| {
                 controller.update(cx, |this, cx| {
                     if this.install_generation != generation {
@@ -477,9 +483,10 @@ pub(crate) fn dispatch_process_mode() -> anyhow::Result<ProcessDispatch> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("--moonterminal-update-helper") => {
-            let manifest = required_arg(&args, 2, "manifest")?;
+            let manifest = Path::new(required_arg(&args, 2, "manifest")?);
             let nonce = required_arg(&args, 3, "nonce")?;
-            run_helper(Path::new(manifest), nonce)?;
+            run_helper(manifest, nonce)
+                .inspect_err(|error| record_helper_failure(manifest, nonce, error))?;
             Ok(ProcessDispatch::Exit)
         }
         Some("--moonterminal-update-resume") => {
@@ -575,6 +582,7 @@ fn prepare_install(candidate: AvailableRelease) -> anyhow::Result<()> {
             .context("commit acknowledged update helper")
     });
     if let Err(error) = ready {
+        let error = annotate_helper_failure(error, &transaction.nonce);
         terminate_child(&mut helper).context("stop unready update helper")?;
         cleanup_abandoned_transaction(&transaction, &manifest_path);
         return Err(error);
@@ -660,6 +668,80 @@ fn run_helper(manifest_path: &Path, nonce: &str) -> anyhow::Result<()> {
     recover_viable_target(&transaction, manifest_path)
         .with_context(|| format!("update failed ({update_error}); recovery also failed"))?;
     Err(update_error)
+}
+
+/// Best-effort record of why the helper process failed, for the parent to surface later.
+///
+/// Never alters the error being returned or the caller's control flow: every fallible step here
+/// is swallowed.
+fn record_helper_failure(manifest_path: &Path, nonce: &str, error: &anyhow::Error) {
+    let Ok(canonical) = paths::update_helper_paths(manifest_path, nonce) else {
+        return;
+    };
+    remove_plain_file(&canonical.reason);
+    let Ok(mut file) = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&canonical.reason)
+    else {
+        return;
+    };
+    let _ = file.write_all(render_failure_reason(error).as_bytes());
+    let _ = file.sync_all();
+}
+
+/// Strip control and invisible-format characters before a diagnostic reaches the UI.
+fn sanitize_reason_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() && !moon_core::venue::is_invisible_format(*c))
+        .collect()
+}
+
+/// Render an error chain into a single bounded, sanitized diagnostic line.
+fn render_failure_reason(error: &anyhow::Error) -> String {
+    let joined = error
+        .chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ");
+    let sanitized = sanitize_reason_text(&joined);
+    if sanitized.len() <= MAX_HELPER_REASON_BYTES {
+        return sanitized;
+    }
+    let mut boundary = MAX_HELPER_REASON_BYTES;
+    while !sanitized.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    sanitized[..boundary].to_owned()
+}
+
+/// Read the helper's best-effort failure reason left in the current transaction directory.
+fn read_helper_failure(nonce: &str) -> Option<String> {
+    let canonical = paths::update_transaction_paths(nonce).ok()?;
+    let metadata = fs::symlink_metadata(&canonical.reason).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let file = File::open(&canonical.reason).ok()?;
+    let mut buffer = Vec::new();
+    file.take(MAX_HELPER_REASON_BYTES as u64)
+        .read_to_end(&mut buffer)
+        .ok()?;
+    let text = String::from_utf8_lossy(&buffer);
+    let sanitized = sanitize_reason_text(&text);
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+/// Append the helper's recorded failure reason to a helper-readiness error, when one exists.
+fn annotate_helper_failure(error: anyhow::Error, nonce: &str) -> anyhow::Error {
+    match read_helper_failure(nonce) {
+        Some(reason) => anyhow!("{error} ({reason})"),
+        None => error,
+    }
 }
 
 /// Replace and start the new executable after the old process has definitely exited.
@@ -896,13 +978,11 @@ fn launch_target(
         .context("launch installed MoonTerminal")
 }
 
-/// Accept the installed executable's real casing while binding it to the derived install root.
+/// Bind the manifest's installed target to the derived install root without pinning its file
+/// name. A tester's renamed or copied install ("MoonTerminal (1).exe") is a legitimate target;
+/// the binding that proves this path is the real running parent is `open_parent`, not its name.
 fn same_installed_target(actual: &Path, canonical: &Path) -> bool {
-    actual.parent() == canonical.parent()
-        && actual
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("MoonTerminal.exe"))
+    actual.parent() == canonical.parent() && actual.file_name().is_some()
 }
 
 /// Compare two existing Windows paths through canonical filesystem identities.
@@ -927,6 +1007,9 @@ fn cleanup_accepted_transaction(transaction: &UpdateTransaction, manifest_path: 
         manifest_path,
     ] {
         remove_plain_file(path);
+    }
+    if let Ok(canonical) = paths::update_helper_paths(manifest_path, &transaction.nonce) {
+        remove_plain_file(&canonical.reason);
     }
 }
 

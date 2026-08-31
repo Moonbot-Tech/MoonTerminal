@@ -122,6 +122,11 @@ pub fn update_staged_executable_path(nonce: &str) -> std::io::Result<PathBuf> {
 /// Canonical paths for one same-directory update transaction.
 pub struct UpdateTransactionPaths {
     /// Installed executable that will be replaced.
+    ///
+    /// Authoritative only when built via [`update_transaction_paths`] (the real installed exe
+    /// path). When built via [`update_helper_paths`] this is a lexical placeholder used only so
+    /// `.parent()` yields the install root, and must never be trusted by a future reader as the
+    /// accepted install name.
     pub target: PathBuf,
     /// Versioned transaction manifest.
     pub manifest: PathBuf,
@@ -139,6 +144,9 @@ pub struct UpdateTransactionPaths {
     pub started: PathBuf,
     /// New-process healthy acknowledgement.
     pub healthy: PathBuf,
+    /// Best-effort helper-failure diagnostic file, living alongside the existing markers in
+    /// the same nonce-bound transaction directory.
+    pub reason: PathBuf,
 }
 
 /// Derive every canonical update path from one executable lookup and validated nonce.
@@ -212,6 +220,7 @@ fn transaction_paths(target: PathBuf, transaction: PathBuf) -> UpdateTransaction
         commit: transaction.join("install-committed"),
         started: transaction.join("app-started"),
         healthy: transaction.join("app-healthy"),
+        reason: transaction.join("helper-error"),
     }
 }
 
