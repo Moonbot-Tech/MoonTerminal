@@ -1,6 +1,11 @@
 //! Regression tests for durable-history asynchronous request identity.
 
-use super::history_result_is_current;
+use std::time::Duration;
+
+use super::{
+    ReportTradesStatus, draws_any_trade_kind, generation_refresh_interval,
+    history_result_is_current,
+};
 
 /// Removing the sequence check lets a slower Report scope A overwrite newer scope B on the same
 /// tab; removing the target check lets core A history land after the tab moves to core B.
@@ -14,7 +19,6 @@ fn stale_history_results_require_both_latest_sequence_and_exact_target() {
     assert!(history_result_is_current(2, 2, &core_b, Some(&core_b)));
 }
 
-use super::draws_any_trade_kind;
 use moon_core::config::ChartGraphicsCfg;
 
 /// Only "both boxes clear" may skip the durable read; every other combination must fetch the same
@@ -36,4 +40,38 @@ fn only_both_checkboxes_clear_skips_the_durable_read() {
     assert!(draws_any_trade_kind(&kinds(false, true)));
     assert!(!draws_any_trade_kind(&kinds(false, false)));
     assert!(draws_any_trade_kind(&ChartGraphicsCfg::default()));
+}
+
+/// Changing `report_trades.rs:HISTORY_LIVE_REFRESH_INTERVAL` from 250 ms to 5 s must redden this
+/// assertion; otherwise a closed trade's dashed line and triangle can again take several seconds
+/// to appear on the foreground chart.
+#[test]
+fn generation_refresh_interval_keeps_foreground_closed_trades_near_instant() {
+    assert!(
+        generation_refresh_interval(ReportTradesStatus::Ready, true) <= Duration::from_millis(250)
+    );
+}
+
+/// Removing the `report_trades.rs:generation_refresh_interval` NotReady/Failed backoff arm must
+/// redden this assertion; otherwise a broken foreground replica retries and log-spams every 250 ms.
+#[test]
+fn generation_refresh_interval_backs_off_failed_and_not_ready_foreground_reads() {
+    assert_eq!(
+        generation_refresh_interval(ReportTradesStatus::Failed, true),
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        generation_refresh_interval(ReportTradesStatus::NotReady, true),
+        Duration::from_secs(5)
+    );
+}
+
+/// Changing `report_trades.rs:HISTORY_REFRESH_INTERVAL_BACKGROUND` away from 30 s must redden
+/// this assertion; otherwise background chart tiles lose their bounded durable-read cadence.
+#[test]
+fn generation_refresh_interval_keeps_background_tiles_at_thirty_seconds() {
+    assert_eq!(
+        generation_refresh_interval(ReportTradesStatus::Ready, false),
+        Duration::from_secs(30)
+    );
 }
