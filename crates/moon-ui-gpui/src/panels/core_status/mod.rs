@@ -102,6 +102,17 @@ enum CoreStatusMode {
 /// How many recent warning episodes the Warnings list shows.
 const WARN_LIST_LIMIT: usize = 500;
 
+/// Position of the dead separator cell in the mode strip: after the two LIVE views (By-IP, Flat)
+/// and before the two HISTORY views (Warnings, Updates).
+///
+/// Named because it is load-bearing in two places that must agree — the item list and the
+/// click-index match. A literal in both is how a separator quietly becomes a mode.
+const MODE_DIVIDER_INDEX: usize = 2;
+
+/// Unscaled width of that separator cell. Wide enough to read as a gap with a rule in it, narrow
+/// enough not to read as a missing button.
+const MODE_DIVIDER_WIDTH: f32 = 13.0;
+
 /// How many recent update-history rows the Updates list shows, after scope filtering. Matches
 /// `HISTORY_CAP` in `crates/moon-core/src/session/core_update.rs`: the backing history itself
 /// never holds more than this, so the cap only ever bites when scoping filters less than the
@@ -958,6 +969,18 @@ impl CoreStatusView {
             combo
         };
         let weak_view = cx.entity().downgrade();
+        let mode_palette = MoonPalette::active(cx);
+        // The four modes are two different KINDS of surface: By-IP and Flat are live views of the
+        // fleet as it stands, while Warnings and Updates are history — records of what already
+        // happened. `MODE_DIVIDER_INDEX` is a dead cell that draws the boundary between them.
+        //
+        // One control rather than two, deliberately: the selection is one value, so two controls
+        // would each need to render "nothing selected" while the other holds it, and any drift
+        // between them shows the user two highlighted tabs. A replaced cell "preserves its
+        // resolved width and selected underline but exposes no segment click, scroll, hover,
+        // cursor, or tooltip behavior" (MoonUI `segment.rs::replace_item`), which is exactly a
+        // separator: it can never be selected and can never be clicked, so the index below it
+        // simply never arrives.
         let modes = MoonSegmentedControl::new("core-status-mode")
             .items([
                 MoonSegmentItem::new("", t!("core_status.mode.by_ip").to_string())
@@ -966,6 +989,12 @@ impl CoreStatusView {
                 MoonSegmentItem::new("", t!("core_status.mode.flat").to_string())
                     .fit_width(cx, 54.0, 88.0)
                     .selected(self.mode == CoreStatusMode::Flat),
+                // Narrow by explicit width, not `fit_width`: a separator sized like a label cell
+                // would open a 54-88px hole in the strip, which reads as a missing button rather
+                // than a boundary.
+                MoonSegmentItem::new("", String::new())
+                    .width(MODE_DIVIDER_WIDTH)
+                    .disabled(true),
                 MoonSegmentItem::new("", t!("core_status.mode.warnings").to_string())
                     .fit_width(cx, 54.0, 88.0)
                     .selected(self.mode == CoreStatusMode::Warnings),
@@ -973,6 +1002,15 @@ impl CoreStatusView {
                     .fit_width(cx, 54.0, 88.0)
                     .selected(self.mode == CoreStatusMode::Updates),
             ])
+            .replace_item(
+                MODE_DIVIDER_INDEX,
+                h_flex()
+                    .w_full()
+                    .h_full()
+                    .justify_center()
+                    .items_center()
+                    .child(design::chrome_divider(cx, mode_palette)),
+            )
             .on_click(move |index, _, _, app| {
                 let Some(view) = weak_view.upgrade() else {
                     return;
@@ -980,7 +1018,8 @@ impl CoreStatusView {
                 let mode = match index {
                     0 => CoreStatusMode::ByIp,
                     1 => CoreStatusMode::Flat,
-                    2 => CoreStatusMode::Warnings,
+                    // 2 is the separator and never reports a click.
+                    3 => CoreStatusMode::Warnings,
                     _ => CoreStatusMode::Updates,
                 };
                 view.update(app, |this, cx| this.set_mode(mode, cx));
