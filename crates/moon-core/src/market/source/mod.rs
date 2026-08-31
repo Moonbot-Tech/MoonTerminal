@@ -214,6 +214,101 @@ pub struct MarketLimits {
     pub max_leverage: i32,
 }
 
+/// What one unit of a market's `quantity` field IS.
+///
+/// A separate type rather than an `Option<f64>` because the money path needs THREE answers and an
+/// option only carries two. "Linear, so quantity is coins" and "nothing about this market has
+/// arrived" must never collapse into one value: the second one, read as the first, sends the USD
+/// figure itself as a quantity — which on a coin-margined market is the 100x order this whole rule
+/// exists to prevent. A caller that cannot get an answer must refuse, not fall back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MarketQuantityUnit {
+    /// Contracts, each worth this fixed amount of quote currency (coin-margined/inverse).
+    Contracts(f64),
+    /// The market's own coin amount, converted through the account's balance currency.
+    Coins,
+}
+
+/// Whether a market is INVERSE (coin-margined), from the quote currency it reports.
+///
+/// A coin-margined contract is denominated in USD and reports NO quote currency; a linear one
+/// names it. This is the same test `feed/live/convert.rs` uses to read positions back, and the
+/// same one `build_assets` uses.
+///
+/// Two other discriminators were tried against a live COIN-M core and neither works:
+///
+/// - the market NAME — `resolve_quote_on("BTCUSD_PERP", BinanceCoinM)` answers `"USD"`, so a name
+///   test calls Binance's coin-margined contracts linear and only fires on Bybit-style `AAVEPERP`;
+/// - `futures_type`, the protocol's settlement enum, which LOOKS authoritative and would be — the
+///   2026-08-31 QQ probe found it arrives `EMPTY` for `BTCUSD_PERP`, `SOLUSD_260925` and
+///   `ADAUSD_PERP` alike, while `contract_size` (100 / 10 / 10) and the empty quote both arrive
+///   correctly. An unset field cannot discriminate anything.
+///
+/// The emptiness is only trustworthy for a market that IS in the snapshot — quote and contract
+/// size travel in one wire record, so they cannot skew apart. A market that has not arrived at all
+/// is a different answer, and [`MarketDataSource::market_quantity_unit`] returns `None` for it.
+///
+/// It is also not sufficient ON ITS OWN, which is why the caller pairs it with a contract size
+/// other than 1: Hyperliquid markets report an empty catalog quote while being USDC-quoted and
+/// LINEAR (`HFUN` in `label_tests.rs`), and reading one of those as contracts would send the USD
+/// figure straight through as a coin quantity. `convert.rs` draws the line in the same place.
+fn quote_is_absent(quote: &str) -> bool {
+    quote.trim().is_empty()
+}
+
+/// What a manual order on one market must satisfy: the unit its quantity counts, and the smallest
+/// quantity the exchange accepts.
+///
+/// One value rather than two lookups: both come from the same market record, and reading them
+/// separately would let a snapshot land between them and pair one market's unit with another's
+/// floor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OrderSizeRules {
+    /// What one unit of `size` is on this market.
+    pub unit: MarketQuantityUnit,
+    /// Exchange minimum quantity, in that same unit. `0` when the venue states none.
+    pub min_qty: f64,
+}
+
+/// What a market's quantity field counts, from the two figures the core reports about it.
+///
+/// The two OUTBOUND readers — the maximum order cap and the size a manual order is placed with —
+/// both ask here, because a copy of the test at a call site is a second place to get it wrong and
+/// the two answers must never disagree: a cap stated in USD beside an order sized in contracts is
+/// how a $500 order becomes $50 000.
+///
+/// `feed/live/convert.rs` still carries its own INBOUND version of this test (contracts -> coins).
+/// It is deliberately left alone here: it reads positions the core already reports and is not on
+/// the money path this rule protects. Unifying the two is worth doing, and is not worth doing
+/// inside a fix to order sizing.
+///
+/// Args:
+///     quote: The market's quote currency as it reports it; empty means coin-margined.
+///     contract_size: Fixed quote-currency value of one contract, as the market reports it.
+///
+/// Returns:
+///     The unit, or `None` when it is NOT KNOWN — the market reports no quote AND no contract
+///     value, so neither branch can be chosen. A caller sizing real money must refuse on that
+///     rather than resolve it either way.
+pub(crate) fn market_quantity_unit(quote: &str, contract_size: f64) -> Option<MarketQuantityUnit> {
+    if !quote_is_absent(quote) {
+        return Some(MarketQuantityUnit::Coins);
+    }
+    // The pair, not the empty quote alone. `contract_size == 1.0` beside an empty quote is how a
+    // LINEAR Hyperliquid market presents itself, and calling that inverse would send the USD figure
+    // through as a coin quantity — the same trap in the opposite direction. A genuine inverse
+    // contract worth exactly one dollar is therefore read as linear too; that costs the coin's
+    // price as a factor on one venue, against emptying an account on the other reading.
+    // `convert.rs` makes the identical trade-off inbound.
+    if !contract_size.is_finite() || contract_size <= 0.0 {
+        return None;
+    }
+    match contract_size == 1.0 {
+        true => Some(MarketQuantityUnit::Coins),
+        false => Some(MarketQuantityUnit::Contracts(contract_size)),
+    }
+}
+
 /// The exchange maximum order size in the quote currency, from the figures a market carries.
 ///
 /// The stated notional cap wins. Only when the exchange gave none is the QUANTITY cap converted,
@@ -229,16 +324,15 @@ pub struct MarketLimits {
 ///   is why that fallback MOVES with the price while a stated cap stands still — a distinction the
 ///   returned [`MaxOrderSource`] preserves so the UI can say so instead of hiding it.
 ///
-/// An EMPTY QUOTE in the market name is what separates the two, NOT `contract_size != 1` on its
-/// own: linear QUANTO futures also carry a contract size (Gate's `ASTEROID_USDT` has 10000) while
-/// still reporting quantity in coins. Same guard, same reason, as `convert.rs`. That test is made
-/// HERE, from the market name and its exchange, rather than by each caller: it is half of this one
-/// rule — it chooses which formula applies — and a copy of it at every call site is a second place
-/// to get coin-margined detection wrong.
+/// The market's SETTLEMENT currency separates the two — see [`market_quantity_unit`], which makes
+/// that test once for both this cap and the size of an order. `contract_size != 1` does not: linear
+/// QUANTO futures also carry a contract size (Gate's `ASTEROID_USDT` has 10000) while still
+/// reporting quantity in coins.
 ///
 /// A quantity cap whose conversion cannot be completed yet — a linear market before its first price
-/// tick, where `ask` is still zero — is [`MaxOrderSource::Pending`], NOT `Absent`. Only a market
-/// stating neither cap is `Absent`. Both render as a dash, and they explain themselves differently.
+/// tick, where `ask` is still zero, or a coin-settled one whose contract value has not arrived — is
+/// [`MaxOrderSource::Pending`], NOT `Absent`. Only a market stating neither cap is `Absent`. Both
+/// render as a dash, and they explain themselves differently.
 ///
 /// Takes the market's FIGURES as primitives rather than the market itself, because `moonproto`'s
 /// `Market` is not re-exported at its crate root and cannot be named here. Both readers of the rule
@@ -247,8 +341,7 @@ pub struct MarketLimits {
 /// coin.
 ///
 /// Args:
-///     market: Canonical market name used to distinguish linear from inverse contracts.
-///     exchange: Market exchange used when resolving the market's quote token.
+///     quote: The market's quote currency; empty means coin-margined. See [`market_quantity_unit`].
 ///     max_notional: Exchange-stated maximum order size in quote currency, when available.
 ///     max_qty: Exchange-stated maximum quantity, used only when no notional cap exists.
 ///     ask: Current best ask used to convert a linear-market quantity cap.
@@ -257,8 +350,7 @@ pub struct MarketLimits {
 /// Returns:
 ///     A stated, derived, pending, or absent quote-currency cap with its provenance.
 pub(crate) fn max_order_notional(
-    market: &str,
-    exchange: crate::symbol::Exchange,
+    quote: &str,
     max_notional: f64,
     max_qty: f64,
     ask: f64,
@@ -273,14 +365,12 @@ pub(crate) fn max_order_notional(
     if !max_qty.is_finite() || max_qty <= 0.0 {
         return MaxOrder::default();
     }
-    let inverse = crate::symbol::resolve_quote_on(market, exchange).is_empty()
-        && contract_size.is_finite()
-        && contract_size > 0.0
-        && contract_size != 1.0;
-    let value = if inverse {
-        max_qty * contract_size
-    } else {
-        max_qty * ask
+    let value = match market_quantity_unit(quote, contract_size) {
+        Some(MarketQuantityUnit::Contracts(contract_size)) => max_qty * contract_size,
+        Some(MarketQuantityUnit::Coins) => max_qty * ask,
+        // Coin-settled, contract value not reported yet: the cap exists and cannot be converted,
+        // which is what `Pending` means. Zero falls into that branch below.
+        None => 0.0,
     };
     if !value.is_finite() || value <= 0.0 {
         // The cap exists; what converts it does not yet. Never report that as "no cap".

@@ -127,7 +127,6 @@ impl MarketDataSource {
 
         let markets = snap.markets();
         let mut rows = Vec::with_capacity(markets.market_count());
-        let exchange = self.exchange_of(provider);
         for handle in markets.iter() {
             let name = handle.name();
             let mut row = handle.with(|m| ScreenerRow {
@@ -137,8 +136,7 @@ impl MarketDataSource {
                 vol_24h: m.volume,
                 ask: m.price.ask,
                 max_order: max_order_notional(
-                    name,
-                    exchange,
+                    &m.base_currency,
                     m.max_notional(),
                     m.max_qty(),
                     m.price.ask,

@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 
 use moon_core::feed::CoreLogLine;
+use moon_core::market::MarketQuantityUnit;
 use moon_core::session::order_lines::OrderCloseReason;
 use moon_core::util::now_unix_ms_i64;
 
@@ -76,13 +77,38 @@ impl Runtime {
                 format!("order_cancel_lag has no live-correct latest price for {market}: {reason}")
             })?;
         let price = (latest_price as f64 * self.config.order_cancel_price_mult).max(1e-8);
-        let size_override = self.config.order_cancel_size.or_else(|| {
-            self.config
-                .order_cancel_quote_size
-                .map(|quote| quote / price)
-        });
+        // `order_cancel_quote_size` is a QUOTE amount, and what one unit of size means depends on
+        // the market: dividing by price gives a coin quantity, which is right on a linear market
+        // and wrong on a coin-margined one, where the exchange counts contracts of fixed value.
+        // This script places a REAL order, so it asks the market rather than assuming.
+        let quote_size = self.config.order_cancel_quote_size;
+        let size_override = match self.config.order_cancel_size {
+            Some(size) => Some(size),
+            None => match quote_size {
+                None => None,
+                Some(quote) => {
+                    match backend
+                        .session
+                        .market_source()
+                        .order_size_rules(core, &market)
+                        .map(|rules| rules.unit)
+                    {
+                        // Both units take a COIN amount on the wire; see `manual_order_size_base`.
+                        Some(MarketQuantityUnit::Contracts(_) | MarketQuantityUnit::Coins) => {
+                            Some(quote / price)
+                        }
+                        None => {
+                            return Err(format!(
+                                "order_cancel_lag cannot size {market}: its quantity unit has not \
+                                 been reported yet"
+                            ));
+                        }
+                    }
+                }
+            },
+        };
         let terms = backend
-            .manual_order_terms(core, size_override)
+            .manual_order_terms(core, &market, price, size_override)
             .ok_or_else(|| {
                 format!(
                     "order_cancel_lag core={core} has no complete local terms or valid order size"
