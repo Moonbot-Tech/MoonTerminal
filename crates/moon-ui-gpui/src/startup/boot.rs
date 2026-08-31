@@ -664,10 +664,41 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     }
                     crate::firetest::tick_backend(b, cx);
 
+                    // The update queue owns no `AppConfig`, so a `Verifying` core leaves its
+                    // respawn as a REQUEST on the queue's outbox and this same, already-existing
+                    // drain executes it eight lines below -- one mechanism, not two.
+                    // Deduplicated against a manual press already pending for the same core: two
+                    // respawns would both bump the epoch and the predicate would still settle,
+                    // but one is what was asked for.
+                    let respawns = b.session.take_update_respawn_requests();
+                    for id in respawns {
+                        if !b.reconnect_request.contains(&id) {
+                            b.reconnect_request.push(id);
+                        }
+                    }
+
                     let recon: Vec<CoreId> = b.reconnect_request.drain(..).collect();
                     for id in recon {
-                        b.session
+                        let respawned = b
+                            .session
                             .reconnect(id, &b.config, b.reports.as_ref().map(|h| &h.tx));
+                        if !respawned {
+                            // `reconnect` silently declines a core that left the configuration or
+                            // whose server/group went inactive. A `Verifying` attempt must learn
+                            // that on this tick rather than waiting out its whole bound; any other
+                            // phase ignores it.
+                            //
+                            // This closes a history record AFTER the `core_updates_hr0` comparison
+                            // above already ran, so that comparison alone would never see it --
+                            // the persistence writer at the bottom of this tick would silently
+                            // skip a real, closed record until some unrelated update happened to
+                            // dirty the flag. The bool this returns is exactly the "did a record
+                            // just close" signal `core_updates_hr0` computes for every other path;
+                            // reuse it here instead of widening that comparison window.
+                            if b.session.note_update_respawn_refused(id, now_ms) {
+                                b.core_updates_dirty = true;
+                            }
+                        }
                     }
                     // The debounced workspace flush. Guarded as a whole rather than per file so
                     // a newly persisted thing added below cannot forget the rule; the dirty

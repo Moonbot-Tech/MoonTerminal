@@ -287,8 +287,8 @@ pub(super) fn group_tz_offset(cores: &[CoreStatusRow]) -> TzOffsetGroup {
 pub(super) enum GroupUpdate {
     /// No core on the server is tracked in the queue at all.
     Idle,
-    /// At least one core is being sent to or awaited from, or is queued and not blocked. Carries
-    /// the count.
+    /// At least one core is queued and not blocked, or has an in-flight update attempt. Carries the
+    /// count.
     Active(usize),
     /// At least one core is queued behind a STALLED lane and no core is `Failed`. Carries the
     /// count.
@@ -317,7 +317,8 @@ pub(super) fn group_update(cores: &[CoreStatusRow]) -> GroupUpdate {
             Some(
                 CoreUpdatePhase::Queued { held: false, .. }
                 | CoreUpdatePhase::Sent { .. }
-                | CoreUpdatePhase::Waiting { .. },
+                | CoreUpdatePhase::Waiting { .. }
+                | CoreUpdatePhase::Verifying { .. },
             ) => active += 1,
             Some(CoreUpdatePhase::Done(_)) | None => {}
         }

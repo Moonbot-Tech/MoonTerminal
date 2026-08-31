@@ -598,12 +598,28 @@ impl SessionManager {
     }
 
     /// Reconnect one active core from the current config and reset its provider role.
-    pub fn reconnect(&mut self, id: CoreId, config: &AppConfig, reports: Option<&ReportTx>) {
+    ///
+    /// Args:
+    ///     id: Core to reconnect.
+    ///     config: Live application config, read for the core's current server/group state.
+    ///     reports: Optional report-database channel.
+    ///
+    /// Returns:
+    ///     Whether the respawn was actually issued. `false` means the core is absent from the
+    ///     current configuration, or its server or group is inactive -- a `Verifying` update
+    ///     attempt watches this to learn a refusal on the same tick rather than waiting out its
+    ///     whole bound; see [`crate::session::SessionManager::note_update_respawn_refused`].
+    pub fn reconnect(
+        &mut self,
+        id: CoreId,
+        config: &AppConfig,
+        reports: Option<&ReportTx>,
+    ) -> bool {
         let Some(server) = config.servers.iter().find(|s| s.id == id).cloned() else {
-            return;
+            return false;
         };
         if !(server.active && config.group(&server.group).active) {
-            return;
+            return false;
         }
         // Refresh ranks because reconnect may insert a missing session without reconciliation.
         self.config_order = config.servers.iter().map(|s| s.id).collect();
@@ -615,5 +631,6 @@ impl SessionManager {
             reports,
             "reconnect",
         );
+        true
     }
 }

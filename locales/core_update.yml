@@ -19,6 +19,10 @@ core_update.phase.waiting:
   ru: "Обновляется"
   en: "Updating"
   es: "Actualizando"
+core_update.phase.verifying:
+  ru: "Проверяем версию"
+  en: "Verifying build"
+  es: "Verificando la versión"
 core_update.phase.succeeded:
   ru: "Обновлено"
   en: "Updated"
@@ -51,6 +55,16 @@ core_update.phase.failed.abandoned:
   ru: "Прервано выходом из приложения"
   en: "Abandoned when the application quit"
   es: "Abandonado al cerrar la aplicación"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable:
+  ru: "Версию не удалось проверить — переподключение недоступно"
+  en: "Build not verified — reconnect unavailable"
+  es: "Versión no verificada — reconexión no disponible"
+core_update.phase.unverified.timeout:
+  ru: "Версию не удалось проверить — ядро не вернулось вовремя"
+  en: "Build not verified — the core did not come back in time"
+  es: "Versión no verificada — el núcleo no volvió a tiempo"
 
 # --- Fleet-wide footer counters, drawn only while a campaign is active ---
 core_update.summary.updating:

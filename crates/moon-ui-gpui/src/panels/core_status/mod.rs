@@ -738,6 +738,7 @@ impl Render for CoreStatusView {
                             Some(CoreUpdatePhase::Queued { .. })
                                 | Some(CoreUpdatePhase::Sent { .. })
                                 | Some(CoreUpdatePhase::Waiting { .. })
+                                | Some(CoreUpdatePhase::Verifying { .. })
                         )
                     })
                     .cloned()

@@ -159,6 +159,165 @@ fn unchanged_connection_epoch_keeps_a_sent_update_out_of_waiting() {
     );
 }
 
+/// `core_update.rs:advance_in_flight_updates` must require `conn_epoch > epoch1`; changing it
+/// to `>=` accepts the pre-respawn build and leaves the terminal reporting a stale MoonBot version.
+#[test]
+fn verifying_waits_for_a_fresh_connection_before_accepting_a_build() {
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 1, 2));
+    let core = 8;
+    let epoch1 = 41;
+    let mut manager = manager();
+    let mut data = ready_core(ip);
+    data.conn_epoch = epoch1;
+    insert_core(&mut manager, core, data);
+    manager.core_updates.phases.insert(
+        core,
+        CoreUpdatePhase::Verifying {
+            target: UpdateTarget::Release,
+            from: Some(100),
+            epoch1,
+            sent_at_ms: 0,
+            left_at_ms: 1,
+            verify_at_ms: 1,
+        },
+    );
+    manager.core_updates.lanes.insert(
+        ip,
+        Lane {
+            order: VecDeque::new(),
+            active: Some(core),
+            stalled: false,
+        },
+    );
+
+    manager.advance_in_flight_updates(2);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Verifying { epoch1: 41, .. })
+        ),
+        "the pre-respawn snapshot must not complete verification before a fresh client connects"
+    );
+
+    manager
+        .store
+        .core_mut(core)
+        .expect("inserted core must remain in the retained store")
+        .begin_connection_attempt();
+    manager.advance_in_flight_updates(3);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Verifying { .. })
+        ),
+        "a respawning core cannot verify while its old snapshot has been cleared"
+    );
+
+    let data = manager
+        .store
+        .core_mut(core)
+        .expect("inserted core must remain in the retained store");
+    data.apply(FeedMsg::Status(ConnStatus::Ready));
+    data.startup.state = crate::feed::CoreStartupState::Ready;
+    manager.advance_in_flight_updates(4);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Verifying { .. })
+        ),
+        "a new epoch alone cannot verify the update until the fresh client reports its build"
+    );
+
+    manager
+        .store
+        .core_mut(core)
+        .expect("inserted core must remain in the retained store")
+        .server_version = Some(101);
+    manager.advance_in_flight_updates(5);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded {
+                from: Some(100),
+                to: 101
+            }))
+        ),
+        "the fresh connection and fresh build must settle verification as the observed update"
+    );
+}
+
+/// `core_update.rs:active_from` must keep `Verifying` active; moving it to `None` starts a
+/// sibling update on the same IP while the first MoonBot update is still being verified.
+#[test]
+fn verifying_core_blocks_a_ready_sibling_on_its_new_ip() {
+    let old_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
+    let shared_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4));
+    let verifying_core = 3;
+    let queued_core = 4;
+    let mut manager = manager();
+
+    insert_core(&mut manager, verifying_core, ready_core(shared_ip));
+    insert_core(&mut manager, queued_core, ready_core(shared_ip));
+    manager.core_updates.phases.insert(
+        verifying_core,
+        CoreUpdatePhase::Verifying {
+            target: UpdateTarget::Release,
+            from: Some(100),
+            epoch1: 12,
+            sent_at_ms: 0,
+            left_at_ms: 1,
+            verify_at_ms: 1,
+        },
+    );
+    manager.core_updates.lanes.insert(
+        old_ip,
+        Lane {
+            order: VecDeque::new(),
+            active: Some(verifying_core),
+            stalled: false,
+        },
+    );
+    manager.core_updates.phases.insert(
+        queued_core,
+        CoreUpdatePhase::Queued {
+            lane: shared_ip,
+            held: false,
+            not_ready_since: None,
+        },
+    );
+    manager.core_updates.attempts.insert(
+        queued_core,
+        AttemptMeta {
+            started_ms: 0,
+            core_name: "queued".to_string(),
+            target: UpdateTarget::Release,
+            from: Some(100),
+        },
+    );
+    manager.core_updates.lanes.insert(
+        shared_ip,
+        Lane {
+            order: VecDeque::from([queued_core]),
+            active: None,
+            stalled: false,
+        },
+    );
+
+    manager.pop_ready_lanes(2);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(queued_core),
+            Some(CoreUpdatePhase::Queued { lane, .. }) if *lane == shared_ip
+        ),
+        "a verifying core that moved onto this IP must defer the sibling instead of starting it"
+    );
+}
+
 /// `store.rs:CoreData::apply` must bump `conn_epoch` only on `Ready -> not-Ready`; changing the
 /// edge guard to `true` counts reconnect backoff messages as departures and falsely completes an update.
 #[test]

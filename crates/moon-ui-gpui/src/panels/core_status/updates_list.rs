@@ -34,8 +34,9 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///
 /// Args:
 ///     id: Stable table element identity.
-///     live_rows: Cores currently tracked in the update queue (`Queued`/`Sent`/`Waiting`),
-///         already scoped to the panel's effective core selection. Drawn first.
+///     live_rows: Cores currently tracked in the update queue
+///         (`Queued`/`Sent`/`Waiting`/`Verifying`), already scoped to the panel's effective
+///         core selection. Drawn first.
 ///     history: Closed history records, already scoped, capped and ordered newest first. Drawn
 ///         after every in-flight row.
 ///     server_names: Server display name per lane/endpoint IP -- never the raw address.
@@ -114,6 +115,12 @@ fn live_row(
             from,
             sent_at_ms,
             ..
+        }
+        | CoreUpdatePhase::Verifying {
+            target,
+            from,
+            sent_at_ms,
+            ..
         } => cells(
             ix,
             time_text(*sent_at_ms, zone),
@@ -148,6 +155,9 @@ fn history_row(
     let to = match &record.outcome {
         CoreUpdateOutcome::Succeeded { to, .. } => Some(*to),
         CoreUpdateOutcome::Unchanged { version } => Some(*version),
+        // THE WHOLE POINT of the variant: the cell must not claim a build the terminal never
+        // actually confirmed.
+        CoreUpdateOutcome::Unverified(_) => None,
         CoreUpdateOutcome::Failed(_) => None,
     };
     let duration = if record.started_ms > 0 {
@@ -157,7 +167,7 @@ fn history_row(
     };
     // Reuses the same phase-to-word formatter the badge and hover tooltip already use, by
     // wrapping the closed outcome back into the `Done` phase it always closed from -- one
-    // formatter, never a second match restating the same seven cases.
+    // formatter, never a second match restating the same exhaustive phase/outcome cases.
     let outcome = update_tooltip(&CoreUpdatePhase::Done(record.outcome.clone()));
     cells(
         ix,

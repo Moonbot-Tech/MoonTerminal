@@ -32,16 +32,30 @@ use crate::feed::{ConnStatus, CoreStartupState, UpdateTarget};
 /// How long a `Sent` command may sit without the core ever leaving `Ready`, before this gives up
 /// and assumes nothing happened (`Failed(NeverDropped)`, which stalls the lane).
 ///
-/// HYPOTHESIS: nobody has measured a real MoonBot update-and-restart yet. What would settle it:
-/// one live campaign's `ended_ms - started_ms`, read from its resulting history record.
+/// MEASURED 2026-08-31 on the author's own fleet: two cores completed a full MoonBot
+/// update-and-restart in 24 s and 28 s, send to settled. Both bounds stay where they are: they
+/// are outage budgets, not expectations, and 180 s / 900 s against a ~26 s reality is deliberate
+/// headroom for a slow link or a large download. The figure is recorded so nobody re-opens this
+/// as an unknown; it is not a reason to tighten either number.
 const SEND_TO_DROP_TIMEOUT_MS: i64 = 180_000;
 
 /// How long a `Waiting` core may stay away before this gives up (`Failed(Timeout)`, which stalls
 /// the lane). Measured from `sent_at_ms`, never from `left_at_ms` -- a core that takes its time
 /// leaving `Ready` must not effectively earn extra time to come back.
 ///
-/// Same hypothesis and check as [`SEND_TO_DROP_TIMEOUT_MS`].
+/// Same measurement as [`SEND_TO_DROP_TIMEOUT_MS`].
 const DROP_TO_READY_TIMEOUT_MS: i64 = 900_000;
+
+/// How long a `Verifying` core may take to come back on a FRESH client before this gives up
+/// (`Unverified(RespawnTimedOut)`, which ADVANCES the lane).
+///
+/// Its own constant, measured from `verify_at_ms`, deliberately NOT the remaining slice of
+/// `DROP_TO_READY_TIMEOUT_MS`: that budget is measured from `sent_at_ms`, so a core that took
+/// fourteen minutes to update would enter `Verifying` with sixty seconds left and time out
+/// instantly, converting a successful update into an unverified one for a reason that has
+/// nothing to do with the respawn. What this leg measures is one local TCP connect plus one
+/// MoonProto init, which the fleet does in seconds.
+const VERIFY_TO_READY_TIMEOUT_MS: i64 = 120_000;
 
 /// Retained history ring size -- about ten full campaigns on a 200-core fleet.
 const HISTORY_CAP: usize = 2_000;
@@ -88,6 +102,56 @@ pub enum CoreUpdatePhase {
         sent_at_ms: i64,
         left_at_ms: i64,
     },
+    /// The core is back and settled on its OLD MoonProto client, whose retained `ServerInfo`
+    /// snapshot still describes the pre-update process. This phase forces a fresh client (via the
+    /// existing `reconnect_request` drain) and settles only on a build read from it -- see the
+    /// module doc and `advance_in_flight_updates` for why a respawn is the only route at the
+    /// pinned MoonProto revision.
+    ///
+    /// RESPAWN-SAFETY VERDICT: proceed. What a respawn costs, at the instant this phase requests
+    /// one: a new feed thread and MoonProto client (`spawn_feed`), `endpoint`/`sys`/`startup`
+    /// reset and `server_version` cleared (`begin_connection_attempt`), this core's provider
+    /// coordination dropped (`clear_core_coordination`) -- which can hand off or briefly leave an
+    /// exchange without a provider -- while report replication does NOT restart from zero
+    /// (`ReportSink::starts` resumes at `Resume`/`Checkpoint`). For a few seconds the core's row
+    /// shows `Connecting`, the build cell blanks then repopulates, sys metrics blank and refill,
+    /// and a market pane the core was feeding as provider may hand over.
+    ///
+    /// Why this is nonetheless right:
+    /// 1. The same respawn is already the per-core manual reconnect button, so it is already
+    ///    deemed safe to fire at a live, trading core.
+    /// 2. The MARGINAL cost here is near zero: by the time this phase fires the core has just
+    ///    been away for the entire update (24 s and 28 s measured 2026-08-31), so any provider
+    ///    election it held was already re-decided on the first coordination tick after it left
+    ///    `Ready` -- the respawn merely re-disturbs an election that just re-settled seconds ago.
+    /// 3. The MoonBot process genuinely RESTARTED; MoonProto's retained snapshot describes a
+    ///    process that no longer exists, so a full re-init is the correct response, not a trick
+    ///    to read a number.
+    /// 4. It is scoped to one core, once, only after an update this terminal itself commanded --
+    ///    see [`SessionManager::advance_in_flight_updates`]'s apply pass, the single producer.
+    ///
+    /// No alternative exists at the pinned MoonProto revision `02cbe52`: `set_server_info` has
+    /// exactly two production callers, both in the init state machine, and no public handle
+    /// re-runs BaseCheck or re-publishes `ServerInfo` without a full respawn.
+    ///
+    /// RESIDUAL, deliberately out of scope: a core that restarts for any OTHER reason (hand
+    /// restart, crash-and-recover) still shows its pre-restart build, because MoonProto's
+    /// internal reconnect keeps the snapshot. This phase fires only after an update this queue
+    /// itself sent, and must not be described as fixing that broader case.
+    Verifying {
+        target: UpdateTarget,
+        from: Option<u32>,
+        /// `CoreData::conn_epoch` read at the instant this phase was entered, i.e. at the FIRST
+        /// settle after the update. The respawn request emitted alongside it is what moves this
+        /// counter; the completion predicate proves the fresh client exists by requiring
+        /// `conn_epoch > epoch1`, never `>=`.
+        epoch1: u64,
+        sent_at_ms: i64,
+        left_at_ms: i64,
+        /// When the respawn was requested. This leg's own bound is measured from HERE, never
+        /// from `sent_at_ms` -- see [`VERIFY_TO_READY_TIMEOUT_MS`].
+        verify_at_ms: i64,
+    },
     /// The attempt reached a terminal outcome. A core in this phase is eligible to be enqueued
     /// again; [`eligible`] treats `Done` as though nothing were tracked for it.
     Done(CoreUpdateOutcome),
@@ -107,8 +171,39 @@ pub enum CoreUpdateOutcome {
     /// already-current core, and a fleet-relative "behind" predicate ([`SessionManager::cores_behind`])
     /// cannot avoid selecting those.
     Unchanged { version: u32 },
+    /// The core returned from the update, but the terminal could not establish which build it
+    /// returned on. NOT a failure of the update (the core provably departed and returned, so
+    /// nothing is in flight on that IP) and NOT `Unchanged` (which asserts a build; this asserts
+    /// only that we could not tell). See [`SessionManager::advance_in_flight_updates`]'s
+    /// `Verifying` arm for why this stalls no lane: to reach `Verifying` at all the queue has
+    /// already observed both the core's departure and its settled return, so the update itself is
+    /// finished -- the only thing outstanding is the terminal's own read of the build. Stalling on
+    /// that would punish every sibling on the IP for a terminal-side observability gap, and would
+    /// kill any bulk campaign at the first core whose server or group happens to be inactive in
+    /// config, with a stalled lane the user has to clear by hand.
+    ///
+    /// PERSISTENCE NOTE: `CoreUpdateOutcome` round-trips through `core_updates.json`
+    /// (`config::CoreUpdateHistory`). An OLD file read by a NEW binary is safe -- serde resolves
+    /// by name, no existing variant moved. A NEW file (containing this variant) read by an OLD
+    /// binary is destructive: `serde_json` fails the whole document on an unknown variant and
+    /// `CoreUpdateHistory::load` falls back to `Self::default()`, silently resetting the entire
+    /// retained ring. Pre-existing behaviour for any variant addition to this enum; not mitigated
+    /// here (per-record fault tolerance would need `Vec<serde_json::Value>` plus a hand-rolled
+    /// second pass, far larger than the defect warrants).
+    Unverified(UnverifiedReason),
     /// The attempt failed; see [`UpdateFailure`] for which way.
     Failed(UpdateFailure),
+}
+
+/// Why a `Verifying` attempt could not establish the core's post-update build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnverifiedReason {
+    /// `SessionManager::reconnect` declined the respawn -- the core is absent from the current
+    /// configuration, or its server or group is inactive.
+    RespawnUnavailable,
+    /// The respawn was issued but no fresh connection epoch, Ready status and build arrived
+    /// within [`VERIFY_TO_READY_TIMEOUT_MS`].
+    RespawnTimedOut,
 }
 
 /// Why one update attempt failed.
@@ -229,6 +324,11 @@ pub(crate) struct CoreUpdateQueue {
     phases: HashMap<CoreId, CoreUpdatePhase>,
     attempts: HashMap<CoreId, AttemptMeta>,
     history: VecDeque<CoreUpdateRecord>,
+    /// Cores whose `Verifying` phase requested a respawn, pending pickup by the coordinator's
+    /// existing `reconnect_request` drain (`boot.rs`). This queue owns no `AppConfig`, which is
+    /// precisely why the request must leave as data rather than as a direct call; see
+    /// [`SessionManager::take_update_respawn_requests`].
+    respawn_requests: Vec<CoreId>,
     rev: u64,
     history_rev: u64,
     /// Highest `now_ms` this queue has ever ticked at, used to keep the clock this queue reads
@@ -264,6 +364,14 @@ enum Transition {
         epoch0: u64,
         sent_at_ms: i64,
         left_at_ms: i64,
+    },
+    ToVerifying {
+        target: UpdateTarget,
+        from: Option<u32>,
+        epoch1: u64,
+        sent_at_ms: i64,
+        left_at_ms: i64,
+        verify_at_ms: i64,
     },
     Done {
         lane_addr: IpAddr,
@@ -428,7 +536,9 @@ impl SessionManager {
         for phase in self.core_updates.phases.values() {
             match phase {
                 CoreUpdatePhase::Queued { .. } => summary.queued += 1,
-                CoreUpdatePhase::Sent { .. } | CoreUpdatePhase::Waiting { .. } => {
+                CoreUpdatePhase::Sent { .. }
+                | CoreUpdatePhase::Waiting { .. }
+                | CoreUpdatePhase::Verifying { .. } => {
                     summary.updating += 1;
                 }
                 CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(_)) => summary.failed += 1,
@@ -560,6 +670,50 @@ impl SessionManager {
         self.core_updates.history_rev
     }
 
+    /// Drain every core a `Verifying` phase has requested a respawn for, since the last drain.
+    ///
+    /// This queue owns no `AppConfig`, which is precisely why the request must leave as data
+    /// rather than as a call -- see `lifecycle.rs`'s `SessionManager::reconnect`, the only
+    /// production caller that can actually issue one. The coordinator's existing
+    /// `reconnect_request` drain executes what this returns.
+    pub fn take_update_respawn_requests(&mut self) -> Vec<CoreId> {
+        std::mem::take(&mut self.core_updates.respawn_requests)
+    }
+
+    /// Record that a `Verifying` core's requested respawn was declined this tick.
+    ///
+    /// Args:
+    ///     core: Core whose respawn request was refused.
+    ///     now_ms: Injected clock, recorded as the closing attempt's `ended_ms`.
+    ///
+    /// Returns:
+    ///     Whether this core was actually `Verifying`. `false` is a legal, silent no-op: a manual
+    ///     reconnect that gets refused for any OTHER phase (or no tracked phase at all) must not
+    ///     touch the update queue.
+    pub fn note_update_respawn_refused(&mut self, core: CoreId, now_ms: i64) -> bool {
+        let now_ms = self.core_updates.clamped_now(now_ms);
+        let Some(CoreUpdatePhase::Verifying { from, .. }) = self.core_updates.phases.get(&core)
+        else {
+            return false;
+        };
+        let from = *from;
+        let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
+            return false;
+        };
+        self.finish_core(
+            core,
+            lane_addr,
+            from,
+            CoreUpdateOutcome::Unverified(UnverifiedReason::RespawnUnavailable),
+            now_ms,
+        );
+        if let Some(lane) = self.core_updates.lanes.get_mut(&lane_addr) {
+            lane.active = None;
+        }
+        self.core_updates.bump_rev();
+        true
+    }
+
     /// Seed the retained history from persisted storage at boot.
     ///
     /// Called exactly ONCE, before any campaign runs, into a queue whose history is empty by
@@ -607,12 +761,9 @@ impl SessionManager {
         for &core in &pending {
             let phase = self.core_updates.phases.get(&core);
             let was_queued = matches!(phase, Some(CoreUpdatePhase::Queued { .. }));
-            let from = match phase {
-                Some(
-                    CoreUpdatePhase::Sent { from, .. } | CoreUpdatePhase::Waiting { from, .. },
-                ) => *from,
-                _ => self.core_updates.attempts.get(&core).and_then(|m| m.from),
-            };
+            let from = phase
+                .and_then(Self::active_from)
+                .unwrap_or_else(|| self.core_updates.attempts.get(&core).and_then(|m| m.from));
             let Some(lane_addr) = self.current_lane(core) else {
                 // Invariant violation: a tracked, non-`Done` phase with no lane this core could be
                 // resolved from. Log and skip rather than losing the core silently or panicking
@@ -685,15 +836,32 @@ impl SessionManager {
         )
     }
 
+    /// Whether `phase` carries an attempt genuinely in flight, and if so, the baseline build it
+    /// is moving from. `Sent`, `Waiting` and `Verifying` are the only phases with a live attempt;
+    /// every site that needs "is this core actively being sent to, dropped, or verified" reads it
+    /// from here rather than hand-matching the same three variants. Matches EVERY variant of
+    /// `CoreUpdatePhase` explicitly, with no `_` or `..` catch-all at the variant level -- a future
+    /// phase must break the build here, once, instead of silently taking the wrong
+    /// branch wherever this match was copied.
+    fn active_from(phase: &CoreUpdatePhase) -> Option<Option<u32>> {
+        match phase {
+            CoreUpdatePhase::Queued { .. } => None,
+            CoreUpdatePhase::Sent { from, .. }
+            | CoreUpdatePhase::Waiting { from, .. }
+            | CoreUpdatePhase::Verifying { from, .. } => Some(*from),
+            CoreUpdatePhase::Done(_) => None,
+        }
+    }
+
     /// Resolve which lane a tracked core currently belongs to.
     ///
-    /// A `Queued` phase carries its lane directly; a `Sent` or `Waiting` phase does not, so this
-    /// searches for the lane whose `active` still points at the core -- which a stall deliberately
-    /// leaves in place, see [`Lane::stalled`].
+    /// A `Queued` phase carries its lane directly; every in-flight phase is recognized through
+    /// [`Self::active_from`], so this searches for the lane whose `active` still points at the
+    /// core -- which a stall deliberately leaves in place, see [`Lane::stalled`].
     fn current_lane(&self, core: CoreId) -> Option<IpAddr> {
         match self.core_updates.phases.get(&core) {
             Some(CoreUpdatePhase::Queued { lane, .. }) => Some(*lane),
-            Some(CoreUpdatePhase::Sent { .. } | CoreUpdatePhase::Waiting { .. }) => self
+            Some(phase) if Self::active_from(phase).is_some() => self
                 .core_updates
                 .lanes
                 .iter()
@@ -774,12 +942,8 @@ impl SessionManager {
                 if self.sessions.iter().any(|s| s.id == core) {
                     return None;
                 }
-                match phase {
-                    CoreUpdatePhase::Sent { from, .. } | CoreUpdatePhase::Waiting { from, .. } => {
-                        self.current_lane(core).map(|addr| (core, addr, *from))
-                    }
-                    _ => None,
-                }
+                Self::active_from(phase)
+                    .and_then(|from| self.current_lane(core).map(|addr| (core, addr, from)))
             })
             .collect();
         let vanished_queued: Vec<(CoreId, IpAddr)> = self
@@ -844,8 +1008,8 @@ impl SessionManager {
         changed
     }
 
-    /// Step 2 of [`Self::tick_core_updates`]: advance every `Sent` or `Waiting` core, per the
-    /// transition table.
+    /// Step 2 of [`Self::tick_core_updates`]: advance every in-flight core, per the transition
+    /// table.
     fn advance_in_flight_updates(&mut self, now_ms: i64) -> bool {
         let mut transitions: Vec<(CoreId, Transition)> = Vec::new();
         for (&core, phase) in &self.core_updates.phases {
@@ -888,7 +1052,10 @@ impl SessionManager {
                     }
                 }
                 CoreUpdatePhase::Waiting {
-                    from, sent_at_ms, ..
+                    target,
+                    from,
+                    sent_at_ms,
+                    ..
                 } => {
                     let Some(data) = self.store.core(core) else {
                         continue;
@@ -897,26 +1064,24 @@ impl SessionManager {
                     // MoonProto's per-core Ready/Connected events do not arrive in a fixed order,
                     // and `startup` is observed through `startup_rev`, which advances only on
                     // changed PROGRESS. This is the single place this feature could hang forever.
+                    //
+                    // This predicate no longer proves the build: it proves the core is back and
+                    // addressable enough to be respawned. MoonProto's retained `ServerInfo`
+                    // snapshot describes the pre-update process (see the module doc), so the
+                    // actual build is read only after `Verifying` forces a fresh client.
                     let settled = data.status == ConnStatus::Ready
                         && data.startup.state == CoreStartupState::Ready
                         && data.server_version.is_some();
                     if settled {
-                        let v = data.server_version.expect("settled implies Some above");
-                        let outcome = if Some(v) != *from {
-                            CoreUpdateOutcome::Succeeded { from: *from, to: v }
-                        } else {
-                            CoreUpdateOutcome::Unchanged { version: v }
-                        };
-                        let Some(lane_addr) = self.lane_or_skip(core, "Waiting") else {
-                            continue;
-                        };
                         transitions.push((
                             core,
-                            Transition::Done {
-                                lane_addr,
+                            Transition::ToVerifying {
+                                target: target.clone(),
                                 from: *from,
-                                outcome,
-                                stall: false,
+                                epoch1: data.conn_epoch,
+                                sent_at_ms: *sent_at_ms,
+                                left_at_ms: now_ms,
+                                verify_at_ms: now_ms,
                             },
                         ));
                     } else if now_ms - sent_at_ms >= DROP_TO_READY_TIMEOUT_MS {
@@ -930,6 +1095,55 @@ impl SessionManager {
                                 from: *from,
                                 outcome: CoreUpdateOutcome::Failed(UpdateFailure::Timeout),
                                 stall: true,
+                            },
+                        ));
+                    }
+                }
+                CoreUpdatePhase::Verifying {
+                    from,
+                    epoch1,
+                    verify_at_ms,
+                    ..
+                } => {
+                    let Some(data) = self.store.core(core) else {
+                        continue;
+                    };
+                    let verified = data.conn_epoch > *epoch1
+                        && data.status == ConnStatus::Ready
+                        && data.startup.state == CoreStartupState::Ready
+                        && data.server_version.is_some();
+                    if verified {
+                        let v = data.server_version.expect("verified implies Some above");
+                        let outcome = if Some(v) != *from {
+                            CoreUpdateOutcome::Succeeded { from: *from, to: v }
+                        } else {
+                            CoreUpdateOutcome::Unchanged { version: v }
+                        };
+                        let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
+                            continue;
+                        };
+                        transitions.push((
+                            core,
+                            Transition::Done {
+                                lane_addr,
+                                from: *from,
+                                outcome,
+                                stall: false,
+                            },
+                        ));
+                    } else if now_ms - verify_at_ms >= VERIFY_TO_READY_TIMEOUT_MS {
+                        let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
+                            continue;
+                        };
+                        transitions.push((
+                            core,
+                            Transition::Done {
+                                lane_addr,
+                                from: *from,
+                                outcome: CoreUpdateOutcome::Unverified(
+                                    UnverifiedReason::RespawnTimedOut,
+                                ),
+                                stall: false,
                             },
                         ));
                     }
@@ -958,6 +1172,30 @@ impl SessionManager {
                             left_at_ms,
                         },
                     );
+                }
+                Transition::ToVerifying {
+                    target,
+                    from,
+                    epoch1,
+                    sent_at_ms,
+                    left_at_ms,
+                    verify_at_ms,
+                } => {
+                    self.core_updates.phases.insert(
+                        core,
+                        CoreUpdatePhase::Verifying {
+                            target,
+                            from,
+                            epoch1,
+                            sent_at_ms,
+                            left_at_ms,
+                            verify_at_ms,
+                        },
+                    );
+                    // The ONLY place that ever pushes here -- one producer, in the arm that fires
+                    // exactly once per attempt -- is what scopes the respawn to the update path
+                    // alone, structurally rather than by convention.
+                    self.core_updates.respawn_requests.push(core);
                 }
                 Transition::Done {
                     lane_addr,
@@ -1102,10 +1340,7 @@ impl SessionManager {
                     let other_in_flight_here =
                         self.core_updates.phases.iter().any(|(&other, phase)| {
                             other != core
-                                && matches!(
-                                    phase,
-                                    CoreUpdatePhase::Sent { .. } | CoreUpdatePhase::Waiting { .. }
-                                )
+                                && Self::active_from(phase).is_some()
                                 && self
                                     .store
                                     .core(other)

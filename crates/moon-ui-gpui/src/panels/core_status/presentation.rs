@@ -1,7 +1,9 @@
 //! Shared connection and metric presentation rules for both Core Status modes.
 
 use moon_core::feed::{ConnStatus, Diagnosis};
-use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase, UpdateFailure};
+use moon_core::session::core_update::{
+    CoreUpdateOutcome, CoreUpdatePhase, UnverifiedReason, UpdateFailure,
+};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
@@ -521,6 +523,14 @@ fn update_failure_locale_key(failure: UpdateFailure) -> &'static str {
     }
 }
 
+/// Locale key for one unverified attempt, by the reason the build could not be confirmed.
+fn unverified_locale_key(reason: UnverifiedReason) -> &'static str {
+    match reason {
+        UnverifiedReason::RespawnUnavailable => "core_update.phase.unverified.unavailable",
+        UnverifiedReason::RespawnTimedOut => "core_update.phase.unverified.timeout",
+    }
+}
+
 /// Badge for one core's own update-queue phase.
 ///
 /// Args:
@@ -551,6 +561,11 @@ pub(super) fn update_badge(phase: Option<&CoreUpdatePhase>) -> Option<UpdateBadg
             level: LoadLevel::Notice,
             locale_key: "core_update.phase.waiting",
         }),
+        CoreUpdatePhase::Verifying { .. } => Some(UpdateBadge {
+            glyph: "\u{21bb}", // ↻ -- to the user it is still "coming back"
+            level: LoadLevel::Notice,
+            locale_key: "core_update.phase.verifying",
+        }),
         CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => Some(UpdateBadge {
             glyph: "\u{2713}", // ✓
             level: LoadLevel::Normal,
@@ -562,10 +577,17 @@ pub(super) fn update_badge(phase: Option<&CoreUpdatePhase>) -> Option<UpdateBadg
         // marks that carry no instruction and read as clutter.
         //
         // Nothing is lost: the attempt, its target and this exact outcome are a row in the
-        // Updates list, which is where a record of what already happened belongs. The three
-        // marks that survive all still carry an instruction -- in flight, went somewhere, or
-        // needs you.
+        // Updates list, which is where a record of what already happened belongs. The marks that
+        // survive all still carry an instruction -- in flight, went somewhere, or needs you.
         CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => None,
+        // `?`, not `!`: this is not a failure, only a build the terminal could not confirm. It
+        // keeps its badge where `Unchanged` loses one, because "needs you" is exactly what it
+        // says: the core came back and the version beside it is unconfirmed.
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Unverified(reason)) => Some(UpdateBadge {
+            glyph: "?",
+            level: LoadLevel::Warning,
+            locale_key: unverified_locale_key(*reason),
+        }),
         CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(failure)) => Some(UpdateBadge {
             glyph: "!",
             level: LoadLevel::Critical,
@@ -617,11 +639,15 @@ pub(super) fn update_tooltip(phase: &CoreUpdatePhase) -> String {
         CoreUpdatePhase::Queued { held: true, .. } => t!("core_update.phase.held").to_string(),
         CoreUpdatePhase::Sent { .. } => t!("core_update.phase.sent").to_string(),
         CoreUpdatePhase::Waiting { .. } => t!("core_update.phase.waiting").to_string(),
+        CoreUpdatePhase::Verifying { .. } => t!("core_update.phase.verifying").to_string(),
         CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => {
             t!("core_update.phase.succeeded").to_string()
         }
         CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => {
             t!("core_update.phase.unchanged").to_string()
+        }
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Unverified(reason)) => {
+            t!(unverified_locale_key(*reason)).to_string()
         }
         CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(failure)) => {
             t!(update_failure_locale_key(*failure)).to_string()
