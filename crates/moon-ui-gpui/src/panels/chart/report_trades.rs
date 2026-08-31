@@ -13,18 +13,36 @@ use crate::backend::ChartHistoryScope;
 /// Maximum durable rows drawn for one Main chart.
 const HISTORY_LIMIT: usize = 1_000;
 
-/// Minimum interval between durable refresh reads triggered by report commits.
-const HISTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+/// Minimum spacing between retries of a NotReady/Failed durable read.
+///
+/// Unrelated to how fast a settled read reacts to a new report commit (see
+/// [`HISTORY_LIVE_REFRESH_INTERVAL`]): this backs off a BROKEN or not-yet-ready replica reader, so a
+/// busy detect feed re-adding the same market to extend its TTL costs at most one `open_reader` call
+/// every 5 s rather than one per detection.
+const HISTORY_RETRY_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Minimum spacing between report-generation refreshes on the FOREGROUND ("fast") chart.
+///
+/// A closed trade is a live, `ReportPublication::Immediate` commit (`moon_core::db::apply_msg`), so
+/// this panel's own report-revision observer fires within one 100 ms coordination tick of the write
+/// — see `crate::startup::ReportRevisionGate`. Coalescing that edge at the old 5 s value (matching
+/// [`HISTORY_RETRY_BACKOFF`]) is what produced the reported 5-7 s lag before a closed trade's dashed
+/// line and triangle appeared: the wait before the NEXT due refresh is up to the full interval,
+/// regardless of how recent or rare the triggering commit was. 250 ms keeps the same coalescing
+/// shape (a burst of live commits still costs at most 4 durable reads/s on this one panel) while
+/// making an isolated trade close imperceptible, matching the 250 ms cadence already used elsewhere
+/// in this crate for UI-observable coalescing (`Backend::flush_backend_notify`).
+const HISTORY_LIVE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Minimum spacing between report-generation refreshes on a BACKGROUND chart tile.
 ///
 /// One report generation would otherwise start one durable read per open tile, and a stack can hold
-/// dozens. The foreground chart keeps the 5 s edge because it is the one being read; a tile in the
-/// corner of a stack is not worth a fresh SQLite connection six times a minute.
+/// dozens; a tile in the corner of a stack is not worth a fresh SQLite connection four times a
+/// second. The foreground chart does not share this bound — see [`HISTORY_LIVE_REFRESH_INTERVAL`].
 const HISTORY_REFRESH_INTERVAL_BACKGROUND: Duration = Duration::from_secs(30);
 
 /// Visible durable-history load state for a Main chart.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ReportTradesStatus {
     /// No exact target has requested durable history yet.
     #[default]
@@ -42,6 +60,28 @@ pub(super) enum ReportTradesStatus {
     NotReady,
     /// The durable read failed without disabling the live chart.
     Failed,
+}
+
+/// The wait a generation-triggered refresh owes before its next durable read.
+///
+/// A NotReady/Failed status always takes [`HISTORY_RETRY_BACKOFF`], whatever `fast` says: a
+/// broken or not-yet-ready replica reader must back off the same way through EVERY entry point,
+/// not just the explicit-navigation one `history_request_is_redundant` already guards. A settled
+/// status takes the panel's own live-refresh cadence: [`HISTORY_LIVE_REFRESH_INTERVAL`] for the
+/// foreground ("fast") chart, [`HISTORY_REFRESH_INTERVAL_BACKGROUND`] for a background tile.
+///
+/// Args:
+///     status: The panel's current durable-history load state.
+///     fast: Whether this is the foreground ("fast") chart rather than a background tile.
+///
+/// Returns:
+///     The minimum spacing the next generation-triggered refresh must respect.
+fn generation_refresh_interval(status: ReportTradesStatus, fast: bool) -> Duration {
+    match status {
+        ReportTradesStatus::NotReady | ReportTradesStatus::Failed => HISTORY_RETRY_BACKOFF,
+        _ if fast => HISTORY_LIVE_REFRESH_INTERVAL,
+        _ => HISTORY_REFRESH_INTERVAL_BACKGROUND,
+    }
 }
 
 /// Request token, exact target, and visible status owned by one chart panel.
@@ -365,8 +405,8 @@ impl ChartPanel {
     /// `Loading | Ready | Empty` are settled: the answer is either in hand or on its way. The two
     /// FAILURE states are not settled — they must be retried — but not on demand: an unavailable
     /// replica would otherwise turn a busy detect feed, which re-adds the same market to extend its
-    /// TTL, into one `open_reader` per detection. They are rate-limited to the same interval a
-    /// report-generation refresh uses, and the report-revision observer retries them anyway.
+    /// TTL, into one `open_reader` per detection. They are rate-limited by [`HISTORY_RETRY_BACKOFF`],
+    /// and the report-revision observer retries them anyway.
     fn history_request_is_redundant(
         &self,
         core: CoreId,
@@ -388,12 +428,20 @@ impl ChartPanel {
             ReportTradesStatus::NotReady | ReportTradesStatus::Failed => self
                 .report_trades
                 .last_refresh_start
-                .is_some_and(|started| started.elapsed() < HISTORY_REFRESH_INTERVAL),
+                .is_some_and(|started| started.elapsed() < HISTORY_RETRY_BACKOFF),
             ReportTradesStatus::Idle => false,
         }
     }
 
-    /// Coalesce report-generation refreshes to at most one durable read every five seconds.
+    /// Coalesce report-generation refreshes to at most one durable read per
+    /// [`generation_refresh_interval`] — or, while the last read is still broken or not-ready,
+    /// per [`HISTORY_RETRY_BACKOFF`] instead.
+    ///
+    /// A generation edge fires on ANY live report commit, not just this panel's own market, so
+    /// without the status check below a foreground panel stuck on `NotReady`/`Failed` would retry
+    /// `open_reader` at [`HISTORY_LIVE_REFRESH_INTERVAL`] (250 ms) for as long as trading stayed
+    /// active elsewhere — the exact read/log storm [`HISTORY_RETRY_BACKOFF`] exists to prevent,
+    /// just reached through this entry point instead of the explicit-navigation one.
     ///
     /// Args:
     ///     cx: Panel context used to arm a trailing refresh timer or start a due read.
@@ -409,7 +457,7 @@ impl ChartPanel {
         if self.report_trades.last_admitted_any == Some(false) {
             return;
         }
-        let interval = self.history_refresh_interval();
+        let interval = generation_refresh_interval(self.report_trades.status, self.fast);
         let elapsed = self
             .report_trades
             .last_refresh_start
@@ -438,23 +486,15 @@ impl ChartPanel {
                         return;
                     }
                     this.report_trades.refresh_timer_armed = false;
-                    this.refresh_trade_history(cx);
+                    // Re-derive the interval and elapsed time rather than refreshing
+                    // unconditionally: the status this timer was armed under may have flipped to
+                    // NotReady/Failed while it was waiting, and a stale short wait must not let a
+                    // retry through faster than HISTORY_RETRY_BACKOFF.
+                    this.requery_trade_history_on_generation(cx);
                 });
             });
         })
         .detach();
-    }
-
-    /// How often this panel re-reads durable history when report generations commit.
-    ///
-    /// The foreground chart is the one the user is reading; background tiles trade freshness for the
-    /// per-tile cost of a durable read, because a generation reaches every one of them at once.
-    fn history_refresh_interval(&self) -> Duration {
-        if self.fast {
-            HISTORY_REFRESH_INTERVAL
-        } else {
-            HISTORY_REFRESH_INTERVAL_BACKGROUND
-        }
     }
 
     /// Re-read durable history when the graphics popup changes which trade kinds are drawn.
