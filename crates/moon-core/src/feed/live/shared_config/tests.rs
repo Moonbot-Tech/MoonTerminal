@@ -4,7 +4,11 @@ use super::{
     FieldMask, MAX_ATTEMPTS, SequenceAction, SharedConfigSequence, apply_core_config,
     core_config_from_proto,
 };
-use crate::feed::{AutoStartSettings, CoreConfig};
+use crate::feed::{AutoStartSettings, CoreConfig, CoreConfigEditEvent, CoreConfigEditResult};
+
+/// Core id these tests plan against. Only ever reaches the log line naming the core, so its value
+/// is arbitrary; the planner's decisions do not read it.
+const TEST_CORE: u64 = 1;
 
 /// Build a write out of a base config's own projection, changed by `mutate`.
 fn edit_from(cfg: &SharedConfig, mutate: impl FnOnce(&mut AutoStartSettings)) -> CoreConfig {
@@ -16,7 +20,7 @@ fn edit_from(cfg: &SharedConfig, mutate: impl FnOnce(&mut AutoStartSettings)) ->
 /// Extract the next full config or fail with the unexpected action.
 fn next_config(sequence: &mut SharedConfigSequence, base: &SharedConfig) -> SharedConfig {
     let mut events = Vec::new();
-    match sequence.next_action(base, &mut events) {
+    match sequence.next_action(base, TEST_CORE, &mut events) {
         SequenceAction::Send { config, .. } => *config,
         SequenceAction::Idle => panic!("expected a shared config send"),
     }
@@ -67,7 +71,7 @@ fn edit_already_reflected_is_dropped_without_a_send() {
 
     let mut events = Vec::new();
     assert!(matches!(
-        sequence.next_action(&base, &mut events),
+        sequence.next_action(&base, TEST_CORE, &mut events),
         SequenceAction::Idle
     ));
 }
@@ -88,7 +92,7 @@ fn send_waits_for_the_core_echo() {
     // The core has not echoed yet, so the still-stale base must produce no second send.
     let mut events = Vec::new();
     assert!(matches!(
-        sequence.next_action(&base, &mut events),
+        sequence.next_action(&base, TEST_CORE, &mut events),
         SequenceAction::Idle
     ));
 
@@ -99,9 +103,81 @@ fn send_waits_for_the_core_echo() {
         cfg
     };
     assert!(matches!(
-        sequence.next_action(&echoed, &mut events),
+        sequence.next_action(&echoed, TEST_CORE, &mut events),
         SequenceAction::Idle
     ));
+}
+
+/// Regression target: a packet whose echo never arrives must not be reported as a REFUSED write.
+///
+/// Before `observe_echo_timeout` dropped the confirmation with the barrier, the next plan compared
+/// the sent packet against the pre-write base — a mismatch inside the mask by construction — and
+/// resolved it as `NotApplied`, so a silent core produced a rejection naming a field it had never
+/// answered about at all.
+#[test]
+fn an_echo_that_never_arrives_is_not_a_rejection() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mask = FieldMask::EMPTY.with_order_size_slot(3);
+    let mut wanted = core_config_from_proto(&base);
+    wanted.manual.order_sizes[3] = 4200.0;
+    sequence.enqueue(wanted, mask);
+
+    let sent = next_config(&mut sequence, &base);
+    sequence.observe_send_success(&sent, 1, mask);
+    sequence.observe_echo_timeout();
+
+    // The base is unchanged — the core answered nothing — so this plan must only re-send.
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&base, TEST_CORE, &mut events),
+        SequenceAction::Send { .. }
+    ));
+    assert!(
+        events.is_empty(),
+        "a timed-out echo must resolve nothing, got {events:?}"
+    );
+}
+
+/// Regression target: an echo that lands AFTER its timeout still resolves the edit.
+///
+/// `observe_echo_timeout` drops the confirmation, so a late echo reaches the queue through
+/// `edit_satisfied` instead of the comparison. That path must still emit `Confirmed`:
+/// `CoreData::core_config_edit` clears on nothing else, so a silent drop leaves the toolbar cell
+/// on its pending marker for the rest of the session while the write actually succeeded.
+#[test]
+fn an_echo_after_the_timeout_still_confirms_the_edit() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mask = FieldMask::EMPTY.with_order_size_slot(3);
+    let mut wanted = core_config_from_proto(&base);
+    wanted.manual.order_sizes[3] = 4200.0;
+    sequence.enqueue(wanted, mask);
+
+    let sent = next_config(&mut sequence, &base);
+    sequence.observe_send_success(&sent, 1, mask);
+    sequence.observe_echo_timeout();
+
+    // The core did apply it, just later than the timeout allowed.
+    let echoed = {
+        let mut cfg = base.clone();
+        cfg.ui.hotkeys_config.o_size[3] = 4200.0;
+        cfg
+    };
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&echoed, TEST_CORE, &mut events),
+        SequenceAction::Idle
+    ));
+    assert!(
+        matches!(
+            events.as_slice(),
+            [CoreConfigEditEvent::Resolved(
+                CoreConfigEditResult::Confirmed
+            )]
+        ),
+        "a late echo must resolve as confirmed, got {events:?}"
+    );
 }
 
 /// Regression target: a core that clamps or refuses a value never echoes what was queued, and an
@@ -123,7 +199,7 @@ fn unconfirmed_edit_is_dropped_after_three_attempts() {
     }
     let mut events = Vec::new();
     assert!(matches!(
-        sequence.next_action(&base, &mut events),
+        sequence.next_action(&base, TEST_CORE, &mut events),
         SequenceAction::Idle
     ));
 }

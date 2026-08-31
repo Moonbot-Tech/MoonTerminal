@@ -217,6 +217,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         order_size_rev: 0,
         order_size_edit_req: None,
         sell_edit_req: None,
+        size_write_refused: None,
         group_exit_sync: HashMap::new(),
         manual_strat_local: HashMap::new(),
         panic_local: HashMap::new(),

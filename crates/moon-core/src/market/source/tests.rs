@@ -78,20 +78,72 @@ fn all_dirty_flags_exclude_the_chart_archive() {
     assert!(MarketDirtyFlags::ALL.contains(MarketDirtyFlags::HISTORY));
 }
 
+/// Regression target: a manual order on a coin-margined market is sized in CONTRACTS. Sending the
+/// USD figure itself placed a $500 order as 500 contracts — $50 000 — on the 2026-08-31 QQ run.
+///
+/// The discriminator is the market's own quote currency, measured on that run: `BTCUSD_PERP`,
+/// `SOLUSD_260925` and `ADAUSD_PERP` all report an EMPTY quote with `contract_size` 100 / 10 / 10,
+/// while `futures_type` — which looks like the authoritative settlement enum — arrives unset on
+/// every one of them.
+#[test]
+fn a_market_without_a_quote_counts_contracts_and_a_quoted_one_counts_coins() {
+    use MarketQuantityUnit::{Coins, Contracts};
+
+    // Coin-margined: no quote currency, because the contract is denominated in USD.
+    assert_eq!(
+        market_quantity_unit("", 100.0),
+        Some(Contracts(100.0)),
+        "BTCUSD_PERP: $100 a contract"
+    );
+    assert_eq!(market_quantity_unit("", 10.0), Some(Contracts(10.0)));
+    assert_eq!(market_quantity_unit("   ", 10.0), Some(Contracts(10.0)));
+    // An empty quote with `contract_size == 1.0` is how a LINEAR Hyperliquid market presents
+    // itself (`HFUN` in label_tests.rs), so the pair — not the empty quote alone — decides. Reading
+    // it as contracts would send the USD figure through as a coin quantity.
+    assert_eq!(market_quantity_unit("", 1.0), Some(Coins));
+
+    // Quoted markets count coins, whatever the quote is.
+    for quote in ["USDT", "USDC", "FDUSD", "USD", "BTC", "TRY", "RUB"] {
+        assert_eq!(
+            market_quantity_unit(quote, 1.0),
+            Some(Coins),
+            "{quote}-quoted markets report a coin amount"
+        );
+    }
+    // The trap the rule exists for: a LINEAR quanto future carrying a contract size. Reading it as
+    // inverse would divide the order by 10 000. Gate's `ASTEROID_USDT` is USDT-quoted.
+    assert_eq!(market_quantity_unit("USDT", 10_000.0), Some(Coins));
+
+    // No quote AND no contract value: NOT KNOWN, so a caller sizing real money refuses instead of
+    // sending the USD figure as a quantity.
+    assert_eq!(market_quantity_unit("", 0.0), None);
+    assert_eq!(market_quantity_unit("", f64::NAN), None);
+}
+
+/// The arithmetic the QQ run got wrong, stated as numbers: a preset in USD divided by the
+/// contract's value is the contract count the exchange takes.
+#[test]
+fn a_usd_preset_becomes_a_contract_count() {
+    let contracts = |usd: f64, contract_size: f64| match market_quantity_unit("", contract_size) {
+        Some(MarketQuantityUnit::Contracts(value)) => usd / value,
+        other => panic!("expected a contract count, got {other:?}"),
+    };
+    // BTCUSD_PERP, $100 a contract: the run sent 500 and meant 5.
+    assert_eq!(contracts(500.0, 100.0), 5.0);
+    // SOLUSD_260925 and ADAUSD_PERP, $10 a contract: the run sent 500 and meant 50.
+    assert_eq!(contracts(500.0, 10.0), 50.0);
+    // Below one contract the exchange's own minimum decides; the terminal states the fraction
+    // rather than rounding a money figure the user did not ask for.
+    assert_eq!(contracts(50.0, 100.0), 0.5);
+}
+
 /// Regression target: `market/source/mod.rs:max_order_notional` must keep a stated cap ahead of
 /// the quantity fallback, or the Screener and trading toolbar show an order size the exchange did
 /// not state and an operator can size an order against the wrong limit.
 #[test]
 fn stated_max_order_notional_precedes_the_quantity_fallback() {
     assert_eq!(
-        max_order_notional(
-            "BTCUSDT",
-            crate::symbol::Exchange::Binance,
-            250.0,
-            4.0,
-            100.0,
-            10.0
-        ),
+        max_order_notional("USDT", 250.0, 4.0, 100.0, 10.0),
         MaxOrder {
             value: 250.0,
             source: MaxOrderSource::Stated,
@@ -105,14 +157,7 @@ fn stated_max_order_notional_precedes_the_quantity_fallback() {
 #[test]
 fn linear_quantity_cap_uses_the_current_ask_even_with_a_contract_size() {
     assert_eq!(
-        max_order_notional(
-            "ASTEROID_USDT",
-            crate::symbol::Exchange::Gate,
-            0.0,
-            6.0,
-            2.0,
-            10_000.0,
-        ),
+        max_order_notional("USDT", 0.0, 6.0, 2.0, 10_000.0),
         MaxOrder {
             value: 12.0,
             source: MaxOrderSource::Derived,
@@ -126,14 +171,7 @@ fn linear_quantity_cap_uses_the_current_ask_even_with_a_contract_size() {
 #[test]
 fn inverse_quantity_cap_uses_contract_size_without_an_ask() {
     assert_eq!(
-        max_order_notional(
-            "AAVEPERP",
-            crate::symbol::Exchange::Bybit,
-            0.0,
-            7.0,
-            50.0,
-            10.0,
-        ),
+        max_order_notional("", 0.0, 7.0, 50.0, 10.0),
         MaxOrder {
             value: 70.0,
             source: MaxOrderSource::Derived,
@@ -147,28 +185,14 @@ fn inverse_quantity_cap_uses_contract_size_without_an_ask() {
 #[test]
 fn max_order_notional_distinguishes_absent_from_pending_conversion() {
     assert_eq!(
-        max_order_notional(
-            "BTCUSDT",
-            crate::symbol::Exchange::Binance,
-            0.0,
-            0.0,
-            100.0,
-            1.0
-        ),
+        max_order_notional("USDT", 0.0, 0.0, 100.0, 1.0),
         MaxOrder {
             value: 0.0,
             source: MaxOrderSource::Absent,
         }
     );
     assert_eq!(
-        max_order_notional(
-            "BTCUSDT",
-            crate::symbol::Exchange::Binance,
-            0.0,
-            4.0,
-            0.0,
-            1.0
-        ),
+        max_order_notional("USDT", 0.0, 4.0, 0.0, 1.0),
         MaxOrder {
             value: 0.0,
             source: MaxOrderSource::Pending,

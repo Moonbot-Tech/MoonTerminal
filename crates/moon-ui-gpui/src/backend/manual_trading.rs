@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, CoreConfigState, FieldMask, StrategyRow};
+use moon_core::feed::{ClientSettingsEdit, CoreConfig, CoreConfigState, FieldMask, StrategyRow};
+use moon_core::market::MarketQuantityUnit;
 use moon_core::session::CoreId;
 use moon_core::session::store::CoreData;
 
@@ -219,7 +220,8 @@ fn usd_to_base_amount(usd: f64, rate: Option<f64>) -> Option<f64> {
 
 /// Group-owned terms resolved before one manual order is submitted to a core.
 pub(crate) struct ManualOrderTerms {
-    /// Base-currency quantity sent to the target core.
+    /// Quantity sent to the target core, in THAT MARKET's own unit: a coin amount on a linear or
+    /// spot market, a contract count on a coin-settled one. See `manual_order_size_base`.
     pub(crate) size_base: f64,
     /// Visible USD equivalent, absent when an isolated FireTest overrides the base size.
     pub(crate) size_usd: Option<f64>,
@@ -340,6 +342,38 @@ impl Backend {
         display_target == self.manual_write_core(group)
     }
 
+    /// The base projection a whole-config write must start from, or WHY there is none.
+    ///
+    /// Both manual order-size writers refuse rather than invent one: a `CoreConfig` built from
+    /// defaults would carry ~90 fields the user never saw straight into the core. The `Err` half
+    /// is the sentence for the log — the two reasons are worth telling apart, because "the core is
+    /// gone" and "the core has not answered yet" call for different things from the user.
+    fn core_config_for_write(&self, core: CoreId) -> Result<CoreConfig, &'static str> {
+        match self.session.store().core(core) {
+            None => Err("the core is not in the session store"),
+            Some(data) => data
+                .core_config
+                .clone()
+                .ok_or("the core has not reported its configuration yet"),
+        }
+    }
+
+    /// Report a refused manual order-size write ONCE per core.
+    ///
+    /// A refusal leaves the seed value untouched, so the strip's "did the value actually change"
+    /// guard cannot damp anything: every character typed into the inline editor and every wheel
+    /// tick would write its own identical line. Cleared by the next write that succeeds.
+    fn note_size_write_refusal(&mut self, core: CoreId, reason: &'static str) {
+        // Keyed on the REASON too, not the core alone: "the core is gone" turning into "the core
+        // is back but silent" is a different fact about the same core, and a core-only latch
+        // would report whichever came first and hide the other for the rest of the session.
+        if self.size_write_refused == Some((core, reason)) {
+            return;
+        }
+        self.size_write_refused = Some((core, reason));
+        log::warn!("manual order-size write refused: core={core}: {reason}");
+    }
+
     /// Return the core's retained manual order-size preset block and its freshness, tolerant of a
     /// stale-but-retained snapshot. `None` only while the core has never reported one at all.
     pub(crate) fn core_manual_sizes(
@@ -458,13 +492,17 @@ impl Backend {
             return;
         }
         if let Some(core) = self.manual_write_core(group) {
-            let Some(data) = self.session.store().core(core) else {
-                return;
-            };
             // A `None` `core_config` REFUSES rather than inventing defaults for the other ~90
-            // fields a whole-projection write would otherwise have to guess.
-            let Some(mut cfg) = data.core_config.clone() else {
-                return;
+            // fields a whole-projection write would otherwise have to guess. Reported, because a
+            // refusal here consumes the user's edit and is otherwise indistinguishable from a
+            // write that reached the core: the toolbar keeps rendering the core's own values
+            // either way.
+            let mut cfg = match self.core_config_for_write(core) {
+                Ok(cfg) => cfg,
+                Err(reason) => {
+                    self.note_size_write_refusal(core, reason);
+                    return;
+                }
             };
             cfg.manual.order_size_sel = ix;
             if let Err(error) =
@@ -472,7 +510,9 @@ impl Backend {
                     .edit_core_config(core, cfg, FieldMask::EMPTY.with_order_size_sel())
             {
                 log::warn!("set order size sel failed: core={core}: {error:#}");
+                return;
             }
+            self.size_write_refused = None;
             return;
         }
         self.update_group_trade(group, |trade| trade.order_size_sel = ix);
@@ -521,26 +561,112 @@ impl Backend {
     }
 
     /// Convert a target core's effective USD amount — group-local, or the core's own when the
-    /// per-core opt-in is on (display and order must never be able to disagree) — into that
-    /// core's base currency.
-    pub(crate) fn manual_order_size_base(&self, core: CoreId) -> Option<(f64, f64)> {
+    /// per-core opt-in is on (display and order must never be able to disagree) — into the unit
+    /// the core places an order in ON THIS MARKET.
+    ///
+    /// Two units, because a quantity does not mean the same thing on every market and the wire
+    /// field is one `size`:
+    ///
+    /// - **Inverse (coin-margined) markets take a CONTRACT COUNT**, each contract worth a fixed
+    ///   amount of quote currency (`BTCUSD_PERP` = $100, other `*USD` = $10), so the size is
+    ///   `usd / contract_size` and no price is involved. Sending the USD figure itself put a
+    ///   $500 order in as 500 contracts — $50 000 — on the 2026-08-31 QQ run.
+    /// - **Linear and spot markets take the account's balance currency**, so the size is
+    ///   `usd / rate`, unchanged.
+    ///
+    /// The unit comes from `MarketDataSource::market_quantity_unit`, the same rule the market's
+    /// maximum-order cap uses: a cap stated in USD beside an order sized in contracts is exactly
+    /// the disagreement that rule exists to prevent. Its `None` — the market's figures have not
+    /// arrived — REFUSES here rather than picking a unit.
+    ///
+    /// Args:
+    ///     core: Core the order will be placed on.
+    ///     market: Canonical market name the order is for — the unit depends on it, not just on
+    ///         the core.
+    ///
+    /// Returns:
+    ///     The size in the market's own unit and the USD equivalent it came from.
+    pub(crate) fn manual_order_size_base(
+        &self,
+        core: CoreId,
+        market: &str,
+        price: f64,
+    ) -> Option<(f64, f64)> {
         let server = self
             .config
             .servers
             .iter()
             .find(|server| server.id == core)?;
         let usd = self.effective_order_size_usd_for_order(&server.group, core)?;
-        let base = self.session.core_base(core)?;
-        let size = usd_to_base_amount(
-            usd,
-            self.session.market_source().currency_usd_rate(core, base),
-        )?;
+        let source = self.session.market_source();
+        // REFUSES on an unknown unit rather than picking one: guessing here is what sends a whole
+        // account's worth of coin as a quantity.
+        let rules = source.order_size_rules(core, market)?;
+        let rate = match rules.unit {
+            // Coin-margined: the wire field is the account's balance currency, which on these
+            // markets is the COIN — so the amount is `usd / price`, exactly as on a linear market
+            // quoted in dollars. `contract_size` does NOT belong here: the core reports positions
+            // in contracts but takes orders in coin, measured on the 2026-08-31 QQ run where a
+            // sent `50` came back as a $4 990 order (50 SOL), not as 50 contracts ($500).
+            MarketQuantityUnit::Contracts(_) => (price.is_finite() && price > 0.0).then_some(price),
+            MarketQuantityUnit::Coins => {
+                source.currency_usd_rate(core, self.session.core_base(core)?)
+            }
+        };
+        let size = usd_to_base_amount(usd, rate)?;
+        // Below what the venue accepts the order cannot be placed at all, so refusing is the honest
+        // answer: rounding down reaches zero, rounding up spends more than the trader asked for.
+        // On a coin-margined market the venue states its minimum in CONTRACTS while the order is
+        // sent in coin, so the floor is converted the same way a position is read back —
+        // `min_qty * contract_size / price` — and never drops below one whole contract, which
+        // cannot be split.
+        let (floor, notional) = match rules.unit {
+            MarketQuantityUnit::Contracts(contract_size) => {
+                let contracts = rules.min_qty.max(1.0);
+                (
+                    contracts * contract_size / price,
+                    format!(", about ${} of notional", contracts * contract_size),
+                )
+            }
+            MarketQuantityUnit::Coins => (rules.min_qty, String::new()),
+        };
+        if floor > 0.0 && size < floor {
+            log::warn!(
+                "manual order refused: core={core} market={market} ${usd} is below this market's \
+                 minimum: {size:.8} < {floor:.8} ({:?}){notional}",
+                rules.unit
+            );
+            return None;
+        }
         Some((size, usd))
     }
 
-    /// Return the visible USD equivalent only when the target core can currently convert it.
+    /// Return the visible USD equivalent for the crosshair label.
+    ///
+    /// Deliberately does NOT resolve the market's quantity unit, unlike the order path: this runs
+    /// on the ChartPanel's per-frame render, and `market_quantity_unit` takes the market-source
+    /// lock and reads a snapshot — the class of call `market/source/read.rs` says does not belong
+    /// on a frame path. The USD figure is the same either way; only the unit it will be converted
+    /// INTO depends on the market, and that conversion happens when an order is actually placed.
+    ///
+    /// The label can therefore stand while the order path would refuse for a unit it cannot yet
+    /// resolve. That is the right way round: a refused order says so in the log, whereas taking a
+    /// lock 60 times a second to hide a number would cost every chart frame.
     pub(crate) fn prospective_order_usd(&self, core: CoreId) -> Option<f64> {
-        self.manual_order_size_base(core).map(|(_, usd)| usd)
+        let server = self
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core)?;
+        let usd = self.effective_order_size_usd_for_order(&server.group, core)?;
+        // Same "can this core price anything at all" gate the order path applies, and cheap: a
+        // USD-stable base short-circuits inside `currency_usd_rate` before any lock is taken.
+        let base = self.session.core_base(core)?;
+        self.session
+            .market_source()
+            .currency_usd_rate(core, base)
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+            .map(|_| usd)
     }
 
     /// Resolve the effective exit settings and either the visible USD size or a FireTest override.
@@ -551,6 +677,8 @@ impl Backend {
     pub(crate) fn manual_order_terms(
         &self,
         core: CoreId,
+        market: &str,
+        price: f64,
         size_base_override: Option<f64>,
     ) -> Option<super::ManualOrderTerms> {
         let server = self
@@ -563,7 +691,7 @@ impl Backend {
             Some(size) if size.is_finite() && size > 0.0 => (size, None),
             Some(_) => return None,
             None => {
-                let (size, usd) = self.manual_order_size_base(core)?;
+                let (size, usd) = self.manual_order_size_base(core, market, price)?;
                 (size, Some(usd))
             }
         };
@@ -583,13 +711,16 @@ impl Backend {
             return;
         }
         if let Some(core) = self.manual_write_core(group) {
-            let Some(data) = self.session.store().core(core) else {
-                return;
-            };
             // A `None` `core_config` REFUSES — the same principle as the money path, and the only
-            // way to avoid inventing defaults for the other ~90 fields.
-            let Some(mut cfg) = data.core_config.clone() else {
-                return;
+            // way to avoid inventing defaults for the other ~90 fields. Reported for the same
+            // reason as the selection twin above: silently dropping the edit looks exactly like a
+            // write the core ignored.
+            let mut cfg = match self.core_config_for_write(core) {
+                Ok(cfg) => cfg,
+                Err(reason) => {
+                    self.note_size_write_refusal(core, reason);
+                    return;
+                }
             };
             cfg.manual.order_sizes[ix] = value;
             if let Err(error) =
@@ -597,7 +728,9 @@ impl Backend {
                     .edit_core_config(core, cfg, FieldMask::EMPTY.with_order_size_slot(ix))
             {
                 log::warn!("set order size value failed: core={core}: {error:#}");
+                return;
             }
+            self.size_write_refused = None;
             return;
         }
         self.update_group_trade(group, |trade| trade.order_sizes_usd[ix] = value);

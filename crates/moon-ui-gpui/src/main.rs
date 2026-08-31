@@ -273,6 +273,14 @@ struct Backend {
     /// Request to edit a fixed-sell preset inline after an S-button double-click, as
     /// `(group, S1-S6 index)`. Shell writes the visible group value on blur or Enter.
     sell_edit_req: Option<(String, usize)>,
+    /// The `(core, reason)` of the last reported manual order-size refusal, so it is logged once
+    /// per distinct fact rather than once per keystroke.
+    ///
+    /// A refused write never advances the value the editor and the Ctrl+wheel step seed from, so
+    /// the strip's own "value actually changed" guard cannot damp the repeat: every character
+    /// typed and every wheel tick would otherwise write its own line. Cleared as soon as a write
+    /// to that core succeeds, so a later stall is reported again.
+    size_write_refused: Option<(CoreId, &'static str)>,
     /// Last attempted group-exit generation per core as `(settings, snapshot revision, ready)`.
     ///
     /// Including the coarse connection phase forces one retry after a feed respawn even when the

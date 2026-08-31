@@ -909,6 +909,22 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     } else {
         raw_size
     };
+    // The inbound half of the contracts<->coins rule, printed for the followed markets only: an
+    // order whose size is NOT converted reaches the chart label as a contract count multiplied by
+    // a coin price, which is the same figure wrong by the contract size — $4.99K where the order
+    // is $500. The three inputs that decide it are invisible from outside otherwise.
+    if crate::order_diag::follows(
+        &crate::feed::core_label(server_id).to_string(),
+        &o.market_name,
+    ) {
+        crate::order_diag::line(&format!(
+            "core {} uid={} market={} size {raw_size} -> {size} (quote_is_empty={quote_is_empty}, \
+             contract_size={contract_size}, entry={entry}, valid_entry={valid_entry})",
+            crate::feed::core_label(server_id),
+            o.uid,
+            o.market_name,
+        ));
+    }
     let sell_remaining_raw = if o.sell_order.quantity_remaining != 0.0 {
         o.sell_order.quantity_remaining
     } else if ss != 0.0 {
@@ -1257,7 +1273,7 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
         // trade, so print them beside the state that produced them.
         crate::order_diag::line(&format!(
             "core {} uid={} market={} status={} pending={} cond={:?} buy={} filled={} short={} \
-             t_create={} t_sell_create={} t_entry_fill={}",
+             size={} remaining={} t_create={} t_sell_create={} t_entry_fill={}",
             crate::feed::core_label(server_id),
             r.uid,
             r.market,
@@ -1267,6 +1283,12 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
             r.buy_price,
             r.filled,
             r.is_short,
+            // The size the order came back with, beside the one that was sent: on a coin-margined
+            // market these two are in different units (contracts out, coins back through
+            // `convert_contract_qty`), and comparing them is the only way to establish from
+            // outside what the core did with the number.
+            r.size,
+            r.remaining_size,
             r.create_time_ms,
             r.sell_create_time_ms,
             r.entry_fill_time_ms

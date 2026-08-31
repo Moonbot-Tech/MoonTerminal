@@ -8,7 +8,7 @@ use crate::session::CoreId;
 use super::{
     ArbQuote, ArbVenue, CoinTag, DetectSnapshot, LatestPriceError, MarketContextReadout,
     MarketDataSource, MarketFiguresReadout, MarketRevisions, MarketTickerReadout,
-    MarketWindowsReadout, rows_to_ticks,
+    MarketWindowsReadout, OrderSizeRules, rows_to_ticks,
 };
 use crate::market::candles::ChartCandle;
 
@@ -573,7 +573,6 @@ impl MarketDataSource {
         want_session: bool,
     ) -> Option<MarketFiguresReadout> {
         let mut out = MarketFiguresReadout::default();
-        let exchange = self.exchange_of(core);
         let provider_snapshot = self
             .provider_of(core)
             .and_then(|provider| self.core_client(provider))
@@ -599,8 +598,7 @@ impl MarketDataSource {
                     out.vol_24h = positive(m.volume);
                     out.max_leverage = (m.max_leverage > 0).then_some(m.max_leverage);
                     out.max_order = max_order_notional(
-                        market,
-                        exchange,
+                        &m.base_currency,
                         m.max_notional(),
                         m.max_qty(),
                         m.price.ask,
@@ -860,11 +858,9 @@ impl MarketDataSource {
         };
         let snapshot = client.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
-        let exchange = self.exchange_of(core);
         Some(handle.with(|m| MarketLimits {
             max_order: max_order_notional(
-                market,
-                exchange,
+                &m.base_currency,
                 m.max_notional(),
                 m.max_qty(),
                 m.price.ask,
@@ -872,6 +868,50 @@ impl MarketDataSource {
             ),
             max_leverage: m.max_leverage,
         }))
+    }
+
+    /// What a manual order on `market` must satisfy: its quantity unit and the exchange's minimum.
+    ///
+    /// `None` means NOT KNOWN: the provider, its client, the snapshot or the market itself has not
+    /// arrived, or the market reports neither a quote nor a contract value. It never means
+    /// "linear" — that answer is `MarketQuantityUnit::Coins`. A caller sizing a real order must
+    /// REFUSE on `None` rather than assume either unit: assuming coins on a coin-margined market
+    /// sends the USD figure as a contract count, which is the 100x order this rule exists to
+    /// prevent.
+    ///
+    /// Args:
+    ///     core: Consumer core whose provider owns the market data.
+    ///     market: Canonical market name from `MarketHandle::name()`.
+    ///
+    /// Returns:
+    ///     The market's order-size rules, or `None` while its figures have not arrived.
+    pub fn order_size_rules(&self, core: CoreId, market: &str) -> Option<OrderSizeRules> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let handle = snapshot.markets().get(market)?;
+        let (quote, contract_size, min_qty, settlement) = handle.with(|m| {
+            (
+                m.base_currency.clone(),
+                m.contract_size(),
+                m.min_qty(),
+                m.futures_type.name(),
+            )
+        });
+        let unit = super::market_quantity_unit(&quote, contract_size)?;
+        // Printed because the figures this decision rests on are otherwise invisible from the
+        // outside, and getting it wrong sizes a REAL order. Called once per order, never per frame.
+        log::info!(
+            "core {} market {market} order size rules: {unit:?} min_qty={min_qty}              (quote={quote:?}, contract_size={contract_size}, futures_type={settlement})",
+            crate::feed::core_label(core)
+        );
+        Some(OrderSizeRules { unit, min_qty })
     }
 
     /// Build a frozen snapshot for a detection card.

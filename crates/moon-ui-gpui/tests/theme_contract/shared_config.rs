@@ -57,9 +57,18 @@ fn shared_config_has_one_live_sequence_writer() {
         }
     }
 
+    // Compared by FILE, not by `file:line`: the invariant is "one writer, and it is the sequence",
+    // which a line number does not carry. Pinning the line made every edit above the send — a log
+    // line, a comment — read as a contract break, which trains the next reader to update the
+    // number rather than to ask whether a second writer appeared.
+    let call_files: Vec<&str> = call_sites
+        .iter()
+        .map(|site| site.split(':').next().unwrap_or(site))
+        .collect();
     assert_eq!(
-        call_sites,
-        ["feed/live/shared_config.rs:271"],
-        "send_shared_config must have exactly one call site in feed/live/shared_config.rs"
+        call_files,
+        ["feed/live/shared_config.rs"],
+        "send_shared_config must have exactly one call site in feed/live/shared_config.rs; found \
+         {call_sites:?}"
     );
 }
