@@ -8,7 +8,9 @@
 //! core schema not delivered). `Failed` means filesystem or SQLite access
 //! failed; `kind` carries enough detail for failure-specific UI guidance.
 //! `IncomparableQuote` is a healthy safety boundary for raw-money scopes whose
-//! persisted currency identity is mixed or unknown.
+//! persisted currency identity is mixed or unknown. `PeriodOutOfRange` is a
+//! resolved query period outside the readable range — a corrupt or absurd
+//! bound, not an absence of trades, so it must not render as an empty result.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -35,6 +37,10 @@ pub enum ReadFail {
     NotReady,
     /// Raw quote money cannot be compared because the query is mixed or unknown.
     IncomparableQuote,
+    /// The resolved period lies outside the readable range — a corrupt or absurd bound, not an
+    /// absence of trades. Distinct from an empty result so the UI never reads a rejected period
+    /// as "nothing happened".
+    PeriodOutOfRange,
     /// Filesystem or SQLite access failed. `msg` is pre-formatted for display;
     /// the origin already logged the failure.
     Failed { kind: FailKind, msg: Arc<str> },
@@ -50,7 +56,7 @@ impl ReadFail {
     ///     Database failure kind, or `None` for healthy non-database outcomes.
     pub fn kind(&self) -> Option<FailKind> {
         match self {
-            ReadFail::NotReady | ReadFail::IncomparableQuote => None,
+            ReadFail::NotReady | ReadFail::IncomparableQuote | ReadFail::PeriodOutOfRange => None,
             ReadFail::Failed { kind, .. } => Some(*kind),
         }
     }
@@ -68,6 +74,7 @@ impl std::fmt::Display for ReadFail {
         match self {
             ReadFail::NotReady => f.write_str("replica not ready"),
             ReadFail::IncomparableQuote => f.write_str("quote currency is mixed or unknown"),
+            ReadFail::PeriodOutOfRange => f.write_str("period outside the readable range"),
             ReadFail::Failed { msg, .. } => f.write_str(msg),
         }
     }

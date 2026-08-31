@@ -5,7 +5,7 @@ use rusqlite::types::Value;
 
 use super::super::report_axis::ReportAxis;
 use super::super::valuation::ValuationMode;
-use super::super::{ProfitMetric, QuoteBreakdown, ReadResult, SideFilter};
+use super::super::{ProfitMetric, QuoteBreakdown, ReadFail, ReadResult, SideFilter};
 
 mod mask;
 
@@ -105,7 +105,48 @@ pub struct Query {
     pub prefer_usdt: bool,
 }
 
+/// Latest instant a persisted or picked bound may name.
+pub const ANALYTICS_HORIZON_SECS: i64 = 4_102_444_800; // 2100-01-01 UTC
+/// Widest period Analytics will read. Not a taste limit: the span sets the number of SQL windows
+/// and the number of time buckets, and both are unbounded without it.
+pub const ANALYTICS_MAX_SPAN_SECS: i64 = 1_262_304_000; // 40 years
+
 impl Query {
+    /// Clamp this query's period to the readable range, refusing what it cannot safely read
+    /// rather than silently narrowing or emptying it.
+    ///
+    /// Deliberately does NOT floor `from`: a floor here would turn a replica whose rows all
+    /// predate the floor into a query with no rows and a SUCCESSFUL empty result — the exact
+    /// "nothing happened" standing in for "your data is unreadable" this whole goal exists to
+    /// close. `to` is capped to [`ANALYTICS_HORIZON_SECS`], and the resulting SPAN is capped at
+    /// [`ANALYTICS_MAX_SPAN_SECS`] — refused, not narrowed, because silently pulling `from`
+    /// forward to fit the cap is the same silent-empty trap: it would drop real rows and report
+    /// success. A span that wide is never something a preset or the date picker can produce, so
+    /// refusing it loses no genuine user intent.
+    ///
+    /// Deliberately does NOT bound `to` against the wall clock either — an earlier revision
+    /// capped it at `now + 1 day`, and that turned a period lying WHOLLY in the future (a user
+    /// picking `from 01.01.2027 to 01.02.2027` before that date) into a rejected read instead of
+    /// the empty one it must be: SQL simply finds no future rows, and there is nothing left to
+    /// bound anyway once `to` is already capped by the horizon and the span by
+    /// `ANALYTICS_MAX_SPAN_SECS`. Reading real wall-clock time here would also make every caller
+    /// time-dependent: a future period would first be rejected until a moving cap reached its
+    /// start, then silently narrowed before eventually receiving its full range. A read must not
+    /// change that way merely because time passed.
+    ///
+    /// Returns:
+    ///     Nothing on a still-readable period, or a classified failure for one that is not.
+    pub(in crate::db) fn clamp_period(&mut self) -> ReadResult<()> {
+        self.to = self.to.min(ANALYTICS_HORIZON_SECS);
+        if self.to <= self.from {
+            return Err(ReadFail::PeriodOutOfRange);
+        }
+        if self.to.saturating_sub(self.from) > ANALYTICS_MAX_SPAN_SECS {
+            return Err(ReadFail::PeriodOutOfRange);
+        }
+        Ok(())
+    }
+
     /// Resolve the "all history" sentinel: a negative `from` means the whole replica, which
     /// every single-scan tuner reader (the KPI matrix, the histogram, the sweep, the coin
     /// groups) represents as `from = 1` — the earliest possible second, distinct from the

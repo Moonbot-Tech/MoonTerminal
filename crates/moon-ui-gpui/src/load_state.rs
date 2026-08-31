@@ -97,6 +97,7 @@ impl<T> LoadState<T> {
             }
             LoadState::NotReady => Err(Note::NotReady),
             LoadState::Failed(ReadFail::IncomparableQuote) => Err(Note::IncomparableQuote),
+            LoadState::Failed(ReadFail::PeriodOutOfRange) => Err(Note::PeriodOutOfRange),
             // `apply` routes `NotReady` to its own state, so a `Failed` here
             // always carries a database kind; `Other` is the conservative
             // stand-in because it is the one that promises the user nothing.
@@ -116,11 +117,15 @@ pub(crate) enum Note {
     NotReady,
     /// Raw-money analytics cannot form one scalar because quote identity is mixed or unknown.
     IncomparableQuote,
+    /// The resolved period lies outside the readable range. Distinct from `Empty`: an empty
+    /// period says "nothing happened", while this says the request itself was rejected — a
+    /// corrupt or absurd persisted bound, not a period with no closed trades in it.
+    PeriodOutOfRange,
     /// A read failure with its originating error message. `kind` picks the guidance:
     /// only contention is worth retrying and only corruption is known to be
     /// permanent, so an I/O error must promise neither.
     Failed { msg: SharedString, kind: FailKind },
-    /// Genuinely no rows in the selected period — the only one of these four
+    /// Genuinely no rows in the selected period — the only one of these states
     /// that the user should read as "nothing happened".
     Empty,
 }
@@ -150,37 +155,50 @@ pub(crate) fn note_el(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    let (body, kind) = match note {
+    // `(title, body, hint)` are chosen TOGETHER, one case at a time, rather than the hint coming
+    // from a second match on `FailKind` alone and the title being fixed: `PeriodOutOfRange` needs
+    // a hint but carries no `FailKind` at all, and it is NOT a database read failure — titling it
+    // "failed to read the reports database" would send the user to repair a database over a
+    // period this build simply refuses to read. Picking all three here keeps the single
+    // `MoonAlert::error` construction below.
+    let (title, body, hint): (String, SharedString, String) = match note {
         Note::Loading => return muted(t!("common.loading").to_string(), pad, p, cx),
         Note::Empty => return muted(t!("common.empty_period").to_string(), pad, p, cx),
         Note::NotReady => return muted(t!("common.db_not_ready").to_string(), pad, p, cx),
         Note::IncomparableQuote => {
             return muted(t!("common.incomparable_quote").to_string(), pad, p, cx);
         }
-        Note::Failed { msg, kind } => (msg, kind),
-    };
-    // Say only what is true of this failure: corruption requires repair,
-    // contention may clear on retry, and I/O errors or misuse promise neither.
-    let hint = match kind {
-        FailKind::Corrupt => t!("common.db_read_failed_corrupt"),
-        FailKind::Busy => t!("common.db_read_failed_retry"),
-        FailKind::Other => t!("common.db_read_failed_other"),
+        Note::PeriodOutOfRange => (
+            t!("common.period_out_of_range_title").to_string(),
+            SharedString::from(t!("common.period_out_of_range").to_string()),
+            t!("common.period_out_of_range_hint").to_string(),
+        ),
+        // Say only what is true of this failure: corruption requires repair,
+        // contention may clear on retry, and I/O errors or misuse promise neither.
+        Note::Failed { msg, kind } => {
+            let hint = match kind {
+                FailKind::Corrupt => t!("common.db_read_failed_corrupt"),
+                FailKind::Busy => t!("common.db_read_failed_retry"),
+                FailKind::Other => t!("common.db_read_failed_other"),
+            };
+            (
+                t!("common.db_read_failed").to_string(),
+                msg,
+                hint.to_string(),
+            )
+        }
     };
     div()
         .p(design::ui_px(cx, pad))
         .child(
             v_flex()
                 .gap(design::ui_px(cx, 4.0))
-                .child(
-                    MoonAlert::error(id, body)
-                        .title(t!("common.db_read_failed").to_string())
-                        .render(),
-                )
+                .child(MoonAlert::error(id, body).title(title).render())
                 .child(
                     div()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.text_muted))
-                        .child(hint.to_string()),
+                        .child(hint),
                 ),
         )
         .into_any_element()

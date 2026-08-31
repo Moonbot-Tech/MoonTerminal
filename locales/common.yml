@@ -39,6 +39,18 @@ common.incomparable_quote:
   ru: "В выбранных сделках разные или неизвестные quote-валюты. Выберите одну валюту или переключитесь на Profit %."
   en: "The selected trades have mixed or unknown quote currencies. Select one currency or switch to Profit %."
   es: "Las operaciones seleccionadas tienen monedas de cotización mixtas o desconocidas. Seleccione una moneda o cambie a Profit %."
+common.period_out_of_range:
+  ru: "Запрошенный период выходит за пределы читаемого диапазона."
+  en: "The requested period is outside the readable range."
+  es: "El período solicitado está fuera del rango legible."
+common.period_out_of_range_title:
+  ru: "Период вне читаемого диапазона."
+  en: "Period outside the readable range."
+  es: "Período fuera del rango legible."
+common.period_out_of_range_hint:
+  ru: "Это не пустой период, а отклонённый: проверьте сохранённый период или данные ядра."
+  en: "This is a rejected period, not an empty one — check the saved period or the core's data."
+  es: "Es un período rechazado, no vacío: compruebe el período guardado o los datos del núcleo."
 common.exchange_unknown:
   ru: "Биржа не определена"
   en: "Exchange not identified"

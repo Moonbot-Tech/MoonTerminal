@@ -3,6 +3,7 @@
 
 use chrono::Datelike as _;
 use chrono_tz::Tz;
+use moon_core::db::analytics::{ANALYTICS_HORIZON_SECS, ANALYTICS_MAX_SPAN_SECS};
 use rust_i18n::t;
 
 use crate::controls::date_range;
@@ -75,11 +76,55 @@ impl Period {
         Period::Year,
         Period::All,
     ];
-    /// A preset by its id (the selection persisted in layout); None — unknown id.
+    /// Restore a period from its persisted selection id.
+    ///
+    /// Args:
+    ///     id: Persisted preset id or custom-period encoding.
+    ///
+    /// Returns:
+    ///     Matching period, or `None` for an unknown or invalid persisted value.
     pub(super) fn from_id(id: &str) -> Option<Period> {
+        let now = moon_core::util::now_unix_ms_i64() / 1000;
+        Self::from_id_at(id, now)
+    }
+
+    /// [`from_id`](Self::from_id) at a pinned instant — the same pinned-instant shape
+    /// [`range`](Self::range)/[`range_at`](Self::range_at) already use, so tests can validate
+    /// deterministically.
+    ///
+    /// A persisted custom range is REJECTED, not clamped, when it cannot have come from the
+    /// picker. There is no epoch floor on `f` — no closed trade predates it, but flooring a
+    /// PICKER value the way moon-core floors a data-derived one would turn a genuinely old `f`
+    /// into a silently different range instead of a named error, and the core's own
+    /// `clamp_period` is the boundary that actually protects the read. `f == -1` (the documented
+    /// "from unset" sentinel) is always accepted and skips the span check below, since it defers
+    /// the real lower bound to whatever the core resolves. Otherwise: `t` must exceed `f.max(0)`,
+    /// sit below `ANALYTICS_HORIZON_SECS`, and the span `t - f` must not exceed
+    /// `ANALYTICS_MAX_SPAN_SECS` — a picker can never produce a range that wide, so refusing one
+    /// loses no genuine user intent. `to` stays deliberately unbounded against `now` — the picker
+    /// lets a user choose a future end date, and that already persists and works today (SQL
+    /// simply finds no future rows), so bounding it here would be a regression rather than a
+    /// hardening. `now` is therefore unused inside this rule; it stays a parameter only to keep
+    /// this function's shape symmetric with `range`/`range_at`. `None` here falls through to the
+    /// same `unwrap_or(Period::CurMonth)` sites an unknown id already does, with no new fallback
+    /// of its own.
+    ///
+    /// That fallback is SILENT by design, and deliberately not a `PeriodOutOfRange` alert. A
+    /// rejected value here is a discarded PREFERENCE, not a failed read: the period bar renders
+    /// `active_period()`, so the window shows "current month" and reads the current month — the
+    /// label and the data never disagree, and nothing is presented under a range the user did not
+    /// choose. It is the same contract `dock_persist::DOCK_VERSION` already applies to an
+    /// incompatible saved layout. Surfacing an error instead would make a corrupt file open a
+    /// window that is useless until the user edits the very period the file broke.
+    pub(super) fn from_id_at(id: &str, _now: i64) -> Option<Period> {
         if let Some(rest) = id.strip_prefix("p-custom:") {
             let (f, t) = rest.split_once(':')?;
-            return Some(Period::Custom(f.parse().ok()?, t.parse().ok()?));
+            let f: i64 = f.parse().ok()?;
+            let t: i64 = t.parse().ok()?;
+            let not_inverted = t > f.max(0);
+            let under_horizon = t < ANALYTICS_HORIZON_SECS;
+            let span_ok = f == -1 || t.saturating_sub(f) <= ANALYTICS_MAX_SPAN_SECS;
+            return (not_inverted && under_horizon && span_ok).then_some(Period::Custom(f, t));
         }
         Period::ALL.into_iter().find(|p| p.id() == id)
     }

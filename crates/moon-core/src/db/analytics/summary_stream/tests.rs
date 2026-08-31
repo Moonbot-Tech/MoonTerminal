@@ -12,6 +12,42 @@ static TRACE_GUARD: Mutex<()> = Mutex::new(());
 /// SQL statements executed while the local test connection has tracing enabled.
 static TRACE_SQL: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// `summary_stream.rs:Accumulator::finish_period` must reject a grid that would exceed its
+/// span-derived cap; removing that cap lets an out-of-period observed bucket silently expand the
+/// Summary grid instead of returning the classified failure that prevents an allocation abort.
+#[test]
+fn finish_period_rejects_a_distant_bucket_after_the_span_cap() {
+    const DAY: i64 = 86_400;
+    let mut accumulator = Accumulator {
+        days: vec![
+            DayPoint {
+                start: 0,
+                profit: 1.0,
+                trades: 1,
+            },
+            DayPoint {
+                start: 3 * DAY,
+                profit: 2.0,
+                trades: 1,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let error = accumulator
+        .finish_period(DAY, chrono_tz::UTC, 2)
+        .expect_err("two span slots cannot consume a bucket three days away");
+
+    assert!(
+        matches!(
+            error,
+            rusqlite::Error::InvalidColumnType(_, message, rusqlite::types::Type::Null)
+                if message == "summary grid exceeded max_buckets"
+        ),
+        "the bounded grid must surface its classified overflow"
+    );
+}
+
 /// Record one statement reported by SQLite's execution trace.
 fn record_sql(event: TraceEvent<'_>) {
     if let TraceEvent::Stmt(statement, _) = event {

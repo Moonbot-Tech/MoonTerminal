@@ -1086,6 +1086,9 @@ fn corrupt_replica_surfaces_error_not_empty() {
         Err(ReadFail::IncomparableQuote) => {
             panic!("a single-quote corruption fixture must not become a quote-scope error")
         }
+        Err(ReadFail::PeriodOutOfRange) => {
+            panic!("a single-quote corruption fixture must not become a period-range error")
+        }
         Ok(_) => unreachable!("уже проверено выше"),
     }
 

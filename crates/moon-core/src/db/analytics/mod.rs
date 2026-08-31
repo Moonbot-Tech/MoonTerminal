@@ -36,7 +36,7 @@ pub use calendar::{
 };
 pub use groups::{GroupStat, KindCore, KindStat, TopTrade, coin_groups, strategies_for_coins};
 pub use profit_monitor::{ProfitMonitorCore, ProfitMonitorSummary, profit_monitor};
-pub use query::{PreviousPeriodBasis, Query};
+pub use query::{ANALYTICS_HORIZON_SECS, ANALYTICS_MAX_SPAN_SECS, PreviousPeriodBasis, Query};
 
 use groups::groups;
 pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
@@ -611,6 +611,11 @@ pub(super) fn summary_on(
     if q.from < 0 {
         q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
+    // `min_closedate` resolves only the all-history sentinel; a persisted explicit bound can
+    // still carry any value. Both routes into this read must therefore pass through the same
+    // clamp before anything sizes a grid from them: a corrupt or absurd bound is a read failure,
+    // not a read of the whole timeline.
+    q.clamp_period()?;
     let decision = match scope_decision_on(conn, &q)? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
         decision => decision,
@@ -828,7 +833,11 @@ fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<
 ///     Sequence statistics, dense time buckets, and 24 selected-zone hour aggregates.
 ///
 /// Errors:
-///     Returns a classified read failure when statement preparation or row decoding fails.
+///     Returns a classified read failure when statement preparation or row decoding fails, when
+///     a row's corrected instant cannot be placed on the civil grid (a genuinely broken row, not
+///     a display edge case), or when the grid needed to reach it exceeds its `to - from`-derived
+///     bucket cap — never a silent truncation, since a swallowed failure here would make
+///     [`previous_stats`]'s best-effort comparison quietly wrong instead of simply absent.
 fn scan_period(
     conn: &Connection,
     src: &str,
@@ -893,8 +902,22 @@ fn scan_period(
         peak = peak.max(cum);
         st.max_dd = st.max_dd.max(peak - cum);
 
-        let start = crate::util::display_time::bucket_start(close_utc, bucket, axis.zone())
-            .unwrap_or(close_utc);
+        // Same rationale as `summary_stream::Accumulator::push`: `bucket_start` returning `None`
+        // means the axis-corrected instant is outside chrono's representable range — a
+        // genuinely broken row, not a display edge case. An unaligned fallback here is exactly
+        // what let the fill loop below run away toward chrono's own limit.
+        let Some(start) = crate::util::display_time::bucket_start(close_utc, bucket, axis.zone())
+        else {
+            return Err(read_fail_on(
+                conn,
+                CTX,
+                rusqlite::Error::InvalidColumnType(
+                    0,
+                    "scan_period row bucket_start outside chrono's representable range".to_string(),
+                    rusqlite::types::Type::Null,
+                ),
+            ));
+        };
         match days.last_mut() {
             Some(d) if d.start == start => {
                 d.profit += profit;
@@ -920,10 +943,30 @@ fn scan_period(
     }
     // Fill series gaps (days without trades) with zeroes so bars stay evenly spaced in time.
     if !days.is_empty() {
-        let mut filled = Vec::with_capacity(days.len());
+        // Exact, not a second policy constant: `to - from` bounds this scan's own span, plus the
+        // small DST margin one civil bucket can drift by. `previous_stats` does not re-floor its
+        // comparison `from` to the epoch, but that span is still proportional to the caller's
+        // already-clamped period length, so this stays finite.
+        let max_buckets = usize::try_from((to - from) / bucket + 2).unwrap_or(usize::MAX);
+        let mut filled = Vec::with_capacity(days.len().min(max_buckets));
         let mut t = days[0].start;
         let mut it = days.into_iter().peekable();
         while let Some(d) = it.peek() {
+            if filled.len() >= max_buckets {
+                // `previous_stats` folds any error here into `None` (best-effort), so this must
+                // fail loudly through the classified read-failure channel rather than silently
+                // truncate — a silent break would make the comparison period quietly wrong and
+                // invisible instead of simply absent.
+                return Err(read_fail_on(
+                    conn,
+                    CTX,
+                    rusqlite::Error::InvalidColumnType(
+                        0,
+                        "scan_period grid exceeded max_buckets".to_string(),
+                        rusqlite::types::Type::Null,
+                    ),
+                ));
+            }
             if d.start == t {
                 filled.push(it.next().unwrap());
             } else {
