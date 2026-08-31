@@ -216,7 +216,11 @@ fn cells(
 
 /// A reported build number, or a dash for "never reported".
 fn number_or_dash(v: Option<u32>) -> String {
-    v.map(|n| n.to_string()).unwrap_or_else(|| "—".to_string())
+    // The SAME formatter the MoonBot column uses (`presentation::version_text` ->
+    // `fmt::core_build`), so a build reads `7.69` here exactly as it does in the telemetry table.
+    // A raw `769` beside a `7.69` elsewhere reads as two different facts about one core.
+    v.map(moon_core::util::fmt::core_build)
+        .unwrap_or_else(|| "—".to_string())
 }
 
 /// Localized target word -- net new, since no UI surface has ever had to word `UpdateTarget`
