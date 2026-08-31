@@ -318,6 +318,86 @@ fn verifying_core_blocks_a_ready_sibling_on_its_new_ip() {
     );
 }
 
+/// `core_update.rs:current_lane` must recognize `Verifying` through `active_from`; replacing its
+/// guarded arm with only `Sent | Waiting` wedges the lane and leaves every same-IP sibling queued.
+#[test]
+fn settled_verifying_core_releases_its_lane_to_a_ready_sibling() {
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+    let verifying_core = 5;
+    let queued_core = 6;
+    let mut manager = manager();
+
+    let mut verifying_data = ready_core(ip);
+    verifying_data.conn_epoch = 12;
+    insert_core(&mut manager, verifying_core, verifying_data);
+    insert_core(&mut manager, queued_core, ready_core(ip));
+    manager.core_updates.phases.insert(
+        verifying_core,
+        CoreUpdatePhase::Verifying {
+            target: UpdateTarget::Release,
+            from: Some(100),
+            epoch1: 12,
+            sent_at_ms: 0,
+            left_at_ms: 1,
+            verify_at_ms: 1,
+        },
+    );
+    manager.core_updates.phases.insert(
+        queued_core,
+        CoreUpdatePhase::Queued {
+            lane: ip,
+            held: false,
+            not_ready_since: None,
+        },
+    );
+    manager.core_updates.attempts.insert(
+        queued_core,
+        AttemptMeta {
+            started_ms: 0,
+            core_name: "queued".to_string(),
+            target: UpdateTarget::Release,
+            from: Some(100),
+        },
+    );
+    manager.core_updates.lanes.insert(
+        ip,
+        Lane {
+            order: VecDeque::from([queued_core]),
+            active: Some(verifying_core),
+            stalled: false,
+        },
+    );
+
+    manager.pop_ready_lanes(2);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(queued_core),
+            Some(CoreUpdatePhase::Queued { lane, .. }) if *lane == ip
+        ),
+        "the in-flight Verifying core must keep its same-IP sibling queued"
+    );
+
+    let data = manager
+        .store
+        .core_mut(verifying_core)
+        .expect("inserted core must remain in the retained store");
+    data.conn_epoch = 13;
+    data.server_version = Some(101);
+    manager.advance_in_flight_updates(3);
+    manager.pop_ready_lanes(3);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(queued_core),
+            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(
+                UpdateFailure::NotSent
+            )))
+        ),
+        "once verification settles, the lane must pop and attempt its ready sibling"
+    );
+}
+
 /// `store.rs:CoreData::apply` must bump `conn_epoch` only on `Ready -> not-Ready`; changing the
 /// edge guard to `true` counts reconnect backoff messages as departures and falsely completes an update.
 #[test]
