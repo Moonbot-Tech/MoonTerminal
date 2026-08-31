@@ -530,43 +530,48 @@ fn update_failure_locale_key(failure: UpdateFailure) -> &'static str {
 ///     `None` for a core the queue has never touched; otherwise the badge for its current phase.
 pub(super) fn update_badge(phase: Option<&CoreUpdatePhase>) -> Option<UpdateBadge> {
     let phase = phase?;
-    Some(match phase {
-        CoreUpdatePhase::Queued { held: false, .. } => UpdateBadge {
+    match phase {
+        CoreUpdatePhase::Queued { held: false, .. } => Some(UpdateBadge {
             glyph: "\u{2026}", // …
             level: LoadLevel::Normal,
             locale_key: "core_update.phase.queued",
-        },
-        CoreUpdatePhase::Queued { held: true, .. } => UpdateBadge {
+        }),
+        CoreUpdatePhase::Queued { held: true, .. } => Some(UpdateBadge {
             glyph: "\u{2016}", // ‖
             level: LoadLevel::Warning,
             locale_key: "core_update.phase.held",
-        },
-        CoreUpdatePhase::Sent { .. } => UpdateBadge {
+        }),
+        CoreUpdatePhase::Sent { .. } => Some(UpdateBadge {
             glyph: "\u{2191}", // ↑
             level: LoadLevel::Notice,
             locale_key: "core_update.phase.sent",
-        },
-        CoreUpdatePhase::Waiting { .. } => UpdateBadge {
+        }),
+        CoreUpdatePhase::Waiting { .. } => Some(UpdateBadge {
             glyph: "\u{21bb}", // ↻
             level: LoadLevel::Notice,
             locale_key: "core_update.phase.waiting",
-        },
-        CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => UpdateBadge {
+        }),
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => Some(UpdateBadge {
             glyph: "\u{2713}", // ✓
             level: LoadLevel::Normal,
             locale_key: "core_update.phase.succeeded",
-        },
-        CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => UpdateBadge {
-            glyph: "=",
-            level: LoadLevel::Normal,
-            locale_key: "core_update.phase.unchanged",
-        },
-        CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(failure)) => UpdateBadge {
+        }),
+        // NO badge. "The build did not move" is the one outcome that says nothing about the core
+        // as it stands now, and this badge sits permanently beside the build number -- so on a
+        // fleet where most cores are already current, a campaign would leave a column of `=`
+        // marks that carry no instruction and read as clutter.
+        //
+        // Nothing is lost: the attempt, its target and this exact outcome are a row in the
+        // Updates list, which is where a record of what already happened belongs. The three
+        // marks that survive all still carry an instruction -- in flight, went somewhere, or
+        // needs you.
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => None,
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(failure)) => Some(UpdateBadge {
             glyph: "!",
             level: LoadLevel::Critical,
             locale_key: update_failure_locale_key(*failure),
-        },
-    })
+        }),
+    }
 }
 
 /// Badge for a collapsed server row's rolled-up update state — see [`GroupUpdate`].
