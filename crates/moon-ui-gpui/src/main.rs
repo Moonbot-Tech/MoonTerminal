@@ -214,6 +214,12 @@ struct Backend {
     /// the write is deferred to the same debounce loop that persists the layout instead of putting
     /// an fsync in a frame.
     tab_badges_dirty: bool,
+    /// Whether the update-queue history has unsaved changes since the last debounced flush.
+    ///
+    /// `SessionManager` owns the retained history; this only tracks whether the flush loop still
+    /// owes it a save. The coordination tick sets it when the history revision advances, and
+    /// `on_app_quit` sets it after an abandon pass that writes closed records.
+    core_updates_dirty: bool,
     /// Cache of the default header-ticker source when no choice is saved, as `(core, market)`.
     /// Resolved lazily from exact BTCUSDT or UBTCUSDC matches, then the first broader `BTC` search
     /// result as a fallback, and not persisted.

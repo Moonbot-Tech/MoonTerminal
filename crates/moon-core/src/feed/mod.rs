@@ -520,6 +520,15 @@ pub enum CoreCmd {
     /// `settings().restart_now()`. It starts the market runtime, leaves passive mode, and starts
     /// checked strategies. The protocol has no stop operation.
     RestartNow,
+    /// Ask the core to install a release or a named beta/test build through moonproto
+    /// `settings().request_release_update()` / `request_version_update(name)`.
+    ///
+    /// This is FIRE-AND-FORGET: both calls resolve to MoonProto's `send_no_reply`, so there is no
+    /// acknowledgement and completion can only ever be observed as a version change. MoonProto
+    /// also EXPECTS THE LINK TO DROP after this command — `TUpdateVersionCommand`'s own doc in the
+    /// pinned checkout says the server broadcasts the command back and marks the session so the
+    /// next init takes the update-aware `BaseCheck` retry path.
+    UpdateVersion { target: UpdateTarget },
     /// Turn the core's AutoDetect on or off through moonproto
     /// `settings().set_auto_detect_active()` — Moonbot's passive mode, the inverse of this flag.
     ///

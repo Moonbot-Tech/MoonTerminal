@@ -15,11 +15,14 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use crate::Backend;
 use crate::conn_diag::fault_short;
+use crate::controls::core_update::{self, OfferCounts};
 
 use crate::design;
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
+use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 
 use super::CoreStatusView;
 use super::by_ip_widths::{ByIpWidths, CELL_GAP_W, CHEVRON_W, ROW_GAP_W, TREE_SCROLLBAR_W};
@@ -29,10 +32,10 @@ use super::model::{
 };
 use super::ordering::GroupSortField;
 use super::presentation::{
-    LoadLevel, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level, lat_level,
-    level_color, memory_free, memory_u16, percent, ping_plain, tz_offset_group_text,
-    version_behind_group_tooltip, version_behind_tooltip, version_color, version_group_text,
-    version_text,
+    LoadLevel, UpdateBadge, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level,
+    lat_level, level_color, memory_free, memory_u16, percent, ping_plain, tz_offset_group_text,
+    update_badge, update_badge_for_group, version_behind_group_tooltip, version_behind_tooltip,
+    version_color, version_group_text, version_text,
 };
 use super::startup::{
     StartupCell, problem_diagnostic_text, startup_cell, startup_cell_text, startup_facts,
@@ -41,6 +44,7 @@ use super::startup::{
 use super::time_offset::{
     TzOffsetCell, tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip,
 };
+use super::update_menu;
 
 /// IP mask shown while the column is hidden; a fixed run avoids leaking the address length.
 const IP_MASK: &str = "************";
@@ -113,6 +117,7 @@ pub(super) fn grouped_server_view(
     rem_size: f32,
     overrides: &HashMap<String, f32>,
     state: &Entity<MoonTreeState>,
+    backend: &Entity<Backend>,
     window: &Window,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
@@ -122,6 +127,13 @@ pub(super) fn grouped_server_view(
     let header_weak = weak_view.clone();
     // A third for the width probe below, which outlives this call inside the canvas closure.
     let weak_measure = weak_view.clone();
+    // HANDED IN by the caller, never read off `cx.entity()`. This runs inside `CoreStatusView`'s
+    // own update, so reading that entity here panics `cannot read ... while it is already being
+    // updated` in a non-unwinding frame -- i.e. the process dies the moment the panel renders.
+    // The caller is a `&self` method that already holds the handle. Cloned once and moved into
+    // the tree's render closure below: the update buttons it hosts command the backend directly,
+    // never through the view.
+    let backend = backend.clone();
     let server_positions = Rc::new(
         groups
             .iter()
@@ -186,6 +198,7 @@ pub(super) fn grouped_server_view(
                             editing_input,
                             widths,
                             &weak_view,
+                            &backend,
                             p,
                             app,
                         ));
@@ -199,7 +212,7 @@ pub(super) fn grouped_server_view(
                 // A core row highlights when it is the charted core, and clicking it charts that core.
                 return MoonListItem::new(meta.index)
                     .selected(chart_core == Some(core.id))
-                    .child(core_row(core, widths, &weak_view, p, app));
+                    .child(core_row(core, widths, &weak_view, &backend, p, app));
             }
         }
         MoonListItem::new(meta.index)
@@ -304,6 +317,7 @@ fn server_row(
     edit_input: Option<Entity<MoonInputState>>,
     w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
+    backend: &Entity<Backend>,
     p: MoonPalette,
     app: &App,
 ) -> impl IntoElement {
@@ -312,6 +326,29 @@ fn server_row(
         ServerConnectivity::Degraded => p.amber,
         ServerConnectivity::Offline => p.red,
     };
+    // The server-row control commands every core in the group -- bulk fills the same queue a
+    // single enqueue would, never a burst of commands. No retry affordance at this scope: retry
+    // is a one-core action, offered on the core row it belongs to.
+    let group_update_cores: Rc<[CoreId]> = group.cores.iter().map(|core| core.id).collect();
+    let mut group_update_counts = OfferCounts::default();
+    for core in &group.cores {
+        group_update_counts.add(core_update::offer_state(
+            &core.status,
+            core.server_version,
+            core.endpoint.is_some(),
+            core.update.as_ref(),
+        ));
+    }
+    let group_update_btn = core_update::update_button(
+        format!("core-update-server:{}", group.key.tree_id()),
+        SharedString::from(format!("core-update-hover:{}", group.key.tree_id())),
+        group_update_cores,
+        group_update_counts,
+        None,
+        backend,
+        p,
+        app,
+    );
 
     h_flex()
         .w_full()
@@ -432,9 +469,17 @@ fn server_row(
                 // ellipsis, whose whole message is "expand me".
                 .child(
                     version_slot(
+                        // Per-server rather than the single literal `plain_slot` used to share
+                        // across every row: the same GPUI hover/press hazard CORRECTION P3-3
+                        // documents for `core_row` applies equally to a fleet of MULTIPLE
+                        // collapsed server rows drawing this cell in one frame.
+                        format!("core-status-version-group:{}", group.key.tree_id()),
+                        SharedString::from(format!("core-update-hover:{}", group.key.tree_id())),
                         version_group_text(group.version),
                         matches!(group.version, GroupVersion::Uniform(_)),
                         group.version_behind.is_some(),
+                        update_badge_for_group(group.update),
+                        group_update_btn,
                         w.version,
                         p,
                     )
@@ -507,6 +552,7 @@ fn core_row(
     core: &CoreStatusRow,
     w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
+    backend: &Entity<Backend>,
     p: MoonPalette,
     app: &App,
 ) -> impl IntoElement {
@@ -524,6 +570,30 @@ fn core_row(
     // colour without a separate gate here.
     let ping_lvl = lat_level(core.ping_sev);
     let exch_lvl = lat_level(core.exch_sev);
+    // One-core scope: either the plain enqueue control, a retry affordance when the last attempt
+    // failed, or nothing at all while the badge already speaks (`Queued`/`Sent`/`Waiting`).
+    let mut core_update_counts = OfferCounts::default();
+    core_update_counts.add(core_update::offer_state(
+        &core.status,
+        core.server_version,
+        core.endpoint.is_some(),
+        core.update.as_ref(),
+    ));
+    let core_failed_retry = matches!(
+        core.update.as_ref(),
+        Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(_)))
+    )
+    .then_some(core.id);
+    let core_update_btn = core_update::update_button(
+        format!("core-update-row:{}", core.id),
+        SharedString::from(format!("core-update-hover:{}", core.id)),
+        Rc::from([core.id]),
+        core_update_counts,
+        core_failed_retry,
+        backend,
+        p,
+        app,
+    );
     h_flex()
         .w_full()
         .min_w_0()
@@ -539,6 +609,36 @@ fn core_row(
                 if let Some(view) = weak_view.upgrade() {
                     view.update(app, |this, cx| this.select_chart_core(id, cx));
                 }
+            }
+        })
+        // Right-click opens the row's update menu. Deliberately does NOT touch selection --
+        // opening a menu must not change which core is charted, so the core and its name are
+        // named explicitly here rather than read back from panel state at click time.
+        .on_mouse_down(MouseButton::Right, {
+            let weak_view = weak_view.clone();
+            let id = core.id;
+            let name = core.name.clone();
+            let updatable = update_menu::core_updatable(
+                &core.status,
+                core.server_version,
+                core.endpoint.is_some(),
+                core.update.as_ref(),
+            );
+            move |e: &MouseDownEvent, window, app| {
+                app.stop_propagation();
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                let backend = view.read(app).backend.clone();
+                update_menu::open_update_row_menu(
+                    &backend,
+                    id,
+                    name.clone(),
+                    updatable,
+                    e.position,
+                    window,
+                    app,
+                );
             }
         })
         // Empty chevron gutter, matching the server row's 12 px expand column so the body aligns.
@@ -618,9 +718,17 @@ fn core_row(
                 // where it can co-occur with this number instead of being duplicated by it.
                 .child(
                     version_slot(
+                        // Per-core: `core_row` calls this for EVERY by-IP core row, so a shared
+                        // literal id here is the exact GPUI hover/press hazard CORRECTION P3-3
+                        // names -- not from the row's INDEX, since groups re-sort on every cache
+                        // rebuild, but from the core's own stable identity.
+                        ("core-status-version", core.id),
+                        SharedString::from(format!("core-update-hover:{}", core.id)),
                         version_text(core.server_version),
                         core.server_version.is_some(),
                         core.version_behind.is_some(),
+                        update_badge(core.update.as_ref()),
+                        core_update_btn,
                         w.version,
                         p,
                     )
@@ -941,27 +1049,58 @@ fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stat
 /// why it is not the amber used elsewhere in this file.
 ///
 /// Args:
+///     id: Stable element identity, unique among the rows sharing one frame — see the CAUTION
+///         above [`plain_slot`] about a shared id migrating GPUI hover/press state between rows.
+///     hover_group: Per-row hover-reveal group name for [`crate::controls::core_update`]'s button,
+///         derived from the same identity as `id` rather than a literal shared across rows.
 ///     text: The already-composed cell text.
 ///     reported: Whether there is a build to show, as opposed to absence or disagreement.
 ///     behind: Whether this build is behind the fleet's newest reported build.
+///     badge: This row's update-queue badge, when it has one.
+///     update_btn: This row's hover-revealed update control, when its scope currently offers one.
 ///     value_w: Current column width from [`ByIpWidths`].
 ///     p: Active Moon palette.
 ///
 /// Returns:
-///     A compact build cell with a stable footprint.
+///     A compact build cell with a stable footprint, a trailing update-queue badge when one
+///     applies, and the hover-revealed update control.
 fn version_slot(
+    id: impl Into<ElementId>,
+    hover_group: SharedString,
     text: String,
     reported: bool,
     behind: bool,
+    badge: Option<UpdateBadge>,
+    update_btn: Option<AnyElement>,
     value_w: f32,
     p: MoonPalette,
 ) -> Stateful<Div> {
-    plain_slot(
-        "core-status-version",
-        text,
-        value_w,
-        version_color(behind, reported, p),
-    )
+    let id: ElementId = id.into();
+    // The badge is its OWN stateful child, with an id derived from the slot's, so it can carry its
+    // own hover independently of `version_behind`'s tooltip on the outer slot -- `tooltip` panics
+    // in debug builds if called twice on the same element.
+    let badge_id = (id.clone(), "update-badge");
+    plain_slot(id, text, value_w, version_color(behind, reported, p))
+        // The hover surface [`crate::controls::core_update::update_button`] reveals itself
+        // against -- see that module's doc for why this rides GPUI's own group styling rather
+        // than any state this panel owns.
+        .group(hover_group)
+        .flex()
+        .items_center()
+        .gap(px(CELL_GAP_W))
+        .when_some(badge, |slot, badge| {
+            slot.child(
+                div()
+                    .id(badge_id)
+                    .flex_none()
+                    .text_color(rgb(level_color(badge.level, p)))
+                    .child(badge.glyph)
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!(badge.locale_key).to_string(),
+                    )),
+            )
+        })
+        .when_some(update_btn, |slot, btn| slot.child(btn))
 }
 
 /// A fixed-width text cell with NO warning-icon lead, for a column that has no `WarnAxis` behind
@@ -973,7 +1112,10 @@ fn version_slot(
 /// owner, so their width, clipping and no-wrap behaviour cannot drift apart.
 ///
 /// The id is a PARAMETER because a row now draws more than one of these; two children sharing a
-/// stateful element id is a real GPUI hazard, not a style point.
+/// stateful element id is a real GPUI hazard, not a style point. [`version_slot`] in particular
+/// derives its id from the core (or server) it draws, rather than reusing one literal across every
+/// row -- see CORRECTION P3-3 in `branch-P3.md`: hanging an interactive or hover-sensitive child
+/// off a shared id migrates GPUI hover and press state between rows.
 ///
 /// Args:
 ///     id: Stable element identity, unique among the cells of one row.
@@ -983,7 +1125,7 @@ fn version_slot(
 ///
 /// Returns:
 ///     A compact cell with a stable footprint.
-fn plain_slot(id: &'static str, text: String, value_w: f32, color: u32) -> Stateful<Div> {
+fn plain_slot(id: impl Into<ElementId>, text: String, value_w: f32, color: u32) -> Stateful<Div> {
     div()
         .id(id)
         .w(px(value_w))

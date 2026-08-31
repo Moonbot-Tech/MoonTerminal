@@ -197,6 +197,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::load()),
         tab_badges: moon_core::config::TabBadgeSettings::load(),
         tab_badges_dirty: false,
+        core_updates_dirty: false,
         header_ticker_default: None,
         last_header_ticker_refresh: None,
         dock_states,
@@ -299,6 +300,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         strategy_edit_note_cursor: HashMap::new(),
     });
     backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
+    // Seed the queue's retained history from disk exactly once, before any campaign can run.
+    // `SessionManager` is the single capped authority for it from here on; persistence only
+    // borrows from `core_update_history()` and never drains it (see `core_updates.rs`).
+    backend.update(cx, |b, _| {
+        let history = moon_core::config::CoreUpdateHistory::load();
+        b.session.seed_core_update_history(history.records);
+    });
     // Settle the header clock fields once before any window reads them: detect an untouched
     // profile's OS zone, migrate an old nonzero offset, or refresh a saved zone's offset mirror.
     crate::chrome::clock::reconcile_clock_zone(&backend, cx);
@@ -447,6 +455,23 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             if b.tab_badges_dirty {
                 b.tab_badges.save();
                 b.tab_badges_dirty = false;
+            }
+            // D4: no dangling "updating" row survives a restart. This is the ONLY place that
+            // closes out an in-flight campaign gracefully -- `on_app_quit` is itself skipped by
+            // `std::process::exit`, so a crash, a forced termination, or a power loss still drops
+            // the queue with no `Abandoned` record (see `SessionManager::abandon_core_updates`).
+            let abandoned = b
+                .session
+                .abandon_core_updates(moon_chart::paint::now_unix_ms() as i64);
+            if abandoned > 0 || b.core_updates_dirty {
+                let history = moon_core::config::CoreUpdateHistory {
+                    records: b.session.core_update_history().iter().cloned().collect(),
+                };
+                if let Err(e) = history.save() {
+                    log::warn!("core update history save (quit) failed: {e}");
+                } else {
+                    b.core_updates_dirty = false;
+                }
             }
             if b.figures.borrow().dirty {
                 b.figures.borrow_mut().save();
@@ -612,13 +637,68 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // Before the warning engine: a schedule boundary crossed on this very tick must
                     // already be in force for the alerts this tick opens.
                     b.tick_quiet(cx);
-                    b.tick_core_warnings(moon_chart::paint::now_unix_ms() as i64);
+                    let now_ms = moon_chart::paint::now_unix_ms() as i64;
+                    b.tick_core_warnings(now_ms);
+                    // The update queue spawns no timer of its own: this coordination loop already
+                    // runs at 100 ms with no window open, unlike
+                    // `controls/core_run/actions.rs`'s `expire_later`/`claim_sweep` dance, which
+                    // exists because THAT state only ticks while a run panel is on screen. Reuses
+                    // the SAME clock reading `tick_core_warnings` just took, above, rather than a
+                    // second one, so the two state machines cannot classify one tick against two
+                    // different times.
+                    // The dirty flag is gated on the HISTORY revision specifically, never on the
+                    // coarse `changed` bool `tick_core_updates` returns: that bool ORs all four
+                    // internal steps together, including `refresh_held_flags`, which touches no
+                    // history at all. Only `finish_core` appends a record, and it already
+                    // advances `core_update_history_rev()` -- so without this a busy fleet
+                    // mid-campaign re-serializes and atomically rewrites the whole up-to-2000-
+                    // record JSON on nearly every 100 ms tick. `mark_backend_dirty` stays on the
+                    // coarse signal: the PANEL must still repaint on a phase-only change, only
+                    // the disk write moves to the narrower trigger.
+                    let core_updates_hr0 = b.session.core_update_history_rev();
+                    if b.session.tick_core_updates(now_ms) {
+                        b.mark_backend_dirty(cx);
+                    }
+                    if b.session.core_update_history_rev() != core_updates_hr0 {
+                        b.core_updates_dirty = true;
+                    }
                     crate::firetest::tick_backend(b, cx);
+
+                    // The update queue owns no `AppConfig`, so a `Verifying` core leaves its
+                    // respawn as a REQUEST on the queue's outbox and this same, already-existing
+                    // drain executes it eight lines below -- one mechanism, not two.
+                    // Deduplicated against a manual press already pending for the same core: two
+                    // respawns would both bump the epoch and the predicate would still settle,
+                    // but one is what was asked for.
+                    let respawns = b.session.take_update_respawn_requests();
+                    for id in respawns {
+                        if !b.reconnect_request.contains(&id) {
+                            b.reconnect_request.push(id);
+                        }
+                    }
 
                     let recon: Vec<CoreId> = b.reconnect_request.drain(..).collect();
                     for id in recon {
-                        b.session
+                        let respawned = b
+                            .session
                             .reconnect(id, &b.config, b.reports.as_ref().map(|h| &h.tx));
+                        if !respawned {
+                            // `reconnect` silently declines a core that left the configuration or
+                            // whose server/group went inactive. A `Verifying` attempt must learn
+                            // that on this tick rather than waiting out its whole bound; any other
+                            // phase ignores it.
+                            //
+                            // This closes a history record AFTER the `core_updates_hr0` comparison
+                            // above already ran, so that comparison alone would never see it --
+                            // the persistence writer at the bottom of this tick would silently
+                            // skip a real, closed record until some unrelated update happened to
+                            // dirty the flag. The bool this returns is exactly the "did a record
+                            // just close" signal `core_updates_hr0` computes for every other path;
+                            // reuse it here instead of widening that comparison window.
+                            if b.session.note_update_respawn_refused(id, now_ms) {
+                                b.core_updates_dirty = true;
+                            }
+                        }
                     }
                     // The debounced workspace flush. Guarded as a whole rather than per file so
                     // a newly persisted thing added below cannot forget the rule; the dirty
@@ -643,6 +723,19 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         if b.tab_badges_dirty {
                             b.tab_badges.save();
                             b.tab_badges_dirty = false;
+                        }
+                        if b.core_updates_dirty {
+                            // The single capped authority is `SessionManager`; this only borrows
+                            // a snapshot to persist. A `Backend`-side copy would be a second,
+                            // possibly-diverging store -- see `CoreUpdateHistory`'s own docs.
+                            let history = moon_core::config::CoreUpdateHistory {
+                                records: b.session.core_update_history().iter().cloned().collect(),
+                            };
+                            if let Err(e) = history.save() {
+                                log::warn!("core update history save failed: {e}");
+                            } else {
+                                b.core_updates_dirty = false;
+                            }
                         }
                         if b.figures.borrow().dirty {
                             b.figures.borrow_mut().save();

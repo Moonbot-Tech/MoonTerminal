@@ -14,7 +14,8 @@ use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
 use crate::feed::{
-    CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment, order_edit, trade,
+    CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment, UpdateTarget, order_edit,
+    trade,
 };
 use crate::util::now_unix_ms as now_ms;
 
@@ -979,6 +980,25 @@ pub(super) fn drain_commands(
                 } else {
                     log::info!(
                         "core {} restart_now sent",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
+            Ok(CoreCmd::UpdateVersion { target }) => {
+                // Fire-and-forget: no ack, and MoonProto expects the link to drop. Completion is
+                // observed only as a version change through the store; see `CoreCmd::UpdateVersion`.
+                let result = match target {
+                    UpdateTarget::Release => client.settings().request_release_update(),
+                    UpdateTarget::Named(n) => client.settings().request_version_update(n),
+                };
+                if let Err(error) = result {
+                    log::warn!(
+                        "core {} update_version failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                } else {
+                    log::info!(
+                        "core {} update_version sent",
                         crate::feed::core_label(server.id)
                     );
                 }

@@ -14,6 +14,7 @@
 pub mod clock_skew;
 pub mod coordinator;
 pub mod core_time_offset;
+pub mod core_update;
 pub mod order_lines;
 pub mod run_state;
 pub mod store;
@@ -157,6 +158,8 @@ pub struct SessionManager {
     /// Last `(provider, markets, orderbook_markets)` role sent to each core, used to suppress
     /// duplicate commands. `orderbook_markets` is the subset of `markets` that needs an order book.
     last_cmd: HashMap<CoreId, (bool, Vec<String>, Vec<String>)>,
+    /// Per-IP core-update queue and its retained history; see `core_update`.
+    core_updates: core_update::CoreUpdateQueue,
 }
 
 #[derive(Clone, Debug, Default)]
