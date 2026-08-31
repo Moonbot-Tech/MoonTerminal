@@ -1,12 +1,14 @@
 //! Regression tests for the recurring updater schedule and lifecycle authority.
 
-use std::time::Duration;
+use std::{fs, time::Duration};
 
+use moon_core::config::paths;
 use moon_core::update::DiscoveryRetry;
 
 use super::{
     POLL_WINDOW_SECONDS, PollSchedule, STARTUP_POLL_GAP_SECONDS, UpdateState, claim_polling,
-    failure_backoff, next_regular_poll, polling_continues_after,
+    failure_backoff, next_regular_poll, polling_continues_after, read_helper_failure,
+    record_helper_failure, same_installed_target,
 };
 
 /// Removing the five-minute startup gap would issue a duplicate request when an immediate scan
@@ -107,4 +109,58 @@ fn a_successful_current_scan_schedules_the_next_attempt() {
     let deadline = schedule.after_success(completed, completed - 2, None);
     assert!(deadline > completed);
     assert!(deadline - completed <= POLL_WINDOW_SECONDS + STARTUP_POLL_GAP_SECONDS);
+}
+
+/// Removing `update.rs:record_helper_failure` or its parent-side read would leave a failed helper
+/// opaque to the user instead of surfacing its bounded diagnostic; a missing file must retain the
+/// existing opaque readiness error.
+#[test]
+fn helper_failure_reason_round_trips_and_absence_stays_opaque() {
+    let nonce = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+    let missing_nonce = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+    let transaction = paths::update_transaction_paths(nonce).expect("derive transaction paths");
+    let transaction_dir = transaction
+        .manifest
+        .parent()
+        .expect("transaction manifest has a parent");
+    fs::create_dir_all(transaction_dir).expect("create nonce-bound transaction directory");
+    fs::write(&transaction.manifest, b"{}").expect("create canonical transaction manifest");
+
+    record_helper_failure(
+        &transaction.manifest,
+        nonce,
+        &anyhow::anyhow!("replacement helper could not open the installed executable"),
+    );
+
+    assert_eq!(
+        read_helper_failure(nonce).as_deref(),
+        Some("replacement helper could not open the installed executable")
+    );
+    assert_eq!(read_helper_failure(missing_nonce), None);
+
+    fs::remove_file(&transaction.reason).expect("remove helper failure diagnostic");
+    fs::remove_file(&transaction.manifest).expect("remove transaction manifest");
+    fs::remove_dir(transaction_dir).expect("remove empty transaction directory");
+}
+
+/// Requiring `update.rs:same_installed_target` to retain the literal `MoonTerminal.exe` name
+/// rejects a legitimate renamed portable install even though the manifest still binds it to the
+/// derived install root.
+#[test]
+fn same_installed_target_accepts_a_renamed_install_name() {
+    let canonical = std::path::Path::new(r"C:\install\MoonTerminal.exe");
+    let renamed = std::path::Path::new(r"C:\install\MoonTerminalX.exe");
+
+    assert!(same_installed_target(renamed, canonical));
+}
+
+/// Removing `update.rs:same_installed_target`'s parent-directory comparison accepts a manifest
+/// target outside its derived install root, allowing the updater to validate an unrelated
+/// executable.
+#[test]
+fn same_installed_target_rejects_a_target_outside_the_derived_install_root() {
+    let canonical = std::path::Path::new(r"C:\install\MoonTerminal.exe");
+    let outside = std::path::Path::new(r"C:\other\MoonTerminal.exe");
+
+    assert!(!same_installed_target(outside, canonical));
 }
