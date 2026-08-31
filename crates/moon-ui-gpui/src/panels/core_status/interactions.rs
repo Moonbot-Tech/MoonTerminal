@@ -3,15 +3,23 @@
 //! the mutation half of the panel, distinct from its render-cache pipeline and its rendering.
 
 use std::collections::HashSet;
+use std::net::IpAddr;
 
 use gpui::*;
-use moon_ui::{MoonInputEvent, MoonInputState};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputEvent, MoonInputState, MoonPalette,
+    MoonWindowExt as _, h_flex,
+};
 
 use super::by_ip_header::ByIpDragAnchor;
 use super::by_ip_widths::{ByIpCol, MAX_COL_W, MIN_COL_W};
 use super::model::ServerKey;
 use super::{ChartWindow, CoreStatusMode, CoreStatusView};
+use crate::design;
+use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
+use moon_core::session::core_update::CoreUpdatePhase;
+use rust_i18n::t;
 
 impl CoreStatusView {
     /// Record where a By IP header divider drag began.
@@ -449,5 +457,156 @@ impl CoreStatusView {
             );
             cx.notify();
         }
+    }
+
+    /// Best-effort preview of what a fleet-wide bulk update is about to enqueue, read from public
+    /// session data rather than the private `SessionManager::eligible` gate it mirrors.
+    ///
+    /// Deliberately fleet-wide, over the whole store rather than this panel's own scope: the
+    /// engine's `cores_behind` and `fleet_newest_version` are already store-wide so that two
+    /// differently scoped panels never disagree, and a bulk action started from either one must
+    /// preview the same fleet it is about to enqueue against.
+    ///
+    /// Args:
+    ///     only_behind: Whether to preview `cores_behind()` or every core the enqueue gate would
+    ///         currently accept.
+    ///     cx: View context used to read the backend snapshot.
+    ///
+    /// Returns:
+    ///     `(core count, distinct lane/server count)` for the confirm question. An exact match to
+    ///     the engine's own gate is not the point -- wording the question honestly before the
+    ///     press is.
+    fn fleet_update_preview(&self, only_behind: bool, cx: &Context<Self>) -> (usize, usize) {
+        let b = self.backend.read(cx);
+        let store = b.session.store();
+        let mut lanes: HashSet<IpAddr> = HashSet::new();
+        let count = if only_behind {
+            let ids = b.session.cores_behind();
+            for id in &ids {
+                if let Some(address) = store
+                    .core(*id)
+                    .and_then(|data| data.endpoint)
+                    .map(|endpoint| endpoint.address)
+                {
+                    lanes.insert(address);
+                }
+            }
+            ids.len()
+        } else {
+            let mut n = 0usize;
+            for (id, data) in store.cores() {
+                if data.status != ConnStatus::Ready || data.server_version.is_none() {
+                    continue;
+                }
+                let Some(endpoint) = data.endpoint else {
+                    continue;
+                };
+                let in_flight = matches!(
+                    b.session.core_update_phase(id),
+                    Some(phase) if !matches!(phase, CoreUpdatePhase::Done(_))
+                );
+                if in_flight {
+                    continue;
+                }
+                n += 1;
+                lanes.insert(endpoint.address);
+            }
+            n
+        };
+        (count, lanes.len())
+    }
+
+    /// Open the ONE confirm a fleet-wide bulk update gets, naming the core and lane counts before
+    /// the press that fills the whole per-IP queue.
+    ///
+    /// Args:
+    ///     only_behind: Forwarded to `update_fleet` on confirmation: only cores behind the fleet's
+    ///         newest build, or every core the enqueue gate accepts.
+    ///     window: Window that owns the unique dialog.
+    ///     cx: View context used to read the preview counts and build the dialog.
+    ///
+    /// Returns:
+    ///     Nothing; only the Yes button reaches `update_fleet`, and it closes the dialog either way.
+    pub(super) fn confirm_fleet_update(
+        &mut self,
+        only_behind: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (core_count, lane_count) = self.fleet_update_preview(only_behind, cx);
+        let backend = self.backend.clone();
+        window.open_unique_moon_dialog(
+            "core-status-fleet-update-confirm",
+            cx,
+            move |dialog, _window, cx| {
+                let p = MoonPalette::active(cx);
+                let confirm_backend = backend.clone();
+                let question = t!(
+                    "core_update.confirm.q",
+                    cores = core_count,
+                    servers = lane_count
+                )
+                .to_string();
+                dialog
+                    .w(px(360.0))
+                    .close_button(true)
+                    .overlay(true)
+                    .overlay_closable(true)
+                    .bg(rgb(p.shell_high))
+                    .border_color(rgb(p.border))
+                    .rounded(design::r_container(cx))
+                    .text_color(rgb(p.text))
+                    .header(
+                        div()
+                            .w_full()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(rgb(p.border))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("core_update.confirm.title").to_string()),
+                    )
+                    .content(move |content, _window, cx| {
+                        let p = MoonPalette::active(cx);
+                        content.child(
+                            div()
+                                .font_family(design::mono())
+                                .text_size(design::t_body(cx))
+                                .text_color(rgb(p.text))
+                                .child(question.clone()),
+                        )
+                    })
+                    .footer(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                MoonButton::new("core-status-fleet-confirm-no")
+                                    .outline()
+                                    .size(MoonButtonSize::Action)
+                                    .label(format!("  {}  ", t!("dialogs.no")))
+                                    .on_click(move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                    })
+                                    .render(),
+                            )
+                            .child(
+                                MoonButton::new("core-status-fleet-confirm-yes")
+                                    .size(MoonButtonSize::Action)
+                                    .variant(MoonButtonVariant::Danger)
+                                    .label(format!("  {}  ", t!("dialogs.yes")))
+                                    .on_click(move |_, window, cx| {
+                                        crate::controls::core_update::update_fleet(
+                                            &confirm_backend,
+                                            only_behind,
+                                            cx,
+                                        );
+                                        window.close_dialog(cx);
+                                    })
+                                    .render(),
+                            ),
+                    )
+            },
+        );
     }
 }

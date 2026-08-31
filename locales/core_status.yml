@@ -37,6 +37,10 @@ core_status.mode.warnings:
   ru: "Тревоги"
   en: "Alerts"
   es: "Alertas"
+core_status.mode.updates:
+  ru: "Обновления"
+  en: "Updates"
+  es: "Actualizaciones"
 core_status.warn_empty:
   ru: "Нет записанных тревог"
   en: "No recorded alerts"

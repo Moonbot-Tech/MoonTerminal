@@ -1,10 +1,11 @@
 //! Shared connection and metric presentation rules for both Core Status modes.
 
 use moon_core::feed::{ConnStatus, Diagnosis};
+use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase, UpdateFailure};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
-use super::model::{ApiKeyState, GroupVersion, TzOffsetGroup};
+use super::model::{ApiKeyState, GroupUpdate, GroupVersion, TzOffsetGroup};
 use super::time_offset::{TzOffsetCell, tz_offset_cell_text};
 use crate::backend::core_warn::LatencySeverity;
 use crate::conn_diag::fault_short;
@@ -492,6 +493,135 @@ pub(super) fn version_behind_group_tooltip(have: u32, newest: u32) -> String {
         newest = moon_core::util::fmt::core_build(newest)
     )
     .to_string()
+}
+
+/// Small `Copy` visual for one update-queue state: a glyph, the load level to color it, and the
+/// locale key naming it for a hover.
+///
+/// The moon-core -> UI localization boundary the module doc describes: `moon-core` hands back a
+/// typed [`CoreUpdatePhase`]/[`GroupUpdate`], never a `String`, and this is the one place that
+/// turns it into something to paint. The glyph lives here rather than in the dictionaries, per
+/// `locales/README.md` -- the same reason `∞` lives in [`api_expiry_text`].
+#[derive(Debug, Clone, Copy)]
+pub(super) struct UpdateBadge {
+    pub(super) glyph: &'static str,
+    pub(super) level: LoadLevel,
+    pub(super) locale_key: &'static str,
+}
+
+/// Locale key for one failed attempt, by the reason it failed.
+fn update_failure_locale_key(failure: UpdateFailure) -> &'static str {
+    match failure {
+        UpdateFailure::NotSent => "core_update.phase.failed.not_sent",
+        UpdateFailure::NeverDropped => "core_update.phase.failed.never_dropped",
+        UpdateFailure::NotReady => "core_update.phase.failed.not_ready",
+        UpdateFailure::Timeout => "core_update.phase.failed.timeout",
+        UpdateFailure::Gone => "core_update.phase.failed.gone",
+        UpdateFailure::Abandoned => "core_update.phase.failed.abandoned",
+    }
+}
+
+/// Badge for one core's own update-queue phase.
+///
+/// Args:
+///     phase: This core's tracked phase, or `None` when it has never been enqueued.
+///
+/// Returns:
+///     `None` for a core the queue has never touched; otherwise the badge for its current phase.
+pub(super) fn update_badge(phase: Option<&CoreUpdatePhase>) -> Option<UpdateBadge> {
+    let phase = phase?;
+    Some(match phase {
+        CoreUpdatePhase::Queued { held: false, .. } => UpdateBadge {
+            glyph: "\u{2026}", // …
+            level: LoadLevel::Normal,
+            locale_key: "core_update.phase.queued",
+        },
+        CoreUpdatePhase::Queued { held: true, .. } => UpdateBadge {
+            glyph: "\u{2016}", // ‖
+            level: LoadLevel::Warning,
+            locale_key: "core_update.phase.held",
+        },
+        CoreUpdatePhase::Sent { .. } => UpdateBadge {
+            glyph: "\u{2191}", // ↑
+            level: LoadLevel::Notice,
+            locale_key: "core_update.phase.sent",
+        },
+        CoreUpdatePhase::Waiting { .. } => UpdateBadge {
+            glyph: "\u{21bb}", // ↻
+            level: LoadLevel::Notice,
+            locale_key: "core_update.phase.waiting",
+        },
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => UpdateBadge {
+            glyph: "\u{2713}", // ✓
+            level: LoadLevel::Normal,
+            locale_key: "core_update.phase.succeeded",
+        },
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => UpdateBadge {
+            glyph: "=",
+            level: LoadLevel::Normal,
+            locale_key: "core_update.phase.unchanged",
+        },
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(failure)) => UpdateBadge {
+            glyph: "!",
+            level: LoadLevel::Critical,
+            locale_key: update_failure_locale_key(*failure),
+        },
+    })
+}
+
+/// Badge for a collapsed server row's rolled-up update state — see [`GroupUpdate`].
+///
+/// Args:
+///     update: The group's rollup over its own cores.
+///
+/// Returns:
+///     `None` while `Idle`, so a server with no update activity draws no badge at all.
+pub(super) fn update_badge_for_group(update: GroupUpdate) -> Option<UpdateBadge> {
+    match update {
+        GroupUpdate::Idle => None,
+        GroupUpdate::Active(_) => Some(UpdateBadge {
+            glyph: "\u{21bb}", // ↻
+            level: LoadLevel::Notice,
+            locale_key: "core_update.summary.updating",
+        }),
+        // No dedicated `summary.held` key exists (see the phase list in `branch-P3.md`); a held
+        // core is a queued one blocked behind a stalled lane, so it borrows `summary.queued`.
+        GroupUpdate::Held(_) => Some(UpdateBadge {
+            glyph: "\u{2016}", // ‖
+            level: LoadLevel::Warning,
+            locale_key: "core_update.summary.queued",
+        }),
+        GroupUpdate::Failed(_) => Some(UpdateBadge {
+            glyph: "!",
+            level: LoadLevel::Critical,
+            locale_key: "core_update.summary.failed",
+        }),
+    }
+}
+
+/// Full localized hover text for one core's own update-queue phase.
+///
+/// Args:
+///     phase: This core's tracked phase.
+///
+/// Returns:
+///     The phrase naming that phase, from the same locale keys [`update_badge`] points at.
+pub(super) fn update_tooltip(phase: &CoreUpdatePhase) -> String {
+    match phase {
+        CoreUpdatePhase::Queued { held: false, .. } => t!("core_update.phase.queued").to_string(),
+        CoreUpdatePhase::Queued { held: true, .. } => t!("core_update.phase.held").to_string(),
+        CoreUpdatePhase::Sent { .. } => t!("core_update.phase.sent").to_string(),
+        CoreUpdatePhase::Waiting { .. } => t!("core_update.phase.waiting").to_string(),
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => {
+            t!("core_update.phase.succeeded").to_string()
+        }
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => {
+            t!("core_update.phase.unchanged").to_string()
+        }
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(failure)) => {
+            t!(update_failure_locale_key(*failure)).to_string()
+        }
+    }
 }
 
 #[cfg(test)]

@@ -25,6 +25,8 @@ mod table;
 #[cfg(test)]
 mod tests;
 mod time_offset;
+mod update_menu;
+mod updates_list;
 mod warnings;
 
 pub(crate) use presentation::connection_status_text;
@@ -34,10 +36,12 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonDataTableState, MoonInputState, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDataTableState, MoonInputState,
+    MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonTreeState, Panel, PanelEvent,
+    PanelState, h_flex, v_flex,
 };
 
 use crate::Backend;
@@ -46,6 +50,7 @@ use crate::design;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup};
 use moon_core::session::CoreId;
+use moon_core::session::core_update::CoreUpdatePhase;
 use rust_i18n::t;
 
 /// Chart X-axis span selectable in the detached window.
@@ -90,10 +95,18 @@ enum CoreStatusMode {
     Flat,
     /// Recorded warning episodes from the database, newest first.
     Warnings,
+    /// The update-history log, merged with attempts still in flight.
+    Updates,
 }
 
 /// How many recent warning episodes the Warnings list shows.
 const WARN_LIST_LIMIT: usize = 500;
+
+/// How many recent update-history rows the Updates list shows, after scope filtering. Matches
+/// `HISTORY_CAP` in `crates/moon-core/src/session/core_update.rs`: the backing history itself
+/// never holds more than this, so the cap only ever bites when scoping filters less than the
+/// whole retained log.
+const UPDATE_LIST_LIMIT: usize = 2_000;
 
 impl Default for CoreStatusMode {
     /// Return the server-by-IP presentation a panel opens on when nothing was ever remembered.
@@ -116,6 +129,7 @@ impl CoreStatusMode {
             Self::ByIp => "by-ip",
             Self::Flat => "flat",
             Self::Warnings => "warnings",
+            Self::Updates => "updates",
         }
     }
 
@@ -134,6 +148,7 @@ impl CoreStatusMode {
         match code.trim() {
             "flat" => Self::Flat,
             "warnings" => Self::Warnings,
+            "updates" => Self::Updates,
             _ => Self::default(),
         }
     }
@@ -165,6 +180,14 @@ pub struct CoreStatusView {
     pub(super) sel_cores: HashSet<CoreId>,
     /// Unix ms of the last repaint; telemetry repaints at most once per second.
     last_repaint_ms: i64,
+    /// `core_update_rev()` as of the last rebuild, bypassing the 1 s repaint gate on change so a
+    /// phase transition never sits stale for up to a second — see the backend observer below.
+    last_update_rev: u64,
+    /// `core_update_history_rev()` as of the last rebuild, folded into the same bypass as
+    /// `last_update_rev`: a record appended by a completing attempt moves the history but need
+    /// not move any phase, so gating on the phase revision alone would leave the Updates list
+    /// stale for up to a second.
+    last_history_rev: u64,
     /// Whether any server currently has a warning; drives the dock-tab badge.
     has_warn: bool,
     /// Whether this instance is a detached window (vs a dock tab). Only a window renders the chart.
@@ -208,6 +231,9 @@ pub struct CoreStatusView {
     table_state: Entity<MoonDataTableState>,
     /// Column state for the Warnings list table (separate widths from the flat telemetry table).
     warn_table_state: Entity<MoonDataTableState>,
+    /// Column state for the Updates list table (separate widths from every other table/tree here,
+    /// the same way `warn_table_state` never folds into the Flat table's own state).
+    updates_table_state: Entity<MoonDataTableState>,
     /// Whether the alert-axis toggle popover (the gear beside the mode control) is open.
     warn_cfg_open: bool,
     /// Last measured width of the By IP list, in pixels; `0` until the first frame measures it.
@@ -279,12 +305,22 @@ impl CoreStatusView {
         // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but the
         // rebuild is gated to once per second. Detection AND chart-history recording run in the
         // backend engine (backend-always), so the panel only rebuilds its display from that state.
-        cx.observe(&backend, |this, _backend, cx| {
+        cx.observe(&backend, |this, backend, cx| {
             let now = moon_chart::paint::now_unix_ms() as i64;
-            if now - this.last_repaint_ms < 1000 {
+            // OR alongside the 1 s time gate, never a replacement for it: a signature-driven
+            // bypass here is what keeps a phase transition from sitting stale for up to a second,
+            // while the time gate still governs every OTHER backend notify -- up to 4 Hz over a
+            // 200-core fleet, which is why this must not become the panel's only gate.
+            let update_rev = backend.read(cx).session.core_update_rev();
+            let history_rev = backend.read(cx).session.core_update_history_rev();
+            let update_changed =
+                update_rev != this.last_update_rev || history_rev != this.last_history_rev;
+            if !update_changed && now - this.last_repaint_ms < 1000 {
                 return;
             }
             this.last_repaint_ms = now;
+            this.last_update_rev = update_rev;
+            this.last_history_rev = history_rev;
             this.rebuild_cache(cx);
             cx.notify();
         })
@@ -379,6 +415,7 @@ impl CoreStatusView {
         })
         .detach();
         let warn_table_state = cx.new(|_| MoonDataTableState::new());
+        let updates_table_state = cx.new(|_| MoonDataTableState::new());
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         let focus = cx.focus_handle();
 
@@ -387,6 +424,8 @@ impl CoreStatusView {
             group,
             sel_cores: HashSet::new(),
             last_repaint_ms: 0,
+            last_update_rev: 0,
+            last_history_rev: 0,
             has_warn: false,
             detached,
             chart_window: ChartWindow::default(),
@@ -404,6 +443,7 @@ impl CoreStatusView {
             tree_state,
             table_state,
             warn_table_state,
+            updates_table_state,
             warn_cfg_open: false,
             by_ip_width: 0.0,
             widths_id,
@@ -553,6 +593,8 @@ impl Panel for CoreStatusView {
             // `warn_table_state`), so it must not be folded in with Flat: doing that resets the
             // hidden grid and leaves the visible one untouched.
             CoreStatusMode::Warnings => &self.warn_table_state,
+            // Same reasoning as Warnings: Updates is its own table with its own widths.
+            CoreStatusMode::Updates => &self.updates_table_state,
         };
         Some(vec![crate::persistence::table_persist::reset_button(
             "core-status-reset-widths",
@@ -658,6 +700,87 @@ impl Render for CoreStatusView {
                     Rc::new(core_names),
                     &self.warn_table_state,
                     crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
+                    cx,
+                )
+                .into_any_element()
+            }
+            CoreStatusMode::Updates => {
+                let b = self.backend.read(cx);
+                let scope = self.effective_scope(b);
+                let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
+                let now_ms = moon_core::util::now_unix_ms_i64();
+                // Live rows come straight off `rows`: `CoreStatusRow.update` is already this
+                // core's current phase, scoped by `query_cores` the same way every other mode
+                // here is scoped. `Done`/`None` are excluded -- a finished attempt is already a
+                // history record, and a core the queue has never touched has nothing to show.
+                let live_rows: Vec<CoreStatusRow> = rows
+                    .iter()
+                    .filter(|row| {
+                        matches!(
+                            row.update,
+                            Some(CoreUpdatePhase::Queued { .. })
+                                | Some(CoreUpdatePhase::Sent { .. })
+                                | Some(CoreUpdatePhase::Waiting { .. })
+                        )
+                    })
+                    .cloned()
+                    .collect();
+                // Admit a record when EITHER: its core is still configured and in `core_ids` --
+                // this keeps the sibling leak closed, so a still-configured core the user did not
+                // select never shows through on a shared IP -- OR the core has been removed from
+                // configuration entirely (it can no longer appear in `core_ids` at all, see
+                // `EffectiveCoreScope::ids`) and its lane ran on an address this panel's scope
+                // still covers. Without the second half, `reconcile_vanished_updates`'s
+                // `Failed(Gone)` row -- and every other history row for that core -- becomes
+                // unreachable the instant the core leaves the config, even though
+                // `CoreUpdateRecord::core_name` was snapshotted at enqueue precisely so the row
+                // could keep naming a core that no longer exists.
+                let configured_core_ids: HashSet<CoreId> =
+                    b.config.servers.iter().map(|server| server.id).collect();
+                // The SCOPE's server addresses, not the live rows' (`update_ips`, below, is
+                // downstream of this filter and only ever covers cores already admitted). Reuses
+                // the same `groups` aggregate the Warnings branch above already derives its own
+                // server-address set from.
+                let scope_server_addrs: HashSet<IpAddr> =
+                    groups.iter().filter_map(|group| group.address).collect();
+                let history: Vec<moon_core::session::core_update::CoreUpdateRecord> = b
+                    .session
+                    .core_update_history()
+                    .iter()
+                    .rev()
+                    .filter(|record| {
+                        core_ids.contains(&record.core)
+                            || (!configured_core_ids.contains(&record.core)
+                                && scope_server_addrs.contains(&record.lane_addr))
+                    })
+                    .take(UPDATE_LIST_LIMIT)
+                    .cloned()
+                    .collect();
+                let update_ips: HashSet<IpAddr> = live_rows
+                    .iter()
+                    .filter_map(|row| row.endpoint.map(|ep| ep.address))
+                    .chain(history.iter().map(|record| record.lane_addr))
+                    .collect();
+                let server_names: HashMap<IpAddr, String> = update_ips
+                    .into_iter()
+                    .map(|ip| {
+                        let name = groups
+                            .iter()
+                            .find(|group| group.address == Some(ip))
+                            .map(|group| group.display_name.clone())
+                            .or_else(|| b.layout.core_server_names.get(&ip.to_string()).cloned())
+                            .unwrap_or_else(|| "—".to_string());
+                        (ip, name)
+                    })
+                    .collect();
+                updates_list::updates_table(
+                    "core-status-updates",
+                    Rc::new(live_rows),
+                    Rc::new(history),
+                    Rc::new(server_names),
+                    &self.updates_table_state,
+                    crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
+                    now_ms,
                     cx,
                 )
                 .into_any_element()
@@ -840,6 +963,9 @@ impl CoreStatusView {
                 MoonSegmentItem::new("", t!("core_status.mode.warnings").to_string())
                     .fit_width(cx, 54.0, 88.0)
                     .selected(self.mode == CoreStatusMode::Warnings),
+                MoonSegmentItem::new("", t!("core_status.mode.updates").to_string())
+                    .fit_width(cx, 54.0, 88.0)
+                    .selected(self.mode == CoreStatusMode::Updates),
             ])
             .on_click(move |index, _, _, app| {
                 let Some(view) = weak_view.upgrade() else {
@@ -848,7 +974,8 @@ impl CoreStatusView {
                 let mode = match index {
                     0 => CoreStatusMode::ByIp,
                     1 => CoreStatusMode::Flat,
-                    _ => CoreStatusMode::Warnings,
+                    2 => CoreStatusMode::Warnings,
+                    _ => CoreStatusMode::Updates,
                 };
                 view.update(app, |this, cx| this.set_mode(mode, cx));
             });
@@ -888,6 +1015,26 @@ impl CoreStatusView {
             .iter()
             .filter(|group| group.ready_count == group.cores.len() && !group.cores.is_empty())
             .count();
+        // Fleets run 3 to 200 cores, so the campaign totals must be readable WITHOUT expanding a
+        // single server -- drawn only while a campaign is actually on, never a permanent "0
+        // updating" fixture. `done` and `lanes_stalled` are deliberately excluded: this is the
+        // fleet's ATTENTION state, and a finished or held-but-not-failed row needs none.
+        let summary = self.backend.read(cx).session.core_update_summary();
+        let update_parts: Vec<String> = [
+            (summary.updating, "core_update.summary.updating"),
+            (summary.queued, "core_update.summary.queued"),
+            (summary.failed, "core_update.summary.failed"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, key)| format!("{n} {}", t!(key)))
+        .collect();
+        // Fleet-relative, not release-relative -- see `session::core_update`'s own doc comment.
+        // Empty here means every core already agrees with the fleet's newest build, never that no
+        // release exists, so the button explains that in its tooltip instead of just going gray.
+        let behind_empty = self.backend.read(cx).session.cores_behind().is_empty();
+        let update_all_view = cx.entity();
+        let update_behind_view = update_all_view.clone();
         h_flex()
             .w_full()
             .flex_none()
@@ -903,5 +1050,59 @@ impl CoreStatusView {
                 cores = total_cores,
                 online = online
             ))
+            .child(div().flex_1())
+            // A campaign's summary plus both bulk buttons, as ONE group that may shrink and wrap
+            // onto its own row rather than clip: up to three localized counters joined with the
+            // fleet summary and two localized buttons on a single non-shrinking row overruns a
+            // narrow dock. `min_w_0` is what makes the wrap reachable -- only a group allowed to
+            // shrink below its content wraps rather than overflowing -- following the same idiom
+            // `panels/report/controls.rs::selection_actions` already uses for its own count-plus-
+            // commands group.
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .flex_wrap()
+                    .justify_end()
+                    .items_center()
+                    .gap_2()
+                    .when(!update_parts.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_color(rgb(p.amber))
+                                .child(update_parts.join(" - ")),
+                        )
+                    })
+                    .child(
+                        MoonButton::new("core-status-update-all")
+                            .label(t!("core_update.fleet.all").to_string())
+                            .size(MoonButtonSize::Micro)
+                            .variant(MoonButtonVariant::Panel)
+                            .on_click(move |_, window, cx| {
+                                update_all_view.update(cx, |this, cx| {
+                                    this.confirm_fleet_update(false, window, cx);
+                                });
+                            })
+                            .render(),
+                    )
+                    .child({
+                        let behind_button = MoonButton::new("core-status-update-behind")
+                            .label(t!("core_update.fleet.behind").to_string())
+                            .size(MoonButtonSize::Micro)
+                            .variant(MoonButtonVariant::Panel)
+                            .disabled(behind_empty)
+                            .on_click(move |_, window, cx| {
+                                update_behind_view.update(cx, |this, cx| {
+                                    this.confirm_fleet_update(true, window, cx);
+                                });
+                            });
+                        if behind_empty {
+                            behind_button.tooltip(t!("core_update.fleet.behind_none").to_string())
+                        } else {
+                            behind_button
+                        }
+                        .render()
+                    }),
+            )
     }
 }

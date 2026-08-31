@@ -21,6 +21,7 @@ pub mod badges;
 pub mod chart_defaults;
 pub mod chart_labels;
 pub mod core_groups;
+pub mod core_updates;
 pub mod crypto;
 pub mod detect_view;
 pub mod groups;
@@ -66,6 +67,7 @@ pub use core_groups::{
     CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX, CORE_GROUPS_MAX, CoreGroup, move_group,
     sanitize_core_groups, unique_group_name,
 };
+pub use core_updates::CoreUpdateHistory;
 pub use detect_view::{
     DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
     DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, DetectViewFile, detect_slot_count,

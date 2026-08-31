@@ -435,6 +435,11 @@ pub fn tab_badges_path() -> PathBuf {
     cfg_dir().join("tab_badges.json")
 }
 
+/// Retained per-core update-queue history, in a small portable JSON file.
+pub fn core_updates_path() -> PathBuf {
+    cfg_dir().join("core_updates.json")
+}
+
 /// Arbitrage column presentation (which venues, in what order, name and colour) in a separate
 /// portable file: it is a roster a trader sets once and carries between machines, not a per-chart
 /// setting like the caption modules that print it.

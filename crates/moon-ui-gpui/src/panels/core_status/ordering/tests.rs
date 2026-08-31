@@ -17,8 +17,8 @@ use super::{
 };
 use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{
-    ApiKeyState, CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, ServerStatusGroup,
-    TzOffsetGroup,
+    ApiKeyState, CoreStatusRow, GroupUpdate, GroupVersion, ServerConnectivity, ServerKey,
+    ServerStatusGroup, TzOffsetGroup,
 };
 
 /// Build one core row carrying only an API-key state: `Some(days)` is a dated key, `None` is a core
@@ -44,6 +44,7 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
         version_behind: None,
+        update: None,
     }
 }
 
@@ -86,6 +87,7 @@ fn group(
             time_offset: CoreTimeOffsetStatus::default(),
             server_version: None,
             version_behind: None,
+            update: None,
         })
         .collect::<Vec<_>>();
     let ready_count = cores
@@ -105,6 +107,7 @@ fn group(
         api_key: ApiKeyState::Unknown,
         version: GroupVersion::Absent,
         version_behind: None,
+        update: GroupUpdate::Idle,
         tz_offset: TzOffsetGroup::Absent,
         address: None,
         cores,

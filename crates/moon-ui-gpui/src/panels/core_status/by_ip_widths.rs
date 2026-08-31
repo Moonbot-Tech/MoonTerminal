@@ -283,7 +283,7 @@ impl ByIpWidths {
         exch: 64.0,
         api: 84.0,
         cores: 40.0,
-        version: 72.0,
+        version: 84.0,
         startup: 84.0,
         tz_off: 84.0,
         icon: 12.0,

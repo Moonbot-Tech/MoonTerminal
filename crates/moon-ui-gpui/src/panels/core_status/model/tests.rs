@@ -40,6 +40,7 @@ fn row(
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
         version_behind: None,
+        update: None,
     }
 }
 
@@ -512,6 +513,7 @@ fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow 
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
         version_behind: None,
+        update: None,
     }
 }
 

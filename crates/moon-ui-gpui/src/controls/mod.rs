@@ -16,6 +16,9 @@
 //!   selection state;
 //! - [`core_run`] is the shared run control: whether a core (or a whole group of them) is up and
 //!   trading, plus the restart and start/stop buttons that change it;
+//! - [`core_update`] is the shared update control: enqueuing a requested update for a core or a
+//!   server, retrying a failed one, and updating the fleet -- a sibling of [`core_run`], never a
+//!   fork of it;
 //! - [`core_groups`] holds the pure decisions behind its saved core groups;
 //! - [`core_group_dialogs`] owns the two modals that create and manage those groups;
 //! - [`core_host`] is the adapter each of its six consumers implements, plus the extras assembly
@@ -37,6 +40,7 @@ mod core_groups;
 mod core_host;
 mod core_quick;
 pub(crate) mod core_run;
+pub(crate) mod core_update;
 pub(crate) mod date_range;
 mod fmt;
 mod label_fields;

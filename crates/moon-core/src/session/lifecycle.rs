@@ -76,6 +76,7 @@ impl SessionManager {
             wanted: HashMap::new(),
             pending_drop: HashMap::new(),
             last_cmd: HashMap::new(),
+            core_updates: crate::session::core_update::CoreUpdateQueue::default(),
         };
         for s in config
             .servers

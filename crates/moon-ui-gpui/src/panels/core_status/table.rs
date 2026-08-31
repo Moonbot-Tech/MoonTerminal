@@ -10,14 +10,18 @@ use super::model::ServerKey;
 use super::ordering::{FlatLine, FlatSection};
 use super::presentation::{
     api_expiry_level, api_expiry_text, api_quota_level, api_quota_text, connection_presentation,
-    level_color, memory_u16, percent, ping, version_behind_tooltip, version_color, version_text,
+    level_color, memory_u16, percent, ping, update_badge, version_behind_tooltip, version_color,
+    version_text,
 };
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
 use super::time_offset::{tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip};
+use super::update_menu;
 use super::*;
 use crate::conn_diag::{fault_facts, fault_tooltip};
+use crate::controls::core_update::{self, OfferCounts};
 use gpui::prelude::FluentBuilder;
 use moon_core::feed::{Diagnosis, diagnose};
+use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
 /// Build the fixed set of sortable server, core, connection, and telemetry columns.
@@ -125,10 +129,19 @@ pub(super) fn core_status_table(
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
     let view = cx.entity();
+    // Read once and cloned into the row-building closure below: the update button it hosts
+    // commands the backend directly, never through the view.
+    let backend = view.read(cx).backend.clone();
     // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
     // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
     // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
     let section_columns = columns();
+    // Cloned BEFORE `lines`/`rows`/`view` are moved into the row-builder and sort closures below:
+    // `MoonDataTable` addresses every line it draws by INDEX, headings included, so the right-click
+    // handler resolves that index back to a core itself instead of assuming it already is one.
+    let menu_lines = lines.clone();
+    let menu_rows = rows.clone();
+    let menu_view = view.clone();
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
@@ -143,12 +156,39 @@ pub(super) fn core_status_table(
                 // so which column sits leftmost stopped mattering.
                 section_row(section, logos_ready, sorted, section_columns.len(), p, app)
             }
-            FlatLine::Core(row) => core_status_row(&table_rows[*row], &server_names, p),
+            FlatLine::Core(row) => {
+                core_status_row(&table_rows[*row], &server_names, &backend, p, app)
+            }
         })
         .columns(columns())
         .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
+        .on_right_click_row(move |ix, window, app| {
+            let core = match menu_lines.get(ix) {
+                Some(FlatLine::Core(row)) => menu_rows.get(*row),
+                _ => None,
+            };
+            let Some(core) = core else {
+                return;
+            };
+            let backend = menu_view.read(app).backend.clone();
+            let updatable = update_menu::core_updatable(
+                &core.status,
+                core.server_version,
+                core.endpoint.is_some(),
+                core.update.as_ref(),
+            );
+            update_menu::open_update_row_menu(
+                &backend,
+                core.id,
+                core.name.clone(),
+                updatable,
+                window.mouse_position(),
+                window,
+                app,
+            );
+        })
         .on_sort(move |key, ascending, _window, app| {
             let key = key.to_string();
             view.update(app, |this, cx| this.set_flat_sort(&key, ascending, cx));
@@ -161,14 +201,18 @@ pub(super) fn core_status_table(
 /// Args:
 ///     r: Cached core snapshot.
 ///     server_names: Server display name per server key.
+///     backend: Shared terminal state the hover-revealed update button commands.
 ///     p: Active Moon palette, for the API and MoonBot cells' colour.
+///     app: Application context used to scale the update button's geometry.
 ///
 /// Returns:
 ///     One row in column order, with server, core, connection, build, and telemetry cells.
 fn core_status_row(
     r: &CoreStatusRow,
     server_names: &HashMap<ServerKey, String>,
+    backend: &Entity<Backend>,
     p: MoonPalette,
+    app: &App,
 ) -> MoonDataRow {
     let sys = &r.sys;
     let server = server_names
@@ -182,7 +226,7 @@ fn core_status_row(
         MoonDataCell::text(server),
         MoonDataCell::text(r.name.clone()),
         MoonDataCell::element(status_cell(r, diag.as_ref())),
-        MoonDataCell::element(version_hover_cell(r, p)),
+        MoonDataCell::element(version_hover_cell(r, backend, p, app)),
         MoonDataCell::text(percent(sys.process_cpu_percent)),
         MoonDataCell::text(percent(sys.system_cpu_percent)),
         MoonDataCell::text(memory_u16(sys.used_memory_mb)),
@@ -361,19 +405,73 @@ fn status_cell(r: &CoreStatusRow, diag: Option<&Diagnosis>) -> Stateful<Div> {
 ///
 /// Args:
 ///     r: The row being rendered.
+///     backend: Shared terminal state the hover-revealed update button commands.
 ///     p: Active Moon palette.
+///     app: Application context used to scale the update button's geometry.
 ///
 /// Returns:
 ///     The cell element.
-fn version_hover_cell(r: &CoreStatusRow, p: MoonPalette) -> Stateful<Div> {
+fn version_hover_cell(
+    r: &CoreStatusRow,
+    backend: &Entity<Backend>,
+    p: MoonPalette,
+    app: &App,
+) -> Stateful<Div> {
+    let badge = update_badge(r.update.as_ref());
+    let hover_group = SharedString::from(format!("core-update-hover:{}", r.id));
+    let mut update_counts = OfferCounts::default();
+    update_counts.add(core_update::offer_state(
+        &r.status,
+        r.server_version,
+        r.endpoint.is_some(),
+        r.update.as_ref(),
+    ));
+    let failed_retry = matches!(
+        r.update.as_ref(),
+        Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(_)))
+    )
+    .then_some(r.id);
+    let update_btn = core_update::update_button(
+        format!("cs-update-{}", r.id),
+        hover_group.clone(),
+        Rc::from([r.id]),
+        update_counts,
+        failed_retry,
+        backend,
+        p,
+        app,
+    );
     div()
         .id(SharedString::from(format!("cs-version-{}", r.id)))
+        .group(hover_group)
+        .flex()
+        .items_center()
+        .gap_1()
         .text_color(rgb(version_color(
             r.version_behind.is_some(),
             r.server_version.is_some(),
             p,
         )))
         .child(version_text(r.server_version))
+        .when_some(badge, |c, badge| {
+            // The badge is its OWN stateful child, carrying its own tooltip, exactly as
+            // `server_view.rs::version_slot` already does for its badge -- `tooltip` panics in
+            // debug builds if called twice on one element, which is why the phase hover cannot
+            // also live on the outer cell below. Without this the Flat table's badge had NO
+            // tooltip of its own whenever `version_behind.is_some()` claimed the cell's one slot
+            // -- exactly the cores a bulk "Update the cores behind" campaign is watching.
+            c.child(
+                div()
+                    .id(SharedString::from(format!("cs-version-{}-badge", r.id)))
+                    .flex_none()
+                    .text_color(rgb(level_color(badge.level, p)))
+                    .child(badge.glyph)
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!(badge.locale_key).to_string(),
+                    )),
+            )
+        })
+        .when_some(update_btn, |c, btn| c.child(btn))
         .when_some(r.version_behind, |c, newest| {
             c.tooltip(crate::panels::common::text_tooltip(version_behind_tooltip(
                 r.server_version,

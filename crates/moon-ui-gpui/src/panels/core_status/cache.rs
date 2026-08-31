@@ -101,6 +101,7 @@ impl CoreStatusView {
                     .zip(fleet_newest)
                     .filter(|(mine, newest)| mine < newest)
                     .map(|(_, newest)| newest),
+                update: b.session.core_update_phase(id).cloned(),
             });
         }
         out
@@ -120,12 +121,7 @@ impl CoreStatusView {
             // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset
             // of the fleet must not compute a lower maximum and silently flag nothing, and two Core
             // Status panels with different scopes must not disagree about which cores are stale.
-            let fleet_newest: Option<u32> = b
-                .session
-                .store()
-                .cores()
-                .filter_map(|(_, core)| core.server_version)
-                .max();
+            let fleet_newest: Option<u32> = b.session.fleet_newest_version();
             let api_axis_on = b.warn_axes().api;
             let rows = self.collect(b, fleet_newest, api_axis_on);
             let names = b.layout.core_server_names.clone();

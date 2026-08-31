@@ -30,6 +30,7 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
         version_behind: None,
+        update: None,
     }
 }
 

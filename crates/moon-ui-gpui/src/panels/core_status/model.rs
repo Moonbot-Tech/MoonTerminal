@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use moon_core::feed::{ConnFault, ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
+use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 use moon_core::session::{ApiKeyExpiry, CoreId, CoreStartupStatus, CoreSysStatus};
 
 use super::startup::{StartupCell, startup_cell};
@@ -75,6 +76,8 @@ pub(super) struct CoreStatusRow {
     /// current, or when it reported nothing (an absence is never an age claim -- see
     /// `server_version`).
     pub(super) version_behind: Option<u32>,
+    /// This core's current update-queue phase, or `None` if it has never been enqueued.
+    pub(super) update: Option<CoreUpdatePhase>,
 }
 
 /// What is known about one core's exchange API key, as of a given moment.
@@ -274,6 +277,62 @@ pub(super) fn group_tz_offset(cores: &[CoreStatusRow]) -> TzOffsetGroup {
     }
 }
 
+/// What one server's cores are doing in the update queue, rolled up for the collapsed row.
+///
+/// Unlike [`GroupVersion`] this is not an agreement rollup -- there is no shared fact to assert
+/// on a core's behalf, only a count of cores this row CAN see in each bucket ([`group_update`]
+/// never counts a core it has no phase for), so a silent sibling simply contributes to no bucket
+/// rather than needing its own `Mixed`-style state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GroupUpdate {
+    /// No core on the server is tracked in the queue at all.
+    Idle,
+    /// At least one core is being sent to or awaited from, or is queued and not blocked. Carries
+    /// the count.
+    Active(usize),
+    /// At least one core is queued behind a STALLED lane and no core is `Failed`. Carries the
+    /// count.
+    Held(usize),
+    /// At least one core's last attempt ended `Failed`. Carries the count; takes priority over
+    /// `Held` and `Active` because a failure is the state that most needs the operator's attention.
+    Failed(usize),
+}
+
+/// Roll one server's per-core update phases up into the single state its collapsed row shows.
+///
+/// Args:
+///     cores: The group's core rows, already collected.
+///
+/// Returns:
+///     `Failed` if any core's last attempt failed, else `Held` if any is blocked behind a stalled
+///     lane, else `Active` if any is queued or in flight, else `Idle`.
+pub(super) fn group_update(cores: &[CoreStatusRow]) -> GroupUpdate {
+    let mut failed = 0usize;
+    let mut held = 0usize;
+    let mut active = 0usize;
+    for core in cores {
+        match &core.update {
+            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(_))) => failed += 1,
+            Some(CoreUpdatePhase::Queued { held: true, .. }) => held += 1,
+            Some(
+                CoreUpdatePhase::Queued { held: false, .. }
+                | CoreUpdatePhase::Sent { .. }
+                | CoreUpdatePhase::Waiting { .. },
+            ) => active += 1,
+            Some(CoreUpdatePhase::Done(_)) | None => {}
+        }
+    }
+    if failed > 0 {
+        GroupUpdate::Failed(failed)
+    } else if held > 0 {
+        GroupUpdate::Held(held)
+    } else if active > 0 {
+        GroupUpdate::Active(active)
+    } else {
+        GroupUpdate::Idle
+    }
+}
+
 /// Stable grouping identity for a known host or one isolated unknown core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ServerKey {
@@ -368,6 +427,9 @@ pub(super) struct ServerStatusGroup {
     /// [`Self::version`] -- re-stating the `Uniform`-only rule in a second place, where it could
     /// drift from this one.
     pub(super) version_behind: Option<(u32, u32)>,
+    /// What this server's cores are doing in the update queue — see [`group_update`]. Counts only
+    /// cores this row can actually see a phase for.
+    pub(super) update: GroupUpdate,
     /// What this server's cores agree on about their measured clock offset — see
     /// [`group_tz_offset`]. A collapsed group shows this, so it must never assert a clock on
     /// behalf of a core nobody measured.
@@ -445,6 +507,7 @@ pub(super) fn aggregate_servers(
                 api_key: ApiKeyState::Unknown,
                 version: GroupVersion::Absent,
                 version_behind: None,
+                update: GroupUpdate::Idle,
                 tz_offset: TzOffsetGroup::Absent,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
@@ -576,6 +639,7 @@ fn finish_group(group: &mut ServerStatusGroup, fleet_newest: Option<u32>) {
             .map(|newest| (have, newest)),
         GroupVersion::Mixed | GroupVersion::Absent => None,
     };
+    group.update = group_update(&group.cores);
     group.tz_offset = group_tz_offset(&group.cores);
 
     let mut has_process_memory = false;

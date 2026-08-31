@@ -928,6 +928,16 @@ pub enum ResetProfitKind {
     All,
 }
 
+/// Which build to ask a core's own updater to install, mirroring moonproto's
+/// `request_release_update`/`request_version_update` split on `MoonSettings`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum UpdateTarget {
+    /// The latest ordinary release build, through `request_release_update`.
+    Release,
+    /// A named beta or test build, through `request_version_update`.
+    Named(String),
+}
+
 /// Connection status for a core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnStatus {

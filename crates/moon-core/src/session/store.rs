@@ -213,6 +213,17 @@ pub struct CoreData {
     /// rebuilds on the backend observer rather than polling one, and a counter nothing reads is
     /// dead weight.
     pub server_version: Option<u32>,
+    /// Monotonic count of `Ready -> not-Ready` departures this core has made, wrapping on
+    /// overflow.
+    ///
+    /// Advances on the EDGE only, in the `FeedMsg::Status` arm below, never once per message: a
+    /// reconnect backoff emits many `Connecting` messages, and an episode is one departure, not
+    /// one message. `server_version` alone cannot distinguish "came back on the same build" from
+    /// "never left" — both read `Some(v)` before and after — so a caller that must prove a core
+    /// actually left and returned (a pending update, for instance) compares this counter across
+    /// the wait instead. Deliberately NOT reset by [`Self::begin_connection_attempt`]: a monotonic
+    /// episode counter that resets on a retry is not one.
+    pub conn_epoch: u64,
     /// Unshown Engine action results for toasts. The active window's shell drains them through
     /// [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
@@ -383,6 +394,7 @@ impl CoreData {
             api_expiry: None,
             api_quota: None,
             server_version: None,
+            conn_epoch: 0,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
             log: VecDeque::new(),
@@ -647,6 +659,16 @@ impl CoreData {
                 // own retained snapshot when the core returns — see `feed::live`, which is what
                 // usually restores the confirmation within the same second.
                 if !matches!(s, ConnStatus::Ready) {
+                    // Advance only on the Ready -> not-Ready EDGE, reading `self.status` here
+                    // before it is overwritten below by the new value `s`. A reconnect backoff
+                    // emits many `Connecting` messages while already down, and an episode is one
+                    // DEPARTURE, not one message — a counter that advanced per message would let a
+                    // later consumer's completion predicate fire on the first backoff tick and
+                    // declare an update complete that never started. This is the
+                    // highest-blast-radius line in the whole feature.
+                    if matches!(self.status, ConnStatus::Ready) {
+                        self.conn_epoch = self.conn_epoch.wrapping_add(1);
+                    }
                     self.server_version = None;
                     if self.runtime_state_confirmed {
                         self.runtime_state_confirmed = false;

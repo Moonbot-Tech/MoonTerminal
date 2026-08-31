@@ -9,7 +9,7 @@ use crate::config::{MoveKind, MoveSide};
 use crate::data::OrderBookModel;
 use crate::feed::{
     ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, FieldMask, NewStrategySpec,
-    OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, WalletKind,
+    OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, UpdateTarget, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
 use crate::venue::CoreVenue;
@@ -730,6 +730,16 @@ impl SessionManager {
     /// Start or restart the core runtime from the core-settings popup.
     pub fn restart_now(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::RestartNow, "restart now")
+    }
+
+    /// Ask a core to install a release or a named beta/test build.
+    ///
+    /// This is an INTENT with no acknowledgement: the command channel accepting it proves only
+    /// that it was sent, never that the update happened. The caller observes completion through
+    /// the core's reported version and its connection-episode counter, never through this
+    /// function's `Ok`.
+    pub fn update_core_version(&self, core: CoreId, target: UpdateTarget) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::UpdateVersion { target }, "update version")
     }
 
     /// Turn one core's AutoDetect on or off — Moonbot's passive mode, inverted.
