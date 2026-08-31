@@ -110,6 +110,33 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
             dirty = true;
         }
     }
+    // A core's OWN generation is repaired on exactly the same terms as a group's: it feeds the same
+    // order path, so a hand-edited or truncated file must not be able to size an order from a
+    // non-finite preset just because the values live under a server row instead of a group row.
+    let mut meta_servers = meta.servers.clone();
+    for server in &mut meta_servers {
+        // A core whose switch is on but which carries no generation predates the seeding rule in
+        // `set_core_own_trade` — every file written while the flag meant "read the values back out
+        // of the core" is in that state. Seed it from its group HERE, once, so no later reader has
+        // to decide what an enabled-but-empty core shows: the display and write routes would
+        // otherwise disagree about it, and the sync loop would push a generation the toolbar never
+        // displayed.
+        if server.own_trade_config && server.trade.is_none() {
+            server.trade = Some(
+                groups
+                    .iter()
+                    .find(|g| g.name == server.group)
+                    .map(|g| g.trade.clone())
+                    .unwrap_or_default(),
+            );
+            dirty = true;
+        }
+        if let Some(trade) = server.trade.as_mut() {
+            if trade.repair() {
+                dirty = true;
+            }
+        }
+    }
     // A repaired list is written back so a hand-edited file converges once instead of being
     // re-repaired on every launch. Absent members are NOT a repair — see `core_groups`.
     let mut core_groups = meta.core_groups.clone();
@@ -121,9 +148,9 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         .map(|e| {
             // Bind metadata by uid, or by name for an older file.
             let m = if e.uid != 0 {
-                meta.servers.iter().find(|m| m.uid == e.uid)
+                meta_servers.iter().find(|m| m.uid == e.uid)
             } else {
-                meta.servers.iter().find(|m| m.name == e.name)
+                meta_servers.iter().find(|m| m.name == e.name)
             };
             // Use the stable uid from the file or issue a fresh one and mark the config dirty.
             let uid = if e.uid != 0 {
@@ -156,7 +183,9 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 synthetic: false,
                 chart_bundle: m.map(|m| m.chart_bundle.clone()).unwrap_or_default(),
                 default_alert_strategy: m.map(|m| m.default_alert_strategy).unwrap_or(0),
-                use_core_manual_config: m.is_some_and(|m| m.use_core_manual_config),
+                own_trade_config: m.is_some_and(|m| m.own_trade_config),
+                strat_slots: m.and_then(|m| m.strat_slots.clone()),
+                trade: m.and_then(|m| m.trade.clone()),
                 transport,
             }
         })
@@ -267,7 +296,9 @@ pub fn split(
                 color: s.color,
                 chart_bundle: s.chart_bundle.clone(),
                 default_alert_strategy: s.default_alert_strategy,
-                use_core_manual_config: s.use_core_manual_config,
+                own_trade_config: s.own_trade_config,
+                strat_slots: s.strat_slots.clone(),
+                trade: s.trade.clone(),
                 transport: s.transport,
             })
             .collect(),

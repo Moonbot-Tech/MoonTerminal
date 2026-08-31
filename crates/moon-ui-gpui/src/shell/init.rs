@@ -13,6 +13,7 @@ use moon_ui::{
     MoonSliderEvent, MoonSliderState, PanelView,
 };
 
+use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
@@ -400,6 +401,49 @@ impl Shell {
         })
         .detach();
 
+        // One caption field per quick-select slot, all living in the settings popup. Blur or Enter
+        // writes that slot's caption for the group's active trade core and saves; an empty value
+        // clears the caption, which puts the strategy's own name back on the button.
+        let strat_label_inputs: Vec<Entity<MoonInputState>> = (0..MANUAL_STRAT_SLOTS)
+            .map(|_| cx.new(|cx| MoonInputState::new(window, cx)))
+            .collect();
+        for (slot, input) in strat_label_inputs.iter().enumerate() {
+            cx.subscribe(input, move |this, inp, ev: &MoonInputEvent, cx| {
+                if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                    return;
+                }
+                // The core the popup was OPENED for, never whichever one is active now.
+                let Some(core) = this.strat_slots_core else {
+                    return;
+                };
+                let label = inp.read(cx).value().trim().to_string();
+                // Only an actual CHANGE is written. Every blur fires this — clicking from one field
+                // to the next, or closing the popup — and an unconditional write would fork this
+                // core's slots away from the core's own arrangement for merely having looked at
+                // them.
+                let unchanged = this
+                    .backend
+                    .read(cx)
+                    .strat_slots(core)
+                    .and_then(|slots| slots.get(slot).map(|s| s.label == label))
+                    .unwrap_or(false);
+                if unchanged {
+                    return;
+                }
+                this.backend.update(cx, |b, bcx| {
+                    b.set_strat_slot_label(core, slot, label);
+                    if let Err(error) = b.config.save() {
+                        log::warn!("save strategy button caption failed: {error}");
+                    } else {
+                        b.config_dirty = false;
+                    }
+                    bcx.notify();
+                });
+                cx.notify();
+            })
+            .detach();
+        }
+
         // Inline fixed-sell percentage editor opened by double-clicking an S button. Blur or Enter
         // updates the captured group; empty, nonnumeric, or negative input is
         // ignored.
@@ -568,6 +612,10 @@ impl Shell {
             size_edit: None,
             sell_input,
             sell_edit: None,
+            strat_slot_menu: None,
+            strat_slots_open: false,
+            strat_slots_core: None,
+            strat_label_inputs,
             tp_slider_normal,
             tp_slider_ext,
             tp_fine_slider,

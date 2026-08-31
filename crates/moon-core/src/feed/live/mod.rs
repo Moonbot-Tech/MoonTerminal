@@ -1482,6 +1482,8 @@ pub(super) fn run(
                 if !send_core_config_events(core_config_events) {
                     break;
                 }
+            } else {
+                shared_config_sequence.note_gated(server.id);
             }
             // Provenance travels with the message: only a real `SharedConfigUpdated` full-snapshot
             // echo may advance `core_config_recv_rev` in the store, for the same reason the write

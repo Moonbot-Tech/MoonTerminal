@@ -98,6 +98,18 @@ impl Default for GroupExitSettings {
 }
 
 impl GroupExitSettings {
+    /// The take profit this generation actually asks for: the engaged S preset, or the main TP.
+    ///
+    /// One reading shared by everything that needs "what will this sell at" — the same rule
+    /// `ClientSettingsCommand::effective_take_profit_percent` applies on the wire, so a slot
+    /// engaged here and a slot engaged in the core cannot disagree about which number counts.
+    pub fn effective_take_profit_pct(&self) -> f64 {
+        match self.fixed_sell_slot {
+            Some(slot) if (1..=6).contains(&slot) => self.fixed_sell_pcts[slot - 1],
+            _ => self.take_profit_pct,
+        }
+    }
+
     /// Clamp a finite stop-loss percentage to the protocol-supported visible range.
     pub fn canonical_stop_loss_pct(pct: f32) -> Option<f32> {
         pct.is_finite().then(|| pct.clamp(-20.0, 1.0))

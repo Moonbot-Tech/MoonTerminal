@@ -395,22 +395,6 @@ pub enum CoreConfigArea {
     Manual,
 }
 
-/// An EXACT field mismatch, with both the requested and the core's actual value typed. Only the
-/// money fields — order-size presets and the selected slot — get this resolution; every other area
-/// is reported at [`CoreConfigArea`] granularity instead.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CoreConfigMismatch {
-    OrderSizeSlot {
-        slot: usize,
-        requested: f64,
-        actual: f64,
-    },
-    OrderSizeSel {
-        requested: usize,
-        actual: usize,
-    },
-}
-
 /// What a shared-config echo disagreed with the terminal about, restricted to the fields THIS edit
 /// actually asked to change — never the whole projection; see `feed::live::shared_config`'s module
 /// doc and [`crate::feed::live::FieldMask`]. `moon-core` cannot localize (`rust_i18n::i18n!` is
@@ -421,8 +405,6 @@ pub enum CoreConfigMismatch {
 pub enum CoreConfigRejection {
     /// One or more coarse sections still differ.
     Areas(Vec<CoreConfigArea>),
-    /// One or more exact money-field mismatches.
-    Fields(Vec<CoreConfigMismatch>),
 }
 
 /// Phase of a core-config edit that has not yet reached a terminal outcome, mirroring

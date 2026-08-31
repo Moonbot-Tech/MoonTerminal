@@ -4,9 +4,47 @@ use super::*;
 /// Regression target: deleting `with_market_stop` from `trade::new_order_params` makes a visible
 /// Stop Market selection place a stop-limit order instead.
 fn new_order_params_carry_stop_market() {
-    let params = new_order_params("BTCUSDT".to_string(), false, 100_000.0, 0.001, None, true);
+    let params = new_order_params(
+        "BTCUSDT".to_string(),
+        false,
+        100_000.0,
+        0.001,
+        None,
+        true,
+        0.0,
+    );
 
     assert!(params.use_market_stop);
+}
+
+/// Regression target: the visible take profit reaches a manual order ONLY as this field — Moonbot
+/// stores it on the order rather than in the strategy — so dropping it from `new_order_params`
+/// silently places every manual order with no sell target of its own.
+#[test]
+fn new_order_params_carry_a_positive_planned_sell_only() {
+    let with_target = new_order_params(
+        "BTCUSDT".to_string(),
+        false,
+        100_000.0,
+        0.001,
+        None,
+        false,
+        101_000.0,
+    );
+    assert_eq!(with_target.planned_sell_price, 101_000.0);
+
+    // Zero is the wire's "no target": the core then applies its own settings or the order's
+    // strategy, and sending it as a price would ask for a sell at zero.
+    let without = new_order_params(
+        "BTCUSDT".to_string(),
+        false,
+        100_000.0,
+        0.001,
+        None,
+        false,
+        0.0,
+    );
+    assert_eq!(without.planned_sell_price, 0.0);
 }
 
 /// A `(market_name, uid, has_live_sell_leg)` candidate for the resolver.

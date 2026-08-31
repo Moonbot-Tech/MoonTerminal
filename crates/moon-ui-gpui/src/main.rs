@@ -279,14 +279,6 @@ struct Backend {
     /// Request to edit a fixed-sell preset inline after an S-button double-click, as
     /// `(group, S1-S6 index)`. Shell writes the visible group value on blur or Enter.
     sell_edit_req: Option<(String, usize)>,
-    /// The `(core, reason)` of the last reported manual order-size refusal, so it is logged once
-    /// per distinct fact rather than once per keystroke.
-    ///
-    /// A refused write never advances the value the editor and the Ctrl+wheel step seed from, so
-    /// the strip's own "value actually changed" guard cannot damp the repeat: every character
-    /// typed and every wheel tick would otherwise write its own line. Cleared as soon as a write
-    /// to that core succeeds, so a later stall is reported again.
-    size_write_refused: Option<(CoreId, &'static str)>,
     /// Last attempted group-exit generation per core as `(settings, snapshot revision, ready)`.
     ///
     /// Including the coarse connection phase forces one retry after a feed respawn even when the
@@ -295,6 +287,20 @@ struct Backend {
     /// Optimistic local manual-strategy selection as `(enabled, id)`, keeping the header toggle and
     /// picker responsive until the core echoes its settings.
     manual_strat_local: HashMap<CoreId, (bool, u64)>,
+    /// In-flight `ignore_strat_sell_price` requests per core, so the checkbox that queued one shows
+    /// it immediately instead of waiting out the slow channel's echo.
+    ignore_sell_local: HashMap<CoreId, crate::backend::IgnoreSellLocal>,
+    /// Visible stops waiting for the manual order they belong to, keyed by `(core, market)`.
+    ///
+    /// A manual order placed with a strategy takes its stop from that strategy, so the terminal's
+    /// own stop has to be applied to the ORDER once the core publishes it.
+    pending_stops: HashMap<(CoreId, String), crate::backend::PendingStop>,
+    /// Take profit and stop shown while a manual strategy owns them, keyed by `(core, strategy)`.
+    ///
+    /// An overlay, deliberately: the group's and the core's own saved exits stay untouched while MS
+    /// is on, so switching charts or turning MS off shows what the trader saved rather than what a
+    /// strategy left behind. Seeded from the strategy the first time it is selected.
+    ms_exit_local: HashMap<(CoreId, u64), crate::backend::MsExitOverlay>,
     /// Optimistic Panic Sell override by `(core, market)`: SYMMETRIC (records both arm and
     /// disarm), TTL-bounded, and takes precedence over the core snapshot while fresh. Reconciled
     /// by the coordination tick, which drops an entry the moment the core agrees or the TTL

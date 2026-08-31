@@ -108,7 +108,7 @@ impl Runtime {
             },
         };
         let terms = backend
-            .manual_order_terms(core, &market, price, size_override)
+            .manual_order_terms(core, &market, price, false, size_override)
             .ok_or_else(|| {
                 format!(
                     "order_cancel_lag core={core} has no complete local terms or valid order size"
@@ -138,7 +138,17 @@ impl Runtime {
         let place_submit_ms = now_unix_ms_i64();
         backend
             .session
-            .place_order(core, market.clone(), false, price, size, None, terms.exit)
+            .place_order(
+                core,
+                market.clone(),
+                false,
+                price,
+                size,
+                None,
+                terms.exit,
+                terms.planned_sell.unwrap_or(0.0),
+                terms.sync_exit,
+            )
             .map_err(|error| format!("order_cancel_lag place order failed: {error:#}"))?;
         firetest_info(&format!(
             "[firetest] order_cancel_lag place core={core} market={market} price={price:.8} size={size:.8} quote_size={} latest_price={latest_price:.8}",

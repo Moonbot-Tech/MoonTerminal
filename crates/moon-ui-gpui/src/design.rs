@@ -138,14 +138,43 @@ pub fn glyph_btn_w(cx: &App) -> f32 {
 /// This is the unscaled width passed through [`font_w`].
 pub const HEADER_LABEL_MAX_W: f32 = 260.0;
 
-/// Window widths at which the header ticker drops its per-window deltas, then goes entirely.
+/// Window widths at which the header sheds its ambient readouts, in a fixed order of sacrifice:
+/// the BRAND first, then the ticker's per-window deltas, then the ticker itself, and the clock
+/// last.
 ///
-/// It collapses by priority rather than clipping: the readout is monospaced and its informative
-/// part is the tail, so a character-level clip eats the deltas and then the price digits, turning
-/// "61 333$" into "61 33" — a plausible WRONG price stated as fact. Usable only because
-/// [`HEADER_LABEL_MAX_W`] bounds the clusters that would otherwise grow without limit.
+/// The order is by how much each one is worth once space runs out. The brand identifies an
+/// application the operator is already looking at, so it buys nothing and goes first; the clock is
+/// the only readout here whose absence cannot be reconstructed from anything else on screen, so it
+/// goes last. The ticker sits between them and collapses in two steps rather than clipping: the
+/// readout is monospaced and its informative part is the TAIL, so a character-level clip eats the
+/// deltas and then the price digits, turning "61 333$" into "61 33" — a plausible WRONG price
+/// stated as fact.
+///
+/// Every threshold is a window width and must stay ordered — brand highest, clock lowest — or two
+/// readouts would disappear at the same width and the priority above would be a comment rather
+/// than a behaviour. Usable only because [`HEADER_LABEL_MAX_W`] bounds the clusters that would
+/// otherwise grow without limit.
+const HEADER_BRAND_MIN_W: f32 = 1400.0;
 const TICKER_DELTAS_MIN_W: f32 = 1200.0;
 const TICKER_MIN_W: f32 = 1000.0;
+const HEADER_CLOCK_MIN_W: f32 = 820.0;
+
+/// Return whether the header's brand mark fits at `chrome_width`.
+///
+/// The drag region it lives in stays either way — only the logo and its trailing rule go — so a
+/// narrow window keeps a titlebar the operator can grab.
+pub fn header_brand_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, HEADER_BRAND_MIN_W)
+}
+
+/// Return whether the header clock fits at `chrome_width`.
+///
+/// Last to go, and below [`ticker_visible`]'s threshold on purpose: by the width the clock yields,
+/// the ticker is already gone, so the hand-summed ticker-popup offset (`shell::ticker`) can never
+/// be computed against a header that has a clock in one frame and not the next.
+pub fn header_clock_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, HEADER_CLOCK_MIN_W)
+}
 
 /// Return whether the header ticker fits at `chrome_width`.
 ///
@@ -345,7 +374,7 @@ pub fn line_px(cx: &App, value: f32) -> Pixels {
 ///
 /// Returns:
 ///     The unscaled base font size.
-fn base_text(cx: &App) -> f32 {
+pub fn base_text(cx: &App) -> f32 {
     MoonTheme::active_tokens(cx).typography.mono_font_size
 }
 

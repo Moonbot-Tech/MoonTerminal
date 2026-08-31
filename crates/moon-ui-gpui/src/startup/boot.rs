@@ -218,9 +218,11 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         order_size_rev: 0,
         order_size_edit_req: None,
         sell_edit_req: None,
-        size_write_refused: None,
         group_exit_sync: HashMap::new(),
         manual_strat_local: HashMap::new(),
+        ignore_sell_local: HashMap::new(),
+        pending_stops: HashMap::new(),
+        ms_exit_local: HashMap::new(),
         panic_local: HashMap::new(),
         panic_rev: 0,
         last_panic_press: HashMap::new(),
@@ -620,11 +622,17 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.maybe_diag_open_first_market(cx);
                     b.refresh_header_ticker_default(false);
                     b.sync_open_markets_if_due();
-                    b.sync_group_manual_settings();
+                    b.sync_manual_settings();
                     // Background-originated correction, not a user press: goes through the 250 ms
                     // coalescing gate `flush_backend_notify` flushes below on the same tick, rather
                     // than a bare `cx.notify()`.
                     if b.tick_panic_local() {
+                        b.mark_backend_dirty(cx);
+                    }
+                    // The second reconciliation on this same unconditional tick: a visible stop
+                    // waiting for the manual order it belongs to. Kept as its own statement so the
+                    // panic contract above stays a single, greppable condition.
+                    if b.tick_pending_stops() {
                         b.mark_backend_dirty(cx);
                     }
                     {

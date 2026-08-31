@@ -93,7 +93,8 @@ pub use quiet::{QuietCfg, QuietWarnBypass};
 pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
-    ChartBucket, CoreSortMode, FeedFlags, ServerConfig, TransportVersion, seeded_transport,
+    ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ServerConfig, StratSlot,
+    TransportVersion, seeded_transport,
 };
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
@@ -747,7 +748,9 @@ impl AppConfig {
                 synthetic,
                 chart_bundle: String::new(),
                 default_alert_strategy: 0,
-                use_core_manual_config: false,
+                own_trade_config: false,
+                strat_slots: None,
+                trade: None,
                 transport: servers::transport_from_key(&key),
             })
             .collect();
@@ -925,17 +928,19 @@ impl AppConfig {
     /// reconnect.
     pub fn structural_sig(&self) -> String {
         // Chart bundles and manual-trading values are local presentation/behavior settings.
-        // Changing them does not reconnect cores or rebuild sessions. `use_core_manual_config`
-        // joins this neutralization for the same reason: it is a terminal-local routing choice
-        // over an already-open connection, not a fact about the connection itself, so toggling
-        // it must never reconnect the core.
+        // Changing them does not reconnect cores or rebuild sessions. `own_trade_config` and the
+        // per-core generation it selects join this neutralization for the same reason: they are
+        // terminal-local choices about which numbers this terminal sends with an order, not facts
+        // about the connection itself, so toggling either must never reconnect the core.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
             .map(|s| ServerConfig {
                 chart_bundle: String::new(),
                 default_alert_strategy: 0,
-                use_core_manual_config: false,
+                own_trade_config: false,
+                strat_slots: None,
+                trade: None,
                 ..s.clone()
             })
             .collect();

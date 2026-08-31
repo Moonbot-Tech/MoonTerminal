@@ -3,13 +3,13 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_core::feed::{CoreConfigArea, CoreConfigRejection, CoreConfigState};
+use moon_core::feed::{CoreConfigArea, CoreConfigRejection};
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
-    MoonInputState, MoonLabel, MoonPalette, h_flex,
+    MoonInputState, MoonLabel, MoonPalette, MoonToggle, MoonToggleSize, h_flex,
 };
 
 use super::metric::{metric_button, sl_toggle};
@@ -116,6 +116,11 @@ const TP_W: f32 = 74.6;
 const SL_TOGGLE_TRACK_W: f32 = 35.0;
 /// Base width of the SL text beside the toggle, used only by the row budget.
 const SL_TOGGLE_LABEL_W: f32 = 13.0;
+/// The per-core order-size switch's width, for the row budget ONLY, on the same terms as
+/// [`SL_TOGGLE_TRACK_W`]: `MoonToggle` sizes itself and nothing renders from this number. It is the
+/// bare Compact track without [`SL_TOGGLE_TRACK_W`]'s label gap, because this switch carries no
+/// label — its meaning is in the tooltip.
+const OWN_TRADE_TOGGLE_W: f32 = 28.0;
 /// Base width of the Live/Pause button.
 const LIVE_W: f32 = 62.0;
 /// Raw width of each icon-only singleton-window button. Shared so the Report panel's trash
@@ -311,6 +316,10 @@ fn row_fit(
         + fw(TP_W)
         + design::ui_value(cx, SL_TOGGLE_TRACK_W)
         + fw(SL_TOGGLE_LABEL_W)
+        // Budgeted unconditionally even though it is drawn only for an addressed core: a budget
+        // that shrank with the switch would let the row fit at a width it cannot hold the moment a
+        // chart is addressed, and re-widen only after the clipping had already happened.
+        + design::ui_value(cx, OWN_TRADE_TOGGLE_W)
         + fw(LIVE_W)
         + ICON_BTN_W * 5.0
         // The exchange max-order VALUE is permanent — outcome 4 asks for a readout that is always
@@ -322,10 +331,10 @@ fn row_fit(
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
     // until the trailing cluster clips off the edge of some narrow window.
     let rules = 7.0;
-    // Row gaps: 15 between the 16 root children (both sides of the zero-width spacer included)
-    // plus 5 inside sections — one in Leverage, one in Risk, one in Exit, one between Profit
-    // Monitor and Screener, and one between Analytics and Strategies. Settings is a one-child
-    // section and adds none.
+    // Row gaps: 16 between the 17 root children (the leading per-core switch and both sides of the
+    // zero-width spacer included) plus 5 inside sections — one in Leverage, one in Risk, one in
+    // Exit, one between Profit Monitor and Screener, and one between Analytics and Strategies.
+    // Settings is a one-child section and adds none.
     // Count them ALL: an undercount moves every threshold, so a label stays visible after the row's
     // fixed part has already outgrown the window — and the spacer cannot shrink past zero.
     //
@@ -333,7 +342,7 @@ fn row_fit(
     // button there. That gap is counted HERE rather than on the ladder because the value never
     // sheds; the max-order CAPTION does shed, and its own preceding gap travels inside its ladder
     // width (see `caption_w`), so counting it again here would double it.
-    let gaps = gap * 20.0;
+    let gaps = gap * 21.0;
     let base = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + controls + rules + gaps;
     // A caption costs its own width plus the gap separating it from its strip.
     let caption_w = |text: &str| design::ui_text_width(cx, text, CAPTION_SIZE, 400.0, true) + gap;
@@ -472,10 +481,52 @@ pub(crate) fn effective_chart_display_core(
     )
 }
 
-/// Caption naming one coarse [`CoreConfigArea`] the core rejected, for a
-/// [`CoreConfigRejection::Areas`] this branch cannot pin to one cell (see `strips::size_cell_edits`'s
-/// doc). `moon-core` cannot localize, so the mapping lives here like every other caption of a
-/// `moon-core` enum in this module.
+/// Per-core "keep your own manual-trading set" switch, drawn immediately right of the order-size
+/// strip.
+///
+/// `None` when no chart core is addressed: the switch names ONE core's generation, so a row with
+/// no core to name must not draw it. It addresses the same `display_core` the strip beside it was
+/// rendered from, so the switch and the numbers it governs can never describe different cores.
+///
+/// Flipping it on moves this core off its group's shared generation and onto its own, seeded from
+/// the group so the numbers do not move under the trader's hands; flipping it off returns the row
+/// to the group's, keeping the core's own set for the next time it is switched back on.
+fn own_trade_toggle(
+    core: Option<CoreId>,
+    on: bool,
+    backend: &Entity<Backend>,
+) -> Option<AnyElement> {
+    let core = core?;
+    let toggle_backend = backend.clone();
+    let tip = if on {
+        "toolbar.own_trade_on"
+    } else {
+        "toolbar.own_trade_off"
+    };
+    Some(
+        h_flex()
+            .id("toolbar-own-trade")
+            .flex_none()
+            .items_center()
+            .child(
+                MoonToggle::new("toolbar-own-trade-toggle")
+                    .checked(on)
+                    .size(MoonToggleSize::Compact)
+                    .on_change(move |checked: &bool, _w, app| {
+                        let on = *checked;
+                        toggle_backend.update(app, |b, cx| {
+                            b.set_core_own_trade(core, on);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .tooltip(text_tooltip(SharedString::from(t!(tip).to_string())))
+            .into_any_element(),
+    )
+}
+
+/// Caption naming one coarse [`CoreConfigArea`] the core rejected. `moon-core` cannot localize, so
+/// the mapping lives here like every other caption of a `moon-core` enum in this module.
 fn area_caption(area: CoreConfigArea) -> String {
     let key = match area {
         CoreConfigArea::AutoStart => "toolbar.core_config_area_auto_start",
@@ -487,9 +538,13 @@ fn area_caption(area: CoreConfigArea) -> String {
     t!(key).to_string()
 }
 
-/// Whole-strip tooltip naming a [`CoreConfigRejection::Areas`] the display core's one retained
-/// edit carries, or `None` while nothing is rejected at area granularity. Field-level rejections
-/// (order-size slots/selection) are captioned per cell instead, by `strips::size_cell_edits`.
+/// Whole-block tooltip naming a [`CoreConfigRejection::Areas`] the display core's one retained edit
+/// carries, or `None` while nothing is rejected.
+///
+/// This is the ONLY reader of `CoreData::core_config_edit`. The gear popup still writes AutoStart,
+/// BtcBlink, General and Leverage through the shared-config sequence, and a core that refuses one
+/// of them resolves the edit as `NotApplied` — without this the popup would close exactly as it
+/// does on success and the refusal would never reach the screen.
 fn manual_area_rejection_tip(mismatches: Option<&CoreConfigRejection>) -> Option<SharedString> {
     let Some(CoreConfigRejection::Areas(areas)) = mismatches else {
         return None;
@@ -599,14 +654,12 @@ pub fn toolbar(
         write_matches_display,
         size_values,
         size_sel,
-        size_state,
-        display_manual,
+        size_source,
         core_config_edit,
         tp_value,
         tp_engaged,
         sl_value,
         sl_on,
-        exit_state,
         lev_value,
         sell_pcts,
         sell_slot,
@@ -635,40 +688,66 @@ pub fn toolbar(
         let write_matches_display = b.manual_display_matches_write(group, display_core);
         // Sizes: [`Backend::effective_order_size_state`] is the one resolver every manual-trading
         // reader shares, so the row cannot reach a different "which core, which source" conclusion
-        // than the choke point every write goes through. `GroupLocal` covers BOTH "no chart is
-        // addressed" and "the display core has not opted in" — with the opt-in off this row shows
-        // group-local values exactly as upstream `259c848e` did, never core-sourced numbers with no
-        // marker.
+        // than the choke point every write goes through. Both of its sources are local config this
+        // terminal owns, so there is no freshness to report and nothing to wait for.
         let (size_values, size_sel, size_source) =
             b.effective_order_size_state(group, display_core);
-        let size_state = match size_source {
-            ManualSource::Core(state) => Some(state),
-            ManualSource::GroupLocal => None,
-        };
-        // The display core's retained data, when the resolver above actually routed to one.
-        let manual_display_core =
-            display_core.filter(|_| matches!(size_source, ManualSource::Core(_)));
-        let display_data = manual_display_core.and_then(|core| b.session.store().core(core));
-        let display_manual = display_data
-            .and_then(|d| d.core_config.as_ref())
-            .map(|c| c.manual.clone());
-        // The display core's one retained core-config write attempt, for per-cell notices.
-        let core_config_edit = display_data.and_then(|d| d.core_config_edit.clone());
-        // Exits (TP/SL/sell presets): the exit twin of the sizes resolver above, independently
-        // freshness-tracked from sizes — see `weaker_config_state`'s doc.
-        let (exit, exit_source) = b.effective_group_exit(group, display_core);
-        let exit_state = match exit_source {
-            ManualSource::Core(state) => Some(state),
-            ManualSource::GroupLocal => None,
-        };
+        // Exits (TP/SL/sell presets): the exit twin of the sizes resolver above, resolved through
+        // the same per-core-or-group choice so the two halves cannot disagree about the source.
+        let (exit, _exit_source) = b.effective_group_exit(group, display_core);
+        // The display core's one retained core-config write attempt, for the rejection notice
+        // below. Read from the DISPLAY core so the tooltip describes the same core the row shows.
+        let core_config_edit = display_core
+            .and_then(|core| b.session.store().core(core))
+            .and_then(|data| data.core_config_edit.clone());
+        // Manual-strategy mode, and what it does to this row's exits — Moonbot's own arrangement:
+        //
+        // * the strategy owns the sell price and the stop, so both READOUTS come from it;
+        // * the TP popup (slider and field) is closed in this mode: a free-form take profit has
+        //   nowhere to go, since the strategy's sell price is a single value;
+        // * the S presets are the ONE way to change that sell price, and only while Moonbot's
+        //   "ignore the manual strategy's sell price" checkbox is on — with it off the strategy
+        //   alone decides and the strip is disabled;
+        // * the SL button and its toggle stay live and write to the strategy.
+        // Locked only while the core sells a manual order at the STRATEGY's own price: there the
+        // terminal's TP and S presets reach nothing. With Moonbot's "ignore the manual strategy's
+        // sell price" checkbox on they are ordinary controls again — their value rides along with
+        // the order as `planned_sell_price` — so they stay live, slider and hotkeys included.
+        let manual_on = manual_core
+            .map(|c| b.manual_strat_state(c).0 && !b.ignore_strat_sell_price(c).unwrap_or(false))
+            .unwrap_or(false);
         // The TP button always shows its own `take_profit_pct`, even while an S slot is engaged;
         // selecting a slot must not replace the value displayed by TP.
-        let tp_value = format!("{}%", fmt_field2(exit.take_profit_pct as f32));
-        let tp_engaged = exit.fixed_sell_slot.is_none();
-        // SL is signed: `+1.00%` / `-20.00%`, avoiding `--` from manually prefixing a negative value.
-        let sl_value = format!("{}%", fmt_field2_signed(exit.stop_loss_pct));
-        // The toggle beside SL controls `panic_if_price_drop`; while off, the SL button is disabled.
-        let sl_on = exit.stop_loss_enabled;
+        // In manual-strategy mode both readouts come from the STRATEGY, because that is what the
+        // core will use for the order; the group's own values return the moment MS goes off.
+        // While a manual strategy owns the exits, BOTH readouts come from its overlay; with MS
+        // off — or on another chart — they are the saved generation, untouched underneath.
+        let manual_exit = manual_core.and_then(|c| b.manual_exit_overlay(c));
+        let tp_value = format!(
+            "{}%",
+            fmt_field2(
+                manual_exit
+                    .map(|ms| ms.take_profit_pct)
+                    .unwrap_or(exit.take_profit_pct) as f32
+            )
+        );
+        let tp_engaged = exit.fixed_sell_slot.is_none() && !manual_on;
+        // SL is signed: `+1.00%` / `-20.00%`, avoiding `--` from manually prefixing a negative
+        // value. The strategy stores its stop as a positive distance, so the overlay negates it on
+        // the way in and this reads the way the toolbar's own stop does.
+        let sl_value = format!(
+            "{}%",
+            fmt_field2_signed(
+                manual_exit
+                    .map(|ms| ms.stop_pct)
+                    .unwrap_or(exit.stop_loss_pct)
+            )
+        );
+        // The toggle beside SL is the strategy's `UseStopLoss` in manual mode and
+        // `panic_if_price_drop` otherwise; while off, the SL button is disabled either way.
+        let sl_on = manual_exit
+            .map(|ms| ms.stop_on)
+            .unwrap_or(exit.stop_loss_enabled);
         let sell_pcts = exit.fixed_sell_pcts;
         let sell_slot = exit.fixed_sell_slot;
         // Leverage is the Main chart market's per-core, per-market value from assets.
@@ -680,9 +759,6 @@ pub fn toolbar(
         // The target chart wins over the header selection while it is hovered: mouse and market
         // hotkeys address that chart's independent core, whose manual strategy can override the
         // visible group exit values.
-        let manual_on = manual_core
-            .map(|c| b.manual_strat_state(c).0)
-            .unwrap_or(false);
         (
             b.follow,
             overview,
@@ -690,26 +766,17 @@ pub fn toolbar(
             write_matches_display,
             size_values,
             size_sel,
-            size_state,
-            display_manual,
+            size_source,
             core_config_edit,
             tp_value,
             tp_engaged,
             sl_value,
             sl_on,
-            exit_state,
             lev_value,
             sell_pcts,
             sell_slot,
             manual_on,
         )
-    };
-    // The one honest freshness state for the whole manual-trading block (sizes + TP/SL + sell
-    // prices): `None` when no chart is addressed (today's exact behaviour, no marker at all),
-    // otherwise the WEAKER of the two independent arrivals — see `weaker_config_state`'s doc.
-    let manual_block_state = match (size_state, exit_state) {
-        (Some(a), Some(b)) => Some(crate::backend::weaker_config_state(a, b)),
-        _ => None,
     };
     let p = MoonPalette::active(cx);
     // `p.blue` in both themes, not the light theme's `p.accent`: the light Blue button uses
@@ -735,37 +802,13 @@ pub fn toolbar(
     // labels' fate read them. One computation, one source.
     crate::diag::record_us(&crate::diag::TOOLBAR_DATA_US, phase_us);
     let phase_us = crate::diag::timer();
-    // Per-slot write-attempt notice from the display core's one retained edit row. Baked into the
-    // label BEFORE fitting so the row budget measures the same text the strip renders, exactly
-    // like every other cell value on this row.
-    let size_edits = strips::size_cell_edits(
-        core_config_edit.as_ref(),
-        display_manual.as_ref(),
-        SIZE_UNIT,
-    );
-    let mut size_label_values = size_values;
-    for (value, edit) in size_label_values.iter_mut().zip(size_edits.iter()) {
-        if let Some(override_value) = edit.as_ref().and_then(|e| e.display_override) {
-            *value = override_value;
-        }
-    }
-    let mut size_label_strs = strips::size_labels(size_label_values);
-    for (label, edit) in size_label_strs.iter_mut().zip(size_edits.iter()) {
-        if let Some(edit) = edit {
-            label.push_str(edit.suffix);
-        }
-    }
-    let size_cells = strips::FittedCells::fit(cx, size_label_strs);
-    let size_edit_tooltips: [Option<SharedString>; 6] =
-        std::array::from_fn(|i| size_edits[i].as_ref().map(|edit| edit.tooltip.clone()));
+    let size_cells = strips::FittedCells::fit(cx, strips::size_labels(size_values));
     let sell_cells = strips::FittedCells::fit(cx, strips::sell_labels(sell_pcts));
-    // The manual-trading block's own freshness tooltip: what the numbers are sourced from and how
-    // fresh they are (requirement: an explicit Awaiting/Stale state rather than a live-looking
-    // number with no marker). The reason the strips went non-interactive (goal A2 FIX-3) takes
-    // priority over everything else — it explains why nothing on this row can be clicked, not just
-    // how fresh the shown numbers are. A coarse area-level rejection on the display core's one
-    // retained edit is next — it is the more urgent, more specific fact. Field-level (money)
-    // rejections are captioned per cell instead.
+    // Two whole-block notices, in priority order. The strips going non-interactive comes first: it
+    // explains why nothing on this row can be clicked (goal A2 FIX-3). A core-config rejection is
+    // next — the numbers on the row are local config with nothing to be stale about, but the gear
+    // popup's write to this core can still have been refused, and this tooltip is where that fact
+    // surfaces.
     let manual_block_tip = (!write_matches_display)
         .then(|| SharedString::from(t!("toolbar.core_manual_mismatch").to_string()))
         .or_else(|| {
@@ -774,16 +817,6 @@ pub fn toolbar(
                     .as_ref()
                     .and_then(|row| row.mismatches.as_ref()),
             )
-        })
-        .or_else(|| {
-            manual_block_state.map(|state| {
-                let key = match state {
-                    CoreConfigState::Live => "toolbar.core_manual_live",
-                    CoreConfigState::Stale => "toolbar.core_manual_stale",
-                    CoreConfigState::Awaiting => "toolbar.core_manual_awaiting",
-                };
-                SharedString::from(t!(key).to_string())
-            })
         });
     // The exchange's own cap on a single order, kept permanently on the row rather than only inside
     // the leverage popover: it bounds every order the row above it composes, and a cap you have to
@@ -842,7 +875,15 @@ pub fn toolbar(
         .border_color(rgb(p.border));
 
     row = row
-        // §1 ORDER SIZE. Leads the row: it is the quantity the other three sections modify —
+        // §0 SOURCE. Leftmost, before everything it governs: this switch decides WHICH generation
+        // of sizes and exits the rest of the row shows and edits, so it reads as the row's subject
+        // rather than as one more control inside the size group.
+        .children(own_trade_toggle(
+            display_core,
+            size_source == ManualSource::CoreOwn,
+            backend,
+        ))
+        // §1 ORDER SIZE. Follows the switch: it is the quantity the other three sections modify —
         // leverage scales it, the stop bounds it, and TP/S define its target exit.
         .child(
             section().child(captioned_strip(
@@ -863,7 +904,6 @@ pub fn toolbar(
                     // than the one this row just showed.
                     write_matches_display.then(|| group.to_string()),
                     SIZE_UNIT,
-                    size_edit_tooltips,
                 ),
                 manual_block_tip.clone(),
                 cx,
@@ -911,12 +951,9 @@ pub fn toolbar(
         .child(design::chrome_divider(cx, p))
         .child(
             section()
-                .child(sl_toggle(
-                    sl_on,
-                    manual_on,
-                    backend.clone(),
-                    group.to_string(),
-                ))
+                // Never disabled by manual-strategy mode: there it is the strategy's `UseStopLoss`,
+                // which is precisely what a trader needs to reach while MS is on.
+                .child(sl_toggle(sl_on, false, backend.clone(), group.to_string()))
                 .child(metric_button(
                     TradeMetric::Sl,
                     sl_value,
@@ -937,7 +974,6 @@ pub fn toolbar(
         .child({
             let strip = sell_strip(
                 &sell_cells,
-                // Manual strategy mode does not apply these slots, so none is lit.
                 sell_slot.filter(|_| !manual_on),
                 // Show the S editor only when the request belongs to this toolbar's group.
                 sell_edit
@@ -945,14 +981,11 @@ pub fn toolbar(
                     .map(|(_, i)| i),
                 sell_input,
                 backend.clone(),
-                // Manual strategy mode disables all click, wheel, and double-click interaction;
-                // so does a displayed core disagreeing with the write target (goal A2 FIX-3) — a
-                // live control must not mutate a source other than the one this row just showed.
+                // Disabled only where a click would reach nothing: a manual strategy owning the
+                // sell price. A displayed core disagreeing with the write target disables it too
+                // (goal A2 FIX-3).
                 (!manual_on && write_matches_display).then(|| group.to_string()),
             );
-            // MoonUI dims disabled cells once. An outer opacity would multiply that alpha in
-            // manual-strategy mode and make the strip substantially darker than the disabled TP
-            // button beside it.
             let sell_block = captioned_strip(
                 "toolbar-sell-caption",
                 fit.sell_caption,

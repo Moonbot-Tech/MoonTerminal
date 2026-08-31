@@ -47,6 +47,7 @@ pub(super) fn place_order(
     size: f64,
     strategy_id: Option<u64>,
     use_market_stop: bool,
+    planned_sell: f64,
 ) {
     let params = new_order_params(
         market.clone(),
@@ -55,6 +56,7 @@ pub(super) fn place_order(
         size,
         strategy_id,
         use_market_stop,
+        planned_sell,
     );
     match client.trade().new_order(params) {
         Ok(_ticket) => log::info!(
@@ -78,6 +80,7 @@ fn new_order_params(
     size: f64,
     strategy_id: Option<u64>,
     use_market_stop: bool,
+    planned_sell: f64,
 ) -> NewOrderParams {
     let side = if short {
         OrderSide::Short
@@ -88,6 +91,11 @@ fn new_order_params(
         NewOrderParams::new(market, side, price, size).with_market_stop(use_market_stop);
     if let Some(id) = strategy_id {
         params = params.with_strategy_id(id);
+    }
+    // A positive target only: the wire's zero means "no planned sell", and the core then applies
+    // its own settings or the order's strategy, which is exactly what an absent target must do.
+    if planned_sell.is_finite() && planned_sell > 0.0 {
+        params = params.with_planned_sell_price(planned_sell);
     }
     params
 }

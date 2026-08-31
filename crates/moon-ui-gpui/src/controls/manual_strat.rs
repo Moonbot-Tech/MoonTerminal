@@ -13,21 +13,21 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
+    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonInputState, MoonMenuItem,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
     MoonSelectorSegment, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
-use moon_core::config::moonbot_import::shortcut::{
-    decode as decode_shortcut, display as shortcut_display,
-};
+use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::feed::{ClientSettingsEdit, StrategyRow, StrategySchemaModel};
 use moon_core::session::CoreId;
 
 use crate::backend::MANUAL_STRATEGY_KIND;
+use crate::shell::Shell;
 use crate::{Backend, design};
 
 mod fit;
+mod settings;
 use fit::{LabelMode, SlotWidths, resolve_strat_fit};
 
 /// Pill height shared with the header's core selector; label width is capped separately.
@@ -39,10 +39,12 @@ const BTN_GAP: f32 = 4.0;
 /// other estimate below. MoonUI computes the real value from its own metrics; this is a
 /// conservative estimate for the fit ladder, pending an on-screen check.
 const BTN_CHROME_W: f32 = 20.0;
-/// Gap between a button's name segment and its trailing hotkey segment, at design-reference scale.
-const BTN_SEGMENT_GAP: f32 = 4.0;
+/// Content width of the quick-select settings popup, in font-scaled pixels.
+const SLOT_SETTINGS_W: f32 = 380.0;
+/// Estimated rendered width of the settings gear, at design-reference scale, for the fit ladder —
+/// same reason as [`BTN_CHROME_W`]: `MoonButton` sizes its icon-only form itself.
+const SLOT_GEAR_W: f32 = 26.0;
 const BTN_NAME_TEXT_SIZE: f32 = 11.0;
-const BTN_KEY_TEXT_SIZE: f32 = 9.5;
 const BTN_TEXT_WEIGHT: f32 = 500.0;
 /// Estimated rendered width of the "MS" toggle (track plus label), at design-reference scale, for
 /// the same reason as [`BTN_CHROME_W`].
@@ -60,9 +62,13 @@ const REDUCED_PILL_MAX_W: f32 = 120.0;
 /// design-reference scale like every other estimate below.
 const HEADER_OTHER_SECTIONS_W: f32 = 760.0;
 
-/// One quick-select button slot: `(slot index, raw name, resolved strategy id, name label,
-/// numeric fallback label, hotkey label)`.
-type StratButtonSlot = (usize, String, Option<u64>, String, String, String);
+/// One quick-select button slot: `(slot index, strategy name, resolved strategy id, caption,
+/// numeric fallback caption)`.
+///
+/// No hotkey segment: a button shows its CAPTION alone — the trader's own, or the strategy's name
+/// when they set none. The binding belongs to the slot rather than to the label, and is stated in
+/// the settings popup, where there is room for it.
+type StratButtonSlot = (usize, String, Option<u64>, String, String);
 
 /// Header "manual strategy" cluster: the MS toggle, the picker pill, and a summary of the
 /// selected strategy's parameters.
@@ -72,11 +78,24 @@ type StratButtonSlot = (usize, String, Option<u64>, String, String, String);
 /// header keeps a rule with nothing behind it.
 ///
 /// `chrome_width` feeds the priority-ordered narrow-window clip (`fit::resolve_strat_fit`) that
-/// governs the ten quick-select buttons this cluster adds when the resolved core's own shared
-/// config turns them on (`ManualSettings::strat_buttons::use_buttons`).
+/// governs the ten quick-select buttons and the parameter summary this cluster adds.
+///
+/// The buttons are drawn only while manual-strategy mode is ENABLED: with MS off they select
+/// nothing a new order would use, and their width is what makes the rest of the row shift every
+/// time the balance beside them changes width.
+///
+/// Each button carries two gestures, matching Moonbot: left click fires the slot's strategy and
+/// right click assigns which strategy it fires. Everything else about the buttons — captions,
+/// per-slot visibility, and the core's own sell-price flag — lives in the gear popup beside them
+/// (`settings::slot_settings_content`).
+#[allow(clippy::too_many_arguments)]
 pub fn manual_strategy_controls(
     group: &str,
     backend: &Entity<Backend>,
+    shell: &Entity<Shell>,
+    slot_menu: Option<(CoreId, usize)>,
+    slots_open: bool,
+    label_inputs: &[Entity<MoonInputState>],
     chrome_width: f32,
     p: MoonPalette,
     cx: &App,
@@ -102,52 +121,45 @@ pub fn manual_strategy_controls(
         (None, _) => "?".to_string(),
     };
 
-    // Quick-select buttons: only while the resolved core's own shared config turns them on.
-    // `use_buttons` gates the whole row; `show_button[i]` gates each slot. Each entry is
-    // `(slot index, raw name, resolved strategy id, name label, numeric fallback label, hotkey
-    // label)`.
-    let buttons: Option<Vec<StratButtonSlot>> = core_data
-        .core_config
-        .as_ref()
-        .map(|cfg| &cfg.manual)
-        .filter(|m| m.strat_buttons.use_buttons)
-        .map(|m| {
-            (0..10)
-                .filter(|&i| m.strat_buttons.show_button[i])
-                .map(|i| {
-                    let raw_name = m.strat_names[i].trim().to_string();
-                    // Match the slot's NAME against this snapshot's Manual-kind strategies rather
-                    // than its ordinal position, because `strat_names[i]` is the core's SLOT i
-                    // while an ordinal match would address the ix-th Manual-kind strategy in
-                    // snapshot order — the two can disagree, and a button that fires the wrong
-                    // strategy places a real order silently.
-                    let sid = manuals
-                        .iter()
-                        .find(|(_, name)| *name == raw_name)
-                        .map(|(sid, _)| *sid);
-                    let numeric_label = (i + 1).to_string();
-                    let name_label = if raw_name.is_empty() {
-                        numeric_label.clone()
-                    } else {
-                        raw_name.clone()
-                    };
-                    let key_label = shortcut_display(decode_shortcut(m.strat_buttons.hot_keys[i]));
-                    (i, raw_name, sid, name_label, numeric_label, key_label)
-                })
-                .collect::<Vec<_>>()
-        });
+    // Quick-select buttons. The SLOTS come from this terminal (`Backend::strat_slots`), which falls
+    // back to the core's own `manual_strats_names` until a button is assigned here; the core's
+    // config still decides which slots are ON SCREEN (`use_buttons` / `show_button[i]`), plus any
+    // slot this terminal has assigned — that one must be reachable even if the core never showed
+    // it, or an assignment could not be undone.
+    let slots = b.strat_slots(core);
+    let buttons: Option<Vec<StratButtonSlot>> = (on && slots.is_some()).then(|| {
+        let slots = slots.as_deref().unwrap_or_default();
+        (0..MANUAL_STRAT_SLOTS)
+            .filter(|&i| slots.get(i).is_some_and(|slot| slot.show))
+            .map(|i| {
+                let slot = slots.get(i).cloned().unwrap_or_default();
+                let strategy = slot.strategy.trim().to_string();
+                // Match the slot's STRATEGY NAME against this snapshot's Manual-kind strategies
+                // rather than its ordinal position: the slot is the core's slot `i` while an
+                // ordinal match would address the ix-th Manual-kind strategy in snapshot order —
+                // the two can disagree, and a button that fires the wrong strategy places a real
+                // order silently.
+                let sid = manuals
+                    .iter()
+                    .find(|(_, name)| *name == strategy)
+                    .map(|(sid, _)| *sid);
+                let numeric_label = (i + 1).to_string();
+                let caption = slot_caption(&slot.label, &strategy, &numeric_label);
+                (i, strategy, sid, caption, numeric_label)
+            })
+            .collect::<Vec<_>>()
+    });
 
     // Resolve the narrow-window clip once, from real measured widths, before building either the
     // button row or the pill text below — the two share one decision.
     let fit = buttons.as_deref().map(|slots| {
         let btn_chrome_w = design::ui_value(cx, BTN_CHROME_W);
-        let btn_segment_gap = design::ui_value(cx, BTN_SEGMENT_GAP);
         let ms_toggle_w = design::ui_value(cx, MS_TOGGLE_W);
         let pill_chrome_w = design::ui_value(cx, PILL_CHROME_W);
         let header_other_sections_w = design::ui_value(cx, HEADER_OTHER_SECTIONS_W);
         let widths: Vec<SlotWidths> = slots
             .iter()
-            .map(|(_, _, _, name_label, numeric_label, key_label)| {
+            .map(|(_, _, _, name_label, numeric_label)| {
                 let name_w = design::ui_text_width(
                     cx,
                     name_label,
@@ -155,8 +167,6 @@ pub fn manual_strategy_controls(
                     BTN_TEXT_WEIGHT,
                     true,
                 );
-                let key_w =
-                    design::ui_text_width(cx, key_label, BTN_KEY_TEXT_SIZE, BTN_TEXT_WEIGHT, true);
                 let numeric_w = design::ui_text_width(
                     cx,
                     numeric_label,
@@ -165,7 +175,6 @@ pub fn manual_strategy_controls(
                     true,
                 );
                 SlotWidths {
-                    name_and_key: btn_chrome_w + name_w + btn_segment_gap + key_w,
                     name_only: btn_chrome_w + name_w,
                     number_only: btn_chrome_w + numeric_w,
                 }
@@ -183,11 +192,39 @@ pub fn manual_strategy_controls(
                 500.0,
                 true,
             );
+        // The parameter summary sits at the END of this cluster and is measured like the buttons
+        // are: it is real width the header spends, and leaving it out of the base is what let it
+        // run under the readouts to its right instead of making the buttons yield first.
+        let summary_w = summary
+            .as_deref()
+            .map(|text| {
+                design::ui_value(cx, design::CHROME_GAP)
+                    + design::ui_text_width(cx, text, design::base_text(cx) - 2.0, 400.0, true)
+            })
+            .unwrap_or(0.0);
+        // The gear is permanent chrome in this cluster, so it belongs in the base like the toggle
+        // and the pill: budgeting the row without it proves a fit at a width the row then overflows.
         let base = header_other_sections_w
             + ms_toggle_w
-            + design::ui_value(cx, design::CHROME_GAP) * 2.0
-            + pill_w_full;
-        resolve_strat_fit(chrome_width, design::ui_value(cx, BTN_GAP), &widths, base)
+            + design::ui_value(cx, design::CHROME_GAP) * 3.0
+            + design::ui_value(cx, SLOT_GEAR_W)
+            + pill_w_full
+            + summary_w;
+        // Which rendered slot is the active one, so the ladder measures it the way it draws it.
+        let selected_slot = on
+            .then(|| {
+                slots
+                    .iter()
+                    .position(|(_, _, sid, _, _)| sid.is_some() && *sid == Some(id))
+            })
+            .flatten();
+        resolve_strat_fit(
+            chrome_width,
+            design::ui_value(cx, BTN_GAP),
+            &widths,
+            selected_slot,
+            base,
+        )
     });
 
     // Capped like the core selector beside it: a strategy name is arbitrary user text and this
@@ -252,6 +289,34 @@ pub fn manual_strategy_controls(
                     });
                 }),
         )
+        // The gear sits with the switch it belongs to and exists only while MS is on: with the
+        // mode off there are no buttons on the row, so settings for them would configure nothing
+        // visible.
+        .children(on.then(|| {
+            let gear_shell = shell.clone();
+            let content = slots_open.then(|| {
+                settings::slot_settings_content(core, backend, shell, label_inputs, p, cx)
+            });
+            crate::chrome::terminal_chrome::header_gear_popover(
+                "ms-slots",
+                MoonPopoverPlacement::BottomStart,
+                SLOT_SETTINGS_W,
+                slots_open,
+                content,
+                MoonButton::new("ms-slots-gear")
+                    .size(MoonButtonSize::ToolbarCompact)
+                    .variant(MoonButtonVariant::Ghost)
+                    .icon("icons/settings.svg")
+                    .tooltip(t!("header.ms_slots_gear").to_string())
+                    .render(),
+                move |open, _, app| {
+                    gear_shell.update(app, |shell, cx| {
+                        shell.set_strat_slots_open(open, cx);
+                        cx.notify();
+                    });
+                },
+            )
+        }))
         .child({
             MoonPopover::new("header-ms-selector")
                 .placement(MoonPopoverPlacement::BottomStart)
@@ -277,47 +342,160 @@ pub fn manual_strategy_controls(
                         .render(),
                 )
         });
-    // Ten quick-select buttons: the fit ladder resolved above decides the label mode and how
-    // many of the caller's `show_button`-filtered slots to render; `0` renders none, leaving the
-    // toggle and the pill as the last two standing.
+    // Ten quick-select buttons: the fit ladder resolved above decides the label mode and how many
+    // slots to render; `0` renders none, leaving the toggle and the pill as the last two standing.
+    //
+    // Three gestures per button, matching Moonbot: left click fires the slot, right click assigns
+    // which strategy it fires, and a double click renames it.
     if let (Some(slots), Some(fit)) = (buttons, fit)
         && fit.visible_count > 0
     {
         let mut btn_row = h_flex().flex_none().gap(design::ui_px(cx, BTN_GAP));
-        for (i, raw_name, sid, name_label, numeric_label, key_label) in
-            slots.into_iter().take(fit.visible_count)
+        for (i, strategy, sid, caption, numeric_label) in slots.into_iter().take(fit.visible_count)
         {
+            let selected = on && sid.is_some() && sid == Some(id);
+            // The SELECTED slot keeps its caption even at the number-only clip level: the row's
+            // job is to say which strategy a new order will use, and a lone digit does not.
             let label = match fit.label_mode {
-                LabelMode::NumberOnly => numeric_label,
-                LabelMode::NameOnly | LabelMode::NameAndKey => name_label,
+                LabelMode::NumberOnly if !selected => numeric_label,
+                _ => caption.clone(),
             };
+            // An explicit width, so the caption sits inside the button's own padding instead of
+            // against its border. Measured through the same helper the fit ladder used, so the
+            // budget and the rendered button cannot disagree.
+            let label_w =
+                design::ui_text_width(cx, &label, BTN_NAME_TEXT_SIZE, BTN_TEXT_WEIGHT, true);
+            let btn_w = design::ui_value(cx, BTN_CHROME_W) + label_w;
+
             let mut btn = MoonButton::new(SharedString::from(format!("ms-btn-{i}")))
                 .size(MoonButtonSize::ToolbarCompact)
-                .variant(MoonButtonVariant::Panel)
-                .selected(on && sid.is_some() && sid == Some(id))
-                .segment(MoonButtonSegment::new(label).weight(BTN_TEXT_WEIGHT));
-            if matches!(fit.label_mode, LabelMode::NameAndKey) {
-                btn = btn.segment(
-                    MoonButtonSegment::new(key_label)
-                        .color(p.text_muted)
-                        .font_size(BTN_KEY_TEXT_SIZE),
+                // The active slot carries the accent variant rather than only `selected`: on a
+                // Panel button the selected state is a few percent of background and reads as
+                // nothing on a row of ten.
+                .variant(if selected {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Panel
+                })
+                .width(btn_w)
+                .selected(selected)
+                .segment(MoonButtonSegment::new(label.clone()).weight(BTN_TEXT_WEIGHT));
+            if sid.is_none() && !strategy.is_empty() {
+                // Assigned to a name this core's snapshot does not have: say so rather than firing
+                // something else. Still renameable and re-assignable, hence not disabled.
+                btn = btn.tooltip(
+                    t!("hotkeys.ms_button_unresolved", name = strategy.as_str()).to_string(),
+                );
+            } else if sid.is_none() {
+                btn = btn.tooltip(t!("header.ms_slot_empty").to_string());
+            }
+            let click_backend = backend.clone();
+            let btn = btn.on_click(move |_, _, app| {
+                let Some(sid) = sid else { return };
+                click_backend.update(app, |b, bcx| {
+                    send_manual(b, core, true, sid);
+                    bcx.notify();
+                });
+            });
+
+            // Right click opens the assign menu for THIS slot. `MoonPopover` opens from a click on
+            // its trigger, so the open state is driven from `Shell` instead and the wrapper only
+            // has to catch the right button.
+            let menu_shell = shell.clone();
+            let close_shell = shell.clone();
+            let clear_backend = backend.clone();
+            let clear_shell = shell.clone();
+            let mut menu_items = Vec::with_capacity(manuals.len() + 1);
+            menu_items.push(
+                MoonMenuItem::with_key(
+                    format!("ms-slot-{i}-clear"),
+                    t!("header.ms_slot_clear").to_string(),
+                )
+                .selected(strategy.is_empty())
+                .on_click(move |_, _, app| {
+                    clear_backend.update(app, |b, bcx| {
+                        b.set_strat_slot_strategy(core, i, String::new());
+                        bcx.notify();
+                    });
+                    clear_shell.update(app, |shell, cx| {
+                        shell.close_strat_slot_menu();
+                        cx.notify();
+                    });
+                }),
+            );
+            for (_, name) in &manuals {
+                let assigned = *name == strategy;
+                let assign_name = name.clone();
+                let assign_backend = backend.clone();
+                let assign_shell = shell.clone();
+                menu_items.push(
+                    MoonMenuItem::with_key(format!("ms-slot-{i}-{name}"), name.clone())
+                        .selected(assigned)
+                        .checked(assigned)
+                        .on_click(move |_, _, app| {
+                            let assign_name = assign_name.clone();
+                            assign_backend.update(app, |b, bcx| {
+                                b.set_strat_slot_strategy(core, i, assign_name);
+                                bcx.notify();
+                            });
+                            assign_shell.update(app, |shell, cx| {
+                                shell.close_strat_slot_menu();
+                                cx.notify();
+                            });
+                        }),
                 );
             }
-            btn = match sid {
-                Some(sid) => {
-                    let backend = backend.clone();
-                    btn.on_click(move |_, _, cx| {
-                        backend.update(cx, |b, bcx| {
-                            send_manual(b, core, true, sid);
-                            bcx.notify();
+            // The menu hangs off a ZERO-SIZE anchor beside the button rather than wrapping it.
+            // `MoonPopover` toggles itself on a left mouse-down on its trigger, so making the
+            // button the trigger would open this menu on the very click that fires the strategy —
+            // and swallow that click's mouse-down. An anchor nothing can click leaves the open
+            // state entirely to the right-click handler below.
+            btn_row = btn_row.child(
+                div()
+                    .id(SharedString::from(format!("ms-btn-wrap-{i}")))
+                    .flex_none()
+                    .relative()
+                    .on_mouse_down(MouseButton::Right, move |_, _, app| {
+                        menu_shell.update(app, |shell, cx| {
+                            shell.open_strat_slot_menu(core, i);
+                            cx.notify();
                         });
                     })
-                }
-                None => btn.disabled(true).tooltip(
-                    t!("hotkeys.ms_button_unresolved", name = raw_name.as_str()).to_string(),
-                ),
-            };
-            btn_row = btn_row.child(btn.render());
+                    .child(btn.render())
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .bottom_0()
+                            .w(px(0.0))
+                            .h(px(0.0))
+                            .child(
+                                MoonPopover::new(SharedString::from(format!("ms-slot-menu-{i}")))
+                                    .placement(MoonPopoverPlacement::BottomStart)
+                                    .fit_content()
+                                    .close_on_content_click(true)
+                                    .open(slot_menu == Some((core, i)))
+                                    .on_open_change(move |open, _, app| {
+                                        if !open {
+                                            close_shell.update(app, |shell, cx| {
+                                                shell.close_strat_slot_menu();
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                                    .trigger(div().w(px(0.0)).h(px(0.0)))
+                                    .content(
+                                        MoonPopupMenu::new(SharedString::from(format!(
+                                            "ms-slot-list-{i}"
+                                        )))
+                                        .fit_width(160.0, 420.0)
+                                        .size(MoonMenuSize::Compact)
+                                        .items(menu_items)
+                                        .render(),
+                                    ),
+                            ),
+                    ),
+            );
         }
         row = row.child(btn_row);
     }
@@ -335,6 +513,27 @@ pub fn manual_strategy_controls(
         );
     }
     Some(row.into_any_element())
+}
+
+/// Resolve what one quick-select button says, in the order a trader expects to see it.
+///
+/// The trader's own caption wins; failing that the assigned strategy names the button, as it does
+/// in Moonbot; failing that the slot shows its own number, which is what makes an unassigned slot
+/// visible enough to right-click.
+///
+/// Args:
+///     label: Caption stored for this slot, possibly blank.
+///     strategy: Strategy name assigned to this slot, possibly blank.
+///     ordinal: The slot's 1-based number, used when it has neither.
+///
+/// Returns:
+///     The caption to render.
+fn slot_caption(label: &str, strategy: &str, ordinal: &str) -> String {
+    match (label.trim(), strategy.trim()) {
+        ("", "") => ordinal.to_string(),
+        ("", name) => name.to_string(),
+        (label, _) => label.to_string(),
+    }
 }
 
 /// Collect Manual-kind strategy ids and names in their snapshot order.
@@ -356,25 +555,49 @@ fn manual_strategy_options(strategies: &[StrategyRow]) -> Option<Vec<(u64, Strin
 #[cfg(test)]
 mod tests;
 
-/// Select the zero-based `ix`th manual strategy in picker order and enable manual-strategy mode.
+/// Fire quick-select SLOT `ix` and enable manual-strategy mode.
 ///
-/// This performs the same update as clicking the corresponding picker item.
+/// This performs the same update as clicking button `ix` in the header, and deliberately addresses
+/// the same thing that button does: the slot. Resolving `ix` as "the ix-th Manual-kind strategy in
+/// snapshot order" instead — as this did before slots were assignable — makes the hotkey and the
+/// button with the same number fire DIFFERENT strategies the moment a trader assigns a slot by
+/// hand, which places a real order on the wrong strategy with no visible cause.
 ///
 /// Args:
-///     b: Backend used to read strategies and send the settings edit.
+///     b: Backend used to read the slot, resolve the strategy, and send the settings edit.
 ///     core: Core whose manual strategy should be selected.
-///     ix: Zero-based position among that core's Manual-kind strategies.
+///     ix: Zero-based quick-select slot.
 ///
 /// Returns:
-///     `true` when that position exists; `false` to let the hotkey propagate otherwise.
+///     `true` when that slot names a strategy this core actually has; `false` to let the hotkey
+///     propagate otherwise.
 pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -> bool {
-    let sid = b.session.store().core(core).and_then(|cd| {
-        cd.strategies
-            .iter()
-            .filter(|s| s.kind_ordinal == MANUAL_STRATEGY_KIND)
-            .nth(ix)
-            .map(|s| s.id)
-    });
+    let slot_strategy = b
+        .strat_slots(core)
+        .and_then(|slots| slots.get(ix).map(|slot| slot.strategy.trim().to_string()))
+        .filter(|strategy| !strategy.is_empty());
+    let sid = match slot_strategy {
+        Some(strategy) => b.session.store().core(core).and_then(|cd| {
+            cd.strategies
+                .iter()
+                .find(|s| s.kind_ordinal == MANUAL_STRATEGY_KIND && s.name == strategy)
+                .map(|s| s.id)
+        }),
+        // No slot to go by — the core has assigned none and this terminal owns none either, which
+        // is every core that has not reported its config yet. Fall back to the ordinal reading
+        // this used before slots existed, so the hotkeys keep working on an unconfigured core;
+        // once slots exist they are authoritative, and an empty slot fires nothing on purpose.
+        None if !b.core_owns_strat_trade_slots(core) => {
+            b.session.store().core(core).and_then(|cd| {
+                cd.strategies
+                    .iter()
+                    .filter(|s| s.kind_ordinal == MANUAL_STRATEGY_KIND)
+                    .nth(ix)
+                    .map(|s| s.id)
+            })
+        }
+        None => None,
+    };
     match sid {
         Some(sid) => {
             send_manual(b, core, true, sid);
@@ -395,7 +618,15 @@ pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -
 ///     on: Whether manual-strategy mode should be enabled.
 ///     id: Selected strategy id, retained even when the mode is disabled.
 fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
+    let changed = b.manual_strat_state(core).1 != id;
     b.set_manual_strat_local(core, on, id);
+    if changed {
+        // Selecting a strategy SEEDS the visible take profit and stop from it, once. From then on
+        // the screen is authoritative — the order carries what the trader sees, not what the
+        // strategy holds — but starting from the strategy's own values is what makes the first
+        // order after a selection do what the strategy says it will.
+        b.seed_exit_from_strategy(core, id);
+    }
     if let Err(e) = b
         .session
         .edit_client_settings(core, ClientSettingsEdit::ManualStrategy { on, id })

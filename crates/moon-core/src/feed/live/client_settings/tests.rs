@@ -4,6 +4,9 @@ use super::{
 };
 use crate::feed::ClientSettingsEdit;
 
+/// Core id the log lines in this module are stamped with; no assertion depends on it.
+const TEST_CORE: u64 = 1;
+
 /// Build a valid visible settings generation for serializer tests.
 fn exit_settings(tp: f64, stop_market: bool) -> GroupExitSettings {
     GroupExitSettings {
@@ -22,7 +25,7 @@ fn next_settings(
     sequence: &mut ClientSettingsSequence,
     snapshot: &moonproto::ClientSettingsCommand,
 ) -> moonproto::ClientSettingsCommand {
-    match sequence.next_action(snapshot) {
+    match sequence.next_action(snapshot, TEST_CORE) {
         SequenceAction::Send { settings, .. } => settings,
         _ => panic!("expected a full ClientSettings send"),
     }
@@ -48,7 +51,10 @@ fn full_settings_mutations_compose_before_the_echo() {
     assert_eq!(projected.blacklist_text, "SCAM,TEST");
 
     sequence.observe_update();
-    assert!(matches!(sequence.next_action(&sent), SequenceAction::Idle));
+    assert!(matches!(
+        sequence.next_action(&sent, TEST_CORE),
+        SequenceAction::Idle
+    ));
 }
 
 /// Regression target: removing the `x_tmode = false` write from
@@ -86,7 +92,10 @@ fn commands_arriving_during_an_inflight_generation_wait_for_its_echo() {
     let first_sent = next_settings(&mut sequence, &base);
     sequence.observe_send_success(&first_sent, 1);
     sequence.enqueue_edit(ClientSettingsEdit::ManualStrategy { on: true, id: 77 });
-    assert!(matches!(sequence.next_action(&base), SequenceAction::Idle));
+    assert!(matches!(
+        sequence.next_action(&base, TEST_CORE),
+        SequenceAction::Idle
+    ));
 
     sequence.observe_update();
     let second_sent = next_settings(&mut sequence, &first_sent);
@@ -110,7 +119,10 @@ fn a_confirmed_packet_retires_all_mutations_it_composed() {
     let sent = next_settings(&mut sequence, &base);
     sequence.observe_send_success(&sent, 2);
     sequence.observe_update();
-    assert!(matches!(sequence.next_action(&sent), SequenceAction::Idle));
+    assert!(matches!(
+        sequence.next_action(&sent, TEST_CORE),
+        SequenceAction::Idle
+    ));
 }
 
 /// Regression target: retaining the connection-local echo wait across `live::run` reconnects leaves
@@ -148,6 +160,8 @@ fn orders_release_after_their_own_confirmed_generation() {
         size: 0.25,
         strategy_id: None,
         exit: first,
+        planned_sell: 0.0,
+        sync_exit: true,
     });
     sequence.enqueue_order(ManualOrder {
         market: "BTCUSDT".to_string(),
@@ -156,18 +170,86 @@ fn orders_release_after_their_own_confirmed_generation() {
         size: 0.001,
         strategy_id: None,
         exit: second,
+        planned_sell: 0.0,
+        sync_exit: true,
     });
 
     let first_echo = next_settings(&mut sequence, &base);
     sequence.observe_update();
-    match sequence.next_action(&first_echo) {
+    match sequence.next_action(&first_echo, TEST_CORE) {
         SequenceAction::Place(order) => assert_eq!(order.exit, first),
         _ => panic!("first order did not release after its settings echo"),
     }
     let second_echo = next_settings(&mut sequence, &first_echo);
     sequence.observe_update();
-    match sequence.next_action(&second_echo) {
+    match sequence.next_action(&second_echo, TEST_CORE) {
         SequenceAction::Place(order) => assert_eq!(order.exit, second),
         _ => panic!("second order did not release after its settings echo"),
+    }
+}
+
+/// Regression target: a core that never echoes the exit generation back — which is what one does
+/// while a manual strategy owns the sell price and it keeps rewriting the field under us — held the
+/// order behind it FOREVER. The terminal then re-sent the same settings several times a second and
+/// the trader's chart click did nothing at all, with no error anywhere.
+#[test]
+fn an_order_is_released_after_its_generation_is_refused_three_times() {
+    // A core that always answers with its own values, never with what was sent.
+    let core_settings = moonproto::ClientSettingsCommand::default();
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(ManualOrder {
+        market: "BTCUSDT".to_string(),
+        short: false,
+        price: 100_000.0,
+        size: 0.001,
+        strategy_id: None,
+        exit: exit_settings(30.0, false),
+        planned_sell: 0.0,
+        sync_exit: true,
+    });
+
+    for attempt in 0..3 {
+        let action = sequence.next_action(&core_settings, TEST_CORE);
+        let SequenceAction::Send { settings, .. } = action else {
+            panic!("attempt {attempt} must send the generation");
+        };
+        sequence.observe_send_success(&settings, 1);
+        sequence.observe_update();
+    }
+
+    // Fourth plan: the generation is abandoned and the ORDER goes out, rather than waiting on an
+    // echo that never comes.
+    match sequence.next_action(&core_settings, TEST_CORE) {
+        SequenceAction::Place(order) => assert_eq!(order.market, "BTCUSDT"),
+        _ => panic!("the order must be released after the retry budget"),
+    }
+}
+
+/// Regression target: a manual-strategy order reads neither the visible TP nor the visible SL — the
+/// core takes them from the strategy — so making it wait for that generation's echo cost a full
+/// retry budget of round trips between the click and the order, which is plainly visible next to an
+/// ordinary order that goes out at once.
+#[test]
+fn an_order_that_ignores_the_exit_generation_is_sent_immediately() {
+    let core_settings = moonproto::ClientSettingsCommand::default();
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(ManualOrder {
+        market: "BTCUSDT".to_string(),
+        short: false,
+        price: 100_000.0,
+        size: 0.001,
+        strategy_id: Some(77),
+        // Deliberately a generation the core does NOT hold: it must not matter.
+        exit: exit_settings(30.0, false),
+        planned_sell: 101_000.0,
+        sync_exit: false,
+    });
+
+    match sequence.next_action(&core_settings, TEST_CORE) {
+        SequenceAction::Place(order) => {
+            assert_eq!(order.market, "BTCUSDT");
+            assert_eq!(order.planned_sell, 101_000.0);
+        }
+        _ => panic!("an order that does not sync its exits must go out on the first plan"),
     }
 }

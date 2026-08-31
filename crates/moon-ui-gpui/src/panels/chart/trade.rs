@@ -421,7 +421,7 @@ impl ChartPanel {
                 );
                 return false;
             }
-            let Some(terms) = b.manual_order_terms(core, &market, price, None) else {
+            let Some(terms) = b.manual_order_terms(core, &market, price, short, None) else {
                 // The reason itself is stated by whichever guard refused, on the line immediately
                 // above this one. Listing every possible cause here as well only competes with it.
                 log::warn!(
@@ -438,6 +438,7 @@ impl ChartPanel {
                 );
                 return false;
             };
+            b.queue_visible_stop(core, &market, price, short, terms.exit);
             match b
                 .session
                 .place_order(
@@ -448,6 +449,8 @@ impl ChartPanel {
                     terms.size_base,
                     None,
                     terms.exit,
+                    terms.planned_sell.unwrap_or(0.0),
+                    terms.sync_exit,
                 )
             {
                 Ok(()) => {

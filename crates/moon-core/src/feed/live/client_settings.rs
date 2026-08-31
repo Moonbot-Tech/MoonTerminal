@@ -26,6 +26,19 @@ pub(super) struct ManualOrder {
     pub size: f64,
     /// Optional core-owned strategy.
     pub strategy_id: Option<u64>,
+    /// Whether this order must wait for the core to confirm the visible exit generation.
+    ///
+    /// `false` for an order the core will not read those settings for anyway — a manual-strategy
+    /// order, whose sell comes from `planned_sell_price` or the strategy and whose stop is applied
+    /// to the order itself. Waiting there costs a full retry budget of round trips before the
+    /// order goes out, which is the delay a trader feels between the click and the order.
+    pub sync_exit: bool,
+    /// Sell target stored with this order (`planned_sell_price` on the wire), or `0.0` for none.
+    ///
+    /// Moonbot's own model: the visible take profit is a property of the ORDER, not of the manual
+    /// strategy — clicking a preset changes no strategy. Zero means the core applies whatever its
+    /// own settings or the order's strategy say.
+    pub planned_sell: f64,
     /// Visible settings that must be confirmed before placement.
     pub exit: GroupExitSettings,
 }
@@ -63,11 +76,23 @@ enum SequenceAction {
     Place(ManualOrder),
 }
 
+/// Sends of one settings generation that may go unconfirmed before it is abandoned.
+///
+/// A manual order waits behind its own exit generation, so a core that never echoes that
+/// generation back would hold the order forever — which is exactly what a core does while a manual
+/// strategy owns the sell price and it keeps rewriting `x_sell` under us. Three attempts tell a
+/// lost packet from a value this core will not hold, and the fourth releases the order rather than
+/// leaving the trader with a chart click that silently does nothing.
+const MAX_EXIT_ATTEMPTS: u8 = 3;
+
 /// Per-core serializer for every complete ClientSettings write and gated manual order.
 pub(in crate::feed) struct ClientSettingsSequence {
     queue: VecDeque<SequenceOp>,
     waiting_for_echo: bool,
     pending_confirmation: Option<(crate::feed::ClientSettings, usize)>,
+    /// Consecutive sends of the head mutation that came back unconfirmed; see
+    /// [`MAX_EXIT_ATTEMPTS`]. Cleared whenever the queue actually advances.
+    attempts: u8,
 }
 
 impl ClientSettingsSequence {
@@ -77,6 +102,7 @@ impl ClientSettingsSequence {
             queue: VecDeque::new(),
             waiting_for_echo: false,
             pending_confirmation: None,
+            attempts: 0,
         }
     }
 
@@ -109,10 +135,14 @@ impl ClientSettingsSequence {
 
     /// Queue an order behind its complete group-exit generation.
     pub(super) fn enqueue_order(&mut self, order: ManualOrder) {
-        self.queue
-            .push_back(SequenceOp::Mutation(SettingsMutation::GroupExit(
-                order.exit,
-            )));
+        // The barrier exists so an order cannot go out under someone else's TP/SL. An order that
+        // does not read them needs no barrier — and pays a full round trip for one it would ignore.
+        if order.sync_exit {
+            self.queue
+                .push_back(SequenceOp::Mutation(SettingsMutation::GroupExit(
+                    order.exit,
+                )));
+        }
         self.queue.push_back(SequenceOp::Order(order));
     }
 
@@ -124,6 +154,7 @@ impl ClientSettingsSequence {
     ) {
         self.waiting_for_echo = true;
         self.pending_confirmation = Some((client_settings_from_proto(settings), mutation_count));
+        self.attempts = self.attempts.saturating_add(1);
     }
 
     /// Whether every queued compact write has been echoed by the core.
@@ -166,7 +197,7 @@ impl ClientSettingsSequence {
 
         let mut order_submitted = false;
         loop {
-            match self.next_action(&settings) {
+            match self.next_action(&settings, server_id) {
                 SequenceAction::Idle => return order_submitted,
                 SequenceAction::Send {
                     settings: next,
@@ -199,6 +230,7 @@ impl ClientSettingsSequence {
                         order.size,
                         order.strategy_id,
                         order.exit.use_stop_market,
+                        order.planned_sell,
                     );
                     order_submitted = true;
                 }
@@ -207,7 +239,11 @@ impl ClientSettingsSequence {
     }
 
     /// Select the next deterministic action and discard mutations already reflected by the core.
-    fn next_action(&mut self, settings: &moonproto::ClientSettingsCommand) -> SequenceAction {
+    fn next_action(
+        &mut self,
+        settings: &moonproto::ClientSettingsCommand,
+        server_id: u64,
+    ) -> SequenceAction {
         if self.waiting_for_echo {
             return SequenceAction::Idle;
         }
@@ -219,12 +255,35 @@ impl ClientSettingsSequence {
                     }
                     self.queue.pop_front();
                 }
+                self.attempts = 0;
             }
         }
         loop {
             match self.queue.front() {
                 Some(SequenceOp::Mutation(mutation)) if mutation_satisfied(settings, mutation) => {
                     self.queue.pop_front();
+                    self.attempts = 0;
+                }
+                Some(SequenceOp::Mutation(mutation)) if self.attempts >= MAX_EXIT_ATTEMPTS => {
+                    // Named in the log: from the outside an abandoned generation and a core that
+                    // simply agreed look identical, and the difference is whether the order that
+                    // follows carries the trader's exits or the core's.
+                    let wanted = match mutation {
+                        SettingsMutation::GroupExit(exit) => format!("{exit:?}"),
+                        other => format!("{other:?}"),
+                    };
+                    log::warn!(
+                        "core {} did not accept the exit generation after {MAX_EXIT_ATTEMPTS}                          attempts, dropping it: wanted {wanted}, core holds {:?}",
+                        crate::feed::core_label(server_id),
+                        client_settings_from_proto(settings).group_exit_settings()
+                    );
+                    // This core will not hold the generation we asked for — it rewrites the field
+                    // itself, which is what a manual strategy owning the sell price does. Drop the
+                    // mutation instead of re-sending it forever: the order behind it is the thing
+                    // the trader is waiting on, and it goes out under the core's own values, which
+                    // are the ones the core would have used anyway.
+                    self.queue.pop_front();
+                    self.attempts = 0;
                 }
                 Some(SequenceOp::Mutation(_)) => {
                     let mut next = settings.clone();
@@ -242,7 +301,17 @@ impl ClientSettingsSequence {
                     };
                 }
                 Some(SequenceOp::Order(order)) => {
-                    if client_settings_from_proto(settings).group_exit_settings() != order.exit {
+                    // Only for an order that asked for the barrier, and only while its own
+                    // generation is still QUEUED: once that generation has been abandoned above,
+                    // waiting for a match that will never come would hold the order for the rest of
+                    // the session.
+                    if order.sync_exit
+                        && client_settings_from_proto(settings).group_exit_settings() != order.exit
+                        && self
+                            .queue
+                            .iter()
+                            .any(|op| matches!(op, SequenceOp::Mutation(_)))
+                    {
                         return SequenceAction::Idle;
                     }
                     let Some(SequenceOp::Order(order)) = self.queue.pop_front() else {
