@@ -91,6 +91,7 @@ impl<T> ProfitLoadState<T> {
             Self::Split(_) => Err(Note::IncomparableQuote),
             Self::NotReady => Err(Note::NotReady),
             Self::Failed(ReadFail::IncomparableQuote) => Err(Note::IncomparableQuote),
+            Self::Failed(ReadFail::PeriodOutOfRange) => Err(Note::PeriodOutOfRange),
             Self::Failed(error) => Err(Note::Failed {
                 msg: error.to_string().into(),
                 kind: error.kind().unwrap_or(FailKind::Other),

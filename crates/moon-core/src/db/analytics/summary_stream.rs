@@ -17,6 +17,10 @@ use crate::db::{QuoteScope, ReadResult};
 
 /// Maximum true-UTC span SQLite may sort for one current-period Summary statement.
 const QUERY_WINDOW_SECS: i64 = 7 * 86_400;
+/// Ceiling on how many bounded SQL windows one current-period read may execute. The span cap
+/// alone bounds the dense grid's memory, but not the hang: without this, a 40-year period would
+/// still run thousands of full-replica scans at the fixed 7-day window.
+const MAX_QUERY_WINDOWS: i64 = 400;
 /// Maximum difference between the retained and predicate-baked offsets for one row.
 const OFFSET_SCAN_PADDING_SECS: i64 = MAX_OFFSET_SECS as i64 - MIN_OFFSET_SECS as i64;
 /// Maximum raw `closedate` span each production window may scan from a physical source.
@@ -241,9 +245,22 @@ impl Accumulator {
         self.peak = self.peak.max(self.cumulative);
         self.stats.max_dd = self.stats.max_dd.max(self.peak - self.cumulative);
 
-        let bucket_start =
+        // `clamp_period` has already capped this query's `to` at `ANALYTICS_HORIZON_SECS` and its
+        // SPAN at `ANALYTICS_MAX_SPAN_SECS` — it deliberately floors nothing and reads no wall
+        // clock. `bucket_start` returning `None` therefore means the axis correction produced an
+        // instant chrono cannot represent — a genuinely broken row, not a display edge case. An
+        // unaligned fallback here is exactly what let a runaway fill loop start: `next_bucket`
+        // re-aligns its input, so a raw unaligned entry can never be matched by the stepping grid
+        // and the loop fills forward until chrono's own limit.
+        let Some(bucket_start) =
             crate::util::display_time::bucket_start(closedate_utc, bucket, axis.zone())
-                .unwrap_or(closedate_utc);
+        else {
+            return Err(rusqlite::Error::InvalidColumnType(
+                0,
+                "summary row bucket_start outside chrono's representable range".to_string(),
+                rusqlite::types::Type::Null,
+            ));
+        };
         match self.days.last_mut() {
             Some(day) if day.start == bucket_start => {
                 day.profit += profit;
@@ -303,22 +320,42 @@ impl Accumulator {
     /// Args:
     ///     bucket: Time-grid bucket width in seconds.
     ///     zone: Selected IANA zone used to step the civil bucket grid.
+    ///     max_buckets: Exact bucket ceiling derived from the query's already-clamped span
+    ///         (`span / bucket + 2`). An off-grid or out-of-order first bucket must not be able
+    ///         to walk the civil grid past the requested period — see `push`'s `bucket_start`
+    ///         guard, which rejects an unaligned bucket before it enters the grid.
     ///
     /// Returns:
-    ///     Nothing; aggregate fields and dense buckets are finalized in place.
-    fn finish_period(&mut self, bucket: i64, zone: chrono_tz::Tz) {
+    ///     Success once every observed bucket is placed, or an error once the cap is reached
+    ///     with input still unconsumed — never a silent truncation.
+    fn finish_period(
+        &mut self,
+        bucket: i64,
+        zone: chrono_tz::Tz,
+        max_buckets: usize,
+    ) -> rusqlite::Result<()> {
         if self.stats.n > 0 {
             self.stats.avg = self.stats.profit / self.stats.n as f64;
             self.stats.avg_dur_min = self.duration_seconds as f64 / self.stats.n as f64 / 60.0;
             self.stats.pf = profit_factor(self.win_sum, self.loss_sum);
         }
         if self.days.is_empty() {
-            return;
+            return Ok(());
         }
-        let mut filled = Vec::with_capacity(self.days.len());
+        let mut filled = Vec::with_capacity(self.days.len().min(max_buckets));
         let mut start = self.days[0].start;
         let mut days = std::mem::take(&mut self.days).into_iter().peekable();
         while let Some(day) = days.peek() {
+            if filled.len() >= max_buckets {
+                // Smuggled through `rusqlite::Error` so it reaches `read_fail_on` and its
+                // throttle, the same precedent already used above at `push`'s strategy-key
+                // guard and below in `finish_top`'s row conversion.
+                return Err(rusqlite::Error::InvalidColumnType(
+                    0,
+                    "summary grid exceeded max_buckets".to_string(),
+                    rusqlite::types::Type::Null,
+                ));
+            }
             if day.start == start {
                 filled.push(days.next().expect("peeked day exists"));
             } else {
@@ -334,6 +371,7 @@ impl Accumulator {
             start = next;
         }
         self.days = filled;
+        Ok(())
     }
 }
 
@@ -438,6 +476,17 @@ pub(super) fn read(
     include_kinds: bool,
     has_names: bool,
 ) -> ReadResult<SummaryParts> {
+    // Widen the window at wide spans so the SQL scan count stays bounded too, not only the
+    // grid. Deliberately a NO-OP under `MAX_QUERY_WINDOWS * QUERY_WINDOW_SECS` (~7.7 years) —
+    // today's behavior stays bit-for-bit unchanged there, which
+    // `multi_window_results_match_one_window_reference_across_boundary` already proves the
+    // result is invariant to window width for.
+    // `i64::div_ceil` is still unstable (rust-lang/rust#88581; only the unsigned integer types
+    // stabilized it), so the ceiling is computed by hand — safe here because `clamp_period`
+    // already guarantees `q.to > q.from`. `min_window_secs` is the narrowest window that still
+    // keeps the loop's iteration count at or under `MAX_QUERY_WINDOWS`.
+    let min_window_secs = ((q.to - q.from) + MAX_QUERY_WINDOWS - 1) / MAX_QUERY_WINDOWS;
+    let query_window_secs = QUERY_WINDOW_SECS.max(min_window_secs);
     read_with_window(
         conn,
         src,
@@ -448,7 +497,7 @@ pub(super) fn read(
             bucket,
             include_kinds,
             has_names,
-            query_window_secs: QUERY_WINDOW_SECS,
+            query_window_secs,
         },
     )
 }
@@ -482,6 +531,12 @@ struct StreamReadConfig {
 ///
 /// Returns:
 ///     Every current-period Summary projection or one classified read failure.
+///
+/// Errors:
+///     Also returns a classified failure once the dense grid `finish_period` builds would need
+///     more buckets than `q`'s already-clamped span allows — the exact ceiling that keeps an
+///     off-grid or out-of-order first bucket from walking the civil grid toward chrono's own
+///     limit instead of surfacing a bounded, visible error.
 fn read_with_window(
     conn: &Connection,
     src: &str,
@@ -564,7 +619,13 @@ fn read_with_window(
         }
         window_from = window_to;
     }
-    accumulator.finish_period(bucket, axis.zone());
+    // Exact, not a second policy constant: `q.to - q.from` is already clamped by `clamp_period`
+    // (Step 3's callers), so this bounds the civil grid to what the requested span can actually
+    // hold — plus the small DST margin a civil bucket can drift by at either bucket's own offset.
+    let max_buckets = usize::try_from((q.to - q.from) / bucket + 2).unwrap_or(usize::MAX);
+    accumulator
+        .finish_period(bucket, axis.zone(), max_buckets)
+        .map_err(|error| read_fail_on(conn, CTX, error))?;
 
     let (raw_strategies, raw_coins) = match raw_src {
         Some(raw_src) => read_raw_groups(conn, raw_src, q)?,

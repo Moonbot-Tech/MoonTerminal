@@ -364,6 +364,9 @@ pub(super) fn calendar_period_from(
     if current_query.from < 0 {
         current_query.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
+    // Before `scope_decision_on`, not after: a `ScopeDecision::Split` returns early below, and an
+    // absurd range must surface as `PeriodOutOfRange` rather than come back as Split.
+    current_query.clamp_period()?;
     let decision = match scope_decision_on(conn, &current_query)? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
         decision => decision,
@@ -497,6 +500,9 @@ pub fn calendar_cells(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
         if q.from < 0 {
             q.from = min_closedate(snapshot, &q.resolved_axis(snapshot)?)?;
         }
+        // Same ordering as `calendar_period_from`: before `scope_decision_on`, so a Split scope
+        // cannot return before an absurd range is caught.
+        q.clamp_period()?;
         let decision = match scope_decision_on(snapshot, &q)? {
             ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
             decision => decision,
@@ -514,6 +520,13 @@ pub fn calendar_cells(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
 /// Core of [`calendar_cells`] over an existing connection and the entry point for unit tests,
 /// which seed an in-memory `orders_rep` and verify bucketing, gaps, and win counts.
 ///
+/// Callers (`calendar_cells`, `calendar_period_from`) already clamp `q` to the readable range
+/// before `scope_decision_on`, so a garbage bound never reaches here as a Split scope. This
+/// function keeps its OWN `max_cells` cap regardless, as the last-resort bound for any other
+/// direct caller and for the one thing the outer clamp cannot see: `last_grid` widens to
+/// whatever the DATA reports (`.max(last)`), so one replica row bucketing far outside the period
+/// must not be allowed to size the up-front allocation or drive the fill loop past the cap.
+///
 /// Args:
 ///     conn: Existing SQLite connection whose snapshot should be queried.
 ///     q: Report scope and time range to aggregate.
@@ -521,6 +534,11 @@ pub fn calendar_cells(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
 ///
 /// Returns:
 ///     Dense daily cells or a classified database read failure.
+///
+/// Errors:
+///     Returns a classified failure for an ordinary query or row failure, or once the grid
+///     needed to reach the last observed cell exceeds its span-derived bucket cap — never a
+///     silent truncation.
 fn calendar_cells_from(
     conn: &Connection,
     q: &Query,
@@ -582,9 +600,16 @@ fn calendar_cells_from(
         .max(last);
     let funding = funding_by_bucket(conn, &q, projection, 86_400)?;
     let day0 = day0.min(last_grid);
-    let mut out = Vec::with_capacity((((last_grid - day0) / 86_400) + 1).max(1) as usize);
+    // Exact, not a second policy constant: bounds the grid to what the clamped period can
+    // actually hold. `last_grid` is `.max(last)` above, where `last` is DATA-derived — one
+    // replica row bucketing far in the future must not be allowed to size this allocation, which
+    // is the up-front abort site itself, not merely the loop below it.
+    let max_cells = usize::try_from((q.to - q.from) / 86_400 + 2).unwrap_or(usize::MAX);
+    let requested_cells =
+        usize::try_from((((last_grid - day0) / 86_400) + 1).max(1)).unwrap_or(usize::MAX);
+    let mut out = Vec::with_capacity(requested_cells.min(max_cells));
     let mut t = day0;
-    while t <= last_grid {
+    while t <= last_grid && out.len() < max_cells {
         out.push(map.remove(&t).unwrap_or(DayCell {
             start: t,
             ..Default::default()
@@ -593,6 +618,20 @@ fn calendar_cells_from(
             break;
         };
         t = next;
+    }
+    if t <= last_grid {
+        // The cap was reached (or the grid could not be stepped further) with cells still
+        // unconsumed: `last` carried a garbage bucket outside the requested period. Return the
+        // classified overflow rather than truncate the calendar silently.
+        return Err(read_fail_on(
+            conn,
+            CTX,
+            rusqlite::Error::InvalidColumnType(
+                0,
+                "calendar grid exceeded max_cells".to_string(),
+                rusqlite::types::Type::Null,
+            ),
+        ));
     }
     apply_funding(&mut out, &funding, projection != ProjectionMode::Percent);
     Ok(out)
