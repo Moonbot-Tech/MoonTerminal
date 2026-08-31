@@ -100,6 +100,12 @@ impl FieldMask {
         self.order_size_slots & (1 << slot) != 0
     }
 
+    /// Whether this mask names any part of the manual order-size block. Only the log reads it: a
+    /// write naming neither a slot nor the selection provably leaves `o_size`/`b_num` alone.
+    fn names_order_size(self) -> bool {
+        self.order_size_slots != 0 || self.order_size_sel
+    }
+
     fn union(self, other: Self) -> Self {
         Self {
             auto_start: self.auto_start || other.auto_start,
@@ -124,6 +130,9 @@ pub(in crate::feed) struct SharedConfigSequence {
     /// Projection expected back from the core, the union of the confirmed entries' masks, and how
     /// many queue entries it confirms.
     pending_confirmation: Option<(CoreConfig, FieldMask, usize)>,
+    /// Whether the "queued edits, no base snapshot" stall has been reported. Latched to one line
+    /// per stall, not one per feed-loop iteration; cleared once a base is available again.
+    missing_snapshot_logged: bool,
 }
 
 /// One queued write and how many times it has been sent without a matching echo.
@@ -156,6 +165,7 @@ impl SharedConfigSequence {
             waiting_for_echo: false,
             sent_at: None,
             pending_confirmation: None,
+            missing_snapshot_logged: false,
         }
     }
 
@@ -168,6 +178,8 @@ impl SharedConfigSequence {
         self.waiting_for_echo = false;
         self.sent_at = None;
         self.pending_confirmation = None;
+        // A reconnect starts a new stall episode, worth its own line if that snapshot never lands.
+        self.missing_snapshot_logged = false;
         // The attempt budget exists to end a disagreement with a core that refuses a value, not to
         // punish a dropped link: sends lost to a reconnect must not spend it.
         for queued in &mut self.queue {
@@ -189,6 +201,17 @@ impl SharedConfigSequence {
     /// Allow the next plan after a `SharedConfigUpdated` echo.
     pub(super) fn observe_update(&mut self) {
         self.waiting_for_echo = false;
+    }
+
+    /// Give up waiting for one packet's echo: lift the barrier AND drop the confirmation.
+    ///
+    /// Dropping it is the point. It describes a packet whose echo never arrived, so leaving it
+    /// makes the next plan compare the sent value against the pre-write snapshot — a mismatch
+    /// inside the mask by construction — which resolves as `NotApplied` and reports a core that
+    /// answered nothing as one that refused. The entry stays queued; the budget still ends it.
+    fn observe_echo_timeout(&mut self) {
+        self.waiting_for_echo = false;
+        self.pending_confirmation = None;
     }
 
     /// Record a successful send so no later plan can build on the pre-edit snapshot.
@@ -224,6 +247,8 @@ impl SharedConfigSequence {
         self.waiting_for_echo = false;
         self.sent_at = None;
         self.pending_confirmation = None;
+        // As in `prepare_reconnect`: a different MoonBot ends the latch's episode.
+        self.missing_snapshot_logged = false;
     }
 
     /// Drive queued edits against the client's retained snapshot.
@@ -256,12 +281,35 @@ impl SharedConfigSequence {
                 "core {} shared config echo timed out after {ECHO_TIMEOUT:?}; retrying",
                 crate::feed::core_label(server_id)
             );
-            self.waiting_for_echo = false;
+            self.observe_echo_timeout();
         }
-        let Ok(config) = client.settings().build_shared_config() else {
-            return;
+        let config = match client.settings().build_shared_config() {
+            Ok(config) => {
+                self.missing_snapshot_logged = false;
+                config
+            }
+            // Queued work with no base to write onto is the one failure with no send line, no
+            // echo and no give-up — the edit just waits, looking exactly like a core that ignored
+            // it. ONCE per stall: `drive` runs on every feed-loop iteration.
+            Err(error) => {
+                if !self.missing_snapshot_logged {
+                    self.missing_snapshot_logged = true;
+                    log::warn!(
+                        "core {} holds {} queued shared config edit(s) with no base to write onto: \
+                         {error}",
+                        crate::feed::core_label(server_id),
+                        self.queue.len()
+                    );
+                }
+                return;
+            }
         };
-        match self.next_action(&config, events) {
+        // Captured before the plan shadows `config` with the packet it built. `filled` is the
+        // core's own "the user configured these hotkeys" flag, invisible here unless printed.
+        let base_sizes = config.ui.hotkeys_config.o_size;
+        let base_sel = config.ui.hotkeys_config.b_num;
+        let base_filled = config.ui.hotkeys_config.filled;
+        match self.next_action(&config, server_id, events) {
             SequenceAction::Idle => {}
             SequenceAction::Send {
                 config,
@@ -280,10 +328,23 @@ impl SharedConfigSequence {
                                 mismatches: None,
                             },
                         )));
+                        // The order-size presets travel ONLY on this channel — unlike the sell
+                        // presets, `ClientSettingsCommand` carries no `o_size`/`b_num`. Printing
+                        // the base beside the sent value is what separates "the core was asked to
+                        // change it" from "it already held that".
                         log::info!(
-                            "core {} shared config sent ({edit_count} edits)",
+                            "core {} shared config sent ({edit_count} edits, {touched:?})",
                             crate::feed::core_label(server_id)
                         );
+                        if touched.names_order_size() {
+                            log::info!(
+                                "core {} order sizes sent: o_size {base_sizes:?} -> {:?}, \
+                                 b_num {base_sel} -> {}, hotkeys.filled={base_filled}",
+                                crate::feed::core_label(server_id),
+                                config.ui.hotkeys_config.o_size,
+                                config.ui.hotkeys_config.b_num,
+                            );
+                        }
                     }
                     Err(error) => {
                         // Charged like a real send: the plan is rebuilt on every feed-loop wake, so
@@ -304,6 +365,7 @@ impl SharedConfigSequence {
     fn next_action(
         &mut self,
         config: &SharedConfig,
+        server_id: u64,
         events: &mut Vec<CoreConfigEditEvent>,
     ) -> SequenceAction {
         if self.waiting_for_echo {
@@ -319,6 +381,15 @@ impl SharedConfigSequence {
                     CoreConfigEditResult::Confirmed,
                 ));
             } else if let Some(rejection) = rejection_within_mask(&expected, &actual, touched) {
+                // Logged, not only evented: a core that keeps its own value leaves no other trace
+                // until the budget runs out. NOT phrased as a refusal — `observe_update` lifts the
+                // barrier on ANY `SharedConfigUpdated`, so a first mismatch can be a pre-write
+                // snapshot. The give-up line is where a refusal becomes a verdict.
+                log::warn!(
+                    "core {} shared config echo did not carry the requested value (retrying): \
+                     {rejection:?}",
+                    crate::feed::core_label(server_id)
+                );
                 // Not dequeued: the entries stay queued and MAX_ATTEMPTS below still ends it.
                 events.push(CoreConfigEditEvent::Resolved(
                     CoreConfigEditResult::NotApplied(rejection),
@@ -333,7 +404,29 @@ impl SharedConfigSequence {
                 return SequenceAction::Idle;
             };
             if edit_satisfied(config, &head.config) {
+                // The quietest of the three ways an edit leaves the queue: no send line precedes
+                // it, so "the core already holds this" and "it was never sent" read alike.
+                log::info!(
+                    "core {} shared config edit satisfied by the core's own snapshot ({:?})",
+                    crate::feed::core_label(server_id),
+                    head.touched
+                );
                 self.queue.pop_front();
+                // CONFIRMED, because it is. It also catches the case `observe_echo_timeout` opens:
+                // a late echo reaches the queue HERE, and `CoreData::core_config_edit` clears on
+                // nothing else, so a succeeded write would leave the cell pending for the session.
+                // Suppressed after a REJECTION in the same pass — that would clear the row
+                // carrying it — but not after a `GaveUp`, whose row stays put either way.
+                if !events.iter().any(|event| {
+                    matches!(
+                        event,
+                        CoreConfigEditEvent::Resolved(CoreConfigEditResult::NotApplied(_))
+                    )
+                }) {
+                    events.push(CoreConfigEditEvent::Resolved(
+                        CoreConfigEditResult::Confirmed,
+                    ));
+                }
                 continue;
             }
             if head.attempts >= MAX_ATTEMPTS {
@@ -341,8 +434,9 @@ impl SharedConfigSequence {
                 // which of ~530 fields the core still disagreed on. Now the mask names exactly
                 // what THIS edit touched, so the log names that instead.
                 log::error!(
-                    "shared config write gave up after {MAX_ATTEMPTS} sends: the core's \
+                    "core {} shared config write gave up after {MAX_ATTEMPTS} sends: the core's \
                      configuration still differs on {:?}, so it is NOT applied",
+                    crate::feed::core_label(server_id),
                     head.touched
                 );
                 events.push(CoreConfigEditEvent::Resolved(CoreConfigEditResult::GaveUp));
