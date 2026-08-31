@@ -117,6 +117,7 @@ pub(super) fn grouped_server_view(
     rem_size: f32,
     overrides: &HashMap<String, f32>,
     state: &Entity<MoonTreeState>,
+    backend: &Entity<Backend>,
     window: &Window,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
@@ -126,9 +127,13 @@ pub(super) fn grouped_server_view(
     let header_weak = weak_view.clone();
     // A third for the width probe below, which outlives this call inside the canvas closure.
     let weak_measure = weak_view.clone();
-    // Read once and cloned into the tree's render closure below: the update buttons it hosts
-    // command the backend directly, never through the view.
-    let backend = cx.entity().read(cx).backend.clone();
+    // HANDED IN by the caller, never read off `cx.entity()`. This runs inside `CoreStatusView`'s
+    // own update, so reading that entity here panics `cannot read ... while it is already being
+    // updated` in a non-unwinding frame -- i.e. the process dies the moment the panel renders.
+    // The caller is a `&self` method that already holds the handle. Cloned once and moved into
+    // the tree's render closure below: the update buttons it hosts command the backend directly,
+    // never through the view.
+    let backend = backend.clone();
     let server_positions = Rc::new(
         groups
             .iter()

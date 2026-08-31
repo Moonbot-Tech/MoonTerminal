@@ -641,6 +641,10 @@ impl Render for CoreStatusView {
                 // per-frame clone of it would buy nothing on a path that repaints on every hover.
                 &self.by_ip_col_widths.read(cx).column_widths,
                 &self.tree_state,
+                // Handed down rather than read off the view inside the callee: we are already
+                // inside this view's own update here, and `cx.entity().read(cx)` there is a
+                // process-killing panic. We hold the handle, so we pass it.
+                &self.backend,
                 // `&Window` is enough: `Window::listener_for` takes `&self`, so the header's
                 // drag-move listener needs no mutable borrow.
                 window,
@@ -660,6 +664,8 @@ impl Render for CoreStatusView {
                     self.exchange_logos_ready,
                     self.flat_sort.is_some(),
                     &self.table_state,
+                    // Same reason as the By-IP arm above: the callee must not read this view.
+                    &self.backend,
                     cx,
                 )
                 .into_any_element()

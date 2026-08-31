@@ -119,6 +119,7 @@ pub(super) fn core_status_table(
     logos_ready: bool,
     sorted: bool,
     state: &Entity<MoonDataTableState>,
+    backend: &Entity<Backend>,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
     // Keyed on the CORES, not the lines: a table holding nothing but headings is not representable
@@ -129,9 +130,12 @@ pub(super) fn core_status_table(
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
     let view = cx.entity();
-    // Read once and cloned into the row-building closure below: the update button it hosts
-    // commands the backend directly, never through the view.
-    let backend = view.read(cx).backend.clone();
+    // HANDED IN by the caller, never read off `view` -- `view` IS `cx.entity()`, and this runs
+    // inside `CoreStatusView`'s own update, so reading it here panics `cannot read ... while it
+    // is already being updated` in a non-unwinding frame: the process dies as the panel renders.
+    // `view` itself stays: cloning a handle and calling `update` from a deferred closure is fine,
+    // it is only the SYNCHRONOUS read that is illegal here.
+    let backend = backend.clone();
     // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
     // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
     // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
