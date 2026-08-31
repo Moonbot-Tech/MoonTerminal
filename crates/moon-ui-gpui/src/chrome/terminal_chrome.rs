@@ -10,7 +10,7 @@ use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
     MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
     MoonSelectorSegment, MoonTag, MoonToggle, MoonToggleLabelSide, MoonToggleSize, MoonWindowFrame,
-    h_flex,
+    MoonWindowFrameBrand, h_flex,
 };
 use rust_i18n::t;
 
@@ -55,6 +55,9 @@ pub fn header(
     core_settings_content: Option<AnyElement>,
     quiet_settings_open: bool,
     quiet_settings_content: Option<AnyElement>,
+    strat_slot_menu: Option<(moon_core::session::CoreId, usize)>,
+    strat_slots_open: bool,
+    strat_label_inputs: &[Entity<moon_ui::MoonInputState>],
     chrome_width: f32,
     p: MoonPalette,
     cx: &App,
@@ -97,7 +100,17 @@ pub fn header(
     };
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
-    let manual = crate::controls::manual_strategy_controls(group, &backend, chrome_width, p, cx);
+    let manual = crate::controls::manual_strategy_controls(
+        group,
+        &backend,
+        &shell,
+        strat_slot_menu,
+        strat_slots_open,
+        strat_label_inputs,
+        chrome_width,
+        p,
+        cx,
+    );
     let update_state = updater.read(cx).state();
     h_flex()
         .w_full()
@@ -111,9 +124,17 @@ pub fn header(
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .bg(rgb(p.shell_high))
         // Brand draws its OWN trailing separator (MoonWindowFrame::brand_cluster), so the
-        // groups below add only the seams after them.
+        // groups below add only the seams after them. It is also the FIRST thing this row gives
+        // up on a narrow window (`design::header_brand_visible`): dropping the mark to `None`
+        // keeps the drag region and takes the rule with it, so the space goes to the readouts
+        // that carry information instead.
         .child(
             MoonWindowFrame::main("terminal-header-brand-drag", 0.0)
+                .brand(if design::header_brand_visible(cx, chrome_width) {
+                    MoonWindowFrameBrand::Default
+                } else {
+                    MoonWindowFrameBrand::None
+                })
                 .brand_cluster(cx)
                 .flex_none()
                 .h_full(),
@@ -259,11 +280,21 @@ pub fn header(
                     p,
                     cx,
                 ))
-                .child(design::chrome_divider(cx, p))
                 // The selected zone's clock with a city code or system abbreviation; clicking opens
                 // the picker. Its MoonPopover is anchored to this trigger, so unlike the ticker it
-                // needs no offset arithmetic.
-                .child(crate::chrome::clock::header_clock(&backend, p, cx))
+                // needs no offset arithmetic. Last of the ambient readouts to yield space — by the
+                // width it goes, the ticker whose popup offset counts it is already gone.
+                //
+                // Divider and clock share ONE predicate, for the reason the ticker cluster above
+                // states: split, the narrow window would draw a rule fencing off nothing — and on
+                // macOS, where the window controls are hidden, that rule would end the row.
+                .children(design::header_clock_visible(cx, chrome_width).then(|| {
+                    h_flex()
+                        .items_center()
+                        .gap(design::ui_px(cx, design::CHROME_GAP))
+                        .child(design::chrome_divider(cx, p))
+                        .child(crate::chrome::clock::header_clock(&backend, p, cx))
+                }))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
                         MoonWindowFrame::main("terminal-header-controls", 0.0)

@@ -7,39 +7,43 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use moon_core::config::{
-    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
+    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, MANUAL_STRAT_SLOTS, StratSlot,
+    TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, CoreConfig, CoreConfigState, FieldMask, StrategyRow};
+use moon_core::feed::{ClientSettingsEdit, FieldMask, StrategyRow};
 use moon_core::market::MarketQuantityUnit;
 use moon_core::session::CoreId;
-use moon_core::session::store::CoreData;
 
 use crate::Backend;
 
-/// Where the toolbar's visible manual-trading block (sizes, TP/SL, sell presets) is sourced from.
+/// Which of the terminal's OWN manual-trading generations (sizes, TP/SL, sell presets) the toolbar
+/// is showing.
 ///
-/// `GroupLocal` is reached only when the per-core opt-in is off or no chart core resolved — the
-/// exact, unconditional path every group-window toolbar has always used. `Core` is reached
-/// whenever the opt-in is on, regardless of whether the core has reported real values yet: an
-/// enabled-but-`Awaiting` core never silently falls back to group-local numbers, which would look
-/// exactly like the checkbox being off.
+/// Both arms are local config this terminal owns and delivers with the order; neither reads values
+/// back out of a core, so neither can be "awaiting" anything. `CoreOwn` is reached when the
+/// displayed core keeps its own generation ([`ServerConfig::own_trade_config`]), `GroupLocal`
+/// otherwise — including when no chart core resolved at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ManualSource {
     GroupLocal,
-    Core(CoreConfigState),
+    CoreOwn,
 }
 
-/// Combine two independent core-config arrivals (sizes from `core_config.manual`, exits from
-/// `client_settings`) into the ONE freshness state the toolbar shows for the whole manual-trading
-/// block. The weaker of the two always wins: a `Live` size beside an `Awaiting` exit is shown as
-/// `Awaiting`, never as a live number sitting beside a stale one with no marker.
-pub(crate) fn weaker_config_state(a: CoreConfigState, b: CoreConfigState) -> CoreConfigState {
-    use CoreConfigState::{Awaiting, Live, Stale};
-    match (a, b) {
-        (Awaiting, _) | (_, Awaiting) => Awaiting,
-        (Stale, _) | (_, Stale) => Stale,
-        (Live, Live) => Live,
-    }
+/// How long a requested `ignore_strat_sell_price` outranks the core's own value.
+///
+/// Covers the whole slow-channel budget: `SharedConfigSequence` allows three attempts at a
+/// ten-second echo timeout each, so a shorter window would snap the checkbox back while the write
+/// was still legitimately in flight, and a longer one would keep asserting a value the core has
+/// provably refused.
+pub(crate) const IGNORE_SELL_LOCAL_TTL: Duration = Duration::from_secs(35);
+
+/// One in-flight request for a core's `ignore_strat_sell_price`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IgnoreSellLocal {
+    /// The value the trader asked for.
+    pub want: bool,
+    /// When it was queued, for the TTL above.
+    pub at: Instant,
 }
 
 /// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
@@ -137,6 +141,149 @@ fn panic_press_absorbed(last: Option<Instant>, now: Instant) -> bool {
     last.is_some_and(|last| now.duration_since(last) < PANIC_TOGGLE_DEBOUNCE)
 }
 
+/// What a core's own manual-trading generation must hold when its switch is turned ON.
+///
+/// `Some` seeds it from the group, which is what keeps the numbers on screen from moving at the
+/// moment of the flip. `None` leaves an existing generation alone: a core that was switched off and
+/// on again must come back to ITS OWN values, not to whatever the group holds now — otherwise the
+/// switch would quietly discard the per-core set every time it was toggled.
+fn seed_on_enable(
+    existing: Option<&GroupTradeSettings>,
+    group: &GroupTradeSettings,
+) -> Option<GroupTradeSettings> {
+    existing.is_none().then(|| group.clone())
+}
+
+/// Absolute stop price for one order, from the visible percentage.
+///
+/// A long stops BELOW its entry and a short ABOVE it; the toolbar's percentage is signed, so only
+/// its magnitude is used. `None` when no usable stop can be computed, which leaves the order on
+/// whatever the core would have applied.
+///
+/// Args:
+///     entry: Price the order is placed at.
+///     pct: Visible stop-loss percentage, signed.
+///     short: Whether the position is short.
+///
+/// Returns:
+///     The absolute stop price.
+fn stop_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
+    let pct = pct.abs();
+    if !(entry.is_finite() && entry > 0.0 && pct.is_finite() && pct > 0.0 && pct < 100.0) {
+        return None;
+    }
+    let level = if short {
+        entry * (1.0 + pct / 100.0)
+    } else {
+        entry * (1.0 - pct / 100.0)
+    };
+    (level.is_finite() && level > 0.0).then_some(level)
+}
+
+/// Exit values shown while a manual strategy owns them, seeded from that strategy.
+///
+/// Deliberately NOT written to the saved generation: switching charts, switching strategies, or
+/// turning MS off must all show what the trader saved for that core or group, not what a strategy
+/// left behind.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct MsExitOverlay {
+    /// Whether the stop is enabled (`UseStopLoss` at seed time).
+    pub stop_on: bool,
+    /// Stop loss as the toolbar states it: signed percent.
+    pub stop_pct: f32,
+    /// Take profit in percent (`SellPrice` at seed time).
+    pub take_profit_pct: f64,
+}
+
+/// How long a queued per-order stop waits for its order to appear before it is abandoned.
+///
+/// Long enough for a placement round trip on a WAN-hosted core, short enough that a stop meant for
+/// one order cannot land on an unrelated one placed minutes later.
+pub(crate) const PENDING_STOP_TTL: Duration = Duration::from_secs(15);
+
+/// A visible stop waiting for the order it belongs to.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingStop {
+    /// Orders already on the market when the placement was sent; the first uid outside this set is
+    /// the order this stop belongs to.
+    pub before_uids: std::collections::HashSet<u64>,
+    /// The stop to apply, as an absolute price.
+    pub form: moon_core::feed::OrderStopsForm,
+    /// When the placement was sent, for [`PENDING_STOP_TTL`].
+    pub at: Instant,
+}
+
+/// Resolve one strategy field from the snapshot, then from its kind's schema default.
+fn strat_field_value(
+    row: &StrategyRow,
+    schema: Option<&moon_core::feed::StrategySchemaModel>,
+    name: &str,
+) -> Option<String> {
+    if let Some((_, value)) = row.fields.iter().find(|(field, _)| field == name) {
+        return Some(value.clone());
+    }
+    schema?
+        .kinds
+        .iter()
+        .find(|kind| kind.ordinal == row.kind_ordinal)?
+        .sections
+        .iter()
+        .flat_map(|section| section.fields.iter())
+        .find(|field| field.name == name)?
+        .default
+        .clone()
+}
+
+/// The sell target one manual order carries, as a PRICE, or `None` when the order must not carry
+/// one.
+///
+/// Moonbot's own model, and the reason this is computed per order rather than written anywhere:
+/// the trader's TP or engaged S preset is a property of the ORDER (`planned_sell_price` on the wire
+/// and on the retained row), not of the strategy — clicking a preset changes no strategy file, as
+/// the core's own screen shows. A short sells BELOW its entry, so its target mirrors.
+///
+/// `None` while no percentage is set: zero would ask the core to sell at the entry price.
+///
+/// Args:
+///     entry: Price the order is placed at.
+///     pct: Effective take profit, in percent.
+///     short: Whether the position is short.
+///
+/// Returns:
+///     The absolute price to store with the order.
+fn planned_sell_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
+    if !(entry.is_finite() && entry > 0.0 && pct.is_finite() && pct > 0.0) {
+        return None;
+    }
+    let target = if short {
+        entry * (1.0 - pct / 100.0)
+    } else {
+        entry * (1.0 + pct / 100.0)
+    };
+    (target.is_finite() && target > 0.0).then_some(target)
+}
+
+/// Resolve the sell-price flag to show: a fresh request the core has not answered yet, or the
+/// core's own value.
+///
+/// Settles the moment the core AGREES rather than only on the TTL, exactly like
+/// [`panic_local_settled`]: an override still asserting a value the core already holds would make
+/// the next click — which asks for the opposite — look like the no-op this override exists to
+/// prevent.
+///
+/// Args:
+///     local: The requested value and how long ago it was queued, when one is in flight.
+///     core_value: What the core's own configuration currently says.
+///
+/// Returns:
+///     The value the checkbox must render.
+fn effective_ignore_sell(local: Option<(bool, Duration)>, core_value: bool) -> bool {
+    match local {
+        Some((want, age)) if want != core_value && age < IGNORE_SELL_LOCAL_TTL => want,
+        _ => core_value,
+    }
+}
+
 /// Apply one visible toolbar edit with the same wire quantization used by MoonProto.
 fn apply_group_exit_edit(exit: &mut GroupExitSettings, edit: ClientSettingsEdit) -> bool {
     match edit {
@@ -220,6 +367,15 @@ fn usd_to_base_amount(usd: f64, rate: Option<f64>) -> Option<f64> {
 
 /// Group-owned terms resolved before one manual order is submitted to a core.
 pub(crate) struct ManualOrderTerms {
+    /// Sell target to store with the order, when the terminal's own exit controls are the ones
+    /// that apply. `None` leaves the field zero, which is what the core reads as "no target".
+    pub(crate) planned_sell: Option<f64>,
+    /// Whether the order must wait for the core to confirm the visible exit generation.
+    ///
+    /// `false` with a manual strategy selected: the core reads its sell from the strategy or from
+    /// `planned_sell`, and its stop is applied to the order itself, so waiting for those settings
+    /// only delays the order by a retry budget of round trips.
+    pub(crate) sync_exit: bool,
     /// Quantity sent to the target core, in THAT MARKET's own unit: a coin amount on a linear or
     /// spot market, a contract count on a coin-settled one. See `manual_order_size_base`.
     pub(crate) size_base: f64,
@@ -271,36 +427,505 @@ impl Backend {
             })
     }
 
-    /// Whether `core` reads its manual-trading order sizes, strategies, and exits from its own
-    /// shared core config instead of the group-local settings.
-    pub(crate) fn core_manual_enabled(&self, core: CoreId) -> bool {
+    /// Resolve `core`'s ten manual-strategy quick-select slots: what each button fires and what it
+    /// says.
+    ///
+    /// The terminal's own slots win when it has them; otherwise the core's `manual_strats_names`
+    /// stand in, so a terminal that has never assigned a button shows exactly what Moonbot shows.
+    /// `None` means neither source exists yet — the core has not reported its config and nothing
+    /// local was ever assigned — and the caller must draw no buttons rather than ten empty ones.
+    pub(crate) fn strat_slots(&self, core: CoreId) -> Option<Vec<StratSlot>> {
+        if let Some(local) = self.core_strat_slots(core) {
+            return Some(local.to_vec());
+        }
+        Some(self.core_slots_from_config(core)?.to_vec())
+    }
+
+    /// Build the slot array the CORE describes: its names, and its own per-slot visibility.
+    ///
+    /// `use_buttons` is folded into every slot's `show` rather than kept beside it, because from
+    /// here on visibility is one boolean per slot — the core's master switch has no counterpart in
+    /// the terminal's own slots, and carrying it separately would leave two different answers to
+    /// "is this button drawn".
+    fn core_slots_from_config(&self, core: CoreId) -> Option<[StratSlot; MANUAL_STRAT_SLOTS]> {
+        let manual = &self
+            .session
+            .store()
+            .core(core)?
+            .core_config
+            .as_ref()?
+            .manual;
+        Some(std::array::from_fn(|i| StratSlot {
+            strategy: manual.strat_names[i].trim().to_string(),
+            label: String::new(),
+            show: manual.strat_buttons.use_buttons && manual.strat_buttons.show_button[i],
+        }))
+    }
+
+    /// Whether ANY slot arrangement exists for `core` — its own or the core's.
+    ///
+    /// The hotkey path asks this before falling back to its pre-slot ordinal reading: with a slot
+    /// table present, the slot is the authority and an empty one fires nothing; with none at all,
+    /// the ordinal is the only thing left to go on.
+    pub(crate) fn core_owns_strat_trade_slots(&self, core: CoreId) -> bool {
+        self.strat_slots(core).is_some()
+    }
+
+    /// Show or hide one quick-select slot, taking this core's slots local in the process.
+    pub(crate) fn set_strat_slot_show(&mut self, core: CoreId, ix: usize, show: bool) {
+        self.update_strat_slot(core, ix, |slot| slot.show = show);
+    }
+
+    /// Replace this core's local slots with what the CORE currently describes — Moonbot's own
+    /// names and per-button visibility.
+    ///
+    /// The popup's explicit "pull from the core" action, and the only way back to the core's
+    /// arrangement once a slot has been assigned here. Captions are dropped with the rest: they
+    /// name the core's strategies again, which is exactly what pulling asks for.
+    pub(crate) fn pull_strat_slots_from_core(&mut self, core: CoreId) -> bool {
+        let Some(slots) = self.core_slots_from_config(core) else {
+            return false;
+        };
+        self.update_server(core, |server| server.strat_slots = Some(slots.clone()));
+        true
+    }
+
+    /// Set the core's "ignore a manual strategy's own sell price" flag.
+    ///
+    /// The one manual-block field that is NOT local: it changes what the core does with the toolbar
+    /// TP and S slots while a manual strategy is active, so it travels as a narrow shared-config
+    /// write and is confirmed by the core's echo like every other core-owned setting.
+    pub(crate) fn set_ignore_strat_sell_price(&mut self, core: CoreId, on: bool) {
+        let Some(mut cfg) = self
+            .session
+            .store()
+            .core(core)
+            .and_then(|data| data.core_config.clone())
+        else {
+            log::warn!("ignore strat sell price: core={core} has not reported its configuration");
+            return;
+        };
+        cfg.manual.ignore_strat_sell_price = on;
+        if let Err(error) = self.session.edit_core_config(
+            core,
+            cfg,
+            FieldMask::EMPTY.with_ignore_strat_sell_price(),
+        ) {
+            log::warn!("ignore strat sell price failed: core={core}: {error:#}");
+            return;
+        }
+        // Optimistic, for the same reason the manual-strategy toggle and Panic Sell keep one: this
+        // value travels on the SLOW channel (a whole safe-share packet, behind the compact-settings
+        // gate, with an echo and three attempts), so a checkbox rendered from the core's own value
+        // alone does not move when clicked and reads as broken. The override is time-boxed rather
+        // than permanent — if the core never takes the value, the truth has to come back on its
+        // own.
+        log::info!("core {core} ignore strat sell price -> {on} (queued)");
+        self.ignore_sell_local.insert(
+            core,
+            IgnoreSellLocal {
+                want: on,
+                at: Instant::now(),
+            },
+        );
+    }
+
+    /// The core's "ignore a manual strategy's own sell price" flag as the UI must show it: a fresh
+    /// local request while one is in flight, the core's own value otherwise.
+    ///
+    /// `None` before the core has reported its configuration at all — there is nothing to show and
+    /// nothing to write onto.
+    pub(crate) fn ignore_strat_sell_price(&self, core: CoreId) -> Option<bool> {
+        let core_value = self
+            .session
+            .store()
+            .core(core)?
+            .core_config
+            .as_ref()?
+            .manual
+            .ignore_strat_sell_price;
+        Some(effective_ignore_sell(
+            self.ignore_sell_local
+                .get(&core)
+                .map(|local| (local.want, local.at.elapsed())),
+            core_value,
+        ))
+    }
+
+    /// This core's OWN slots, or `None` while it still follows the core's.
+    fn core_strat_slots(&self, core: CoreId) -> Option<&[StratSlot; MANUAL_STRAT_SLOTS]> {
         self.config
             .servers
             .iter()
             .find(|server| server.id == core)
-            .is_some_and(|server| server.use_core_manual_config)
+            .and_then(|server| server.strat_slots.as_ref())
     }
 
-    /// Set the per-core manual-config opt-in, mirroring the live edit into an open Settings preview
-    /// exactly like [`Self::update_group_trade`] (contract: `docs/ARCHITECTURE.md`'s preview-mirror
-    /// rule, `set_core_manual_enabled` never skips it).
-    pub(crate) fn set_core_manual_enabled(&mut self, core: CoreId, on: bool) {
-        if let Some(server) = self.config.servers.iter_mut().find(|s| s.id == core) {
-            server.use_core_manual_config = on;
+    /// Assign the strategy one slot fires, taking this core's slots local in the process.
+    ///
+    /// Args:
+    ///     core: Core whose slot is being assigned.
+    ///     ix: Zero-based slot.
+    ///     strategy: Manual-kind strategy name, or empty to clear the slot.
+    pub(crate) fn set_strat_slot_strategy(&mut self, core: CoreId, ix: usize, strategy: String) {
+        self.update_strat_slot(core, ix, |slot| slot.strategy = strategy.clone());
+    }
+
+    /// Rename one slot's button. An empty label falls back to the strategy's own name.
+    pub(crate) fn set_strat_slot_label(&mut self, core: CoreId, ix: usize, label: String) {
+        self.update_strat_slot(core, ix, |slot| slot.label = label.clone());
+    }
+
+    /// Apply one mutation to a slot, seeding this core's whole slot array from whatever it was
+    /// SHOWING first.
+    ///
+    /// Seeding from the shown values rather than from empties is what keeps the other nine buttons
+    /// where they were the moment the first one is assigned; without it, taking a core local would
+    /// blank every button that came from `manual_strats_names`.
+    fn update_strat_slot(&mut self, core: CoreId, ix: usize, update: impl Fn(&mut StratSlot)) {
+        if ix >= MANUAL_STRAT_SLOTS {
+            return;
         }
-        if let Some(preview_server) = self
-            .preview
-            .as_mut()
-            .and_then(|preview| preview.servers.iter_mut().find(|s| s.id == core))
+        let seed: [StratSlot; MANUAL_STRAT_SLOTS] = self
+            .strat_slots(core)
+            .map(|slots| std::array::from_fn(|i| slots.get(i).cloned().unwrap_or_default()))
+            .unwrap_or_default();
+        self.update_server(core, |server| {
+            let slots = server.strat_slots.get_or_insert_with(|| seed.clone());
+            update(&mut slots[ix]);
+        });
+    }
+
+    /// Seed the manual-strategy exit OVERLAY from the strategy just selected.
+    ///
+    /// An overlay rather than a write: while MS is on, the take profit and stop on screen belong to
+    /// the SELECTED STRATEGY, and the group's (or the core's own) saved values must survive
+    /// untouched underneath. Switch to another chart and those saved values are what show; switch
+    /// MS off and they come back here too.
+    ///
+    /// Keyed by `(core, strategy)`, so returning to a strategy restores what was last used with it
+    /// rather than re-reading the strategy over the trader's own adjustment.
+    pub(crate) fn seed_exit_from_strategy(&mut self, core: CoreId, strategy_id: u64) {
+        if strategy_id == 0 || self.ms_exit_local.contains_key(&(core, strategy_id)) {
+            return;
+        }
+        let Some((stop_on, stop_pct, sell_pct)) = self.strategy_exit(core, strategy_id) else {
+            return;
+        };
+        self.ms_exit_local.insert(
+            (core, strategy_id),
+            MsExitOverlay {
+                stop_on,
+                // The strategy stores a positive distance; the toolbar's stop is signed.
+                stop_pct: stop_pct.map(|pct| -(pct.abs() as f32)).unwrap_or(0.0),
+                take_profit_pct: sell_pct.unwrap_or(0.0),
+            },
+        );
+    }
+
+    /// The exit the toolbar must show and the order must use, while MS owns it.
+    ///
+    /// `None` whenever the saved generation is the one in force: MS off, no strategy selected, or
+    /// no overlay seeded for it yet.
+    pub(crate) fn manual_exit_overlay(&self, core: CoreId) -> Option<MsExitOverlay> {
+        let (on, strategy_id) = self.manual_strat_state(core);
+        if !on || strategy_id == 0 {
+            return None;
+        }
+        self.ms_exit_local.get(&(core, strategy_id)).copied()
+    }
+
+    /// Apply an exit edit to the manual-strategy overlay instead of the saved generation.
+    ///
+    /// Returns whether the edit was absorbed here; `false` leaves it to the ordinary group/core
+    /// write, which is what happens with MS off.
+    fn edit_manual_exit_overlay(&mut self, group: &str, edit: ClientSettingsEdit) -> bool {
+        let Some(core) = self.active_trade_core(group) else {
+            return false;
+        };
+        let (manual_on, strategy_id) = self.manual_strat_state(core);
+        if !manual_on || strategy_id == 0 {
+            return false;
+        }
+        let mut current = self
+            .ms_exit_local
+            .get(&(core, strategy_id))
+            .copied()
+            .unwrap_or_default();
+        match edit {
+            ClientSettingsEdit::PanicIfPriceDrop(on) => current.stop_on = on,
+            ClientSettingsEdit::StopLossPct(pct) => {
+                let Some(pct) = GroupExitSettings::canonical_stop_loss_pct(pct) else {
+                    return true;
+                };
+                current.stop_pct = pct;
+            }
+            ClientSettingsEdit::TakeProfit { pct, .. }
+            | ClientSettingsEdit::ScalpTakeProfit(pct) => {
+                if !(pct.is_finite() && pct >= 0.0) {
+                    return true;
+                }
+                current.take_profit_pct = pct;
+            }
+            // A fixed-sell preset is a take profit too, and the engaged one is what the order
+            // sells at: keeping it out would leave the readout and the order disagreeing.
+            ClientSettingsEdit::SelectFixedSellSlot(slot) if (1..=6).contains(&slot) => {
+                current.take_profit_pct =
+                    self.write_aligned_group_exit(group).fixed_sell_pcts[slot - 1];
+            }
+            _ => return false,
+        }
+        self.ms_exit_local.insert((core, strategy_id), current);
+        true
+    }
+
+    /// One strategy's `UseStopLoss`, `StopLoss` and `SellPrice`, resolved through the schema like
+    /// the header's own parameter summary — a field left at its default is absent from the
+    /// snapshot.
+    fn strategy_exit(
+        &self,
+        core: CoreId,
+        strategy_id: u64,
+    ) -> Option<(bool, Option<f64>, Option<f64>)> {
+        let data = self.session.store().core(core)?;
+        let row = data.strategies.iter().find(|s| s.id == strategy_id)?;
+        let schema = data.schema.as_ref();
+        let field = |name: &str| strat_field_value(row, schema, name);
+        Some((
+            field("UseStopLoss")
+                .map(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "yes" | "true" | "1" | "on"
+                    )
+                })
+                .unwrap_or(false),
+            field("StopLoss").and_then(|v| v.trim().parse::<f64>().ok()),
+            field("SellPrice").and_then(|v| v.trim().parse::<f64>().ok()),
+        ))
+    }
+
+    /// Queue the visible stop for the order about to be placed, when the core would otherwise use
+    /// the strategy's own.
+    ///
+    /// Only with a manual strategy selected: without one the core already takes the stop from the
+    /// `ClientSettings` generation this terminal pushes ahead of the order, and a second per-order
+    /// write would be the same number twice.
+    ///
+    /// Args:
+    ///     core: Core the order goes to.
+    ///     market: Market it is placed on.
+    ///     price: Entry price, which the stop's absolute level is computed from.
+    ///     short: Position side; a short's stop sits ABOVE its entry.
+    ///     exit: Visible exit generation the order was composed under.
+    pub(crate) fn queue_visible_stop(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        price: f64,
+        short: bool,
+        exit: GroupExitSettings,
+    ) {
+        let (manual_on, strategy_id) = self.manual_strat_state(core);
+        if !manual_on || strategy_id == 0 {
+            return;
+        }
+        // What the trader SEES while MS is on, which is the overlay — the saved generation is not
+        // on screen in this mode and must not be what the order gets.
+        let (stop_on, stop_pct) = self
+            .manual_exit_overlay(core)
+            .map(|ms| (ms.stop_on, ms.stop_pct))
+            .unwrap_or((exit.stop_loss_enabled, exit.stop_loss_pct));
+        let level = stop_price(price, f64::from(stop_pct), short);
+        let form = moon_core::feed::OrderStopsForm {
+            sl: Some(moon_core::feed::StopGroupEdit {
+                on: stop_on,
+                // A FIXED price, not the percentage mode: the percentage mode resolves its level
+                // from the wire, the strategy, or ClientSettings — and the strategy is exactly the
+                // source this exists to override.
+                fixed: stop_on && level.is_some(),
+                price: level.unwrap_or(0.0),
+            }),
+            ..Default::default()
+        };
+        let before_uids = self
+            .session
+            .store()
+            .core(core)
+            .map(|data| {
+                data.order_lines
+                    .iter_market(market)
+                    .map(|order| order.uid)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.pending_stops.insert(
+            (core, market.to_string()),
+            PendingStop {
+                before_uids,
+                form,
+                at: Instant::now(),
+            },
+        );
+    }
+
+    /// Apply the visible stop to a manual order the moment the core publishes it.
+    ///
+    /// A manual order placed WITH a strategy takes its stop from that strategy at the fill, so the
+    /// generation the terminal pushes ahead of the order never reaches it — which is why an
+    /// on-screen stop of -3% ended up as the strategy's own. The order therefore gets its stop
+    /// individually, as an absolute price, the same way the Active-order dialog sets one.
+    ///
+    /// Returns whether anything was applied, so the caller knows to repaint.
+    pub(crate) fn tick_pending_stops(&mut self) -> bool {
+        let mut applied = Vec::new();
+        for ((core, market), pending) in &self.pending_stops {
+            if pending.at.elapsed() >= PENDING_STOP_TTL {
+                applied.push((*core, market.clone(), None));
+                continue;
+            }
+            let uid = self.session.store().core(*core).and_then(|data| {
+                data.order_lines
+                    .iter_market(market)
+                    .find(|order| {
+                        order.closed_ms.is_none() && !pending.before_uids.contains(&order.uid)
+                    })
+                    .map(|order| order.uid)
+            });
+            if let Some(uid) = uid {
+                applied.push((*core, market.clone(), Some((uid, pending.form))));
+            }
+        }
+        let mut sent = false;
+        for (core, market, target) in applied {
+            self.pending_stops.remove(&(core, market.clone()));
+            let Some((uid, form)) = target else {
+                log::warn!("pending stop for core={core} market={market} expired unapplied");
+                continue;
+            };
+            log::info!("core {core} market {market} order {uid}: applying the visible stop");
+            if let Err(error) = self.session.update_order_stops(core, uid, form) {
+                log::warn!("pending stop failed: core={core} order={uid}: {error:#}");
+                continue;
+            }
+            sent = true;
+        }
+        sent
+    }
+
+    /// Whether `core` keeps its OWN manual-trading generation instead of sharing its group's.
+    ///
+    /// The flag alone is not enough: a core must also HAVE a generation for the answer to be yes.
+    /// `set_core_own_trade` seeds one before it sets the flag and `config::reconcile` seeds any
+    /// file that predates the seeding rule, so the two agree in practice — but a hand-edited file
+    /// can still carry the flag with no set, and there this must answer the same as the display
+    /// resolver ([`Self::core_trade_settings`]), or the toolbar would show the group's numbers with
+    /// the switch off while a click silently forked a per-core set.
+    pub(crate) fn core_own_trade(&self, core: CoreId) -> bool {
+        self.core_trade_settings(core).is_some()
+    }
+
+    /// Return `core`'s own manual-trading generation, or `None` while it shares its group's.
+    ///
+    /// A core with the switch ON but no stored generation cannot happen through
+    /// [`Self::set_core_own_trade`], which seeds one before it flips the flag; this still answers
+    /// `None` for a hand-edited config so every reader falls back to the group rather than to
+    /// invented numbers.
+    fn core_trade_settings(&self, core: CoreId) -> Option<&GroupTradeSettings> {
+        self.config
+            .servers
+            .iter()
+            .find(|server| server.id == core)
+            .filter(|server| server.own_trade_config)
+            .and_then(|server| server.trade.as_ref())
+    }
+
+    /// Set whether `core` keeps its own manual-trading generation, mirroring the live edit into an
+    /// open Settings preview exactly like [`Self::update_group_trade`] (contract:
+    /// `docs/ARCHITECTURE.md`'s preview-mirror rule, this never skips it).
+    ///
+    /// Turning the switch ON seeds the core's generation FROM THE GROUP the first time only: the
+    /// numbers on screen must not move at the moment of the flip. A core that already has one
+    /// keeps it, so toggling off and on again restores exactly what that core had — the reason the
+    /// generation survives an off state at all.
+    pub(crate) fn set_core_own_trade(&mut self, core: CoreId, on: bool) {
+        let seed = on
+            .then(|| {
+                self.config
+                    .servers
+                    .iter()
+                    .find(|s| s.id == core)
+                    .and_then(|s| {
+                        seed_on_enable(s.trade.as_ref(), &self.group_trade_settings(&s.group))
+                    })
+            })
+            .flatten();
+        self.update_server(core, |server| {
+            server.own_trade_config = on;
+            if let Some(seed) = seed.clone() {
+                server.trade = Some(seed);
+            }
+        });
+    }
+
+    /// Apply one mutation to `core`'s server row in BOTH the live config and an open Settings
+    /// preview — the server-row twin of [`Self::update_group_trade`], and the one place that
+    /// mirroring is written for them.
+    ///
+    /// Without the preview half a per-core edit made while Settings is open is discarded the moment
+    /// the user presses Save, which replaces the live config from the preview wholesale.
+    fn update_server(
+        &mut self,
+        core: CoreId,
+        update: impl Fn(&mut moon_core::config::ServerConfig),
+    ) {
+        for servers in [
+            Some(&mut self.config.servers),
+            self.preview.as_mut().map(|preview| &mut preview.servers),
+        ]
+        .into_iter()
+        .flatten()
         {
-            preview_server.use_core_manual_config = on;
+            if let Some(server) = servers.iter_mut().find(|s| s.id == core) {
+                update(server);
+            }
         }
         self.config_dirty = true;
     }
 
-    /// Resolve the core a group-local manual-trading write must instead reach, because the
-    /// group's active trading core has opted into the core route. `None` means the write proceeds
-    /// group-local exactly as before. This is the ONE choke point every group-local writer
+    /// Return one group's complete manual-trading generation, or the neutral standard when the
+    /// group row does not exist yet.
+    fn group_trade_settings(&self, group: &str) -> GroupTradeSettings {
+        self.config
+            .group_ref(group)
+            .map(|group| group.trade.clone())
+            .unwrap_or_default()
+    }
+
+    /// Apply one mutation to `core`'s own manual-trading generation, in both the live config and an
+    /// open Settings preview — the per-core twin of [`Self::update_group_trade`].
+    ///
+    /// Seeds from the group when the core somehow has the switch on with no stored generation, so a
+    /// hand-edited config cannot make an edit vanish.
+    fn update_core_trade(&mut self, core: CoreId, update: impl Fn(&mut GroupTradeSettings)) {
+        let group = self
+            .config
+            .servers
+            .iter()
+            .find(|s| s.id == core)
+            .map(|s| s.group.clone());
+        let seed = group.map(|group| self.group_trade_settings(&group));
+        self.update_server(core, |server| {
+            let trade = server
+                .trade
+                .get_or_insert_with(|| seed.clone().unwrap_or_default());
+            update(trade);
+        });
+    }
+
+    /// Resolve the core whose OWN manual-trading generation a write must land in, because the
+    /// group's active trading core keeps one. `None` means the write proceeds group-local exactly
+    /// as before. This is the ONE choke point every group-local writer
     /// (`set_order_size_sel`, `set_order_size_value`, `edit_group_exit`) checks, so a hotkey, a
     /// strip click, a Settings-panel input, and a metric popup cannot reach three different
     /// conclusions about which core (if any) a write must go to.
@@ -312,7 +937,7 @@ impl Backend {
     /// same group briefly disagrees with this fallback.
     pub(crate) fn manual_write_core(&self, group: &str) -> Option<CoreId> {
         self.active_trade_core(group)
-            .filter(|&core| self.core_manual_enabled(core))
+            .filter(|&core| self.core_own_trade(core))
     }
 
     /// Whether a manual-trading control seeded from `display_core` would write to the source it
@@ -338,55 +963,8 @@ impl Backend {
         group: &str,
         display_core: Option<CoreId>,
     ) -> bool {
-        let display_target = display_core.filter(|&core| self.core_manual_enabled(core));
+        let display_target = display_core.filter(|&core| self.core_own_trade(core));
         display_target == self.manual_write_core(group)
-    }
-
-    /// The base projection a whole-config write must start from, or WHY there is none.
-    ///
-    /// Both manual order-size writers refuse rather than invent one: a `CoreConfig` built from
-    /// defaults would carry ~90 fields the user never saw straight into the core. The `Err` half
-    /// is the sentence for the log — the two reasons are worth telling apart, because "the core is
-    /// gone" and "the core has not answered yet" call for different things from the user.
-    fn core_config_for_write(&self, core: CoreId) -> Result<CoreConfig, &'static str> {
-        match self.session.store().core(core) {
-            None => Err("the core is not in the session store"),
-            Some(data) => data
-                .core_config
-                .clone()
-                .ok_or("the core has not reported its configuration yet"),
-        }
-    }
-
-    /// Report a refused manual order-size write ONCE per core.
-    ///
-    /// A refusal leaves the seed value untouched, so the strip's "did the value actually change"
-    /// guard cannot damp anything: every character typed into the inline editor and every wheel
-    /// tick would write its own identical line. Cleared by the next write that succeeds.
-    fn note_size_write_refusal(&mut self, core: CoreId, reason: &'static str) {
-        // Keyed on the REASON too, not the core alone: "the core is gone" turning into "the core
-        // is back but silent" is a different fact about the same core, and a core-only latch
-        // would report whichever came first and hide the other for the rest of the session.
-        if self.size_write_refused == Some((core, reason)) {
-            return;
-        }
-        self.size_write_refused = Some((core, reason));
-        log::warn!("manual order-size write refused: core={core}: {reason}");
-    }
-
-    /// Return the core's retained manual order-size preset block and its freshness, tolerant of a
-    /// stale-but-retained snapshot. `None` only while the core has never reported one at all.
-    pub(crate) fn core_manual_sizes(
-        &self,
-        core: CoreId,
-    ) -> Option<([f64; 6], usize, CoreConfigState)> {
-        let data = self.session.store().core(core)?;
-        let cfg = data.core_config.as_ref()?;
-        Some((
-            cfg.manual.order_sizes,
-            cfg.manual.order_size_sel.min(5),
-            data.core_config_state(),
-        ))
     }
 
     /// One resolver for the toolbar, hotkeys, and every metric popup: the effective F1-F6 sizes,
@@ -401,15 +979,12 @@ impl Backend {
         group: &str,
         core: Option<CoreId>,
     ) -> ([f64; 6], usize, ManualSource) {
-        if let Some(core) = core.filter(|&core| self.core_manual_enabled(core)) {
-            return match self.core_manual_sizes(core) {
-                Some((sizes, sel, state)) => (sizes, sel, ManualSource::Core(state)),
-                None => (
-                    DEFAULT_ORDER_SIZES_USD,
-                    2,
-                    ManualSource::Core(CoreConfigState::Awaiting),
-                ),
-            };
+        if let Some(trade) = core.and_then(|core| self.core_trade_settings(core)) {
+            return (
+                trade.order_sizes_usd,
+                trade.order_size_sel.min(trade.order_sizes_usd.len() - 1),
+                ManualSource::CoreOwn,
+            );
         }
         let (sizes, sel) = self.manual_order_size_state(group);
         (sizes, sel, ManualSource::GroupLocal)
@@ -443,24 +1018,8 @@ impl Backend {
         group: &str,
         core: Option<CoreId>,
     ) -> (GroupExitSettings, ManualSource) {
-        if let Some(core) = core.filter(|&core| self.core_manual_enabled(core)) {
-            let data = self.session.store().core(core);
-            return match data.and_then(|data| data.client_settings.as_ref()) {
-                Some(settings) => (
-                    settings.group_exit_settings(),
-                    // The exit half's freshness comes from `CoreData` itself, which owns the
-                    // latched `client_settings_stale` marker. A local approximation here would
-                    // miss that latch and read `Live` for a reconnect that reached `Ready` again
-                    // before a fresh snapshot arrived.
-                    ManualSource::Core(
-                        data.map_or(CoreConfigState::Awaiting, CoreData::client_settings_state),
-                    ),
-                ),
-                None => (
-                    GroupExitSettings::default(),
-                    ManualSource::Core(CoreConfigState::Awaiting),
-                ),
-            };
+        if let Some(trade) = core.and_then(|core| self.core_trade_settings(core)) {
+            return (trade.exit, ManualSource::CoreOwn);
         }
         (self.group_exit_settings(group), ManualSource::GroupLocal)
     }
@@ -484,44 +1043,18 @@ impl Backend {
             .0
     }
 
-    /// Select an F1-F6 USD-equivalent preset for one group, or the group's active core when its
-    /// per-core opt-in is on: the choke point re-targets the write onto the core's own shared
-    /// config rather than the group-local settings.
+    /// Select an F1-F6 USD-equivalent preset for one group, or for the group's active core when
+    /// that core keeps its own generation: the choke point re-targets the write onto the core's
+    /// own set rather than the group's.
     pub(crate) fn set_order_size_sel(&mut self, group: &str, ix: usize) {
         if ix >= 6 {
             return;
         }
         if let Some(core) = self.manual_write_core(group) {
-            // A `None` `core_config` REFUSES rather than inventing defaults for the other ~90
-            // fields a whole-projection write would otherwise have to guess. Reported, because a
-            // refusal here consumes the user's edit and is otherwise indistinguishable from a
-            // write that reached the core: the toolbar keeps rendering the core's own values
-            // either way.
-            let mut cfg = match self.core_config_for_write(core) {
-                Ok(cfg) => cfg,
-                Err(reason) => {
-                    self.note_size_write_refusal(core, reason);
-                    return;
-                }
-            };
-            cfg.manual.order_size_sel = ix;
-            if let Err(error) =
-                self.session
-                    .edit_core_config(core, cfg, FieldMask::EMPTY.with_order_size_sel())
-            {
-                log::warn!("set order size sel failed: core={core}: {error:#}");
-                return;
-            }
-            self.size_write_refused = None;
+            self.update_core_trade(core, |trade| trade.order_size_sel = ix);
             return;
         }
         self.update_group_trade(group, |trade| trade.order_size_sel = ix);
-    }
-
-    /// Return the selected USD-equivalent order amount for one group.
-    pub(crate) fn manual_order_size_usd(&self, group: &str) -> f64 {
-        let (sizes, sel) = self.manual_order_size_state(group);
-        sizes[sel]
     }
 
     /// Resolve the USD-equivalent order size for a real order about to reach `core`, refusing
@@ -532,12 +1065,8 @@ impl Backend {
     /// would size a real order from `DEFAULT_ORDER_SIZES_USD` while the user believes it is sized
     /// from their configured core. `None` therefore means "do not place this order", not "show 0".
     fn effective_order_size_usd_for_order(&self, group: &str, core: CoreId) -> Option<f64> {
-        if self.core_manual_enabled(core) {
-            let (sizes, sel, _state) = self.core_manual_sizes(core)?;
-            Some(sizes[sel])
-        } else {
-            Some(self.manual_order_size_usd(group))
-        }
+        let (sizes, sel, _source) = self.effective_order_size_state(group, Some(core));
+        Some(sizes[sel])
     }
 
     /// Exit twin of [`Self::effective_order_size_usd_for_order`]: the core's own retained exit
@@ -548,16 +1077,7 @@ impl Backend {
         group: &str,
         core: CoreId,
     ) -> Option<GroupExitSettings> {
-        if self.core_manual_enabled(core) {
-            let settings = self
-                .session
-                .store()
-                .core(core)
-                .and_then(|data| data.client_settings.as_ref())?;
-            Some(settings.group_exit_settings())
-        } else {
-            Some(self.group_exit_settings(group))
-        }
+        Some(self.effective_group_exit(group, Some(core)).0)
     }
 
     /// Convert a target core's effective USD amount — group-local, or the core's own when the
@@ -679,6 +1199,7 @@ impl Backend {
         core: CoreId,
         market: &str,
         price: f64,
+        short: bool,
         size_base_override: Option<f64>,
     ) -> Option<super::ManualOrderTerms> {
         let server = self
@@ -695,42 +1216,39 @@ impl Backend {
                 (size, Some(usd))
             }
         };
+        // The visible take profit rides ALONG WITH the order, Moonbot-style, and only where it is
+        // the thing that applies: with a manual strategy selected, the core sells at that
+        // strategy's own price unless its "ignore the strategy's sell price" checkbox is on. Ask
+        // for a target in the other case and the core would have two answers for one order.
+        let (manual_on, _) = self.manual_strat_state(core);
+        let terminal_owns_sell = !manual_on || self.ignore_strat_sell_price(core).unwrap_or(false);
+        // The take profit the trader SEES: the manual-strategy overlay while it is in force, the
+        // saved generation otherwise.
+        let take_profit_pct = self
+            .manual_exit_overlay(core)
+            .map(|ms| ms.take_profit_pct)
+            .unwrap_or_else(|| exit.effective_take_profit_pct());
+        let planned_sell = terminal_owns_sell
+            .then(|| planned_sell_price(price, take_profit_pct, short))
+            .flatten();
         Some(ManualOrderTerms {
             size_base,
             size_usd,
             exit,
+            planned_sell,
+            sync_exit: !manual_on,
         })
     }
 
-    /// Write one USD-equivalent F1-F6 preset, group-local or (per-core opt-in on) through the
-    /// core's own shared config. The zero/non-finite guard above is client-side and applies
-    /// identically to both routes, so a core-side `NotApplied` stays reserved for a genuine core
-    /// refusal rather than a request already known to be bad.
+    /// Write one USD-equivalent F1-F6 preset into the group's set, or into the active core's own
+    /// set when it keeps one. The zero/non-finite guard rejects a value the order path could not
+    /// size from, identically on both routes.
     pub(crate) fn set_order_size_value(&mut self, group: &str, ix: usize, value: f64) {
         if ix >= 6 || !(value.is_finite() && value > 0.0) {
             return;
         }
         if let Some(core) = self.manual_write_core(group) {
-            // A `None` `core_config` REFUSES — the same principle as the money path, and the only
-            // way to avoid inventing defaults for the other ~90 fields. Reported for the same
-            // reason as the selection twin above: silently dropping the edit looks exactly like a
-            // write the core ignored.
-            let mut cfg = match self.core_config_for_write(core) {
-                Ok(cfg) => cfg,
-                Err(reason) => {
-                    self.note_size_write_refusal(core, reason);
-                    return;
-                }
-            };
-            cfg.manual.order_sizes[ix] = value;
-            if let Err(error) =
-                self.session
-                    .edit_core_config(core, cfg, FieldMask::EMPTY.with_order_size_slot(ix))
-            {
-                log::warn!("set order size value failed: core={core}: {error:#}");
-                return;
-            }
-            self.size_write_refused = None;
+            self.update_core_trade(core, |trade| trade.order_sizes_usd[ix] = value);
             return;
         }
         self.update_group_trade(group, |trade| trade.order_sizes_usd[ix] = value);
@@ -744,39 +1262,29 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    /// Apply a visible ClientSettings edit to the group's local source of truth, or (per-core
-    /// opt-in on) to the group's active core's own exit generation through the EXISTING
-    /// `sync_group_exit` command path — TP/SL/S1-S6 stay on the `ClientSettingsEdit` channel,
-    /// unchanged. Refuses rather than guessing while the core has not reported `ClientSettings`
-    /// yet: editing a synthesized default exit and pushing it would overwrite whatever the core
-    /// actually has.
+    /// Apply a visible TP/SL/S-slot edit to the generation the toolbar is writing to: the group's,
+    /// or the active core's own when it keeps one.
+    ///
+    /// Both routes write LOCAL config only. The core learns the new generation the way it always
+    /// has — `sync_manual_settings` pushes it to the cores that use it, and the order path holds
+    /// each order behind its own exit generation — so an edit never depends on the core having
+    /// answered first.
     pub(crate) fn edit_group_exit(&mut self, group: &str, edit: ClientSettingsEdit) -> bool {
-        if let Some(core) = self.manual_write_core(group) {
-            let Some(settings) = self
-                .session
-                .store()
-                .core(core)
-                .and_then(|data| data.client_settings.as_ref())
-            else {
-                return false;
-            };
-            let mut exit = settings.group_exit_settings();
-            if !apply_group_exit_edit(&mut exit, edit) {
-                return false;
-            }
-            return match self.session.sync_group_exit(core, exit) {
-                Ok(()) => true,
-                Err(error) => {
-                    log::warn!("edit group exit failed: core={core}: {error:#}");
-                    false
-                }
-            };
+        // With a manual strategy selected the exits on screen belong to that strategy, not to the
+        // saved generation — see `manual_exit_overlay`. Absorbed before any config write so the
+        // group's (or the core's own) values are left exactly as the trader saved them.
+        if self.edit_manual_exit_overlay(group, edit) {
+            return true;
         }
-        let mut exit = self.group_exit_settings(group);
+        let write_core = self.manual_write_core(group);
+        let mut exit = self.effective_group_exit(group, write_core).0;
         if !apply_group_exit_edit(&mut exit, edit) {
             return false;
         }
-        self.update_group_trade(group, |trade| trade.exit = exit);
+        match write_core {
+            Some(core) => self.update_core_trade(core, |trade| trade.exit = exit),
+            None => self.update_group_trade(group, |trade| trade.exit = exit),
+        }
         true
     }
 
@@ -791,8 +1299,18 @@ impl Backend {
         self.config_dirty = true;
     }
 
-    /// Synchronize each group's complete local exit generation to every live core in that group.
-    pub(crate) fn sync_group_manual_settings(&mut self) {
+    /// Drop sync bookkeeping for cores that are no longer live.
+    ///
+    /// What this function no longer does is the point: it used to PUSH every group's exit
+    /// generation into every live core on each coordination tick, which is why a TP changed in
+    /// Moonbot itself sprang back within a tick, and why the compact settings channel could stay
+    /// permanently busy — starving the safe-share writes queued behind it.
+    ///
+    /// The terminal's exits are local. They reach a core exactly where they must: the manual-order
+    /// path serializes the visible generation ahead of the order it belongs to
+    /// (`feed::live::client_settings`), so an order can still never go out under someone else's
+    /// TP/SL, while a core left alone stays editable from its own screen.
+    pub(crate) fn sync_manual_settings(&mut self) {
         let live_ids: HashSet<CoreId> = self
             .session
             .sessions()
@@ -801,53 +1319,6 @@ impl Backend {
             .collect();
         self.group_exit_sync
             .retain(|core, _| live_ids.contains(core));
-
-        for server in self
-            .config
-            .servers
-            .iter()
-            .filter(|server| server.active && live_ids.contains(&server.id))
-        {
-            // A core reading its own manual config keeps its own exit generation. Pushing the
-            // group's local exit here would overwrite the very core values the checkbox exists to
-            // respect, within one tick, regardless of what the order path does.
-            if server.use_core_manual_config {
-                self.group_exit_sync.remove(&server.id);
-                continue;
-            }
-            let exit = self.group_exit_settings(&server.group);
-            let (revision, ready, matches) = self
-                .session
-                .store()
-                .core(server.id)
-                .map(|data| {
-                    (
-                        data.client_settings_rev,
-                        data.status == moon_core::feed::ConnStatus::Ready,
-                        data.client_settings
-                            .as_ref()
-                            .is_some_and(|settings| settings.group_exit_settings() == exit),
-                    )
-                })
-                .unwrap_or((0, false, false));
-            let generation = (exit, revision, ready);
-            if matches {
-                self.group_exit_sync.insert(server.id, generation);
-                continue;
-            }
-            if self.group_exit_sync.get(&server.id) == Some(&generation) {
-                continue;
-            }
-            if let Err(error) = self.session.sync_group_exit(server.id, exit) {
-                log::warn!(
-                    "group manual settings sync failed: core={} group={}: {error:#}",
-                    server.id,
-                    server.group
-                );
-                continue;
-            }
-            self.group_exit_sync.insert(server.id, generation);
-        }
     }
 
     /// Store a process-lifetime local manual-strategy override for immediate feedback.

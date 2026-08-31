@@ -814,6 +814,8 @@ pub(super) fn drain_commands(
                 size,
                 strategy_id,
                 exit,
+                planned_sell,
+                sync_exit,
             }) => {
                 client_settings_sequence.enqueue_order(ManualOrder {
                     market,
@@ -822,6 +824,8 @@ pub(super) fn drain_commands(
                     size,
                     strategy_id,
                     exit,
+                    planned_sell,
+                    sync_exit,
                 });
             }
             Ok(CoreCmd::MoveOrder { uid, new_price }) => {
@@ -1081,6 +1085,8 @@ pub(super) fn drain_commands(
                 // `ClientSettingsSequence::is_idle`.
                 if client_settings_sequence.is_idle() {
                     shared_config_sequence.drive(client, server.id, core_config_events);
+                } else {
+                    shared_config_sequence.note_gated(server.id);
                 }
                 return CommandDrain::QueueEmpty;
             }
@@ -1101,6 +1107,8 @@ pub(super) fn drain_commands(
             *orders_mutated |= client_settings_sequence.drive(client, server.id);
             if client_settings_sequence.is_idle() {
                 shared_config_sequence.drive(client, server.id, core_config_events);
+            } else {
+                shared_config_sequence.note_gated(server.id);
             }
             return CommandDrain::BudgetExhausted;
         }

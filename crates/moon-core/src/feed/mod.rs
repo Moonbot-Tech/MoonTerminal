@@ -388,6 +388,10 @@ pub enum CoreCmd {
         strategy_id: Option<u64>,
         /// Group-local exit settings that must be confirmed before this order is released.
         exit: crate::config::GroupExitSettings,
+        /// Sell target to store with the order; `0.0` for none.
+        planned_sell: f64,
+        /// Whether the order waits for the core to confirm `exit` before it is sent.
+        sync_exit: bool,
     },
     /// Move or replace an existing core order by `uid` at a new price, as when dragging its line.
     /// This becomes moonproto `orders().move_order`.

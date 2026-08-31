@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ProfileAge;
 use super::core_groups::CoreGroup;
-use super::groups::GroupConfig;
+use super::groups::{self, GroupConfig};
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
@@ -236,9 +236,18 @@ pub struct ServerMeta {
     /// Default alert strategy (id of type "Alerts"); see `ServerConfig::default_alert_strategy`.
     #[serde(default)]
     pub default_alert_strategy: u64,
-    /// Per-core manual-config opt-in; see `ServerConfig::use_core_manual_config`.
-    #[serde(default)]
-    pub use_core_manual_config: bool,
+    /// Per-core manual-trading opt-in; see `ServerConfig::own_trade_config`. The alias reads files
+    /// written under the flag's previous name.
+    #[serde(default, alias = "use_core_manual_config")]
+    pub own_trade_config: bool,
+    /// This core's manual-strategy quick-select slots; see `ServerConfig::strat_slots`. Absent
+    /// while the core still follows its own `manual_strats_names`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strat_slots: Option<[servers::StratSlot; servers::MANUAL_STRAT_SLOTS]>,
+    /// This core's own manual-trading generation; see `ServerConfig::trade`. Absent in older files
+    /// and whenever the core shares its group's generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trade: Option<groups::GroupTradeSettings>,
     /// MoonProto transport mode (`V0`/`V1`/`V2`); see `ServerConfig::transport`. Absent in older
     /// files and while no key has been read, in which case the key decides.
     #[serde(default, skip_serializing_if = "Option::is_none")]

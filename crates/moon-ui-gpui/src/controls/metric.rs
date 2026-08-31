@@ -113,11 +113,18 @@ impl TradeMetric {
     /// fields, so the toolbar's TP and SL would not reach a new order. Leverage requires a core
     /// named by the visible scope; group-local TP and SL always have a complete
     /// neutral-or-user-edited generation.
+    /// Manual-strategy mode closes the TP popup ALONE.
+    ///
+    /// TP there would be a free-form take profit with nowhere to go: the strategy sells at one
+    /// value, and the S presets are the control that changes it. The STOP is different — it exists
+    /// in the strategy as a level plus an on/off flag, exactly the two things this button and its
+    /// toggle edit, so in manual mode they keep working and write to the strategy instead of to the
+    /// local exit generation (`Backend::mirror_stop_into_strategy`).
     pub fn available_with(self, has_core: bool, sl_on: bool, manual_on: bool) -> bool {
         match self {
             TradeMetric::Lev => has_core,
             TradeMetric::Tp => !manual_on,
-            TradeMetric::Sl => sl_on && !manual_on,
+            TradeMetric::Sl => sl_on,
         }
     }
 

@@ -4,6 +4,37 @@ use serde::{Deserialize, Serialize};
 
 use super::secrets::Secret;
 
+/// Number of manual-strategy quick-select slots, matching Moonbot's `ManualStratsConfig` and the
+/// terminal's own `HotkeysConfig::manual_strategy` key array.
+pub const MANUAL_STRAT_SLOTS: usize = 10;
+
+/// One manual-strategy quick-select button, as this terminal owns it.
+///
+/// Both halves are the terminal's, not the core's: Moonbot's wire carries only a name per slot
+/// (`trading.manual_strats_names`), which is also the button's caption there. Separating the two
+/// lets a slot keep firing one strategy under a caption the trader chose — the whole point of
+/// naming a button — while an empty caption still falls back to the strategy's own name, so a
+/// slot seeded from the core reads exactly as it does in Moonbot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StratSlot {
+    /// Name of the Manual-kind strategy this button fires; empty means the slot is unassigned.
+    ///
+    /// Stored by NAME rather than by id, like the core's own slots: an id is a per-core number
+    /// that a re-created strategy does not keep, and the name is what both screens show.
+    #[serde(default)]
+    pub strategy: String,
+    /// Caption shown on the button; empty falls back to [`Self::strategy`].
+    #[serde(default)]
+    pub label: String,
+    /// Whether this slot is drawn at all, mirroring Moonbot's `Button N` checkbox.
+    ///
+    /// Local like the rest of the slot: the core's own `show_button` seeds it through the settings
+    /// popup's "pull from the core" action, after which this is the answer — otherwise clearing a
+    /// slot the core hides would make the button vanish with no way to reach it again.
+    #[serde(default)]
+    pub show: bool,
+}
+
 /// Core-data reception flags, implemented entirely as a client-side filter.
 ///
 /// IMPORTANT: the core always sends these domain events. A cleared flag means do not read,
@@ -107,13 +138,33 @@ pub struct ServerConfig {
     /// This is local terminal config because the protocol does not provide the core default.
     #[serde(default)]
     pub default_alert_strategy: u64,
-    /// Whether manual-trading order sizes/strategies/exits for this core are read from the
-    /// core's own shared config instead of the group-local settings. Defaults to `false`,
-    /// deliberately: turning this on by default would change the numbers a trader sizes orders
-    /// from on the first launch after an upgrade, and the group-local route must stay
-    /// byte-for-byte unchanged until the user opts in.
-    #[serde(default)]
-    pub use_core_manual_config: bool,
+    /// Whether this core keeps its OWN manual-trading generation ([`Self::trade`]) instead of
+    /// sharing its group's. Defaults to `false`, deliberately: turning this on by default would
+    /// change the numbers a trader sizes orders from on the first launch after an upgrade, and the
+    /// group-local route must stay byte-for-byte unchanged until the user opts in.
+    ///
+    /// The `alias` reads files written while this flag meant "read the values back OUT of the
+    /// core's shared config". That route is gone — the terminal owns these values and delivers
+    /// them with the order — but a file carrying the old name still describes a core the user
+    /// deliberately separated from its group, which is exactly what this flag means now.
+    #[serde(default, alias = "use_core_manual_config")]
+    pub own_trade_config: bool,
+    /// This core's manual-strategy quick-select slots, or `None` while it still follows the
+    /// core's own `manual_strats_names`.
+    ///
+    /// Deliberately INDEPENDENT of [`Self::own_trade_config`]: which strategy a button fires is a
+    /// different question from which sizes and exits the toolbar edits, and a trader who wants
+    /// their own buttons must not have to move their TP/SL off the group to get them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strat_slots: Option<[StratSlot; MANUAL_STRAT_SLOTS]>,
+    /// This core's own manual-trading generation, used only while [`Self::own_trade_config`] is
+    /// on. `None` means the core has never had one; the toggle seeds it from the group so
+    /// switching cannot move the numbers under the trader's hands.
+    ///
+    /// Kept across a toggle-off deliberately: turning the switch back on must restore what the
+    /// core had, not the group's current values (that is the whole point of a per-core set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trade: Option<super::groups::GroupTradeSettings>,
     /// MoonProto transport mode to connect with; `None` falls back to what the key encodes.
     ///
     /// See [`TransportVersion`] for why this is stored at all instead of always reading the key.

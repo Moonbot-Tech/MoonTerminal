@@ -2,7 +2,7 @@
 
 use moon_core::feed::StrategyRow;
 
-use super::manual_strategy_options;
+use super::{manual_strategy_options, slot_caption};
 use crate::backend::MANUAL_STRATEGY_KIND;
 
 /// Build a strategy row carrying only the fields used by the picker-option filter.
@@ -49,4 +49,13 @@ fn manual_strategy_options_preserve_snapshot_order() {
             (9, "Manual A".to_string()),
         ])
     );
+}
+
+/// Regression target: dropping the caption fallback chain leaves an assigned button blank (when the
+/// trader never renamed it) or an unassigned one invisible (with nothing to right-click).
+#[test]
+fn a_slot_caption_prefers_the_trader_name_then_the_strategy_then_its_number() {
+    assert_eq!(slot_caption("Scalp", "Single_Static", "3"), "Scalp");
+    assert_eq!(slot_caption("  ", "Single_Static", "3"), "Single_Static");
+    assert_eq!(slot_caption("", "", "3"), "3");
 }

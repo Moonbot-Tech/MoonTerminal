@@ -21,9 +21,9 @@ use moonproto::shared_config::SharedConfig;
 
 use crate::feed::{
     AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
-    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigMismatch,
-    CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
-    LeverageSettings, ManualSettings, day_fraction_to_minutes, minutes_to_day_fraction,
+    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
+    CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings, LeverageSettings,
+    ManualSettings, day_fraction_to_minutes, minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -55,9 +55,12 @@ pub struct FieldMask {
     btc_blink: bool,
     general: bool,
     leverage: bool,
-    /// Bit `i` set means slot `i` (0-based) of `ManualSettings::order_sizes` is touched.
-    order_size_slots: u8,
-    order_size_sel: bool,
+    /// `trading.ignore_strat_sell_price`, the one manual-block field the terminal still WRITES.
+    ///
+    /// It is core behaviour, not a value the terminal can hold locally: it decides whether the core
+    /// applies a manual strategy's own sell price or the global TP/S the toolbar edits. Everything
+    /// else in the manual block is read-only here — see the module doc.
+    ignore_strat_sell_price: bool,
 }
 
 impl FieldMask {
@@ -67,8 +70,7 @@ impl FieldMask {
         btc_blink: false,
         general: false,
         leverage: false,
-        order_size_slots: 0,
-        order_size_sel: false,
+        ignore_strat_sell_price: false,
     };
 
     /// The four gear-popup sections and nothing else. The manual block is deliberately absent: a
@@ -79,31 +81,13 @@ impl FieldMask {
         btc_blink: true,
         general: true,
         leverage: true,
-        order_size_slots: 0,
-        order_size_sel: false,
+        ignore_strat_sell_price: false,
     };
 
-    /// Name one order-size preset slot (0-based, clamped into `0..6` like
-    /// [`ManualSettings::order_size_sel`]).
-    pub fn with_order_size_slot(mut self, slot: usize) -> Self {
-        self.order_size_slots |= 1 << slot.min(5);
+    /// Name the core's "ignore a manual strategy's own sell price" flag.
+    pub fn with_ignore_strat_sell_price(mut self) -> Self {
+        self.ignore_strat_sell_price = true;
         self
-    }
-
-    /// Name the selected order-size slot.
-    pub fn with_order_size_sel(mut self) -> Self {
-        self.order_size_sel = true;
-        self
-    }
-
-    fn touches_order_size_slot(self, slot: usize) -> bool {
-        self.order_size_slots & (1 << slot) != 0
-    }
-
-    /// Whether this mask names any part of the manual order-size block. Only the log reads it: a
-    /// write naming neither a slot nor the selection provably leaves `o_size`/`b_num` alone.
-    fn names_order_size(self) -> bool {
-        self.order_size_slots != 0 || self.order_size_sel
     }
 
     fn union(self, other: Self) -> Self {
@@ -112,8 +96,7 @@ impl FieldMask {
             btc_blink: self.btc_blink || other.btc_blink,
             general: self.general || other.general,
             leverage: self.leverage || other.leverage,
-            order_size_slots: self.order_size_slots | other.order_size_slots,
-            order_size_sel: self.order_size_sel || other.order_size_sel,
+            ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
         }
     }
 }
@@ -133,6 +116,9 @@ pub(in crate::feed) struct SharedConfigSequence {
     /// Whether the "queued edits, no base snapshot" stall has been reported. Latched to one line
     /// per stall, not one per feed-loop iteration; cleared once a base is available again.
     missing_snapshot_logged: bool,
+    /// Whether the "waiting behind the compact settings channel" stall has been reported, latched
+    /// per queued edit for the same reason. Cleared by the next `enqueue`.
+    gated_logged: bool,
 }
 
 /// One queued write and how many times it has been sent without a matching echo.
@@ -166,6 +152,7 @@ impl SharedConfigSequence {
             sent_at: None,
             pending_confirmation: None,
             missing_snapshot_logged: false,
+            gated_logged: false,
         }
     }
 
@@ -191,6 +178,7 @@ impl SharedConfigSequence {
     /// arrived yet. `touched` names the fields this edit actually asked to change; see
     /// [`FieldMask`].
     pub(super) fn enqueue(&mut self, config: CoreConfig, touched: FieldMask) {
+        self.gated_logged = false;
         self.queue.push_back(QueuedEdit {
             config,
             touched,
@@ -201,6 +189,26 @@ impl SharedConfigSequence {
     /// Allow the next plan after a `SharedConfigUpdated` echo.
     pub(super) fn observe_update(&mut self) {
         self.waiting_for_echo = false;
+    }
+
+    /// Report ONCE that queued safe-share writes cannot go out because the compact settings
+    /// channel is still busy.
+    ///
+    /// The two channels share one order: a compact packet the core never reflects keeps that queue
+    /// non-idle for the rest of the connection (its own KNOWN LIMIT), and everything queued here —
+    /// a gear-popup OK, the manual-strategy sell-price flag — then waits behind it with no send, no
+    /// echo, and no timeout of its own. Silence there looks exactly like a control that does
+    /// nothing when clicked, so it gets a line the first time it happens.
+    pub(super) fn note_gated(&mut self, server_id: u64) {
+        if self.queue.is_empty() || self.gated_logged {
+            return;
+        }
+        self.gated_logged = true;
+        log::warn!(
+            "core {} has {} shared-config edit(s) waiting: the compact settings channel is not idle",
+            crate::feed::core_label(server_id),
+            self.queue.len()
+        );
     }
 
     /// Give up waiting for one packet's echo: lift the barrier AND drop the confirmation.
@@ -304,11 +312,6 @@ impl SharedConfigSequence {
                 return;
             }
         };
-        // Captured before the plan shadows `config` with the packet it built. `filled` is the
-        // core's own "the user configured these hotkeys" flag, invisible here unless printed.
-        let base_sizes = config.ui.hotkeys_config.o_size;
-        let base_sel = config.ui.hotkeys_config.b_num;
-        let base_filled = config.ui.hotkeys_config.filled;
         match self.next_action(&config, server_id, events) {
             SequenceAction::Idle => {}
             SequenceAction::Send {
@@ -328,23 +331,10 @@ impl SharedConfigSequence {
                                 mismatches: None,
                             },
                         )));
-                        // The order-size presets travel ONLY on this channel — unlike the sell
-                        // presets, `ClientSettingsCommand` carries no `o_size`/`b_num`. Printing
-                        // the base beside the sent value is what separates "the core was asked to
-                        // change it" from "it already held that".
                         log::info!(
                             "core {} shared config sent ({edit_count} edits, {touched:?})",
                             crate::feed::core_label(server_id)
                         );
-                        if touched.names_order_size() {
-                            log::info!(
-                                "core {} order sizes sent: o_size {base_sizes:?} -> {:?}, \
-                                 b_num {base_sel} -> {}, hotkeys.filled={base_filled}",
-                                crate::feed::core_label(server_id),
-                                config.ui.hotkeys_config.o_size,
-                                config.ui.hotkeys_config.b_num,
-                            );
-                        }
                     }
                     Err(error) => {
                         // Charged like a real send: the plan is rebuilt on every feed-loop wake, so
@@ -486,36 +476,12 @@ fn rejection_within_mask(
     if touched.leverage && expected.leverage != actual.leverage {
         areas.push(CoreConfigArea::Leverage);
     }
-    if !areas.is_empty() {
-        return Some(CoreConfigRejection::Areas(areas));
+    if touched.ignore_strat_sell_price
+        && expected.manual.ignore_strat_sell_price != actual.manual.ignore_strat_sell_price
+    {
+        areas.push(CoreConfigArea::Manual);
     }
-    let mut fields = Vec::new();
-    for slot in 0..6 {
-        if !touched.touches_order_size_slot(slot) {
-            continue;
-        }
-        let (requested, actual_v) = (
-            expected.manual.order_sizes[slot],
-            actual.manual.order_sizes[slot],
-        );
-        // Same reasoning as `ManualSettings`'s hand-written `PartialEq`: this is an
-        // equality-of-snapshots test, not an IEEE numeric comparison, so a core holding a
-        // non-finite preset cannot spuriously mismatch itself.
-        if requested.total_cmp(&actual_v).is_ne() {
-            fields.push(CoreConfigMismatch::OrderSizeSlot {
-                slot,
-                requested,
-                actual: actual_v,
-            });
-        }
-    }
-    if touched.order_size_sel && expected.manual.order_size_sel != actual.manual.order_size_sel {
-        fields.push(CoreConfigMismatch::OrderSizeSel {
-            requested: expected.manual.order_size_sel,
-            actual: actual.manual.order_size_sel,
-        });
-    }
-    (!fields.is_empty()).then_some(CoreConfigRejection::Fields(fields))
+    (!areas.is_empty()).then_some(CoreConfigRejection::Areas(areas))
 }
 
 /// Project the settings the terminal renders out of a full safe-share snapshot.
@@ -674,7 +640,9 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
     if touched.leverage {
         apply_leverage(cfg, &wanted.leverage);
     }
-    apply_manual(cfg, &wanted.manual, touched);
+    if touched.ignore_strat_sell_price {
+        cfg.trading.ignore_strat_sell_price = wanted.manual.ignore_strat_sell_price;
+    }
 }
 
 /// Apply the General tab to the exit rules, iceberg flags and blacklist in `trading`.
@@ -772,29 +740,6 @@ fn apply_btc_blink(cfg: &mut SharedConfig, blink: &BtcBlinkSettings) {
     b.blink_btc_delta_up = blink.blink_btc_delta_up;
     b.alarm_btc = blink.alarm_btc;
     b.alarm_type = blink.alarm_type;
-}
-
-/// Write the manual block's write half, gated by `touched`: nothing here is written unless the
-/// caller named it at enqueue time (see [`FieldMask`] and the module doc). The popup's mask never
-/// names any of this — see `commit_core_draft` in `moon-ui-gpui` — so today the only producer that
-/// can reach it is a narrow toolbar write.
-fn apply_manual(cfg: &mut SharedConfig, m: &ManualSettings, touched: FieldMask) {
-    let hotkeys = &mut cfg.ui.hotkeys_config;
-    for slot in 0..6 {
-        if touched.touches_order_size_slot(slot) {
-            hotkeys.o_size[slot] = m.order_sizes[slot];
-        }
-    }
-    if touched.order_size_sel {
-        // GUARD A — conditional `b_num` write, identical shape and reasoning to
-        // `apply_auto_start`'s `work_time_from` guard above ("rewriting it from an unchanged
-        // minute value would drift the core's own boundary"): `order_size_sel` is a lossy
-        // projection (`b_num.saturating_sub(1).clamp(0,5)`), so writing `b_num` back from an
-        // unchanged selection would silently move a core with `b_num = 0` to slot 1.
-        if hotkeys.b_num.saturating_sub(1).clamp(0, 5) as usize != m.order_size_sel {
-            hotkeys.b_num = (m.order_size_sel.min(5) as i32) + 1;
-        }
-    }
 }
 
 #[cfg(test)]

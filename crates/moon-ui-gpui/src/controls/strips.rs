@@ -2,10 +2,7 @@
 //! Ctrl+wheel, tooltip, and inline-edit behavior.
 
 use gpui::*;
-use moon_core::feed::{
-    ClientSettingsEdit, CoreConfigEditPhase, CoreConfigEditRow, CoreConfigMismatch,
-    CoreConfigRejection, ManualSettings,
-};
+use moon_core::feed::ClientSettingsEdit;
 use moon_core::util::fmt::compact_order_size;
 use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
 use rust_i18n::t;
@@ -165,121 +162,6 @@ pub(super) fn sell_labels(pcts: [f64; 6]) -> [String; 6] {
     labels(pcts, |pct| format!("{}%", fmt_sell_pct(pct)))
 }
 
-/// One order-size cell's core-config write-attempt notice, derived from the display core's one
-/// retained [`CoreConfigEditRow`]. `moon-core` cannot localize, so the tooltip text is built here
-/// from the row's typed fields rather than handed across pre-built.
-pub(super) struct SizeCellEdit {
-    /// Overrides the cell's plain value with the REQUESTED one while the write is in flight or
-    /// gave up — never reverted to the old confirmed value on a `GaveUp` transition, which is
-    /// exactly the state this override already holds. `None` for a rejected slot: by the time a
-    /// rejection resolves, the retained projection already reflects the core's own actual value
-    /// (its echo is what carried the rejection), so the plain value stands and only the marker
-    /// below distinguishes it.
-    pub(super) display_override: Option<f64>,
-    /// Compact marker appended to the fitted label.
-    pub(super) suffix: &'static str,
-    pub(super) tooltip: SharedString,
-}
-
-/// Derive the six order-size cells' write-attempt notices from the display core's one retained
-/// edit row, or all-`None` when nothing is in flight or retained for this core.
-///
-/// A slot is TOUCHED when the row's requested projection ([`CoreConfigEditRow::config`], the
-/// WHOLE projection the edit asked the core to hold — Phase II carries no per-field diff on the
-/// row itself) differs from `confirmed`, the core's last retained manual block. `confirmed` is
-/// `None` only when the core has never reported a projection at all, in which case every slot the
-/// row's own value differs from the neutral placeholder is treated as touched.
-///
-/// `CoreConfigRejection::Fields` mismatches resolve to a precise per-slot marker.
-/// `CoreConfigRejection::Areas` covers the coarse case (a non-money manual field rejected
-/// alongside sizes in the same batch) and is captioned by the caller instead, since it cannot be
-/// pinned to one slot — see `toolbar::manual_area_rejection_tip`.
-///
-/// Args:
-///     row: The display core's one active core-config write attempt, if any.
-///     confirmed: The display core's last retained manual block, for touched-slot detection.
-///     unit: USDT-equivalent unit named in the built tooltip text.
-///
-/// Returns:
-///     Six per-slot notices, indexed like the strip's own cells.
-pub(super) fn size_cell_edits(
-    row: Option<&CoreConfigEditRow>,
-    confirmed: Option<&ManualSettings>,
-    unit: &str,
-) -> [Option<SizeCellEdit>; 6] {
-    let mut edits: [Option<SizeCellEdit>; 6] = Default::default();
-    let Some(row) = row else { return edits };
-    let requested = &row.config.manual;
-    let touches_sel = confirmed.is_none_or(|c| c.order_size_sel != requested.order_size_sel);
-    for (slot, out) in edits.iter_mut().enumerate() {
-        let touches_value = confirmed.is_none_or(|c| {
-            !c.order_sizes[slot]
-                .total_cmp(&requested.order_sizes[slot])
-                .is_eq()
-        });
-        let touches_sel_here = touches_sel && requested.order_size_sel == slot;
-        if !touches_value && !touches_sel_here {
-            continue;
-        }
-        let fields = match &row.mismatches {
-            Some(CoreConfigRejection::Fields(fields)) => Some(fields.as_slice()),
-            _ => None,
-        };
-        let mismatch = fields.and_then(|fields| {
-            fields.iter().find(|m| match m {
-                CoreConfigMismatch::OrderSizeSlot { slot: s, .. } => touches_value && *s == slot,
-                CoreConfigMismatch::OrderSizeSel { .. } => touches_sel_here,
-            })
-        });
-        *out = Some(match mismatch {
-            Some(CoreConfigMismatch::OrderSizeSlot {
-                requested, actual, ..
-            }) => SizeCellEdit {
-                display_override: None,
-                suffix: "!",
-                tooltip: SharedString::from(
-                    t!(
-                        "toolbar.size_not_applied",
-                        requested = compact_order_size(*requested),
-                        actual = compact_order_size(*actual),
-                        unit = unit,
-                    )
-                    .to_string(),
-                ),
-            },
-            Some(CoreConfigMismatch::OrderSizeSel { requested, actual }) => SizeCellEdit {
-                display_override: None,
-                suffix: "!",
-                tooltip: SharedString::from(
-                    // Both carry 0-based slot indices (contract: `CoreConfigMismatch`'s doc).
-                    t!(
-                        "toolbar.size_sel_not_applied",
-                        requested = *requested as i64 + 1,
-                        actual = *actual as i64 + 1,
-                    )
-                    .to_string(),
-                ),
-            },
-            None if fields.is_some() => {
-                // This slot's own field matched; a SIBLING field in the same batch was rejected.
-                continue;
-            }
-            None => {
-                let (key, suffix) = match row.phase {
-                    CoreConfigEditPhase::Pending => ("toolbar.size_pending", "\u{2026}"),
-                    CoreConfigEditPhase::GaveUp => ("toolbar.size_gave_up", "?"),
-                };
-                SizeCellEdit {
-                    display_override: touches_value.then_some(requested.order_sizes[slot]),
-                    suffix,
-                    tooltip: SharedString::from(t!(key).to_string()),
-                }
-            }
-        });
-    }
-    edits
-}
-
 /// Build the order-size preset strip.
 ///
 /// Single click selects and persists a preset, double click requests inline editing, and
@@ -295,8 +177,6 @@ pub(super) fn size_cell_edits(
 ///         when the displayed core and the write target disagree (goal A2 FIX-3), so a click,
 ///         double-click, or wheel step cannot mutate a source other than the one on screen.
 ///     unit: USDT-equivalent unit shown in tooltips.
-///     edit_tooltips: Per-slot write-attempt notice from [`size_cell_edits`], indexed like the
-///         strip's own cells; overrides the default hint while present.
 ///
 /// Returns:
 ///     The configured segmented control.
@@ -308,20 +188,15 @@ pub(super) fn size_strip(
     backend: Entity<Backend>,
     group: Option<String>,
     unit: &str,
-    edit_tooltips: [Option<SharedString>; 6],
 ) -> impl IntoElement {
     let interactive = group.is_some();
     let unit = unit.to_string();
     let items = (0..6).map(|index| {
-        let item = cells.items[index]
+        cells.items[index]
             .clone()
             .selected(sel == index)
-            .disabled(!interactive);
-        match edit_tooltips[index].clone() {
-            Some(tip) => item.tooltip(tip),
-            None => item
-                .tooltip(t!("toolbar.size_hint", n = index + 1, unit = unit.as_str()).to_string()),
-        }
+            .disabled(!interactive)
+            .tooltip(t!("toolbar.size_hint", n = index + 1, unit = unit.as_str()).to_string())
     });
 
     let click_backend = backend.clone();

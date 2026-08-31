@@ -13,7 +13,8 @@ pub(crate) mod server_chart;
 mod tests;
 
 pub(crate) use manual_trading::{
-    MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource, PanicLocal, weaker_config_state,
+    IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource, MsExitOverlay,
+    PanicLocal, PendingStop,
 };
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
 

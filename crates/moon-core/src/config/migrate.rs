@@ -70,7 +70,9 @@ fn config_from_legacy_enc(plain: &[u8], uid_floor: Option<u64>) -> anyhow::Resul
             synthetic: false,
             chart_bundle: String::new(),
             default_alert_strategy: 0,
-            use_core_manual_config: false,
+            own_trade_config: false,
+            strat_slots: None,
+            trade: None,
             // Left unset: the key this legacy entry carries seeds it on the next merge.
             transport: None,
         })
@@ -128,7 +130,9 @@ fn config_from_legacy_toml(text: &str, uid_floor: Option<u64>) -> anyhow::Result
             synthetic: false,
             chart_bundle: String::new(),
             default_alert_strategy: 0,
-            use_core_manual_config: false,
+            own_trade_config: false,
+            strat_slots: None,
+            trade: None,
             // Left unset: the key this legacy entry carries seeds it on the next merge.
             transport: None,
         }],

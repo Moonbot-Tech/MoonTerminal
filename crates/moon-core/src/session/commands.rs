@@ -348,6 +348,8 @@ impl SessionManager {
         size: f64,
         strategy_id: Option<u64>,
         exit: crate::config::GroupExitSettings,
+        planned_sell: f64,
+        sync_exit: bool,
     ) -> Result<()> {
         if market.is_empty()
             || !(price.is_finite() && price > 0.0)
@@ -364,6 +366,8 @@ impl SessionManager {
                 size,
                 strategy_id,
                 exit,
+                planned_sell,
+                sync_exit,
             },
             "place order",
         )

@@ -176,6 +176,92 @@ fn every_group_is_repaired_even_after_an_earlier_change() {
     assert_eq!(merged.groups[1].trade.exit, Default::default());
 }
 
+/// Regression target: a file written while the flag meant "read the values back out of the core"
+/// carries it with no `trade` block. Left unseeded, the display route (which needs a set) and the
+/// write route (which needed only the flag) disagreed about that core: the toolbar showed the
+/// group's numbers with the switch off while a click forked a per-core set behind it.
+#[test]
+fn an_enabled_core_without_a_generation_is_seeded_from_its_group() {
+    let servers: ServersFile = toml::from_str(
+        r#"
+        [[servers]]
+        uid = 1
+        name = "desk-core"
+        "#,
+    )
+    .expect("servers file must parse");
+    let mut group = GroupConfig::new("desk");
+    group.trade.order_sizes_usd[0] = 77.0;
+    let settings: SettingsFile = toml::from_str(&format!(
+        r#"
+        version = {SCHEMA_VERSION}
+        next_uid = 2
+
+        [[servers]]
+        uid = 1
+        name = "desk-core"
+        group = "desk"
+        use_core_manual_config = true
+        "#
+    ))
+    .map(|mut s: SettingsFile| {
+        s.groups = vec![group.clone()];
+        s
+    })
+    .expect("a file using the flag's previous name must parse");
+
+    let merged = merge(servers, settings, None);
+
+    assert!(merged.dirty, "a seeded core generation must be persisted");
+    assert_eq!(
+        merged.servers[0].trade.as_ref().map(|t| t.order_sizes_usd),
+        Some(group.trade.order_sizes_usd),
+        "the seed must come from the core's own group, not from the defaults"
+    );
+}
+
+/// Regression target: skipping the per-core repair loop lets a hand-edited `trade` block size a
+/// real order from a non-finite preset — the same failure the group loop above exists to prevent,
+/// on values that reach the same order path.
+#[test]
+fn a_cores_own_generation_is_repaired_like_a_groups() {
+    let servers: ServersFile = toml::from_str(
+        r#"
+        [[servers]]
+        uid = 1
+        name = "desk-core"
+        "#,
+    )
+    .expect("servers file must parse");
+    let settings: SettingsFile = toml::from_str(
+        r#"
+        version = 17
+        next_uid = 2
+
+        [[servers]]
+        uid = 1
+        name = "desk-core"
+        group = "desk"
+        own_trade_config = true
+
+        [servers.trade]
+        order_sizes_usd = [50.0, nan, 250.0, 500.0, 1000.0, 2500.0]
+        order_size_sel = 9
+        "#,
+    )
+    .expect("settings file with a per-core generation must parse");
+
+    let merged = merge(servers, settings, None);
+
+    assert!(merged.dirty, "a repaired core generation must be persisted");
+    let trade = merged.servers[0]
+        .trade
+        .as_ref()
+        .expect("the core keeps its own generation");
+    assert_eq!(trade.order_sizes_usd[1], DEFAULT_ORDER_SIZES_USD[1]);
+    assert_eq!(trade.order_size_sel, 5);
+}
+
 /// Named breakage (`config::reconcile::merge`): replacing
 /// `dirty |= sanitize_core_groups(&mut core_groups);` with a bare `let core_groups =
 /// meta.core_groups.clone();` would stop repairing a hand-edited `settings.toml` at load time.

@@ -300,6 +300,13 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "settings/connections/tab.rs",
             r#".id("icon-picker")"#,
         ),
+        // The manual-strategy quick-select gear: its content lives in the cluster's own submodule,
+        // so the declaring file and the content file differ.
+        (
+            "controls/manual_strat.rs",
+            "controls/manual_strat/settings.rs",
+            r#".id("ms-slots-popup")"#,
+        ),
         // The Alerts row gear. Its content is `figstyle::rows` BARE — the same rows the chart's
         // own settings panel wraps in `figstyle::shell`, which is what paints a surface there and
         // must not be handed to a popover that already paints one. The anchor is the content

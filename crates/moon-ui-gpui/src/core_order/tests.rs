@@ -20,7 +20,9 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
         synthetic: false,
         chart_bundle: String::new(),
         default_alert_strategy: 0,
-        use_core_manual_config: false,
+        own_trade_config: false,
+        strat_slots: None,
+        trade: None,
         transport: None,
     }
 }

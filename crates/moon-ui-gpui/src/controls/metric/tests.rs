@@ -58,5 +58,8 @@ fn availability_gates_each_metric_on_its_own_condition() {
     assert!(!TradeMetric::Tp.available_with(true, false, true));
     assert!(TradeMetric::Sl.available_with(false, true, false));
     assert!(!TradeMetric::Sl.available_with(true, false, false));
-    assert!(!TradeMetric::Sl.available_with(true, true, true));
+    // SL stays editable in manual-strategy mode, unlike TP: there the button and its toggle carry
+    // the STRATEGY's stop (level plus `UseStopLoss`), which is exactly what a trader has to reach
+    // while MS is on. Disabling it here left the strategy's stop unreachable from the toolbar.
+    assert!(TradeMetric::Sl.available_with(true, true, true));
 }

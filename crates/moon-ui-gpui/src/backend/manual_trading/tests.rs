@@ -8,9 +8,10 @@ use moon_core::config::{
 use moon_core::feed::{ClientSettingsEdit, StrategyRow};
 
 use super::{
-    MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL, PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit,
-    effective_manual_strat_state, effective_panic_armed, panic_local_settled, panic_press_absorbed,
-    update_group_trade_pair, usd_to_base_amount,
+    IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL, PANIC_TOGGLE_DEBOUNCE,
+    apply_group_exit_edit, effective_ignore_sell, effective_manual_strat_state,
+    effective_panic_armed, panic_local_settled, panic_press_absorbed, planned_sell_price,
+    seed_on_enable, stop_price, update_group_trade_pair, usd_to_base_amount,
 };
 
 /// Build a strategy row carrying only the kind used by manual-state validation.
@@ -32,6 +33,86 @@ fn strategy(id: u64, kind_ordinal: u8) -> StrategyRow {
         is_short: false,
         fields: Vec::new(),
     }
+}
+
+/// Regression target: seeding a core's own generation on EVERY enable (rather than only when it has
+/// none) throws away the set the trader configured the last time the switch was on, so toggling off
+/// and back on silently replaces their per-core numbers with the group's current ones.
+#[test]
+fn enabling_own_trade_seeds_from_the_group_only_when_the_core_has_no_set() {
+    let mut group = GroupTradeSettings::default();
+    group.order_sizes_usd[0] = 111.0;
+    let mut own = GroupTradeSettings::default();
+    own.order_sizes_usd[0] = 999.0;
+
+    assert_eq!(
+        seed_on_enable(None, &group),
+        Some(group.clone()),
+        "a core with no generation must start from the group's"
+    );
+    assert_eq!(
+        seed_on_enable(Some(&own), &group),
+        None,
+        "a core that already has one must keep it across an off/on cycle"
+    );
+}
+
+/// Regression target: rendering the sell-price checkbox from the core's value alone leaves a click
+/// with no effect on screen for a whole slow-channel round trip, and holding the override past the
+/// core's agreement makes the NEXT click look like the no-op instead.
+#[test]
+fn a_queued_sell_price_request_outranks_the_core_until_it_agrees() {
+    // Fresh disagreement: what the trader asked for is what the checkbox shows.
+    assert!(effective_ignore_sell(
+        Some((true, Duration::from_secs(1))),
+        false
+    ));
+    // The core came back with the same value: the override has nothing left to assert.
+    assert!(effective_ignore_sell(
+        Some((true, Duration::from_secs(1))),
+        true
+    ));
+    // Stale request the core never took: the core's own value comes back rather than a lie.
+    assert!(!effective_ignore_sell(
+        Some((true, IGNORE_SELL_LOCAL_TTL)),
+        false
+    ));
+    // No request at all.
+    assert!(effective_ignore_sell(None, true));
+}
+
+/// Regression target: the visible take profit reaches a manual order ONLY as a price stored with
+/// it, so getting the direction wrong puts a short's target ABOVE its entry — an order that closes
+/// at a loss the moment it fills.
+#[test]
+fn a_planned_sell_target_mirrors_for_a_short() {
+    let long = planned_sell_price(100.0, 2.0, false).expect("a long target");
+    let short = planned_sell_price(100.0, 2.0, true).expect("a short target");
+    assert!((long - 102.0).abs() < 1e-9, "long target {long}");
+    assert!((short - 98.0).abs() < 1e-9, "short target {short}");
+
+    // No percentage set, or nonsense input: no target, which the wire spells as zero.
+    assert_eq!(planned_sell_price(100.0, 0.0, false), None);
+    assert_eq!(planned_sell_price(0.0, 2.0, false), None);
+    assert_eq!(planned_sell_price(100.0, f64::NAN, false), None);
+    // A short cannot be asked for 100% down: that is a target of zero.
+    assert_eq!(planned_sell_price(100.0, 100.0, true), None);
+}
+
+/// Regression target: a manual order with a strategy takes its stop FROM THE STRATEGY, so the stop
+/// the trader sees only reaches the order as an absolute price computed here. Getting the direction
+/// wrong puts a long's stop above its entry, where it fires immediately.
+#[test]
+fn a_visible_stop_becomes_an_absolute_price_on_the_correct_side() {
+    let long = stop_price(100.0, -3.0, false).expect("a long stop");
+    let short = stop_price(100.0, -3.0, true).expect("a short stop");
+    assert!((long - 97.0).abs() < 1e-9, "long stop {long}");
+    assert!((short - 103.0).abs() < 1e-9, "short stop {short}");
+
+    // Nothing usable: the order keeps whatever the core would have applied.
+    assert_eq!(stop_price(100.0, 0.0, false), None);
+    assert_eq!(stop_price(0.0, -3.0, false), None);
+    assert_eq!(stop_price(100.0, -100.0, false), None);
 }
 
 /// Treating revision zero as confirmed empty would expose TP/SL before the first snapshot arrives.

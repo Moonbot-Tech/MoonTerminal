@@ -147,6 +147,44 @@ header.ms_none:
   ru: "— стратегия —"
   en: "— strategy —"
   es: "— estrategia —"
+# Quick-select strategy buttons: tooltip for a slot nothing is assigned to yet, and the menu entry
+# that unassigns one. Right click opens that menu; a double click renames the button.
+header.ms_slot_empty:
+  ru: "Пустая ячейка — ПКМ назначить стратегию, подпись в настройках кнопок"
+  en: "Empty slot — right click to assign a strategy; captions live in the button settings"
+  es: "Casilla vacía — clic derecho para asignar una estrategia; los rótulos están en los ajustes"
+header.ms_slot_clear:
+  ru: "Очистить ячейку"
+  en: "Clear slot"
+  es: "Vaciar casilla"
+# Quick-select settings popup: the gear beside the strategy buttons, its rows, the core-side
+# sell-price flag it exposes, and the action that replaces the local slots with the core's.
+header.ms_slots_gear:
+  ru: "Настройки кнопок стратегий"
+  en: "Strategy button settings"
+  es: "Ajustes de los botones de estrategia"
+header.ms_slots_hint:
+  ru: "Галка — показывать кнопку, поле — подпись, ПКМ по кнопке — какая стратегия в ней"
+  en: "The box shows the button, the field names it, right click a button to assign its strategy"
+  es: "La casilla muestra el botón, el campo lo nombra, clic derecho en un botón asigna su estrategia"
+header.ms_slot_unassigned:
+  ru: "не назначена"
+  en: "unassigned"
+  es: "sin asignar"
+header.ms_slots_pull:
+  ru: "Подтянуть из ядра"
+  en: "Pull from the core"
+  es: "Traer del núcleo"
+header.ms_slots_pull_tip:
+  ru: "Заменить подписи и видимость кнопок тем, что настроено в самом ядре"
+  en: "Replace the captions and button visibility with what the core itself has"
+  es: "Reemplazar los rótulos y la visibilidad con lo que tiene el propio núcleo"
+# Moonbot's own checkbox, stored in the CORE: while it is off the core sells a manual-strategy
+# order at that strategy's own price and the toolbar's TP/S never reach it.
+header.ms_ignore_strat_sell:
+  ru: "Не учитывать SellPrice ручной стратегии"
+  en: "Ignore the manual strategy's own sell price"
+  es: "Ignorar el precio de venta propio de la estrategia manual"
 # Trading-metric popup titles for the slider and input field.
 toolbar.tp_title:
   ru: "Тейк-профит"
@@ -185,22 +223,16 @@ toolbar.apply:
   en: "Apply"
   es: "Aplicar"
 
-# --- Manual-trading block sourced from the chart's own core (toolbar::chart_display_core) ---
-# Whole-group freshness tooltip on the Size/Sell strips while a chart addresses a core: what the
-# numbers are sourced from and how fresh they are. `Awaiting` reads differently from `Stale` on
-# purpose — one shows a neutral placeholder, the other shows real, retained-but-unconfirmed values.
-toolbar.core_manual_live:
-  ru: "Показаны значения ядра"
-  en: "Showing the core's own values"
-  es: "Mostrando los valores propios del núcleo"
-toolbar.core_manual_stale:
-  ru: "Последние известные значения ядра — соединение нестабильно"
-  en: "Last known values from the core — connection unstable"
-  es: "Últimos valores conocidos del núcleo — conexión inestable"
-toolbar.core_manual_awaiting:
-  ru: "Ждём конфигурацию ядра — показаны значения по умолчанию"
-  en: "Awaiting the core's configuration — showing default values"
-  es: "Esperando la configuración del núcleo — se muestran valores por defecto"
+# Toolbar switch beside the order-size strip: whether this core keeps its OWN sizes/TP/SL set or
+# shares its group's. Two texts, because the tooltip states what a click would do next.
+toolbar.own_trade_on:
+  ru: "У ядра свой набор размеров и TP/SL — выключить, чтобы вернуться к общему"
+  en: "This core keeps its own sizes and TP/SL — switch off to return to the shared set"
+  es: "Este núcleo mantiene sus propios tamaños y TP/SL — desactívalo para volver al conjunto común"
+toolbar.own_trade_off:
+  ru: "Ядро использует общий набор — включить, чтобы завести собственный"
+  en: "This core uses the shared set — switch on to give it its own"
+  es: "Este núcleo usa el conjunto común — actívalo para darle el suyo propio"
 # The hovered chart's core differs from the group's active trading core (or their per-core opt-in
 # disagrees), so a click, wheel, or edit here would write somewhere other than the values shown.
 # Disabled on purpose rather than silently mutating the wrong core (goal A2 FIX-3).
@@ -208,29 +240,7 @@ toolbar.core_manual_mismatch:
   ru: "Значения другого ядра под курсором — правка отключена, чтобы не изменить активное ядро"
   en: "Showing a different core under the cursor — editing is disabled to avoid changing the active core"
   es: "Mostrando otro núcleo bajo el cursor — la edición está desactivada para no cambiar el núcleo activo"
-# Per-cell notice on an order-size preset the core rejected (CoreConfigMismatch::OrderSizeSlot).
-toolbar.size_not_applied:
-  ru: "Ядро отклонило значение: запрошено %{requested} %{unit}, у ядра %{actual} %{unit}"
-  en: "The core rejected this value: requested %{requested} %{unit}, the core has %{actual} %{unit}"
-  es: "El núcleo rechazó este valor: solicitado %{requested} %{unit}, el núcleo tiene %{actual} %{unit}"
-# Per-cell notice on a rejected preset SELECTION (CoreConfigMismatch::OrderSizeSel); %{requested}/
-# %{actual} are 1-based F-slot numbers.
-toolbar.size_sel_not_applied:
-  ru: "Ядро отклонило выбор пресета: запрошен F%{requested}, у ядра F%{actual}"
-  en: "The core rejected this preset selection: requested F%{requested}, the core has F%{actual}"
-  es: "El núcleo rechazó esta selección de preset: solicitado F%{requested}, el núcleo tiene F%{actual}"
-# A submitted order-size edit is awaiting the core's echo.
-toolbar.size_pending:
-  ru: "Отправлено ядру, ждём подтверждения…"
-  en: "Sent to the core, awaiting confirmation…"
-  es: "Enviado al núcleo, esperando confirmación…"
-# The retry budget for this edit is exhausted and the core never confirmed it. Replaces goal A's
-# `TimedOut`: upstream's transport retries on its own monotonic echo timeout rather than the
-# terminal owning a wall clock, so this is "gave up after N attempts", not a bare timeout.
-toolbar.size_gave_up:
-  ru: "Ядро не подтвердило значение — попытки исчерпаны"
-  en: "The core never confirmed this value — retries exhausted"
-  es: "El núcleo nunca confirmó este valor — se agotaron los intentos"
+
 # Coarse-area rejection (CoreConfigRejection::Areas) the display core's edit carries; %{areas} is
 # a comma-joined list built from the toolbar.core_config_area_* keys below.
 toolbar.core_config_areas_rejected:

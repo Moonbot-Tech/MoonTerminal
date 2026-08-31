@@ -118,10 +118,8 @@ fn send_waits_for_the_core_echo() {
 fn an_echo_that_never_arrives_is_not_a_rejection() {
     let base = SharedConfig::default();
     let mut sequence = SharedConfigSequence::new();
-    let mask = FieldMask::EMPTY.with_order_size_slot(3);
-    let mut wanted = core_config_from_proto(&base);
-    wanted.manual.order_sizes[3] = 4200.0;
-    sequence.enqueue(wanted, mask);
+    let mask = FieldMask::RENDERED_SECTIONS;
+    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
 
     let sent = next_config(&mut sequence, &base);
     sequence.observe_send_success(&sent, 1, mask);
@@ -149,21 +147,15 @@ fn an_echo_that_never_arrives_is_not_a_rejection() {
 fn an_echo_after_the_timeout_still_confirms_the_edit() {
     let base = SharedConfig::default();
     let mut sequence = SharedConfigSequence::new();
-    let mask = FieldMask::EMPTY.with_order_size_slot(3);
-    let mut wanted = core_config_from_proto(&base);
-    wanted.manual.order_sizes[3] = 4200.0;
-    sequence.enqueue(wanted, mask);
+    let mask = FieldMask::RENDERED_SECTIONS;
+    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
 
     let sent = next_config(&mut sequence, &base);
     sequence.observe_send_success(&sent, 1, mask);
     sequence.observe_echo_timeout();
 
-    // The core did apply it, just later than the timeout allowed.
-    let echoed = {
-        let mut cfg = base.clone();
-        cfg.ui.hotkeys_config.o_size[3] = 4200.0;
-        cfg
-    };
+    // The core did apply it, just later than the timeout allowed: its echo is the packet itself.
+    let echoed = sent.clone();
     let mut events = Vec::new();
     assert!(matches!(
         sequence.next_action(&echoed, TEST_CORE, &mut events),
@@ -246,29 +238,9 @@ fn every_rendered_field_survives_a_write_and_read_back() {
     assert_eq!(round_tripped.leverage, wanted.leverage);
 }
 
-/// Regression target: omitting `apply_manual` from `apply_core_config` loses a newly projected
-/// manual order-size field, so the toolbar cannot send the preset the trader selected.
-#[test]
-fn every_touched_manual_field_survives_a_write_and_read_back() {
-    let base = SharedConfig::default();
-    let mut wanted = core_config_from_proto(&base);
-    wanted.manual.order_sizes[2] = 187.5;
-    wanted.manual.order_size_sel = 2;
-
-    let mut written = base.clone();
-    let touched = FieldMask::EMPTY
-        .with_order_size_slot(2)
-        .with_order_size_sel();
-    apply_core_config(&mut written, &wanted, touched);
-
-    let round_tripped = core_config_from_proto(&written);
-    assert_eq!(round_tripped.manual.order_sizes[2], 187.5);
-    assert_eq!(round_tripped.manual.order_size_sel, 2);
-}
-
-/// Regression target: making `apply_core_config` ignore `FieldMask::RENDERED_SECTIONS` writes the
-/// popup's stale manual order size, so pressing OK reverts a toolbar change made after the draft
-/// was seeded.
+/// Regression target: `apply_core_config` must not write the manual block AT ALL — the terminal
+/// owns those values locally now and delivers them with the order, so a popup OK carrying a stale
+/// projection of them must leave the core's own copy exactly as it found it.
 #[test]
 fn popup_commit_mask_preserves_manual_order_size_changed_after_seed() {
     let base = SharedConfig::default();
@@ -281,24 +253,4 @@ fn popup_commit_mask_preserves_manual_order_size_changed_after_seed() {
 
     assert!(latest.trading.use_g_take_profit);
     assert_eq!(latest.ui.hotkeys_config.o_size[4], 640.0);
-}
-
-/// Regression target: making `apply_core_config` ignore the narrow order-size mask lets a second
-/// queued toolbar edit restore the first preset's stale value, so a trader's first order-size edit
-/// is silently discarded before it can be used for an order.
-#[test]
-fn two_queued_narrow_order_size_edits_keep_both_values() {
-    let base = SharedConfig::default();
-    let mut first = core_config_from_proto(&base);
-    first.manual.order_sizes[0] = 125.0;
-    let mut second = core_config_from_proto(&base);
-    second.manual.order_sizes[1] = 250.0;
-
-    let mut sequence = SharedConfigSequence::new();
-    sequence.enqueue(first, FieldMask::EMPTY.with_order_size_slot(0));
-    sequence.enqueue(second, FieldMask::EMPTY.with_order_size_slot(1));
-
-    let sent = next_config(&mut sequence, &base);
-    assert_eq!(sent.ui.hotkeys_config.o_size[0], 125.0);
-    assert_eq!(sent.ui.hotkeys_config.o_size[1], 250.0);
 }
