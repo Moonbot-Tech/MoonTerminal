@@ -124,18 +124,13 @@ pub(crate) struct Shell {
     /// header's active core can change under an open menu — keeping the core in the key is what
     /// makes the menu close instead of silently retargeting.
     strat_slot_menu: Option<(moon_core::session::CoreId, usize)>,
-    /// Whether the quick-select settings popup (captions, per-slot visibility, the core's
+    /// Whether the quick-select settings popup (per-slot visibility, the core's
     /// sell-price flag) is open, and the core it was opened FOR.
     ///
     /// The core is captured on open rather than resolved again on each write: `active_trade_core`
     /// can move on its own in the Auto workspace, and a caption typed for one core must not land in
     /// another's slots when the field finally blurs.
     strat_slots_open: bool,
-    strat_slots_core: Option<moon_core::session::CoreId>,
-    /// One caption field per quick-select slot, reused across popup openings. Blur or Enter writes
-    /// the caption to the core the popup was opened for; an empty one restores the strategy's own
-    /// name.
-    strat_label_inputs: Vec<Entity<MoonInputState>>,
     /// Sliders and fields for the TP/SL/leverage popups.
     ///
     /// They persist across renders. TP/SL seed and edit the group-local exit generation; leverage

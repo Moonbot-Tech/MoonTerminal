@@ -447,7 +447,7 @@ impl ChartPanel {
                     short,
                     price,
                     terms.size_base,
-                    None,
+                    terms.strategy_id,
                     terms.exit,
                     terms.planned_sell.unwrap_or(0.0),
                     terms.sync_exit,
@@ -468,6 +468,10 @@ impl ChartPanel {
                     true
                 }
                 Err(err) => {
+                    // The stop was queued before the order was sent, and it attaches to whatever
+                    // order appears next in this market. With no order on its way, leaving it armed
+                    // would put THIS click's stop on somebody else's next order.
+                    b.cancel_pending_stop(core, &market);
                     log::warn!(
                         "manual chart order failed: core={} market={market} price={price:.8}: {err:#}",
                         moon_core::feed::core_label(core)

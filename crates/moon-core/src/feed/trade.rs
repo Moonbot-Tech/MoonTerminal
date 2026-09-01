@@ -58,14 +58,18 @@ pub(super) fn place_order(
         use_market_stop,
         planned_sell,
     );
+    // What actually RIDES, not what was asked for: `new_order_params` drops a target that is not
+    // finite and positive, so logging the request would name a sell the order does not carry.
+    let sent_sell = params.planned_sell_price;
     match client.trade().new_order(params) {
         Ok(_ticket) => log::info!(
-            "core {} place order {market} short={short} price={price} size={size} strat={strategy_id:?}",
+            "core {} place order {market} short={short} {price}/{size} strat={strategy_id:?} sell={sent_sell}",
             crate::feed::core_label(server_id)
         ),
+        // The same facts as the success line: a placement that FAILED is the one that needs them.
         Err(error) => {
             log::warn!(
-                "core {} place order {market} failed: {error}",
+                "core {} place order {market} short={short} {price}/{size} strat={strategy_id:?} sell={sent_sell} failed: {error}",
                 crate::feed::core_label(server_id)
             )
         }

@@ -185,6 +185,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 default_alert_strategy: m.map(|m| m.default_alert_strategy).unwrap_or(0),
                 own_trade_config: m.is_some_and(|m| m.own_trade_config),
                 strat_slots: m.and_then(|m| m.strat_slots.clone()),
+                manual_strategy: m.and_then(|m| m.manual_strategy.clone()),
                 trade: m.and_then(|m| m.trade.clone()),
                 transport,
             }
@@ -298,6 +299,7 @@ pub fn split(
                 default_alert_strategy: s.default_alert_strategy,
                 own_trade_config: s.own_trade_config,
                 strat_slots: s.strat_slots.clone(),
+                manual_strategy: s.manual_strategy.clone(),
                 trade: s.trade.clone(),
                 transport: s.transport,
             })

@@ -624,10 +624,6 @@ pub(super) fn apply_client_settings_edit(
         ClientSettingsEdit::PanicIfPriceDrop(on) => s.panic_if_price_drop = on,
         ClientSettingsEdit::SignOrders(on) => s.sign_orders = on,
         ClientSettingsEdit::EmuMode(on) => s.emu_mode = on,
-        ClientSettingsEdit::ManualStrategy { on, id } => {
-            s.use_manual_strategy = on;
-            s.manual_strategy_id = id;
-        }
     }
 }
 

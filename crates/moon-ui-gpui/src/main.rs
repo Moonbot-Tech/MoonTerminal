@@ -284,9 +284,14 @@ struct Backend {
     /// Including the coarse connection phase forces one retry after a feed respawn even when the
     /// first new snapshot equals the retained pre-reconnect value and therefore keeps its revision.
     group_exit_sync: HashMap<CoreId, (moon_core::config::GroupExitSettings, u64, bool)>,
-    /// Optimistic local manual-strategy selection as `(enabled, id)`, keeping the header toggle and
-    /// picker responsive until the core echoes its settings.
-    manual_strat_local: HashMap<CoreId, (bool, u64)>,
+    /// Snapshot revisions `(strategies, client_settings)` the manual-strategy settle pass has
+    /// already examined per core, so it re-runs only when one of them actually moves.
+    manual_strat_checked: HashMap<CoreId, crate::backend::SettleKey>,
+    /// Snapshot revisions `(strategies, schema)` the manual-EXIT seed has already examined per core.
+    ///
+    /// Separate from [`Self::manual_strat_checked`] because it answers a different question against
+    /// different inputs: which strategy this core fires versus what that strategy's exits are.
+    manual_exit_checked: HashMap<CoreId, (u64, u64)>,
     /// In-flight `ignore_strat_sell_price` requests per core, so the checkbox that queued one shows
     /// it immediately instead of waiting out the slow channel's echo.
     ignore_sell_local: HashMap<CoreId, crate::backend::IgnoreSellLocal>,
@@ -299,7 +304,8 @@ struct Backend {
     ///
     /// An overlay, deliberately: the group's and the core's own saved exits stay untouched while MS
     /// is on, so switching charts or turning MS off shows what the trader saved rather than what a
-    /// strategy left behind. Seeded from the strategy the first time it is selected.
+    /// strategy left behind. Seeded from the strategy on selection, and on the coordination tick
+    /// for a mode that was already on at startup.
     ms_exit_local: HashMap<(CoreId, u64), crate::backend::MsExitOverlay>,
     /// Optimistic Panic Sell override by `(core, market)`: SYMMETRIC (records both arm and
     /// disarm), TTL-bounded, and takes precedence over the core snapshot while fresh. Reconciled

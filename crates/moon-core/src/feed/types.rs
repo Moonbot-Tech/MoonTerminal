@@ -847,11 +847,15 @@ pub struct ClientSettings {
     pub fixed_sell_pcts: [f64; 6],
     /// Selected fixed-sell slot in 1..=6 from `selected_fixed_sell_slot`.
     pub fixed_sell_slot: usize,
-    /// Whether the manual strategy is enabled through `use_manual_strategy`. Manual orders then
-    /// follow that strategy: the core places sells and stops from its fields, while toolbar TP, S,
-    /// and SL settings do not apply to new orders.
+    /// Whether the CORE's own manual-strategy mode is enabled, through `use_manual_strategy`.
+    ///
+    /// Read-only here, and it is not this terminal's mode: an order this terminal places carries
+    /// its strategy explicitly, so this describes only what the core does with an order that
+    /// arrives without one — a Moonbot-placed order, or one from another client. It seeds this
+    /// terminal's own mode once, on a core that has never had one stored locally.
     pub use_manual_strategy: bool,
-    /// Selected manual-strategy ID from `manual_strategy_id`; `0` means none is selected.
+    /// Selected manual-strategy ID from `manual_strategy_id`; `0` means none is selected. Read on
+    /// the same terms as [`Self::use_manual_strategy`].
     pub manual_strategy_id: u64,
 }
 
@@ -912,10 +916,6 @@ pub enum ClientSettingsEdit {
     SignOrders(bool),
     /// Core emulator mode through `emu_mode`.
     EmuMode(bool),
-    /// Manual-strategy enabled state and ID through
-    /// `use_manual_strategy`/`manual_strategy_id`. Disabling preserves the ID so toggling it again
-    /// restores the same strategy.
-    ManualStrategy { on: bool, id: u64 },
 }
 
 /// Profit counter to reset through moonproto `ResetProfitKind`, selected by the Session or

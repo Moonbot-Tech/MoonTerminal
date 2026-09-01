@@ -11,7 +11,7 @@
 /// How a button slot's label renders at the current clip level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LabelMode {
-    /// The slot's caption: the trader's own, or the strategy's name when they set none.
+    /// The slot names its strategy, or shows its own number when it has none assigned.
     NameOnly,
     /// The slot's 1-based ordinal (`"1"`..`"10"`), for a row too narrow to hold captions.
     NumberOnly,
@@ -59,6 +59,9 @@ pub(super) struct StratFit {
 ///         width it then overflows, clipping the header's trailing readouts.
 ///     base: Width already spent by everything else in the cluster and a conservative
 ///         reservation for the rest of the header, with the picker pill at its normal label cap.
+///         The pill is budgeted even where it ends up hidden behind the buttons: whether it is
+///         drawn depends on what the slots resolve to, which this ladder cannot see, and a budget
+///         that under-reserves overflows the header instead of merely showing one button fewer.
 ///
 /// Returns:
 ///     The label mode, the number of leading slots to render, and whether the pill cap is reduced.

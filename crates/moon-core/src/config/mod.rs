@@ -93,8 +93,8 @@ pub use quiet::{QuietCfg, QuietWarnBypass};
 pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
-    ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ServerConfig, StratSlot,
-    TransportVersion, seeded_transport,
+    ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
+    StratSlot, TransportVersion, seeded_transport,
 };
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
@@ -750,6 +750,7 @@ impl AppConfig {
                 default_alert_strategy: 0,
                 own_trade_config: false,
                 strat_slots: None,
+                manual_strategy: None,
                 trade: None,
                 transport: servers::transport_from_key(&key),
             })
@@ -940,6 +941,7 @@ impl AppConfig {
                 default_alert_strategy: 0,
                 own_trade_config: false,
                 strat_slots: None,
+                manual_strategy: None,
                 trade: None,
                 ..s.clone()
             })

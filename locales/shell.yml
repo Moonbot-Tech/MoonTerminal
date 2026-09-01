@@ -148,11 +148,11 @@ header.ms_none:
   en: "— strategy —"
   es: "— estrategia —"
 # Quick-select strategy buttons: tooltip for a slot nothing is assigned to yet, and the menu entry
-# that unassigns one. Right click opens that menu; a double click renames the button.
+# that unassigns one. Right click opens that menu.
 header.ms_slot_empty:
-  ru: "Пустая ячейка — ПКМ назначить стратегию, подпись в настройках кнопок"
-  en: "Empty slot — right click to assign a strategy; captions live in the button settings"
-  es: "Casilla vacía — clic derecho para asignar una estrategia; los rótulos están en los ajustes"
+  ru: "Пустая ячейка — ПКМ назначить стратегию"
+  en: "Empty slot — right click to assign a strategy"
+  es: "Casilla vacía — clic derecho para asignar una estrategia"
 header.ms_slot_clear:
   ru: "Очистить ячейку"
   en: "Clear slot"
@@ -164,9 +164,24 @@ header.ms_slots_gear:
   en: "Strategy button settings"
   es: "Ajustes de los botones de estrategia"
 header.ms_slots_hint:
-  ru: "Галка — показывать кнопку, поле — подпись, ПКМ по кнопке — какая стратегия в ней"
-  en: "The box shows the button, the field names it, right click a button to assign its strategy"
-  es: "La casilla muestra el botón, el campo lo nombra, clic derecho en un botón asigna su estrategia"
+  ru: "Галка — показывать кнопку. Кнопка называется своей стратегией; ПКМ по ней — назначить её"
+  en: "The box shows the button. A button is named by its strategy; right click one to assign it"
+  es: "La casilla muestra el botón. El botón lleva el nombre de su estrategia; clic derecho para asignarla"
+# Link out of the popup to where the bindings listed in it are actually edited.
+header.ms_slots_hotkeys:
+  ru: "Хоткеи"
+  en: "Hotkeys"
+  es: "Atajos"
+header.ms_slots_hotkeys_tip:
+  ru: "Открыть настройки на вкладке хоткеев"
+  en: "Open settings on the hotkeys tab"
+  es: "Abrir los ajustes en la pestaña de atajos"
+# Shown instead of the Buy/Sell/SL/TS summary when the selected strategy hands its exits to a
+# MoonHook strategy: those exits come from the hook, so the strategy's own numbers would mislead.
+header.ms_summary_hook:
+  ru: "Выходы из хука %{name}"
+  en: "Exits from hook %{name}"
+  es: "Salidas del hook %{name}"
 header.ms_slot_unassigned:
   ru: "не назначена"
   en: "unassigned"
@@ -176,9 +191,9 @@ header.ms_slots_pull:
   en: "Pull from the core"
   es: "Traer del núcleo"
 header.ms_slots_pull_tip:
-  ru: "Заменить подписи и видимость кнопок тем, что настроено в самом ядре"
-  en: "Replace the captions and button visibility with what the core itself has"
-  es: "Reemplazar los rótulos y la visibilidad con lo que tiene el propio núcleo"
+  ru: "Заменить набор кнопок тем, что настроено в самом ядре"
+  en: "Replace the button set with what the core itself has"
+  es: "Reemplazar el conjunto de botones con lo que tiene el propio núcleo"
 # Moonbot's own checkbox, stored in the CORE: while it is off the core sells a manual-strategy
 # order at that strategy's own price and the toolbar's TP/S never reach it.
 header.ms_ignore_strat_sell:

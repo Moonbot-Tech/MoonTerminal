@@ -337,8 +337,10 @@ impl SessionManager {
 
     /// Place a manual order on the core's `market` after its group exit state is confirmed.
     ///
-    /// `short` selects the Long or Short position side; `strategy_id=None` maps to `StratID=0` for
-    /// an order without a strategy. Non-finite or non-positive `price` or `size` values are ignored.
+    /// `short` selects the Long or Short position side; `strategy_id=None` maps to `StratID=0`,
+    /// which the core reads as "substitute my own manual strategy if that mode is on" rather than
+    /// as "no strategy" — there is no way to spell a deliberate absence on the wire. Non-finite or
+    /// non-positive `price` or `size` values are ignored.
     pub fn place_order(
         &self,
         core: CoreId,

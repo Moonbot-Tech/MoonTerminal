@@ -714,7 +714,9 @@ pub fn toolbar(
         // sell price" checkbox on they are ordinary controls again — their value rides along with
         // the order as `planned_sell_price` — so they stay live, slider and hotkeys included.
         let manual_on = manual_core
-            .map(|c| b.manual_strat_state(c).0 && !b.ignore_strat_sell_price(c).unwrap_or(false))
+            .map(|c| {
+                b.manual_strat_active(c).is_some() && !b.ignore_strat_sell_price(c).unwrap_or(false)
+            })
             .unwrap_or(false);
         // The TP button always shows its own `take_profit_pct`, even while an S slot is engaged;
         // selecting a slot must not replace the value displayed by TP.

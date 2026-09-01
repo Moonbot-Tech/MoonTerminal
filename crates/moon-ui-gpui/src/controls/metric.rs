@@ -119,7 +119,8 @@ impl TradeMetric {
     /// value, and the S presets are the control that changes it. The STOP is different — it exists
     /// in the strategy as a level plus an on/off flag, exactly the two things this button and its
     /// toggle edit, so in manual mode they keep working and write to the strategy instead of to the
-    /// local exit generation (`Backend::mirror_stop_into_strategy`).
+    /// manual-strategy overlay (`Backend::manual_exit_overlay`), which is also what the order
+    /// carries.
     pub fn available_with(self, has_core: bool, sl_on: bool, manual_on: bool) -> bool {
         match self {
             TradeMetric::Lev => has_core,
@@ -132,11 +133,17 @@ impl TradeMetric {
     /// hover-aware manual core as the toolbar.
     pub fn available(self, b: &Backend, group: &str, manual_core: Option<CoreId>) -> bool {
         let core = scoped_lev_core(b, group);
-        let exit = b.group_exit_settings(group);
         let manual_on = manual_core
-            .map(|core| b.manual_strat_state(core).0)
+            .map(|core| b.manual_strat_active(core).is_some())
             .unwrap_or(false);
-        self.available_with(core.is_some(), exit.stop_loss_enabled, manual_on)
+        // The same source the toolbar's own SL button renders from: with a manual strategy in force
+        // that is the overlay, and reading the saved generation here made the row and the button
+        // beside it disagree about whether the stop is even on.
+        let sl_on = manual_core
+            .and_then(|core| b.manual_exit_overlay(core))
+            .map(|ms| ms.stop_on)
+            .unwrap_or_else(|| b.group_exit_settings(group).stop_loss_enabled);
+        self.available_with(core.is_some(), sl_on, manual_on)
     }
 
     /// The value this metric's popup would seed from, or `None` when there is none to show.
@@ -189,9 +196,24 @@ impl TradeMetric {
     /// Returns:
     ///     The current metric value, or `None` when the leverage target is absent.
     pub fn current(self, b: &Backend, group: &str) -> Option<f32> {
+        // While a manual strategy owns the exits, the popup must open on the value the button next
+        // to it shows and the order will use — the overlay — not on the saved generation sitting
+        // underneath it.
+        let manual = b
+            .active_trade_core(group)
+            .and_then(|core| b.manual_exit_overlay(core));
         match self {
-            TradeMetric::Tp => Some(b.write_aligned_group_exit(group).take_profit_pct as f32),
-            TradeMetric::Sl => Some(b.write_aligned_group_exit(group).stop_loss_pct),
+            TradeMetric::Tp => Some(
+                manual
+                    .map(|ms| ms.take_profit_pct)
+                    .unwrap_or_else(|| b.write_aligned_group_exit(group).take_profit_pct)
+                    as f32,
+            ),
+            TradeMetric::Sl => Some(
+                manual
+                    .map(|ms| ms.stop_pct)
+                    .unwrap_or_else(|| b.write_aligned_group_exit(group).stop_loss_pct),
+            ),
             TradeMetric::Lev => {
                 let core = scoped_lev_core(b, group)?;
                 // Read the Main chart market's leverage from the per-core map, which includes every

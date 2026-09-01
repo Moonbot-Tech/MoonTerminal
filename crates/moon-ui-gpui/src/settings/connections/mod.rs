@@ -268,6 +268,12 @@ pub(super) fn build_conn(
                             // would rewrite it mid-edit. See `config::seeded_transport`.
                             s.transport = moon_core::config::seeded_transport(s.transport, &v);
                             s.key = Secret::new(v);
+                            // A new key can point this row at a DIFFERENT Moonbot, where strategy
+                            // ids mean something else, so the pinned id is void. The NAME survives
+                            // and re-pins itself against the new host's list.
+                            if let Some(manual) = s.manual_strategy.as_mut() {
+                                manual.id = 0;
+                            }
                         },
                         false,
                     );

@@ -310,7 +310,6 @@ impl Render for Shell {
                     quiet_settings_content,
                     self.strat_slot_menu,
                     self.strat_slots_open,
-                    &self.strat_label_inputs,
                     chrome_width,
                     p,
                     cx,

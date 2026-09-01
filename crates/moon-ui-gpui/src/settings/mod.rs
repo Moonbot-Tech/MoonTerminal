@@ -54,7 +54,7 @@ use lines::Lines;
 const SETTINGS_HEADER_H: f32 = 30.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+pub(crate) enum Tab {
     Connections,
     General,
     Hotkeys,
@@ -278,7 +278,12 @@ impl SettingsView {
     ///
     /// Returns:
     ///     Fully initialized Settings state with a retained Connections virtual-list scroll handle.
-    fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        backend: Entity<Backend>,
+        tab: Tab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let iface = interface::build(&backend, window, cx);
         let lines = lines::build(&backend, window, cx);
         let badges = badges::build(&backend, window, cx);
@@ -461,7 +466,7 @@ impl SettingsView {
                 .then(std::time::Instant::now),
             conn_hint_armed: false,
             backend,
-            active: Tab::Connections,
+            active: tab,
             status: None,
             iface,
             lines,
@@ -584,14 +589,40 @@ fn settings_sig(b: &Backend) -> u64 {
     h.finish()
 }
 
-/// Opens Settings in a separate OS window backed by a live-preview configuration draft.
+/// Open Settings on its default tab, in a separate OS window backed by a live-preview draft.
 ///
-/// Reuses and activates an existing Settings window. If a draft already exists without a usable
-/// window, opening is ignored so two windows cannot share one draft.
+/// Args:
+///     backend: Application state the window edits through its preview.
+///     owner: Window this one belongs to, for placement.
+///     owner_display: Display the owner sits on.
+///     cx: Application context.
 pub fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
+    open_on_tab(backend, owner, owner_display, Tab::Connections, cx);
+}
+
+/// Open the settings window on a named tab, for a control that sends the trader somewhere precise.
+///
+/// An ALREADY open window is only brought forward, not re-tabbed: its draft state belongs to
+/// whatever the trader was doing in it, and switching the page under them would lose their place.
+/// If a draft exists without a usable window, opening is ignored so two windows cannot share one
+/// draft.
+///
+/// Args:
+///     backend: Application state the window edits through its preview.
+///     owner: Window this one belongs to, for placement.
+///     owner_display: Display the owner sits on.
+///     tab: Tab to select when the window is created.
+///     cx: Application context.
+pub fn open_on_tab(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    tab: Tab,
     cx: &mut App,
 ) {
     if let Some(handle) = backend.read(cx).settings_window {
@@ -641,7 +672,7 @@ pub fn open(
     let b = backend.clone();
     match cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
-        let view = cx.new(|cx| SettingsView::new(b, window, cx));
+        let view = cx.new(|cx| SettingsView::new(b, tab, window, cx));
         // Arm the first-run repaint chain here rather than in `new`: `pulse::arm` needs the built
         // view, and arming from `render` would let the window keep itself awake through its own
         // repaints.

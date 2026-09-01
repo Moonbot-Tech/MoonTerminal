@@ -322,6 +322,13 @@ fn paste_key_affix(
                         if let Some(s) = pv.servers.get_mut(i) {
                             s.transport = moon_core::config::seeded_transport(s.transport, &text);
                             s.key = Secret::new(text.clone());
+                            // A new key can point this row at a DIFFERENT Moonbot, and strategy ids
+                            // are unique per host, not globally — so the pinned id would silently
+                            // name whatever strategy inherited that number there. The NAME survives
+                            // and re-pins itself against the new host's list.
+                            if let Some(manual) = s.manual_strategy.as_mut() {
+                                manual.id = 0;
+                            }
                             bcx.notify();
                         }
                     }
@@ -410,6 +417,7 @@ impl SettingsView {
                     default_alert_strategy: 0,
                     own_trade_config: false,
                     strat_slots: None,
+                    manual_strategy: None,
                     trade: None,
                     // No key yet, so no mode to seed: pasting one fills this in.
                     transport: None,

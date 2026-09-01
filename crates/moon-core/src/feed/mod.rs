@@ -377,8 +377,9 @@ pub enum CoreCmd {
     /// Permanently convert one core's small balances, or dust, to BNB.
     ConvertDust,
     /// Place a manual order from the main screen on the core's `market`. `short` is the position
-    /// side, mirroring `is_short`; `size` is in the base coin; `strategy_id=None` maps to
-    /// `StratID=0` for an order without a strategy. This becomes moonproto `new_order`; see
+    /// side, mirroring `is_short`; `size` is in the base coin. `strategy_id=None` maps to a zero
+    /// `StratID`, which lets the CORE substitute its own manual strategy when that mode is on; it
+    /// is not a way to demand an order without one. This becomes moonproto `new_order`; see
     /// `feed::trade`.
     PlaceOrder {
         market: String,
