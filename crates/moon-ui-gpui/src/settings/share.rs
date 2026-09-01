@@ -69,9 +69,12 @@ impl SettingsView {
             Tab::Hotkeys => HotkeysConfig::parse_share(&text)
                 .map(|h| self.apply_draft(cx, move |d| d.hotkeys = h))
                 .is_some(),
-            Tab::Badges => BadgesConfig::parse_share(&text)
-                .map(|b| self.apply_draft(cx, move |d| d.badges = b))
-                .is_some(),
+            Tab::Badges => {
+                let cur = self.draft_snapshot(cx, |d| d.badges.clone());
+                BadgesConfig::parse_share(&text, &cur)
+                    .map(|b| self.apply_draft(cx, move |d| d.badges = b))
+                    .is_some()
+            }
             _ => false,
         };
 

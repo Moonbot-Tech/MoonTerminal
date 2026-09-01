@@ -110,12 +110,21 @@ impl BadgeEntry {
     }
 }
 
+/// Maximum remembered custom colours. Matches the MoonUI colour-picker widget's own
+/// `MAX_CUSTOM_COLORS`; a larger stored/seeded list here would just be silently trimmed the next
+/// time a picker seeds itself from it.
+const CUSTOM_COLORS_MAX: usize = 20;
+
 /// Detection-badge configuration (portable `badges.json`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct BadgesConfig {
     /// Entries by strategy kind (ordinal → code/colors/outline).
     pub entries: Vec<BadgeEntry>,
+    /// Colours typed into a badge colour picker's hex field, most recent first. A picker-wide
+    /// reuse palette for the whole Badges tab (shared by every row's colour/outline pickers), not
+    /// per-row data — hence not a field on `BadgeEntry`.
+    pub custom_colors: Vec<[u8; 3]>,
 }
 
 /// Default 24 kinds: `(ordinal, name, code, dark_color, light_color)`. Colors come from
@@ -171,6 +180,7 @@ impl Default for BadgesConfig {
                     ..BadgeEntry::default()
                 })
                 .collect(),
+            custom_colors: Vec::new(),
         }
     }
 }
@@ -218,10 +228,45 @@ impl BadgesConfig {
     /// Parses badges.json text (clipboard paste / file contents). Requires an `entries`
     /// array; otherwise any JSON would silently produce the default (`serde(default)`).
     /// `None` means the text is not a badge configuration.
-    pub fn parse_share(text: &str) -> Option<Self> {
+    ///
+    /// `custom_colors` is always kept from `current` rather than the pasted text: it is local
+    /// reuse history, not a shared setting, and `to_share_string` writes the same struct back out
+    /// — so without this, pasting a colleague's `badges.json` (whose own history is unrelated, or
+    /// simply absent under `#[serde(default)]`) would silently wipe the local user's remembered
+    /// custom colours.
+    ///
+    /// Args:
+    ///     text: Pasted `badges.json` text to validate and deserialize.
+    ///     current: Local configuration whose custom-colour reuse history must survive the paste.
+    ///
+    /// Returns:
+    ///     Parsed shared badge settings with `current.custom_colors`, or `None` when `text` does
+    ///     not contain a badge `entries` array.
+    pub fn parse_share(text: &str, current: &Self) -> Option<Self> {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
         v.get("entries")?.as_array()?;
-        serde_json::from_str(text).ok()
+        let mut parsed: Self = serde_json::from_str(text).ok()?;
+        parsed.custom_colors = current.custom_colors.clone();
+        Some(parsed)
+    }
+
+    /// Remember a colour typed into a badge colour picker's hex field, most-recent-first, capped
+    /// at `CUSTOM_COLORS_MAX` (dropping the oldest). Mirrors the MoonUI widget's own dedupe/cap so
+    /// the persisted list and a freshly-seeded picker never disagree on order.
+    ///
+    /// Args:
+    ///     color: RGB value the user committed through a picker hex field.
+    ///
+    /// Returns:
+    ///     Whether the list actually changed — `false` when `color` was already the front entry.
+    pub fn remember_custom_color(&mut self, color: [u8; 3]) -> bool {
+        if self.custom_colors.first() == Some(&color) {
+            return false;
+        }
+        self.custom_colors.retain(|c| *c != color);
+        self.custom_colors.insert(0, color);
+        self.custom_colors.truncate(CUSTOM_COLORS_MAX);
+        true
     }
 
     /// Entry by ordinal (first match).
@@ -254,3 +299,6 @@ impl BadgesConfig {
             .and_then(|e| e.outline_color(is_short, is_light))
     }
 }
+
+#[cfg(test)]
+mod tests;

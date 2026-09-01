@@ -279,6 +279,14 @@ pub fn rgb_to_u32(c: [u8; 3]) -> u32 {
     (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32
 }
 
+/// Convert palette/config `[u8; 3]` RGB bytes directly to a `MoonColorPicker` `Hsla` value.
+///
+/// The one-liner every `MoonColorPickerState` seed/init site repeats (`rgb(rgb_to_u32(c)).into()`)
+/// — kept here beside `rgb_to_u32` rather than re-derived at each call site.
+pub fn rgb_bytes_to_hsla(c: [u8; 3]) -> Hsla {
+    rgb(rgb_to_u32(c)).into()
+}
+
 /// Build the explicit palette supplied to `MoonColorPicker::colors`.
 ///
 /// It contains five saturation/lightness variants for each of 12 hues plus five grays, for 65
