@@ -6,15 +6,84 @@
 
 use std::collections::HashSet;
 
-use moon_core::config::CoreGroup;
+use moon_core::config::{CoreGroup, UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN};
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
 use super::super::AnalyticsSessionState;
 use super::{
-    CoreSelectionCaption, UndatedBanner, analytics_core_filter_ids, sole_core_name,
-    undated_banner_state,
+    CoreSelectionCaption, UndatedBanner, analytics_core_filter_ids, presets_row_fits,
+    sole_core_name, undated_banner_state,
 };
+
+/// `analytics/toolbar.rs:presets_row_fits` must keep the inline presets at the exact available
+/// width; changing `>=` to `>` collapses the Analytics period bar one pixel early for a window
+/// that still fits every preset.
+#[test]
+fn presets_row_fits_only_when_available_width_reaches_the_row_width() {
+    assert!(
+        presets_row_fits(401.0, 400.0),
+        "room beyond the measured row keeps the one-click presets inline"
+    );
+    assert!(
+        !presets_row_fits(399.0, 400.0),
+        "a row wider than its available room must collapse to the dropdown"
+    );
+    assert!(
+        presets_row_fits(400.0, 400.0),
+        "an exact fit is still a fit and must not collapse one pixel early"
+    );
+}
+
+/// `locales/analytics.yml:analytics.period.last_month` must remain below the font-scaled toolbar
+/// ceiling; widening it would elide the Russian Analytics period label with an ellipsis.
+#[gpui::test]
+fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::TestAppContext) {
+    rust_i18n::set_locale("ru");
+    // Every preset in the bar must fit at the default scale -- the task's baseline done-condition.
+    for per in super::Period::ALL {
+        let title = per.title(chrono_tz::Tz::UTC);
+        let (natural, ceiling) = cx.update(|cx| {
+            let natural = moon_ui::MoonSegmentItem::new("", title.clone())
+                .fit_width(cx, 0.0, f32::MAX)
+                .resolved_width();
+            let ceiling =
+                moon_ui::MoonTheme::active_tokens(cx).font_width(super::PRESET_CELL_MAX_W);
+            (natural, ceiling)
+        });
+        assert!(
+            natural < ceiling,
+            "{title:?} natural width {natural} does not fit under the {ceiling}px fitted-cell \
+             ceiling at the default scale and would render truncated with an ellipsis"
+        );
+    }
+
+    // Every preset except the pre-existing, out-of-scope Week overflow must survive the supported
+    // font-delta extremes, which is the failure class this regression is meant to catch.
+    for delta in [UI_FONT_DELTA_MIN as f32, UI_FONT_DELTA_MAX as f32] {
+        let ceiling = cx.update(|cx| {
+            moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta;
+            moon_ui::MoonTheme::active_tokens(cx).font_width(super::PRESET_CELL_MAX_W)
+        });
+        for per in super::Period::ALL {
+            if matches!(per, super::Period::Week) {
+                continue;
+            }
+            let title = per.title(chrono_tz::Tz::UTC);
+            let natural = cx.update(|cx| {
+                moon_ui::MoonSegmentItem::new("", title.clone())
+                    .fit_width(cx, 0.0, f32::MAX)
+                    .resolved_width()
+            });
+            assert!(
+                natural < ceiling,
+                "{title:?} natural width {natural} does not fit under the {ceiling}px fitted-cell \
+                 ceiling at font delta {delta} and would render truncated with an ellipsis"
+            );
+        }
+    }
+    rust_i18n::set_locale("en");
+}
 
 /// Some undated trades, with money attached.
 ///

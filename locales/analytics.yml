@@ -23,10 +23,6 @@ profit_monitor.group.ungrouped:
   ru: "Без группы"
   en: "Ungrouped"
   es: "Sin grupo"
-profit_monitor.period.hour:
-  ru: "Час"
-  en: "Hour"
-  es: "Hora"
 profit_monitor.column.name:
   ru: "Имя"
   en: "Name"
@@ -768,7 +764,9 @@ analytics.period.yesterday:
   es: "Ayer"
 # The rolling presets are labelled by their day count, matching report.period.*. A bare week or year
 # label beside a current-month / current-year label reads as a calendar period and is not one.
-# Analytics has calendar month and calendar year (`cur_month` / `cur_year`) but no calendar week.
+# This Period enum has calendar month and calendar year (`cur_month` / `cur_year`) but no calendar
+# week key of its own; the Profit Monitor's separate preset set borrows `report.period.cur_week`
+# directly instead of duplicating it here.
 # Labels only: persisted selection uses stable `p-week` / `p-year` / `p-cur-year` ids, so this
 # needs no layout migration. `p-year` stays rolling 365 days; `p-cur-year` is the civil year.
 # A rolling 7-day window ending today.
@@ -781,6 +779,12 @@ analytics.period.cur_month:
   ru: "Тек. месяц"
   en: "This month"
   es: "Mes actual"
+# Previous calendar month, 1st to last day. Also borrowed by the Profit Monitor's own preset set
+# (`analytics/profit_monitor/model.rs`), the same way it already borrows `cur_month`/`cur_year`.
+analytics.period.last_month:
+  ru: "Прош. мес."
+  en: "Last month"
+  es: "Mes pasado"
 # Calendar year from January 1st.
 analytics.period.cur_year:
   ru: "Тек. год"

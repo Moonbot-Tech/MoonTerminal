@@ -306,6 +306,78 @@ fn cur_year_resolves_to_january_first() {
     );
 }
 
+/// `panels/report/mod.rs:Period::range_at` must resolve Last month with inclusive Report bounds;
+/// replacing the January carry with the current year makes the Report toolbar silently query the
+/// wrong month after New Year.
+///
+/// Independent oracle: each expected edge is an explicit UTC civil instant, including the final
+/// second of the prior month, not an output of `range_at` or `prev_month_start`.
+#[test]
+fn last_month_resolves_previous_calendar_month_with_inclusive_edges() {
+    let utc = |year, month, day, hour, minute, second| {
+        Utc.with_ymd_and_hms(year, month, day, hour, minute, second)
+            .single()
+            .expect("valid UTC instant")
+            .timestamp()
+    };
+
+    for (now, expected, why) in [
+        (
+            utc(2024, 6, 15, 12, 0, 0),
+            (
+                Some(utc(2024, 5, 1, 0, 0, 0)),
+                Some(utc(2024, 5, 31, 23, 59, 59)),
+            ),
+            "mid-year month",
+        ),
+        (
+            utc(2024, 1, 15, 12, 0, 0),
+            (
+                Some(utc(2023, 12, 1, 0, 0, 0)),
+                Some(utc(2023, 12, 31, 23, 59, 59)),
+            ),
+            "January rolls into the prior year",
+        ),
+        (
+            utc(2024, 9, 15, 12, 0, 0),
+            (
+                Some(utc(2024, 8, 1, 0, 0, 0)),
+                Some(utc(2024, 8, 31, 23, 59, 59)),
+            ),
+            "31-day August precedes a 30-day current month",
+        ),
+        (
+            utc(2024, 3, 15, 12, 0, 0),
+            (
+                Some(utc(2024, 2, 1, 0, 0, 0)),
+                Some(utc(2024, 2, 29, 23, 59, 59)),
+            ),
+            "leap-year February includes February 29",
+        ),
+        (
+            utc(2023, 3, 15, 12, 0, 0),
+            (
+                Some(utc(2023, 2, 1, 0, 0, 0)),
+                Some(utc(2023, 2, 28, 23, 59, 59)),
+            ),
+            "ordinary February ends on February 28",
+        ),
+    ] {
+        assert_eq!(
+            Period::LastMonth.range_at(now, chrono_tz::UTC),
+            expected,
+            "{why}"
+        );
+    }
+}
+
+/// `panels/report/mod.rs:Period::from_menu_key` must restore the Last month Report key; renaming
+/// it resets an existing toolbar preference instead of reopening the selected range.
+#[test]
+fn last_month_menu_key_round_trips_to_its_preset() {
+    assert!(Period::from_menu_key("rp-last-month") == Some(Period::LastMonth));
+}
+
 /// `Period::GROUPS` is the single declaration of menu membership, grouping, AND the exact display
 /// order within each group: every variant must appear exactly once, in the approved sequence, and
 /// no two presets may share a menu element id.
@@ -333,7 +405,12 @@ fn period_groups_home_every_variant_exactly_once_in_the_approved_order() {
         Period::GROUPS
             == [
                 &[Period::Today, Period::Yesterday][..],
-                &[Period::CurWeek, Period::CurMonth, Period::CurYear][..],
+                &[
+                    Period::CurWeek,
+                    Period::CurMonth,
+                    Period::LastMonth,
+                    Period::CurYear,
+                ][..],
                 &[Period::Days7, Period::Days30, Period::Days365][..],
                 &[Period::All][..],
             ],
@@ -348,6 +425,7 @@ fn period_groups_home_every_variant_exactly_once_in_the_approved_order() {
             Period::Yesterday => 0,
             Period::CurWeek => 1,
             Period::CurMonth => 1,
+            Period::LastMonth => 1,
             Period::CurYear => 1,
             Period::Days7 => 2,
             Period::Days30 => 2,
@@ -358,11 +436,12 @@ fn period_groups_home_every_variant_exactly_once_in_the_approved_order() {
 
     // Explicit runtime checklist for completeness and duplicate detection. Keep it synchronized
     // with the exhaustive `expected_group` match whenever a preset is added.
-    const ALL: [Period; 9] = [
+    const ALL: [Period; 10] = [
         Period::Today,
         Period::Yesterday,
         Period::CurWeek,
         Period::CurMonth,
+        Period::LastMonth,
         Period::CurYear,
         Period::Days7,
         Period::Days30,
@@ -486,6 +565,7 @@ fn filter_ids_are_pinned_exact_strings() {
             Period::Yesterday => "rp-yesterday",
             Period::CurWeek => "rp-cur-week",
             Period::CurMonth => "rp-cur-month",
+            Period::LastMonth => "rp-last-month",
             Period::CurYear => "rp-cur-year",
             Period::Days7 => "rp-days-7",
             Period::Days30 => "rp-days-30",
@@ -498,6 +578,7 @@ fn filter_ids_are_pinned_exact_strings() {
         Period::Yesterday,
         Period::CurWeek,
         Period::CurMonth,
+        Period::LastMonth,
         Period::CurYear,
         Period::Days7,
         Period::Days30,

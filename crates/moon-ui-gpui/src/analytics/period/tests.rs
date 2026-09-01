@@ -133,6 +133,64 @@ fn cur_year_range_starts_january_1_and_ends_tomorrow() {
     );
 }
 
+/// `analytics/period.rs:Period::range_at` must resolve Last month as the entire previous civil
+/// month; replacing `prev_month_start` with the current year in January makes all Analytics tabs
+/// silently show the wrong calendar month after New Year.
+///
+/// Independent oracle: each edge is a separately pinned UTC civil midnight, including January's
+/// prior-year December, a 31-day predecessor, and both February lengths. These dates do not come
+/// from `range_at` or from the shared carry helper.
+#[test]
+fn last_month_range_uses_previous_calendar_month_boundaries() {
+    let midnight = |year, month, day| {
+        Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+            .single()
+            .expect("valid UTC midnight")
+            .timestamp()
+    };
+
+    for (now, expected, why) in [
+        (
+            midnight(2024, 6, 15),
+            (midnight(2024, 5, 1), midnight(2024, 6, 1)),
+            "mid-year month",
+        ),
+        (
+            midnight(2024, 1, 15),
+            (midnight(2023, 12, 1), midnight(2024, 1, 1)),
+            "January rolls into the prior year",
+        ),
+        (
+            midnight(2024, 9, 15),
+            (midnight(2024, 8, 1), midnight(2024, 9, 1)),
+            "31-day August precedes a 30-day current month",
+        ),
+        (
+            midnight(2024, 3, 15),
+            (midnight(2024, 2, 1), midnight(2024, 3, 1)),
+            "leap-year February ends on the following month start",
+        ),
+        (
+            midnight(2023, 3, 15),
+            (midnight(2023, 2, 1), midnight(2023, 3, 1)),
+            "ordinary February has the same month-start boundary shape",
+        ),
+    ] {
+        assert_eq!(
+            Period::LastMonth.range_at(now, chrono_tz::UTC),
+            expected,
+            "{why}"
+        );
+    }
+}
+
+/// `analytics/period.rs:Period::from_id` must restore the Last month id already persisted in
+/// Analytics layout; renaming it drops a user's chosen preset on the next window reopen.
+#[test]
+fn last_month_persisted_id_round_trips_to_its_preset() {
+    assert!(Period::from_id("p-last-month") == Some(Period::LastMonth));
+}
+
 /// The question this change had to answer: one day chosen on BOTH fields, with the two default
 /// clock times, must still mean that whole day.
 ///

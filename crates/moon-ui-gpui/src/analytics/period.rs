@@ -50,6 +50,8 @@ pub(super) enum Period {
     Week,
     /// The current selected-zone calendar month from its first civil day.
     CurMonth,
+    /// The previous selected-zone calendar month as `[previous-month start, current-month start)`.
+    LastMonth,
     /// The current selected-zone calendar year from January 1 of that civil year.
     CurYear,
     /// A rolling 30 days.
@@ -66,11 +68,12 @@ pub(super) enum Period {
 }
 
 impl Period {
-    pub(super) const ALL: [Period; 8] = [
+    pub(super) const ALL: [Period; 9] = [
         Period::Today,
         Period::Yesterday,
         Period::Week,
         Period::CurMonth,
+        Period::LastMonth,
         Period::Month,
         Period::CurYear,
         Period::Year,
@@ -134,6 +137,7 @@ impl Period {
             Period::Yesterday => "p-yesterday",
             Period::Week => "p-week",
             Period::CurMonth => "p-cur-month",
+            Period::LastMonth => "p-last-month",
             Period::CurYear => "p-cur-year",
             Period::Month => "p-month",
             Period::Year => "p-year",
@@ -161,6 +165,7 @@ impl Period {
             Period::Yesterday => t!("analytics.period.yesterday"),
             Period::Week => t!("analytics.period.week"),
             Period::CurMonth => t!("analytics.period.cur_month"),
+            Period::LastMonth => t!("analytics.period.last_month"),
             Period::CurYear => t!("analytics.period.cur_year"),
             Period::Month => t!("analytics.period.month"),
             Period::Year => t!("analytics.period.year"),
@@ -221,6 +226,19 @@ impl Period {
                     .and_then(|day| moon_core::util::display_time::day_start(day, zone))
                     .unwrap_or(day0);
                 (start, tomorrow)
+            }
+            Period::LastMonth => {
+                // Both bounds are civil-month starts: the upper is exclusive and never counts a
+                // day, so a shorter or longer previous month (28/29/30/31 days) needs no explicit
+                // length check — the following month's own start already draws the line.
+                let (prev_month_start_date, cur_month_start_date) =
+                    moon_core::util::display_time::prev_and_cur_month_start(today);
+                let cur_month_start =
+                    moon_core::util::display_time::day_start(cur_month_start_date, zone)
+                        .unwrap_or(day0);
+                let start = moon_core::util::display_time::day_start(prev_month_start_date, zone)
+                    .unwrap_or(day0);
+                (start, cur_month_start)
             }
             Period::CurYear => {
                 // January 1 of today's civil year in the selected zone, exclusive tomorrow.
