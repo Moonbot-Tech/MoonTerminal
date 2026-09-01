@@ -1,28 +1,29 @@
 //! Header toggle and picker for Moonbot manual strategies.
 //!
-//! State lives in the core's `ClientSettings.use_manual_strategy` and `manual_strategy_id` fields.
-//! Toggle and picker changes send `ClientSettingsEdit::ManualStrategy`; the process-lifetime local
-//! override exposed by `Backend::manual_strat_state` provides immediate feedback and continues to
-//! take precedence over ClientSettings snapshots until replaced. Core echoes and command failures do
-//! not reconcile it. When enabled, the core derives sell and stop behavior for manual orders from
-//! the strategy fields, so the toolbar's TP, S slots, and SL do not apply to new orders and are
-//! disabled. `effective_strat_id` in moon-core already routes manual orders through the selected
-//! strategy.
+//! The mode is TERMINAL state, stored per core in `ServerConfig::manual_strategy` and never sent:
+//! an order names its strategy explicitly, so the core's own `use_manual_strategy` switch stays
+//! where its user left it and two terminals on one core can work on different strategies. A core
+//! that has never been set here is seeded once from its own snapshot
+//! (`Backend::tick_manual_strat_seed`), which is what carries an upgrade over.
+//!
+//! With a strategy selected, the core derives the sell from that strategy unless its "ignore the
+//! strategy's sell price" checkbox is on, so the toolbar's TP and S slots do not apply to new
+//! orders and are disabled; the stop stays editable and is applied to the order itself.
 
 use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
+    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
     MoonSelectorSegment, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
 use moon_core::config::MANUAL_STRAT_SLOTS;
-use moon_core::feed::{ClientSettingsEdit, StrategyRow, StrategySchemaModel};
+use moon_core::feed::{StrategyRow, StrategySchemaModel};
 use moon_core::session::CoreId;
 
-use crate::backend::MANUAL_STRATEGY_KIND;
+use crate::backend::{MANUAL_STRATEGY_KIND, manual_strategy_id};
 use crate::shell::Shell;
 use crate::{Backend, design};
 
@@ -85,8 +86,8 @@ type StratButtonSlot = (usize, String, Option<u64>, String, String);
 /// time the balance beside them changes width.
 ///
 /// Each button carries two gestures, matching Moonbot: left click fires the slot's strategy and
-/// right click assigns which strategy it fires. Everything else about the buttons — captions,
-/// per-slot visibility, and the core's own sell-price flag — lives in the gear popup beside them
+/// right click assigns which strategy it fires. Everything else about the buttons — per-slot
+/// visibility and the core's own sell-price flag — lives in the gear popup beside them
 /// (`settings::slot_settings_content`).
 #[allow(clippy::too_many_arguments)]
 pub fn manual_strategy_controls(
@@ -95,7 +96,6 @@ pub fn manual_strategy_controls(
     shell: &Entity<Shell>,
     slot_menu: Option<(CoreId, usize)>,
     slots_open: bool,
-    label_inputs: &[Entity<MoonInputState>],
     chrome_width: f32,
     p: MoonPalette,
     cx: &App,
@@ -112,13 +112,15 @@ pub fn manual_strategy_controls(
         .then(|| sel_row.map(|r| strat_summary(r, schema)))
         .flatten();
 
-    // The pill shows the selected strategy, the localized none marker when no id is selected, or
-    // `?` when an id exists but the selected strategy was deleted. The untruncated candidate is
-    // resolved first because the fit ladder below decides which cap it renders at.
-    let full_pill_text: String = match (sel_row, id) {
-        (Some(r), _) => r.name.clone(),
-        (None, 0) => t!("header.ms_none").to_string(),
-        (None, _) => "?".to_string(),
+    // The pill shows the selected strategy, `?` when one is selected but does not resolve, and the
+    // localized none marker when nothing is selected at all. A name that resolves to nothing is NOT
+    // an empty selection — the strategy was renamed, deleted, or has not arrived, and an order in
+    // that state is refused rather than placed, so the two must not look alike. The untruncated
+    // candidate is resolved first because the fit ladder below decides which cap it renders at.
+    let full_pill_text: String = match sel_row {
+        Some(r) => r.name.clone(),
+        None if b.selected_manual_strategy_name(core).is_some() => "?".to_string(),
+        None => t!("header.ms_none").to_string(),
     };
 
     // Quick-select buttons. The SLOTS come from this terminal (`Backend::strat_slots`), which falls
@@ -138,13 +140,17 @@ pub fn manual_strategy_controls(
                 // rather than its ordinal position: the slot is the core's slot `i` while an
                 // ordinal match would address the ix-th Manual-kind strategy in snapshot order —
                 // the two can disagree, and a button that fires the wrong strategy places a real
-                // order silently.
-                let sid = manuals
-                    .iter()
-                    .find(|(_, name)| *name == strategy)
-                    .map(|(sid, _)| *sid);
+                // order silently. Through the shared resolver, so the button and the hotkey for the
+                // same slot cannot reach different strategies.
+                let sid = manual_strategy_id(&core_data.strategies, &strategy);
                 let numeric_label = (i + 1).to_string();
-                let caption = slot_caption(&slot.label, &strategy, &numeric_label);
+                // The button IS its strategy; an unassigned slot falls back to its own number so
+                // the empty slot stays clickable and identifiable.
+                let caption = if strategy.is_empty() {
+                    numeric_label.clone()
+                } else {
+                    strategy.clone()
+                };
                 (i, strategy, sid, caption, numeric_label)
             })
             .collect::<Vec<_>>()
@@ -230,6 +236,30 @@ pub fn manual_strategy_controls(
     // Capped like the core selector beside it: a strategy name is arbitrary user text and this
     // pill sizes to its content, so an uncapped one pushes the header's right cluster off-window.
     // The cap narrows once the fit ladder has already dropped every quick-select button.
+    // Only ASSIGNED slots replace the picker. A row of empty slots chooses nothing — clicking one
+    // is a no-op — so hiding the dropdown behind it would leave no way to pick a strategy at all.
+    // The picker also stays whenever the selection resolves to nothing, because its `?` and its
+    // danger dot are the only thing on screen saying why every order is being refused.
+    let assigned_shown = match (buttons.as_deref(), fit) {
+        (Some(slots), Some(fit)) => slots
+            .iter()
+            .take(fit.visible_count)
+            .any(|(_, _, sid, _, _)| sid.is_some()),
+        _ => false,
+    };
+    // The selected strategy has to be visible SOMEWHERE. A button carries it only if one of the
+    // rendered slots fires it; otherwise the picker is the only thing naming the selection, and
+    // hiding it would leave the trader with no highlighted button, no name, and no way to pick a
+    // strategy that is not in a slot.
+    let selection_on_a_button = match (buttons.as_deref(), fit) {
+        (Some(slots), Some(fit)) => slots
+            .iter()
+            .take(fit.visible_count)
+            .any(|(_, _, sid, _, _)| sid.is_some() && *sid == Some(id)),
+        _ => false,
+    };
+    let buttons_shown =
+        assigned_shown && selection_on_a_button && b.manual_strat_unresolved(core).is_none();
     let pill_cap = if fit.is_some_and(|f| f.pill_reduced) {
         design::font_w(cx, REDUCED_PILL_MAX_W)
     } else {
@@ -238,8 +268,10 @@ pub fn manual_strategy_controls(
     let display = design::fit_label(cx, &full_pill_text, pill_cap);
     let dot_color = if on && sel_row.is_some() {
         design::positive_color(p)
-    } else if on {
-        // Signal an enabled strategy id that did not resolve by using the danger color.
+    } else if on && b.selected_manual_strategy_name(core).is_some() {
+        // A selection that NAMES a strategy but does not resolve: the danger colour, because every
+        // order on this core is being refused. The mode being on with nothing selected is not that
+        // — it is an ordinary manual order — and painting it red would cry wolf.
         design::danger_color(p)
     } else {
         p.text_muted
@@ -256,7 +288,7 @@ pub fn manual_strategy_controls(
                 // Selecting a strategy also enables the mode, matching the Moonbot menu.
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
-                        send_manual(b, core, true, sid);
+                        set_manual(b, core, true, sid);
                         bcx.notify();
                     });
                 }),
@@ -274,17 +306,19 @@ pub fn manual_strategy_controls(
                 .label_side(MoonToggleLabelSide::Left)
                 .checked(on)
                 .size(MoonToggleSize::Compact)
-                // The mode cannot be enabled until the picker selects a strategy.
-                .disabled(id == 0)
+                // Enabling needs a resolved strategy. DISABLING must stay possible without one, or
+                // a selection that stopped resolving would leave the mode stuck on with every
+                // order refused and no control on screen able to clear it.
+                .disabled(id == 0 && !on)
                 .on_change(move |ch: &bool, _w, app| {
                     let v = *ch;
                     toggle_backend.update(app, |b, bcx| {
                         let (_, cur_id) = b.manual_strat_state(core);
-                        if cur_id == 0 {
+                        if cur_id == 0 && v {
                             return;
                         }
                         // Disabling preserves the id so the next toggle restores the same strategy.
-                        send_manual(b, core, v, cur_id);
+                        set_manual(b, core, v, cur_id);
                         bcx.notify();
                     });
                 }),
@@ -294,9 +328,8 @@ pub fn manual_strategy_controls(
         // visible.
         .children(on.then(|| {
             let gear_shell = shell.clone();
-            let content = slots_open.then(|| {
-                settings::slot_settings_content(core, backend, shell, label_inputs, p, cx)
-            });
+            let content =
+                slots_open.then(|| settings::slot_settings_content(core, backend, shell, p, cx));
             crate::chrome::terminal_chrome::header_gear_popover(
                 "ms-slots",
                 MoonPopoverPlacement::BottomStart,
@@ -311,13 +344,16 @@ pub fn manual_strategy_controls(
                     .render(),
                 move |open, _, app| {
                     gear_shell.update(app, |shell, cx| {
-                        shell.set_strat_slots_open(open, cx);
+                        shell.set_strat_slots_open(open);
                         cx.notify();
                     });
                 },
             )
         }))
-        .child({
+        // The picker exists to choose a strategy. With at least one quick-select button on screen
+        // that choice is already one click away, and the dropdown is a second, wider control saying
+        // the same thing — so it yields to the buttons and returns the moment none are shown.
+        .children((!buttons_shown).then(|| {
             MoonPopover::new("header-ms-selector")
                 .placement(MoonPopoverPlacement::BottomStart)
                 .fit_content()
@@ -341,12 +377,12 @@ pub fn manual_strategy_controls(
                         .items(items)
                         .render(),
                 )
-        });
+        }));
     // Ten quick-select buttons: the fit ladder resolved above decides the label mode and how many
     // slots to render; `0` renders none, leaving the toggle and the pill as the last two standing.
     //
-    // Three gestures per button, matching Moonbot: left click fires the slot, right click assigns
-    // which strategy it fires, and a double click renames it.
+    // Two gestures per button, matching Moonbot: left click fires the slot, right click assigns
+    // which strategy it fires.
     if let (Some(slots), Some(fit)) = (buttons, fit)
         && fit.visible_count > 0
     {
@@ -382,7 +418,7 @@ pub fn manual_strategy_controls(
                 .segment(MoonButtonSegment::new(label.clone()).weight(BTN_TEXT_WEIGHT));
             if sid.is_none() && !strategy.is_empty() {
                 // Assigned to a name this core's snapshot does not have: say so rather than firing
-                // something else. Still renameable and re-assignable, hence not disabled.
+                // something else. Still re-assignable by right click, hence not disabled.
                 btn = btn.tooltip(
                     t!("hotkeys.ms_button_unresolved", name = strategy.as_str()).to_string(),
                 );
@@ -393,7 +429,7 @@ pub fn manual_strategy_controls(
             let btn = btn.on_click(move |_, _, app| {
                 let Some(sid) = sid else { return };
                 click_backend.update(app, |b, bcx| {
-                    send_manual(b, core, true, sid);
+                    set_manual(b, core, true, sid);
                     bcx.notify();
                 });
             });
@@ -515,27 +551,6 @@ pub fn manual_strategy_controls(
     Some(row.into_any_element())
 }
 
-/// Resolve what one quick-select button says, in the order a trader expects to see it.
-///
-/// The trader's own caption wins; failing that the assigned strategy names the button, as it does
-/// in Moonbot; failing that the slot shows its own number, which is what makes an unassigned slot
-/// visible enough to right-click.
-///
-/// Args:
-///     label: Caption stored for this slot, possibly blank.
-///     strategy: Strategy name assigned to this slot, possibly blank.
-///     ordinal: The slot's 1-based number, used when it has neither.
-///
-/// Returns:
-///     The caption to render.
-fn slot_caption(label: &str, strategy: &str, ordinal: &str) -> String {
-    match (label.trim(), strategy.trim()) {
-        ("", "") => ordinal.to_string(),
-        ("", name) => name.to_string(),
-        (label, _) => label.to_string(),
-    }
-}
-
 /// Collect Manual-kind strategy ids and names in their snapshot order.
 ///
 /// Args:
@@ -577,12 +592,11 @@ pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -
         .and_then(|slots| slots.get(ix).map(|slot| slot.strategy.trim().to_string()))
         .filter(|strategy| !strategy.is_empty());
     let sid = match slot_strategy {
-        Some(strategy) => b.session.store().core(core).and_then(|cd| {
-            cd.strategies
-                .iter()
-                .find(|s| s.kind_ordinal == MANUAL_STRATEGY_KIND && s.name == strategy)
-                .map(|s| s.id)
-        }),
+        Some(strategy) => b
+            .session
+            .store()
+            .core(core)
+            .and_then(|cd| manual_strategy_id(&cd.strategies, &strategy)),
         // No slot to go by — the core has assigned none and this terminal owns none either, which
         // is every core that has not reported its config yet. Fall back to the ordinal reading
         // this used before slots existed, so the hotkeys keep working on an unconfigured core;
@@ -600,39 +614,30 @@ pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -
     };
     match sid {
         Some(sid) => {
-            send_manual(b, core, true, sid);
+            set_manual(b, core, true, sid);
             true
         }
         None => false,
     }
 }
 
-/// Store the process-lifetime local override and send a manual-strategy edit to the core.
-///
-/// The override remains authoritative until replaced or process exit; neither a core echo nor a
-/// command failure reconciles it. Send failures are logged.
+/// Store this core's manual-strategy mode. Nothing leaves the terminal.
 ///
 /// Args:
-///     b: Backend whose local state and session are updated.
+///     b: Backend whose per-core configuration is updated.
 ///     core: Target core.
 ///     on: Whether manual-strategy mode should be enabled.
-///     id: Selected strategy id, retained even when the mode is disabled.
-fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
-    let changed = b.manual_strat_state(core).1 != id;
-    b.set_manual_strat_local(core, on, id);
-    if changed {
-        // Selecting a strategy SEEDS the visible take profit and stop from it, once. From then on
-        // the screen is authoritative — the order carries what the trader sees, not what the
-        // strategy holds — but starting from the strategy's own values is what makes the first
-        // order after a selection do what the strategy says it will.
-        b.seed_exit_from_strategy(core, id);
-    }
-    if let Err(e) = b
-        .session
-        .edit_client_settings(core, ClientSettingsEdit::ManualStrategy { on, id })
-    {
-        log::warn!("manual strategy edit failed: {e:#}");
-    }
+///     id: Selected strategy id, retained by name even when the mode is disabled.
+fn set_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
+    // The id actually STORED, which is not always the one clicked: an id the snapshot cannot name
+    // keeps the previous selection rather than clearing it, and the exits must be seeded from what
+    // the order will really use.
+    let id = b.set_manual_strat(core, on, id);
+    // Selecting a strategy SEEDS the visible take profit and stop from it, once — the helper keeps
+    // the per-strategy overlay it already has. From then on the screen is authoritative (the order
+    // carries what the trader sees, not what the strategy holds), but starting from the strategy's
+    // own values is what makes the first order after a selection do what the strategy says it will.
+    b.seed_exit_from_strategy(core, id);
 }
 
 /// Build a Moonbot-style `Buy +0.00% Sell +0.50% SL ON TS OFF` parameter summary.
@@ -648,6 +653,15 @@ fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
 ///     The four-part Buy, Sell, SL, and TS summary.
 fn strat_summary(row: &StrategyRow, schema: Option<&StrategySchemaModel>) -> String {
     let field = |name: &str| strat_field(row, schema, name);
+    // A strategy that hands its exits to a MoonHook has none of its own to show: the core
+    // substitutes the hook at order time and takes both the sell price and the stop from it, so
+    // printing this strategy's Sell and SL here would name numbers no order will ever use. Say
+    // which hook instead — that is the thing whose values apply.
+    if let Some(hook) = field("UseHookStrategy").map(|v| v.trim().to_string())
+        && !hook.is_empty()
+    {
+        return t!("header.ms_summary_hook", name = hook).to_string();
+    }
     let mut parts: Vec<String> = Vec::with_capacity(4);
     // Always show Buy and Sell, as Moonbot does. A default-valued field may be absent from both the
     // snapshot and some schema sections; zero then means the current price, matching the core's

@@ -10,11 +10,11 @@ pub const MANUAL_STRAT_SLOTS: usize = 10;
 
 /// One manual-strategy quick-select button, as this terminal owns it.
 ///
-/// Both halves are the terminal's, not the core's: Moonbot's wire carries only a name per slot
-/// (`trading.manual_strats_names`), which is also the button's caption there. Separating the two
-/// lets a slot keep firing one strategy under a caption the trader chose — the whole point of
-/// naming a button — while an empty caption still falls back to the strategy's own name, so a
-/// slot seeded from the core reads exactly as it does in Moonbot.
+/// The button is its STRATEGY: Moonbot's wire carries one name per slot
+/// (`trading.manual_strats_names`) and shows exactly that on the button, and so does this. A
+/// separate trader-chosen caption existed here briefly and was removed — a button whose label can
+/// differ from the strategy it fires is a button that can place a real order on something other
+/// than what it says.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StratSlot {
     /// Name of the Manual-kind strategy this button fires; empty means the slot is unassigned.
@@ -23,9 +23,6 @@ pub struct StratSlot {
     /// that a re-created strategy does not keep, and the name is what both screens show.
     #[serde(default)]
     pub strategy: String,
-    /// Caption shown on the button; empty falls back to [`Self::strategy`].
-    #[serde(default)]
-    pub label: String,
     /// Whether this slot is drawn at all, mirroring Moonbot's `Button N` checkbox.
     ///
     /// Local like the rest of the slot: the core's own `show_button` seeds it through the settings
@@ -33,6 +30,40 @@ pub struct StratSlot {
     /// slot the core hides would make the button vanish with no way to reach it again.
     #[serde(default)]
     pub show: bool,
+}
+
+/// Manual-strategy mode for one core, as this terminal owns it.
+///
+/// Terminal state, not a mirror of the core's `use_manual_strategy`/`manual_strategy_id`: the
+/// order carries its strategy explicitly (`NewOrderParams::with_strategy_id`), so which strategy
+/// THIS terminal fires is nothing the core has to be switched into. Two terminals on one core can
+/// therefore sit on different strategies.
+///
+/// The terminal no longer WRITES the core's own switch, which is a narrower promise than leaving it
+/// untouched: every ClientSettings edit still travels as a full snapshot, so an unrelated setting
+/// changed here re-sends whatever `use_manual_strategy` the terminal last read. What is gone is
+/// this mode driving that field.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ManualStratState {
+    /// Whether manual-strategy mode is on for this core.
+    #[serde(default)]
+    pub on: bool,
+    /// Selected Manual-kind strategy BY NAME; empty means none is selected.
+    ///
+    /// The name is the ANCHOR, not the working identifier: an id is a per-core number that a
+    /// re-created strategy does not keep, so the name is what survives a strategy being rebuilt.
+    /// It is used to find the strategy again only when [`Self::id`] no longer names one.
+    #[serde(default)]
+    pub strategy: String,
+    /// Id this selection was last confirmed to have, or `0` before it has ever been resolved.
+    ///
+    /// The WORKING identifier, and the reason it exists: Moonbot substitutes manual hook strategies
+    /// while they run ("Manual strategy X turned into Hook Y"), so resolving the name against the
+    /// live snapshot before every order can hand back a DIFFERENT strategy — with its own stop —
+    /// for a selection the trader never touched. Pinning the id makes the choice stable; the name
+    /// takes over only once that id is gone from the core.
+    #[serde(default)]
+    pub id: u64,
 }
 
 /// Core-data reception flags, implemented entirely as a client-side filter.
@@ -157,6 +188,14 @@ pub struct ServerConfig {
     /// their own buttons must not have to move their TP/SL off the group to get them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strat_slots: Option<[StratSlot; MANUAL_STRAT_SLOTS]>,
+    /// This core's manual-strategy mode, or `None` while it has never been set here.
+    ///
+    /// `None` is what every file written before the terminal owned this mode says, and it is
+    /// deliberately distinguishable from `Some(default)`: the first snapshot a core reports seeds
+    /// this once from its own `use_manual_strategy`, so an upgrade does not silently drop the
+    /// strategy the trader was working with. After that the core is never read for it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_strategy: Option<ManualStratState>,
     /// This core's own manual-trading generation, used only while [`Self::own_trade_config`] is
     /// on. `None` means the core has never had one; the toggle seeds it from the group so
     /// switching cannot move the numbers under the trader's hands.

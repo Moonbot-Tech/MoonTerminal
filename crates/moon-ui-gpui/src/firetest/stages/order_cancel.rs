@@ -144,7 +144,7 @@ impl Runtime {
                 false,
                 price,
                 size,
-                None,
+                terms.strategy_id,
                 terms.exit,
                 terms.planned_sell.unwrap_or(0.0),
                 terms.sync_exit,

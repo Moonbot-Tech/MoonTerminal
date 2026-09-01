@@ -449,3 +449,57 @@ fn the_transport_survives_a_split() {
         "the mode must persist as its MoonBot name, got: {text}"
     );
 }
+
+/// Regression target: adding a per-core field to `ServerConfig` without wiring BOTH halves of
+/// `merge`/`split`. The manual-strategy mode is the only record of which strategy a core fires, and
+/// a missing `split` line would drop it on every save while the running session looked correct.
+#[test]
+fn the_manual_strategy_mode_survives_a_split() {
+    let server = merged_server(
+        "",
+        "uid = 7\nname = \"alpha\"\n[manual_strategy]\non = true\nstrategy = \"Beta\"
+id = 2981",
+    );
+    assert_eq!(
+        server.manual_strategy,
+        Some(crate::config::ManualStratState {
+            on: true,
+            strategy: "Beta".to_string(),
+            id: 2981,
+        }),
+        "merge must carry the stored mode into the running config"
+    );
+    let (_, meta) = split(
+        std::slice::from_ref(&server),
+        &[],
+        &[],
+        Language::default(),
+        MarketDataMode::default(),
+        true,
+        false,
+        false,
+        360,
+        true,
+        0,
+        true,
+        14,
+        default_ui_font_delta(),
+        UiThemeMode::default(),
+        default_ui_scale(),
+        100,
+        crate::config::CoreSortMode::default(),
+        crate::db::valuation::ValuationMode::default(),
+        8,
+    );
+
+    assert_eq!(
+        meta.servers.first().and_then(|m| m.manual_strategy.clone()),
+        server.manual_strategy,
+        "a saved config must keep the strategy the core is set to"
+    );
+    let text = toml::to_string(&meta).expect("settings must serialize");
+    assert!(
+        text.contains("strategy = \"Beta\""),
+        "the selection must persist by name, got: {text}"
+    );
+}

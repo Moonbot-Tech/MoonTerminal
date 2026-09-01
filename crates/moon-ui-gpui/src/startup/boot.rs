@@ -219,9 +219,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         order_size_edit_req: None,
         sell_edit_req: None,
         group_exit_sync: HashMap::new(),
-        manual_strat_local: HashMap::new(),
         ignore_sell_local: HashMap::new(),
         pending_stops: HashMap::new(),
+        manual_strat_checked: HashMap::new(),
+        manual_exit_checked: HashMap::new(),
         ms_exit_local: HashMap::new(),
         panic_local: HashMap::new(),
         panic_rev: 0,
@@ -633,6 +634,20 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // waiting for the manual order it belongs to. Kept as its own statement so the
                     // panic contract above stays a single, greppable condition.
                     if b.tick_pending_stops() {
+                        b.mark_backend_dirty(cx);
+                    }
+                    // Adopting a core's own manual-strategy mode the first time it reports one, so
+                    // an upgrade keeps the strategy the trader was working with. It needs a live
+                    // settings snapshot AND a confirmed strategy list, which is why it waits on a
+                    // tick rather than being decided at config load.
+                    if b.tick_manual_strat_seed() {
+                        b.mark_backend_dirty(cx);
+                    }
+                    // And the exits that mode implies: the overlay is process-lifetime and used to
+                    // be filled only by the click that picked a strategy, so after a restart the
+                    // toolbar showed the saved TP/SL and the first order carried them instead of
+                    // the strategy's own.
+                    if b.tick_manual_exit_seed() {
                         b.mark_backend_dirty(cx);
                     }
                     {

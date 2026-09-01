@@ -2,39 +2,38 @@
 //!
 //! One gear beside the MS cluster, in the same shape as every other gear popup in the chrome
 //! (`chrome::terminal_chrome::header_gear_popover`). It owns everything about the ten buttons that
-//! is not a single click: which slots are drawn, what each one is called, and the one CORE-side
+//! is not a single click: which slots are drawn, and the one CORE-side
 //! flag that decides whether the toolbar's TP/S apply at all while a manual strategy is active.
 //!
-//! Slot captions and visibility are the terminal's own per-core state (`ServerConfig::strat_slots`)
-//! — see `Backend::strat_slots`. `Pull from the core` replaces them with Moonbot's own arrangement,
-//! and is the way back after any local edit.
+//! Which slots are drawn is the terminal's own per-core state (`ServerConfig::strat_slots`) — see
+//! `Backend::strat_slots`. `Pull from the core` replaces them with Moonbot's own arrangement, and
+//! is the way back after any local edit. A button always says what strategy it fires; there is no
+//! separate caption, because a button that can be named something other than what it does is a
+//! button that places a real order on something other than what it says.
 
 use gpui::*;
 use moon_core::config::MANUAL_STRAT_SLOTS;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
-    MoonInputState, MoonPalette, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use crate::shell::Shell;
 use crate::{Backend, design};
 
-/// Width of the caption field, wide enough for the strategy names Moonbot ships with.
-const LABEL_INPUT_W: f32 = 150.0;
-/// Width of the "fires" column, which names the strategy a slot is assigned to.
-const STRATEGY_COL_W: f32 = 150.0;
+/// Width of the strategy column, which names the strategy a slot fires.
+const STRATEGY_COL_W: f32 = 220.0;
 /// Width of the hotkey column, showing the terminal binding this slot answers to.
 const HOTKEY_COL_W: f32 = 78.0;
 
-/// Build the popup's content: ten slot rows, the core's sell-price flag, and the pull action.
+/// Build the popup's content: ten slot rows, the core's sell-price flag, and the two actions.
 ///
 /// Args:
 ///     core: Core whose slots are being edited — the group's active trade core.
 ///     backend: Application state read for slots and written by every control here.
-///     shell: Shell that owns the popup's open state and its caption fields.
-///     inputs: One caption field per slot, seeded when the popup opened.
+///     shell: Shell that owns the popup's open state.
 ///     p: Active palette.
 ///     cx: Application context.
 ///
@@ -44,15 +43,14 @@ pub(super) fn slot_settings_content(
     core: CoreId,
     backend: &Entity<Backend>,
     shell: &Entity<Shell>,
-    inputs: &[Entity<MoonInputState>],
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
     let b = backend.read(cx);
     let slots = b.strat_slots(core).unwrap_or_default();
     // The TERMINAL's own bindings (Settings > Hotkeys > manual strategy), shown read-only: this
-    // popup is where a trader looks to see which key fires which button, and sending them back to
-    // the hotkeys tab to find out is the friction it exists to remove.
+    // popup is where a trader looks to see which key fires which button. Changing one is a
+    // different question, and the button below leads to where that is done.
     let hotkeys = b.config.hotkeys.manual_strategy.clone();
     let ignore_sell = b.ignore_strat_sell_price(core);
     // Pulling reads the core's OWN configuration, so it is available exactly while that
@@ -88,13 +86,6 @@ pub(super) fn slot_settings_content(
                             });
                         }),
                 )
-                .children(inputs.get(slot).map(|input| {
-                    div().w(px(design::font_w(cx, LABEL_INPUT_W))).child(
-                        MoonInput::new(SharedString::from(format!("ms-slot-label-{slot}")))
-                            .state(input)
-                            .small(),
-                    )
-                }))
                 .child(
                     div()
                         .w(px(design::font_w(cx, STRATEGY_COL_W)))
@@ -127,6 +118,7 @@ pub(super) fn slot_settings_content(
     let pull_backend = backend.clone();
     let pull_shell = shell.clone();
     let sell_backend = backend.clone();
+    let hotkeys_backend = backend.clone();
     v_flex()
         .id("ms-slots-popup")
         .w_full()
@@ -154,37 +146,57 @@ pub(super) fn slot_settings_content(
                 })
         }))
         .child(
-            h_flex().w_full().justify_end().child(
-                MoonButton::new("ms-slots-pull")
-                    .size(MoonButtonSize::ToolbarCompact)
-                    .variant(MoonButtonVariant::Soft)
-                    .label(t!("header.ms_slots_pull").to_string())
-                    .disabled(!core_known)
-                    .tooltip(t!("header.ms_slots_pull_tip").to_string())
-                    .on_click(move |_, _, app| {
-                        let pulled = pull_backend.update(app, |b, cx| {
-                            let pulled = b.pull_strat_slots_from_core(core);
-                            if pulled {
-                                if let Err(error) = b.config.save() {
-                                    log::warn!("save pulled strategy slots failed: {error}");
-                                } else {
-                                    b.config_dirty = false;
+            h_flex()
+                .w_full()
+                .justify_between()
+                .child(
+                    MoonButton::new("ms-slots-hotkeys")
+                        .size(MoonButtonSize::ToolbarCompact)
+                        .variant(MoonButtonVariant::Ghost)
+                        .label(t!("header.ms_slots_hotkeys").to_string())
+                        .tooltip(t!("header.ms_slots_hotkeys_tip").to_string())
+                        .on_click(move |_, window, app| {
+                            // Owner and display come from the clicking window, as the toolbar's
+                            // own launcher does: without them the window is placed on the primary
+                            // display, which on a multi-monitor desk is not where the trader is.
+                            crate::settings::open_on_tab(
+                                hotkeys_backend.clone(),
+                                Some(window.window_handle()),
+                                window.display(app).map(|display| display.id()),
+                                crate::settings::Tab::Hotkeys,
+                                app,
+                            );
+                        })
+                        .render(),
+                )
+                .child(
+                    MoonButton::new("ms-slots-pull")
+                        .size(MoonButtonSize::ToolbarCompact)
+                        .variant(MoonButtonVariant::Soft)
+                        .label(t!("header.ms_slots_pull").to_string())
+                        .disabled(!core_known)
+                        .tooltip(t!("header.ms_slots_pull_tip").to_string())
+                        .on_click(move |_, _, app| {
+                            let pulled = pull_backend.update(app, |b, cx| {
+                                let pulled = b.pull_strat_slots_from_core(core);
+                                if pulled {
+                                    if let Err(error) = b.config.save() {
+                                        log::warn!("save pulled strategy slots failed: {error}");
+                                    } else {
+                                        b.config_dirty = false;
+                                    }
+                                    cx.notify();
                                 }
-                                cx.notify();
-                            }
-                            pulled
-                        });
-                        // Re-seed the caption fields from what was just pulled; without this the
-                        // fields keep showing the captions the pull replaced.
-                        if pulled {
-                            pull_shell.update(app, |shell, cx| {
-                                shell.set_strat_slots_open(true, cx);
-                                cx.notify();
+                                pulled
                             });
-                        }
-                    })
-                    .render(),
-            ),
+                            // The popup renders straight from the slots, so a pull needs no
+                            // re-seed — only a repaint of the window that owns it.
+                            if pulled {
+                                pull_shell.update(app, |_, cx| cx.notify());
+                            }
+                        })
+                        .render(),
+                ),
         )
         .into_any_element()
 }

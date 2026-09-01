@@ -26,7 +26,11 @@ use crate::market::MarketDataMode;
 /// USD-equivalent settings and deliberately discards old sizes whose units are ambiguous.
 /// Version 17 makes every group exit generation complete and neutral from first load, removing
 /// the startup dependency on whichever core settings snapshot happens to arrive first.
-pub const SCHEMA_VERSION: u32 = 17;
+/// Version 18 drops the per-slot button caption (`StratSlot::label`) — a button is named by the
+/// strategy it fires — and adds the pinned strategy id to a core's manual-strategy selection. The
+/// bump exists for the REMOVAL: the first save after an upgrade rewrites the file without those
+/// captions, and the version gate is what puts a pre-change snapshot beside it first.
+pub const SCHEMA_VERSION: u32 = 18;
 
 /// Schema version from which runtime `CoreId == uid` and is stable. Older configs stored
 /// POSITIONAL CoreIds in `charts.json`, which must be rebound to uids once. This is fixed,
@@ -244,6 +248,11 @@ pub struct ServerMeta {
     /// while the core still follows its own `manual_strats_names`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strat_slots: Option<[servers::StratSlot; servers::MANUAL_STRAT_SLOTS]>,
+    /// This core's manual-strategy mode; see `ServerConfig::manual_strategy`. Absent in files
+    /// written before the terminal owned this mode, which is what makes the one-time seed from the
+    /// core's own snapshot distinguishable from a trader who deliberately turned it off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_strategy: Option<servers::ManualStratState>,
     /// This core's own manual-trading generation; see `ServerConfig::trade`. Absent in older files
     /// and whenever the core shares its group's generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]

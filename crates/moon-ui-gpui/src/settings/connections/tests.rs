@@ -33,6 +33,7 @@ fn server(group: &str) -> ServerConfig {
         default_alert_strategy: 0,
         own_trade_config: false,
         strat_slots: None,
+        manual_strategy: None,
         trade: None,
         transport: None,
     }

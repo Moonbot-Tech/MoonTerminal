@@ -14,7 +14,7 @@ mod tests;
 
 pub(crate) use manual_trading::{
     IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource, MsExitOverlay,
-    PanicLocal, PendingStop,
+    PanicLocal, PendingStop, SettleKey, manual_strategy_id,
 };
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
 

@@ -33,20 +33,19 @@ fn next_settings(
 
 #[test]
 /// Regression target: making `ClientSettingsSequence::next_action` apply only the newest mutation
-/// drops an earlier ManualStrategy or blacklist edit, so the user's next order uses stale settings.
+/// drops an earlier targeted or blacklist edit, so the user's next order uses stale settings.
 fn full_settings_mutations_compose_before_the_echo() {
     let base = moonproto::ClientSettingsCommand::default();
     let exit = exit_settings(12.0, true);
     let mut sequence = ClientSettingsSequence::new();
     sequence.enqueue_group_exit(exit);
-    sequence.enqueue_edit(ClientSettingsEdit::ManualStrategy { on: true, id: 77 });
+    sequence.enqueue_edit(ClientSettingsEdit::SignOrders(true));
     sequence.enqueue_blacklist(true, "SCAM,TEST".to_string());
 
     let sent = next_settings(&mut sequence, &base);
     let projected = client_settings_from_proto(&sent);
     assert_eq!(projected.group_exit_settings(), exit);
-    assert!(projected.use_manual_strategy);
-    assert_eq!(projected.manual_strategy_id, 77);
+    assert!(projected.sign_orders);
     assert!(projected.use_blacklist);
     assert_eq!(projected.blacklist_text, "SCAM,TEST");
 
@@ -91,7 +90,7 @@ fn commands_arriving_during_an_inflight_generation_wait_for_its_echo() {
 
     let first_sent = next_settings(&mut sequence, &base);
     sequence.observe_send_success(&first_sent, 1);
-    sequence.enqueue_edit(ClientSettingsEdit::ManualStrategy { on: true, id: 77 });
+    sequence.enqueue_edit(ClientSettingsEdit::SignOrders(true));
     assert!(matches!(
         sequence.next_action(&base, TEST_CORE),
         SequenceAction::Idle
@@ -101,8 +100,7 @@ fn commands_arriving_during_an_inflight_generation_wait_for_its_echo() {
     let second_sent = next_settings(&mut sequence, &first_sent);
     let projected = client_settings_from_proto(&second_sent);
     assert_eq!(projected.group_exit_settings(), exit);
-    assert!(projected.use_manual_strategy);
-    assert_eq!(projected.manual_strategy_id, 77);
+    assert!(projected.sign_orders);
 }
 
 /// Regression target: confirming a composed packet without retiring its entire mutation prefix

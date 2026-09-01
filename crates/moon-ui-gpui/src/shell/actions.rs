@@ -66,39 +66,13 @@ impl Shell {
         self.strat_slot_menu = None;
     }
 
-    /// Open or close the quick-select settings popup, seeding every caption field from the slots
-    /// the active core is showing right now.
+    /// Open or close the quick-select settings popup.
     ///
-    /// Seeded on OPEN rather than on every render: the fields are edited in place, and rewriting
-    /// them under the caret is exactly what a per-render seed would do.
-    pub(crate) fn set_strat_slots_open(&mut self, open: bool, cx: &mut Context<Self>) {
+    /// The popup reads the group's active trade core as it renders, so there is nothing to capture
+    /// here; closing it also drops any slot context menu left open over a button.
+    pub(crate) fn set_strat_slots_open(&mut self, open: bool) {
         self.strat_slots_open = open;
         self.strat_slot_menu = None;
-        if !open {
-            self.strat_slots_core = None;
-            return;
-        }
-        let core = self.backend.read(cx).active_trade_core(&self.group);
-        self.strat_slots_core = core;
-        // Seeded EVERY time, including when the core has no slots to show: these fields are shared
-        // by every core this window ever opens the popup for, and leaving the previous core's
-        // captions in them would let the next blur persist them onto a core that never had them.
-        let slots = core.and_then(|core| self.backend.read(cx).strat_slots(core));
-        let inputs = self.strat_label_inputs.clone();
-        let handle = self.window_handle;
-        cx.defer(move |app| {
-            let _ = handle.update(app, move |_, window, app| {
-                for (slot, input) in inputs.iter().enumerate() {
-                    let value = slots
-                        .as_ref()
-                        .and_then(|slots| slots.get(slot).map(|s| s.label.clone()))
-                        .unwrap_or_default();
-                    input.update(app, |st, cx| {
-                        st.set_value(value, window, cx);
-                    });
-                }
-            });
-        });
     }
 
     /// Drain Engine-action results such as leverage, hedge, cancel-all, and transfers into toasts.
