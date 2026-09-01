@@ -143,6 +143,36 @@ pub(crate) fn current_offset_min(zone: Tz, now_utc: DateTime<Utc>) -> i32 {
         / 60
 }
 
+/// Signed hour offset of `zone` relative to `reference`, e.g. `+6`, `-3:30`, `0`.
+///
+/// Pure zone-to-label math, shared by the picker rows and their unit tests. Minutes are dropped
+/// from the label only when they are zero, so a half- or quarter-hour difference (India, Nepal,
+/// Chatham) still renders exactly rather than rounding to a lying whole hour. Zero renders `"0"`
+/// rather than an empty string so the reference row still reads as a deliberate answer, not a
+/// missing one.
+///
+/// Args:
+///     zone: City zone whose offset is being labelled.
+///     reference: Zone the label is measured against — UTC for the picker's production caller.
+///     now_utc: Instant both offsets are resolved at, so a DST boundary cannot split them.
+///
+/// Returns:
+///     Signed label with no leading zero on the hour, or `"0"` when the two zones currently agree.
+pub(crate) fn offset_label(zone: Tz, reference: Tz, now_utc: DateTime<Utc>) -> String {
+    let diff_min = current_offset_min(zone, now_utc) - current_offset_min(reference, now_utc);
+    if diff_min == 0 {
+        return "0".to_string();
+    }
+    let sign = if diff_min < 0 { '-' } else { '+' };
+    let abs = diff_min.abs();
+    let (h, m) = (abs / 60, abs % 60);
+    if m == 0 {
+        format!("{sign}{h}")
+    } else {
+        format!("{sign}{h}:{m:02}")
+    }
+}
+
 /// Valid range of a compatibility seed; the fixed-offset schema rejects values outside it.
 const LEGACY_OFFSETS: std::ops::RangeInclusive<i32> = (-12 * 60)..=(14 * 60);
 

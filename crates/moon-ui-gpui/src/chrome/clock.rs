@@ -127,6 +127,31 @@ const CLOCK_TIME_WEIGHT: f32 = 600.0;
 
 const CLOCK_TZ_WEIGHT: f32 = 400.0;
 
+/// Column width the offset label is right-padded to inside a picker row's trailing text.
+///
+/// `mono(true)` on the popup makes every row monospace, so a fixed width keeps the sign and
+/// digits aligned down the whole list. Sized for the widest label the table can produce today —
+/// `"-12:45"`, six glyphs — rather than the common two- or three-glyph case, so a future
+/// quarter-hour zone at the far edge of the table does not outgrow it and break alignment.
+const OFFSET_LABEL_WIDTH: usize = 6;
+
+/// Compose a picker row's trailing text: the city's wall clock, and its offset from UTC.
+///
+/// UTC is always resolvable, unlike the machine's own zone, so every row carries an offset
+/// column — there is no "reference unresolved" fallback left to handle.
+///
+/// Args:
+///     zone: City zone the row shows.
+///     now: Instant both the time and the offset are read at.
+///
+/// Returns:
+///     `"HH:MM:SS  <offset>"`, offset right-padded to [`OFFSET_LABEL_WIDTH`].
+fn picker_right_label(zone: chrono_tz::Tz, now: DateTime<Utc>) -> String {
+    let time = cities::local_hms(zone, now);
+    let offset = cities::offset_label(zone, chrono_tz::Tz::UTC, now);
+    format!("{time}  {offset:>OFFSET_LABEL_WIDTH$}")
+}
+
 /// Time precision requested by one clock host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClockPrecision {
@@ -308,7 +333,7 @@ fn render_header_clock(
                 "tz-system",
                 t!("header.clock_system", zone = selected.name()).to_string(),
             )
-            .right_label(cities::local_hms(selected, now))
+            .right_label(picker_right_label(selected, now))
             .selected(true)
             .checked(true)
             .disabled(true),
@@ -322,7 +347,7 @@ fn render_header_clock(
                 format!("tz-{}", city.code),
                 format!("{}  {}", city.code, city.name()),
             )
-            .right_label(cities::local_hms(city.zone, now))
+            .right_label(picker_right_label(city.zone, now))
             .selected(is_selected)
             .checked(is_selected)
             .on_click(move |_, _, cx| {
