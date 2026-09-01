@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize, MoonMenuSize, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility, MoonSelect, MoonTooltipView,
-    MoonVirtualList, StyledExt, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility,
+    MoonSelect, MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -19,7 +19,8 @@ use super::SettingsView;
 use super::entries::{ConnEntry, EntryLabels, flatten_entries};
 use super::table::{conn_row_h_value, server_row};
 use crate::design;
-use moon_core::config::GroupConfig;
+use crate::panels::common::{RadioMark, radio_items};
+use moon_core::config::{GroupConfig, ServerConfig, TransportVersion};
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
@@ -137,6 +138,107 @@ fn subsection_header_row(
                 .text_size(design::t_body(cx))
                 .text_color(rgb(p.text_soft))
                 .child(t!("conn.member_count", n = member_count).to_string()),
+        )
+}
+
+/// Set every draft server row in one group to a single transport mode.
+///
+/// Pure and GPUI-free so it is directly testable (`moon-ui-gpui` is a binary crate with no
+/// `[lib]`): the bulk dropdown below is a thin GPUI shell around this one loop.
+///
+/// Args:
+///     servers: Every draft server row.
+///     group: The target group's name; only rows whose `group` matches are touched.
+///     mode: The mode to set on every matching row.
+///
+/// Returns:
+///     Whether at least one row's mode actually changed.
+pub(super) fn apply_group_transport(
+    servers: &mut [ServerConfig],
+    group: &str,
+    mode: TransportVersion,
+) -> bool {
+    let mut changed = false;
+    for s in servers.iter_mut().filter(|s| s.group == group) {
+        if s.transport != Some(mode) {
+            s.transport = Some(mode);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Build the bulk transport-mode control for one group header.
+///
+/// Sets every draft server row currently in this group to the picked mode, instead of the user
+/// changing each core's `proto_dropdown` (`table.rs`) one row at a time — the incident this exists
+/// for was 32 cores on one machine, all needing the same change. It is the SAME control and the
+/// same `radio_items` shape as the per-core dropdown, aimed at a group instead of one row, rather
+/// than a second mechanism: no new persisted field, and no new confirmation of its own — it writes
+/// the existing `servers[i].transport` draft field and takes effect on Save exactly like every
+/// other field this tab edits, which is already the one confirmation gating the whole draft. A
+/// transport mode is reversible the same way it was set, so no extra confirmation is warranted
+/// here on top of that.
+///
+/// Args:
+///     weak: Weak callback owner the select handler closes over.
+///     name: The group's name, used to find its member rows.
+///
+/// Returns:
+///     A compact "Mode" dropdown that applies the picked mode to every member on selection.
+fn bulk_proto_dropdown(weak: &WeakEntity<SettingsView>, name: &str) -> impl IntoElement {
+    let weak_select = weak.clone();
+    let group_name = name.to_string();
+    // `Option<TransportVersion>` with no single CURRENT value: a group's members may already
+    // disagree, and this control is an action ("apply to every member"), not a bound field, so no
+    // item shows as pre-checked.
+    let items = radio_items(
+        TransportVersion::ALL.into_iter().map(|v| {
+            (
+                Some(v),
+                SharedString::from(v.label()),
+                SharedString::from(v.label()),
+            )
+        }),
+        None,
+        RadioMark::Check,
+        move |app, v| {
+            let Some(v) = v else { return };
+            let n = group_name.clone();
+            let _ = weak_select.update(app, |this, ctx| {
+                let changed = this.backend.update(ctx, |b, bcx| {
+                    let Some(p) = b.preview.as_mut() else {
+                        return false;
+                    };
+                    let changed = apply_group_transport(&mut p.servers, &n, v);
+                    if changed {
+                        bcx.notify();
+                    }
+                    changed
+                });
+                if changed {
+                    ctx.notify();
+                }
+            });
+        },
+    );
+
+    div()
+        .id(SharedString::from(format!("bulk-proto-tip-{name}")))
+        .tooltip(|_window, cx| {
+            cx.new(|_| MoonTooltipView::new(t!("conn.bulk_mode_tip").to_string()).max_width(360.0))
+                .into()
+        })
+        .child(
+            MoonDropdown::new(SharedString::from(format!("bulk-proto-{name}")))
+                .label(t!("conn.bulk_mode_btn").to_string())
+                .trigger_caret(true)
+                .trigger_variant(MoonButtonVariant::Neutral)
+                .trigger_size(MoonButtonSize::Micro)
+                .trigger_width_scaled(58.0)
+                .menu_width_scaled(96.0)
+                .menu_size(MoonMenuSize::Compact)
+                .items(items),
         )
 }
 
@@ -282,6 +384,7 @@ fn group_header_row(
                         .render(),
                 ),
         )
+        .child(bulk_proto_dropdown(weak, name))
         .child(popover)
         .child(
             MoonButton::new(SharedString::from(format!("addgrp-{name}")))

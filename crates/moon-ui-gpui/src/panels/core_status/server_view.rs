@@ -755,7 +755,12 @@ fn core_row(
                             p.red,
                         )
                         .tooltip(crate::panels::common::text_tooltip(
-                            problem_diagnostic_text(&d, core.fault.as_ref(), &core.startup),
+                            problem_diagnostic_text(
+                                &d,
+                                core.fault.as_ref(),
+                                &core.startup,
+                                core.mode_suggestion,
+                            ),
                         )),
                         None => startup_text_cell(
                             startup_cell(&core.status, &core.startup),

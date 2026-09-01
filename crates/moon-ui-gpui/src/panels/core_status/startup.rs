@@ -9,6 +9,7 @@
 //! crate with no `[lib]`, and a panel decision that needs a real test has to be a free function
 //! first.
 
+use moon_core::config::TransportVersion;
 use moon_core::feed::{ConnFault, ConnStatus, Diagnosis};
 use moon_core::session::{CoreStartupState, CoreStartupStatus};
 use rust_i18n::t;
@@ -305,6 +306,8 @@ pub(crate) fn startup_diagnostic_text(status: &CoreStartupStatus) -> String {
 ///     diagnosis: Classified reason and retry state to render first.
 ///     fault: Frozen failed-attempt evidence when this diagnosis came from a retained fault.
 ///     live_status: Latest startup snapshot, used only when no failed attempt exists.
+///     mode_suggestion: A fleet-wide "try this mode instead" suggestion
+///         (`conn_diag::fleet_mode_suggestion`), when the evidence supports one.
 ///
 /// Returns:
 ///     One localized tooltip whose verdict and telemetry describe the same attempt.
@@ -312,11 +315,12 @@ pub(crate) fn problem_diagnostic_text(
     diagnosis: &Diagnosis,
     fault: Option<&ConnFault>,
     live_status: &CoreStartupStatus,
+    mode_suggestion: Option<TransportVersion>,
 ) -> String {
     let evidence_status = fault.map(|fault| &fault.startup).unwrap_or(live_status);
     format!(
         "{}\n{}:\n{}",
-        crate::conn_diag::fault_tooltip(&crate::conn_diag::fault_facts(diagnosis)),
+        crate::conn_diag::fault_tooltip(&crate::conn_diag::fault_facts(diagnosis, mode_suggestion)),
         t!("core_status.col.startup"),
         startup_diagnostic_text(evidence_status)
     )

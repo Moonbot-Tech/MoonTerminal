@@ -526,6 +526,7 @@ fn roster_input(
     });
     WorkspaceRosterInput {
         fault: None,
+        mode_suggestion: None,
         core,
         name: name.to_string(),
         group: group.to_string(),
@@ -569,6 +570,7 @@ fn availability(
 fn selectable_row(core: u64, group: &str) -> super::WorkspaceRosterRow {
     super::WorkspaceRosterRow {
         fault: None,
+        mode_suggestion: None,
         core,
         name: format!("Core {core}"),
         group: group.to_string(),

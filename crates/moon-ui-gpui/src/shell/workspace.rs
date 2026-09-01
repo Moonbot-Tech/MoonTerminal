@@ -824,13 +824,19 @@ impl Shell {
             crate::core_order::CoreOrder::new(&backend.config)
                 .sort_by(&mut servers, |server| server.id);
             let venues = backend.session.core_venues();
+            let store = backend.session.store();
+            let is_ready = |id| {
+                store
+                    .core(id)
+                    .is_some_and(|core| core.status == ConnStatus::Ready)
+            };
             let inputs = servers
-                .into_iter()
+                .iter()
                 .map(|server| {
-                    let core = backend.session.store().core(server.id);
+                    let core = store.core(server.id);
                     WorkspaceRosterInput {
                         core: server.id,
-                        name: server.name,
+                        name: server.name.clone(),
                         group: server.group.clone(),
                         venue: venues.get(&server.id).cloned(),
                         availability: backend.workspace_core_availability(&server.group, server.id),
@@ -840,6 +846,9 @@ impl Shell {
                             .map(|core| core.startup)
                             .unwrap_or_else(CoreStartupStatus::default),
                         fault: core.and_then(|core| core.fault.clone()),
+                        mode_suggestion: crate::conn_diag::fleet_mode_suggestion(
+                            server.id, &servers, is_ready,
+                        ),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -1208,6 +1217,7 @@ fn workspace_core_tooltip(row: &WorkspaceRosterRow) -> String {
                 diag,
                 row.fault.as_ref(),
                 &row.startup,
+                row.mode_suggestion,
             ));
         } else {
             lines.push(format!(

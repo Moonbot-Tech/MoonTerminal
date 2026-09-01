@@ -12,7 +12,7 @@ use super::ordering::{self, assign_server_names, compare_flat_rows, compare_grou
 use super::{CoreStatusView, server_view};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
-use moon_core::session::{CoreStartupStatus, CoreSysStatus};
+use moon_core::session::{CoreId, CoreStartupStatus, CoreSysStatus};
 
 impl CoreStatusView {
     /// Collect filtered core rows for the group scope in canonical order.
@@ -36,6 +36,13 @@ impl CoreStatusView {
         // One clock reading for the whole snapshot: a per-row `now` could classify two cores
         // against different days in the same frame.
         let now_ms = moon_core::util::now_unix_ms_i64();
+        // Whether a core (by id) is currently `Ready`, read once for the whole fleet: the mode
+        // suggestion below compares EVERY configured core, not just this (possibly scoped) view.
+        let is_ready = |id: CoreId| {
+            store
+                .core(id)
+                .is_some_and(|core| core.status == ConnStatus::Ready)
+        };
         let mut out = Vec::new();
         for (id, name) in self.query_cores(b) {
             // One store lookup per core: this loop runs for every core on every cache rebuild.
@@ -76,6 +83,11 @@ impl CoreStatusView {
                 sys,
                 startup,
                 time_offset,
+                mode_suggestion: crate::conn_diag::fleet_mode_suggestion(
+                    id,
+                    &b.config.servers,
+                    is_ready,
+                ),
                 fault,
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),

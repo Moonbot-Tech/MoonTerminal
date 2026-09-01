@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use gpui::Context;
-use moon_core::config::WorkspaceMode;
+use moon_core::config::{TransportVersion, WorkspaceMode};
 use moon_core::feed::{ConnFault, ConnStatus, CoreStartupStatus};
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
@@ -553,6 +553,9 @@ pub(crate) struct WorkspaceRosterInput {
     pub(crate) startup: CoreStartupStatus,
     /// Why this core's last connection attempt ended, when one has ended.
     pub(crate) fault: Option<ConnFault>,
+    /// A fleet-wide "try this mode instead" suggestion for this core, when the evidence supports
+    /// one (`conn_diag::fleet_mode_suggestion`).
+    pub(crate) mode_suggestion: Option<TransportVersion>,
 }
 
 /// Derived roster row rendered by the Auto workspace rail.
@@ -568,6 +571,9 @@ pub(crate) struct WorkspaceRosterRow {
     pub(crate) startup: CoreStartupStatus,
     /// Why this core's last connection attempt ended, when one has ended.
     pub(crate) fault: Option<ConnFault>,
+    /// A fleet-wide "try this mode instead" suggestion for this core, when the evidence supports
+    /// one (`conn_diag::fleet_mode_suggestion`).
+    pub(crate) mode_suggestion: Option<TransportVersion>,
 }
 
 /// One venue section in the all-core roster.
@@ -643,6 +649,7 @@ pub(crate) fn derive_workspace_roster(
                     connection: input.connection.clone(),
                     startup: input.startup,
                     fault: input.fault.clone(),
+                    mode_suggestion: input.mode_suggestion,
                 }
             })
             .collect();

@@ -156,7 +156,7 @@ impl Render for Shell {
         self.last_frame = Some(now_inst);
         let fps = self.fps;
 
-        let (conn, license, snap, book_levels) = {
+        let (conn, license, snap, book_levels, mode_suggestions) = {
             let b = self.backend.read(cx);
             let mut conn = b.session.conn_summary_group(&self.group);
             // The disconnected-cores tooltip is a core list like any other — rank it the same
@@ -171,7 +171,30 @@ impl Render for Shell {
                 }),
                 None => 0,
             };
-            (conn, license, snap, book_levels)
+            // Fleet-wide "try another mode" advice for the (small) non-ready set the bar tooltip
+            // shows -- see `conn_diag::fleet_mode_suggestion`. Computed here, not inside
+            // `status_bar`, because only this scope has both the live config and the store.
+            let store = b.session.store();
+            let is_ready = |id: moon_core::session::CoreId| {
+                store
+                    .core(id)
+                    .is_some_and(|core| core.status == moon_core::feed::ConnStatus::Ready)
+            };
+            let mode_suggestions = conn
+                .down
+                .iter()
+                .map(|row| {
+                    (
+                        row.id,
+                        crate::conn_diag::fleet_mode_suggestion(
+                            row.id,
+                            &b.config.servers,
+                            is_ready,
+                        ),
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            (conn, license, snap, book_levels, mode_suggestions)
         };
         let chrome_width = f32::from(window.viewport_size().width);
         let p = MoonPalette::active(cx);
@@ -344,7 +367,16 @@ impl Render for Shell {
             // ── Status bar, fully ported from egui's lower `shell::ui` panel ──
             .child({
                 let _t = crate::diag::scope(&crate::diag::SHELL_STATUS_US);
-                self.status_bar(conn, license, snap, book_levels, fps, chrome_width, cx)
+                self.status_bar(
+                    conn,
+                    license,
+                    snap,
+                    book_levels,
+                    fps,
+                    chrome_width,
+                    &mode_suggestions,
+                    cx,
+                )
             })
             .child(
                 MoonWindowFrame::main("moon-main-window-frame", chrome_width)

@@ -19,6 +19,7 @@ fn row(
 ) -> CoreStatusRow {
     CoreStatusRow {
         fault: None,
+        mode_suggestion: None,
         id,
         name: format!("Core {id}"),
         status,
@@ -495,6 +496,7 @@ fn a_count_without_a_date_reaches_the_column() {
 fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow {
     CoreStatusRow {
         fault: None,
+        mode_suggestion: None,
         id: 1,
         name: "Core 1".to_string(),
         status,

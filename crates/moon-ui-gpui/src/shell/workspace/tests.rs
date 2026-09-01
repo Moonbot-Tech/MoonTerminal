@@ -54,6 +54,7 @@ impl DeferredAutoTopologyGuard for AutoGuardHarness {
 fn rail_row(core: u64) -> WorkspaceRosterRow {
     WorkspaceRosterRow {
         fault: None,
+        mode_suggestion: None,
         core,
         name: format!("Core {core}"),
         group: "G1".to_string(),

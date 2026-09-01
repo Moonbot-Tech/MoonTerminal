@@ -204,7 +204,7 @@ fn problem_diagnostic_keeps_verdict_and_socket_facts_on_the_failed_attempt() {
     let diagnosis = moon_core::feed::diagnose(&ConnStatus::Connecting, Some(&fault), &live_retry)
         .expect("the retained timeout must remain diagnosable during its retry");
 
-    let text = problem_diagnostic_text(&diagnosis, Some(&fault), &live_retry);
+    let text = problem_diagnostic_text(&diagnosis, Some(&fault), &live_retry, None);
     assert!(text.contains("31002"));
     assert!(text.contains("17"));
     assert!(text.contains("23"));
