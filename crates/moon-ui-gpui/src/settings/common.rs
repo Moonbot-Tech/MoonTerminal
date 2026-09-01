@@ -141,10 +141,12 @@ pub(super) fn draft_color(
     apply: impl Fn(&mut AppConfig, [u8; 3]) -> bool + 'static,
 ) -> Entity<MoonColorPickerState> {
     let st = cx.new(|cx| {
-        MoonColorPickerState::new(window, cx).default_value(rgb(design::rgb_to_u32(init)).into())
+        MoonColorPickerState::new(window, cx).default_value(design::rgb_bytes_to_hsla(init))
     });
     cx.subscribe(&st, move |this, _emitter, ev: &MoonColorPickerEvent, cx| {
-        let MoonColorPickerEvent::Change(h) = ev;
+        let MoonColorPickerEvent::Change(h) = ev else {
+            return;
+        };
         let c = hsla_u8(*h);
         this.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {

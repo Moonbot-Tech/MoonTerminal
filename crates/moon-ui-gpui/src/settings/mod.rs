@@ -45,7 +45,7 @@ use moon_core::session::CoreId;
 
 use badges::BadgesEd;
 use common::{
-    collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row,
+    collapse_block, color_row, draft_color, draft_slider, hsla_u8, section, separator, slider_row,
 };
 use connections::{ConnEntry, ConnRow};
 use interface::Iface;

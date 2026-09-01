@@ -671,14 +671,15 @@ impl ChartTabs {
         let fig_color_picker = {
             let b = backend.read(cx);
             let init = b.fig_style(b.fig_tool).color;
-            let hsla: Hsla =
-                gpui::rgb(crate::design::rgb_to_u32([init[0], init[1], init[2]])).into();
+            let hsla: Hsla = crate::design::rgb_bytes_to_hsla([init[0], init[1], init[2]]);
             cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(hsla))
         };
         cx.subscribe(
             &fig_color_picker,
             |this, _st, ev: &MoonColorPickerEvent, cx| {
-                let MoonColorPickerEvent::Change(h) = ev;
+                let MoonColorPickerEvent::Change(h) = ev else {
+                    return;
+                };
                 let c = crate::design::hsla_to_rgb8(*h);
                 this.backend.update(cx, |b, bcx| {
                     let tool = b.fig_tool;

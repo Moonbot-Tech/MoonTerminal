@@ -85,11 +85,13 @@ impl StrategiesView {
                 return state.clone();
             }
         }
-        let init: Hsla = gpui::rgb(design::rgb_to_u32(rgb_val)).into();
+        let init: Hsla = design::rgb_bytes_to_hsla(rgb_val);
         let state = cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(init));
         let prefix = hex_alpha_prefix(hex);
         cx.subscribe(&state, move |this, _st, ev: &MoonColorPickerEvent, cx| {
-            let MoonColorPickerEvent::Change(h) = ev;
+            let MoonColorPickerEvent::Change(h) = ev else {
+                return;
+            };
             let c = design::hsla_to_rgb8(*h);
             let hexv = format!("{prefix}{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
             this.stage_field_value(keys.as_ref(), &field, hexv, cx);
