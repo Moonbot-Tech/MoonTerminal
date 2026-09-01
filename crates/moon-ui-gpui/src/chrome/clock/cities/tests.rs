@@ -4,8 +4,8 @@
 //! shadows the built-in attribute and makes `#[test]` expand recursively.
 
 use super::{
-    CITIES, by_zone_id, current_offset_min, local_hms, migrate_offset_min, reconcile_target,
-    zone_by_id,
+    CITIES, by_zone_id, current_offset_min, local_hms, migrate_offset_min, offset_label,
+    reconcile_target, zone_by_id,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::{OffsetComponents, Tz};
@@ -53,6 +53,61 @@ fn a_citys_clock_follows_its_summer_time_rules() {
     // Control: a zone with no summer time must not move.
     assert_eq!(local_hms(Tz::Asia__Tokyo, july), "21:00:00");
     assert_eq!(local_hms(Tz::Asia__Tokyo, january), "21:00:00");
+}
+
+/// Picker labels must show the relative direction and the exact minute difference between cities.
+///
+/// Regression target: changing `cities.rs:offset_label` to always select `'+'` makes New York
+/// appear east of Warsaw instead of west. Users would read an incorrect direction in the city
+/// picker and could select a city under a false time-zone comparison.
+#[test]
+fn relative_offset_labels_preserve_sign_zero_and_half_hours() {
+    // At noon UTC on 1 January 2026, New York is 07:00, Warsaw is 13:00, Tokyo is 21:00, and
+    // Kolkata is 17:30. Those independently known wall-clock readings yield the labels below.
+    let now = at("2026-01-01T12:00:00Z");
+
+    assert_eq!(
+        offset_label(Tz::America__New_York, Tz::Europe__Warsaw, now),
+        "-6",
+        "New York is six hours west of Warsaw"
+    );
+    assert_eq!(
+        offset_label(Tz::Asia__Tokyo, Tz::Europe__Warsaw, now),
+        "+8",
+        "Tokyo is eight hours east of Warsaw"
+    );
+    assert_eq!(
+        offset_label(Tz::Europe__Warsaw, Tz::Europe__Warsaw, now),
+        "0",
+        "the reference city needs an explicit neutral label"
+    );
+    assert_eq!(
+        offset_label(Tz::Asia__Kolkata, Tz::UTC, now),
+        "+5:30",
+        "Kolkata's half-hour offset must not be rounded"
+    );
+}
+
+/// The picker's UTC row must remain the neutral `0` reference for every operator.
+///
+/// Regression target: changing `clock.rs:picker_right_label` to pass Warsaw or a machine-derived
+/// zone instead of `Tz::UTC` makes the UTC row show a nonzero offset. Users would again read city
+/// offsets relative to the viewing machine rather than to the universally understood UTC baseline.
+///
+/// The oracle is UTC's fixed zero offset by definition, independent of the formatter's offset
+/// arithmetic; the picker-label assertion proves that the production row uses that same reference.
+#[test]
+fn utc_picker_row_is_neutral_against_utc_reference() {
+    let now = at("2026-01-01T12:00:00Z");
+
+    assert_eq!(offset_label(Tz::UTC, Tz::UTC, now), "0");
+    assert_eq!(
+        super::super::picker_right_label(Tz::UTC, now)
+            .split_whitespace()
+            .last(),
+        Some("0"),
+        "the UTC picker row must be measured against UTC rather than a machine zone"
+    );
 }
 
 /// Codes are the header label and the localization key, so a duplicate would make one city
