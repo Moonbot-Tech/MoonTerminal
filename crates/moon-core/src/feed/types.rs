@@ -938,6 +938,70 @@ pub enum UpdateTarget {
     Named(String),
 }
 
+/// Leading command word accepted in the [`UpdateTarget::Named`] field when a tester pastes a
+/// complete install command. Keep it here so the normalizer, placeholder, and hint share one
+/// spelling rather than drifting from the protocol convention.
+pub const CORE_UPDATE_COMMAND_WORD: &str = "InstallTestVersion";
+
+/// Protocol error code the core answers with when it refuses a named/test build target. Machine-
+/// stable and language-independent, unlike the prose sentence that rides beside it — a core build
+/// can reword the sentence, never this code. See [`is_core_update_rejection`].
+pub const CORE_UPDATE_REJECT_CODE: &str = "BGF-SUB4";
+
+/// Strip a leading [`CORE_UPDATE_COMMAND_WORD`] typed into the named/test build field, so both
+/// `MoonBot-F8` and `InstallTestVersion MoonBot-F8` reach the updater as the bare version name.
+/// Trims, collapses internal whitespace runs to a single space, drops a case-insensitive leading
+/// command-word TOKEN (whitespace-delimited,
+/// so `installtestversion-foo` is one token and is left alone), then trims again. Returns `None`
+/// when nothing remains — a value that is only the command word is refused rather than sent as an
+/// empty name.
+pub fn normalize_named_build(raw: &str) -> Option<String> {
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim();
+    let without_command = trimmed
+        .split_once(char::is_whitespace)
+        .filter(|(head, _)| head.eq_ignore_ascii_case(CORE_UPDATE_COMMAND_WORD))
+        .map(|(_, rest)| rest.trim())
+        .unwrap_or_else(|| {
+            if trimmed.eq_ignore_ascii_case(CORE_UPDATE_COMMAND_WORD) {
+                ""
+            } else {
+                trimmed
+            }
+        });
+    if without_command.is_empty() {
+        None
+    } else {
+        Some(without_command.to_string())
+    }
+}
+
+/// Whether a raw `ServerLogEvent.msg` line names [`CORE_UPDATE_REJECT_CODE`], bounded on BOTH
+/// sides so neither a longer sibling code sharing the prefix (`BGF-SUB40`), a longer token this
+/// code is merely a substring of (`XBGF-SUB4:`), nor an underscore-joined token (`BGF-SUB4_foo`)
+/// can match: the character immediately before and immediately after the code must each be either
+/// absent (start/end of the line) or NOT ASCII-alphanumeric, `-`, or `_`. Case-sensitive, and
+/// deliberately blind to the English sentence that rides beside the code in the core's log line —
+/// that prose is copy a core build can reword, the code is not. The input is arbitrary decoded
+/// core text, so both boundaries matter equally; only checking the trailing one would still let
+/// `XBGF-SUB4:` free a lane while an update is genuinely running.
+pub fn is_core_update_rejection(msg: &str) -> bool {
+    let code = CORE_UPDATE_REJECT_CODE;
+    let is_token_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    for (start, _) in msg.match_indices(code) {
+        let end = start + code.len();
+        let before_ok = msg[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_token_char(c));
+        let after_ok = msg[end..].chars().next().is_none_or(|c| !is_token_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
 /// Connection status for a core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnStatus {
@@ -1231,6 +1295,16 @@ pub enum FeedMsg {
     /// `feed::news` and the projection in `feed::live::convert`. The store gates the News panel with
     /// `news_rev` only when the reduced snapshot changes.
     News(super::news::NewsSnapshot),
+    /// The core answered a `request_version_update` with [`CORE_UPDATE_REJECT_CODE`].
+    ///
+    /// `request_version_update` is fire-and-forget (moonproto `send_no_reply`, no ack exists), so
+    /// a `ServerLog` line naming the code is the ONLY reply channel for a refused target. Published
+    /// from the feed's UNCONDITIONAL `ServerLog` ingestion loop — ahead of `want_log` — so a core
+    /// with logging disabled in the UI still surfaces the refusal. Carries NO payload and
+    /// deliberately no timestamp: a consumer comparing it against a `sent_at_ms` would be mixing
+    /// two different clocks (see `session::core_update`'s counter-not-timestamp design), so this
+    /// message exists purely as a tick for a monotonic counter on `CoreData`.
+    CoreUpdateRejected,
 }
 
 #[cfg(test)]

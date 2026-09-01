@@ -520,6 +520,7 @@ fn update_failure_locale_key(failure: UpdateFailure) -> &'static str {
         UpdateFailure::Timeout => "core_update.phase.failed.timeout",
         UpdateFailure::Gone => "core_update.phase.failed.gone",
         UpdateFailure::Abandoned => "core_update.phase.failed.abandoned",
+        UpdateFailure::Rejected => "core_update.phase.failed.rejected",
     }
 }
 

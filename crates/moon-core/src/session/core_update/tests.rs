@@ -73,6 +73,7 @@ fn moved_in_flight_core_blocks_a_ready_sibling_on_its_new_ip() {
             from: Some(100),
             epoch0: 0,
             sent_at_ms: 0,
+            rejects0: 0,
         },
     );
     manager.core_updates.lanes.insert(
@@ -137,6 +138,7 @@ fn unchanged_connection_epoch_keeps_a_sent_update_out_of_waiting() {
             from: Some(100),
             epoch0: 41,
             sent_at_ms: 0,
+            rejects0: 0,
         },
     );
     manager.core_updates.lanes.insert(
@@ -395,6 +397,116 @@ fn settled_verifying_core_releases_its_lane_to_a_ready_sibling() {
             )))
         ),
         "once verification settles, the lane must pop and attempt its ready sibling"
+    );
+}
+
+/// `core_update.rs:advance_in_flight_updates` must check departure before rejection; reordering
+/// those branches reports a genuinely updating named build as refused and advances its IP lane.
+#[test]
+fn departed_named_update_enters_waiting_before_a_later_rejection_is_considered() {
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 1, 3));
+    let core = 9;
+    let mut manager = manager();
+    let mut data = ready_core(ip);
+    data.conn_epoch = 43;
+    data.update_rejects = 8;
+    insert_core(&mut manager, core, data);
+    manager.core_updates.phases.insert(
+        core,
+        CoreUpdatePhase::Sent {
+            target: UpdateTarget::Named("MoonBot-F8".to_string()),
+            from: Some(100),
+            epoch0: 42,
+            sent_at_ms: 0,
+            rejects0: 7,
+        },
+    );
+    manager.core_updates.lanes.insert(
+        ip,
+        Lane {
+            order: VecDeque::new(),
+            active: Some(core),
+            stalled: false,
+        },
+    );
+
+    manager.advance_in_flight_updates(1);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Waiting {
+                epoch0: 42,
+                left_at_ms: 1,
+                ..
+            })
+        ),
+        "a moved connection epoch proves departure, so a simultaneous rejection cannot release the in-flight IP lane"
+    );
+}
+
+/// `core_update.rs:advance_in_flight_updates` must gate refusal on `UpdateTarget::Named`; dropping
+/// it reports a release update as refused and advances its still-in-flight IP lane.
+#[test]
+fn rejection_finishes_named_updates_but_leaves_release_updates_sent() {
+    let release_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 1, 4));
+    let named_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 1, 5));
+    let release_core = 10;
+    let named_core = 11;
+    let mut manager = manager();
+
+    for (core, ip, target) in [
+        (release_core, release_ip, UpdateTarget::Release),
+        (
+            named_core,
+            named_ip,
+            UpdateTarget::Named("MoonBot-F8".to_string()),
+        ),
+    ] {
+        let mut data = ready_core(ip);
+        data.conn_epoch = 50;
+        data.update_rejects = 4;
+        insert_core(&mut manager, core, data);
+        manager.core_updates.phases.insert(
+            core,
+            CoreUpdatePhase::Sent {
+                target,
+                from: Some(100),
+                epoch0: 50,
+                sent_at_ms: 0,
+                rejects0: 3,
+            },
+        );
+        manager.core_updates.lanes.insert(
+            ip,
+            Lane {
+                order: VecDeque::new(),
+                active: Some(core),
+                stalled: false,
+            },
+        );
+    }
+
+    manager.advance_in_flight_updates(1);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(release_core),
+            Some(CoreUpdatePhase::Sent {
+                target: UpdateTarget::Release,
+                ..
+            })
+        ),
+        "a rejection line alone cannot release a sent release-update lane"
+    );
+    assert!(
+        matches!(
+            manager.core_update_phase(named_core),
+            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(
+                UpdateFailure::Rejected
+            )))
+        ),
+        "the same new rejection must finish a named update as refused"
     );
 }
 
