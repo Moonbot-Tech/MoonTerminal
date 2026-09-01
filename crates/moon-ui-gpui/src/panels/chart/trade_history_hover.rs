@@ -284,26 +284,35 @@ impl ChartPanel {
         let card_w = f32::from(design::ui_px(cx, CARD_W)).min((slot_w - inset * 2.0).max(1.0));
 
         let now_ms = now_unix_ms_i64();
-        let rows = self.chart.with_trade_records(|records| {
-            let mut shown = hover
-                .trades
-                .iter()
-                .filter_map(|&index| records.get(index))
-                .collect::<Vec<_>>();
-            // Chronological, so a cluster reads as the sequence it actually traded in. The record
-            // order is the query's (newest first) and the indices are sorted, so neither is it.
-            shown.sort_by(|left, right| {
-                left.buy_date
-                    .cmp(&right.buy_date)
-                    .then(left.close_date.cmp(&right.close_date))
-            });
-            let hidden = shown.len().saturating_sub(CARD_MAX_ITEMS);
-            let rows = shown
-                .into_iter()
-                .take(CARD_MAX_ITEMS)
-                .map(|record| trade_row(record, now_ms, palette, cx))
-                .collect::<Vec<_>>();
-            (rows, hidden)
+        let rows = self.chart.with_report_axis(|axis| {
+            self.chart.with_trade_records(|records| {
+                let mut shown = hover
+                    .trades
+                    .iter()
+                    .filter_map(|&index| records.get(index))
+                    .collect::<Vec<_>>();
+                // Chronological, so a cluster reads as the sequence it actually traded in. The
+                // record order is the query's (newest first) and the indices are sorted, so
+                // neither is it.
+                //
+                // NO axis correction here: `hover.trades` are indices into ONE pane's records,
+                // and a pane draws only its own core. Within one core, `Backend::report_axis`
+                // yields exactly one segment, so `to_utc` is the strictly monotonic map
+                // `x -> x - k` — order-preserving, so corrected order equals raw order.
+                // Correcting here would be pure cost.
+                shown.sort_by(|left, right| {
+                    left.buy_date
+                        .cmp(&right.buy_date)
+                        .then(left.close_date.cmp(&right.close_date))
+                });
+                let hidden = shown.len().saturating_sub(CARD_MAX_ITEMS);
+                let rows = shown
+                    .into_iter()
+                    .take(CARD_MAX_ITEMS)
+                    .map(|record| trade_row(record, axis, now_ms, palette, cx))
+                    .collect::<Vec<_>>();
+                (rows, hidden)
+            })
         });
         let (rows, hidden) = rows;
         if rows.is_empty() {
@@ -417,13 +426,21 @@ fn profit_text(record: &ChartTradeRecord) -> Option<(String, fmt::DeltaSign)> {
 ///
 /// Args:
 ///     record: Durable trade record to render.
+///     axis: This engine's current report axis, used to lift the record's core-local
+///         `buy_date`/`close_date` onto the true-UTC axis the clock formatter expects.
 ///     now_ms: Current Unix time in milliseconds for dated clock formatting.
 ///     p: Active theme palette.
 ///     cx: Application context used for scaled design tokens and translations.
 ///
 /// Returns:
 ///     One complete card-row element.
-fn trade_row(record: &ChartTradeRecord, now_ms: i64, p: MoonPalette, cx: &App) -> AnyElement {
+fn trade_row(
+    record: &ChartTradeRecord,
+    axis: &moon_core::db::ReportAxis,
+    now_ms: i64,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
     let side_color = if record.is_short { p.red } else { p.green };
     let side = if record.is_short {
         SIDE_SHORT
@@ -431,7 +448,8 @@ fn trade_row(record: &ChartTradeRecord, now_ms: i64, p: MoonPalette, cx: &App) -
         SIDE_LONG
     };
     // The chart's own axis formatter, so the card and the axis under it cannot disagree about when
-    // a trade happened — and it adds the date when the trade is not from today.
+    // a trade happened — and it adds the date when the trade is not from today. It treats its
+    // argument as true-UTC seconds, so the caller must have already lifted it through `axis`.
     let clock = |seconds: i64| {
         crate::chartdx::axes::format_clock_dated(
             seconds.saturating_mul(1_000) as f64,
@@ -458,8 +476,8 @@ fn trade_row(record: &ChartTradeRecord, now_ms: i64, p: MoonPalette, cx: &App) -
                 .font_family(design::mono())
                 .child(format!(
                     "{} → {}",
-                    clock(record.buy_date),
-                    clock(record.close_date)
+                    clock(axis.to_utc(record.buy_date, record.core_uid)),
+                    clock(axis.to_utc(record.close_date, record.core_uid))
                 )),
         );
     let prices = h_flex()

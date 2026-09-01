@@ -143,6 +143,7 @@ impl Render for ChartPanel {
             chart_graphics,
             chart_labels,
             arb_view,
+            report_axis,
         ) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
@@ -176,6 +177,10 @@ impl Render for ChartPanel {
             // The roster is GLOBAL: the same handle for every chart, taken straight off the
             // backend rather than through the per-tab settings signature beside it.
             let arb_view = b.arb_view.clone();
+            // Same reasoning as `chart_labels` just above: read off the settings signature, which
+            // the observer already restamped before this render ran, instead of rebuilding it here
+            // every frame.
+            let report_axis = self.settings_sig.report_axis.clone();
             (
                 theme,
                 orders,
@@ -185,6 +190,7 @@ impl Render for ChartPanel {
                 chart_graphics,
                 chart_labels,
                 arb_view,
+                report_axis,
             )
         };
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
@@ -202,6 +208,7 @@ impl Render for ChartPanel {
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
+            | self.chart.set_report_axis(report_axis)
             | self.chart.set_chart_labels(chart_labels)
             | self.chart.set_arb_view(arb_view)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
