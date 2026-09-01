@@ -43,7 +43,7 @@ pub struct StratSlot {
 /// untouched: every ClientSettings edit still travels as a full snapshot, so an unrelated setting
 /// changed here re-sends whatever `use_manual_strategy` the terminal last read. What is gone is
 /// this mode driving that field.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ManualStratState {
     /// Whether manual-strategy mode is on for this core.
     #[serde(default)]
@@ -64,6 +64,31 @@ pub struct ManualStratState {
     /// takes over only once that id is gone from the core.
     #[serde(default)]
     pub id: u64,
+    /// Whether this core follows Moonbot's OWN stop rule for a manual-strategy order.
+    ///
+    /// On - the default - the stop of such an order belongs to the strategy the core applies (or to
+    /// the MoonHook that strategy defers to), exactly as Moonbot behaves: the terminal shows that
+    /// stop, locks its SL control while a strategy is selected, and sends no per-order override.
+    /// Off re-opens the control and the visible stop is written to the order right after it is
+    /// placed, whatever the core ended up applying.
+    ///
+    /// Defaults to TRUE, including for every file written before this field existed: repeating the
+    /// core's behaviour is the baseline, and the terminal overriding it was the exception.
+    #[serde(default = "default_true")]
+    pub mb_logic: bool,
+}
+
+/// Hand-written rather than derived, because the derive would default [`Self::mb_logic`] to FALSE
+/// and silently opt every default-constructed core out of Moonbot's own stop rule.
+impl Default for ManualStratState {
+    fn default() -> Self {
+        Self {
+            on: false,
+            strategy: String::new(),
+            id: 0,
+            mb_logic: default_true(),
+        }
+    }
 }
 
 /// Core-data reception flags, implemented entirely as a client-side filter.

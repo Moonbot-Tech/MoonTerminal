@@ -466,8 +466,16 @@ id = 2981",
             on: true,
             strategy: "Beta".to_string(),
             id: 2981,
+            ..Default::default()
         }),
         "merge must carry the stored mode into the running config"
+    );
+    assert!(
+        server
+            .manual_strategy
+            .as_ref()
+            .is_some_and(|manual| manual.mb_logic),
+        "a file written before the switch existed follows Moonbot's own stop rule, as Moonbot does"
     );
     let (_, meta) = split(
         std::slice::from_ref(&server),

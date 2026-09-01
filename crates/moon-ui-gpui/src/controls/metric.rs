@@ -16,6 +16,7 @@ use moon_core::market::MarketLimits;
 use moon_core::session::CoreId;
 
 use super::{DASH, LEV_PRESETS, MaxOrderReadout, TP_FINE_MAX, lev_preset_available};
+use crate::backend::ManualStop;
 use crate::shell::Shell;
 use crate::{Backend, design};
 use moon_core::util::fmt;
@@ -118,14 +119,24 @@ impl TradeMetric {
     /// TP there would be a free-form take profit with nowhere to go: the strategy sells at one
     /// value, and the S presets are the control that changes it. The STOP is different — it exists
     /// in the strategy as a level plus an on/off flag, exactly the two things this button and its
-    /// toggle edit, so in manual mode they keep working and write to the strategy instead of to the
-    /// manual-strategy overlay (`Backend::manual_exit_overlay`), which is also what the order
-    /// carries.
-    pub fn available_with(self, has_core: bool, sl_on: bool, manual_on: bool) -> bool {
+    /// toggle edit, so in manual mode they keep working over the manual-strategy overlay
+    /// (`Backend::manual_exit_overlay`), which is also what the order carries.
+    ///
+    /// `sl_locked` is the exception to that last sentence, and the default: while this core follows
+    /// Moonbot's own rule (`Backend::manual_stop_locked`) the stop belongs to the strategy, no
+    /// per-order override is sent, and an editable SL would be a control whose value never reaches
+    /// an order.
+    pub fn available_with(
+        self,
+        has_core: bool,
+        sl_on: bool,
+        manual_on: bool,
+        sl_locked: bool,
+    ) -> bool {
         match self {
             TradeMetric::Lev => has_core,
             TradeMetric::Tp => !manual_on,
-            TradeMetric::Sl => sl_on,
+            TradeMetric::Sl => sl_on && !sl_locked,
         }
     }
 
@@ -136,14 +147,20 @@ impl TradeMetric {
         let manual_on = manual_core
             .map(|core| b.manual_strat_active(core).is_some())
             .unwrap_or(false);
-        // The same source the toolbar's own SL button renders from: with a manual strategy in force
-        // that is the overlay, and reading the saved generation here made the row and the button
-        // beside it disagree about whether the stop is even on.
-        let sl_on = manual_core
-            .and_then(|core| b.manual_exit_overlay(core))
-            .map(|ms| ms.stop_on)
-            .unwrap_or_else(|| b.group_exit_settings(group).stop_loss_enabled);
-        self.available_with(core.is_some(), sl_on, manual_on)
+        // The same one fact the toolbar's own SL cell renders from. Reading a different source here
+        // made the row and the popup guard beside it disagree about whether the stop is even on,
+        // which strands an open popup with no event to say why.
+        let manual_stop = manual_core
+            .map(|core| b.manual_stop(core))
+            .unwrap_or(ManualStop::Free);
+        let sl_on = manual_stop.stop_on(
+            manual_core
+                .and_then(|core| b.manual_exit_overlay(core))
+                .map(|ms| ms.stop_on)
+                .unwrap_or_else(|| b.group_exit_settings(group).stop_loss_enabled),
+        );
+        let sl_locked = manual_stop.locked();
+        self.available_with(core.is_some(), sl_on, manual_on, sl_locked)
     }
 
     /// The value this metric's popup would seed from, or `None` when there is none to show.
@@ -199,21 +216,31 @@ impl TradeMetric {
         // While a manual strategy owns the exits, the popup must open on the value the button next
         // to it shows and the order will use — the overlay — not on the saved generation sitting
         // underneath it.
-        let manual = b
-            .active_trade_core(group)
-            .and_then(|core| b.manual_exit_overlay(core));
+        let manual_core = b.active_trade_core(group);
+        // The stop's owner, asked the same way the row and the popup guard ask it: while the
+        // strategy owns it this seed must not offer the saved generation for editing.
+        let manual_stop = manual_core
+            .map(|core| b.manual_stop(core))
+            .unwrap_or(ManualStop::Free);
+        let manual = manual_core.and_then(|core| b.manual_exit_overlay(core));
         match self {
             TradeMetric::Tp => Some(
                 manual
-                    .map(|ms| ms.take_profit_pct)
+                    .and_then(|ms| ms.take_profit_pct)
                     .unwrap_or_else(|| b.write_aligned_group_exit(group).take_profit_pct)
                     as f32,
             ),
-            TradeMetric::Sl => Some(
-                manual
+            TradeMetric::Sl => Some(match manual_stop {
+                ManualStop::Strategy { pct, .. } => pct,
+                // Never `None`, even with the value unreadable: this core resolves through
+                // `active_trade_core` while `available` uses the hover-aware one, so the two can
+                // disagree about which chart is being addressed, and a `None` here would turn that
+                // disagreement into a click that silently opens nothing. The lock is enforced by
+                // `available` and by the edit absorber, not by withholding a seed.
+                ManualStop::Unknown | ManualStop::Free => manual
                     .map(|ms| ms.stop_pct)
                     .unwrap_or_else(|| b.write_aligned_group_exit(group).stop_loss_pct),
-            ),
+            }),
             TradeMetric::Lev => {
                 let core = scoped_lev_core(b, group)?;
                 // Read the Main chart market's leverage from the per-core map, which includes every

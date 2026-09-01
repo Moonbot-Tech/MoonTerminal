@@ -52,14 +52,19 @@ fn a_seeded_leverage_address_does_not_match_a_different_market() {
 fn availability_gates_each_metric_on_its_own_condition() {
     // Plausible future edit: `controls::metric::TradeMetric::available_with` puts `has_core &&`
     // around the match. TP and SL would become uneditable when a persisted group has no live core.
-    assert!(!TradeMetric::Lev.available_with(false, true, false));
-    assert!(TradeMetric::Lev.available_with(true, false, true));
-    assert!(TradeMetric::Tp.available_with(false, false, false));
-    assert!(!TradeMetric::Tp.available_with(true, false, true));
-    assert!(TradeMetric::Sl.available_with(false, true, false));
-    assert!(!TradeMetric::Sl.available_with(true, false, false));
+    assert!(!TradeMetric::Lev.available_with(false, true, false, false));
+    assert!(TradeMetric::Lev.available_with(true, false, true, false));
+    assert!(TradeMetric::Tp.available_with(false, false, false, false));
+    assert!(!TradeMetric::Tp.available_with(true, false, true, false));
+    assert!(TradeMetric::Sl.available_with(false, true, false, false));
+    assert!(!TradeMetric::Sl.available_with(true, false, false, false));
     // SL stays editable in manual-strategy mode, unlike TP: there the button and its toggle carry
     // the STRATEGY's stop (level plus `UseStopLoss`), which is exactly what a trader has to reach
     // while MS is on. Disabling it here left the strategy's stop unreachable from the toolbar.
-    assert!(TradeMetric::Sl.available_with(true, true, true));
+    assert!(TradeMetric::Sl.available_with(true, true, true, false));
+    // The one thing that does close it: the core following Moonbot's own rule, where the strategy
+    // owns the stop outright and no per-order override is sent. The lock is about the STOP alone —
+    // leverage is a different account setting and TP is governed by the sell-price flag.
+    assert!(!TradeMetric::Sl.available_with(true, true, true, true));
+    assert!(TradeMetric::Lev.available_with(true, true, true, true));
 }
