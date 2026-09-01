@@ -10,6 +10,15 @@ use super::*;
 const COUNTDOWN_CHECK: Duration = Duration::from_millis(250);
 
 impl ChartDataState {
+    /// Create chart state with a core-local identity report axis until the backend supplies measurements.
+    ///
+    /// Args:
+    ///     container: Chart panes and their shared navigation state.
+    ///     render: Per-pane retained render state.
+    ///     theme: Initial chart theme.
+    ///
+    /// Returns:
+    ///     Fresh chart data state ready for the first backend synchronization.
     pub(crate) fn new(
         container: Rc<RefCell<Container>>,
         render: Rc<RefCell<RenderState>>,
@@ -47,6 +56,7 @@ impl ChartDataState {
             news_marks: std::rc::Rc::new(Vec::new()),
             news_hovered: None,
             trade_history: std::rc::Rc::new(Vec::new()),
+            report_axis: moon_core::db::ReportAxis::identity_core_local(),
             trade_history_revision: 0,
             trade_hovered: None,
             warn_marks: std::rc::Rc::new(Vec::new()),

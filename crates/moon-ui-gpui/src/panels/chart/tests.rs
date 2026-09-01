@@ -1,5 +1,14 @@
 //! Static action-authority regressions for group-owned chart panels.
 
+use std::{collections::HashMap, rc::Rc};
+
+use super::ChartSettingsSig;
+use moon_core::{
+    config::{ChartGraphicsCfg, ChartLabelsCfg, ChartTheme, OrdersStyleSet},
+    db::{OffsetSegment, ReportAxis},
+    market::CandleViewCfg,
+};
+
 /// Removing a dispatch-time `workspace_action_allows_core` guard from `trade.rs`, `render.rs`, or
 /// `render_input.rs` must fail: a stale chart could trade or navigate a core other than the Auto
 /// rail selection.
@@ -90,5 +99,42 @@ fn chart_stacks_pass_their_workspace_group_into_every_panel() {
     assert!(
         args.contains("workspace_group"),
         "AddToChart panels must be constructed with their workspace group: {args:?}"
+    );
+}
+
+/// `panels/chart/mod.rs:ChartSettingsSig::eq` must compare the report axis.
+///
+/// Dropping that comparison leaves an idle chart asleep after a core's clock offset is measured,
+/// so its closed-trade arrows continue to use stale timestamps until an unrelated repaint.
+#[test]
+fn chart_settings_signature_changes_when_the_report_axis_changes() {
+    let identity_axis = ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
+    let offset_axis = ReportAxis::from_measured(
+        HashMap::from([(
+            42,
+            vec![OffsetSegment {
+                from_utc: 0,
+                offset_secs: 3_600,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+    let identity = ChartSettingsSig {
+        theme: ChartTheme::default(),
+        orders: OrdersStyleSet::default(),
+        follow: false,
+        chart_graphics: ChartGraphicsCfg::default(),
+        candle_view: CandleViewCfg::default(),
+        chart_labels: Rc::new(ChartLabelsCfg::default()),
+        report_axis: identity_axis,
+    };
+    let offset = ChartSettingsSig {
+        report_axis: offset_axis,
+        ..identity.clone()
+    };
+
+    assert!(
+        identity != offset,
+        "a newly measured core offset must wake an idle chart"
     );
 }

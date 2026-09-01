@@ -1217,6 +1217,14 @@ struct ChartDataState {
     news_hovered: Option<usize>,
     /// Durable closed trades for this exact Main chart target.
     trade_history: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
+    /// The time axis this engine's replicated closed-trade stamps are corrected on.
+    ///
+    /// The replica stores `buydate`/`closedate` on the CORE's own wall clock, while the chart
+    /// epoch and its candles are true UTC, so every stamp is lifted through this axis before it
+    /// becomes a chart millisecond. A core with no measurement converts as the identity. See
+    /// `moon_core::db::report_axis`; this axis carries only the CURRENT segment per core
+    /// (`Backend::report_axis`'s documented limitation, `backend/mod.rs:1803-1821`).
+    report_axis: moon_core::db::ReportAxis,
     /// Revision incremented whenever the durable history set changes.
     trade_history_revision: u64,
     /// The trade arrow under the cursor as `(pane, mark index in that pane, buy)`. It is drawn

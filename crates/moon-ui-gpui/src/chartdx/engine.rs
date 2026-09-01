@@ -605,6 +605,24 @@ impl ChartEngine {
         read(&self.data.borrow().trade_history)
     }
 
+    /// Read the report axis this engine's closed-trade stamps are currently corrected on.
+    ///
+    /// Handed to a closure rather than a returning clone, for the same reason
+    /// [`Self::with_trade_geometry`] is one: the hover card is rebuilt on every frame the pointer
+    /// rests on an arrow, and a `HashMap` clone per frame is avoidable work.
+    ///
+    /// Args:
+    ///     read: Receives the current report axis.
+    ///
+    /// Returns:
+    ///     The closure's value.
+    pub(crate) fn with_report_axis<R>(
+        &self,
+        read: impl FnOnce(&moon_core::db::ReportAxis) -> R,
+    ) -> R {
+        read(&self.data.borrow().report_axis)
+    }
+
     /// Read one pane's retained trade-arrow geometry.
     ///
     /// Handed to a closure rather than returned, because it holds the clusters and their member
@@ -760,6 +778,17 @@ impl ChartEngine {
         data.last_order_sig = u64::MAX;
         data.mark_view_dirty();
         true
+    }
+
+    /// Apply the report axis that corrects this engine's closed-trade stamps on every pane.
+    ///
+    /// Args:
+    ///     axis: Current per-core report-time offsets and display zone from the backend.
+    ///
+    /// Returns:
+    ///     `true` when the axis changed and trade-history geometry was invalidated.
+    pub fn set_report_axis(&mut self, axis: moon_core::db::ReportAxis) -> bool {
+        self.data.borrow_mut().set_report_axis(axis)
     }
 
     /// The arbitrage venue whose NAME is under a point, in the pane's own logical pixels.

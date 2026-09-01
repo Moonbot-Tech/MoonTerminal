@@ -174,9 +174,11 @@ pub struct ChartTradeRecord {
     pub core_uid: u64,
     /// Coin identity stored by the originating core.
     pub coin: String,
-    /// Entry timestamp in Unix seconds.
+    /// Entry timestamp, in seconds on the CORE's own wall clock — NOT true UTC. Lift it through
+    /// `ReportAxis::to_utc(secs, core_uid)` before treating it as a Unix instant; see the
+    /// `report_axis` module for why.
     pub buy_date: i64,
-    /// Close timestamp in Unix seconds.
+    /// Close timestamp, same core-local caveat as `buy_date` above.
     pub close_date: i64,
     /// Entry price.
     pub buy_price: f64,

@@ -102,6 +102,10 @@ struct ChartSettingsSig {
     /// Behind an `Rc` because this is ALSO the value `render` hands the engine on every frame: one
     /// allocation, re-made only when the signature is rebuilt, instead of a deep copy per render.
     chart_labels: std::rc::Rc<moon_core::config::ChartLabelsCfg>,
+    /// A core's newly-measured clock offset, in the signature for the same reason as
+    /// `chart_graphics`: an idle chart must learn about it the same way it learns about a
+    /// chart-graphics edit from elsewhere, instead of waiting on some unrelated repaint.
+    report_axis: moon_core::db::ReportAxis,
 }
 
 impl PartialEq for ChartSettingsSig {
@@ -122,6 +126,7 @@ impl PartialEq for ChartSettingsSig {
             && self.candle_view == other.candle_view
             && (std::rc::Rc::ptr_eq(&self.chart_labels, &other.chart_labels)
                 || self.chart_labels == other.chart_labels)
+            && self.report_axis == other.report_axis
     }
 }
 
@@ -160,6 +165,7 @@ fn chart_settings_sig(
             cfg.sanitize();
             std::rc::Rc::new(cfg)
         },
+        report_axis: backend.report_axis(crate::chartdx::axes::display_zone()),
     }
 }
 

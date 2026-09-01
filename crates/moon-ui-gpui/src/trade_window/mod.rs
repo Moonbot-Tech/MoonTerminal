@@ -163,6 +163,28 @@ pub(super) fn remembered_geometry(
     next
 }
 
+/// Lift a record's core-local entry/exit stamps onto the true-UTC axis, in seconds.
+///
+/// A free function, and a pure one, so the rule can be exercised without a window. This window is
+/// worse off than a display bug on a skewed core: the pair is compared against a REAL exchange's
+/// true-UTC candle stamps, so the uncorrected pair fetches the wrong range entirely.
+///
+/// Args:
+///     record: The trade being shown.
+///     axis: This session's current report axis.
+///
+/// Returns:
+///     `(buy_utc, close_utc)`, in seconds.
+pub(super) fn utc_stamps(
+    record: &ChartTradeRecord,
+    axis: &moon_core::db::ReportAxis,
+) -> (i64, i64) {
+    (
+        axis.to_utc(record.buy_date, record.core_uid),
+        axis.to_utc(record.close_date, record.core_uid),
+    )
+}
+
 /// Resolve one trade's metadata into the strings its chart captions print.
 ///
 /// The STRATEGY is the half that has to happen up here: the replica stores a Delphi-signed id, and
@@ -400,7 +422,22 @@ impl TradeWindowView {
     /// Args:
     ///     cx: View context.
     fn fetch(&mut self, cx: &mut Context<Self>) {
-        let Some(window) = replay_window(self.record.buy_date, self.record.close_date) else {
+        // Resolved exactly ONCE here and carried through `apply` into `publish`, rather than
+        // re-resolved in `publish`: `fetch` starts an async REST request whose result reaches
+        // `publish` later, and if a core's offset were adopted or changed WHILE that request is in
+        // flight, a second independent `Backend::report_axis()` read there could disagree with this
+        // one — the downloaded candles would be fetched for one window while the viewport/arrows
+        // frame a different one. Re-resolving here on every `fetch` (including a manual Retry) is
+        // still intentional: a Retry after the offset was finally measured should use the fresh
+        // number, and `fetch` is exactly the point where a NEW request is about to be made.
+        let (buy_utc, close_utc) = utc_stamps(
+            &self.record,
+            &self
+                .backend
+                .read(cx)
+                .report_axis(crate::chartdx::axes::display_zone()),
+        );
+        let Some(window) = replay_window(buy_utc, close_utc) else {
             self.state = TradeWindowState::Empty(TradeReplayEmpty::DegenerateWindow);
             cx.notify();
             return;
@@ -455,7 +492,9 @@ impl TradeWindowView {
                 return;
             };
             cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| this.apply(sequence, outcome, cx));
+                let _ = this.update(cx, |this, cx| {
+                    this.apply(sequence, outcome, buy_utc, close_utc, cx)
+                });
             });
         })
         .detach();
@@ -466,8 +505,18 @@ impl TradeWindowView {
     /// Args:
     ///     sequence: Dispatch counter the answer belongs to.
     ///     outcome: What the worker produced.
+    ///     buy_utc: True-UTC entry stamp the ORIGINATING `fetch` resolved, carried through
+    ///         unchanged so `publish` frames the same instants the REST request was fetched for.
+    ///     close_utc: True-UTC exit stamp, same provenance as `buy_utc`.
     ///     cx: View context.
-    fn apply(&mut self, sequence: u64, outcome: TradeReplayOutcome, cx: &mut Context<Self>) {
+    fn apply(
+        &mut self,
+        sequence: u64,
+        outcome: TradeReplayOutcome,
+        buy_utc: i64,
+        close_utc: i64,
+        cx: &mut Context<Self>,
+    ) {
         // An answer from a superseded request is not wrong, merely stale; dropping it silently is
         // the whole point of the counter.
         if sequence != self.sequence {
@@ -487,7 +536,7 @@ impl TradeWindowView {
                 // range: a floor of one minute for anything finer, and no `as` wrap for anything
                 // absurdly coarse.
                 let tf_min = (series.tf_ms / 60_000).clamp(1, i64::from(u16::MAX)) as u16;
-                self.publish(series, cx);
+                self.publish(series, buy_utc, close_utc, cx);
                 TradeWindowState::Ready { source, tf_min }
             }
             TradeReplayOutcome::Empty(empty) => TradeWindowState::Empty(empty),
@@ -544,15 +593,30 @@ impl TradeWindowView {
     ///
     /// Args:
     ///     series: The frozen rows.
+    ///     buy_utc: True-UTC entry stamp the `fetch` that produced `series` resolved. Read here
+    ///         rather than re-resolving the axis: `publish` is always downstream of the `fetch`
+    ///         that carries this value, on the same `sequence`-guarded call chain, so it
+    ///         necessarily frames the exact pair `fetch` used to build the REST request whose
+    ///         `series` this now is.
+    ///     close_utc: True-UTC exit stamp, same provenance as `buy_utc`.
     ///     cx: View context.
-    fn publish(&mut self, series: TradeReplaySeries, cx: &mut Context<Self>) {
+    fn publish(
+        &mut self,
+        series: TradeReplaySeries,
+        buy_utc: i64,
+        close_utc: i64,
+        cx: &mut Context<Self>,
+    ) {
         // Read off the series BEFORE it is moved into the panel, exactly as `source` and `tf_min`
         // are in `apply`.
         let frame = frame::trade_frame(
-            self.record.buy_date.saturating_mul(1_000),
-            self.record.close_date.saturating_mul(1_000),
+            buy_utc.saturating_mul(1_000),
+            close_utc.saturating_mul(1_000),
             series.tf_ms,
         );
+        // The RAW record, deliberately: correcting it here would double-correct, since B.1
+        // (`chartdx/trade_history_sync.rs`) already applies the axis inside
+        // `append_trade_history_geometry`.
         let record = self.record.clone();
         self.panel.update(cx, |panel, pcx| {
             panel.attach_trade_replay(Some(std::rc::Rc::new(series)), pcx);

@@ -1,10 +1,13 @@
 //! Adapter between the durable closed-trade replica and the chart's userdata layer.
 //!
 //! The geometry itself — which arrow an action gets, what colour a side is drawn in, where the
-//! connector runs — lives in [`moon_chart::trade_marks`], because `moon-ui-gpui` is a binary crate
-//! whose logic no test can import. What stays here is only what needs the chart's own state:
-//! filtering to the pane's core, rebasing timestamps onto the chart epoch, resolving theme colours,
-//! publishing hover state, and retaining the exact cluster snapshot uploaded for hit-testing.
+//! connector runs — lives in [`moon_chart::trade_marks`], because `moon-ui-gpui`'s own `tests/`
+//! integration suite cannot import this binary crate's items (hence the static text contracts in
+//! `tests/theme_contract/`). A `src/**/tests.rs` sibling unit-test module, like this file's own,
+//! compiles and runs normally and is where a private free function belongs. What stays here is
+//! only what needs the chart's own state: filtering to the pane's core, rebasing timestamps onto
+//! the chart epoch, resolving theme colours, publishing hover state, and retaining the exact
+//! cluster snapshot uploaded for hit-testing.
 
 use std::rc::Rc;
 
@@ -39,6 +42,35 @@ fn trade_kind_visible(graphics: &moon_core::config::ChartGraphicsCfg, emulator: 
     }
 }
 
+/// Lift a record's core-local entry/exit stamps onto the chart's true-UTC millisecond axis.
+///
+/// The ordering matters: convert on the SECONDS axis first, then scale to milliseconds.
+/// Multiplying first and subtracting a seconds-offset afterwards is off by a factor of a
+/// thousand, and silently so. This cannot be baked into `query_chart_trade_history` instead:
+/// `panels/report/trade_detail.rs:104-105` already applies `axis.to_utc` to the record it gets
+/// back from that same function, and a corrected column would double-correct it.
+///
+/// Args:
+///     record: Raw closed-trade record, straight from the durable replica.
+///     axis: This engine's current report axis.
+///
+/// Returns:
+///     The mark with `buy_ms`/`close_ms` on the chart's true-UTC millisecond epoch.
+fn trade_mark(record: &ChartTradeRecord, axis: &moon_core::db::ReportAxis) -> TradeMark {
+    TradeMark {
+        buy_ms: axis
+            .to_utc(record.buy_date, record.core_uid)
+            .saturating_mul(1_000),
+        close_ms: axis
+            .to_utc(record.close_date, record.core_uid)
+            .saturating_mul(1_000),
+        buy_price: record.buy_price,
+        sell_price: record.sell_price,
+        qty: record.quantity,
+        is_short: record.is_short,
+    }
+}
+
 /// Everything a pane must retain about the trade arrows it currently has on the GPU.
 ///
 /// The two halves travel together because neither is usable alone: the clusters say WHERE the
@@ -60,6 +92,20 @@ pub(crate) struct TradeGeometry {
 }
 
 impl ChartDataState {
+    /// Mark every pane's trade-history geometry dirty and request a present.
+    ///
+    /// The shared body of every setter here that invalidates the userdata pass rather than a
+    /// single pane: `set_trade_history`, `set_trade_hover`, and `set_report_axis` all need
+    /// exactly this.
+    fn dirty_all_trade_panes(&mut self) {
+        let mut render = self.render.borrow_mut();
+        for pane in &mut render.panes {
+            pane.last_trade_history_sig = u64::MAX;
+            pane.gpu_prepare_dirty = true;
+        }
+        render.needs_present = true;
+    }
+
     /// Replace the exact-target durable history and invalidate userdata only on a real change.
     ///
     /// Args:
@@ -73,12 +119,23 @@ impl ChartDataState {
         }
         self.trade_history = records;
         self.trade_history_revision = self.trade_history_revision.wrapping_add(1);
-        let mut render = self.render.borrow_mut();
-        for pane in &mut render.panes {
-            pane.last_trade_history_sig = u64::MAX;
-            pane.gpu_prepare_dirty = true;
+        self.dirty_all_trade_panes();
+        true
+    }
+
+    /// Replace the report axis this engine's closed-trade stamps are corrected on.
+    ///
+    /// Args:
+    ///     axis: This engine's current report axis, synced in from `Backend` on render.
+    ///
+    /// Returns:
+    ///     Whether the axis changed.
+    pub(super) fn set_report_axis(&mut self, axis: moon_core::db::ReportAxis) -> bool {
+        if self.report_axis == axis {
+            return false;
         }
-        render.needs_present = true;
+        self.report_axis = axis;
+        self.dirty_all_trade_panes();
         true
     }
 
@@ -100,12 +157,7 @@ impl ChartDataState {
             return false;
         }
         self.trade_hovered = hovered;
-        let mut render = self.render.borrow_mut();
-        for pane in &mut render.panes {
-            pane.last_trade_history_sig = u64::MAX;
-            pane.gpu_prepare_dirty = true;
-        }
-        render.needs_present = true;
+        self.dirty_all_trade_panes();
         true
     }
 
@@ -180,14 +232,7 @@ impl ChartDataState {
             .map(|(index, record)| {
                 // Built in the same pass as the marks, so the two lists cannot fall out of step.
                 sources.push(index);
-                TradeMark {
-                    buy_ms: record.buy_date.saturating_mul(1_000),
-                    close_ms: record.close_date.saturating_mul(1_000),
-                    buy_price: record.buy_price,
-                    sell_price: record.sell_price,
-                    qty: record.quantity,
-                    is_short: record.is_short,
-                }
+                trade_mark(record, &self.report_axis)
             })
             .collect::<Vec<_>>();
         let clusters = moon_chart::build_trade_geometry(
