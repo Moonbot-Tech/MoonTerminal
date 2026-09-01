@@ -772,6 +772,10 @@ core_status.fault.next.unparsed:
   ru: "Пакеты дошли до терминала: это не закрытый порт. Пришли лог и эти счётчики в поддержку"
   en: "Packets reached the terminal: this is not a closed port. Send the log and these counters to support"
   es: "Los paquetes llegaron al terminal: no es un puerto cerrado. Envia el registro y estos contadores al soporte"
+core_status.fault.next.try_mode:
+  ru: "Другие ядра на этом терминале подключились по режиму %{mode} — попробуй переключить это ядро на %{mode}"
+  en: "Other cores on this terminal connected fine on mode %{mode} — try switching this one to %{mode}"
+  es: "Otros nucleos de este terminal se conectaron bien en modo %{mode} — prueba a cambiar este a %{mode}"
 core_status.fault.next.access:
   ru: "Вставь ключ, экспортированный ИМЕННО этим ботом, и проверь, что на ядре включён режим Kernel (VPS). Он остаётся неактивным, пока биржевой аккаунт не заведён под реферала MoonBonus"
   en: "Paste the key exported from THIS bot, and check that Kernel (VPS) mode is on at the core. It stays inactive while the exchange account is not under the MoonBonus referral"

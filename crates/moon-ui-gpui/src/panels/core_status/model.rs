@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+use moon_core::config::TransportVersion;
 use moon_core::feed::{ConnFault, ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 use moon_core::session::{ApiKeyExpiry, CoreId, CoreStartupStatus, CoreSysStatus};
@@ -35,6 +36,10 @@ pub(super) struct CoreStatusRow {
     /// Retained across the backoff retry, so a row that is connecting again still explains WHY the
     /// previous attempt failed instead of falling back to a bare progress figure.
     pub(super) fault: Option<ConnFault>,
+    /// A fleet-wide "try this mode instead" suggestion for this core, when the evidence supports
+    /// one (`conn_diag::fleet_mode_suggestion`). Computed regardless of this core's own status;
+    /// the wording layer only shows it beside a `NoResponse` verdict.
+    pub(super) mode_suggestion: Option<TransportVersion>,
     /// Endpoint decoded by the feed without exposing the exported key.
     pub(super) endpoint: Option<CoreEndpoint>,
     /// Whether this specific core has a sustained above-baseline client↔core ping (the per-core ping

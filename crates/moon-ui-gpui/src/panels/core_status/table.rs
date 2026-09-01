@@ -396,7 +396,7 @@ fn status_cell(r: &CoreStatusRow, diag: Option<&Diagnosis>) -> Stateful<Div> {
         .child(connection_presentation(&r.status, diag).label);
     match diag {
         Some(d) => cell.tooltip(crate::panels::common::text_tooltip(fault_tooltip(
-            &fault_facts(d),
+            &fault_facts(d, r.mode_suggestion),
         ))),
         None => cell,
     }

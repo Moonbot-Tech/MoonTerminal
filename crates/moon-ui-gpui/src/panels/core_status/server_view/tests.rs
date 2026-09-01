@@ -12,6 +12,7 @@ use crate::panels::core_status::model::{CoreStatusRow, aggregate_servers};
 fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
     CoreStatusRow {
         fault: None,
+        mode_suggestion: None,
         id,
         name: format!("Core {id}"),
         status: ConnStatus::Ready,

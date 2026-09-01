@@ -84,6 +84,14 @@ conn.icon_btn:
   ru: "Иконка"
   en: "Icon"
   es: "Icono"
+conn.bulk_mode_btn:
+  ru: "Режим"
+  en: "Mode"
+  es: "Modo"
+conn.bulk_mode_tip:
+  ru: "Поставить режим транспорта MoonProto всем ядрам группы разом, вместо ручной правки построчно. Применяется по «Сохранить»: каждое изменённое ядро переподключится само."
+  en: "Set the MoonProto transport mode for every core in this group at once, instead of one row at a time. Applied on Save: each changed core reconnects by itself."
+  es: "Establece el modo de transporte MoonProto para todos los nucleos del grupo a la vez, en lugar de fila por fila. Se aplica al guardar: cada nucleo cambiado se reconecta solo."
 conn.icon_for:
   ru: "Иконка для «%{name}»"
   en: "Icon for “%{name}”"

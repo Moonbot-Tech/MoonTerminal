@@ -5,9 +5,11 @@ use rust_i18n::t;
 
 use moon_ui::{MoonPalette, MoonStatusBar, MoonStatusIndicator, MoonStatusItem, MoonTooltipView};
 
+use moon_core::config::TransportVersion;
 use moon_core::feed::ConnStatus;
 use moon_core::metrics::MetricsSnapshot;
-use moon_core::session::{ConnSummary, LicenseSummary};
+use moon_core::session::{ConnSummary, CoreId, LicenseSummary};
+use std::collections::HashMap;
 
 use crate::design;
 
@@ -28,6 +30,9 @@ impl Shell {
     ///     book_levels: Order-book level count for the active Main chart.
     ///     fps: Smoothed shell render rate.
     ///     chrome_width: Current window width used to select the compact narrow layout.
+    ///     mode_suggestions: Fleet-wide "try this mode instead" advice for `conn.down`'s cores,
+    ///         keyed by core id (`conn_diag::fleet_mode_suggestion`, computed by the caller —
+    ///         only it holds both the live config and the store).
     ///     cx: Application context used for theme tokens, text measurement, and actions.
     ///
     /// Returns:
@@ -40,6 +45,7 @@ impl Shell {
         book_levels: usize,
         fps: f32,
         chrome_width: f32,
+        mode_suggestions: &HashMap<CoreId, Option<TransportVersion>>,
         cx: &App,
     ) -> impl IntoElement {
         let all_ok = conn.total > 0 && conn.ready == conn.total;
@@ -71,7 +77,10 @@ impl Shell {
                     row.fault.as_ref(),
                     &row.startup,
                 ) {
-                    Some(d) => crate::conn_diag::fault_line(&d),
+                    Some(d) => crate::conn_diag::fault_line(
+                        &d,
+                        mode_suggestions.get(&row.id).copied().flatten(),
+                    ),
                     None => match row.status {
                         ConnStatus::Disconnected => t!("status.disconnected").to_string(),
                         _ => t!("status.connecting").to_string(),

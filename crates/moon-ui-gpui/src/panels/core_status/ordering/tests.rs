@@ -26,6 +26,7 @@ use crate::panels::core_status::model::{
 fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
     CoreStatusRow {
         fault: None,
+        mode_suggestion: None,
         id,
         name: format!("Core {id}"),
         status: ConnStatus::Ready,
@@ -62,6 +63,7 @@ fn group(
         .enumerate()
         .map(|(i, &(rtt, ready))| CoreStatusRow {
             fault: None,
+            mode_suggestion: None,
             id: i as u64,
             name: format!("c{i}"),
             status: if ready {

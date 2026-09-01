@@ -2,17 +2,74 @@
 
 use super::entries::{ConnEntry, EntryLabels, flatten_entries};
 use super::sync_groups_from_servers;
-use super::tab::{ServerRowMeta, pending_server_indices, visible_group_rows};
+use super::tab::{
+    ServerRowMeta, apply_group_transport, pending_server_indices, visible_group_rows,
+};
 use crate::core_order::CoreOrder;
 use moon_core::config::{
     AppConfig, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
-    TakeProfitMode,
+    TakeProfitMode, TransportVersion,
 };
 use moon_core::venue::CoreVenue;
 
 /// Build one identified core's venue from its platform ordinal.
 fn venue(code: u8) -> CoreVenue {
     CoreVenue::identify(code, "", None)
+}
+
+/// `connections/tab.rs:apply_group_transport` must update every selected group member only.
+///
+/// Breakage: narrowing the group filter or removing it leaves a core unchanged or changes another group's core, so one bulk selection no longer produces the requested reconnections on Save.
+#[test]
+fn group_transport_updates_every_member_and_leaves_other_groups_untouched() {
+    let mut servers = vec![server("desk"), server("desk"), server("ops")];
+    servers[0].transport = Some(TransportVersion::V0);
+    servers[1].transport = Some(TransportVersion::V1);
+    servers[2].transport = Some(TransportVersion::V0);
+    assert!(apply_group_transport(
+        &mut servers,
+        "desk",
+        TransportVersion::V2
+    ));
+    assert_eq!(servers[0].transport, Some(TransportVersion::V2));
+    assert_eq!(servers[1].transport, Some(TransportVersion::V2));
+    assert_eq!(servers[2].transport, Some(TransportVersion::V0));
+}
+
+/// `connections/tab.rs:apply_group_transport` must report changes only when a row changes mode.
+///
+/// Breakage: setting `changed` for an already-matching, empty, or absent group would trigger a needless config notification and reconnect cycle without any user-visible configuration change.
+#[test]
+fn group_transport_skips_already_matching_empty_and_missing_groups() {
+    let mut servers = vec![server("desk"), server("ops")];
+    servers[0].transport = Some(TransportVersion::V1);
+    servers[1].transport = Some(TransportVersion::V0);
+    let before = servers
+        .iter()
+        .map(|server| server.transport)
+        .collect::<Vec<_>>();
+    assert!(!apply_group_transport(
+        &mut servers,
+        "desk",
+        TransportVersion::V1
+    ));
+    assert!(!apply_group_transport(
+        &mut servers,
+        "",
+        TransportVersion::V2
+    ));
+    assert!(!apply_group_transport(
+        &mut servers,
+        "missing",
+        TransportVersion::V2
+    ));
+    assert_eq!(
+        servers
+            .iter()
+            .map(|server| server.transport)
+            .collect::<Vec<_>>(),
+        before
+    );
 }
 
 /// Build a minimal server fixture for preview-group synchronization.

@@ -149,16 +149,25 @@ fn status_dot(
                 .then(|| {
                     let view = view.upgrade()?;
                     let backend = view.read(cx).backend.clone();
-                    let core = backend.read(cx).session.store().core(core_id)?;
+                    let b = backend.read(cx);
+                    let store = b.session.store();
+                    let core = store.core(core_id)?;
                     let diag = moon_core::feed::diagnose(
                         &core.status,
                         core.fault.as_ref(),
                         &core.startup,
                     )?;
+                    let mode_suggestion =
+                        crate::conn_diag::fleet_mode_suggestion(core_id, &b.config.servers, |id| {
+                            store
+                                .core(id)
+                                .is_some_and(|c| c.status == ConnStatus::Ready)
+                        });
                     Some(crate::panels::problem_diagnostic_text(
                         &diag,
                         core.fault.as_ref(),
                         &core.startup,
+                        mode_suggestion,
                     ))
                 })
                 .flatten();

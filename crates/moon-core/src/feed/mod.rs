@@ -5,6 +5,7 @@ pub(crate) mod assets;
 mod conn_verdict;
 mod core_label;
 pub mod live;
+mod mode_advice;
 pub mod news;
 pub mod news_marks;
 mod order_edit;
@@ -16,6 +17,7 @@ pub mod types;
 pub use conn_verdict::{Diagnosis, FailureClass, diagnose};
 pub use core_label::{clear_core_name, core_label, set_core_name};
 pub use live::FieldMask;
+pub use mode_advice::{SiblingOutcome, suggest_alternate_mode};
 pub use news::{NewsItem, NewsSnapshot};
 pub use types::*;
 
