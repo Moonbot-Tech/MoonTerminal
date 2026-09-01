@@ -8,12 +8,12 @@ use moon_core::config::{
 use moon_core::feed::{ClientSettingsEdit, StrategyRow};
 
 use super::{
-    IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL, PANIC_TOGGLE_DEBOUNCE,
-    apply_group_exit_edit, effective_ignore_sell, effective_manual_strat_state,
-    effective_panic_armed, manual_selection_is_broken, manual_strat_seed, manual_strategy_id,
-    panic_local_settled, panic_press_absorbed, planned_sell_price, resolve_manual_selection,
-    seed_on_enable, stop_price, stop_write_is_redundant, update_group_trade_pair,
-    usd_to_base_amount,
+    HOOK_STRATEGY_KIND, IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL,
+    PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit, effective_ignore_sell,
+    effective_manual_strat_state, effective_panic_armed, exit_source, manual_selection_is_broken,
+    manual_strat_seed, manual_strategy_id, panic_local_settled, panic_press_absorbed,
+    planned_sell_price, resolve_manual_selection, seed_on_enable, stop_price,
+    stop_write_is_redundant, update_group_trade_pair, usd_to_base_amount,
 };
 
 /// Regression target, three times over in one session: the rule deciding whether the per-order stop
@@ -64,6 +64,7 @@ fn stored(name: &str, id: u64) -> ManualStratState {
         on: true,
         strategy: name.to_string(),
         id,
+        ..ManualStratState::default()
     }
 }
 
@@ -135,6 +136,48 @@ fn manual_strategy(id: u64, name: &str) -> StrategyRow {
         name: name.to_string(),
         ..strategy(id, MANUAL_STRATEGY_KIND)
     }
+}
+
+/// Regression target (BB1, 2026-09-01): reading the SELECTED strategy's own stop while a MoonHook
+/// supplied the real one. Both the seed and the per-order comparison resolve the source here, so a
+/// wrong answer either shows a stop no order uses or suppresses the write that would have fixed it.
+#[test]
+fn the_exit_source_is_the_hook_whenever_one_is_named() {
+    let manual = manual_strategy(7, "manual2");
+    let hook = StrategyRow {
+        name: "HookTest1".to_string(),
+        ..strategy(31, HOOK_STRATEGY_KIND)
+    };
+    let snapshot = [manual.clone(), hook.clone()];
+    assert_eq!(
+        exit_source(&snapshot, "", 7),
+        Some(7),
+        "no hook: the strategy carries its own exits"
+    );
+    assert_eq!(
+        exit_source(&snapshot, "HookTest1", 7),
+        Some(31),
+        "a named hook owns both the sell price and the stop, so it is the source"
+    );
+    assert_eq!(
+        exit_source(&snapshot, "HookTest9", 7),
+        None,
+        "a hook this core does not have leaves the exits unknowable, which is not the same as none"
+    );
+    // The kind is part of the match, not decoration: `UseHookStrategy` is a picklist over MoonHook
+    // strategies, and a Manual strategy sharing the name has entirely different exits.
+    let namesake = [
+        manual,
+        StrategyRow {
+            name: "HookTest1".to_string(),
+            ..strategy(44, MANUAL_STRATEGY_KIND)
+        },
+    ];
+    assert_eq!(
+        exit_source(&namesake, "HookTest1", 7),
+        None,
+        "only a MoonHook-kind row can be a hook, whatever else carries the name"
+    );
 }
 
 /// Regression target: gating the seed on a non-zero revision instead of on a non-empty list. The
@@ -260,6 +303,7 @@ fn a_broken_selection_is_told_apart_from_a_list_that_has_not_arrived() {
                 on: true,
                 strategy: "   ".to_string(),
                 id: 0,
+                ..ManualStratState::default()
             }
         ),
         "the mode is on but nothing is chosen, which is an ordinary manual order"

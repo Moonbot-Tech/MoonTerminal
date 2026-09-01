@@ -13,8 +13,9 @@ pub(crate) mod server_chart;
 mod tests;
 
 pub(crate) use manual_trading::{
-    IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource, MsExitOverlay,
-    PanicLocal, PendingStop, SettleKey, manual_strategy_id,
+    FIELD_USE_HOOK_STRATEGY, IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource,
+    ManualStop, MsExitOverlay, PanicLocal, PendingStop, SettleKey, hook_of, manual_strategy_id,
+    strat_field_value,
 };
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
 
@@ -2539,6 +2540,20 @@ impl Backend {
             id,
             coin,
             sent: false,
+            timed_out_shown: false,
+        });
+    }
+
+    /// Watch one strategy edit's OUTCOME without announcing that it was sent.
+    ///
+    /// For a control that already shows what was chosen the moment it is clicked: the send needs no
+    /// toast, but an Adjusted, Superseded or TimedOut answer still has nowhere else to appear.
+    pub(crate) fn watch_strategy_edit_quiet(&mut self, core: CoreId, id: u64, label: String) {
+        self.strategy_edit_watches.push(PendingStrategyEditWatch {
+            core,
+            id,
+            coin: label,
+            sent: true,
             timed_out_shown: false,
         });
     }

@@ -56,6 +56,19 @@ pub(crate) struct IgnoreSellLocal {
 /// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
 pub(crate) const MANUAL_STRATEGY_KIND: u8 = 12;
 
+/// Strategy field naming the MoonHook strategy a strategy defers its exits to; empty means none.
+///
+/// Wire text, so it is spelled once: it is both read (the exits a manual order will carry) and
+/// written (the picker in the manual-strategy popup).
+pub(crate) const FIELD_USE_HOOK_STRATEGY: &str = "UseHookStrategy";
+
+/// Ordinal of the MoonHook kind, which a manual strategy can hand its whole exit set to.
+///
+/// `UseHookStrategy` names one of these BY NAME, and moonproto builds that field's picklist from
+/// exactly this filter (`StrategyDynamicPicklist::HookStrategies`: an empty item, then every local
+/// MoonHook strategy), so the terminal offers the same list the core's own editor does.
+pub(crate) const HOOK_STRATEGY_KIND: u8 = 20;
+
 /// How long a fresh `PanicLocal` override outranks the core snapshot.
 ///
 /// The override's only job is bridging one core round trip. 3 s is >= 3x the slowest in-app data
@@ -187,6 +200,46 @@ fn stop_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
     (level.is_finite() && level > 0.0).then_some(level)
 }
 
+/// Who owns the stop the toolbar is showing, and what it is — see [`Backend::manual_stop`].
+///
+/// Three states, not two: "the strategy owns it" and "the strategy owns it and this terminal cannot
+/// read it" have to be told apart, because the second one must reach the screen as a dash. Folding
+/// it into the first would print the saved generation as though it were the strategy's, under a
+/// locked control, while the order carried something else entirely.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ManualStop {
+    /// The terminal's own value governs: the mode is off, nothing is selected, or the trader turned
+    /// Moonbot's rule off for this core.
+    Free,
+    /// The strategy (or the hook it defers to) owns the stop, and this is what the core will apply.
+    Strategy { on: bool, pct: f32 },
+    /// The strategy owns the stop and its value cannot be read: the schema has not arrived, or the
+    /// hook it names is not in this snapshot.
+    Unknown,
+}
+
+impl ManualStop {
+    /// Whether the stop is the strategy's rather than this terminal's.
+    ///
+    /// On the enum so the toolbar, the popup guard and the edit absorber all read ONE spelling of
+    /// it; three copies of `!matches!(.., Free)` is how they come to disagree.
+    pub(crate) fn locked(self) -> bool {
+        !matches!(self, Self::Free)
+    }
+
+    /// Whether a stop is enabled, given what the caller shows when the terminal still owns it.
+    ///
+    /// `Unknown` answers `false`: with no readable value there is nothing to enable, and a control
+    /// lit from a stop nobody can state is worse than a dark one.
+    pub(crate) fn stop_on(self, free: bool) -> bool {
+        match self {
+            Self::Strategy { on, .. } => on,
+            Self::Unknown => false,
+            Self::Free => free,
+        }
+    }
+}
+
 /// Exit values shown while a manual strategy owns them, seeded from that strategy.
 ///
 /// Deliberately NOT written to the saved generation: switching charts, switching strategies, or
@@ -194,12 +247,26 @@ fn stop_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
 /// left behind.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct MsExitOverlay {
+    /// Strategy these values were read FROM, which is the selected one or the MoonHook it defers
+    /// to (`Backend::exit_source_strategy`).
+    ///
+    /// Kept so the seed can tell "already seeded" from "seeded off a source that no longer
+    /// applies": pointing a manual strategy at a different hook replaces its whole exit set, and
+    /// without this the first seed would hold the previous hook's numbers on screen forever.
+    pub source: u64,
     /// Whether the stop is enabled (`UseStopLoss` at seed time).
     pub stop_on: bool,
     /// Stop loss as the toolbar states it: signed percent.
     pub stop_pct: f32,
-    /// Take profit in percent (`SellPrice` at seed time).
-    pub take_profit_pct: f64,
+    /// Take profit in percent (`SellPrice` at seed time), or `None` where the strategy has none to
+    /// read and the trader's own saved take profit stays in force.
+    ///
+    /// `None` is the hooked case, and it is not the same as zero: a MoonHook carries NO `SellPrice`
+    /// field at all — its sell lives in `HookSellLevel`/`HookSellFixed`, different fields with
+    /// different semantics (checked against 290 real MoonHook rows in two core dumps: `SellPrice`
+    /// present on none of them, `UseStopLoss`/`StopLoss` on all). Reading its absence as 0% would
+    /// send an order with no sell target whatsoever.
+    pub take_profit_pct: Option<f64>,
 }
 
 /// How long a queued per-order stop waits for its order to appear before it is abandoned.
@@ -221,7 +288,7 @@ pub(crate) struct PendingStop {
 }
 
 /// Resolve one strategy field from the snapshot, then from its kind's schema default.
-fn strat_field_value(
+pub(crate) fn strat_field_value(
     row: &StrategyRow,
     schema: Option<&moon_core::feed::StrategySchemaModel>,
     name: &str,
@@ -424,9 +491,60 @@ fn stop_write_is_redundant(strategy: (bool, f64), visible: (bool, f32)) -> bool 
     strategy_on == visible_on && (!visible_on || signed_stop_pct(Some(strategy_pct)) == visible_pct)
 }
 
+/// Resolve which strategy in one snapshot supplies the exits for `strategy_id`.
+///
+/// `hook` is that strategy's `UseHookStrategy`, already read and trimmed. Empty means it keeps its
+/// own exits, so it is its own source. A named hook resolves ONLY against MoonHook-kind rows: the
+/// field is a picklist over that kind, and a Manual strategy that happens to share the name is a
+/// different strategy with different exits — resolving to it would put numbers on screen that no
+/// order uses.
+///
+/// `None` means a hook is named and this snapshot does not have it, which is the one case the
+/// caller must not guess at.
+///
+/// Args:
+///     strategies: The core's retained strategy snapshot.
+///     hook: `UseHookStrategy` of the selected strategy, trimmed.
+///     strategy_id: The selected strategy.
+///
+/// Returns:
+///     The id whose `UseStopLoss`/`StopLoss`/`SellPrice` the order will carry.
+fn exit_source(strategies: &[StrategyRow], hook: &str, strategy_id: u64) -> Option<u64> {
+    if hook.is_empty() {
+        return Some(strategy_id);
+    }
+    strategies
+        .iter()
+        // A zero id is the "nothing selected" sentinel everywhere else here, so a row carrying one
+        // cannot be an answer: handing it back would reveal nothing and price an order off a
+        // strategy the rest of this file reads as absent.
+        .find(|row| is_hook(row) && row.id != 0 && row.name.trim() == hook)
+        .map(|row| row.id)
+}
+
 /// Whether a retained strategy row is one of the Manual-kind strategies this mode selects from.
 fn is_manual(row: &StrategyRow) -> bool {
     row.kind_ordinal == MANUAL_STRATEGY_KIND
+}
+
+/// Whether a retained strategy row is a MoonHook — the only kind `UseHookStrategy` can name.
+fn is_hook(row: &StrategyRow) -> bool {
+    row.kind_ordinal == HOOK_STRATEGY_KIND
+}
+
+/// The MoonHook this row defers its exits to, trimmed; empty means none.
+///
+/// Takes the ROW rather than an id, so a caller holding one pays no lookup at all. The header does
+/// still find its row per drawn button (measured at well under a tenth of a percent of a frame, and
+/// the alternative — carrying the row through the slot tuple — pays for the buttons the fit ladder
+/// clips as well).
+pub(crate) fn hook_of(
+    row: &StrategyRow,
+    schema: Option<&moon_core::feed::StrategySchemaModel>,
+) -> String {
+    strat_field_value(row, schema, FIELD_USE_HOOK_STRATEGY)
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Convert a strategy's own stop distance into the signed percentage the toolbar and the order use.
@@ -562,6 +680,9 @@ fn manual_strat_seed(
         on: core_mode_on,
         strategy,
         id,
+        // A core adopted from its own snapshot starts on Moonbot's stop rule, which is what it was
+        // running under a moment ago.
+        ..ManualStratState::default()
     })
 }
 
@@ -776,17 +897,28 @@ impl Backend {
     /// Keyed by `(core, strategy)`, so returning to a strategy restores what was last used with it
     /// rather than re-reading the strategy over the trader's own adjustment.
     pub(crate) fn seed_exit_from_strategy(&mut self, core: CoreId, strategy_id: u64) -> bool {
-        if strategy_id == 0 || self.ms_exit_local.contains_key(&(core, strategy_id)) {
+        if strategy_id == 0 {
             return false;
         }
-        // A strategy that hands its exits to a hook describes nothing the order will use, so there
-        // is nothing here worth putting on screen. Leaving the overlay unseeded keeps the trader's
-        // own saved TP/SL visible — and those are what the per-order write then delivers, which is
-        // the only way to reach an order whose exits the hook would otherwise own outright.
-        if self.strategy_uses_hook(core, strategy_id) {
+        // The strategy the CORE will read these from, which is the selected one unless it defers to
+        // a MoonHook. `None` means a hook is named but its row is not here, so nothing on screen can
+        // be made to agree with the order: leave the saved generation showing rather than display
+        // the selected strategy's own numbers, which that order will not use.
+        let Some(source) = self.exit_source_strategy(core, strategy_id) else {
+            return false;
+        };
+        // Already holding this source's values, adjustments included — nothing to read. A DIFFERENT
+        // source is a different exit set altogether (the hook was changed or cleared), and that one
+        // is re-read over whatever is here.
+        if self
+            .ms_exit_local
+            .get(&(core, strategy_id))
+            .map(|ms| ms.source)
+            == Some(source)
+        {
             return false;
         }
-        let Some((stop_on, stop_pct, sell_pct)) = self.strategy_exit(core, strategy_id) else {
+        let Some((stop_on, stop_pct, sell_pct)) = self.strategy_exit(core, source) else {
             return false;
         };
         // Through the same clamp every other writer of this number uses, or a strategy carrying a
@@ -794,16 +926,23 @@ impl Backend {
         // snaps to the boundary the first time the SL popup is touched.
         let stop_pct = GroupExitSettings::canonical_stop_loss_pct(signed_stop_pct(Some(stop_pct)))
             .unwrap_or(0.0);
+        // The take profit comes from the SELECTED strategy or from nowhere. The stop above may be
+        // the hook's — a hook has one — but a hook has no `SellPrice`, so a hooked strategy leaves
+        // this unseeded and the trader's own take profit stays on screen and on the order.
+        //
         // A sell distance is a percentage forward from entry; anything non-finite or negative is
         // not one, and `planned_sell_price` would turn it into a target below the buy.
-        let take_profit_pct = if sell_pct.is_finite() && sell_pct >= 0.0 {
-            sell_pct
-        } else {
-            0.0
-        };
+        let take_profit_pct = (source == strategy_id).then(|| {
+            if sell_pct.is_finite() && sell_pct >= 0.0 {
+                sell_pct
+            } else {
+                0.0
+            }
+        });
         self.ms_exit_local.insert(
             (core, strategy_id),
             MsExitOverlay {
+                source,
                 stop_on,
                 stop_pct,
                 take_profit_pct,
@@ -848,9 +987,9 @@ impl Backend {
             let Some(id) = resolve_manual_selection(&data.strategies, stored) else {
                 continue;
             };
-            if self.ms_exit_local.contains_key(&(server.id, id)) {
-                continue;
-            }
+            // No "already has an overlay" test here: an entry seeded off a source that no longer
+            // applies — the strategy was pointed at another hook — has to be re-read, and only
+            // `seed_exit_from_strategy` knows which source produced it. It answers cheaply.
             pending.push((server.id, id));
         }
         for (core, key) in checked {
@@ -885,9 +1024,26 @@ impl Backend {
         let Some(strategy_id) = self.manual_strat_active(core) else {
             return false;
         };
+        // Moonbot's own rule, when this core follows it: the stop belongs to the strategy and is
+        // read-only here. ABSORBED rather than passed on — letting it fall through would write the
+        // saved generation instead, moving a number that is not the one on screen. The toolbar
+        // disables the same controls from `manual_stop_locked`, so this catches only what arrives by
+        // another route: a hotkey, or a popup opened before the mode came on.
+        if self.manual_stop_locked(core)
+            && matches!(
+                edit,
+                ClientSettingsEdit::PanicIfPriceDrop(_) | ClientSettingsEdit::StopLossPct(_)
+            )
+        {
+            log::debug!(
+                "core {}: the stop belongs to the manual strategy, edit ignored",
+                moon_core::feed::core_label(core)
+            );
+            return true;
+        }
         // Seed first: an edit landing before the coordination tick would otherwise create the entry
-        // itself, and the `contains_key` guard would then block the strategy's own values from ever
-        // being read into it. Idempotent, so this is a no-op once seeded.
+        // itself, and the freshness guard would then block the strategy's own values from ever being
+        // read into it. Idempotent, so this is a no-op once seeded.
         self.seed_exit_from_strategy(core, strategy_id);
         // Where the seed DECLINES — a hook owns the exits, or the schema has not arrived — there is
         // no overlay to edit and none is invented here: the toolbar is showing the saved generation,
@@ -910,13 +1066,13 @@ impl Backend {
                 if !(pct.is_finite() && pct >= 0.0) {
                     return true;
                 }
-                current.take_profit_pct = pct;
+                current.take_profit_pct = Some(pct);
             }
             // A fixed-sell preset is a take profit too, and the engaged one is what the order
             // sells at: keeping it out would leave the readout and the order disagreeing.
             ClientSettingsEdit::SelectFixedSellSlot(slot) if (1..=6).contains(&slot) => {
                 current.take_profit_pct =
-                    self.write_aligned_group_exit(group).fixed_sell_pcts[slot - 1];
+                    Some(self.write_aligned_group_exit(group).fixed_sell_pcts[slot - 1]);
             }
             _ => return false,
         }
@@ -953,24 +1109,239 @@ impl Backend {
         ))
     }
 
-    /// Whether this strategy hands its exits to a MoonHook strategy.
+    /// The MoonHook strategy this one defers its exits to, as the CORE currently holds it.
     ///
-    /// Moonbot substitutes one at order time — its log says `Manual strategy X turned into Hook Y`
-    /// — and then takes BOTH the sell price and the stop from that hook (`Using (strategy <Y>) Sell
-    /// Price`). The selected strategy's own `StopLoss` then describes nothing the order will use,
-    /// so anything comparing against it is comparing with the wrong number.
+    /// Empty means none. Moonbot substitutes the hook at order time — its log says `Manual strategy
+    /// X turned into Hook Y` — and the order's exits then come from the hook, not from the selected
+    /// strategy (`Using (strategy <Y>) Sell Price`). Only the STOP is readable from here: a hook
+    /// carries `UseStopLoss`/`StopLoss` like any strategy, but its sell lives in
+    /// `HookSellLevel`/`HookSellFixed` rather than the `SellPrice` every other kind uses — see
+    /// [`MsExitOverlay::take_profit_pct`].
     ///
-    /// Read from `UseHookStrategy`, which the schema exposes as the MoonHook picklist with an empty
-    /// first item — empty meaning no hook.
-    fn strategy_uses_hook(&self, core: CoreId, strategy_id: u64) -> bool {
+    /// Read from `UseHookStrategy`, whose picklist moonproto builds from the local MoonHook
+    /// strategies with an empty first item.
+    pub(crate) fn strategy_hook(&self, core: CoreId, strategy_id: u64) -> String {
+        let Some(data) = self.session.store().core(core) else {
+            return String::new();
+        };
+        let Some(row) = data.strategies.iter().find(|s| s.id == strategy_id) else {
+            return String::new();
+        };
+        hook_of(row, data.schema.as_ref())
+    }
+
+    /// [`Self::strategy_hook`] with this terminal's own unconfirmed edit on top.
+    ///
+    /// The control that sent the edit has to keep showing what was chosen: a core takes a moment to
+    /// echo a strategy back, and a dropdown that snaps to the old value in between reads as a click
+    /// that did nothing. The confirmed value returns the moment the echo lands.
+    pub(crate) fn strategy_hook_shown(&self, core: CoreId, strategy_id: u64) -> String {
+        let open = self
+            .session
+            .store()
+            .core(core)
+            .and_then(|data| data.strategy_edit(strategy_id));
+        match open {
+            // An open edit carries the strategy's DESIRED state whole, and a field equal to its
+            // default is omitted from it — so an absent hook there means "no hook", not "this edit
+            // says nothing about it". Falling back to the confirmed value instead would leave a
+            // just-cleared hook on screen until the core echoed.
+            Some(edit) => edit
+                .fields
+                .iter()
+                .find(|(name, _)| name == FIELD_USE_HOOK_STRATEGY)
+                .map(|(_, value)| value.trim().to_string())
+                .unwrap_or_default(),
+            None => self.strategy_hook(core, strategy_id),
+        }
+    }
+
+    /// The MoonHook strategy carrying this name, when this core has one.
+    ///
+    /// Through [`exit_source`], the same resolver the exits go through, so a control that reveals
+    /// "the hook this strategy uses" and the order that reads its stop can never mean two different
+    /// strategies. The `0` is the unused no-hook fallback of that function: with a non-empty name
+    /// it only ever answers the hook's own id.
+    pub(crate) fn hook_strategy_id(&self, core: CoreId, hook: &str) -> Option<u64> {
+        let hook = hook.trim();
+        if hook.is_empty() {
+            return None;
+        }
+        exit_source(&self.session.store().core(core)?.strategies, hook, 0)
+    }
+
+    /// Names of this core's MoonHook strategies, in snapshot order — the picker's options.
+    ///
+    /// A strategy the core never named is skipped. `StrategyRow::name` is a DISPLAY name and
+    /// substitutes `strat <id>` for those (`feed::strategies::strat_display_name`), which is not a
+    /// name the core's own `UseHookStrategy` picklist carries — writing it would set a hook nothing
+    /// on the core resolves. Duplicates go too: the field addresses a hook by name, so two rows
+    /// sharing one are a choice this picker cannot make on the trader's behalf.
+    pub(crate) fn hook_strategy_names(&self, core: CoreId) -> Vec<String> {
+        let Some(data) = self.session.store().core(core) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = Vec::new();
+        for row in data.strategies.iter().filter(|row| is_hook(row)) {
+            let name = row.name.trim();
+            // The placeholder `strat <id>` spelling `feed::strategies::strat_display_name` puts on
+            // an unnamed strategy, tested without allocating one to compare against.
+            let placeholder = name
+                .strip_prefix("strat ")
+                .is_some_and(|rest| rest.parse::<u64>() == Ok(row.id));
+            if name.is_empty() || placeholder {
+                continue;
+            }
+            let name = name.to_string();
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// Point one strategy at a MoonHook strategy, or clear it with an empty `hook`.
+    ///
+    /// This writes to the CORE's own strategy, exactly as the Strategies panel's field editor does
+    /// and through the same command — it is the same setting, reachable from the popup that already
+    /// names the strategy. Nothing local is touched: the exit overlay re-seeds itself off the new
+    /// source once the core echoes the strategy back ([`MsExitOverlay::source`]), so a write the
+    /// core refuses leaves the screen on the values still in force.
+    ///
+    /// Returns whether the command was queued.
+    pub(crate) fn set_strategy_hook(
+        &mut self,
+        core: CoreId,
+        strategy_id: u64,
+        hook: String,
+    ) -> bool {
+        let label = if hook.trim().is_empty() {
+            rust_i18n::t!("header.ms_hook_none").to_string()
+        } else {
+            hook.trim().to_string()
+        };
+        let edits = vec![(
+            strategy_id,
+            vec![(FIELD_USE_HOOK_STRATEGY.to_string(), hook)],
+        )];
+        match self.session.edit_strategies(core, edits) {
+            Ok(()) => {
+                // The popup this is clicked from has no window of its own, so an outcome other than
+                // a clean confirmation can only be reported through the shell's toast queue — the
+                // same route the coin menu's field edit uses. Quiet on the way out: the picker
+                // already shows what was chosen, and a toast per pick would be noise.
+                self.watch_strategy_edit_quiet(core, strategy_id, label);
+                true
+            }
+            Err(error) => {
+                log::warn!(
+                    "core {} strategy {strategy_id}: setting the hook failed: {error}",
+                    moon_core::feed::core_label(core)
+                );
+                false
+            }
+        }
+    }
+
+    /// Whether this strategy's KIND exposes `field` in the schema the core sent.
+    ///
+    /// A field outside the kind's schema is dropped by the serializer, so the edit would be a
+    /// silent no-op — and with no schema at all the whole batch is refused before it is staged.
+    /// Both are "do not offer this control", which is why an absent schema answers `false`. The
+    /// coin menu gates its own field edit the same way (`controls::coin_menu`).
+    pub(crate) fn strategy_has_field(&self, core: CoreId, strategy_id: u64, field: &str) -> bool {
         let Some(data) = self.session.store().core(core) else {
             return false;
         };
         let Some(row) = data.strategies.iter().find(|s| s.id == strategy_id) else {
             return false;
         };
-        strat_field_value(row, data.schema.as_ref(), "UseHookStrategy")
-            .is_some_and(|value| !value.trim().is_empty())
+        let Some(schema) = data.schema.as_ref() else {
+            return false;
+        };
+        schema
+            .kinds
+            .iter()
+            .find(|kind| kind.ordinal == row.kind_ordinal)
+            .is_some_and(|kind| {
+                kind.sections
+                    .iter()
+                    .any(|section| section.fields.iter().any(|f| f.name == field))
+            })
+    }
+
+    /// The strategy whose exits a manual order on `strategy_id` will actually carry.
+    ///
+    /// `Some(strategy_id)` with no hook set; the hook's own id when one is set and present in the
+    /// snapshot; `None` when a hook is NAMED but its row is not here — the one case where this
+    /// terminal cannot say what the order's exits will be, and must not guess.
+    fn exit_source_strategy(&self, core: CoreId, strategy_id: u64) -> Option<u64> {
+        let hook = self.strategy_hook(core, strategy_id);
+        let strategies = self
+            .session
+            .store()
+            .core(core)
+            .map(|data| data.strategies.as_slice())
+            .unwrap_or_default();
+        exit_source(strategies, &hook, strategy_id)
+    }
+
+    /// Whether this core repeats Moonbot's own stop rule for manual-strategy orders.
+    ///
+    /// See [`ManualStratState::mb_logic`]. On for a core that has never had this state at all, so
+    /// the answer is the same before and after the first selection is stored.
+    pub(crate) fn ms_mb_logic(&self, core: CoreId) -> bool {
+        self.stored_manual_strat(core)
+            .map(|stored| stored.mb_logic)
+            .unwrap_or_else(|| ManualStratState::default().mb_logic)
+    }
+
+    /// Set this core's Moonbot-stop-rule switch. Local state; nothing is sent.
+    pub(crate) fn set_ms_mb_logic(&mut self, core: CoreId, on: bool) {
+        if self.ms_mb_logic(core) == on {
+            return;
+        }
+        let mut next = self.stored_manual_strat(core).cloned().unwrap_or_default();
+        next.mb_logic = on;
+        self.update_server(core, |server| server.manual_strategy = Some(next.clone()));
+    }
+
+    /// Who owns this core's stop right now, and what it is.
+    ///
+    /// Read LIVE from the strategy the core will apply, not from the exit overlay: while the rule
+    /// is on nothing here can edit the stop, so there is no local adjustment to preserve, and the
+    /// overlay is a snapshot that would keep reporting a number the strategy has since moved away
+    /// from. It also settles the case the overlay cannot express — the strategy is in force but its
+    /// value is unreadable — which must be STATED rather than filled in from the saved generation,
+    /// a different number that no order will carry.
+    pub(crate) fn manual_stop(&self, core: CoreId) -> ManualStop {
+        if !self.ms_mb_logic(core) {
+            return ManualStop::Free;
+        }
+        let Some(strategy_id) = self.manual_strat_active(core) else {
+            return ManualStop::Free;
+        };
+        let Some(source) = self.exit_source_strategy(core, strategy_id) else {
+            return ManualStop::Unknown;
+        };
+        let Some((on, pct, _)) = self.strategy_exit(core, source) else {
+            return ManualStop::Unknown;
+        };
+        ManualStop::Strategy {
+            on,
+            pct: GroupExitSettings::canonical_stop_loss_pct(signed_stop_pct(Some(pct)))
+                .unwrap_or(0.0),
+        }
+    }
+
+    /// Whether the stop on screen belongs to the strategy and must not be edited here.
+    ///
+    /// The one predicate behind both halves of that promise: the toolbar disables its SL control
+    /// with it, and `edit_group_exit` swallows a stop edit that reaches it by another route — a
+    /// popup left open as the mode came on. Without the second half such an edit would fall through
+    /// to the SAVED generation, quietly moving a value the trader cannot see.
+    pub(crate) fn manual_stop_locked(&self, core: CoreId) -> bool {
+        self.manual_stop(core).locked()
     }
 
     /// Queue the visible stop for the order about to be placed, when the core would otherwise use
@@ -997,6 +1368,12 @@ impl Backend {
         let Some(strategy_id) = self.manual_strat_active(core) else {
             return;
         };
+        // Moonbot's own rule, and the default: a manual-strategy order's stop is the strategy's (or
+        // its hook's), full stop. There is nothing to override because nothing here was editable —
+        // `manual_stop_locked` held the SL control shut — so the whole per-order write is off.
+        if self.ms_mb_logic(core) {
+            return;
+        }
         // What the trader SEES while MS is on, which is the overlay — the saved generation is not
         // on screen in this mode and must not be what the order gets.
         let (stop_on, stop_pct) = self
@@ -1008,12 +1385,13 @@ impl Backend {
         // per-order write exists to OVERRIDE the strategy; with nothing to override there is
         // nothing to send. Right after a selection this is the common case, because
         // `seed_exit_from_strategy` sets the screen to the strategy's own values.
-        // Only where the strategy's own stop is what the core would actually apply. With a hook
-        // in the way it is not: the hook supplies the stop, the terminal cannot see its value, and
-        // skipping the write on the strength of the strategy's own number is how a visible -3%
-        // silently became the hook's -4.51% on 2026-09-01.
-        if !self.strategy_uses_hook(core, strategy_id)
-            && let Some((strat_on, strat_pct, _)) = self.strategy_exit(core, strategy_id)
+        // Against the strategy the core will ACTUALLY read the stop from — the hook's when one is
+        // set. Comparing with the selected strategy's own number while a hook supplies the real one
+        // is how a visible -3% silently became the hook's -4.51% on 2026-09-01. A hook that names no
+        // row here answers `None`, and an unknown stop is never equal to the visible one: the write
+        // goes out.
+        if let Some(source) = self.exit_source_strategy(core, strategy_id)
+            && let Some((strat_on, strat_pct, _)) = self.strategy_exit(core, source)
         {
             // Exact equality because both sides come out of `signed_stop_pct`: the overlay compared
             // against was produced from the same strategy field by the same conversion, so an
@@ -1585,7 +1963,7 @@ impl Backend {
         // saved generation otherwise.
         let take_profit_pct = self
             .manual_exit_overlay(core)
-            .map(|ms| ms.take_profit_pct)
+            .and_then(|ms| ms.take_profit_pct)
             .unwrap_or_else(|| exit.effective_take_profit_pct());
         let planned_sell = terminal_owns_sell
             .then(|| planned_sell_price(price, take_profit_pct, short))
@@ -1723,7 +2101,15 @@ impl Backend {
                     .unwrap_or_default()
             }
         };
-        let next = ManualStratState { on, strategy, id };
+        // Everything this setter does not own is carried over: `mb_logic` is a separate switch in
+        // the same popup, and rebuilding the state around a selection must not reset it.
+        let mb_logic = self.ms_mb_logic(core);
+        let next = ManualStratState {
+            on,
+            strategy,
+            id,
+            mb_logic,
+        };
         // Held hotkeys repeat, and a re-selection of the same strategy is the common case; writing
         // unconditionally would raise `config_dirty` and buy a full encrypted save each repeat.
         if self.stored_manual_strat(core) == Some(&next) {
@@ -1803,7 +2189,16 @@ impl Backend {
             // more attempt per input change, instead of the same two scans ten times a second.
             answered.push((server.id, key));
             match server.manual_strategy.as_ref() {
-                // Nothing selected: there is no id to pin and no core value left to adopt.
+                // Nothing selected, and nothing adopted into it either. The core's own
+                // `manual_strategy_id` is NOT read here, however tempting: Moonbot moves that field
+                // by itself, and forwarding it is what put two real orders on a strategy nobody
+                // chose on 2026-09-01 (see `manual_strat_state`). Adoption belongs to the `None`
+                // arm below — a core this terminal has never known — and a stored state, even one
+                // naming nothing, means the trader has already touched this mode here.
+                //
+                // The cost is narrow and visible: turning MS on before the core has reported skips
+                // the one-time carry-over of its selection, and the picker — on screen precisely
+                // because the mode is on — is how one gets chosen instead.
                 Some(stored) if stored.strategy.trim().is_empty() => {}
                 // A stored selection whose pin is missing or has gone stale. Missing is every
                 // config written before the id was kept; stale is a strategy deleted and rebuilt,
@@ -1929,9 +2324,6 @@ impl Backend {
             .unwrap_or(raw)
     }
 
-    /// The manual selection this core carries that currently resolves to NOTHING, described for a
-    /// log.
-    ///
     /// Whether this core is configured to receive its strategy list at all.
     ///
     /// `FeedFlags::strategies` is a client-side filter: with it off the terminal never stores the
@@ -1944,9 +2336,12 @@ impl Backend {
             .is_some_and(|server| server.feed.strategies)
     }
 
-    /// Whether a stored selection names a strategy this core cannot currently provide.
-    /// here to be broken — it reads as mode-off — and an order on it is an ordinary manual order;
-    /// `manual_order_terms` warns separately when such a core still has its own switch on.
+    /// The manual selection this core carries that currently resolves to NOTHING, described for a
+    /// log — a strategy this core cannot provide, and the one state an order is refused on.
+    ///
+    /// A core with no Manual strategies at all is not counted here to be broken — it reads as
+    /// mode-off — and an order on it is an ordinary manual order; `manual_order_terms` warns
+    /// separately when such a core still has its own switch on.
     pub(crate) fn manual_strat_unresolved(&self, core: CoreId) -> Option<&str> {
         // A core whose strategy feed is switched off never receives a list, so its selection can
         // never resolve. Refusing every order forever, with the whole MS cluster hidden for the

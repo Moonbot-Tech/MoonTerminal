@@ -12,10 +12,11 @@ use moon_ui::{
     MoonInputState, MoonLabel, MoonPalette, MoonToggle, MoonToggleSize, h_flex,
 };
 
+use super::DASH;
 use super::metric::{metric_button, sl_toggle};
 use super::strips::{self, sell_strip, size_strip};
 use super::{MaxOrderReadout, TradeMetric, fmt_field2, fmt_field2_signed};
-use crate::backend::ManualSource;
+use crate::backend::{ManualSource, ManualStop};
 use crate::panels::common::text_tooltip;
 use crate::shell::Shell;
 use crate::{Backend, design};
@@ -664,6 +665,7 @@ pub fn toolbar(
         sell_pcts,
         sell_slot,
         manual_on,
+        sl_locked,
     ) = {
         let b = backend.read(cx);
         // Whether the header scope names one account at all. Read ONCE here so the leverage
@@ -708,7 +710,9 @@ pub fn toolbar(
         // * the S presets are the ONE way to change that sell price, and only while Moonbot's
         //   "ignore the manual strategy's sell price" checkbox is on — with it off the strategy
         //   alone decides and the strip is disabled;
-        // * the SL button and its toggle stay live and write to the strategy.
+        // * the SL button and its toggle follow the same core's "Moonbot logic" switch: with it on
+        //   — the default — the stop is the strategy's and both controls only report it; with it
+        //   off they are editable and the visible stop is written to the order once it is placed.
         // Locked only while the core sells a manual order at the STRATEGY's own price: there the
         // terminal's TP and S presets reach nothing. With Moonbot's "ignore the manual strategy's
         // sell price" checkbox on they are ordinary controls again — their value rides along with
@@ -729,27 +733,40 @@ pub fn toolbar(
             "{}%",
             fmt_field2(
                 manual_exit
-                    .map(|ms| ms.take_profit_pct)
+                    .and_then(|ms| ms.take_profit_pct)
                     .unwrap_or(exit.take_profit_pct) as f32
             )
         );
         let tp_engaged = exit.fixed_sell_slot.is_none() && !manual_on;
+        // Who owns the stop, decided once and used for the value, the toggle and the lock alike —
+        // three readings of one fact that must not diverge. Moonbot's own rule is on by default per
+        // core; the switch is in the MS gear popup beside the toggle that turns the mode on.
+        let manual_stop = manual_core
+            .map(|c| b.manual_stop(c))
+            .unwrap_or(ManualStop::Free);
+        let sl_locked = manual_stop.locked();
         // SL is signed: `+1.00%` / `-20.00%`, avoiding `--` from manually prefixing a negative
-        // value. The strategy stores its stop as a positive distance, so the overlay negates it on
-        // the way in and this reads the way the toolbar's own stop does.
-        let sl_value = format!(
-            "{}%",
-            fmt_field2_signed(
-                manual_exit
-                    .map(|ms| ms.stop_pct)
-                    .unwrap_or(exit.stop_loss_pct)
-            )
+        // value. The strategy stores its stop as a positive distance, so it is negated on the way
+        // in and this reads the way the toolbar's own stop does. A DASH where the strategy owns the
+        // stop and its value cannot be read: the saved generation would look like an answer here,
+        // and it is not the number the order carries.
+        let sl_on = manual_stop.stop_on(
+            manual_exit
+                .map(|ms| ms.stop_on)
+                .unwrap_or(exit.stop_loss_enabled),
         );
-        // The toggle beside SL is the strategy's `UseStopLoss` in manual mode and
-        // `panic_if_price_drop` otherwise; while off, the SL button is disabled either way.
-        let sl_on = manual_exit
-            .map(|ms| ms.stop_on)
-            .unwrap_or(exit.stop_loss_enabled);
+        let sl_value = match manual_stop {
+            ManualStop::Strategy { pct, .. } => format!("{}%", fmt_field2_signed(pct)),
+            ManualStop::Unknown => DASH.to_string(),
+            ManualStop::Free => format!(
+                "{}%",
+                fmt_field2_signed(
+                    manual_exit
+                        .map(|ms| ms.stop_pct)
+                        .unwrap_or(exit.stop_loss_pct)
+                )
+            ),
+        };
         let sell_pcts = exit.fixed_sell_pcts;
         let sell_slot = exit.fixed_sell_slot;
         // Leverage is the Main chart market's per-core, per-market value from assets.
@@ -778,6 +795,7 @@ pub fn toolbar(
             sell_pcts,
             sell_slot,
             manual_on,
+            sl_locked,
         )
     };
     let p = MoonPalette::active(cx);
@@ -794,10 +812,10 @@ pub fn toolbar(
     // Leverage alone needs a live value. Group-owned TP and SL are complete even before a core
     // connects, so their availability depends only on manual-strategy and SL-toggle state.
     let has_core = focus_core.is_some();
-    let lev_available =
-        TradeMetric::Lev.available_with(has_core, sl_on, manual_on) && lev_value.is_some();
-    let tp_available = TradeMetric::Tp.available_with(has_core, sl_on, manual_on);
-    let sl_available = TradeMetric::Sl.available_with(has_core, sl_on, manual_on);
+    let lev_available = TradeMetric::Lev.available_with(has_core, sl_on, manual_on, sl_locked)
+        && lev_value.is_some();
+    let tp_available = TradeMetric::Tp.available_with(has_core, sl_on, manual_on, sl_locked);
+    let sl_available = TradeMetric::Sl.available_with(has_core, sl_on, manual_on, sl_locked);
     let lev_str = lev_value.unwrap_or_else(|| "—".to_string());
 
     // Cells are fitted BEFORE rendering: both the strip itself and the row budget that decides the
@@ -953,9 +971,15 @@ pub fn toolbar(
         .child(design::chrome_divider(cx, p))
         .child(
             section()
-                // Never disabled by manual-strategy mode: there it is the strategy's `UseStopLoss`,
-                // which is precisely what a trader needs to reach while MS is on.
-                .child(sl_toggle(sl_on, false, backend.clone(), group.to_string()))
+                // Disabled only where the stop is not this terminal's to move: with a manual
+                // strategy selected and Moonbot's own rule in force, this reports the strategy's
+                // `UseStopLoss`. Turn that rule off in the MS popup and it is editable again.
+                .child(sl_toggle(
+                    sl_on,
+                    sl_locked,
+                    backend.clone(),
+                    group.to_string(),
+                ))
                 .child(metric_button(
                     TradeMetric::Sl,
                     sl_value,

@@ -8,7 +8,9 @@
 //!
 //! With a strategy selected, the core derives the sell from that strategy unless its "ignore the
 //! strategy's sell price" checkbox is on, so the toolbar's TP and S slots do not apply to new
-//! orders and are disabled; the stop stays editable and is applied to the order itself.
+//! orders and are disabled. The stop follows the core's own "Moonbot logic" switch
+//! (`ManualStratState::mb_logic`, on by default): with it on the strategy owns the stop and the
+//! toolbar only reports it; with it off the visible stop is written to the order after placement.
 
 use gpui::*;
 use rust_i18n::t;
@@ -39,9 +41,33 @@ const BTN_GAP: f32 = 4.0;
 /// segment, at design-reference scale — run through `design::ui_value` before use, like every
 /// other estimate below. MoonUI computes the real value from its own metrics; this is a
 /// conservative estimate for the fit ladder, pending an on-screen check.
+///
 const BTN_CHROME_W: f32 = 20.0;
+/// Padding between a quick-select button and the dashed hook frame around it, at design-reference
+/// scale. Non-zero so the frame reads as a mark ON the button rather than as a second border
+/// welded to its own.
+///
+/// Deliberately NOT folded into [`BTN_CHROME_W`]: that one is the BUTTON's own chrome and is also
+/// what `.width()` hands the button, so widening it would fatten every button instead of the frame
+/// around it. The frame is the wrapper's, and only the fit ladder adds it.
+///
+/// ONE, not two, and the height is what fixes it: a `ToolbarCompact` button is 26 + font delta tall
+/// inside a 32 + font delta header strip, so the frame has exactly 6px to spend on both sides
+/// together — `2 * (1 pad + 2 border)`. At two the buttons would overhang the strip they sit in.
+const HOOK_FRAME_PAD: f32 = 1.0;
+/// Border width of that frame, in raw pixels — `border_2()` is not font-scaled, so the ladder must
+/// not scale it either.
+///
+/// TWO, not one: the dash pattern is a fixed multiple of the border width, so a 1px dashed border
+/// is a 2px dash against a 1px gap and reads as solid at a glance — which would leave the mark
+/// saying the same thing as an ordinary border.
+const HOOK_FRAME_BORDER: f32 = 2.0;
 /// Content width of the quick-select settings popup, in font-scaled pixels.
-const SLOT_SETTINGS_W: f32 = 380.0;
+///
+/// Sized for the widest row it holds: the show box, the strategy picker, the hook picker, the two
+/// reveal buttons and the hotkey column — about 484 of it at design-reference scale, leaving the
+/// same headroom the row had before those columns joined it.
+const SLOT_SETTINGS_W: f32 = 540.0;
 /// Estimated rendered width of the settings gear, at design-reference scale, for the fit ladder —
 /// same reason as [`BTN_CHROME_W`]: `MoonButton` sizes its icon-only form itself.
 const SLOT_GEAR_W: f32 = 26.0;
@@ -86,9 +112,9 @@ type StratButtonSlot = (usize, String, Option<u64>, String, String);
 /// time the balance beside them changes width.
 ///
 /// Each button carries two gestures, matching Moonbot: left click fires the slot's strategy and
-/// right click assigns which strategy it fires. Everything else about the buttons — per-slot
-/// visibility and the core's own sell-price flag — lives in the gear popup beside them
-/// (`settings::slot_settings_content`).
+/// right click assigns which strategy it fires. Everything else lives in the gear popup beside them
+/// (`settings::slot_settings_content`): per-slot visibility, which strategy each slot fires, that
+/// strategy's hook, the two exit rules, and a link into the Strategies window.
 #[allow(clippy::too_many_arguments)]
 pub fn manual_strategy_controls(
     group: &str,
@@ -160,6 +186,10 @@ pub fn manual_strategy_controls(
     // button row or the pill text below — the two share one decision.
     let fit = buttons.as_deref().map(|slots| {
         let btn_chrome_w = design::ui_value(cx, BTN_CHROME_W);
+        // The dashed hook frame is real width every slot spends, hooked or not — the row draws it
+        // on all ten so its geometry cannot depend on which strategies carry a hook. Budgeting the
+        // button alone proves a fit the row then overflows by six pixels a button.
+        let frame_w = (design::ui_value(cx, HOOK_FRAME_PAD) + HOOK_FRAME_BORDER) * 2.0;
         let ms_toggle_w = design::ui_value(cx, MS_TOGGLE_W);
         let pill_chrome_w = design::ui_value(cx, PILL_CHROME_W);
         let header_other_sections_w = design::ui_value(cx, HEADER_OTHER_SECTIONS_W);
@@ -181,8 +211,8 @@ pub fn manual_strategy_controls(
                     true,
                 );
                 SlotWidths {
-                    name_only: btn_chrome_w + name_w,
-                    number_only: btn_chrome_w + numeric_w,
+                    name_only: btn_chrome_w + frame_w + name_w,
+                    number_only: btn_chrome_w + frame_w + numeric_w,
                 }
             })
             .collect();
@@ -306,17 +336,15 @@ pub fn manual_strategy_controls(
                 .label_side(MoonToggleLabelSide::Left)
                 .checked(on)
                 .size(MoonToggleSize::Compact)
-                // Enabling needs a resolved strategy. DISABLING must stay possible without one, or
-                // a selection that stopped resolving would leave the mode stuck on with every
-                // order refused and no control on screen able to clear it.
-                .disabled(id == 0 && !on)
+                // Never disabled, including with nothing selected: the picker and the gear appear
+                // only while the mode is ON, so a switch that refused to turn on without a strategy
+                // would hide the one control able to choose one. The mode with no selection places
+                // ordinary manual orders — `manual_strat_active` answers `None` — which is exactly
+                // what it did before this switch existed.
                 .on_change(move |ch: &bool, _w, app| {
                     let v = *ch;
                     toggle_backend.update(app, |b, bcx| {
                         let (_, cur_id) = b.manual_strat_state(core);
-                        if cur_id == 0 && v {
-                            return;
-                        }
                         // Disabling preserves the id so the next toggle restores the same strategy.
                         set_manual(b, core, v, cur_id);
                         bcx.notify();
@@ -328,8 +356,8 @@ pub fn manual_strategy_controls(
         // visible.
         .children(on.then(|| {
             let gear_shell = shell.clone();
-            let content =
-                slots_open.then(|| settings::slot_settings_content(core, backend, shell, p, cx));
+            let content = slots_open
+                .then(|| settings::slot_settings_content(core, group, backend, shell, p, cx));
             crate::chrome::terminal_chrome::header_gear_popover(
                 "ms-slots",
                 MoonPopoverPlacement::BottomStart,
@@ -350,10 +378,11 @@ pub fn manual_strategy_controls(
                 },
             )
         }))
-        // The picker exists to choose a strategy. With at least one quick-select button on screen
-        // that choice is already one click away, and the dropdown is a second, wider control saying
-        // the same thing — so it yields to the buttons and returns the moment none are shown.
-        .children((!buttons_shown).then(|| {
+        // The picker exists to choose a strategy, and only the enabled mode uses one: with MS off
+        // nothing it selects reaches an order, so it leaves the row entirely rather than sitting
+        // there naming a strategy nothing will fire. With the mode on it yields to the quick-select
+        // buttons — the same choice, one click away — and returns the moment none are shown.
+        .children((on && !buttons_shown).then(|| {
             MoonPopover::new("header-ms-selector")
                 .placement(MoonPopoverPlacement::BottomStart)
                 .fit_content()
@@ -386,10 +415,23 @@ pub fn manual_strategy_controls(
     if let (Some(slots), Some(fit)) = (buttons, fit)
         && fit.visible_count > 0
     {
+        // One list for all ten assign menus, built before the loop: it does not vary by slot, and
+        // rebuilding it per button clones every strategy name ten times on every header repaint.
+        let slot_names = slot_strategy_names(&manuals);
         let mut btn_row = h_flex().flex_none().gap(design::ui_px(cx, BTN_GAP));
         for (i, strategy, sid, caption, numeric_label) in slots.into_iter().take(fit.visible_count)
         {
             let selected = on && sid.is_some() && sid == Some(id);
+            // What this slot's strategy defers its exits to, resolved for the buttons the fit
+            // ladder actually draws rather than for all ten: it changes what the button MEANS —
+            // both exits then come from that hook — so a drawn button states it, and a clipped one
+            // costs nothing to say nothing about. Read off the snapshot already borrowed here,
+            // which is the same reader the backend uses.
+            let hook = sid
+                .and_then(|sid| core_data.strategies.iter().find(|row| row.id == sid))
+                .map(|row| crate::backend::hook_of(row, schema))
+                .unwrap_or_default();
+            let hooked = !hook.is_empty();
             // The SELECTED slot keeps its caption even at the number-only clip level: the row's
             // job is to say which strategy a new order will use, and a lone digit does not.
             let label = match fit.label_mode {
@@ -407,7 +449,9 @@ pub fn manual_strategy_controls(
                 .size(MoonButtonSize::ToolbarCompact)
                 // The active slot carries the accent variant rather than only `selected`: on a
                 // Panel button the selected state is a few percent of background and reads as
-                // nothing on a row of ten.
+                // nothing on a row of ten. Fill is therefore the SELECTION and nothing else — the
+                // hook is marked by the dashed frame around the button instead, so a mark and a
+                // selection can never be mistaken for each other.
                 .variant(if selected {
                     MoonButtonVariant::Blue
                 } else {
@@ -424,6 +468,10 @@ pub fn manual_strategy_controls(
                 );
             } else if sid.is_none() {
                 btn = btn.tooltip(t!("header.ms_slot_empty").to_string());
+            } else if hooked {
+                // The same sentence the parameter summary uses for the same fact, from the same
+                // key: two wordings for "these exits come from that hook" would drift apart.
+                btn = btn.tooltip(t!("header.ms_summary_hook", name = hook.as_str()).to_string());
             }
             let click_backend = backend.clone();
             let btn = btn.on_click(move |_, _, app| {
@@ -441,7 +489,7 @@ pub fn manual_strategy_controls(
             let close_shell = shell.clone();
             let clear_backend = backend.clone();
             let clear_shell = shell.clone();
-            let mut menu_items = Vec::with_capacity(manuals.len() + 1);
+            let mut menu_items = Vec::with_capacity(slot_names.len() + 1);
             menu_items.push(
                 MoonMenuItem::with_key(
                     format!("ms-slot-{i}-clear"),
@@ -459,13 +507,15 @@ pub fn manual_strategy_controls(
                     });
                 }),
             );
-            for (_, name) in &manuals {
+            for (ix, name) in slot_names.iter().enumerate() {
                 let assigned = *name == strategy;
                 let assign_name = name.clone();
                 let assign_backend = backend.clone();
                 let assign_shell = shell.clone();
                 menu_items.push(
-                    MoonMenuItem::with_key(format!("ms-slot-{i}-{name}"), name.clone())
+                    // Keyed by POSITION: the key identifies the row to the menu, and a name is
+                    // arbitrary user text that two strategies can share.
+                    MoonMenuItem::with_key(format!("ms-slot-{i}-strat-{ix}"), name.clone())
                         .selected(assigned)
                         .checked(assigned)
                         .on_click(move |_, _, app| {
@@ -491,6 +541,26 @@ pub fn manual_strategy_controls(
                     .id(SharedString::from(format!("ms-btn-wrap-{i}")))
                     .flex_none()
                     .relative()
+                    // The hook mark: a dashed amber frame around the button, drawn on the wrapper
+                    // the right-click menu already needs. `MoonButton` offers no dashed border of
+                    // its own — variant and `.outline()` are its only border knobs — so this is
+                    // the framework's own `border_dashed`, in the palette's amber and the shared
+                    // button radius, rather than a bespoke widget or a hand-mixed colour.
+                    //
+                    // Drawn on EVERY button, transparent where there is no hook: a frame that only
+                    // some buttons carry would make the row's spacing depend on which strategies
+                    // are hooked, and the row would visibly re-flow as a hook is set or cleared.
+                    .p(px(design::ui_value(cx, HOOK_FRAME_PAD)))
+                    // The button's own radius plus the padding between them, so the frame's corners
+                    // stay concentric with the ones they enclose instead of cutting inside them.
+                    .rounded(design::r_button(cx) + px(design::ui_value(cx, HOOK_FRAME_PAD)))
+                    .border_2()
+                    .border_dashed()
+                    .border_color(if hooked {
+                        design::moon(p.amber)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .on_mouse_down(MouseButton::Right, move |_, _, app| {
                         menu_shell.update(app, |shell, cx| {
                             shell.open_strat_slot_menu(core, i);
@@ -551,7 +621,27 @@ pub fn manual_strategy_controls(
     Some(row.into_any_element())
 }
 
+/// The distinct strategy NAMES a quick-select slot can be assigned.
+///
+/// A slot stores a name (`StratSlot::strategy`) and fires whatever that name resolves to, first
+/// match wins. Two strategies sharing a name are therefore one choice however they are listed:
+/// offering both would let the second be picked and the first be assigned, with both rows then
+/// drawn as selected. The header's own picker is unaffected — it selects an id and pins it.
+fn slot_strategy_names(manuals: &[(u64, String)]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::with_capacity(manuals.len());
+    for (_, name) in manuals {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
 /// Collect Manual-kind strategy ids and names in their snapshot order.
+///
+/// Duplicates are kept: the header's own picker selects by ID and pins it, so two strategies
+/// sharing a name are two real, separately selectable choices there. A SLOT is different — it
+/// stores the name — and its pickers go through [`slot_strategy_names`] instead.
 ///
 /// Args:
 ///     strategies: Current strategy snapshot for the active trade core.
@@ -561,8 +651,12 @@ pub fn manual_strategy_controls(
 fn manual_strategy_options(strategies: &[StrategyRow]) -> Option<Vec<(u64, String)>> {
     let options: Vec<_> = strategies
         .iter()
-        .filter(|strategy| strategy.kind_ordinal == MANUAL_STRATEGY_KIND)
-        .map(|strategy| (strategy.id, strategy.name.clone()))
+        // The same two rules `manual_strategy_id` resolves by: a zero id is the sentinel for
+        // "nothing selected" everywhere here, and the name is compared trimmed. An untrimmed option
+        // is stored untrimmed and then never compares equal to the slot that fires it, so the
+        // picker shows no selection for a button that works.
+        .filter(|strategy| strategy.kind_ordinal == MANUAL_STRATEGY_KIND && strategy.id != 0)
+        .map(|strategy| (strategy.id, strategy.name.trim().to_string()))
         .collect();
     (!options.is_empty()).then_some(options)
 }
@@ -652,12 +746,12 @@ fn set_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
 /// Returns:
 ///     The four-part Buy, Sell, SL, and TS summary.
 fn strat_summary(row: &StrategyRow, schema: Option<&StrategySchemaModel>) -> String {
-    let field = |name: &str| strat_field(row, schema, name);
+    let field = |name: &str| crate::backend::strat_field_value(row, schema, name);
     // A strategy that hands its exits to a MoonHook has none of its own to show: the core
     // substitutes the hook at order time and takes both the sell price and the stop from it, so
     // printing this strategy's Sell and SL here would name numbers no order will ever use. Say
     // which hook instead — that is the thing whose values apply.
-    if let Some(hook) = field("UseHookStrategy").map(|v| v.trim().to_string())
+    if let Some(hook) = field(crate::backend::FIELD_USE_HOOK_STRATEGY).map(|v| v.trim().to_string())
         && !hook.is_empty()
     {
         return t!("header.ms_summary_hook", name = hook).to_string();
@@ -673,35 +767,6 @@ fn strat_summary(row: &StrategyRow, schema: Option<&StrategySchemaModel>) -> Str
     parts.push(format!("SL {}", on_off(field("UseStopLoss"))));
     parts.push(format!("TS {}", on_off(field("UseTrailing"))));
     parts.join(" · ")
-}
-
-/// Resolve a strategy field from the snapshot, then its schema-kind default.
-///
-/// Args:
-///     row: Strategy snapshot whose explicit fields take priority.
-///     schema: Optional schema containing defaults by strategy kind.
-///     name: Exact field name to resolve.
-///
-/// Returns:
-///     The explicit or default value, or `None` when neither is available.
-fn strat_field(
-    row: &StrategyRow,
-    schema: Option<&StrategySchemaModel>,
-    name: &str,
-) -> Option<String> {
-    if let Some((_, v)) = row.fields.iter().find(|(n, _)| n == name) {
-        return Some(v.clone());
-    }
-    schema?
-        .kinds
-        .iter()
-        .find(|k| k.ordinal == row.kind_ordinal)?
-        .sections
-        .iter()
-        .flat_map(|s| s.fields.iter())
-        .find(|f| f.name == name)?
-        .default
-        .clone()
 }
 
 /// Format a numeric percentage field with an explicit non-zero sign (`"0.5"` -> `"+0.50%"`).

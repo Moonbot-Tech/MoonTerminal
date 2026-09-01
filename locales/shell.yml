@@ -164,9 +164,18 @@ header.ms_slots_gear:
   en: "Strategy button settings"
   es: "Ajustes de los botones de estrategia"
 header.ms_slots_hint:
-  ru: "Галка — показывать кнопку. Кнопка называется своей стратегией; ПКМ по ней — назначить её"
-  en: "The box shows the button. A button is named by its strategy; right click one to assign it"
-  es: "La casilla muestra el botón. El botón lleva el nombre de su estrategia; clic derecho para asignarla"
+  ru: "Галка — показывать кнопку. Списки: стратегия кнопки и её хук-стратегия (пишется в ядро). Роботы открывают их в окне «Стратегии»"
+  en: "The box shows the button. The lists are its strategy and that strategy's hook (written to the core). The robots open them in the Strategies window"
+  es: "La casilla muestra el botón. Las listas: su estrategia y el hook de esa estrategia (se escribe en el núcleo). Los robots los abren en Estrategias"
+# The per-core switch that decides whether the terminal touches a manual order's stop at all.
+header.ms_mb_logic:
+  ru: "Логика МБ"
+  en: "Moonbot's own logic"
+  es: "Lógica de Moonbot"
+header.ms_mb_logic_hint:
+  ru: "Стоп берётся из стратегии (или её хука), как в Moonbot: SL в тулбаре заблокирован и ничего не досылается. Снимите галку, чтобы досылать свой стоп после выставления ордера"
+  en: "The stop comes from the strategy (or its hook), as Moonbot does it: the toolbar's SL is locked and nothing is sent after the order. Clear the box to write your own stop once the order is placed"
+  es: "El stop viene de la estrategia (o de su hook), como en Moonbot: el SL de la barra queda bloqueado y no se envía nada. Desmarque para enviar su propio stop tras colocar la orden"
 # Link out of the popup to where the bindings listed in it are actually edited.
 header.ms_slots_hotkeys:
   ru: "Хоткеи"
@@ -176,12 +185,23 @@ header.ms_slots_hotkeys_tip:
   ru: "Открыть настройки на вкладке хоткеев"
   en: "Open settings on the hotkeys tab"
   es: "Abrir los ajustes en la pestaña de atajos"
-# Shown instead of the Buy/Sell/SL/TS summary when the selected strategy hands its exits to a
-# MoonHook strategy: those exits come from the hook, so the strategy's own numbers would mislead.
+# Names the MoonHook a strategy defers its exits to. Two readers: the header's parameter summary
+# shows it INSTEAD of Buy/Sell/SL/TS, whose numbers would mislead, and a quick-select button whose
+# strategy is hooked carries it as a tooltip.
 header.ms_summary_hook:
-  ru: "Выходы из хука %{name}"
-  en: "Exits from hook %{name}"
-  es: "Salidas del hook %{name}"
+  ru: "Через хук %{name}"
+  en: "Via hook %{name}"
+  es: "Vía hook %{name}"
+# The empty option in the hook picker: the strategy keeps its own exits.
+header.ms_hook_none:
+  ru: "без хука"
+  en: "no hook"
+  es: "sin hook"
+# Tooltip on the robot button after the hook field: it opens the hook strategy, not the manual one.
+header.ms_hook_goto_tip:
+  ru: "Перейти к хук-стратегии"
+  en: "Go to the hook strategy"
+  es: "Ir a la estrategia hook"
 header.ms_slot_unassigned:
   ru: "не назначена"
   en: "unassigned"
