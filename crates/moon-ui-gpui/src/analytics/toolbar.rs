@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
-    MoonDateTimePicker, MoonDropdown, MoonInput, MoonMenuSize, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, h_flex,
+    MoonDateTimePicker, MoonDropdown, MoonInput, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonSegmentItem, MoonSegmentedControl, h_flex,
 };
 use rust_i18n::t;
 
@@ -83,8 +83,37 @@ const PRESET_CELL_MIN_W: f32 = 44.0;
 /// label, and the item's tooltip still carries the whole of it.
 const PRESET_CELL_MAX_W: f32 = 104.0;
 
+/// Reserved width for the trade counter that closes the period bar on its right edge.
+///
+/// The counter's exact text varies with the trade count and the active locale, so this is a
+/// conservative floor rather than a measurement: six digits plus the localized noun is wider than
+/// any realistic count, and undercounting here would let the collapse decision keep the preset row
+/// inline for a beat after the counter has already started to clip.
+const PERIOD_COUNTER_RESERVED_W: f32 = 90.0;
+
 #[cfg(test)]
 mod tests;
+
+/// Whether the Analytics period-preset strip stays an inline row at `available` width, or must
+/// collapse into a single dropdown trigger instead.
+///
+/// The presets are the ONLY thing that yields on this bar — the custom-range group and the trade
+/// counter never shrink, wrap, or clip, so `available` already excludes their own reserved width.
+/// Kept a pure function of two plain widths, with no `cx`/`App` dependency at all, mirroring the
+/// cx-free half of `design::ticker_visible`'s window-level threshold and
+/// `controls/toolbar.rs::label_ladder`'s decision split — so it is unit-testable with no window and
+/// no theme. Inclusive: the row stays a row at the exact pixel it still fits, the same convention
+/// every other collapse threshold in this window uses.
+///
+/// Args:
+///     available: Width left for the presets after every other atom on the bar has taken its own.
+///     presets_row_width: Total width the segmented preset row would occupy inline.
+///
+/// Returns:
+///     `true` when the row fits inline, `false` when it must collapse to a dropdown trigger.
+pub(super) fn presets_row_fits(available: f32, presets_row_width: f32) -> bool {
+    available >= presets_row_width
+}
 
 /// What the "undated trades" strip should be right now.
 ///
@@ -930,44 +959,142 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Render the active tab's period presets, custom date range, and scoped trade count.
+    /// Fit every preset's segment item once, at the current locale and display zone.
     ///
-    /// Summary and Tuning retain independent periods, so selection and count both read from the
-    /// currently visible tab.
-    ///
-    /// Presets and the custom range remain atomic groups so a narrow host wraps between controls
-    /// instead of clipping one away.
+    /// `MoonSegmentItem::fit_width` is a pure `cx`-only computation — no window, no paint, no
+    /// `cx.notify()` — so calling it here and reusing its output both for the collapse-decision
+    /// sum ([`Self::period_bar`]) and for the actual inline render ([`Self::presets_row`]) costs
+    /// one fit per preset per frame instead of two, and removes the drift between a hand-rolled
+    /// width mirror and the real `MoonSegmentItem` layout.
     ///
     /// Args:
-    ///     p: Active MoonUI palette.
-    ///     cx: Analytics view context.
+    ///     cx: Application context supplying theme-aware scale and text measurements.
     ///
     /// Returns:
-    ///     Period controls and exact scoped trade count.
-    pub(super) fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
-        // Highlight follows the ACTIVE tab's period (Summary/Tuning are independent).
-        let active = self.active_period();
-        // The segmented control's handler is a plain indexed `Fn`, not a listener type, so the
-        // view is reached the documented other way — `cx.entity()` plus `update`.
-        let view = cx.entity();
-        let presets = MoonSegmentedControl::new("an-period-presets")
-            .items(Period::ALL.map(|per| {
+    ///     One fitted, tooltipped item per [`Period::ALL`] entry, in that order.
+    fn fitted_preset_items(&self, cx: &App) -> Vec<MoonSegmentItem> {
+        Period::ALL
+            .into_iter()
+            .map(|per| {
                 // The tooltip carries the untruncated title, since `fit_width` elides the label
                 // and an elided preset is otherwise unreadable with no way to recover it.
                 let title = per.title(self.display_zone);
                 MoonSegmentItem::new("", title.clone())
                     .fit_width(cx, PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
                     .tooltip(title)
-                    .selected(active == per)
-            }))
+            })
+            .collect()
+    }
+
+    /// Build the inline segmented preset row from items [`Self::fitted_preset_items`] already fit.
+    ///
+    /// Args:
+    ///     active: Currently active preset, or a custom range that matches none of them.
+    ///     items: This frame's fitted preset items, in [`Period::ALL`] order.
+    ///     cx: Analytics view context used to wire click handlers.
+    ///
+    /// Returns:
+    ///     The rendered segmented control.
+    fn presets_row(
+        &self,
+        active: Period,
+        items: Vec<MoonSegmentItem>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        // The segmented control's handler is a plain indexed `Fn`, not a listener type, so the
+        // view is reached the documented other way — `cx.entity()` plus `update`.
+        let view = cx.entity();
+        MoonSegmentedControl::new("an-period-presets")
+            .items(
+                Period::ALL
+                    .into_iter()
+                    .zip(items)
+                    .map(|(per, item)| item.selected(active == per)),
+            )
             .on_click(move |ix, _, window, app| {
                 let Some(per) = Period::ALL.get(ix).copied() else {
                     return;
                 };
                 view.update(app, |this, cx| this.set_period(per, window, cx));
             })
-            .render();
+            .render()
+    }
+
+    /// Build the collapsed period-preset dropdown — the narrow-window fallback for
+    /// [`Self::presets_row`], reusing `MoonDropdown` exactly like this bar's own side/kind/metric
+    /// combos rather than a hand-rolled trigger. Its label always names the active preset, so a
+    /// collapsed bar never hides which period is selected.
+    ///
+    /// Args:
+    ///     active: Currently active preset, or a custom range that matches none of them.
+    ///     cx: Analytics view context used to wire click handlers.
+    ///
+    /// Returns:
+    ///     The rendered dropdown trigger and menu.
+    fn presets_dropdown(&self, active: Period, cx: &Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let items: Vec<MoonMenuItem> = Period::ALL
+            .into_iter()
+            .map(|per| {
+                let view = view.clone();
+                let title = per.title(self.display_zone);
+                MoonMenuItem::with_key(per.id(), title)
+                    .selected(active == per)
+                    .on_click(move |_, window, app| {
+                        view.update(app, |this, cx| this.set_period(per, window, cx));
+                    })
+            })
+            .collect();
+        MoonDropdown::new("an-period-presets-dd")
+            .label(active.title(self.display_zone))
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .fit_trigger_width(PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
+            .fit_menu_width(120.0, 220.0)
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
+    }
+
+    /// Render the active tab's period presets, custom date range, and scoped trade count.
+    ///
+    /// Summary and Tuning retain independent periods, so selection and count both read from the
+    /// currently visible tab.
+    ///
+    /// When the preset row fits `chrome_width` it stays a row — a user with room keeps the
+    /// one-click strip. When it does not, the presets collapse into a single dropdown trigger
+    /// instead of wrapping onto a second line or clipping, conditional on space rather than
+    /// unconditional. The custom-range group never yields — only the presets do, mirroring
+    /// `design::ticker_visible`'s "the ticker collapses, the clock does not" priority.
+    ///
+    /// `chrome_width` is a WINDOW-level value read once at `render()`'s entry
+    /// (`crate::window::windowing::responsive_width`), and every width this function compares
+    /// against it is a pure font-metric estimate ([`Self::fitted_preset_items`]'s summed
+    /// `resolved_width`, the custom-group and counter budgets below) — never an actual measured
+    /// layout. That is deliberate: this window
+    /// has none of the dock panels' repaint throttles (no `flush_backend_notify`, no `Shell`
+    /// observe gate, no per-panel `RenderGate`), so a decision that measured a real layout and then
+    /// `cx.notify()`d to re-render at the corrected size would be an unbounded repaint loop with
+    /// nothing here to stop it. Estimating instead means this render pass settles the collapse
+    /// decision in one pass, with no follow-up notify of its own.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     chrome_width: Current window width, read once at the render root.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Period controls and exact scoped trade count.
+    pub(super) fn period_bar(
+        &self,
+        p: MoonPalette,
+        chrome_width: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        // Highlight follows the ACTIVE tab's period (Summary/Tuning are independent).
+        let active = self.active_period();
         // Keep the divider inside the custom-range group so it cannot wrap onto a line by itself.
+        let custom_label = t!("analytics.period.custom_lbl").to_string();
         let custom = design::chrome_section(cx)
             .child(design::chrome_divider(cx, p))
             .child(
@@ -975,10 +1102,48 @@ impl AnalyticsView {
                     .flex_none()
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
-                    .child(t!("analytics.period.custom_lbl").to_string()),
+                    .child(custom_label.clone()),
             )
             .child(self.date_field(false, p, cx))
             .child(self.date_field(true, p, cx));
+        // Everything the presets are NOT free to take: the row's own padding, the gap before each
+        // of the two neighbouring atoms, the custom-range group (divider + label + two date
+        // fields, each with its own localized caption and inner gap, mirroring `chrome_section`'s
+        // own internal gap), and the counter's reserved floor.
+        let field_w = crate::controls::date_range::field_width(cx);
+        let from_lbl = t!("analytics.period.from_lbl").to_string();
+        let to_lbl = t!("analytics.period.to_lbl").to_string();
+        // Each `date_field` draws its caption at `design::t_body(cx)`, so measure at the same
+        // unscaled base rather than a second guessed size.
+        let date_captions_w =
+            design::ui_text_width(cx, &from_lbl, design::base_text(cx), 400.0, true)
+                + design::ui_text_width(cx, &to_lbl, design::base_text(cx), 400.0, true);
+        // `date_field`'s own `h_flex().gap_1()` between its caption and picker — GPUI's
+        // `rems(0.25)`, at the window's rem size, which this app never overrides from GPUI's
+        // default `px(16.)`. One gap per field, not scaled by the Font slider.
+        let date_field_gaps_w = f32::from(rems(0.25).to_pixels(px(16.0))) * 2.0;
+        let custom_group_w = 1.0
+            + design::ui_text_width(cx, &custom_label, 10.5, 400.0, true)
+            + field_w * 2.0
+            + date_captions_w
+            + date_field_gaps_w
+            + design::ui_value(cx, design::CHROME_GAP) * 3.0;
+        let fixed_w = design::ui_value(cx, 10.0) * 2.0
+            + custom_group_w
+            + design::ui_value(cx, PERIOD_COUNTER_RESERVED_W)
+            + design::ui_value(cx, design::CHROME_GAP) * 2.0;
+        let available_for_presets = (chrome_width - fixed_w).max(0.0);
+        let fitted_presets = self.fitted_preset_items(cx);
+        let presets_row_w: f32 = fitted_presets
+            .iter()
+            .map(MoonSegmentItem::resolved_width)
+            .sum();
+        let presets = if presets_row_fits(available_for_presets, presets_row_w) {
+            self.presets_row(active, fitted_presets, cx)
+                .into_any_element()
+        } else {
+            self.presets_dropdown(active, cx).into_any_element()
+        };
         // Split scopes carry the real count outside the deliberately empty scalar payload.
         let split_orders = match self.tab {
             Tab::Summary => self.data.split(),
@@ -1026,13 +1191,13 @@ impl AnalyticsView {
         h_flex()
             .flex_none()
             .w_full()
-            // A minimum rather than fixed height leaves room for a wrapped second line.
             .min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
-            .flex_wrap()
+            // Deliberately NOT `.flex_wrap()`: a narrow window collapses the presets into
+            // `presets_dropdown` instead, so this row never needs a second line — the settled
+            // requirement is a dropdown "only for those who lack the room", never a wrap.
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
             .gap_x(design::ui_px(cx, design::CHROME_GAP))
-            .gap_y(design::ui_px(cx, 4.0))
             .items_center()
             // The bottom rule separates the controls from the muted notice below.
             .border_b_1()
@@ -1040,7 +1205,6 @@ impl AnalyticsView {
             .child(presets)
             .child(custom)
             .child(
-                // A margin avoids adding a spacer that could take its own line when the row wraps.
                 div()
                     .ml_auto()
                     .min_w_0()

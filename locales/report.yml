@@ -331,8 +331,9 @@ report.period.yesterday:
 # Every preset here is named by its FAMILY: a calendar one says which period it is current within,
 # a rolling one is labelled by its day count. A bare week or year cannot be told apart from its
 # rolling counterpart once both are offered, which is why the rolling three are numeric. The same
-# wording is carried in analytics.period.* so the two windows do not disagree; Analytics offers no
-# calendar week or year, so it has no counterpart for cur_week / cur_year.
+# wording is carried in analytics.period.* so the two windows do not disagree; analytics.period.*
+# has its own cur_year but no calendar-week key — the Profit Monitor borrows this cur_week key
+# directly instead of duplicating it.
 # A rolling 7-day window ending today.
 report.period.week:
   ru: "7 дней"
@@ -348,6 +349,11 @@ report.period.cur_month:
   ru: "Тек. месяц"
   en: "This month"
   es: "Mes actual"
+# Previous calendar month, 1st to last day inclusive.
+report.period.last_month:
+  ru: "Прош. мес."
+  en: "Last month"
+  es: "Mes pasado"
 # Calendar year from January 1st.
 report.period.cur_year:
   ru: "Тек. год"

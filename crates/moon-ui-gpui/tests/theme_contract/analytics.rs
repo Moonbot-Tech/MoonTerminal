@@ -2131,47 +2131,49 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
 // `panels::report::totals::tests::worker_health_is_stated_outside_every_quote_scope_branch`, which
 // builds a single-currency snapshot with a stalled worker and requires the marker to lead the tail.
 
-/// The period bar stays two named groups — presets and custom range — that wrap between
-/// themselves rather than clipping either one.
+/// The period bar keeps the custom range as one atomic chrome section and collapses presets to a
+/// dropdown instead of wrapping the controls across two lines.
 ///
-/// Breakage this pins: flattening the groups in `analytics/toolbar.rs:period_bar` or replacing its
-/// minimum height with a fixed height would split or clip controls in a narrow host.
+/// Breakage this pins: restoring inline segmented-control construction, `.flex_wrap()`, or a
+/// width-free `period_bar` makes narrow Analytics hosts wrap or clips an atomic control group.
 #[test]
-fn period_bar_wraps_between_its_two_control_groups() {
+fn period_bar_collapses_presets_to_a_dropdown_instead_of_wrapping() {
     let toolbar = read_src("analytics/toolbar.rs");
-    let body = braced_body(&toolbar, "pub(super) fn period_bar(");
+    let body = code_only(braced_body(&toolbar, "pub(super) fn period_bar("));
 
     for needle in [
-        "let presets = MoonSegmentedControl::new(",
         "let custom = design::chrome_section(cx)",
+        "self.presets_row(",
+        "self.presets_dropdown(",
+        "presets_row_fits(",
         ".child(presets)",
         ".child(custom)",
     ] {
         assert!(
             body.contains(needle),
-            "`period_bar` must contain {needle:?} so the presets and the custom range stay two \
-             separate, atomic groups the row can wrap between"
+            "`period_bar` must contain {needle:?} so the custom range stays atomic while presets \
+             choose the inline row or narrow-window dropdown"
         );
     }
-    let presets_at = body
-        .find("let presets = MoonSegmentedControl::new(")
-        .expect("checked above");
     let custom_at = body
         .find("let custom = design::chrome_section(cx)")
         .expect("checked above");
+    let fits_at = body.find("presets_row_fits(").expect("checked above");
     let child_presets_at = body.find(".child(presets)").expect("checked above");
     let child_custom_at = body.find(".child(custom)").expect("checked above");
     assert!(
-        presets_at < custom_at
-            && custom_at < child_presets_at
-            && child_presets_at < child_custom_at,
-        "the presets group must be built, then the custom group, before either joins the row, \
-         so the row wraps between two complete groups rather than through a half-built one"
+        custom_at < fits_at && fits_at < child_presets_at && child_presets_at < child_custom_at,
+        "the custom chrome section and width choice must be built before the chosen preset control \
+         and custom section join the period row"
     );
 
     assert!(
-        body.contains(".flex_wrap()"),
-        "`period_bar` must wrap a second line instead of clipping a preset or the custom range"
+        !body.contains(".flex_wrap()"),
+        "the code-only period bar must not wrap: narrow widths collapse presets to a dropdown"
+    );
+    assert!(
+        body.contains("chrome_width: f32"),
+        "period_bar must receive the render-root window width for its collapse decision"
     );
     assert!(
         body.contains(".min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
@@ -2179,7 +2181,7 @@ fn period_bar_wraps_between_its_two_control_groups() {
     );
     assert!(
         !body.contains(".h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
-        "a fixed row height would clip the wrapped second line instead of growing the row"
+        "a fixed row height would clip the one-line period controls"
     );
 }
 

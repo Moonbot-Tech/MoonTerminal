@@ -34,8 +34,9 @@ use moon_core::db::valuation::ValuationMode;
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonSegmentItem, MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -1299,35 +1300,51 @@ fn group_title(group: GroupMode) -> String {
 
 /// Render the period preset as one standard MoonUI dropdown.
 ///
+/// The presets arrive already grouped by [`MonitorPeriod::GROUPS`] — day, calendar, rolling, then
+/// the unbounded one — with a separator standing BETWEEN the groups and never after the last, the
+/// same grouped layout the Report panel's period picker uses.
+///
 /// Args:
 ///     selected: Currently active preset.
 ///     view: Monitor entity receiving selection changes.
 ///
 /// Returns:
-///     A compact dropdown carrying every period choice.
+///     A compact dropdown carrying every period choice, grouped by family.
 fn period_dropdown(selected: MonitorPeriod, view: Entity<ProfitMonitorView>) -> MoonDropdown {
-    let options = MonitorPeriod::ALL.into_iter().map(|period| {
-        (
-            period,
-            SharedString::from(period.id()),
-            SharedString::from(period.title()),
-        )
-    });
-    let items = crate::panels::radio_items(
-        options,
-        selected,
-        crate::panels::RadioMark::Highlight,
-        move |app, period| {
-            view.update(app, |this, cx| this.set_period(period, cx));
-        },
-    );
+    let mut items: Vec<MoonMenuItem> = Vec::new();
+    for group in MonitorPeriod::GROUPS {
+        if !items.is_empty() {
+            items.push(MoonMenuItem::separator());
+        }
+        let view = view.clone();
+        let options: Vec<(MonitorPeriod, SharedString, SharedString)> = group
+            .iter()
+            .map(|period| {
+                (
+                    *period,
+                    SharedString::from(period.id()),
+                    SharedString::from(period.title()),
+                )
+            })
+            .collect();
+        // Per group rather than once over a flat list: `radio_items` marks the current preset in
+        // whichever group holds it, so the selection is unaffected by the split.
+        items.extend(crate::panels::radio_items(
+            options,
+            selected,
+            crate::panels::RadioMark::Highlight,
+            move |app, period| {
+                view.update(app, |this, cx| this.set_period(period, cx));
+            },
+        ));
+    }
     MoonDropdown::new("profit-monitor-period")
         .label(selected.title())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Action)
-        .fit_trigger_width(96.0, 148.0)
-        .fit_menu_width(132.0, 196.0)
+        .fit_trigger_width(100.0, 150.0)
+        .fit_menu_width(130.0, 190.0)
         .menu_size(MoonMenuSize::Compact)
         .items(items)
 }

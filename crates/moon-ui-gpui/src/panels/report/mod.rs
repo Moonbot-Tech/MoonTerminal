@@ -92,6 +92,8 @@ pub(super) enum Period {
     CurWeek,
     /// The calendar month from the 1st to today.
     CurMonth,
+    /// The previous calendar month, ending at the inclusive second before the current month starts.
+    LastMonth,
     /// The calendar year from January 1st to today.
     CurYear,
     /// The rolling seven days ending today.
@@ -109,7 +111,12 @@ impl Period {
     /// a home here remains unreachable from the menu rather than being silently appended.
     pub(super) const GROUPS: [&'static [Self]; 4] = [
         &[Self::Today, Self::Yesterday],
-        &[Self::CurWeek, Self::CurMonth, Self::CurYear],
+        &[
+            Self::CurWeek,
+            Self::CurMonth,
+            Self::LastMonth,
+            Self::CurYear,
+        ],
         &[Self::Days7, Self::Days30, Self::Days365],
         &[Self::All],
     ];
@@ -129,6 +136,7 @@ impl Period {
             Self::Yesterday => "rp-yesterday",
             Self::CurWeek => "rp-cur-week",
             Self::CurMonth => "rp-cur-month",
+            Self::LastMonth => "rp-last-month",
             Self::CurYear => "rp-cur-year",
             Self::Days7 => "rp-days-7",
             Self::Days30 => "rp-days-30",
@@ -156,6 +164,7 @@ impl Period {
             "rp-yesterday" => Self::Yesterday,
             "rp-cur-week" => Self::CurWeek,
             "rp-cur-month" => Self::CurMonth,
+            "rp-last-month" => Self::LastMonth,
             "rp-cur-year" => Self::CurYear,
             "rp-days-7" => Self::Days7,
             "rp-days-30" => Self::Days30,
@@ -179,6 +188,7 @@ impl Period {
             Self::Yesterday => t!("report.period.yesterday"),
             Self::CurWeek => t!("report.period.cur_week"),
             Self::CurMonth => t!("report.period.cur_month"),
+            Self::LastMonth => t!("report.period.last_month"),
             Self::CurYear => t!("report.period.cur_year"),
             Self::Days7 => t!("report.period.week"),
             Self::Days30 => t!("report.period.month"),
@@ -218,6 +228,17 @@ impl Period {
                 -i64::from(today.weekday().num_days_from_monday()),
             ))),
             Self::CurMonth => calendar(today.with_day(1)),
+            Self::LastMonth => {
+                let (prev_month_start_date, cur_month_start_date) =
+                    moon_core::util::display_time::prev_and_cur_month_start(today);
+                // The lower bound is the previous month's own first day; the upper bound is one
+                // second before the CURRENT month starts, so a shorter or longer previous month
+                // (28/29/30/31 days) needs no explicit length check.
+                (
+                    day_start(prev_month_start_date),
+                    day_start(cur_month_start_date).map(|value| value - 1),
+                )
+            }
             Self::CurYear => calendar(today.with_month(1).and_then(|date| date.with_day(1))),
             // Rolling windows count back from today INCLUSIVE, so the shift is one day short of the
             // window: seven days is today plus the six before it.

@@ -72,7 +72,7 @@ impl Render for AnalyticsView {
             // Calendar has its OWN month navigation, so hide the from/to period bar there; its
             // body has a separate Previous/month/Next row.
             .when(self.tab != Tab::Calendar, |el| {
-                el.child(self.period_bar(p, cx))
+                el.child(self.period_bar(p, chrome_width, cx))
             })
             // Show the integrity banner on EVERY tab: a damaged replica matters on Calendar too,
             // because it reads the same database.

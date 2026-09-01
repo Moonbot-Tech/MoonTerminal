@@ -134,3 +134,24 @@ fn stored_utc_log_clocks_follow_the_selected_zone() {
     );
     assert_eq!(format_utc_millis_clock("malformed 12:34", Warsaw), "12:34");
 }
+
+/// `display_time::prev_month_start` must decrement the year while rolling January back to
+/// December; keeping January's year makes every Last month preset query the wrong data at New
+/// Year across Analytics, Report, and Profit Monitor.
+#[test]
+fn previous_month_start_rolls_january_into_the_prior_year() {
+    assert_eq!(
+        prev_month_start(NaiveDate::from_ymd_opt(2024, 1, 15).expect("valid January date")),
+        NaiveDate::from_ymd_opt(2023, 12, 1).expect("valid prior December"),
+    );
+}
+
+/// `display_time::prev_month_start` must preserve the year outside January; decrementing it for
+/// an ordinary mid-year date makes Last month presets jump back a full year.
+#[test]
+fn previous_month_start_keeps_the_year_for_a_mid_year_date() {
+    assert_eq!(
+        prev_month_start(NaiveDate::from_ymd_opt(2024, 6, 15).expect("valid June date")),
+        NaiveDate::from_ymd_opt(2024, 5, 1).expect("valid May start"),
+    );
+}

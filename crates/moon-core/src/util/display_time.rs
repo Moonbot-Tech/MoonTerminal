@@ -172,6 +172,45 @@ pub fn shift_date(date: NaiveDate, days: i64) -> NaiveDate {
     }
 }
 
+/// First civil day of the calendar month preceding `date`'s month.
+///
+/// A month never wraps within one year alone — January's preceding month is December of the PRIOR
+/// year — so this is the one place that year rollback lives, shared by every "previous calendar
+/// month" preset instead of each caller re-deriving the carry. Month LENGTH (28/29/30/31) never
+/// enters this function: callers resolve a preset's upper bound from the following month's own
+/// start rather than counting days, so a 31-to-30-day boundary needs no special case here either.
+///
+/// Args:
+///     date: Civil date whose preceding month is required.
+///
+/// Returns:
+///     First day of the preceding calendar month, or `date` itself at chrono's representable
+///     boundary.
+pub fn prev_month_start(date: NaiveDate) -> NaiveDate {
+    let (year, month) = if date.month() == 1 {
+        (date.year() - 1, 12)
+    } else {
+        (date.year(), date.month() - 1)
+    };
+    NaiveDate::from_ymd_opt(year, month, 1).unwrap_or(date)
+}
+
+/// Both civil-month starts a "previous calendar month" preset needs, from today's civil date.
+///
+/// Every such preset (Analytics, Report, the Profit Monitor) agrees on exactly these two dates
+/// before diverging into its own inclusive/exclusive upper-bound convention — this factors out
+/// only that shared pair, never the bound conventions themselves, which stay in each caller.
+///
+/// Args:
+///     today: Civil date to derive the current calendar month's start from.
+///
+/// Returns:
+///     `(previous month's first day, current month's first day)`.
+pub fn prev_and_cur_month_start(today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let cur_month_start = today.with_day(1).unwrap_or(today);
+    (prev_month_start(cur_month_start), cur_month_start)
+}
+
 /// Return the selected zone's civil date at one UTC instant.
 ///
 /// Args:

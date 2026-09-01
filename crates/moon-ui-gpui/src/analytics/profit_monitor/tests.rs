@@ -521,22 +521,163 @@ fn warsaw_calendar_days_follow_both_dst_transitions() {
     assert_eq!(autumn_to - autumn_from, 25 * 60 * 60);
 }
 
-/// `profit_monitor/model.rs:duration_until_period_refresh` must arm calendar presets at the next
-/// selected-city midnight; restoring the UTC-day timer makes the Warsaw wait red and leaves Today
-/// stale for two hours after its query boundary moves in summer.
+/// `profit_monitor/model.rs:MonitorPeriod::id` must keep the three rolling preset ids that are
+/// already stored in `layout.toml`; renaming `m-week` to `m-days-7` makes this assertion red and
+/// silently resets users who selected the seven-day view to Today after restart.
 #[test]
-fn clock_refresh_uses_minute_local_midnight_or_no_timer_by_period() {
+fn legacy_rolling_period_ids_restore_the_renamed_presets() {
     assert_eq!(
-        duration_until_period_refresh(
-            MonitorPeriod::Hour,
-            Warsaw,
-            UNIX_EPOCH + Duration::from_millis(123_456)
-        ),
-        Some(Duration::from_millis(56_544))
+        [
+            MonitorPeriod::from_id("m-week"),
+            MonitorPeriod::from_id("m-month"),
+            MonitorPeriod::from_id("m-year"),
+        ],
+        [
+            Some(MonitorPeriod::Days7),
+            Some(MonitorPeriod::Days30),
+            Some(MonitorPeriod::Days365),
+        ],
+        "persisted rolling-period ids must survive the variant rename"
     );
+}
+
+/// `profit_monitor/model.rs:MonitorPeriod::range_at` must start CurWeek at Monday on Monday and
+/// mid-week; using `num_days_from_sunday()` makes these assertions red and shows users data from
+/// the wrong calendar week.
+#[test]
+fn cur_week_is_monday_anchored_on_and_after_monday() {
+    for (now, expected_to) in [
+        (
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            1_785_794_400,
+        ),
+        (
+            Utc.with_ymd_and_hms(2026, 8, 5, 18, 16, 57).unwrap(),
+            1_785_967_200,
+        ),
+    ] {
+        assert_eq!(
+            MonitorPeriod::CurWeek.range_at(now, Warsaw),
+            (1_785_708_000, expected_to),
+            "CurWeek must begin at the independently pinned Monday boundary"
+        );
+    }
+}
+
+/// `profit_monitor/model.rs:MonitorPeriod::range_at` must start CurYear at January 1 in the
+/// selected zone; starting from today's month makes this assertion red and omits earlier annual
+/// profit data from the monitor.
+#[test]
+fn cur_year_is_anchored_to_january_first_in_the_selected_zone() {
+    let now = Utc.with_ymd_and_hms(2026, 8, 5, 18, 16, 57).unwrap();
+
+    assert_eq!(
+        MonitorPeriod::CurYear.range_at(now, Warsaw),
+        (1_767_222_000, 1_785_967_200),
+        "CurYear must include every local calendar day from January 1 through today"
+    );
+}
+
+/// `analytics/profit_monitor/model.rs:MonitorPeriod::range_at` must resolve Last month as the
+/// complete previous calendar month; a January carry copied from the non-January arm silently
+/// makes the Profit Monitor show January instead of the prior December.
+///
+/// Independent oracle: expected boundaries are explicit UTC midnights for normal, year-crossing,
+/// unequal-month-length, leap-February, and ordinary-February cases rather than values from the
+/// production range resolver.
+#[test]
+fn last_month_range_uses_previous_calendar_month_boundaries() {
+    let midnight = |year, month, day| {
+        Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+            .single()
+            .expect("valid UTC midnight")
+    };
+
+    for (now, expected, why) in [
+        (
+            midnight(2024, 6, 15),
+            (
+                midnight(2024, 5, 1).timestamp(),
+                midnight(2024, 6, 1).timestamp(),
+            ),
+            "mid-year month",
+        ),
+        (
+            midnight(2024, 1, 15),
+            (
+                midnight(2023, 12, 1).timestamp(),
+                midnight(2024, 1, 1).timestamp(),
+            ),
+            "January rolls into the prior year",
+        ),
+        (
+            midnight(2024, 9, 15),
+            (
+                midnight(2024, 8, 1).timestamp(),
+                midnight(2024, 9, 1).timestamp(),
+            ),
+            "31-day August precedes a 30-day current month",
+        ),
+        (
+            midnight(2024, 3, 15),
+            (
+                midnight(2024, 2, 1).timestamp(),
+                midnight(2024, 3, 1).timestamp(),
+            ),
+            "leap-year February ends on the following month start",
+        ),
+        (
+            midnight(2023, 3, 15),
+            (
+                midnight(2023, 2, 1).timestamp(),
+                midnight(2023, 3, 1).timestamp(),
+            ),
+            "ordinary February has the same month-start boundary shape",
+        ),
+    ] {
+        assert_eq!(
+            MonitorPeriod::LastMonth.range_at(now, Tz::UTC),
+            expected,
+            "{why}"
+        );
+    }
+}
+
+/// `analytics/profit_monitor/model.rs:MonitorPeriod::from_id` must restore the Last month id
+/// from the monitor layout; renaming it resets users to Today on the next open.
+#[test]
+fn last_month_persisted_id_round_trips_to_its_preset() {
+    assert_eq!(
+        MonitorPeriod::from_id("m-last-month"),
+        Some(MonitorPeriod::LastMonth)
+    );
+}
+
+/// `profit_monitor/model.rs:MonitorPeriod::GROUPS` must remain the complete ordered partition of
+/// `ALL`; adding a preset to only one constant makes this assertion red and leaves a restorable
+/// period unreachable from the picker or a picker item outside the persisted set.
+#[test]
+fn period_groups_match_all_presets_exactly_once_in_display_order() {
+    let grouped = MonitorPeriod::GROUPS
+        .iter()
+        .flat_map(|group| group.iter().copied())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        grouped,
+        MonitorPeriod::ALL,
+        "GROUPS must contain every persisted preset exactly once and in display order"
+    );
+}
+
+/// `profit_monitor/model.rs:duration_until_period_refresh` must arm every bounded preset at the
+/// next selected-city midnight; restoring the UTC-day timer makes the Warsaw wait red and leaves
+/// a rolling range stale for two hours after its query boundary moves in summer.
+#[test]
+fn clock_refresh_uses_local_midnight_or_no_timer_by_period() {
     assert_eq!(
         duration_until_period_refresh(
-            MonitorPeriod::Year,
+            MonitorPeriod::Days365,
             Warsaw,
             UNIX_EPOCH + Duration::from_secs(1_785_953_817)
         ),

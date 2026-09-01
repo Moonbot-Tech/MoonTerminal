@@ -9,7 +9,6 @@ use rust_i18n::t;
 
 use super::rows::{LiveContext, MonitorRow};
 
-const MINUTE_MS: u128 = 60_000;
 const TRADES_WIDTH: f32 = 390.0;
 const STACKED_CONTROLS_WIDTH: f32 = 460.0;
 const WIN_RATE_WIDTH: f32 = 620.0;
@@ -17,41 +16,75 @@ const STATUS_LABEL_WIDTH: f32 = 700.0;
 const AVERAGE_ORDER_WIDTH: f32 = 760.0;
 
 /// Compact monitor-specific period choices.
+///
+/// Two families, deliberately named apart because a preset that only says "week" or "year"
+/// cannot be read: a CALENDAR preset starts at the period's own boundary (Monday, the 1st,
+/// January 1st), while a ROLLING one counts a fixed number of days back from today inclusive.
+/// The day-only pair and the unbounded `All` round out the set. The menu keeps the families in
+/// separate groups for the same reason (see [`Self::GROUPS`]).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum MonitorPeriod {
-    /// Rolling hour ending now.
-    Hour,
     /// Current calendar day in the application-wide selected zone.
     #[default]
     Today,
     /// Previous calendar day in the application-wide selected zone.
     Yesterday,
-    /// Rolling seven calendar days through tomorrow in the selected zone.
-    Week,
+    /// The calendar week from Monday to today.
+    CurWeek,
     /// Current calendar month in the application-wide selected zone.
-    CurrentMonth,
-    /// Rolling thirty days.
-    Month,
-    /// Rolling year.
-    Year,
+    CurMonth,
+    /// The previous selected-zone calendar month as `[previous-month start, current-month start)`.
+    LastMonth,
+    /// The calendar year from January 1st to today.
+    CurYear,
+    /// Rolling seven days ending today.
+    Days7,
+    /// Rolling thirty days ending today.
+    Days30,
+    /// Rolling three hundred and sixty-five days ending today.
+    Days365,
     /// Complete retained report history.
     All,
 }
 
 impl MonitorPeriod {
-    /// Presets in their stable display order.
-    pub(super) const ALL: [Self; 8] = [
-        Self::Hour,
+    /// Presets in their stable restore and completeness order.
+    pub(super) const ALL: [Self; 10] = [
         Self::Today,
         Self::Yesterday,
-        Self::Week,
-        Self::CurrentMonth,
-        Self::Month,
-        Self::Year,
+        Self::CurWeek,
+        Self::CurMonth,
+        Self::LastMonth,
+        Self::CurYear,
+        Self::Days7,
+        Self::Days30,
+        Self::Days365,
         Self::All,
     ];
 
+    /// The menu's four groups in display order, rendered with a separator between them.
+    ///
+    /// This is the single declaration of menu membership and grouping, so a variant added without
+    /// a home here remains unreachable from the menu rather than being silently appended. [`Self::ALL`]
+    /// above stays the restore/completeness authority [`Self::from_id`] iterates; this const
+    /// governs menu layout only.
+    pub(super) const GROUPS: [&'static [Self]; 4] = [
+        &[Self::Today, Self::Yesterday],
+        &[
+            Self::CurWeek,
+            Self::CurMonth,
+            Self::LastMonth,
+            Self::CurYear,
+        ],
+        &[Self::Days7, Self::Days30, Self::Days365],
+        &[Self::All],
+    ];
+
     /// Restore a persisted monitor period.
+    ///
+    /// A saved `"m-hour"` (the retired rolling-hour preset) matches nothing in [`Self::ALL`] and
+    /// returns `None` here; callers fall back to the default `Today`, the same documented
+    /// contract as `analytics/period.rs`'s own unknown-id fallback.
     ///
     /// Args:
     ///     id: Stable layout id.
@@ -64,34 +97,48 @@ impl MonitorPeriod {
 
     /// Return the stable layout id.
     ///
+    /// The three renamed rolling variants (`Days7`/`Days30`/`Days365`, formerly `Week`/`Month`/
+    /// `Year`) keep their old ids: the range semantics are unchanged, so resetting a user's saved
+    /// choice over a label rename alone would be pure churn. `CurWeek` and `CurYear` are new
+    /// variants and get new ids; `m-hour` is retired with no successor.
+    ///
     /// Returns:
     ///     A short period key.
     pub(super) fn id(self) -> &'static str {
         match self {
-            Self::Hour => "m-hour",
             Self::Today => "m-today",
             Self::Yesterday => "m-yesterday",
-            Self::Week => "m-week",
-            Self::CurrentMonth => "m-current-month",
-            Self::Month => "m-month",
-            Self::Year => "m-year",
+            Self::CurWeek => "m-cur-week",
+            Self::CurMonth => "m-current-month",
+            Self::LastMonth => "m-last-month",
+            Self::CurYear => "m-cur-year",
+            Self::Days7 => "m-week",
+            Self::Days30 => "m-month",
+            Self::Days365 => "m-year",
             Self::All => "m-all",
         }
     }
 
     /// Return the localized button title.
     ///
+    /// `CurWeek` borrows `report.period.cur_week` rather than a `profit_monitor`-local key: the
+    /// Report panel's calendar-week preset already carries the exact label this needs, and
+    /// cross-namespace `t!("report.*")` borrowing from `analytics/*` is already precedented
+    /// elsewhere (`analytics/toolbar.rs`, `analytics/tuner/list/mod.rs`).
+    ///
     /// Returns:
     ///     User-facing period label.
     pub(super) fn title(self) -> String {
         match self {
-            Self::Hour => t!("profit_monitor.period.hour"),
             Self::Today => t!("analytics.period.today"),
             Self::Yesterday => t!("analytics.period.yesterday"),
-            Self::Week => t!("analytics.period.week"),
-            Self::CurrentMonth => t!("analytics.period.cur_month"),
-            Self::Month => t!("analytics.period.month"),
-            Self::Year => t!("analytics.period.year"),
+            Self::CurWeek => t!("report.period.cur_week"),
+            Self::CurMonth => t!("analytics.period.cur_month"),
+            Self::LastMonth => t!("analytics.period.last_month"),
+            Self::CurYear => t!("analytics.period.cur_year"),
+            Self::Days7 => t!("analytics.period.week"),
+            Self::Days30 => t!("analytics.period.month"),
+            Self::Days365 => t!("analytics.period.year"),
             Self::All => t!("analytics.period.all"),
         }
         .to_string()
@@ -106,10 +153,6 @@ impl MonitorPeriod {
     /// Returns:
     ///     Inclusive lower and exclusive upper bound.
     pub(super) fn range_at(self, now: DateTime<Utc>, zone: Tz) -> (i64, i64) {
-        if self == Self::Hour {
-            let now = now.timestamp();
-            return (now.saturating_sub(3_600), now.saturating_add(1));
-        }
         let today = now.with_timezone(&zone).date_naive();
         let shift = |days| moon_core::util::display_time::shift_date(today, days);
         let start = |date| {
@@ -125,15 +168,32 @@ impl MonitorPeriod {
         match self {
             Self::Today => (today_start, tomorrow),
             Self::Yesterday => (shifted(-1), today_start),
-            Self::Week => (shifted(-6), tomorrow),
-            Self::CurrentMonth => {
+            Self::CurWeek => {
+                let week_start = shift(-i64::from(today.weekday().num_days_from_monday()));
+                (start(week_start), tomorrow)
+            }
+            Self::CurMonth => {
                 let month_start = today.with_day(1).unwrap_or(today);
                 (start(month_start), tomorrow)
             }
-            Self::Month => (shifted(-29), tomorrow),
-            Self::Year => (shifted(-364), tomorrow),
+            Self::LastMonth => {
+                let (prev_month_start_date, cur_month_start_date) =
+                    moon_core::util::display_time::prev_and_cur_month_start(today);
+                // The upper bound is the current month's own start (exclusive), so a shorter or
+                // longer previous month (28/29/30/31 days) needs no explicit length check.
+                (start(prev_month_start_date), start(cur_month_start_date))
+            }
+            Self::CurYear => {
+                let year_start = today
+                    .with_month(1)
+                    .and_then(|date| date.with_day(1))
+                    .unwrap_or(today);
+                (start(year_start), tomorrow)
+            }
+            Self::Days7 => (shifted(-6), tomorrow),
+            Self::Days30 => (shifted(-29), tomorrow),
+            Self::Days365 => (shifted(-364), tomorrow),
             Self::All => (-1, tomorrow),
-            Self::Hour => unreachable!("rolling hour returned above"),
         }
     }
 }
@@ -431,21 +491,23 @@ pub(super) fn duration_until_wall_clock_boundary(now: SystemTime, interval_ms: u
 ///     now: Current system wall clock.
 ///
 /// Returns:
-///     Minute-boundary wait for Hour, next local midnight for calendar presets, or `None` for All.
+///     Next local midnight for every bounded preset, or `None` for `All`.
 pub(super) fn duration_until_period_refresh(
     period: MonitorPeriod,
     zone: Tz,
     now: SystemTime,
 ) -> Option<Duration> {
     match period {
-        MonitorPeriod::Hour => Some(duration_until_wall_clock_boundary(now, MINUTE_MS)),
         MonitorPeriod::All => None,
         MonitorPeriod::Today
         | MonitorPeriod::Yesterday
-        | MonitorPeriod::Week
-        | MonitorPeriod::CurrentMonth
-        | MonitorPeriod::Month
-        | MonitorPeriod::Year => {
+        | MonitorPeriod::CurWeek
+        | MonitorPeriod::CurMonth
+        | MonitorPeriod::LastMonth
+        | MonitorPeriod::CurYear
+        | MonitorPeriod::Days7
+        | MonitorPeriod::Days30
+        | MonitorPeriod::Days365 => {
             let since_epoch = now.duration_since(UNIX_EPOCH).ok()?;
             let now_utc =
                 DateTime::from_timestamp_millis(i64::try_from(since_epoch.as_millis()).ok()?)?;
