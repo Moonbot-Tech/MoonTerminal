@@ -11,7 +11,12 @@ use crate::Backend;
 impl Backend {
     /// Plays the most recent eligible new detect sound for each core. The `last_detect_seq` cursor
     /// prevents duplicates and startup bursts: the first visit seeds the cursor without playback.
-    pub(crate) fn play_detect_sounds(&mut self) {
+    ///
+    /// Returns:
+    ///     Whether a sound was played. The price-approach alerts run next in the same drain and
+    ///     share the one player, so they use this to avoid clipping what was just started.
+    pub(crate) fn play_detect_sounds(&mut self) -> bool {
+        let mut played = false;
         for (core, data) in self.session.store().cores() {
             // Gate on revision because feed draining wakes this path hundreds of times per second
             // while detects change infrequently. Leave the list untouched when nothing changed.
@@ -79,6 +84,7 @@ impl Backend {
                     moon_core::feed::core_label(core)
                 ));
                 crate::media::sound::play(&name);
+                played = true;
             } else {
                 // Quiet mode is named explicitly: without it, a silenced night reads as "no
                 // detect asked for a sound", which is a different bug entirely.
@@ -94,5 +100,6 @@ impl Backend {
                 ));
             }
         }
+        played
     }
 }

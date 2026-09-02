@@ -7,14 +7,15 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputState, MoonPalette, MoonSlider, h_flex,
-    rgba_from, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown, MoonInput,
+    MoonMenuSize, MoonPalette, MoonSlider, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use moon_core::feed::{ClientSettingsEdit, CoreConfig};
 use moon_core::session::{CoreId, CoreRunState};
 
+use crate::panels::common::{RadioMark, radio_items, sound_preview_button};
 use crate::shell::Shell;
 use crate::shell::core_settings::resolve_core_settings_write;
 use crate::{Backend, design};
@@ -24,12 +25,36 @@ use super::SettingsWidgets;
 /// Ordinal of the Alerts strategy kind, matching MoonProto `StrategyKindId::ALERTS = 22`.
 const ALERTS_KIND: u8 = 22;
 
+/// Side of the sound-preview square, in font-scaled units: the height of the Action-sized
+/// dropdown it sits beside, so the pair reads as one control.
+const SOUND_PLAY_SIDE: f32 = 22.0;
+
 /// Builds the rendered core's Default Alert Strategy row from that core's Alerts strategies. A
 /// selection updates `Backend::default_alert_strategy[core]`, which is persisted in server config.
 /// Enabling an alert applies this default only when the alert's existing `strategy_id` is zero.
+///
+/// A `MoonDropdown`, like the sound pickers below it and the filters everywhere else. It used to be
+/// a hand-built inline list with its own search field, for one reason only: a menu overlay inside
+/// this popover read as an outside click and shut the popup before the pick landed. The popover now
+/// switches that dismissal off (see the core-settings gear in `chrome::terminal_chrome`), so the
+/// bespoke list — and the retained input behind it — are gone.
+///
+/// No search box comes back with it. The one searchable picker in this application
+/// (`panels::report`'s `MoonCombobox`) needs a state entity built with a `Window` and a per-frame
+/// sync flush, which is a great deal of machinery for a list already narrowed to ONE strategy kind;
+/// the menu scrolls instead. A core that really does carry hundreds of Alerts strategies is the
+/// signal to trade up, and the swap is contained to this function.
+///
+/// Args:
+///     core: Core whose default this row edits, or `None` when no core is active.
+///     backend: Application state read for the strategy list and written on selection.
+///     p: Active palette.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The row, or `None` when there is no core to edit.
 pub(super) fn def_alert_strategy_row(
     core: Option<CoreId>,
-    filter_input: &Entity<MoonInputState>,
     backend: &Entity<Backend>,
     p: MoonPalette,
     cx: &App,
@@ -37,60 +62,38 @@ pub(super) fn def_alert_strategy_row(
     let core = core?;
     let b = backend.read(cx);
     let cur = b.alert_def_strategy(core);
-    let filter = filter_input.read(cx).value().trim().to_lowercase();
-    // Filter this core's Alerts strategies by the query. The em dash meaning no strategy always
-    // remains first and is never filtered out.
-    let mut options: Vec<(u64, String)> = vec![(0u64, "—".to_string())];
+    // The em dash means "no strategy" and always leads the list.
+    let mut options: Vec<(u64, SharedString)> = vec![(0u64, SharedString::from("—"))];
     options.extend(
         b.session
             .store()
             .core(core)?
             .strategies
             .iter()
-            .filter(|s| s.kind_ordinal == ALERTS_KIND)
-            .filter(|s| filter.is_empty() || s.name.to_lowercase().contains(&filter))
-            .map(|s| (s.id, s.name.clone())),
+            .filter(|st| st.kind_ordinal == ALERTS_KIND)
+            .map(|st| (st.id, SharedString::from(st.name.clone()))),
     );
-    // Render inline instead of using MoonDropdown because a nested menu overlay inside MoonPopover
-    // is treated as an outside click and closes the popover before selection. Search and a
-    // height-capped scroller keep hundreds of strategies compact, shrink for short lists, and keep
-    // clicks inside the content.
-    let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
-    for (id, name) in options {
-        let selected = id == cur;
-        let backend2 = backend.clone();
-        list = list.child(
-            h_flex()
-                .id(SharedString::from(format!("def-strat-{id}")))
-                .w_full()
-                .items_center()
-                .gap(design::ui_px(cx, 6.0))
-                .px(design::ui_px(cx, 6.0))
-                .py(design::ui_px(cx, 3.0))
-                .rounded(design::r_button(cx))
-                .cursor_pointer()
-                .when(selected, |e| e.bg(rgba_from(p.accent, 0.16)))
-                .hover(|e| e.bg(rgba_from(p.text, 0.06)))
-                .child(
-                    div()
-                        .w(design::ui_px(cx, 12.0))
-                        .text_color(rgb(p.accent))
-                        .child(if selected { "✓" } else { "" }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(rgb(if selected { p.text } else { p.text_soft }))
-                        .child(name),
-                )
-                .on_click(move |_, _w, app| {
-                    backend2.update(app, |bk, bcx| {
-                        bk.set_alert_def_strategy(core, id);
-                        bcx.notify();
-                    });
-                }),
-        );
-    }
+    let label = options
+        .iter()
+        .find(|(id, _)| *id == cur)
+        .map(|(_, name)| name.to_string())
+        // A default pointing at a strategy this core no longer lists: show the id rather than
+        // silently reading as "no strategy", which is what an unmatched dropdown would look like.
+        .unwrap_or_else(|| format!("#{cur}"));
+    let backend = backend.clone();
+    let items = radio_items(
+        options
+            .into_iter()
+            .map(|(id, name)| (id, SharedString::from(format!("core-def-strat-{id}")), name)),
+        cur,
+        RadioMark::Check,
+        move |app, id| {
+            backend.update(app, |bk, cx| {
+                bk.set_alert_def_strategy(core, id);
+                cx.notify();
+            });
+        },
+    );
     Some(
         v_flex()
             .w_full()
@@ -102,17 +105,18 @@ pub(super) fn def_alert_strategy_row(
                     .child(t!("core_settings.def_strategy").to_string()),
             )
             .child(
-                MoonInput::new("core-def-strategy-filter")
-                    .state(filter_input)
-                    .small(),
-            )
-            .child(
-                div()
-                    .id("core-def-strategy-list")
-                    .w_full()
-                    .max_h(design::ui_px(cx, 150.0))
-                    .overflow_y_scroll()
-                    .child(list),
+                MoonDropdown::new("core-def-strategy")
+                    .label(label)
+                    .trigger_caret(true)
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    // Fits the chosen name between a readable floor and the popup's own
+                    // width, so a long strategy name is not clipped to a fixed trigger.
+                    .fit_trigger_width(120.0, 240.0)
+                    .menu_width_scaled(240.0)
+                    .menu_max_height_ui(220.0)
+                    .menu_size(MoonMenuSize::Compact)
+                    .items(items),
             )
             .into_any_element(),
     )
@@ -244,6 +248,80 @@ pub(super) fn flag(
                 this.edit_core_draft(|draft| set(draft, on), cx);
             });
         })
+}
+
+/// Build the sound picker for one price-approach alert: Moonbot's list in a dropdown, with the
+/// square play button that sounds what is selected.
+///
+/// The same pair the core-warning settings already use (`panels::core_status::config_popup`),
+/// built from the same two helpers, so the two sound pickers in this application cannot drift
+/// apart. Picking does NOT play; the preview button does, exactly as it does there.
+///
+/// A `MoonDropdown` can live here only because the gear popover switches outside-click dismissal
+/// off; see the core-settings gear in `chrome::terminal_chrome`.
+///
+/// A core holding an ordinal this build has no name for shows that NUMBER rather than a guess,
+/// and the preview goes dim: naming it `Alarm` would write that guess back on the next OK.
+///
+/// Args:
+///     id: Element-id prefix, unique per row.
+///     current: The 1-based ordinal the draft holds.
+///     view: Shell entity the selection stages into.
+///     set: Writes the picked ordinal into the draft.
+///     p: Active palette.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The dropdown and its preview button.
+pub(super) fn sound_cell(
+    id: &'static str,
+    current: i32,
+    view: &Entity<Shell>,
+    set: fn(&mut CoreConfig, i32),
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let name = crate::media::sound::mb_sound_name(current);
+    let label = name.map_or_else(|| format!("#{current}"), str::to_string);
+    let view = view.clone();
+    let options = crate::media::sound::MB_SOUNDS
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            // The wire ordinal is 1-based; see `media::sound::MB_SOUNDS`.
+            let ordinal = i as i32 + 1;
+            (
+                ordinal,
+                SharedString::from(format!("{id}-{ordinal}")),
+                SharedString::from(*n),
+            )
+        });
+    let items = radio_items(options, current, RadioMark::Check, move |app, ordinal| {
+        view.update(app, |this, cx| {
+            this.edit_core_draft(|draft| set(draft, ordinal), cx);
+        });
+    });
+    h_flex()
+        .items_center()
+        .gap(design::ui_px(cx, 4.0))
+        .child(
+            MoonDropdown::new(SharedString::from(id))
+                .label(label)
+                .trigger_caret(true)
+                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_size(MoonButtonSize::Action)
+                .trigger_width_scaled(94.0)
+                .menu_width_scaled(128.0)
+                .menu_size(MoonMenuSize::Compact)
+                .items(items),
+        )
+        .child(sound_preview_button(
+            SharedString::from(format!("{id}-play")),
+            name,
+            design::ui_px(cx, SOUND_PLAY_SIDE),
+            p,
+            cx,
+        ))
 }
 
 /// A caption in the popup's muted body colour.

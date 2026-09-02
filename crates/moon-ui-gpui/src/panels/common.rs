@@ -73,6 +73,55 @@ pub(crate) fn side_label(side: moon_core::db::SideFilter) -> String {
     }
 }
 
+/// The square ▶ that plays whatever a sound picker currently holds.
+///
+/// Shared rather than redrawn per surface: it appeared beside the core-warning sound picker first,
+/// and the price-approach alerts in the core-settings popup need the same control down to its
+/// disabled state — a picker holding nothing, or an ordinal this build cannot name, has nothing to
+/// play and says so by going dim rather than by silently doing nothing when clicked.
+///
+/// Args:
+///     id: Stable element identity.
+///     sound: Embedded sound stem to play, or `None` to render the button inert.
+///     side: Side of the square — pass the row's control height, so the button can neither outgrow
+///         the row it sits in nor leave a gap under it.
+///     p: Active palette.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The preview button.
+pub(crate) fn sound_preview_button(
+    id: SharedString,
+    sound: Option<&'static str>,
+    side: Pixels,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let enabled = sound.is_some();
+    div()
+        .id(id)
+        .size(side)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(design::ui_px(cx, 5.0))
+        .border_1()
+        .border_color(rgb(p.border))
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(if enabled { p.text_soft } else { p.text_dim }))
+        .when(enabled, |el| {
+            el.cursor_pointer()
+                .hover(|s| s.border_color(rgb(p.accent)).text_color(rgb(p.accent)))
+                .on_click(move |_, _, _| {
+                    if let Some(name) = sound {
+                        crate::media::sound::play(name);
+                    }
+                })
+        })
+        .child("▶")
+}
+
 /// Selection decoration for a mutually exclusive menu item. `Check` applies the menu item's checked
 /// state, while `Highlight` applies its selected state; callers choose the style explicitly.
 #[derive(Clone, Copy)]

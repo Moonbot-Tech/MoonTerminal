@@ -8,8 +8,8 @@ pub use core_settings::{
     AutoStartSettings, BtcBlinkSettings, CORE_HOTKEY_ACTION_COUNT, CoreConfig, CoreConfigArea,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigRejection, CoreConfigState, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons,
-    GeneralSettings, LeverageSettings, ManualSettings, ProfitState, day_fraction_to_minutes,
-    minutes_to_day_fraction,
+    GeneralSettings, LeverageSettings, ManualSettings, ProfitState, SignalsSettings,
+    day_fraction_to_minutes, minutes_to_day_fraction,
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,

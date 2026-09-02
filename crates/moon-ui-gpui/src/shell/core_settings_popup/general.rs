@@ -22,13 +22,15 @@ use crate::shell::core_settings::draft::{
     TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS, parse_num,
 };
 
-use super::widgets::{caption, def_alert_strategy_row, flag, num, slider, stretch_field};
+use super::widgets::{
+    caption, def_alert_strategy_row, flag, num, slider, sound_cell, stretch_field,
+};
 use super::{SettingsWidgets, TabCtx, TextEditors};
 
 /// Editors this tab owns; see [`super::field_specs`] for the tuple's shape.
 ///
-/// Both belong to the leverage block: the fixed-leverage target beside its checkbox, and Moonbot's
-/// free-form "Config" rules line.
+/// Two belong to the leverage block — the fixed-leverage target beside its checkbox and Moonbot's
+/// free-form "Config" rules line — and two are the price-approach alerts' levels.
 #[allow(clippy::type_complexity)]
 pub(super) fn field_specs(
     draft: &CoreConfig,
@@ -53,6 +55,29 @@ pub(super) fn field_specs(
             l.lev_control.clone(),
             |d, t| d.leverage.lev_control = t.to_string(),
             0.0,
+        ),
+        // Whole per cent, as the wire carries them. Unclamped for the same reason `gen-fix-lev` is:
+        // the editor re-reads the draft only on a re-seed, so clamping mid-typing would leave one
+        // number on screen and another in the packet.
+        (
+            "gen-sell-alert-lvl",
+            draft.signals.sell_alert_level.to_string(),
+            |d, t| {
+                if let Some(v) = parse_num(t) {
+                    d.signals.sell_alert_level = v.round() as i32;
+                }
+            },
+            40.0,
+        ),
+        (
+            "gen-buy-alert-lvl",
+            draft.signals.buy_alert_level.to_string(),
+            |d, t| {
+                if let Some(v) = parse_num(t) {
+                    d.signals.buy_alert_level = v.round() as i32;
+                }
+            },
+            40.0,
         ),
     ]
 }
@@ -369,19 +394,93 @@ pub(super) fn general_tab(
         "core-frame-actions",
         t!("core_settings.frame_actions").to_string(),
     )
-    .child(v_flex().w_full().gap(gap).children(def_alert_strategy_row(
-        core,
-        editors.def_strategy,
-        backend,
-        p,
-        cx,
-    )));
+    .child(
+        v_flex()
+            .w_full()
+            .gap(gap)
+            .children(def_alert_strategy_row(core, backend, p, cx)),
+    );
+
+    // --- Moonbot's two price-approach alerts, laid out as its own page has them: the level inside
+    // the checkbox caption AND in an editor beside it, with the sound picker under each caption.
+    //
+    // The sound plays HERE rather than on the core; see `backend::alert_sound`.
+    let sig = &draft.signals;
+    let sounds = popup_group(
+        "core-frame-alert-sounds",
+        t!("core_settings.frame_alert_sounds").to_string(),
+    )
+    .child(
+        v_flex()
+            .w_full()
+            .gap(gap)
+            .child(flag(
+                "gen-sell-alert-on",
+                t!(
+                    "core_settings.sell_alert_line",
+                    v = sig.sell_alert_level.to_string()
+                )
+                .to_string(),
+                sig.play_sell_alert,
+                view,
+                |d, on| d.signals.play_sell_alert = on,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(sound_cell(
+                        "gen-sell-alert-sound",
+                        sig.signal_sound_2,
+                        view,
+                        |d, v| d.signals.signal_sound_2 = v,
+                        p,
+                        cx,
+                    ))
+                    .child(div().flex_1())
+                    .children(num(widgets, "gen-sell-alert-lvl", cx)),
+            )
+            .child(flag(
+                "gen-buy-alert-on",
+                t!(
+                    "core_settings.buy_alert_line",
+                    v = sig.buy_alert_level.to_string()
+                )
+                .to_string(),
+                sig.play_buy_alert,
+                view,
+                |d, on| d.signals.play_buy_alert = on,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(sound_cell(
+                        "gen-buy-alert-sound",
+                        sig.buy_signal_sound,
+                        view,
+                        |d, v| d.signals.buy_signal_sound = v,
+                        p,
+                        cx,
+                    ))
+                    .child(div().flex_1())
+                    .children(num(widgets, "gen-buy-alert-lvl", cx)),
+            ),
+    );
 
     h_flex()
         .w_full()
         .items_start()
         .gap(design::ui_px(cx, 10.0))
-        .child(v_flex().flex_1().gap(design::ui_px(cx, 8.0)).child(stops))
+        .child(
+            v_flex()
+                .flex_1()
+                .gap(design::ui_px(cx, 8.0))
+                .child(stops)
+                .child(sounds),
+        )
         .child(
             v_flex()
                 .flex_1()

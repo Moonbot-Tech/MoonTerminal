@@ -23,7 +23,7 @@ use crate::feed::{
     AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
     CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
     CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings, LeverageSettings,
-    ManualSettings, day_fraction_to_minutes, minutes_to_day_fraction,
+    ManualSettings, SignalsSettings, day_fraction_to_minutes, minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -47,7 +47,7 @@ const ECHO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// "touched" and writes it back, the exact opposite of what a mask is for.
 ///
 /// `apply_core_config` writes only the areas named here, so two edits queued before either's echo
-/// arrives cannot restore each other's fields, and the gear popup's mask — naming only the four
+/// arrives cannot restore each other's fields, and the gear popup's mask — naming only the five
 /// rendered sections — cannot reach the manual block at all, checkbox on or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldMask {
@@ -55,6 +55,10 @@ pub struct FieldMask {
     btc_blink: bool,
     general: bool,
     leverage: bool,
+    /// The `signals` section's two price-approach alerts. The FIRST field the terminal writes
+    /// outside `trading`/`visual`; the send carries every section either way, so this narrows only
+    /// when those six fields are overwritten, exactly as the four above do for theirs.
+    signals: bool,
     /// `trading.ignore_strat_sell_price`, the one manual-block field the terminal still WRITES.
     ///
     /// It is core behaviour, not a value the terminal can hold locally: it decides whether the core
@@ -70,10 +74,11 @@ impl FieldMask {
         btc_blink: false,
         general: false,
         leverage: false,
+        signals: false,
         ignore_strat_sell_price: false,
     };
 
-    /// The four gear-popup sections and nothing else. The manual block is deliberately absent: a
+    /// The five gear-popup sections and nothing else. The manual block is deliberately absent: a
     /// popup OK may never change a manual-trading field, checkbox on or off — see
     /// `commit_core_draft` in `moon-ui-gpui`.
     pub const RENDERED_SECTIONS: Self = Self {
@@ -81,6 +86,7 @@ impl FieldMask {
         btc_blink: true,
         general: true,
         leverage: true,
+        signals: true,
         ignore_strat_sell_price: false,
     };
 
@@ -96,6 +102,7 @@ impl FieldMask {
             btc_blink: self.btc_blink || other.btc_blink,
             general: self.general || other.general,
             leverage: self.leverage || other.leverage,
+            signals: self.signals || other.signals,
             ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
         }
     }
@@ -476,6 +483,9 @@ fn rejection_within_mask(
     if touched.leverage && expected.leverage != actual.leverage {
         areas.push(CoreConfigArea::Leverage);
     }
+    if touched.signals && expected.signals != actual.signals {
+        areas.push(CoreConfigArea::Signals);
+    }
     if touched.ignore_strat_sell_price
         && expected.manual.ignore_strat_sell_price != actual.manual.ignore_strat_sell_price
     {
@@ -491,9 +501,18 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let b = &cfg.visual.blink_config;
     let t = &cfg.trading;
     let m = &cfg.trading.auto_manage_lev;
+    let sig = &cfg.signals;
     let hotkeys = &cfg.ui.hotkeys_config;
     let strat_buttons = &cfg.trading.manual_strats_config;
     CoreConfig {
+        signals: SignalsSettings {
+            play_sell_alert: sig.play_sell_alert,
+            sell_alert_level: sig.sell_alert_level,
+            signal_sound_2: sig.signal_sound_2,
+            play_buy_alert: sig.play_buy_alert,
+            buy_alert_level: sig.buy_alert_level,
+            buy_signal_sound: sig.buy_signal_sound,
+        },
         auto_start: AutoStartSettings {
             auto_start: a.auto_start,
             auto_detect_on: a.auto_detect_on,
@@ -640,9 +659,27 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
     if touched.leverage {
         apply_leverage(cfg, &wanted.leverage);
     }
+    if touched.signals {
+        apply_signals(cfg, &wanted.signals);
+    }
     if touched.ignore_strat_sell_price {
         cfg.trading.ignore_strat_sell_price = wanted.manual.ignore_strat_sell_price;
     }
+}
+
+/// Apply the two price-approach alerts to the `signals` section.
+///
+/// Six fields of a section with about a hundred: everything else in it — including its
+/// `unknown_tail` — travels back untouched, exactly as `apply_general` leaves the rest of
+/// `trading` alone.
+fn apply_signals(cfg: &mut SharedConfig, s: &SignalsSettings) {
+    let sig = &mut cfg.signals;
+    sig.play_sell_alert = s.play_sell_alert;
+    sig.sell_alert_level = s.sell_alert_level;
+    sig.signal_sound_2 = s.signal_sound_2;
+    sig.play_buy_alert = s.play_buy_alert;
+    sig.buy_alert_level = s.buy_alert_level;
+    sig.buy_signal_sound = s.buy_signal_sound;
 }
 
 /// Apply the General tab to the exit rules, iceberg flags and blacklist in `trading`.

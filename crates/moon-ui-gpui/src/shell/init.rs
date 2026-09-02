@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::*;
-use rust_i18n::t;
 
 use moon_ui::{
     DockArea, DockEvent, DockItem, MoonBackgroundPolicy, MoonInputEvent, MoonInputState,
@@ -454,17 +453,6 @@ impl Shell {
         let sl_input = cx.new(|cx| MoonInputState::new(window, cx));
         let lev_input = cx.new(|cx| MoonInputState::new(window, cx));
         let blacklist_input = cx.new(|cx| MoonInputState::new(window, cx));
-        let def_strategy_input = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .placeholder(t!("core_settings.def_strategy_search").to_string())
-        });
-        // Repaint on strategy-search input so the popup can refilter its list.
-        cx.subscribe(&def_strategy_input, |_this, _, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                cx.notify();
-            }
-        })
-        .detach();
         // Start in multiline mode, but make Enter submit rather than insert a newline.
         let blacklist_area = cx.new(|cx| {
             MoonInputState::new(window, cx)
@@ -586,7 +574,6 @@ impl Shell {
             core_settings_seed_gen: 0,
             blacklist_input,
             blacklist_area,
-            def_strategy_input,
             open_metric_popup: None,
             focus,
             modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),

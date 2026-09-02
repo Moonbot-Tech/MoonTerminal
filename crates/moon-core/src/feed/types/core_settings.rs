@@ -28,6 +28,8 @@ pub struct CoreConfig {
     pub auto_start: AutoStartSettings,
     /// `visual.blink_config`.
     pub btc_blink: BtcBlinkSettings,
+    /// `signals` — the price-approach alert sounds.
+    pub signals: SignalsSettings,
     /// Exit rules, iceberg and blacklist fields spread across `trading`.
     pub general: GeneralSettings,
     /// `trading.auto_manage_lev` and `trading.auto_lev_control`.
@@ -35,6 +37,41 @@ pub struct CoreConfig {
     /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
     /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
     pub manual: ManualSettings,
+}
+
+/// Moonbot's two price-approach alerts: a sound when the last price comes within N per cent of an
+/// order's sell price, and the same for its buy price.
+///
+/// Field names follow the wire names in `moonproto::shared_config::SignalsSection`, like every
+/// other block here, which is why the SELL alert's sound is spelled `signal_sound_2`: that is what
+/// the section calls it. The pairing is read off the section's own field order, where each sound
+/// sits with the alert flag and level it belongs to — `signal_sound_2` between `sell_alert_level`
+/// and `play_sell_alert`, `buy_signal_sound` beside `play_buy_alert` and `buy_alert_level`. The
+/// wire's own doc for `signal_sound_2` says only "the second alert tier", so the pairing is the
+/// one thing here that layout evidence rather than a stated contract settles; a core whose two
+/// rows come back swapped in the popup is the symptom, and the fix is to swap them here.
+///
+/// The two levels are WHOLE PER CENT, as the wire carries them and as Moonbot's own spinner shows
+/// them — not fractions. Zero is a legitimate value and means "when the price has reached the
+/// order's price", not "off"; the flags are what switch each alert off.
+///
+/// The sounds are 1-BASED ordinals into Moonbot's own sound list, not names: the protocol carries
+/// no table to label them with. The terminal's copy of that list, in the order Moonbot shows it,
+/// lives beside the player in `moon-ui-gpui`'s `media::sound`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignalsSettings {
+    /// Play a sound when the price approaches an order's SELL price.
+    pub play_sell_alert: bool,
+    /// How near, in whole per cent, the price must come for the sell alert to fire.
+    pub sell_alert_level: i32,
+    /// Sound for the sell alert, as a 1-based ordinal into Moonbot's sound list.
+    pub signal_sound_2: i32,
+    /// Play a sound when the price approaches an order's BUY price.
+    pub play_buy_alert: bool,
+    /// How near, in whole per cent, the price must come for the buy alert to fire.
+    pub buy_alert_level: i32,
+    /// Sound for the buy alert, as a 1-based ordinal into Moonbot's sound list.
+    pub buy_signal_sound: i32,
 }
 
 /// Automatic start, stop, restart, and panic-sell rules — the Moonbot "AutoStart" settings tab.
@@ -393,6 +430,7 @@ pub enum CoreConfigArea {
     General,
     Leverage,
     Manual,
+    Signals,
 }
 
 /// What a shared-config echo disagreed with the terminal about, restricted to the fields THIS edit

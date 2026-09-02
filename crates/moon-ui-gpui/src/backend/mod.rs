@@ -2,6 +2,7 @@
 //! `main.rs`, the crate root, so its private fields are visible to descendant modules. Methods in
 //! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
+mod alert_sound;
 pub(crate) mod core_warn;
 mod detect_sound;
 mod figures;
@@ -12,6 +13,7 @@ pub(crate) mod server_chart;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use alert_sound::AlertLeg;
 pub(crate) use manual_trading::{
     FIELD_USE_HOOK_STRATEGY, IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource,
     ManualStop, MsExitOverlay, PanicLocal, PendingStop, SettleKey, hook_of, manual_strategy_id,

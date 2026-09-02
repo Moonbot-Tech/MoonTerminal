@@ -535,6 +535,7 @@ fn area_caption(area: CoreConfigArea) -> String {
         CoreConfigArea::General => "toolbar.core_config_area_general",
         CoreConfigArea::Leverage => "toolbar.core_config_area_leverage",
         CoreConfigArea::Manual => "toolbar.core_config_area_manual",
+        CoreConfigArea::Signals => "toolbar.core_config_area_signals",
     };
     t!(key).to_string()
 }

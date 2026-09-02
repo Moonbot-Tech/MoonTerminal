@@ -292,6 +292,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_chart_alerts_activity: 0,
         last_detect_seq: std::collections::HashMap::new(),
         last_detect_rev: std::collections::HashMap::new(),
+        last_orders_alert_rev: std::collections::HashMap::new(),
+        price_alert_near: std::collections::HashMap::new(),
         default_alert_sound: "ding1".to_string(),
         // Seeded right after construction from the persisted schedule, once the clock zone is
         // settled; see `refresh_quiet_state` below.
@@ -538,7 +540,12 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         b.sync_remote_alerts();
                     }
                     // Play core detect/alert sounds for new detects that specify a sound.
-                    b.play_detect_sounds();
+                    let detect_played = b.play_detect_sounds();
+                    // Moonbot's price-approach alerts, on the same drain and behind their own
+                    // per-core revision gate. They are told whether the detect scan above already
+                    // used this drain's one sound: both go through the same player, which replaces
+                    // what it is playing rather than mixing.
+                    b.play_price_alert_sounds(detect_played);
                     if drain.order_lines_data {
                         let chart_consumers = b.live_chart_consumers();
                         for chart in chart_consumers {

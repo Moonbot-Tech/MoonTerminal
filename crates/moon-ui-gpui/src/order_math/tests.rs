@@ -2,7 +2,7 @@
 
 use moon_core::feed::OrderRow;
 
-use super::{order_pnl, position_qty};
+use super::{order_pnl, pct_to_entry, pct_to_exit, position_qty};
 
 /// Build a live long order whose numeric fields may be changed by one test.
 ///
@@ -99,4 +99,75 @@ fn pnl_respects_short_direction_and_refuses_missing_prices() {
     assert_eq!(order_pnl(&profitable_short), Some(40.0));
     assert_eq!(order_pnl(&missing_entry), None);
     assert_eq!(order_pnl(&missing_mark), None);
+}
+
+/// The distance to an order's prices counts DOWN for both directions — the sin this repo has
+/// already committed twice (`sl_level` on a short, and the short's PnL entry leg).
+///
+/// Plausible breakage: one formula for both sides makes the alert fire on a price running AWAY
+/// from the target on every short, and stay silent on the approach it was set for. No type sees it
+/// and the long case — the one anybody tests by hand — stays correct throughout.
+#[test]
+fn the_distance_to_a_price_counts_down_for_a_short_too() {
+    // LONG: the entry waits BELOW the market and the exit ABOVE it, so both still have room.
+    let mut long = order(100.0, 0.0);
+    long.sell_price = 110.0;
+    // At 101 the price has 9 of 110 left to rise before the exit,
+    assert!((pct_to_exit(&long, 101.0).unwrap() - 9.0 / 110.0 * 100.0).abs() < 1e-9);
+    // and 1 of 100 left to fall before the entry.
+    assert!((pct_to_entry(&long, 101.0).unwrap() - 1.0).abs() < 1e-9);
+
+    // SHORT: the mirror image — entry ABOVE the market, exit BELOW it. The same two gaps come out
+    // POSITIVE here too, which is the whole point: one formula for both sides would sign-flip them.
+    let mut short = order(100.0, 0.0);
+    short.is_short = true;
+    short.sell_price = 90.0;
+    assert!((pct_to_exit(&short, 99.0).unwrap() - 9.0 / 90.0 * 100.0).abs() < 1e-9);
+    assert!((pct_to_entry(&short, 99.0).unwrap() - 1.0).abs() < 1e-9);
+}
+
+/// The live price comes from the CALLER, not from the row: `OrderRow::price` is only as fresh as
+/// the last order-table publish, and price movement does not publish one.
+///
+/// Plausible breakage: reading `r.price` again makes the alert compare against a price minutes old,
+/// so it fires late, early, or never — and every arithmetic test above still passes.
+#[test]
+fn the_row_s_own_stale_price_is_not_what_is_measured() {
+    let mut r = order(100.0, 500.0);
+    r.sell_price = 110.0;
+    // The row claims 500; the caller says 101, and 101 is what the answer is built from.
+    assert!((pct_to_exit(&r, 101.0).unwrap() - 9.0 / 110.0 * 100.0).abs() < 1e-9);
+}
+
+/// A price that has gone PAST the target reads negative rather than as a large positive gap, which
+/// is what makes Moonbot's default level of zero mean "it got there".
+#[test]
+fn a_price_past_the_target_is_negative() {
+    let mut long = order(100.0, 0.0);
+    long.sell_price = 110.0;
+    let left = pct_to_exit(&long, 120.0).unwrap();
+    assert!(left < 0.0, "past the exit must be negative, got {left}");
+    assert!(left >= -10.0);
+}
+
+/// Unusable prices answer `None` instead of `Some(NaN)`, for the reason `usable_price` states.
+#[test]
+fn an_unusable_price_yields_no_distance() {
+    let mut r = order(100.0, 0.0);
+    r.sell_price = 0.0;
+    assert_eq!(
+        pct_to_exit(&r, 99.0),
+        None,
+        "an exit of zero is not a target"
+    );
+
+    r.sell_price = 110.0;
+    assert_eq!(pct_to_exit(&r, f64::NAN), None);
+    assert_eq!(pct_to_entry(&r, f64::NAN), None);
+    assert_eq!(
+        pct_to_exit(&r, f64::INFINITY),
+        None,
+        "inf - inf would be NaN one step later"
+    );
+    assert_eq!(pct_to_exit(&r, 0.0), None, "no price yet is not a distance");
 }

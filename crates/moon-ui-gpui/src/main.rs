@@ -567,6 +567,22 @@ struct Backend {
     /// The drain wakes hundreds of times per second while detects change infrequently; without this
     /// gate, every wake would scan as many as 2,000 detects per core.
     last_detect_rev: std::collections::HashMap<CoreId, u64>,
+    /// Last observed `(orders_table_rev, order_lines_rev)` per core, gating
+    /// `play_price_alert_sounds` as `last_detect_rev` gates the detect scan.
+    ///
+    /// BOTH, because they answer different halves of the question: the table revision moves when
+    /// the order SET changes, and the line revision is the one that moves when the PRICE under
+    /// those orders does — a trace point publishes order LINES and never touches the table. Gating
+    /// on the table alone made the alert wait for an unrelated order change before it would look
+    /// at a price at all.
+    last_orders_alert_rev: std::collections::HashMap<CoreId, (u64, u64)>,
+    /// Order legs currently INSIDE their price-approach band, per core. The alert is an edge: a
+    /// leg already in this set has announced itself and stays silent until it leaves and returns.
+    /// An absent core has not been seeded yet and announces nothing on its first pass.
+    price_alert_near: std::collections::HashMap<
+        CoreId,
+        std::collections::HashSet<(u64, crate::backend::AlertLeg)>,
+    >,
     /// Default sound for an alert without a strategy, selected in the Alerts panel.
     /// Stored as a WAV filename stem; see `sound` and `detect_sound`.
     default_alert_sound: String,
