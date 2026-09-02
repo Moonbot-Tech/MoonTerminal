@@ -1704,9 +1704,20 @@ pub(super) fn run(
         // disabled still needs every sample to correct its report rows' times. Sample
         // unconditionally, ahead of and independent from the publication-gated block below, so
         // no flag combination can leave this core with reports to correct and no source to
-        // measure them from.
+        // measure them from. This loop now carries TWO unconditional consumers of the same raw
+        // line for the same reason: a rejected `request_version_update` is fire-and-forget, so
+        // `ServerLog` is the only reply channel, and `feed.log = false` must not be able to hide
+        // it from the update state machine any more than from the clock-offset estimator above.
         for ev in &events {
             if let Event::ServerLog(l) = ev {
+                if crate::feed::is_core_update_rejection(&l.msg) {
+                    log::warn!(
+                        "[{}] core update refused: {}",
+                        server.name,
+                        crate::applog::redact::addresses(&l.msg)
+                    );
+                    let _ = tx.send(FeedMsg::CoreUpdateRejected);
+                }
                 let core_time_ms = l.unix_millis();
                 let recv_ms = now_ms_i64();
                 if let Some(offset_secs) = offset_estimator.observe(core_time_ms, recv_ms) {

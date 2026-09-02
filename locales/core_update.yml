@@ -55,6 +55,10 @@ core_update.phase.failed.abandoned:
   ru: "Прервано выходом из приложения"
   en: "Abandoned when the application quit"
   es: "Abandonado al cerrar la aplicación"
+core_update.phase.failed.rejected:
+  ru: "Ядро отклонило запрошенную сборку"
+  en: "Core refused the requested build name"
+  es: "El núcleo rechazó el nombre de la build solicitada"
 
 # --- Unverified: the update finished but the terminal could not confirm the returned build ---
 core_update.phase.unverified.unavailable:
@@ -177,6 +181,14 @@ core_update.menu.named_prompt:
   ru: "Имя сборки для %{core}:"
   en: "Build name for %{core}:"
   es: "Nombre de la build para %{core}:"
+core_update.menu.named_ph:
+  ru: "MoonBot-F8 или %{cmd} MoonBot-F8"
+  en: "MoonBot-F8 or %{cmd} MoonBot-F8"
+  es: "MoonBot-F8 o %{cmd} MoonBot-F8"
+core_update.menu.named_hint:
+  ru: "Можно ввести только имя сборки или вставить всю команду установки — подойдёт и то, и другое."
+  en: "You can type just the build name, or paste the whole install command — either works."
+  es: "Puedes escribir solo el nombre de la build, o pegar el comando de instalación completo — ambos funcionan."
 core_update.menu.unavailable:
   ru: "Недоступно — ядро не готово или уже обновляется"
   en: "Unavailable — core not ready or already updating"

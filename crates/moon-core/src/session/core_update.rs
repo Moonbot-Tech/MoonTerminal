@@ -92,6 +92,27 @@ pub enum CoreUpdatePhase {
         /// update's.
         epoch0: u64,
         sent_at_ms: i64,
+        /// `CoreData::update_rejects` read at the same instant as `from` and `epoch0`, above. A
+        /// rejection is attributed to THIS attempt only if the counter has moved past this
+        /// baseline -- the same snapshot/compare idiom `epoch0` already uses, and for the same
+        /// reason: a core can be rejected for a PRIOR attempt's target while this one sits queued
+        /// behind it, and a baseline taken at send time is what keeps that from being misread as
+        /// this attempt's own refusal.
+        ///
+        /// RESIDUAL, deliberately unfixed: this counter proves the rejection was OBSERVED after
+        /// the send, never that it was CAUSED by it -- `ServerLogEvent` carries only a time and
+        /// free text, no command id and no target identifier (MoonProto `events/types.rs:143-145`),
+        /// so there is no wire correlator to check instead. A `BGF-SUB4` line already in flight at
+        /// send time can be counted after this snapshot and misattributed to this attempt. Bounded
+        /// three ways, matching the false-positive analysis in
+        /// [`crate::feed::is_core_update_rejection`]: the
+        /// departure check runs first in the arm that reads this field, so a core that actually
+        /// began updating is unreachable here; the gate below confines this branch to
+        /// `UpdateTarget::Named` attempts, since Release and Named share one wire call; and the
+        /// window is only the fraction of a second between this send and the first drain that
+        /// follows it. The failure direction stays a lane that advances one attempt early, never
+        /// one that wedges.
+        rejects0: u64,
     },
     /// The core has been observed leaving `Ready` (`conn_epoch` moved past `epoch0`) and has not
     /// yet been observed settled again.
@@ -232,6 +253,14 @@ pub enum UpdateFailure {
     /// The application quit gracefully while this attempt was still in flight; see
     /// [`SessionManager::abandon_core_updates`].
     Abandoned,
+    /// The core answered the sent command with [`crate::feed::CORE_UPDATE_REJECT_CODE`]: it
+    /// refused the TARGET (the version name did not exist on that build's update channel), so
+    /// nothing was started and nothing is in flight on that IP. The lane ADVANCES -- contrast with
+    /// [`NeverDropped`](Self::NeverDropped), which is untouched and stays for genuine silence,
+    /// where the terminal cannot prove the core did not start an update it simply failed to
+    /// observe. See the PERSISTENCE NOTE on [`CoreUpdateOutcome::Unverified`] above: this variant
+    /// carries the same round-trip hazard as any other addition to this enum, not mitigated here.
+    Rejected,
 }
 
 /// One closed row of update history.
@@ -1019,12 +1048,18 @@ impl SessionManager {
                     from,
                     epoch0,
                     sent_at_ms,
+                    rejects0,
                 } => {
                     let Some(data) = self.store.core(core) else {
                         // Reconciled on the next tick's step 1; skip for now rather than acting on
                         // stale data.
                         continue;
                     };
+                    // DEPARTURE WINS: the epoch check must run before the rejection check. A core
+                    // that provably left `Ready` started an update -- it is already `Waiting` and
+                    // this arm's `data.update_rejects` read is unreachable for it -- and must never
+                    // be closed as refused on the strength of a rejection line that in fact belongs
+                    // to an earlier, already-superseded attempt on the same core.
                     if data.conn_epoch > *epoch0 {
                         transitions.push((
                             core,
@@ -1034,6 +1069,32 @@ impl SessionManager {
                                 epoch0: *epoch0,
                                 sent_at_ms: *sent_at_ms,
                                 left_at_ms: now_ms,
+                            },
+                        ));
+                    } else if matches!(target, UpdateTarget::Named(_))
+                        && data.update_rejects > *rejects0
+                    {
+                        // Gated to a NAMED target: MoonProto routes a Release update through the
+                        // SAME `request_version_update` call as a named one (moonproto
+                        // `client/active_runtime/handles.rs:931-940`), so a `BGF-SUB4` line does
+                        // not identify the attempt it answers. Without this gate a rejection
+                        // line observed while a Release attempt is `Sent` would close that attempt
+                        // as `Failed(Rejected)`, violating "a plain release update behaves exactly
+                        // as it does today". A Release attempt therefore always falls through to
+                        // the timeout branch below, same as before this feature existed.
+                        let Some(lane_addr) = self.lane_or_skip(core, "Sent") else {
+                            continue;
+                        };
+                        log::warn!(
+                            "core {core}: update target refused by the core, advancing lane"
+                        );
+                        transitions.push((
+                            core,
+                            Transition::Done {
+                                lane_addr,
+                                from: *from,
+                                outcome: CoreUpdateOutcome::Failed(UpdateFailure::Rejected),
+                                stall: false,
                             },
                         ));
                     } else if now_ms - sent_at_ms >= SEND_TO_DROP_TIMEOUT_MS {
@@ -1257,6 +1318,7 @@ impl SessionManager {
             let current_endpoint = data.endpoint;
             let from = data.server_version;
             let epoch0 = data.conn_epoch;
+            let rejects0 = data.update_rejects;
 
             match current_endpoint {
                 Some(ep) if ep.address == addr => {
@@ -1395,6 +1457,7 @@ impl SessionManager {
                                     from,
                                     epoch0,
                                     sent_at_ms: now_ms,
+                                    rejects0,
                                 },
                             );
                         }

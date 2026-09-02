@@ -154,8 +154,8 @@ pub(super) fn open_update_row_menu(
 /// closure and needs no field anywhere else, following `core_group_dialogs::open_save_dialog`'s
 /// shape (`crates/moon-ui-gpui/src/controls/core_group_dialogs.rs:140`). No list is offered --
 /// MoonProto's `request_version_update` takes an arbitrary build name and the terminal never
-/// learns what builds exist, so the field is deliberately free text, trimmed on submit with an
-/// empty result treated as "do nothing".
+/// learns what builds exist, so the field is deliberately free text. Submission normalizes a
+/// pasted complete install command to its bare name; an empty result still means "do nothing".
 ///
 /// Args:
 ///     backend: Shared terminal state, forwarded to `update_core` on submit.
@@ -174,7 +174,15 @@ fn open_named_dialog(
     window: &mut Window,
     app: &mut App,
 ) {
-    let input = app.new(|cx| MoonInputState::new(window, cx));
+    let input = app.new(|cx| {
+        MoonInputState::new(window, cx).placeholder(
+            t!(
+                "core_update.menu.named_ph",
+                cmd = moon_core::feed::CORE_UPDATE_COMMAND_WORD
+            )
+            .to_string(),
+        )
+    });
     input
         .clone()
         .update(app, |input, cx| input.focus(window, cx));
@@ -185,6 +193,7 @@ fn open_named_dialog(
         let confirm_input = input.clone();
         let confirm_backend = backend.clone();
         let prompt = t!("core_update.menu.named_prompt", core = core_name.clone()).to_string();
+        let hint = t!("core_update.menu.named_hint").to_string();
         dialog
             .w(px(360.0))
             .close_button(true)
@@ -213,7 +222,8 @@ fn open_named_dialog(
                             MoonInput::new("core-update-named-input")
                                 .state(&field)
                                 .small(),
-                        ),
+                        )
+                        .child(div().text_color(moon(p.text_muted)).child(hint.clone())),
                 )
             })
             .footer(named_footer(confirm_input, confirm_backend, core, p))
@@ -255,20 +265,27 @@ fn named_footer(
                 .variant(MoonButtonVariant::Blue)
                 .label(t!("dialogs.done").to_string())
                 .on_click(move |_, window, cx| {
-                    // An empty or whitespace-only name does nothing and closes -- there is no list
-                    // to validate against, so trimmed-empty is the only rejection this dialog can
-                    // make. Capped like `core_groups`' own sanitize shape: this travels unbounded
-                    // over the MoonProto wire and is written verbatim into the durable
-                    // `cfg/core_updates.json` history otherwise.
-                    let typed: String = input
-                        .read(cx)
-                        .value()
-                        .trim()
-                        .chars()
-                        .take(NAMED_BUILD_NAME_MAX)
-                        .collect();
-                    // Re-trim: truncation can leave a trailing space the first trim had inside
-                    // the name.
+                    // A tester may type either the bare build name or paste the whole install
+                    // command they have in front of them (`InstallTestVersion MoonBot-F8`).
+                    // `normalize_named_build` strips a
+                    // leading command-word TOKEN case-insensitively; `None` covers both an empty
+                    // field and a value that is ONLY the command word, and both close the dialog
+                    // without sending anything -- there is no list to validate against, so this is
+                    // still the only rejection this dialog can make.
+                    let Some(normalized) =
+                        moon_core::feed::normalize_named_build(&input.read(cx).value())
+                    else {
+                        window.close_dialog(cx);
+                        return;
+                    };
+                    // Cap AFTER normalizing, never before: capping first could slice
+                    // `InstallTestVersion` mid-word and defeat the strip above. Capped like
+                    // `core_groups`' own sanitize shape: this travels unbounded over the MoonProto
+                    // wire and is written verbatim into the durable `cfg/core_updates.json` history
+                    // otherwise.
+                    let typed: String = normalized.chars().take(NAMED_BUILD_NAME_MAX).collect();
+                    // Re-trim: truncation can leave a trailing space the normalized name had
+                    // inside it.
                     let typed = typed.trim().to_string();
                     window.close_dialog(cx);
                     if typed.is_empty() {

@@ -224,6 +224,15 @@ pub struct CoreData {
     /// the wait instead. Deliberately NOT reset by [`Self::begin_connection_attempt`]: a monotonic
     /// episode counter that resets on a retry is not one.
     pub conn_epoch: u64,
+    /// Monotonic count of `FeedMsg::CoreUpdateRejected` this core has reported, wrapping on
+    /// overflow.
+    ///
+    /// NEVER reset by the `Status` arm below, or by any other connection-epoch reset — unlike
+    /// [`Self::server_version`]. `session::core_update`'s `Sent` arm attributes a rejection to one
+    /// attempt by snapshotting this counter at send time and comparing `>` against that snapshot;
+    /// clearing it on a reconnect blip would lose a rejection observed just before the blip and
+    /// silently regress that attempt back to the 180s `NeverDropped` stall it exists to avoid.
+    pub update_rejects: u64,
     /// Unshown Engine action results for toasts. The active window's shell drains them through
     /// [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
@@ -395,6 +404,7 @@ impl CoreData {
             api_quota: None,
             server_version: None,
             conn_epoch: 0,
+            update_rejects: 0,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
             log: VecDeque::new(),
@@ -1025,6 +1035,9 @@ impl CoreData {
             }
             FeedMsg::CoreVersion { version } => {
                 self.server_version = Some(version);
+            }
+            FeedMsg::CoreUpdateRejected => {
+                self.update_rejects = self.update_rejects.wrapping_add(1);
             }
             // Identity, base-currency, and market wake-up messages are not routed into this store.
             // The build number above IS, which is why it sits in an arm of its own: it belongs to
