@@ -233,6 +233,29 @@ pub fn header(
                 }
                 _ => t!("update.tooltip").to_string(),
             };
+            // An offered update is the only call to action this header ever grows, and it appears
+            // on a window whose every other control is `Panel` — so neutral panel chrome is
+            // exactly what a user scanning the row does not stop on.
+            //
+            // `Green` rather than the `Blue` primary variant, and the reason is contrast, not
+            // taste. Every tinted MoonUI variant paints its LABEL in the accent colour over a
+            // ~10% wash of it, so the label's legibility is the palette token's own contrast
+            // against this header. In the light theme `Blue` resolves to `p.accent` `#009DFF`
+            // (`button.rs:866`, `tokens.rs:190`) — about 2.5:1 on `shell_high`, far under the
+            // 4.5:1 floor, and this label is 10px `Micro`. `Amber` `#B97824` is no better at
+            // ~3.6:1. `Green` is the one accent MoonUI gave a light-specific foreground,
+            // `green_text` `#0E6E45` (`tokens.rs:186`, `success_fg` at `button.rs:868`), which
+            // clears the floor at roughly 6:1 while staying the accent in the dark theme. It is
+            // also the right semantic: something good is available, not something wrong.
+            //
+            // Every other state keeps `Panel` deliberately. Installing/Restarting already read as
+            // busy through `loading(busy)`, and Failed already reads through its retry label —
+            // accenting those would advertise an action that is either underway or just refused.
+            let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {
+                MoonButtonVariant::Green
+            } else {
+                MoonButtonVariant::Panel
+            };
             let busy = update_state.busy();
             let updater = updater.clone();
             design::chrome_section(cx)
@@ -244,7 +267,7 @@ pub fn header(
                             MoonButton::new("terminal-update")
                                 .label(label)
                                 .size(MoonButtonSize::Micro)
-                                .variant(MoonButtonVariant::Panel)
+                                .variant(variant)
                                 .loading(busy)
                                 .on_click(move |_, _window, cx| {
                                     crate::update::UpdateController::start_install(&updater, cx);

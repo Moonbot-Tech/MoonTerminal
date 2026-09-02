@@ -155,6 +155,41 @@ fn update_button_and_divider_share_the_pre_ticker_header_cluster() {
     );
 }
 
+/// `chrome/terminal_chrome.rs:header` must reserve accent chrome for `Available` and pass that
+/// state-specific variant into the update button. Replacing the `Available(_)` branch's accent
+/// with `Panel` makes a newly available update look like ordinary header chrome and easy to miss.
+#[test]
+fn available_updates_keep_an_accented_button_while_other_states_stay_panel() {
+    let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
+    let header = braced_body(&chrome, "pub fn header(");
+    let variant = header
+        .split_once(
+            "let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {",
+        )
+        .expect("header update cluster must select a variant by update state")
+        .1
+        .split_once("let busy = update_state.busy();")
+        .expect("variant selection must finish before update busy state")
+        .0;
+    let (available, non_available) = variant
+        .split_once("} else {")
+        .expect("available and non-available states must choose separately");
+    let button = chain_between(
+        header,
+        "MoonButton::new(\"terminal-update\")",
+        ".render(),",
+        "update button",
+    );
+
+    assert!(
+        available.contains("MoonButtonVariant::")
+            && !available.contains("MoonButtonVariant::Panel")
+            && non_available.contains("MoonButtonVariant::Panel")
+            && button.contains(".variant(variant)"),
+        "only an Available update may choose accent button chrome, and terminal-update must consume it"
+    );
+}
+
 /// Constructing or starting an updater per Shell would let separate windows scan, download, and
 /// replace concurrently instead of observing the one process authority.
 #[test]

@@ -719,6 +719,32 @@ fn status_bar_keeps_three_glanceable_groups() {
     }
 }
 
+/// `shell/status_bar.rs:Shell::status_bar` must add terminal-version before moonbot.pro. Moving
+/// the version item below that link makes the running-version readout the first trailing item a
+/// narrow start-justified status region clips away.
+#[test]
+fn status_bar_prioritizes_the_running_version_before_the_moonbot_link() {
+    let status_bar = code_only(&read_src("shell/status_bar.rs"));
+    let right_items = status_bar
+        .split_once("let mut right_items = Vec::new();")
+        .expect("status bar must construct right items")
+        .1
+        .split_once(".right_items(right_items)")
+        .expect("status bar must pass right items to MoonStatusBar")
+        .0;
+    let version = right_items
+        .find(".id(\"terminal-version\")")
+        .expect("right items must include the running-version readout");
+    let moonbot = right_items
+        .find(".id(\"moonbot-link\")")
+        .expect("right items must include the moonbot.pro link");
+
+    assert!(
+        version < moonbot,
+        "terminal-version must precede moonbot.pro so it survives narrow status-bar clipping"
+    );
+}
+
 /// Protects the row viewport both log surfaces scroll sideways in.
 ///
 /// The plausible edits are dropping the list's own `Hidden` scrollbar — which would ride the right
