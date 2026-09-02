@@ -16,6 +16,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::SettingsView;
+use super::columns::{CONN_INDENT_MARGIN, CONN_INDENT_PAD, CONN_TABLE_INSET};
 use super::entries::{ConnEntry, EntryLabels, flatten_entries};
 use super::table::{conn_row_h_value, server_row};
 use crate::design;
@@ -113,7 +114,7 @@ fn subsection_header_row(
         .w_full()
         .gap_2()
         .items_center()
-        .pl(px(20.0))
+        .pl(px(CONN_TABLE_INSET))
         .pr_1()
         .py_0p5()
         .child(
@@ -775,16 +776,24 @@ impl SettingsView {
                                 st,
                                 app,
                             );
+                            // EVERY core row starts at `CONN_TABLE_INSET`, indented or not, so
+                            // the one header above the list sits over the columns of both. An
+                            // indented row spends that inset on the branch guide (margin, border,
+                            // padding); a pending or ungrouped row spends it all as padding, and
+                            // used to spend none of it at all.
                             if *indented {
                                 div()
-                                    .ml(px(8.0))
-                                    .pl(px(11.0))
+                                    .ml(px(CONN_INDENT_MARGIN))
+                                    .pl(px(CONN_INDENT_PAD))
                                     .border_l_1()
                                     .border_color(rgb(p.border))
                                     .child(built)
                                     .into_any_element()
                             } else {
-                                built
+                                div()
+                                    .pl(px(CONN_TABLE_INSET))
+                                    .child(built)
+                                    .into_any_element()
                             }
                         }
                     }

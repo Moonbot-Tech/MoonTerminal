@@ -19,6 +19,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::columns::{CONN_TABLE_INSET, ConnColAlign, ConnColId, MicroTriggerMetrics};
 use super::{ConnRow, ConnRowIds, SettingsView, build_conn, sync_groups_from_servers};
 use crate::design;
 use crate::panels::common::{RadioMark, radio_items};
@@ -348,6 +349,38 @@ fn paste_key_affix(
         })
 }
 
+/// Rendered-width inputs a Micro `MoonDropdown` trigger resolves itself against.
+///
+/// MIRRORS MoonUI, which exposes no accessor for either number: `MoonDropdown` resolves a
+/// `Scaled(w)` trigger to `max(w * tokens.font(fs) / fs, tokens.ui(14.0) + measure(ellipsis +
+/// caret))`, and `button_text_metrics` gives a Micro trigger `fs = 10.0`. The two terms follow
+/// DIFFERENT sliders -- the first the Font delta, the second UI geometry -- which is why the
+/// floor cannot be folded into the scale.
+///
+/// The glyph run inside that floor is measured within MoonUI; here it is OVER-estimated at two
+/// ems, deliberately and in the safe direction: a column wider than its trigger merely centres
+/// it, while a column narrower than its trigger is the misalignment this module exists to
+/// prevent. If MoonUI's Micro metrics or trigger padding move, this must follow by hand -- the
+/// same standing caveat `design::glyph_btn_w` carries.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The scale and floor every core-table column is laid out against.
+fn micro_trigger_metrics(cx: &App) -> MicroTriggerMetrics {
+    /// Design-reference font size of a `MoonButtonSize::Micro` trigger.
+    const MICRO_TRIGGER_FONT: f32 = 10.0;
+    /// MoonUI's `DROPDOWN_TRIGGER_PAD_X`, its trigger's horizontal visual padding.
+    const TRIGGER_PAD_X: f32 = 14.0;
+
+    MicroTriggerMetrics {
+        scale: design::font_value(cx, MICRO_TRIGGER_FONT) / MICRO_TRIGGER_FONT,
+        min_width: design::ui_value(cx, TRIGGER_PAD_X)
+            + 2.0 * design::font_value(cx, MICRO_TRIGGER_FONT),
+    }
+}
+
 impl SettingsView {
     /// Start (or restart) the first-run hint's repaint chain.
     ///
@@ -570,7 +603,7 @@ fn feed_popover(
             MoonButtonVariant::Neutral
         })
         .trigger_size(MoonButtonSize::Micro)
-        .trigger_width_scaled(52.0)
+        .trigger_width_scaled(ConnColId::Data.spec().basis)
         .menu_width_scaled(272.0)
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
@@ -676,7 +709,7 @@ fn proto_dropdown(
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::Micro)
-        .trigger_width_scaled(52.0)
+        .trigger_width_scaled(ConnColId::Proto.spec().basis)
         .menu_width_scaled(96.0)
         .menu_size(MoonMenuSize::Compact)
         .items(items)
@@ -769,7 +802,7 @@ fn preset_dropdown(
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::Micro)
-        .trigger_width_scaled(72.0)
+        .trigger_width_scaled(ConnColId::Preset.spec().basis)
         .menu_width_scaled(140.0)
         .menu_size(MoonMenuSize::Compact)
         .items(items)
@@ -863,12 +896,13 @@ pub(super) fn server_row(
     } else {
         div().w(px(24.0)).into_any_element()
     };
-    h_flex()
-        .w_full()
-        .gap_1()
-        .items_center()
-        .py_0p5()
-        .child(SettingsView::cell(28.0, false).child(srv_check(
+    // The row is BUILT from `ConnColId::ALL` rather than merely numbered to agree with it: the
+    // array below takes its LENGTH from that list, so a column added, dropped or reordered in
+    // `columns.rs` without the same move here is a compile error -- not a heading that quietly
+    // slides one column to the right, which is exactly how this table drifted before.
+    let micro = micro_trigger_metrics(cx);
+    let cells: [AnyElement; ConnColId::ALL.len()] = [
+        srv_check(
             view,
             weak,
             cx,
@@ -877,8 +911,9 @@ pub(super) fn server_row(
             "",
             |s| s.active,
             |s, v| s.active = v,
-        )))
-        .child(SettingsView::cell(34.0, false).child(srv_check(
+        )
+        .into_any_element(),
+        srv_check(
             view,
             weak,
             cx,
@@ -887,67 +922,58 @@ pub(super) fn server_row(
             "",
             |s| s.show_window,
             |s, v| s.show_window = v,
-        )))
-        .child(
-            SettingsView::cell(150.0, true)
-                .child(MoonInput::new(ids.name.clone()).state(&row.name).small()),
         )
-        .child(
-            SettingsView::cell(200.0, true).child(
-                // Place the key field and Paste glyph side by side. The fork fixes built-in
-                // affix order, so the button cannot be inserted between visibility and clear.
-                // `set_value` emits no Change event, so Paste also writes directly to draft.
-                h_flex()
-                    .w_full()
-                    .gap_1()
-                    .items_center()
+        .into_any_element(),
+        MoonInput::new(ids.name.clone())
+            .state(&row.name)
+            .small()
+            .into_any_element(),
+        // Place the key field and Paste glyph side by side. The fork fixes built-in affix order,
+        // so the button cannot be inserted between visibility and clear. `set_value` emits no
+        // Change event, so Paste also writes directly to draft.
+        h_flex()
+            .w_full()
+            .gap_1()
+            .items_center()
+            .child(
+                div()
+                    .flex_grow_1()
+                    .min_w_0()
+                    // `relative()` hosts the first-run ring below; it changes no layout, because
+                    // the ring is an inset overlay.
+                    .relative()
                     .child(
-                        div()
-                            .flex_grow_1()
-                            .min_w_0()
-                            // `relative()` hosts the first-run ring below; it changes no
-                            // layout, because the ring is an inset overlay.
-                            .relative()
-                            .child(
-                                MoonInput::new(ids.key.clone())
-                                    .state(&row.key)
-                                    .small()
-                                    // Indicate that this field expects a core key.
-                                    .placeholder(t!("conn.key_ph").to_string())
-                                    .mask_toggle()
-                                    // Allow the key to be cleared quickly before replacement.
-                                    .cleanable(true),
-                            )
-                            // Only an EMPTY key is worth pointing at: once the newcomer has
-                            // pasted something the field has done its job, and a ring around a
-                            // filled input reads as an error rather than as a hint.
-                            .children(view.conn_hint(cx).filter(|_| key_empty).and_then(|at| {
-                                crate::pulse::attention_ring(MoonPalette::active(cx).accent, at)
-                            })),
+                        MoonInput::new(ids.key.clone())
+                            .state(&row.key)
+                            .small()
+                            // Indicate that this field expects a core key.
+                            .placeholder(t!("conn.key_ph").to_string())
+                            .mask_toggle()
+                            // Allow the key to be cleared quickly before replacement.
+                            .cleanable(true),
                     )
-                    .child(paste_key_affix(weak, i, row_key, row.key.clone(), p)),
-            ),
-        )
-        .child(
-            SettingsView::cell(52.0, false).child(proto_dropdown(view, weak, i, row_key, ids, cx)),
-        )
-        .child(
-            SettingsView::cell(72.0, false).child(preset_dropdown(view, weak, i, row_key, ids, cx)),
-        )
-        .child(
-            SettingsView::cell(110.0, false)
-                .child(MoonInput::new(ids.group.clone()).state(&row.group).small()),
-        )
-        .child(
-            SettingsView::cell(96.0, false).child(
-                MoonInput::new(ids.bundle.clone())
-                    .state(&row.bundle)
-                    .small(),
-            ),
-        )
-        .child(SettingsView::cell(52.0, false).child(feed_popover(view, weak, i, row_key, ids, cx)))
-        .child(SettingsView::cell(110.0, false).child(MoonColorPicker::new(&row.color)))
-        .child(SettingsView::cell(24.0, false).child({
+                    // Only an EMPTY key is worth pointing at: once the newcomer has pasted
+                    // something the field has done its job, and a ring around a filled input
+                    // reads as an error rather than as a hint.
+                    .children(view.conn_hint(cx).filter(|_| key_empty).and_then(|at| {
+                        crate::pulse::attention_ring(MoonPalette::active(cx).accent, at)
+                    })),
+            )
+            .child(paste_key_affix(weak, i, row_key, row.key.clone(), p))
+            .into_any_element(),
+        proto_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
+        preset_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
+        MoonInput::new(ids.group.clone())
+            .state(&row.group)
+            .small()
+            .into_any_element(),
+        MoonInput::new(ids.bundle.clone())
+            .state(&row.bundle)
+            .small()
+            .into_any_element(),
+        feed_popover(view, weak, i, row_key, ids, cx).into_any_element(),
+        MoonColorPicker::new(&row.color).into_any_element(),
+        {
             let weak_del = weak.clone();
             MoonButton::new(ids.del.clone())
                 .danger()
@@ -958,63 +984,106 @@ pub(super) fn server_row(
                     let _ = weak_del.update(cx, |this, ctx| this.delete_server(i, window, ctx));
                 })
                 .render()
-        }))
-        .child(SettingsView::cell(24.0, false).child(recon))
-        .child(SettingsView::cell(16.0, false).child(status_dot(
-            row_key,
-            core_id,
-            active,
-            status.as_ref(),
-            weak.clone(),
-            p,
-        )))
+                .into_any_element()
+        },
+        recon,
+        status_dot(row_key, core_id, active, status.as_ref(), weak.clone(), p).into_any_element(),
+    ];
+    h_flex()
+        .w_full()
+        .gap_1()
+        .items_center()
+        .py_0p5()
+        .children(
+            ConnColId::ALL
+                .into_iter()
+                .zip(cells)
+                .map(|(col, content)| SettingsView::cell(col, micro).child(content)),
+        )
         .into_any_element()
 }
 
 impl SettingsView {
-    /// Build the shared column flex specification used by both the header and server rows.
+    /// Build one column's cell from the SHARED specification in [`super::columns`].
     ///
-    /// Sharing this layout keeps columns aligned as they grow or shrink. `basis` is the base
-    /// width; `grow = true` enables flex growth with default shrinking, while `false` disables
-    /// both growth and shrinking.
-    fn cell(basis: f32, grow: bool) -> Div {
-        let d = div().flex_basis(px(basis));
-        if grow {
+    /// Both [`server_row`] and [`Self::conn_col_head_row`] call this with the same [`ConnColId`],
+    /// so a column's width, growth and alignment cannot differ between the header and the rows.
+    ///
+    /// `min_w_0()` is the load-bearing part: gpui's default `min_size: auto` is the CONTENT-based
+    /// automatic minimum, which clamps a flex item UP to its child's min-content width. A control
+    /// that renders wider than its column would then eat free space in the rows that the header
+    /// still had -- and since only the header can hand that space to its two growing columns,
+    /// every column after them drifted, further with each one. Pinned to the basis, an oversized
+    /// child overlaps instead of shifting the grid.
+    ///
+    /// Args:
+    ///     col: Which column to build.
+    ///     micro: Micro dropdown trigger metrics, from [`micro_trigger_metrics`].
+    ///
+    /// Returns:
+    ///     The empty cell, ready for its control or label.
+    fn cell(col: ConnColId, micro: MicroTriggerMetrics) -> Div {
+        let spec = col.spec();
+        let d = div().flex_basis(px(col.width(micro))).min_w_0();
+        // Centred on the header AND on the row, so the two centre on one axis.
+        let d = if spec.align == ConnColAlign::Center {
+            d.flex().items_center().justify_center()
+        } else {
+            d
+        };
+        if spec.grow {
             d.flex_grow_1()
         } else {
             d.flex_grow_0().flex_shrink_0()
         }
     }
 
-    /// Build a column header with a tooltip, ported from egui's `head_tip`.
+    /// Build one column heading, with its tooltip, ported from egui's `head_tip`.
     ///
-    /// Underlining and brighter text signal hover help. `pad` and `grow` match the column layout;
-    /// `MoonTooltipView` wraps long text within its maximum width.
-    fn col_head_tip(
-        id: &'static str,
-        label: &str,
-        basis: f32,
-        grow: bool,
-        pad: f32,
-        tip: SharedString,
+    /// Underlining and brighter text signal hover help. A column with no `label` -- colour,
+    /// delete, reconnect, status -- yields the bare cell, which still has to be emitted: the
+    /// header's growing columns only receive the same free space the rows give them when the
+    /// trailing widths are reserved too.
+    ///
+    /// Args:
+    ///     col: Which column to head.
+    ///     micro: Micro dropdown trigger metrics, from [`micro_trigger_metrics`].
+    ///     p: Active palette.
+    ///     cx: Application context used for the label's text size.
+    ///
+    /// Returns:
+    ///     The column's header cell.
+    fn col_head(
+        col: ConnColId,
+        micro: MicroTriggerMetrics,
         p: MoonPalette,
         cx: &App,
-    ) -> impl IntoElement {
-        Self::cell(basis, grow)
-            .id(id)
+    ) -> AnyElement {
+        let spec = col.spec();
+        let base = Self::cell(col, micro);
+        let Some(label_key) = spec.label else {
+            return base.into_any_element();
+        };
+        let tip: SharedString = t!(spec.tip.unwrap_or(label_key)).to_string().into();
+        base.id(spec.id)
             .child(
                 div()
-                    .ml(px(pad))
+                    .ml(px(spec.head_pad))
+                    .min_w_0()
+                    // A label longer than its column ellipsises INSIDE the column; it may not
+                    // widen it, or the heading would push the grid it is describing.
+                    .truncate()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text))
                     .underline()
                     .text_decoration_color(rgb(p.text_soft))
-                    .child(label.to_string()),
+                    .child(t!(label_key).to_string()),
             )
             .tooltip(move |_window, cx| {
                 cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(320.0))
                     .into()
             })
+            .into_any_element()
     }
 
     /// Build an arbitrary-width help label with underlining and a wrapping tooltip.
@@ -1039,110 +1108,31 @@ impl SettingsView {
             })
     }
 
-    /// Render the core table header with the same 20px left inset as group branches.
+    /// Render the core table header over the columns it names.
     ///
-    /// Trailing placeholders for color, delete, reconnect, and status are required to keep the
-    /// growable header columns aligned with server rows.
+    /// Every cell comes from [`super::columns`], in the same order and with the same widths
+    /// `server_row` uses, and the row is inset by the same [`CONN_TABLE_INSET`] `tab.rs` gives a
+    /// core row -- the two used to carry that number separately. A muted bottom rule in the
+    /// palette's own border colour separates the heading from the tree below it.
+    ///
+    /// Args:
+    ///     p: Active palette.
+    ///     cx: Application context used for label sizing.
+    ///
+    /// Returns:
+    ///     The one header row, drawn above the virtualized list.
     pub(super) fn conn_col_head_row(p: MoonPalette, cx: &App) -> impl IntoElement {
+        // Measured ONCE, as `server_row` does and as `ConnColId::width` asks for -- not
+        // once per column.
+        let micro = micro_trigger_metrics(cx);
         h_flex()
             .w_full()
             .gap_1()
             .items_center()
-            .pl(px(20.0))
-            .child(Self::col_head_tip(
-                "h-act",
-                &t!("conn.col.act"),
-                28.0,
-                false,
-                0.0,
-                t!("conn.tip.act").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-win",
-                &t!("conn.col.win"),
-                34.0,
-                false,
-                0.0,
-                t!("conn.tip.win").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-name",
-                &t!("conn.col.name"),
-                150.0,
-                true,
-                8.0,
-                t!("conn.tip.name").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-key",
-                &t!("conn.col.key"),
-                200.0,
-                true,
-                8.0,
-                t!("conn.tip.key").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-proto",
-                &t!("conn.col.proto"),
-                52.0,
-                false,
-                0.0,
-                t!("conn.tip.proto").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-preset",
-                &t!("conn.col.preset"),
-                72.0,
-                false,
-                0.0,
-                t!("conn.tip.preset").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-group",
-                &t!("conn.col.group"),
-                110.0,
-                false,
-                8.0,
-                t!("conn.tip.group").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-bundle",
-                &t!("conn.col.bundle"),
-                96.0,
-                false,
-                8.0,
-                t!("conn.tip.bundle").to_string().into(),
-                p,
-                cx,
-            ))
-            .child(Self::col_head_tip(
-                "h-data",
-                &t!("conn.col.data"),
-                52.0,
-                false,
-                0.0,
-                t!("conn.tip.flags").to_string().into(),
-                p,
-                cx,
-            ))
-            // Reserve the row's trailing color, delete, reconnect, and status columns.
-            .child(Self::cell(110.0, false))
-            .child(Self::cell(24.0, false))
-            .child(Self::cell(24.0, false))
-            .child(Self::cell(16.0, false))
+            .pl(px(CONN_TABLE_INSET))
+            .pb(px(3.0))
+            .border_b_1()
+            .border_color(rgb(p.border))
+            .children(ConnColId::ALL.map(|col| Self::col_head(col, micro, p, cx)))
     }
 }

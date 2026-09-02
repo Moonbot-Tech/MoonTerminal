@@ -252,6 +252,10 @@ conn.paste_key_tip:
   ru: "Вставить ключ из буфера обмена"
   en: "Paste the key from the clipboard"
   es: "Pegar la clave desde el portapapeles"
+conn.tip.color:
+  ru: "Цвет ядра: им подсвечиваются его сделки и метки на графике."
+  en: "Core color: it tints this core's trades and chart marks."
+  es: "Color del núcleo: tiñe sus operaciones y marcas del gráfico."
 conn.tip.flags:
   ru: "Приём данных от ядра. Серая = принимаем всё; цветная = часть категорий выключена. Клик — настроить."
   en: "Data received from the core. Gray = all on; colored = some categories off. Click to configure."
