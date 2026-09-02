@@ -896,6 +896,7 @@ impl ReportPanel {
             comment_metadata_loaded: false,
             preference_revisions: expected_revisions,
             scope_control,
+            wrap_fit: crate::controls::wrap_fit::WrapFit::default(),
             closed_only: scope.is_some(),
             selection: ReportSelection::default(),
             needs_query: true,

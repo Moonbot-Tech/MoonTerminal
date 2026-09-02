@@ -320,11 +320,24 @@ impl Render for ReportPanel {
                 .child(design::chrome_divider(cx, p))
                 .child(section)
         };
-        let core_filters = design::chrome_section(cx).child(self.core_combo(cx));
-        let strategy_filter = design::chrome_section(cx).child(self.strategy_combo(cx));
+        // Shrink before wrapping: while the row still fits one line the two selectors keep their
+        // words, and the moment it does not they drop to an icon and a count — a second line is the
+        // answer only once that has already been given up. `wrap_fit` owns the decision; here the
+        // leading section reports one line's height and the row reports its own size.
+        let compact = self.wrap_fit.compact();
+        let line = crate::controls::wrap_fit::LineHeight::default();
+        let (core_combo, core_fit) = self.core_combo(compact, cx);
+        let core_filters = crate::controls::wrap_fit::measured_section(
+            design::chrome_section(cx).child(core_combo),
+            &line,
+        );
+        let strategy_filter = design::chrome_section(cx).child(self.strategy_combo(compact, cx));
         let strategy_mask = self
             .strategy_name_mask_field(cx)
             .map(|field| design::chrome_section(cx).child(field));
+        // The one fact the row's own measurement cannot carry beyond its selectors' widths:
+        // whether the mask field is one of its sections at all.
+        let strategy_mask_present = strategy_mask.is_some();
         // No caption beside the coin field: its placeholder names it without consuming row width.
         let trade_filters = design::chrome_section(cx)
             .child(coin_field)
@@ -389,6 +402,30 @@ impl Render for ReportPanel {
             .children(date_filters.into_iter().flatten().map(separated))
             // Export and Columns retain the trailing edge without a flexible wrapping spacer.
             .child(separated(actions).ml_auto());
+        let filters = crate::controls::wrap_fit::measured_row(
+            filters,
+            &line,
+            cx.entity(),
+            self.wrap_fit,
+            crate::controls::wrap_fit::RowFit {
+                // Only rule 4 reads it, and only a COMPACT row reaches that rule: measuring the
+                // saving on a full row would be two text fits per frame for a number nothing looks
+                // at. The compact width comes from the same frame that drew it.
+                saving: if compact {
+                    controls::compact_row_saving(cx, core_fit.full_w, core_fit.compact_w)
+                } else {
+                    0.0
+                },
+                signature: controls::filter_row_signature(
+                    cx,
+                    self.detached,
+                    strategy_mask_present,
+                    core_fit.full_w,
+                    controls::FilterRowLabels::of(self),
+                ),
+            },
+            |panel, fit| panel.wrap_fit = fit,
+        );
 
         // Apply the host's display lens without changing the user's persisted visibility set.
         let hide_core_name = self.hide_core_name_column(self.backend.read(cx));

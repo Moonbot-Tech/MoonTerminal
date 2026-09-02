@@ -896,7 +896,8 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
 /// Auto Report must keep its strategy-name mask workspace-safe and its wrapping toolbar semantic.
 ///
 /// Plausible breakages: hiding the retained mask in Overview or applying it in Classic; dropping it
-/// from persistence or stale-query identity; restoring the shared fixed core-trigger width; using
+/// from persistence or stale-query identity; giving the pinned name the shared fixed core-trigger
+/// width instead of fitting it to the Auto ceiling; using
 /// DB history before the live group name; or placing free dividers between wrapping controls so a
 /// separator can wrap alone. The binary view has no importable library target, so this contract
 /// pins that otherwise-unreachable GPUI wiring while unit tests cover the pure name/filter rules.
@@ -926,7 +927,11 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
     for needle in [
         "backend.group_cores(&self.group)",
         "selected_auto_core_name(core, &live_cores, &cores)",
+        // The widening itself, AND the measurement the row budgets with: the pinned name fits
+        // between the shared width and the Auto ceiling, and the same bounds resolve the width the
+        // wrapping row is allowed to spend on this section.
         ".fit_trigger_width(",
+        "MoonDropdown::fitted_trigger_label(",
         "AUTO_CORE_TRIGGER_MAX_W",
         "host.tooltip(crate::panels::common::text_tooltip(label))",
     ] {

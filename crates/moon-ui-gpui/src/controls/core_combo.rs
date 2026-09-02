@@ -38,6 +38,7 @@ use super::core_groups::{
 use super::core_quick::{exchange_state_label, group_check_state, section_core_ids};
 use super::venue_label::venue_section_label;
 use crate::controls::CORE_COMBO_TRIGGER_W;
+use crate::controls::wrap_fit;
 use crate::core_order::OrderedCores;
 use moon_core::config::CoreGroup;
 use moon_core::venue::CoreVenue;
@@ -202,7 +203,56 @@ fn core_selection_is_all(
     available.peek().is_some() && available.all(|core| selected.contains(&core))
 }
 
+/// Icon standing for "cores" once the selector drops the word.
+///
+/// The same glyph everywhere the compact selector appears, for the reason the toolbar's launchers
+/// keep theirs: at this width the icon IS the label, so a second glyph for the same concept would
+/// read as a different control.
+const CORE_COMPACT_ICON: &str = "icons/cpu.svg";
+
+/// Put a core selector into its compact form: the icon, a short label, and no room for a word.
+///
+/// Applied to the dropdown [`core_combo`] already built, so the menu, its callbacks and its
+/// selection rules are untouched by the row's width — only the trigger yields. The caller keeps the
+/// full summary reachable as a tooltip; nothing here removes information without a way back to it.
+///
+/// The width is FITTED by the component rather than imposed: this trigger also carries a pinned
+/// workspace's core name, which is arbitrary user text, and only the component's own fitting
+/// ellipsizes it and appends the caret exactly once. The BOUNDS are the row's shared ones
+/// ([`wrap_fit::COMPACT_MIN_W`]), so this lands on the same width as a selector beside it that
+/// resolves its own trigger content through `wrap_fit::compact_trigger_width`.
+///
+/// Args:
+///     cx: Application context used to resolve the row's shared floor at the active font step.
+///     combo: The selector as [`core_combo`] built it.
+///     label: Compact trigger text — a short All word, a count, or a pinned scope's own name.
+///     all_word: The short All word this row's selectors are floored on, so this trigger holds the
+///         same width as the ones beside it and does not change width as the selection moves.
+///
+/// Returns:
+///     The same selector wearing its compact trigger.
+pub(crate) fn compact_core_trigger(
+    cx: &App,
+    combo: MoonDropdown,
+    label: String,
+    all_word: &str,
+) -> MoonDropdown {
+    combo
+        .label(label)
+        .trigger_icon(CORE_COMPACT_ICON)
+        .fit_trigger_width(
+            wrap_fit::compact_design_floor(cx, all_word),
+            wrap_fit::COMPACT_MAX_W,
+        )
+}
+
 /// Resolve the trigger summary without exposing a sole core's variable-length name.
+///
+/// Also the summary a HOST needs outside the trigger — a compact label, or the tooltip that
+/// recovers what a compact trigger dropped. Passing short labels yields the compact form; passing
+/// the full ones yields exactly what the trigger says. Both come from these same rules, never from
+/// a second reading of the set: a label that disagreed with the menu beneath it about what "all"
+/// means would be worse than no compaction at all.
 ///
 /// `ImplicitOrComplete` preserves the existing All representation for empty selections and those
 /// containing every available core. `ImplicitOnly` reserves All for the empty set. Every other
@@ -222,14 +272,16 @@ fn core_selection_is_all(
 ///     cores_n: Localized core-count formatter.
 ///
 /// Returns:
-///     The localized trigger summary without its caret and whether the All row is selected.
-fn selection_summary(
+///     The localized trigger summary without its caret, whether the All row is selected, and the
+///     count behind that summary — so a host wanting a second wording (a tooltip beside a compact
+///     trigger) formats it from this pass rather than walking the selection again.
+pub(crate) fn core_selection_summary(
     cores: &[(u64, String)],
     selected: &HashSet<u64>,
     all_row_mode: CoreAllRowMode,
     all_label: &str,
     cores_n: &impl Fn(usize) -> String,
-) -> (String, bool) {
+) -> CoreSummary {
     let selected_available = cores
         .iter()
         .filter(|(core, _)| selected.contains(core))
@@ -245,7 +297,21 @@ fn selection_summary(
     } else {
         cores_n(selected_available)
     };
-    (label, all_on)
+    CoreSummary {
+        label,
+        all_on,
+        selected: selected_available,
+    }
+}
+
+/// One resolution of a core selection, as the trigger and any label beside it should read it.
+pub(crate) struct CoreSummary {
+    /// The localized summary text, without the caret the trigger appends itself.
+    pub(crate) label: String,
+    /// Whether this selection reads as the All row.
+    pub(crate) all_on: bool,
+    /// How many of the selector's own cores are selected — the number `label` may be built from.
+    pub(crate) selected: usize,
 }
 
 /// Append the saved-groups block above the exchange sections: a heading and one row per group.
@@ -445,7 +511,8 @@ where
     G: Fn(Vec<u64>, &mut App) + 'static,
 {
     let on_toggle_exchange: Rc<dyn Fn(Vec<u64>, &mut App)> = Rc::new(on_toggle_exchange);
-    let (cur, all_on) = selection_summary(cores, selected, all_row_mode, &all_label, &cores_n);
+    let summary = core_selection_summary(cores, selected, all_row_mode, &all_label, &cores_n);
+    let (cur, all_on) = (summary.label, summary.all_on);
     let sections = core_menu_sections(cores, venues);
     let toggle_all = on_toggle.clone();
     let mut menu = MoonDropdown::new(id)

@@ -77,6 +77,13 @@ common.exchange_quarterly:
 # the members the panel showing it can actually select. In the MENU that count is formatted by the
 # consumer's own `cores_n`, so it cannot read differently from the trigger right above it;
 # `group_cores_n` below serves the two modals, which have no trigger beside them.
+# Short "all" word for the shared core selector once a narrow row shrinks it to its icon: the noun
+# is what the glyph now says, so only "all" versus a count is left to render. Masculine in Spanish,
+# agreeing with núcleos — which is why it is not the strategy filter's own "all" word.
+common.core_pick.all_short:
+  ru: "Все"
+  en: "All"
+  es: "Todos"
 common.core_pick.groups_heading:
   ru: "Группы ядер"
   en: "Core groups"

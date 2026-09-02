@@ -287,6 +287,125 @@ impl Render for ReportScopeControl {
 /// Maximum design-reference width of the pinned AutoCore selector.
 const AUTO_CORE_TRIGGER_MAX_W: f32 = 360.0;
 
+/// The widths the core selector occupies this frame, full and compact.
+///
+/// It is the row's only content-sized section — a pinned workspace fits the trigger to a core name
+/// — so the compaction saving and the row's composition digest are both resolved from these rather
+/// than from a constant a pinned name outgrows.
+#[derive(Clone, Copy)]
+pub(super) struct CoreFit {
+    /// Rendered width of the full trigger.
+    pub(super) full_w: f32,
+    /// Width the compact trigger never goes below — the floor the component fits inside.
+    ///
+    /// The floor rather than the fitted width, because it under-states how narrow the trigger gets
+    /// and therefore over-states the row's saving, which is the safe direction for the margin a
+    /// re-expansion waits on.
+    pub(super) compact_w: f32,
+}
+
+/// Fingerprint of the filter row's composition, for `wrap_fit`.
+///
+/// The theme, locale and typography half is `wrap_fit::signature`'s own; only what is particular to
+/// THIS row is supplied here — whether the two optional sections are drawn, and the rendered width
+/// of the one section that sizes itself to its content.
+///
+/// Args:
+///     cx: Application context supplying the resolved typography, UI scale and locale.
+///     detached: Whether the row carries the manual date bounds, which only a window shows.
+///     mask: Whether the Auto-workspace strategy-name mask field is on the row.
+///     core_full_w: Rendered width of the core selector at full size — a pinned workspace fits that
+///         trigger to a core name, so hashing the width covers the pin mode and the name at once.
+///
+/// Returns:
+///     The digest for `wrap_fit::RowFit::signature`.
+pub(super) fn filter_row_signature(
+    cx: &App,
+    detached: bool,
+    mask: bool,
+    core_full_w: f32,
+    labels: FilterRowLabels,
+) -> u64 {
+    crate::controls::wrap_fit::signature(
+        cx,
+        (
+            detached,
+            mask,
+            core_full_w.to_bits(),
+            labels.side,
+            labels.kind,
+            labels.deleted_only,
+            labels.period,
+        ),
+    )
+}
+
+/// The filter choices whose LABELS decide how wide the row's other fitted triggers stand.
+///
+/// The scope trigger fits itself between 102 and 170, the period one between 100 and 150, and both
+/// resolve from these: their combined swing outgrows what compacting saves, so a row that ignored
+/// them could stay compact after a shorter label made the full row fit again. Discriminants rather
+/// than the localized strings — the width follows the CHOICE, and hashing it costs no allocation.
+#[derive(Clone, Copy)]
+pub(super) struct FilterRowLabels {
+    side: std::mem::Discriminant<SideFilter>,
+    kind: std::mem::Discriminant<ReportKind>,
+    deleted_only: bool,
+    period: std::mem::Discriminant<Period>,
+}
+
+impl FilterRowLabels {
+    /// Read the label-bearing filter choices off the panel.
+    pub(super) fn of(panel: &ReportPanel) -> Self {
+        Self {
+            side: std::mem::discriminant(&panel.side),
+            kind: std::mem::discriminant(&panel.kind),
+            deleted_only: panel.deleted_only,
+            period: std::mem::discriminant(&panel.period),
+        }
+    }
+}
+
+/// The short "all" word a compact selector renders in place of its full summary.
+///
+/// Cores and strategies take different words: Spanish agrees them with the noun the glyph now
+/// carries — masculine for núcleos, feminine for estrategias — and the core one is shared with
+/// every other panel that hosts the selector.
+fn all_cores_short() -> String {
+    t!("common.core_pick.all_short").to_string()
+}
+
+/// The strategy selector's short "all" word; see [`all_cores_short`].
+fn all_strategies_short() -> String {
+    t!("report.filter.all").to_string()
+}
+
+/// Width the filter row gives back by rendering both selectors compact.
+///
+/// This is the margin a re-expansion waits for (`wrap_fit`), so it must never be UNDER-stated: a
+/// row that expands on too small a margin lands in a width it immediately overflows again, once per
+/// step of a widening drag. Hence both real widths rather than the shared constant — a pinned
+/// AutoCore trigger is up to three times wider than the plain one.
+///
+/// Both selectors are measured on ONE scale — the Action font step MoonUI itself applies to a
+/// trigger — so they never resolve different widths for the same shape.
+///
+/// Args:
+///     cx: Application context supplying the active font scale.
+///     core_full_w: Rendered width of the core selector at full size, from `core_combo`.
+///     core_compact_w: Rendered width of the same selector compact, from `compact_trigger_width`.
+///
+/// Returns:
+///     The saving in logical pixels, never negative.
+pub(super) fn compact_row_saving(cx: &App, core_full_w: f32, core_compact_w: f32) -> f32 {
+    let all_short = all_strategies_short();
+    let core = core_full_w - core_compact_w;
+    let strategy =
+        crate::controls::wrap_fit::action_width(cx, crate::controls::CORE_COMBO_TRIGGER_W)
+            - crate::controls::wrap_fit::compact_trigger_width(cx, &all_short, &all_short);
+    (core + strategy).max(0.0)
+}
+
 /// Resolve one selected core's current display name, with report history only as a fallback.
 ///
 /// Args:
@@ -322,8 +441,12 @@ impl ReportPanel {
     ///     cx: Panel context used to order database cores, read exchanges, and wire callbacks.
     ///
     /// Returns:
-    ///     Interactive retained-scope selector or disabled Auto scope indicator.
-    pub(super) fn core_combo(&self, cx: &Context<Self>) -> AnyElement {
+    ///     The interactive retained-scope selector or disabled Auto scope indicator, and the
+    ///     rendered widths its trigger occupies full and compact. Those widths are the row's only
+    ///     content-sized ones — a pinned workspace fits the trigger to a core name — so both the
+    ///     compaction saving and the row's composition digest are resolved from them rather than
+    ///     from a constant, which a pinned name outgrows by up to three times.
+    pub(super) fn core_combo(&self, compact: bool, cx: &Context<Self>) -> (AnyElement, CoreFit) {
         let workspace_scope = self.workspace_scope(self.backend.read(cx));
         let workspace_owned = workspace_scope
             .as_ref()
@@ -360,15 +483,18 @@ impl ReportPanel {
                 | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
             });
         let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
+        // Resolved once: the trigger, its compact form and the tooltip that recovers the shed words
+        // must all describe the SAME set, and a second reading of it is how they drift apart.
+        let selection = if workspace_owned {
+            &effective_selection
+        } else {
+            &self.sel_cores
+        };
         let combo = crate::controls::core_combo(
             "rep-core",
             &cores,
             &venues,
-            if workspace_owned {
-                &effective_selection
-            } else {
-                &self.sel_cores
-            },
+            selection,
             crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),
@@ -384,9 +510,30 @@ impl ReportPanel {
             },
         )
         .disabled(workspace_owned);
-        let tooltip = pinned_label.clone();
-        let combo = if let Some(label) = pinned_label {
-            combo.label(label).when(auto_core, |combo| {
+        // Only an AutoCore trigger sizes itself to its content; every other state renders the
+        // shared width. Measured through MoonUI's own fitting, so the number the row budgets with is
+        // the number the row draws — the fitted TEXT is deliberately discarded, since it carries the
+        // component's caret and handing it back would draw a second one.
+        let full_w = match pinned_label.as_deref().filter(|_| auto_core) {
+            Some(label) => {
+                MoonDropdown::fitted_trigger_label(
+                    cx,
+                    label,
+                    MoonButtonSize::Action,
+                    crate::controls::CORE_COMBO_TRIGGER_W,
+                    AUTO_CORE_TRIGGER_MAX_W,
+                )
+                .1
+            }
+            // No measurement needed: an unpinned trigger renders the shared width, scaled.
+            None => {
+                crate::controls::wrap_fit::action_width(cx, crate::controls::CORE_COMBO_TRIGGER_W)
+            }
+        };
+        // EVERY pinned scope names itself on the trigger — Overview as much as a core — and only
+        // AutoCore may widen past the shared width to do it.
+        let combo = if let Some(label) = pinned_label.clone() {
+            combo.label(label).when(auto_core && !compact, |combo| {
                 combo.fit_trigger_width(
                     crate::controls::CORE_COMBO_TRIGGER_W,
                     AUTO_CORE_TRIGGER_MAX_W,
@@ -395,14 +542,62 @@ impl ReportPanel {
         } else {
             combo
         };
-        div()
+        // The compact label and the tooltip that recovers it come from one pass over the selection,
+        // through the SAME helper the trigger's own summary uses: a second reading with different
+        // rules could disagree with the menu about what "all" means. Asked for only where it is
+        // rendered — neither a full row nor a pinned one needs it, since a pinned scope names itself.
+        let compact_all_word = all_cores_short();
+        let compact_summary = (compact && pinned_label.is_none()).then(|| {
+            crate::controls::core_selection_summary(
+                &cores,
+                selection,
+                crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                &compact_all_word,
+                &|n| n.to_string(),
+            )
+        });
+        let combo = if compact {
+            // A pinned selector keeps NAMING its scope when compact — the name is the whole content
+            // of that state — and only gives up the width it was allowed to spend on it, which the
+            // component's own fitting then ellipsizes into. An interactive one gives up the word
+            // beside its count, which the icon now carries.
+            let label = pinned_label.clone().unwrap_or_else(|| {
+                compact_summary
+                    .as_ref()
+                    .map_or_else(String::new, |summary| summary.label.clone())
+            });
+            crate::controls::compact_core_trigger(cx, combo, label, &compact_all_word)
+        } else {
+            combo
+        };
+        // The pinned name has always had a tooltip, since it truncates at any width. The compact
+        // form adds one wherever it drops a word, so nothing this row sheds becomes unreachable —
+        // and a pinned trigger keeps naming its own scope there, never the core COUNT, which would
+        // annotate the label with something other than what it says.
+        let tooltip = pinned_label.filter(|_| auto_core || compact).or_else(|| {
+            compact_summary.as_ref().map(|summary| {
+                if summary.all_on {
+                    t!("report.all_cores").to_string()
+                } else {
+                    t!("report.cores_n", n = summary.selected).to_string()
+                }
+            })
+        });
+        let el = div()
             .id("rep-core-tip")
             .flex_none()
-            .when_some(tooltip.filter(|_| auto_core), |host, label| {
+            .when_some(tooltip, |host, label| {
                 host.tooltip(crate::panels::common::text_tooltip(label))
             })
             .child(combo)
-            .into_any_element()
+            .into_any_element();
+        (
+            el,
+            CoreFit {
+                full_w,
+                compact_w: crate::controls::wrap_fit::compact_floor_width(cx),
+            },
+        )
     }
 
     /// Render the separate Auto-workspace strategy-name mask field.
@@ -444,16 +639,48 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     A MoonUI combobox that renders only visible core and strategy rows.
-    pub(super) fn strategy_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn strategy_combo(&self, compact: bool, cx: &Context<Self>) -> impl IntoElement {
         let (summary, _) = strategy_selection_summary(
             &self.available_strategy_keys,
             self.selected_strategies.as_ref(),
             &t!("report.all_strategies"),
             |n| t!("report.strategies_n", n = n).to_string(),
         );
+        // The compact form drops the noun the bot glyph already carries, keeping the one fact the
+        // glyph cannot say: whether this is every strategy or a count of them. Resolved only where
+        // it is rendered — a full row would compare the whole selection set for nothing.
         let palette = MoonPalette::active(cx);
+        let icon_px = design::action_icon_px(cx);
+        let summary = SharedString::from(summary);
+        let (trigger_text, width) = if compact {
+            let all_short = all_strategies_short();
+            let (short, _) = strategy_selection_summary(
+                &self.available_strategy_keys,
+                self.selected_strategies.as_ref(),
+                &all_short,
+                |n| n.to_string(),
+            );
+            let width = px(crate::controls::wrap_fit::compact_trigger_width(
+                cx, &short, &all_short,
+            ));
+            (SharedString::from(short), width)
+        } else {
+            (
+                summary.clone(),
+                // The Action scale, like the core selector beside it: `font_w`'s mono body scale
+                // would size the pair differently as soon as the Font slider leaves zero.
+                px(crate::controls::wrap_fit::action_width(
+                    cx,
+                    crate::controls::CORE_COMBO_TRIGGER_W,
+                )),
+            )
+        };
         div()
-            .w(design::font_w_px(cx, crate::controls::CORE_COMBO_TRIGGER_W))
+            .id("rep-strategy-tip")
+            .w(width)
+            .when(compact, |host| {
+                host.tooltip(crate::panels::common::text_tooltip(summary.clone()))
+            })
             .child(
                 MoonCombobox::new(&self.strategy_select)
                     .trigger_variant(MoonButtonVariant::Soft)
@@ -474,12 +701,28 @@ impl ReportPanel {
                             .w_full()
                             .justify_center()
                             .gap_1()
+                            // The same bot glyph the toolbar's Strategies launcher sheds its label
+                            // to, so the two read as one concept rather than two controls.
+                            // Coloured explicitly, and with the SOFT token: gpui composes an
+                            // element's style from `Style::default()` with no inheritance, so an
+                            // svg without a colour paints nothing at all — while the ambient text
+                            // colour is sampled before the trigger applies its Soft variant, which
+                            // is what the label beside this glyph ends up rendering in.
+                            .when(compact, |row| {
+                                row.child(
+                                    svg()
+                                        .path(crate::controls::STRATEGIES_ICON)
+                                        .size(px(icon_px))
+                                        .flex_none()
+                                        .text_color(rgb(palette.text_soft)),
+                                )
+                            })
                             .child(
                                 div()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .truncate()
-                                    .child(summary.clone()),
+                                    .child(trigger_text.clone()),
                             )
                             // A custom MoonCombobox trigger suppresses its built-in trailing icon.
                             .child(div().text_color(rgb(palette.text_muted)).child("▾"))
