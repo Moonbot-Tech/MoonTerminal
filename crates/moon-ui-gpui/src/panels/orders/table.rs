@@ -85,6 +85,7 @@ pub(super) fn orders_table(
     state: &Entity<MoonDataTableState>,
     highlight: Rc<HashSet<(CoreId, u64)>>,
     stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>>,
+    marker: ScopeMarker,
     cx: &Context<OrdersPanel>,
 ) -> impl IntoElement {
     let empty = rows.is_empty();
@@ -111,7 +112,7 @@ pub(super) fn orders_table(
     crate::panels::common::data_table_host(
         "orders-table-host",
         empty,
-        t!("orders.empty").to_string(),
+        scope_marker::scope_empty_text(Some(&marker), t!("orders.empty").to_string()),
         p,
         cx,
         MoonDataTable::new("orders-table", row_count, move |ix, _window, _app| {

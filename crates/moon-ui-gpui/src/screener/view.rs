@@ -18,6 +18,7 @@ use rust_i18n::t;
 use moon_core::session::CoreId;
 
 use crate::panels::{RenderGate, data_table_host};
+use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
 use super::table::{
@@ -40,6 +41,15 @@ pub struct ScreenerView {
     rows: Rc<Vec<Entry>>,
     /// Row count after source grouping but before coin and volume filters, shown in the footer.
     total: usize,
+    /// Workspace scope marker over every live session, or `None` when the preset is unresolved.
+    /// A resolved full scope still keeps a marker whose facts are empty. Screener is a group-less
+    /// singleton with no `EffectiveCoreScope` of its own, so this is built with
+    /// `ScopeMarker::from_membership` instead of `Backend::new`.
+    scope_marker: Option<ScopeMarker>,
+    /// Live session count, the universe `scope_marker` was built over. Distinguishes "no session
+    /// at all" (the original connect-a-core advice still applies) from "sessions exist but no
+    /// rows survived filtering" (a different, non-actionable empty sentence).
+    sessions_total: usize,
     /// Case-insensitive market or coin substring filter.
     coin_input: Entity<MoonInputState>,
     /// Minimum 24-hour volume filter, accepting `k` and `m` suffixes.
@@ -153,6 +163,8 @@ impl ScreenerView {
             backend,
             rows: Rc::new(Vec::new()),
             total: 0,
+            scope_marker: None,
+            sessions_total: 0,
             coin_input,
             dvol_input,
             sort_key: restored_sort.0,
@@ -179,6 +191,21 @@ impl ScreenerView {
         // so it inherits the last focused group's preset, Auto or Classic, rather than owning a
         // group of its own.
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+        // The universe is LIVE SESSIONS, and that is load-bearing: it is exactly the universe the
+        // group-building loop below filters with the same `core_displayed(preset, s.id)` call. A
+        // different universe (e.g. connected-only) would make the marker's `N of M` describe a set
+        // the table never drew rows from.
+        //
+        // Answered ONCE per session and reused by the grouping loop below: `core_displayed` scans
+        // `config.servers` linearly, so asking twice per session doubles that scan on every
+        // rebuild for an answer that cannot have changed in between.
+        let sessions = b.session.sessions();
+        self.sessions_total = sessions.len();
+        let displayed: Vec<bool> = sessions
+            .iter()
+            .map(|s| b.core_displayed(preset, s.id))
+            .collect();
+        self.scope_marker = ScopeMarker::from_membership(preset, displayed.iter().copied());
         // A retained core filter can point at a core the current preset just hid; keep it selected
         // and it filters every group away, producing an unexplained empty view. Fall back to the
         // all-cores view instead, same shape as `Backend::valid_auto_workspace_core`.
@@ -378,7 +405,19 @@ impl ScreenerView {
         data_table_host(
             "screener-table-host",
             row_count == 0,
-            t!("screener.empty").to_string(),
+            // Three-way choice, and the order matters: `scope_empty_text` takes precedence over
+            // both fallbacks, so a hidden-by-preset Screener never reaches either sentence below
+            // it. Of the two genuine reasons, only "no session at all" asks for an action — a
+            // core hidden by the preset, or connected with no book yet, must not tell the user to
+            // go connect something that is already connected.
+            scope_marker::scope_empty_text(
+                self.scope_marker.as_ref(),
+                if self.sessions_total == 0 {
+                    t!("screener.empty").to_string()
+                } else {
+                    t!("screener.empty_no_data").to_string()
+                },
+            ),
             p,
             cx,
             MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
@@ -550,6 +589,27 @@ impl ScreenerView {
                 .text_color(rgb(p.text_soft))
                 .child(text)
         };
+        // Frozen render idiom (`workspace::scope_marker`): head is the existing formatted count
+        // and never clips; the marker's facts trail it, clipping at their right edge when the
+        // window narrows, exactly as a dock footer's fixed height requires.
+        let count_head = format!(
+            "{} / {} {}",
+            self.rows.len(),
+            self.total,
+            t!("screener.coins")
+        );
+        let footer = scope_marker::scope_footer(count_head, self.scope_marker.as_ref());
+        let footer_tip = scope_marker::scope_footer_tooltip(&footer, self.scope_marker.as_ref());
+        let has_tail = !footer.tail.is_empty();
+        // The shared helper draws nothing when nothing is hidden, which is what keeps this row's
+        // child count, gaps and shrink behaviour identical to its pre-feature form.
+        let footer_tail = scope_marker::scope_footer_tail(
+            "screener-footer-tail",
+            footer.tail,
+            footer_tip,
+            design::t_body(cx),
+            p.text_muted,
+        );
         h_flex()
             .flex_none()
             .w_full()
@@ -580,17 +640,20 @@ impl ScreenerView {
                 ),
             )
             .child(div().flex_1())
+            // Head and tail are DIRECT children of the row, never nested in one shared wrapper —
+            // nested, the wrapper would take a zero flex basis while the `flex_none` head keeps
+            // painting at full width, straight over the tail.
             .child(
                 div()
+                    // `flex_none` only while a tail exists to yield in its place. Pinning the count
+                    // unconditionally would take space from this bar's inputs at a narrow width on
+                    // behalf of a marker that is not on screen.
+                    .when(has_tail, |el| el.flex_none())
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_muted))
-                    .child(format!(
-                        "{} / {} {}",
-                        self.rows.len(),
-                        self.total,
-                        t!("screener.coins")
-                    )),
+                    .child(footer.head),
             )
+            .children(footer_tail)
             .child(self.columns_menu(cx))
     }
 }

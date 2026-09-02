@@ -2,6 +2,8 @@
 
 use super::*;
 
+use crate::workspace::scope_marker::ScopeMarker;
+
 /// Seed the tree's expanded cores from the Auto rail selection.
 ///
 /// The window is opened from a rail that already says which server the user is working on, so
@@ -134,6 +136,46 @@ fn singleton_strategy_scope(b: &Backend) -> Option<(Vec<CoreId>, Option<CoreId>)
     singleton_display_cores(b).map(|cores| (cores, None))
 }
 
+/// Resolve the scope marker for the tree's own empty state, over the SAME universe the tree lists.
+///
+/// Deliberately a second resolve rather than folded into [`singleton_strategy_scope`]: that
+/// function's own doc explains why re-resolving `singleton_workspace()` here is not free, and
+/// merging the two into one typed context is deferred on purpose — this branch may add a marker
+/// beside the scoping, never edit the scoping itself.
+///
+/// The Classic universe here is LIVE SESSIONS, deliberately NOT the `config.servers ∪ sessions`
+/// union [`singleton_display_cores`] iterates. That function's wider universe exists to gate a
+/// DISCONNECTED core's pending-change count, which is not a display question; the tree lists
+/// connected cores only, because [`visible_strategy_cores`] iterates `backend.session.sessions()`.
+/// Counting the union while classifying against sessions would label a merely disconnected
+/// configured core "hidden by the preset" when nothing hid it.
+///
+/// Args:
+///     b: Backend supplying the singleton workspace, its effective scope, and the Classic display
+///         preset.
+///
+/// Returns:
+///     A marker over the tree's own universe, or `None` when nothing is scope-bound.
+fn singleton_strategy_marker(b: &Backend) -> Option<ScopeMarker> {
+    if let Some(workspace) = b.singleton_workspace() {
+        let scope =
+            b.effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All);
+        return Some(ScopeMarker::new(
+            Some(moon_core::config::WorkspaceMode::AutoTrading),
+            scope.membership_shown(),
+            scope.membership_total(),
+        ));
+    }
+    let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+    ScopeMarker::from_membership(
+        preset,
+        b.session
+            .sessions()
+            .iter()
+            .map(|s| b.core_displayed(preset, s.id)),
+    )
+}
+
 /// Fold strategy and schema revisions only for cores visible in the current singleton scope.
 fn strategies_sig(b: &Backend, workspace_cores: Option<&[CoreId]>) -> u64 {
     let store = b.session.store();
@@ -201,6 +243,15 @@ impl StrategiesView {
 
         let scope = singleton_strategy_scope(backend.read(cx));
         let workspace_cores = scope.as_ref().map(|(cores, _)| cores.clone());
+        let scope_marker = singleton_strategy_marker(backend.read(cx));
+        // Seeded from the same read the marker was built from, so the backend observer's first
+        // tick does not mistake an unchanged roster for a changed one and pay the recount.
+        let session_roster_sig = backend
+            .read(cx)
+            .session
+            .sessions()
+            .iter()
+            .fold(0u64, |acc, s| acc.wrapping_mul(31).wrapping_add(s.id));
         let selected_core = scope.and_then(|(_, selected)| selected);
         let initial_sig = strategies_sig(backend.read(cx), workspace_cores.as_deref());
         let mut expanded_cores = match &session {
@@ -242,6 +293,34 @@ impl StrategiesView {
             let goto = b.strategies_goto.is_some();
             let sig = strategies_sig(b, this.workspace_cores.as_deref());
             let strategies_changed = sig != this.last_sig;
+            // The marker counts LIVE SESSIONS, so its universe moves when a core connects or
+            // disconnects — and neither of those raises a workspace revision, which is where the
+            // other observer refreshes it. `strategies_sig` cannot stand in for that signal
+            // either: it folds only over cores the current scope already shows, so connecting a
+            // core the preset HIDES leaves it untouched, and the pane keeps saying "no cores
+            // connected" about a core that just arrived.
+            //
+            // Only the session ROSTER is folded here, never the marker itself: recomputing the
+            // marker walks the group and re-checks availability, and this observer fires on every
+            // backend tick. The fold is O(sessions) over ids the caller already holds.
+            let roster = b
+                .session
+                .sessions()
+                .iter()
+                .fold(0u64, |acc, s| acc.wrapping_mul(31).wrapping_add(s.id));
+            //
+            // The repaint is DEFERRED to the end of the callback rather than taken here: `b`
+            // borrows the backend out of `cx`, and that borrow stays live as long as the arm
+            // below still reads it, so a `cx.notify()` at this point cannot borrow `cx` mutably.
+            let mut marker_moved = false;
+            if roster != this.session_roster_sig {
+                this.session_roster_sig = roster;
+                let marker = singleton_strategy_marker(b);
+                if marker != this.scope_marker {
+                    this.scope_marker = marker;
+                    marker_moved = true;
+                }
+            }
             if strategies_changed || goto {
                 if strategies_changed {
                     this.reconcile_ui_folders(b.session.store());
@@ -251,15 +330,37 @@ impl StrategiesView {
                 this.clamp_selected_section(cx);
                 this.persist_session(cx);
                 cx.notify();
+            } else if marker_moved {
+                // The arm above already repainted. This one covers the case it does not reach:
+                // a core the preset HIDES connecting or leaving moves the marker's counts while
+                // `strategies_sig` — which folds only over cores the scope already shows — does
+                // not budge.
+                cx.notify();
             }
         })
         .detach();
 
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| {
+            // Refreshed before the shape-equality return below: another configured core the
+            // current preset also hides leaves the SHOWN list unchanged while the marker's
+            // `configured` count moves, and a refresh placed after that return would leave the
+            // pane's hidden-by-preset facts stale.
+            //
+            // Refreshing is not enough on its own — the early return below skips `cx.notify()`,
+            // and a pinned `Entity::update` does not notify implicitly, so a marker that moved
+            // while the visible vector stayed equal would sit in the field unpainted until some
+            // unrelated repaint happened to arrive. Switching Classic to Auto with the same single
+            // core selected is exactly that shape.
+            let marker = singleton_strategy_marker(this.backend.read(cx));
+            let marker_moved = marker != this.scope_marker;
+            this.scope_marker = marker;
             let scope = singleton_strategy_scope(this.backend.read(cx));
             let next = scope.as_ref().map(|(cores, _)| cores.clone());
             if next == this.workspace_cores {
+                if marker_moved {
+                    cx.notify();
+                }
                 return;
             }
             this.workspace_cores = next;
@@ -374,6 +475,8 @@ impl StrategiesView {
             exchange_logos_ready: false,
             settings_open: false,
             workspace_cores,
+            scope_marker,
+            session_roster_sig,
             selected: session.as_ref().and_then(|s| s.selected),
             sel: session.as_ref().map(|s| s.sel.clone()).unwrap_or_default(),
             versions: versions::VersionsState {

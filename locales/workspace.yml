@@ -66,3 +66,13 @@ workspace.scope.hint:
   ru: "Часть ядер скрыта активным режимом рабочего пространства — переключите режим или проверьте видимость в Настройках → Подключения"
   en: "Some cores are hidden by the active workspace preset — switch the preset or check visibility in Settings → Connections"
   es: "Algunos núcleos están ocultos por el modo de espacio de trabajo activo — cambie el modo o revise la visibilidad en Ajustes → Conexiones"
+# The empty state of a surface the preset emptied COMPLETELY, shared by every such surface
+# (`workspace::scope_marker::scope_empty_text`). Deliberately not per-surface and deliberately not
+# the surface's own "no orders" / "no data" / "connect a core" line: those assert that nothing
+# exists, and would send the user to fix a connection that is already fine. This one asserts that
+# the data exists and names what is withholding it, and it is read alongside the marker's own
+# "· 0 из 56 ядер" fact in the footer directly below.
+workspace.scope.all_hidden:
+  ru: "Все ядра скрыты активным режимом рабочего пространства"
+  en: "Every core is hidden by the active workspace preset"
+  es: "Todos los núcleos están ocultos por el modo de espacio de trabajo activo"

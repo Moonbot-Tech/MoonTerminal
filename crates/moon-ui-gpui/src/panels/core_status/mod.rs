@@ -47,6 +47,7 @@ use moon_ui::{
 use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
+use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup};
 use moon_core::session::CoreId;
@@ -271,6 +272,12 @@ pub struct CoreStatusView {
     /// compounds every frame. Anchoring once, at the grab, makes the arithmetic independent of
     /// relayout. `None` whenever no drag is in flight.
     by_ip_drag: Option<by_ip_header::ByIpDragAnchor>,
+    /// Scope marker for the footer and empty-state text, rebuilt alongside `cached_rows` /
+    /// `cached_groups`.
+    ///
+    /// Unlike Assets, this panel has no group-less variant to fall back on — every instance is
+    /// scoped to a window group, so this is never `Option`.
+    cached_scope_marker: ScopeMarker,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -461,6 +468,9 @@ impl CoreStatusView {
             by_ip_col_widths,
             by_ip_widths_id,
             by_ip_drag: None,
+            // Placeholder: no preset, nothing configured — reads as "nothing hidden" until the
+            // `rebuild_cache` call below fills it in from the real membership boundary.
+            cached_scope_marker: ScopeMarker::new(None, 0, 0),
             dock: None,
             focus,
         };
@@ -531,6 +541,24 @@ impl CoreStatusView {
             RetainedCoreScope::Explicit(&retained)
         };
         b.effective_workspace_scope(&self.group, retained)
+    }
+
+    /// Build this panel's scope marker for the footer and empty-state text.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts. Unlike Assets, every
+    ///     instance here is scoped to a window group, so there is no unscoped variant to return
+    ///     `None` for.
+    pub(super) fn scope_marker(&self, b: &Backend) -> ScopeMarker {
+        let scope = self.effective_scope(b);
+        ScopeMarker::new(
+            b.display_preset(crate::workspace::DisplayOwner::Group(&self.group)),
+            scope.membership_shown(),
+            scope.membership_total(),
+        )
     }
 
     /// Return canonically ordered core/name pairs in the current effective scope.
@@ -650,8 +678,9 @@ impl Render for CoreStatusView {
         let p = MoonPalette::active(cx);
         let total_cores = rows.len();
 
+        let marker = self.cached_scope_marker;
         let core_bar = self.core_bar(&cores, cx);
-        let footer = self.footer(&groups, total_cores, cx);
+        let footer = self.footer(&groups, total_cores, &marker, cx);
         let content = match self.mode {
             CoreStatusMode::ByIp => server_view::grouped_server_view(
                 groups.clone(),
@@ -674,6 +703,7 @@ impl Render for CoreStatusView {
                 // inside this view's own update here, and `cx.entity().read(cx)` there is a
                 // process-killing panic. We hold the handle, so we pass it.
                 &self.backend,
+                &marker,
                 // `&Window` is enough: `Window::listener_for` takes `&self`, so the header's
                 // drag-move listener needs no mutable borrow.
                 window,
@@ -695,6 +725,7 @@ impl Render for CoreStatusView {
                     &self.table_state,
                     // Same reason as the By-IP arm above: the callee must not read this view.
                     &self.backend,
+                    &marker,
                     cx,
                 )
                 .into_any_element()
@@ -1064,6 +1095,8 @@ impl CoreStatusView {
     /// Args:
     ///     groups: Current server snapshots.
     ///     total_cores: Cores in the current selector scope.
+    ///     marker: This panel's scope marker, clipped onto the tail when the active preset hides
+    ///         at least one core.
     ///     cx: View context used for palette and localization.
     ///
     /// Returns:
@@ -1072,9 +1105,11 @@ impl CoreStatusView {
         &self,
         groups: &[ServerStatusGroup],
         total_cores: usize,
+        marker: &ScopeMarker,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let body = design::t_body(cx);
         let online = groups
             .iter()
             .filter(|group| group.ready_count == group.cores.len() && !group.cores.is_empty())
@@ -1099,6 +1134,29 @@ impl CoreStatusView {
         let behind_empty = self.backend.read(cx).session.cores_behind().is_empty();
         let update_all_view = cx.entity();
         let update_behind_view = update_all_view.clone();
+        // Frozen render idiom (`workspace/scope_marker.rs`): head and tail are DIRECT children of
+        // the row, never nested in a shared box, and the tail is the ONE part of this row allowed
+        // to clip.
+        //
+        // The tail occupies the slot this row's bare `flex_1` spacer used to hold, and exactly one
+        // of the two is ever drawn -- so with nothing hidden the row keeps the child count, the
+        // gaps and the shrink behaviour it had before this feature existed, which is the "nothing
+        // hidden looks identical" criterion held structurally rather than by inspection.
+        //
+        // The wrapping campaign group further right keeps WRAPPING while this tail CLIPS. Both are
+        // right for what they carry -- a clipped button is unusable, a wrapped figure row is not a
+        // row -- and the height of this row already varied with that wrap before this change. Do
+        // not "unify" them.
+        let head_text = t!(
+            "core_status.footer",
+            servers = groups.len(),
+            cores = total_cores,
+            online = online
+        )
+        .to_string();
+        let footer_split = scope_marker::scope_footer(head_text, Some(marker));
+        let tip = scope_marker::scope_footer_tooltip(&footer_split, Some(marker));
+        let has_tail = !footer_split.tail.is_empty();
         h_flex()
             .w_full()
             .flex_none()
@@ -1106,15 +1164,27 @@ impl CoreStatusView {
             .items_center()
             .px_2()
             .py_1()
-            .text_size(design::t_body(cx))
+            .text_size(body)
             .text_color(rgb(p.text_muted))
-            .child(t!(
-                "core_status.footer",
-                servers = groups.len(),
-                cores = total_cores,
-                online = online
+            .child(
+                div()
+                    // `flex_none` only while a tail exists to yield in its place — see the same
+                    // gate in `panels/orders/render.rs`.
+                    .when(has_tail, |el| el.flex_none())
+                    .text_size(body)
+                    .text_color(rgb(p.text_muted))
+                    .child(footer_split.head),
+            )
+            .children(scope_marker::scope_footer_tail(
+                "core-status-footer-tail",
+                footer_split.tail,
+                tip,
+                body,
+                p.text_muted,
             ))
-            .child(div().flex_1())
+            // Exactly one of these two holds the slot: the tail when a marker is on screen, this
+            // bare spacer otherwise.
+            .children((!has_tail).then(|| div().flex_1()))
             // A campaign's summary plus both bulk buttons, as ONE group that may shrink and wrap
             // onto its own row rather than clip: up to three localized counters joined with the
             // fleet summary and two localized buttons on a single non-shrinking row overruns a

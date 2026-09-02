@@ -178,6 +178,29 @@ strat.no_schema:
   ru: "схема не получена"
   en: "schema not received"
   es: "esquema no recibido"
+# The tree pane's empty states. Four reasons, four sentences, because the recovery differs in each:
+# connect something, switch the preset, clear the filter, or simply wait. Lowercase to match
+# `strat.no_selection` and `strat.no_schema` in the same window. The hidden-by-preset case is NOT
+# here — it is the shared `workspace.scope.all_hidden`, rendered with the marker's own counts.
+strat.tree_empty_no_cores:
+  ru: "нет подключённых ядер"
+  en: "no cores connected"
+  es: "no hay núcleos conectados"
+# Separate from `strat.tree_empty_no_strategies`: a core is connected but has not sent its first
+# strategy snapshot yet, and an empty snapshot has not been ruled out. Promising nothing is the
+# point — the two are indistinguishable until `strategies_rev` moves off zero.
+strat.tree_empty_loading:
+  ru: "загрузка стратегий…"
+  en: "loading strategies…"
+  es: "cargando estrategias…"
+strat.tree_empty_filtered:
+  ru: "ничего не подходит под фильтр"
+  en: "nothing matches the filter"
+  es: "nada coincide con el filtro"
+strat.tree_empty_no_strategies:
+  ru: "стратегий пока нет"
+  en: "no strategies to show yet"
+  es: "aún no hay estrategias"
 strat.pick_field:
   ru: "выберите поле для описания"
   en: "select a field for details"

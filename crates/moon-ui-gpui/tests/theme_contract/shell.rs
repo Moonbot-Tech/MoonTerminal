@@ -433,9 +433,9 @@ fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
         .map(|(body, _)| body)
         .expect("Orders Classic layout branch must end before the table");
     assert!(
-        render_body.contains(
-            "let auto_core = self.effective_scope(self.backend.read(cx)).is_auto_core();"
-        ) && auto_layout.contains("controls.flex_wrap()")
+        render_body.contains("let scope = self.effective_scope(self.backend.read(cx));")
+            && render_body.contains("let auto_core = scope.is_auto_core();")
+            && auto_layout.contains("controls.flex_wrap()")
             && auto_layout.contains(".ml_auto()")
             && auto_layout.contains(".child(self.columns_menu(cx))")
             && auto_layout.contains(".child(self.sort_menu(cx))")

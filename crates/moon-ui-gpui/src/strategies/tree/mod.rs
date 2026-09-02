@@ -7,6 +7,7 @@ pub(crate) mod cache;
 pub(crate) mod checks;
 pub(crate) mod dialogs;
 pub(crate) mod dnd;
+mod empty_state;
 pub(crate) mod menu;
 pub(crate) mod moon;
 pub(crate) mod ops;
@@ -79,6 +80,29 @@ impl StrategiesView {
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
+
+        // Resolved before `node_data` moves into the adapter below: `nodes` is the ladder's
+        // first-priority signal, and a build with at least one row never reaches the rest.
+        let nodes = node_data.len();
+        // A connected core enters `CoreData` with `strategies_rev == 0` before its first snapshot
+        // arrives — a genuinely empty one included, which is what makes this the loading/empty
+        // split rather than a redundant "no cores" check. Read-only against the live store, same
+        // field `tree::cache::data_sig` already hashes.
+        //
+        // ANY, not ALL, and the difference is the whole point of the state: with two visible cores
+        // where one has already answered "no strategies" and the other has not answered at all, an
+        // ALL test reads false and the ladder falls through to "no strategies yet" while the second
+        // core may still deliver some. One unanswered core is enough to owe the user a wait.
+        let awaiting_snapshot = cores
+            .iter()
+            .any(|(core, _)| store.core(*core).is_none_or(|cd| cd.strategies_rev == 0));
+        let empty = empty_state::tree_empty_state(
+            cores.len(),
+            nodes,
+            awaiting_snapshot,
+            self.filter.narrows(),
+            self.scope_marker.as_ref(),
+        );
 
         // MoonTree itself is headless and owns flattening, virtualization, and drag-and-drop.
         // The `CoreStore -> MoonTreeItem` adapter plus rows, DnD, and menus live in `moon`.
@@ -236,6 +260,50 @@ impl StrategiesView {
                         .size_full()
                     })
                     .child(tree_el)
+                    // Sibling AFTER `tree_el`, never in its place: dropping the tree would drop
+                    // `MoonTreeState` and every expansion the user has open. Absolute + `inset_0`
+                    // overlays it instead, so nothing hidden ⇒ no overlay at all and today's tree
+                    // renders byte-identical.
+                    .when_some(empty, |el, state| {
+                        el.child(
+                            v_flex()
+                                .id("strat-tree-empty")
+                                .absolute()
+                                .inset_0()
+                                .items_center()
+                                .justify_center()
+                                .gap(design::ui_px(cx, 4.0))
+                                .text_color(moon(p.text_muted))
+                                .child(
+                                    div()
+                                        .text_size(design::t_body(cx))
+                                        .child(empty_state::headline(state)),
+                                )
+                                .when(state == empty_state::TreeEmptyState::HiddenByPreset, |el| {
+                                    let Some(marker) = self.scope_marker.as_ref() else {
+                                        return el;
+                                    };
+                                    let facts = marker.facts();
+                                    let caption = facts.join(" ");
+                                    if caption.is_empty() {
+                                        return el;
+                                    }
+                                    let tip = marker.tooltip(&facts);
+                                    let mut caption_el = div()
+                                        .id("strat-tree-empty-caption")
+                                        .text_size(design::t_caption(cx))
+                                        .child(caption);
+                                    if !tip.is_empty() {
+                                        caption_el = caption_el.tooltip(
+                                            crate::panels::common::text_tooltip(
+                                                SharedString::from(tip),
+                                            ),
+                                        );
+                                    }
+                                    el.child(caption_el)
+                                }),
+                        )
+                    })
                     .on_drag_move(cx.listener(
                         |this, event: &DragMoveEvent<ui::StratDrag>, window, cx| {
                             let event_window = window.window_handle().window_id();

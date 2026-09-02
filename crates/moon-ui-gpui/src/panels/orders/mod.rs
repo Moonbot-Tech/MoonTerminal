@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
@@ -39,6 +40,7 @@ use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
+use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
@@ -296,6 +298,25 @@ impl OrdersPanel {
             RetainedCoreScope::Explicit(&retained)
         };
         b.effective_workspace_scope(&self.group, retained)
+    }
+
+    /// Build this panel's scope marker.
+    ///
+    /// Args:
+    ///     b: Backend snapshot providing the display preset for this group.
+    ///     scope: Already-resolved effective core scope; callers that already hold one (`render`
+    ///         does) pass it instead of paying to re-resolve it here.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts. This panel is always
+    ///     group-owned, so its preset is always resolved and the marker is never `Option`, unlike
+    ///     `panels/assets/mod.rs::scope_marker`'s global-window `None` arm.
+    pub(super) fn scope_marker(&self, b: &Backend, scope: &EffectiveCoreScope) -> ScopeMarker {
+        ScopeMarker::new(
+            b.display_preset(crate::workspace::DisplayOwner::Group(&self.group)),
+            scope.membership_shown(),
+            scope.membership_total(),
+        )
     }
 
     /// Return the group's cores in canonical order for the source selector.

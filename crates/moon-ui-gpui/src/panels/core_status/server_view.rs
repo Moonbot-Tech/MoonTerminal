@@ -45,6 +45,7 @@ use super::time_offset::{
     TzOffsetCell, tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip,
 };
 use super::update_menu;
+use super::{ScopeMarker, scope_marker};
 
 /// IP mask shown while the column is hidden; a fixed run avoids leaking the address length.
 const IP_MASK: &str = "************";
@@ -99,6 +100,9 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 ///         Borrowed, not owned: both reads below are synchronous and yield `Copy` geometries, so
 ///         nothing in the render tree outlives this call and a per-frame clone would be pure waste.
 ///     state: MoonTree state that owns scrolling and selection.
+///     backend: Shared terminal backend, handed down to row builders that must not read this view.
+///     marker: This panel's scope marker, which swaps the empty-state sentence when the active
+///         preset hid every configured core.
 ///     window: Host window, for the header's divider drag listener.
 ///     cx: Panel context used to create a weak action callback.
 ///
@@ -118,6 +122,7 @@ pub(super) fn grouped_server_view(
     overrides: &HashMap<String, f32>,
     state: &Entity<MoonTreeState>,
     backend: &Entity<Backend>,
+    marker: &ScopeMarker,
     window: &Window,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
@@ -276,7 +281,10 @@ pub(super) fn grouped_server_view(
                         .items_center()
                         .justify_center()
                         .text_color(rgb(header_palette.text_muted))
-                        .child(t!("core_status.empty").to_string()),
+                        .child(scope_marker::scope_empty_text(
+                            Some(marker),
+                            t!("core_status.empty").to_string(),
+                        )),
                 );
             }
             root.child(super::by_ip_header::server_header(

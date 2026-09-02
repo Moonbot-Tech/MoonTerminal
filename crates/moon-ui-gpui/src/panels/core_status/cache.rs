@@ -172,6 +172,11 @@ impl CoreStatusView {
         self.has_warn = groups.iter().any(|group| group.has_warn());
         self.cached_groups = Rc::new(groups);
         self.cached_rows = Rc::new(rows);
+        // `workspace_revision`'s observer (`mod.rs::new`) calls this unconditionally on every
+        // change, with no signature gate ahead of it -- unlike the backend observer's 1 s/rev
+        // gate above -- so recomputing the marker here keeps it exactly as fresh as the rows and
+        // groups it is drawn beside.
+        self.cached_scope_marker = self.scope_marker(backend.read(cx));
         self.rebuild_tree(cx);
     }
 
