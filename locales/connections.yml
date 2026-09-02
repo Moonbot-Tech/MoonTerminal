@@ -164,6 +164,10 @@ conn.col.proto:
   ru: "Прото"
   en: "Proto"
   es: "Proto"
+conn.col.preset:
+  ru: "Пресет"
+  en: "Preset"
+  es: "Preset"
 conn.col.group:
   ru: "Группа"
   en: "Group"
@@ -256,6 +260,22 @@ conn.tip.proto:
   ru: "Режим транспорта MoonProto — та же тройка V0/V1/V2, что в настройках ядра «Moon Proto»; обе стороны должны стоять на ОДНОМ. Берётся из ключа ОДИН раз — пока режима ещё нет; дальше только отсюда, и новый ключ его уже не перебьёт — так что перевыпускать ключ ради смены режима не нужно. Прочерк = ключ ничего не сообщил (старый экспорт), соединение идёт как V0. Применяется по «Сохранить»: ядро переподключится само."
   en: "MoonProto transport mode - the same V0/V1/V2 trio as in the core's Moon Proto settings; both sides must be on the SAME one. Taken from the key ONCE, while no mode is set yet; after that it is yours, and a new key no longer overrides it - so no key has to be reissued just to change the mode. A dash means the key named nothing (an older export) and the connection runs as V0. Applied on Save: the core reconnects by itself."
   es: "Modo de transporte MoonProto: el mismo trío V0/V1/V2 que en los ajustes Moon Proto del núcleo; ambos lados deben estar en el MISMO. Se toma de la clave UNA vez, mientras no haya modo definido; después es tuyo y una clave nueva ya no lo sobrescribe, así que no hace falta reemitir ninguna clave para cambiar de modo. Un guion significa que la clave no indicó nada (exportación antigua) y la conexión usa V0. Se aplica al guardar: el núcleo se reconecta solo."
+conn.tip.preset:
+  ru: "В каком режиме рабочего пространства ядро видно в списках: везде, только в Классике или только в Авто. Это только отображение — скрытое ядро всё равно подключается и записывает данные."
+  en: "Which workspace preset shows this core in every list: both, Classic only, or Auto only. Display only — a hidden core still connects and still records."
+  es: "En qué preset de espacio de trabajo se muestra este núcleo en las listas: ambos, solo Clásico o solo Auto. Solo visualización — un núcleo oculto sigue conectándose y registrando."
+conn.preset.both:
+  ru: "Оба"
+  en: "Both"
+  es: "Ambos"
+conn.preset.classic:
+  ru: "Классик"
+  en: "Classic"
+  es: "Clásico"
+conn.preset.auto:
+  ru: "Авто"
+  en: "Auto"
+  es: "Auto"
 conn.tip.group:
   ru: "Группа = ОТДЕЛЬНОЕ главное окно. Все ядра с одинаковым именем группы живут в одном окне; новое имя группы → новое главное окно."
   en: "Group = a SEPARATE main window. All cores with the same group name live in one window; a new group name → a new main window."

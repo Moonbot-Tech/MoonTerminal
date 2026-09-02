@@ -55,10 +55,17 @@ impl ReportPanel {
         let selection = self.selection.clone();
         // Clip resized columns at the shared table host; an empty successful
         // result keeps the header and uses the panel overlay.
+        // "no reports under the filter (or the DB is empty)" sends the user to widen a filter or
+        // suspect their database; when the preset hid every core neither is true and neither
+        // helps. The totals row directly below already says "0 of N cores".
+        let empty_text = crate::workspace::scope_marker::scope_empty_text(
+            self.scope_marker(self.backend.read(cx)).as_ref(),
+            t!("report.empty").to_string(),
+        );
         crate::panels::common::data_table_host(
             "rep-table-host",
             row_count == 0,
-            t!("report.empty").to_string(),
+            empty_text,
             p,
             cx,
             MoonDataTable::new("report-table", row_count, move |ri, _window, _app| {
@@ -457,13 +464,24 @@ impl Render for ReportPanel {
         // The row doubles as the selection bar: while rows are selected it carries their commands
         // and uses an accent tint to distinguish the active selection state.
         let selection_actions = self.selection_actions(p, cx);
+        let marker = self.scope_marker(self.backend.read(cx));
         let facts = totals::footer_facts(
             self.data.data().map(Arc::as_ref),
             matches!(self.data, LoadState::Failed(_)),
             &self.valuation_status,
             moon_core::util::now_unix_ms_i64(),
+            marker.as_ref(),
         );
-        let tip: SharedString = totals::footer_tooltip(&facts).into();
+        let base_tip = totals::footer_tooltip(&facts);
+        // The closing hint line lives in the tooltip only, never on the row itself — exactly as
+        // `panels/assets/balances.rs::summary_tooltip` appends its own hint.
+        let tip: SharedString = match &marker {
+            Some(marker) if marker.hides_anything() => {
+                marker.tooltip(std::slice::from_ref(&base_tip))
+            }
+            _ => base_tip,
+        }
+        .into();
         let body = design::t_body(cx);
         // Every fact is `flex_none`, which is load-bearing in the tail alone: earlier facts retain
         // their intrinsic widths while overflow clips the tail at its right edge.

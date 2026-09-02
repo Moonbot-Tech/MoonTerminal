@@ -3,13 +3,14 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use moon_core::config::CoreGroup;
+use moon_core::config::{CoreGroup, WorkspaceMode};
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
 use crate::controls::venue_section_label;
+use crate::workspace::scope_marker::ScopeMarker;
 
 /// User-selected grouping axis for the monitor table.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -71,6 +72,46 @@ pub(super) struct LiveContext {
     /// 5-second sample that a renamed core does — as a [`super::ContextChange::Regroup`], with no
     /// SQLite read behind it.
     pub(super) core_groups: Vec<CoreGroup>,
+    /// Preset this window displays under.
+    ///
+    /// The Profit Monitor is `DisplayOwner::Singleton`: it inherits the last focused group's
+    /// preset (Auto or Classic), `None` while no group is focused. Carried so
+    /// [`crate::workspace::scope_marker`] can build its facts from the same typed pair every other
+    /// aggregate uses.
+    pub(super) preset: Option<WorkspaceMode>,
+    /// Configured cores before the membership filter ran.
+    pub(super) configured_total: usize,
+    /// Raw ids of every core `config.servers` names, before the membership filter ran.
+    ///
+    /// [`Self::core_names`], [`Self::core_order`] and [`Self::active`] are already filtered down to
+    /// what the active preset shows; this is the unfiltered source they were built from, kept so
+    /// [`super::model::scoped_query_core_ids`] can tell "not configured at all" apart from
+    /// "configured but hidden" — a core absent here is a data-only core the membership filter never
+    /// had authority to hide, and must not lose its money to it. Always `configured_total` long.
+    pub(super) configured_core_ids: HashSet<CoreId>,
+    /// Every core the header's own FLEET run cell may command, independent of the active preset's
+    /// display narrowing.
+    ///
+    /// The same predicate as [`Self::active`], minus `Backend::core_displayed`: the preset is a READ
+    /// narrowing only (the precedent is `analytics::mod::analytics_display_scope`'s docstring), and
+    /// this cell commands the WHOLE table rather than one row, so scoping its authority through the
+    /// same filter that legitimately narrows individual rows would silently narrow a COMMAND path
+    /// too — the failure §4.5 of the goal spec exists to prevent.
+    pub(super) action_core_ids: Vec<CoreId>,
+}
+
+impl LiveContext {
+    /// Build this context's scope marker from its own membership-boundary counts.
+    ///
+    /// The one place both the scoped query ([`super::model::scoped_query_core_ids`]) and every
+    /// render path ask "does the active preset hide anything", so the rows a query returns and the
+    /// marker drawn beside them can never disagree about the same scope.
+    ///
+    /// Returns:
+    ///     A marker driven by this context's own preset, shown count and configured total.
+    pub(super) fn scope_marker(&self) -> ScopeMarker {
+        ScopeMarker::new(self.preset, self.core_order.len(), self.configured_total)
+    }
 }
 
 /// One displayed row after the selected grouping axis has merged per-core data.

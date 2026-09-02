@@ -42,6 +42,7 @@ use crate::controls::core_run::{RunKey, RunScope, RunSlots, reserved_cell, run_c
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use crate::media::exchange_logos::exchange_logo;
+use crate::workspace::scope_marker::ScopeMarker;
 use moon_core::venue::Brand;
 
 /// Render a centered neutral message.
@@ -92,18 +93,23 @@ pub(super) fn centered_alert(title: String, detail: String, cx: &App) -> AnyElem
 /// Args:
 ///     totals: Per-quote safe totals.
 ///     show_trades: Whether the current width retains the aggregate trade count.
+///     scope_marker: This surface's marker, built from the same live context the query used. It
+///         reaches the viewer through the quote chips' HOVER only — see the note at the chips.
 ///     palette: Active MoonUI palette.
 ///     cx: Render context.
 ///
 /// Returns:
-///     Explanation and quote chips, with the aggregate trade count when space permits.
+///     Explanation and quote chips, with the aggregate trade count when space permits. The chips
+///     carry the scope hint as a tooltip when the active preset hides at least one configured core.
 pub(super) fn split_body(
     totals: &moon_core::db::QuoteBreakdown,
     show_trades: bool,
+    scope_marker: ScopeMarker,
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
     let mut chips = h_flex()
+        .id("pm-split-money")
         .flex_wrap()
         .justify_center()
         .gap(design::ui_px(cx, 6.0));
@@ -123,6 +129,18 @@ pub(super) fn split_body(
                 .child(amount),
         );
     }
+    // The scope reaches the viewer by HOVER, never as a caption. This window is ~612px wide in
+    // normal use and the marker's two facts clipped mid-word ("0 и…"), which reads as a rendering
+    // fault rather than as a scope — worse than saying nothing. The money is the right hover
+    // target: the question a scoped figure raises is asked while looking at the figure.
+    let chips = chips.when(scope_marker.hides_anything(), |row| {
+        // `line`, not `facts`: the marker IS the whole tooltip body here, with no head above it,
+        // so the tail's leading separator would open the bubble with a stray bullet.
+        let line = scope_marker.line();
+        row.tooltip(crate::panels::common::text_tooltip(
+            scope_marker.tooltip(std::slice::from_ref(&line)),
+        ))
+    });
     v_flex()
         .flex_1()
         .w_full()
@@ -348,6 +366,15 @@ pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColu
 ///     flash: Live arrival stamps, keyed by the core that closed the trade.
 ///     selection: Cores currently broadcast to the main window; empty means no filter.
 ///     scroll: Retained vertical-list position.
+///     scope_marker: This surface's marker, built from the same live context the scoped query used.
+///         Its facts reach the viewer through the grand-total footer's HOVER only, not as a
+///         caption — see the note at `scope_facts` for why this surface differs from the Report's
+///         and Assets' footers, which do state their scope in the row.
+///     action_cores: Cores the header's own FLEET run cell may command, independent of the active
+///         preset's display narrowing — see `LiveContext::action_core_ids`. Never the union of the
+///         (possibly display-scoped) per-row `run_scopes` below, or a hidden core's row taking its
+///         own button with it would also narrow this table-wide cell, which commands rather than
+///         merely reports.
 ///     palette: Active MoonUI palette.
 ///     view: Owning monitor entity receiving sortable-header actions.
 ///     cx: Application context used for rendering.
@@ -366,6 +393,8 @@ pub(super) fn table(
     flash: &crate::pulse::Arrivals<CoreId>,
     selection: &HashSet<CoreId>,
     scroll: &MoonVirtualListScrollHandle,
+    scope_marker: ScopeMarker,
+    action_cores: &[CoreId],
     palette: MoonPalette,
     view: Entity<ProfitMonitorView>,
     backend: Entity<Backend>,
@@ -492,10 +521,11 @@ pub(super) fn table(
     } else {
         Vec::new()
     };
-    // The heading's own run cell commands EVERY core the table is showing. Built here, where the
-    // entries are still the plain vector, and passed in already rendered: the heading itself owns
-    // no backend and must not learn to.
-    let fleet = fleet_scope(&run_scopes, slots, prefs.header_controls)
+    // The heading's own run cell commands EVERY core its ACTION authority names, never only the
+    // ones the display scope happened to leave in `entries` — see `action_cores`'s own doc. Built
+    // here, where the entries are still the plain vector, and passed in already rendered: the
+    // heading itself owns no backend and must not learn to.
+    let fleet = fleet_scope(action_cores, slots, prefs.header_controls)
         .and_then(|scope| run_cell(&scope, &backend, palette, cx))
         .or_else(|| reserved_cell(slots, cx));
     let header = table_header(
@@ -629,8 +659,18 @@ pub(super) fn table(
     .radius(0.0);
     let (total_profit, total_profit_sign) =
         format_profit(total.profit, total.last_profit, unit, form);
+    // TOOLTIP ONLY, deliberately, and this surface is the exception among the filtering
+    // aggregates. The facts used to ride this label as a clipping tail, which is the right pattern
+    // for the Report's and Assets' full-width footers; here the window is ~612px and the name cell
+    // is one of six, so the tail never had room and always clipped mid-word ("Общий итог · режим:
+    // Классик · 0 и…"). A caption that cannot finish its own sentence states nothing and reads as
+    // a bug. The footer row below carries the same facts plus the recovery hint on hover.
+    // `line`, not `facts`: this tooltip's body is the marker ALONE, so it is separated internally
+    // but never prefixed — the tail form belongs to a footer that always has a head to its left.
+    let scope_line = scope_marker.line();
+    let grand_total_label = t!("profit_monitor.grand_total").to_string();
     let footer = table_row(
-        t!("profit_monitor.grand_total").to_string(),
+        grand_total_label,
         total_profit,
         total_profit_sign,
         format_trade_count(total.trades),
@@ -669,7 +709,12 @@ pub(super) fn table(
     .text_size(design::t_title(cx))
     .font_weight(FontWeight::SEMIBOLD)
     .border_t(px(2.0))
-    .border_color(moon_alpha(palette.amber, 0.7));
+    .border_color(moon_alpha(palette.amber, 0.7))
+    .when(scope_marker.hides_anything(), |element| {
+        element.tooltip(crate::panels::common::text_tooltip(
+            scope_marker.tooltip(std::slice::from_ref(&scope_line)),
+        ))
+    });
 
     v_flex()
         .flex_1()
@@ -681,47 +726,34 @@ pub(super) fn table(
         .into_any_element()
 }
 
-/// Build the scope of the heading's own run cell: every core ANY line of the table commands.
+/// Build the scope of the heading's own run cell: every core its ACTION authority names.
 ///
-/// The one cell in the window that acts on the whole table, which is why it is assembled here and
-/// not in the per-line pass: its scope is the union of every line's own scope, deduplicated, so a
-/// core saved into three groups is commanded once and a group caption can never reach a core its
-/// own heading does not. Taken from `scope_cores` for exactly that reason — a caption stands for
-/// its configured members, which in Core mode include cores that closed no trade and therefore
-/// have no row.
+/// The one cell in the window that acts on the whole table, which is why it takes its OWN input
+/// rather than the per-line pass's: unioning the (possibly display-scoped) row scopes would let the
+/// active preset narrow this table-wide COMMAND cell the moment it hides a core that traded — see
+/// `LiveContext::action_core_ids`'s own doc for why that is a distinct failure from a hidden row
+/// losing its own button, which is fine. `action_cores` already comes deduplicated, one entry per
+/// configured server.
 ///
 /// Restart is deliberately withheld — "restart the fleet" is not an action this window offers, and
 /// the scope's own single-core guard would still hand it over on a table holding exactly one core.
 /// The status slot draws its folded dot, which reports rather than commands.
 ///
-/// Cost: one store lookup per core in the union, once per BODY build — like the flash, selection
-/// and logo passes beside it, and like them not per frame. Taken from the scopes the per-line pass
-/// already resolved rather than walking the entries a second time.
-///
 /// Args:
-///     scopes: The per-line run scopes, already resolved for this render.
+///     action_cores: Every core the header cell may command, resolved once per body build.
 ///     slots: Slots the table reserves, which decide what the cell may fill.
 ///     enabled: The `header_controls` preference; the cell exists only when it is on.
 ///
 /// Returns:
 ///     The heading's scope, or `None` when the table commands nothing — the preference is off, no
 ///     control slot is reserved, or no core is in scope.
-fn fleet_scope(scopes: &[Option<RunScope>], slots: RunSlots, enabled: bool) -> Option<RunScope> {
-    if !enabled || !(slots.trading || slots.auto) {
+fn fleet_scope(action_cores: &[CoreId], slots: RunSlots, enabled: bool) -> Option<RunScope> {
+    if !enabled || !(slots.trading || slots.auto) || action_cores.is_empty() {
         return None;
     }
-    let mut seen = HashSet::with_capacity(scopes.len());
-    let mut cores: Vec<CoreId> = Vec::with_capacity(scopes.len());
-    for scope in scopes.iter().flatten() {
-        for core in scope.cores.iter() {
-            if seen.insert(*core) {
-                cores.push(*core);
-            }
-        }
-    }
-    (!cores.is_empty()).then(|| RunScope {
+    Some(RunScope {
         key: RunKey::Fleet,
-        cores: cores.into(),
+        cores: action_cores.into(),
         reserve: slots,
         // Every reserved slot, the status dot included: this cell exists only because the heading
         // preference asked for it. The restart button is withheld by `allows_restart` alone.

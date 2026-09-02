@@ -66,6 +66,23 @@ impl StrategyFilter {
         }
     }
 
+    /// Return whether this filter narrows the tree at all, across every dimension.
+    ///
+    /// Derived from the real predicate rather than hand-written: [`Self::prepare`] TRIMS the
+    /// search query before deciding whether it is active, so a whitespace-only field must not be
+    /// blamed for an empty tree the way a naive `!self.search.is_empty()` check would.
+    ///
+    /// Returns:
+    ///     `true` when search, kind, direction, active-only, or exchange excludes anything.
+    pub(super) fn narrows(&self) -> bool {
+        let prepared = self.prepare();
+        prepared.query.is_some()
+            || prepared.kind.is_some()
+            || prepared.dir.is_some()
+            || prepared.active_only
+            || self.exchange.is_some()
+    }
+
     /// Returns row visibility for cold single-row callers.
     ///
     /// The per-frame tree pass prepares the filter once and uses [`PreparedFilter`] directly.

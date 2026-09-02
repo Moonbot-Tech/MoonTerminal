@@ -52,7 +52,7 @@ use format::{ColumnFloor, ProfitColumn};
 use model::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn, context_change,
     duration_until_period_refresh, duration_until_wall_clock_boundary, monitor_zone, next_sort,
-    retain_last_known_venues, sort_rows,
+    retain_last_known_venues, scoped_query_core_ids, sort_rows,
 };
 use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use sections::{MonitorEntry, SectionLabels};
@@ -275,6 +275,21 @@ pub(crate) struct ProfitMonitorView {
     valuation: ValuationMode,
     live: LiveContext,
     data: ProfitLoadState<ProfitMonitorSummary>,
+    /// Cores the last SUCCESSFUL read actually named, kept apart from [`Self::data`].
+    ///
+    /// [`super::model::scoped_query_core_ids`] needs the previous read's core list to keep a
+    /// data-only core — one absent from `config.servers`, which membership therefore has no
+    /// authority to hide — inside a scoped query. Reading that list from `data` cannot work:
+    /// `reload` resets `data` to `Loading` BEFORE building the replacement query, and
+    /// `ProfitLoadState::data` also answers `None` for `Split` and `Failed`. Either way the
+    /// carry-forward would arrive empty exactly when it is needed, the narrowed result would
+    /// become the next read's universe, and the core's money would be gone for good rather than
+    /// for one cycle.
+    ///
+    /// The sibling `analytics::toolbar::analytics_core_filter_ids` does not need this because its
+    /// universe comes from `db::distinct_cores`, independent of any view state. This field is that
+    /// independence, held locally: written only when a read applies, never cleared by `reload`.
+    seen_data_cores: Vec<CoreId>,
     refresh_error: Option<ReadFail>,
     /// Run-state token of every configured core, folded with the pending-intent register.
     ///
@@ -438,6 +453,12 @@ impl ProfitMonitorView {
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _, cx| this.sync_context(cx))
             .detach();
+        // A membership-only save advances `workspace_revision` without notifying `Backend`, so the
+        // sync_run_state observation above never fires for it; observe it directly so a hidden core
+        // and its money leave the table without waiting on the five-second context sampler.
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _, cx| this.sync_context(cx))
+            .detach();
         broadcast::observe_core_filter(&backend, cx);
         let mut this = Self {
             backend,
@@ -461,6 +482,7 @@ impl ProfitMonitorView {
             valuation,
             live,
             data: ProfitLoadState::default(),
+            seen_data_cores: Vec::new(),
             refresh_error: None,
             // Left at zero: the first backend notification fills it, and `sync_run_state` already
             // owns the "skip while the column is off" rule.
@@ -560,7 +582,28 @@ impl ProfitMonitorView {
         if !run_slots(self.prefs).any() {
             return;
         }
-        let rev = run_scope_rev(&self.backend, self.live.core_order.iter().copied(), cx);
+        // Both scopes the table can COMMAND, not just the one it displays. The per-row cells stand
+        // for `core_order`, but the header's fleet cell stands for `action_core_ids`, which
+        // deliberately still holds cores the active preset hides — a display boundary must not
+        // narrow a command path. Folding only the displayed list would leave a hidden core's
+        // run-state change invisible to this check, so the cached body would survive it and the
+        // fleet button would keep offering the action the OLD folded state implied: press Stop
+        // while the real fleet has gone mixed, and the command that reaches the visible cores is
+        // the opposite of the one the button is now showing.
+        // Deduped, and deduped IN ORDER on purpose. `Session::run_scope_rev` folds with a
+        // non-commutative `mix`, so the token depends on both the membership AND the sequence:
+        // folding a `HashSet` would hand it a different order per call and invalidate the cached
+        // body forever, while folding the plain chain would pay a session-store lookup twice for
+        // every core that is both displayed and active — which is most of a normal fleet.
+        let mut commanded = self.live.core_order.clone();
+        commanded.extend(
+            self.live
+                .action_core_ids
+                .iter()
+                .copied()
+                .filter(|core| !self.live.core_order.contains(core)),
+        );
+        let rev = run_scope_rev(&self.backend, commanded, cx);
         if rev == self.run_rev {
             return;
         }
@@ -615,10 +658,13 @@ impl ProfitMonitorView {
         combined_generation(&self.report_generation, &self.valuation_generation)
     }
 
-    /// Build the current unfiltered real-trade query.
+    /// Build the current real-trade query, scoped to the active preset's visible cores.
     ///
     /// Returns:
-    ///     Quote-profit query for the selected period and global valuation mode.
+    ///     Quote-profit query for the selected period and global valuation mode. `cores` is
+    ///     unfiltered exactly as an absent scope has always meant when the active preset hides no
+    ///     configured core; otherwise it is [`scoped_query_core_ids`]'s inclusion list, built from
+    ///     `self.live` and the previous successful read's own core set.
     fn query(&self) -> Query {
         // The window resolves in THIS monitor's own selected zone. Under Phase 1 it could not:
         // the bounds went straight onto a core-local column, so computing "today" in the user's
@@ -631,12 +677,17 @@ impl ProfitMonitorView {
         // loads them inside its own pinned snapshot.
         let axis = moon_core::db::ReportAxis::from_measured(Default::default(), self.zone);
         let (from, to) = self.period.range_at(now_utc(), axis.zone());
+        // Read from `seen_data_cores`, NEVER from `self.data`: `reload` clears `data` to `Loading`
+        // before this runs, so deriving the carry-forward from it would hand every scope-narrowing
+        // read an empty list — and since that read's own result becomes the next universe, a
+        // data-only core would be dropped permanently rather than for one cycle.
+        let cores = scoped_query_core_ids(&self.live, &self.seen_data_cores);
         Query {
             axis,
             previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,
-            cores: Vec::new(),
+            cores,
             side: SideFilter::All,
             emulator: Some(false),
             strategies: Vec::new(),
@@ -703,6 +754,20 @@ impl ProfitMonitorView {
                         let error = result.as_ref().err().cloned();
                         if !after_report || error.is_none() {
                             this.data.apply(result);
+                            // Widen the carry-forward universe with what this read named, and only
+                            // from a successful one: a failed or split read names no cores, and
+                            // adopting its emptiness would discard the list a later scoped query
+                            // needs. It ACCUMULATES rather than replaces, because a period holding
+                            // no trade for a data-only core would otherwise forget that core and
+                            // reintroduce the decay this field exists to stop. A core that has
+                            // gone for good simply stops matching rows on later reads.
+                            if let Some(data) = this.data.data() {
+                                for core in &data.cores {
+                                    if !this.seen_data_cores.contains(&core.core_uid) {
+                                        this.seen_data_cores.push(core.core_uid);
+                                    }
+                                }
+                            }
                             this.observe_arrivals(cx);
                             this.invalidate_content(cx);
                         }
@@ -1047,6 +1112,16 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Table, split-currency warning, loading placeholder, or error state.
     fn body(&self, width: f32, palette: MoonPalette, view: Entity<Self>, cx: &App) -> AnyElement {
+        // Hoisted above the match so every arm draws the SAME marker, built from the same facts
+        // the scoped query used. `ProfitLoadState::Split` is matched here BEFORE where the marker
+        // used to be constructed inline (inside the `Ready` arm below) — giving only `Ready` a
+        // marker would compile and render nothing for `Split` (§4.3's cross-model finding). The
+        // Profit Monitor is `Singleton`: an Analytics surface that lists cores and folds them into
+        // money, so it inherits the focused Auto workspace's preset like every other aggregate.
+        // `self.live.preset` is `None`, and this marker stays empty, only while no group is
+        // focused; once one is, a hidden core's exclusion shows here same as it does on Assets and
+        // Core Status.
+        let scope_marker = self.live.scope_marker();
         match &self.data {
             ProfitLoadState::Loading => {
                 centered_message(t!("common.loading").to_string(), palette, cx)
@@ -1062,6 +1137,7 @@ impl ProfitMonitorView {
             ProfitLoadState::Split(totals) => split_body(
                 totals,
                 MonitorLayout::for_width(width, design::ui_value(cx, 1.0)).trades,
+                scope_marker,
                 palette,
                 cx,
             ),
@@ -1112,6 +1188,8 @@ impl ProfitMonitorView {
                     &self.flash,
                     self.backend.read(cx).core_filter(),
                     &self.scroll,
+                    scope_marker,
+                    &self.live.action_core_ids,
                     palette,
                     view,
                     self.backend.clone(),
@@ -1224,20 +1302,37 @@ fn window_width(window: &Window) -> f32 {
 ///     Context sufficient to regroup cached per-core aggregates.
 fn capture_live_context(backend: &Backend) -> LiveContext {
     let config = &backend.config;
+    // The Profit Monitor is an Analytics surface that lists cores and folds them into money, so
+    // it is `Singleton`: it inherits the last focused group's preset (Auto or Classic) like
+    // Strategies, showing everything and marking nothing when no group is focused.
+    let preset = backend.display_preset(crate::workspace::DisplayOwner::Singleton);
+    let configured_total = config.servers.len();
     let core_names = config
         .servers
         .iter()
+        .filter(|server| backend.core_displayed(preset, server.id))
         .map(|server| (server.id, server.name.clone()))
         .collect();
-    // The session's own admission rule, from `session::lifecycle`: a core inside a server group
-    // that is switched off never connects, however active its own checkbox is. Reading the
-    // checkbox alone would give such a core a zero row in a window that can never fill it.
-    let active = config
+    // The header's own FLEET run cell commands the whole table, not one row — scoping its
+    // authority through `core_displayed` the way `active` below legitimately is would narrow a
+    // COMMAND path behind the display preset.
+    //
+    // The session's own admission rule, from `session::lifecycle`, bounds BOTH: a core inside a
+    // server group that is switched off never connects, however active its own checkbox is.
+    // Reading the checkbox alone would give such a core a zero row in a window that can never
+    // fill it.
+    //
+    // NOTE the axis this excludes, because it is not the display one and the docstrings elsewhere
+    // only discuss that: a core the user DEACTIVATED keeps its own row and its own row button when
+    // it traded in the period, but is not part of the fleet cell's authority. That is deliberate —
+    // it has no live session for a Trading or Auto toggle to reach.
+    //
+    // `group_ref`, not `group`: the latter clones a whole `GroupConfig` per server, and this runs
+    // for every configured core on every five-second sample. An unlisted group defaults to active
+    // (`GroupConfig::new`), which is what `is_none_or` states here.
+    let action_core_ids: Vec<CoreId> = config
         .servers
         .iter()
-        // `group_ref`, not `group`: the latter clones a whole `GroupConfig` per server, and this
-        // runs for every configured core on every five-second sample. An unlisted group defaults
-        // to active (`GroupConfig::new`), which is what `is_none_or` states here.
         .filter(|server| {
             server.active
                 && config
@@ -1246,19 +1341,33 @@ fn capture_live_context(backend: &Backend) -> LiveContext {
         })
         .map(|server| server.id)
         .collect();
+    // Derived from the list above rather than re-walking `config.servers` with the same predicate:
+    // `active` IS `action_core_ids` narrowed by the display preset, which is the one difference
+    // between them.
+    let active = action_core_ids
+        .iter()
+        .copied()
+        .filter(|core| backend.core_displayed(preset, *core))
+        .collect();
     let order = CoreOrder::new(config);
     let mut core_order = config
         .servers
         .iter()
+        .filter(|server| backend.core_displayed(preset, server.id))
         .map(|server| server.id)
         .collect::<Vec<_>>();
     order.sort_by(&mut core_order, |core| *core);
+    let configured_core_ids = config.servers.iter().map(|server| server.id).collect();
     LiveContext {
         venues: backend.session.core_venues().clone(),
         core_names,
         core_order,
         active,
         core_groups: config.core_groups.clone(),
+        preset,
+        configured_total,
+        configured_core_ids,
+        action_core_ids,
     }
 }
 

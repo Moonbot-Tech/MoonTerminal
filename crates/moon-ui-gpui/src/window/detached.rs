@@ -394,14 +394,14 @@ impl DetachedWindow {
         })
         .detach();
         // Native activation is a deliberate interaction even before the mouse moves. Attribute
-        // singleton scope to this panel's Auto group while preserving Classic no-op behavior.
+        // singleton scope to this panel's group, whichever preset it is in.
         let activation_backend = backend.clone();
         let activation_group = group.clone();
         cx.observe_window_activation(window, move |_this, window, cx| {
             if window.is_window_active() {
                 activation_backend.update(cx, |b, bcx| {
                     b.note_main_input(&activation_group);
-                    b.focus_auto_workspace(&activation_group, bcx);
+                    b.focus_singleton_owner(&activation_group, bcx);
                 });
             }
         })
@@ -555,7 +555,7 @@ impl Render for DetachedWindow {
                     if phase == DispatchPhase::Capture && window.is_window_active() {
                         backend.update(cx, |b, bcx| {
                             b.note_main_input(&group);
-                            b.focus_auto_workspace(&group, bcx);
+                            b.focus_singleton_owner(&group, bcx);
                         });
                     }
                 },

@@ -98,7 +98,9 @@ impl Render for OrdersPanel {
         crate::diag::bump(&crate::diag::ORDERS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::ORDERS_RENDER_US);
         let view = self.view;
-        let auto_core = self.effective_scope(self.backend.read(cx)).is_auto_core();
+        let scope = self.effective_scope(self.backend.read(cx));
+        let auto_core = scope.is_auto_core();
+        let marker = self.scope_marker(self.backend.read(cx), &scope);
         let cores = self.group_cores(self.backend.read(cx));
         let p = MoonPalette::active(cx);
 
@@ -169,11 +171,23 @@ impl Render for OrdersPanel {
             &self.table_state,
             self.highlight.clone(),
             stop_overlay,
+            marker,
             cx,
         );
 
-        // Footer with total, real, and emulated open-order counts.
+        // Footer with total, real, and emulated open-order counts, plus the marker's own facts
+        // when the workspace preset hides a core. The head — the existing localized total string
+        // — is `flex_none` so the figures never yield; the marker's facts clip from the right.
         let total = self.count_real + self.count_emu;
+        let head = t!(
+            "orders.footer_total",
+            total = total,
+            real = self.count_real,
+            emu = self.count_emu
+        )
+        .to_string();
+        let footer_split = scope_marker::scope_footer(head, Some(&marker));
+        let footer_tip = scope_marker::scope_footer_tooltip(&footer_split, Some(&marker));
         let footer = h_flex()
             .w_full()
             .flex_none()
@@ -183,18 +197,21 @@ impl Render for OrdersPanel {
             .py_1()
             .child(
                 div()
+                    // `flex_none` only while a tail exists to yield in its place. With nothing
+                    // hidden there is no tail, and pinning the head then would change how this row
+                    // behaves at a narrow width for a marker that is not on screen.
+                    .when(!footer_split.tail.is_empty(), |el| el.flex_none())
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_soft))
-                    .child(
-                        t!(
-                            "orders.footer_total",
-                            total = total,
-                            real = self.count_real,
-                            emu = self.count_emu
-                        )
-                        .to_string(),
-                    ),
-            );
+                    .child(footer_split.head),
+            )
+            .children(scope_marker::scope_footer_tail(
+                "orders-footer-tail",
+                footer_split.tail,
+                footer_tip,
+                design::t_body(cx),
+                p.text_soft,
+            ));
 
         v_flex()
             .id("orders-panel")

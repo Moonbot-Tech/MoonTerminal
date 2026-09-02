@@ -1210,7 +1210,7 @@ fn open_window_button(
     btn.on_click(move |_, window, cx| {
         if let Some(group) = workspace_owner.as_deref() {
             backend.update(cx, |backend, backend_cx| {
-                backend.focus_auto_workspace(group, backend_cx);
+                backend.focus_singleton_owner(group, backend_cx);
             });
         }
         let owner_display = window.display(cx).map(|d| d.id());

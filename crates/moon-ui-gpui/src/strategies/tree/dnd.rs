@@ -34,7 +34,7 @@ impl StrategiesView {
     ///     cx: View context used to read strategies and update clipboards.
     ///
     /// Returns:
-    ///     Nothing; a stale Auto target leaves the retained clipboard untouched.
+    ///     Nothing; a target outside the current scope leaves the retained clipboard untouched.
     pub(super) fn copy_folder(&mut self, core: CoreId, path: Vec<String>, cx: &mut Context<Self>) {
         if !action_cores_visible(self.workspace_cores.as_deref(), [core]) {
             return;
@@ -65,7 +65,8 @@ impl StrategiesView {
     ///     cx: View context used to read the clipboard and dispatch creation.
     ///
     /// Returns:
-    ///     Nothing; a stale Auto target preserves clipboard and hidden retained selection state.
+    ///     Nothing; a target outside the current scope preserves clipboard and hidden retained
+    ///     selection state.
     pub(super) fn paste_into(&mut self, core: CoreId, target: String, cx: &mut Context<Self>) {
         if !action_cores_visible(self.workspace_cores.as_deref(), [core]) {
             return;
@@ -282,7 +283,7 @@ impl StrategiesView {
 /// Validate every source and target core immediately before a clipboard or drag action.
 ///
 /// Args:
-///     workspace: Concrete Auto ids, or `None` for Classic.
+///     workspace: Concrete scoped ids from Auto or Classic membership, or `None` when unscoped.
 ///     cores: Source and target cores used by the pending action.
 ///
 /// Returns:

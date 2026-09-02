@@ -119,7 +119,8 @@ struct Backend {
     /// Dedicated wake channel for `core_filter`, observed only by the panels that own a core
     /// selector and by the monitor that publishes it.
     core_filter_revision: Entity<CoreFilterRevision>,
-    /// Last live Auto group to own Analytics and Strategies scope; never serialized.
+    /// Last live group whose window received user activity, owning singleton-tool scope and the
+    /// display-membership preset for Analytics, Strategies, and Profit Monitor; never serialized.
     workspace_focus: Option<workspace::WorkspaceFocus>,
     /// Handle to the metrics worker. The polling itself runs on its own thread — on Windows it
     /// blocks for 12 to 27 ms a call, which on this one would be a frame or three dropped every

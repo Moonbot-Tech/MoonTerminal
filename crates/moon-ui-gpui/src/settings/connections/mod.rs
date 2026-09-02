@@ -72,6 +72,7 @@ pub(super) struct ConnRowIds {
     pub(super) bundle: SharedString,
     pub(super) feed: SharedString,
     pub(super) proto: SharedString,
+    pub(super) preset: SharedString,
     pub(super) act: SharedString,
     pub(super) win: SharedString,
     pub(super) del: SharedString,
@@ -115,6 +116,7 @@ impl ConnRowIds {
             bundle: SharedString::from(format!("bundle-{ident}")),
             feed: SharedString::from(format!("feed-{ident}")),
             proto: SharedString::from(format!("proto-{ident}")),
+            preset: SharedString::from(format!("preset-{ident}")),
             act: SharedString::from(format!("act-{ident}")),
             win: SharedString::from(format!("win-{ident}")),
             del: SharedString::from(format!("del-{ident}")),
@@ -408,6 +410,14 @@ impl SettingsView {
             let visible = visible_at(self.conn_entry_index(key));
             if !visible {
                 self.proto_open = None;
+                changed = true;
+            }
+        }
+
+        if let Some(key) = self.preset_open {
+            let visible = visible_at(self.conn_entry_index(key));
+            if !visible {
+                self.preset_open = None;
                 changed = true;
             }
         }

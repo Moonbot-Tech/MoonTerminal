@@ -3,6 +3,48 @@
 
 use super::support::*;
 
+/// Replacing `Backend::effective_workspace_scope`'s pre-retained `cores.len()` membership count
+/// with the final retained scope count makes a money panel claim that its workspace preset hid
+/// cores that its local filter actually removed.
+#[test]
+fn marker_counts_come_from_the_membership_boundary() {
+    let scope_model = read_src("workspace.rs");
+    assert!(
+        scope_model.contains("computed by the caller before Classic or\n    /// Auto retained filtering narrows `ids` further"),
+        "EffectiveCoreScope documents that membership counts precede retained filtering"
+    );
+    let backend = read_src("backend/mod.rs");
+    let scope = code_only(braced_body(
+        &backend,
+        "pub(crate) fn effective_workspace_scope(",
+    ));
+    assert!(
+        scope.contains("let membership_shown = cores.len();"),
+        "shown count must come from membership-filtered cores, not retained IDs"
+    );
+    let total = scope
+        .find("let membership_total = available.len();")
+        .expect("membership total must be captured before filtering");
+    let membership_filter = scope
+        .find("let cores: Vec<CoreId> = available")
+        .expect("the membership filter must derive the displayed cores");
+    let shown = scope
+        .find("let membership_shown = cores.len();")
+        .expect("the asserted membership count must have a source position");
+    let retained = scope
+        .find("crate::workspace::resolve_group_scope(")
+        .expect("retained panel filtering must remain downstream of membership counts");
+
+    assert!(
+        total < membership_filter && membership_filter < shown && shown < retained,
+        "the marker must carry counts from the membership boundary before retained filtering"
+    );
+    assert!(
+        scope.contains(".with_membership_counts(membership_shown, membership_total)"),
+        "the resolved scope must receive the membership-boundary counts"
+    );
+}
+
 /// Catches adding a second `DockArea` or breaking the ordered Auto surface route. Removing either
 /// `chart_tabs/mod.rs` publication leaves a report coin hidden on Report or leaves an emptied Main
 /// on Charts; bypassing the group cursor can replay another window's or a rebuilt window's event.
@@ -218,9 +260,9 @@ fn activating_an_auto_group_window_refreshes_singleton_ownership() {
     assert!(
         activation.contains("if this.window_active")
             && activation.contains("b.note_main_input(&group);")
-            && activation.contains("b.focus_auto_workspace(&group, bcx);")
+            && activation.contains("b.focus_singleton_owner(&group, bcx);")
             && activation
-                .matches("b.focus_auto_workspace(&group, bcx);")
+                .matches("b.focus_singleton_owner(&group, bcx);")
                 .count()
                 == 1,
         "native activation must refresh Auto singleton ownership without losing Main activity"
@@ -239,9 +281,9 @@ fn detached_panel_activation_and_activity_refresh_auto_singleton_ownership() {
     assert!(
         new.contains("cx.observe_window_activation(")
             && new.contains("b.note_main_input(&activation_group);")
-            && new.contains("b.focus_auto_workspace(&activation_group, bcx);")
+            && new.contains("b.focus_singleton_owner(&activation_group, bcx);")
             && new
-                .matches("b.focus_auto_workspace(&activation_group, bcx);")
+                .matches("b.focus_singleton_owner(&activation_group, bcx);")
                 .count()
                 == 1,
         "native detached-panel activation must attribute both activity and Auto ownership once"
@@ -253,7 +295,7 @@ fn detached_panel_activation_and_activity_refresh_auto_singleton_ownership() {
     assert!(
         render.contains("phase == DispatchPhase::Capture && window.is_window_active()")
             && render.contains("b.note_main_input(&group);")
-            && render.contains("b.focus_auto_workspace(&group, bcx);"),
+            && render.contains("b.focus_singleton_owner(&group, bcx);"),
         "active detached-panel interaction must refresh Main activity and Auto ownership"
     );
 }
@@ -273,7 +315,7 @@ fn detached_chart_activation_and_activity_refresh_auto_singleton_ownership() {
     assert!(
         activation.contains("hide_window_from_taskbar_soon(window)")
             && activation.contains("if window.is_window_active()")
-            && activation.contains("b.focus_auto_workspace(&group, bcx)"),
+            && activation.contains("b.focus_singleton_owner(&group, bcx)"),
         "native detached-chart activation must focus its Auto owner independently of idle polling"
     );
 
@@ -282,7 +324,7 @@ fn detached_chart_activation_and_activity_refresh_auto_singleton_ownership() {
     assert!(
         prune.contains(".any(|h| h.is_active(cx).unwrap_or(false))")
             && prune.contains("b.note_main_input(&group);")
-            && prune.contains("b.focus_auto_workspace(&group, bcx);"),
+            && prune.contains("b.focus_singleton_owner(&group, bcx);"),
         "active detached chart windows must refresh Main activity and Auto ownership"
     );
 }
@@ -575,12 +617,14 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
         ("panels/report/actions.rs", "effective_core_ids"),
         ("panels/report/controls.rs", "workspace_scope"),
         ("analytics/mod.rs", "analytics_workspace_scope"),
+        ("analytics/mod.rs", "analytics_display_scope"),
         ("analytics/toolbar.rs", "analytics_core_filter_ids"),
         ("analytics/tuner/mod.rs", "strategy_selection_visible"),
         ("analytics/tuner/save.rs", "workspace_core_visible"),
         ("analytics/purge.rs", "purge_core_visible"),
         ("analytics/tuner/list/menu.rs", "action_core_ids"),
         ("strategies/state.rs", "singleton_strategy_scope"),
+        ("strategies/state.rs", "singleton_display_cores"),
         ("strategies/logic.rs", "strategy_core_is_visible"),
         ("strategies/actions.rs", "strategy_core_is_visible"),
         ("strategies/versions.rs", "selected_key"),
@@ -628,6 +672,59 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
         ingest.contains(".filter(|s| s.group == self.group)")
             && !ingest.contains("effective_workspace_scope"),
         "Detects ingest and cursors must stay group-wide; only presentation is scoped"
+    );
+}
+
+/// `analytics/mod.rs:AnalyticsView::action_core_ids` must not fall back to `display_scope`;
+/// adding that fallback would make Save, Copy, or purge write through an unconfirmed Classic
+/// membership boundary instead of preserving Classic's unconfined action authority.
+#[test]
+fn analytics_classic_display_membership_never_becomes_action_authority() {
+    let analytics = code_only(&read_src("analytics/mod.rs"));
+    let action = code_only(braced_body(
+        &analytics,
+        "pub(in crate::analytics) fn action_core_ids(&self)",
+    ));
+    let selected = code_only(braced_body(&analytics, "fn cores_selected(&self)"));
+
+    assert!(
+        !action.contains("display_scope"),
+        "Classic display membership must stay outside Analytics write/action authority"
+    );
+    assert!(
+        selected.contains("self.read_core_ids()") && selected.contains("self.hidden_core_ids()"),
+        "Analytics queries must combine the read pin with the Classic hidden-core narrowing"
+    );
+}
+
+/// `analytics/mod.rs:analytics_display_scope` and `strategies/state.rs:singleton_strategy_scope`
+/// must retain the Classic display-membership path; removing its guard or reverting either body to
+/// `singleton_workspace()` makes every Classic member visible again despite workspace membership.
+#[test]
+fn singleton_classic_membership_uses_display_authority_without_changing_auto_scope() {
+    let analytics = code_only(&read_src("analytics/mod.rs"));
+    let analytics_display = code_only(braced_body(&analytics, "fn analytics_display_scope("));
+    assert!(
+        analytics_display
+            .contains("backend.display_preset(crate::workspace::DisplayOwner::Singleton)")
+            && analytics_display
+                .contains("preset != Some(moon_core::config::WorkspaceMode::Classic)")
+            && analytics_display.contains("hidden_core_ids.is_empty()"),
+        "Analytics must read Classic membership only from the singleton display preset and leave unaffected states unscoped"
+    );
+
+    let strategies = code_only(&read_src("strategies/state.rs"));
+    let display = code_only(braced_body(&strategies, "fn singleton_display_cores("));
+    let singleton = code_only(braced_body(&strategies, "fn singleton_strategy_scope("));
+    assert!(
+        display.contains("b.display_preset(crate::workspace::DisplayOwner::Singleton)")
+            && display.contains("excluded.then_some(shown)"),
+        "Strategies must derive a Classic display scope only when membership actually excludes a core"
+    );
+    assert!(
+        singleton.contains("b.singleton_workspace()")
+            && singleton.contains("singleton_display_cores(b)"),
+        "Strategies must preserve its Auto singleton scope before falling through to Classic display membership"
     );
 }
 
@@ -788,4 +885,31 @@ fn fixed_header_rows_cannot_flex_shrink_between_modes() {
         toolbar.contains(".h(px(design::toolbar_height(cx)))\n        .flex_none()"),
         "the explicit-height toolbar must be a non-shrinking flex child"
     );
+}
+
+/// Rebuilding `Backend::configured_workspace_scope` from live sessions would make an all-offline
+/// Report query use the fleet, while using availability or membership helpers would reintroduce liveness.
+#[test]
+fn configured_workspace_scope_is_derived_from_configuration_not_sessions() {
+    let backend = code_only(&read_src("backend/mod.rs"));
+    let configured = code_only(braced_body(
+        &backend,
+        "pub(crate) fn configured_workspace_scope(",
+    ));
+
+    assert!(
+        configured.contains(".servers") && configured.contains("is_configured_active()"),
+        "configured scope must enumerate configured servers and use configuration activity"
+    );
+    for forbidden in [
+        "group_cores(",
+        "core_belongs_to_group(",
+        ".is_available()",
+        "live_session",
+    ] {
+        assert!(
+            !configured.contains(forbidden),
+            "configured scope must not derive its universe through {forbidden}"
+        );
+    }
 }

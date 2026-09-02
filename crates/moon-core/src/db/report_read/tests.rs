@@ -57,6 +57,81 @@ fn chart_history_keeps_the_exact_core_coin_and_report_close_window() {
     assert!(!result.truncated);
 }
 
+/// `report_read.rs::append_row_scope` and `report_read.rs::build_where` must both retain their
+/// `core_uid IN (...)` guards. Removing both makes the present-but-empty sentinel scope read every
+/// core, so a Report footer can show money for a preset that visibly contains no cores.
+#[test]
+fn a_zero_core_uid_filter_matches_no_rows_and_zero_totals() {
+    let conn = Connection::open_in_memory().expect("open sentinel Report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT, newrecid INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL, basecurrency INTEGER, coin TEXT
+         );
+         CREATE TABLE closed_sell_reports (
+             core_uid INTEGER NOT NULL, core_name TEXT, db_id INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL, basecurrency INTEGER, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES (11, 'OFFSET', 1, 100, 12.5, 1, 'BTCUSDT');
+         INSERT INTO closed_sell_reports VALUES (29, 'LEGACY', 2, 110, -3.0, 1, 'ETHUSDT');",
+    )
+    .expect("seed two physical Report sources");
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([
+            (
+                11,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: 3_600,
+                }],
+            ),
+            (
+                crate::config::NO_MATCH_CORE_UID,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: 3_600,
+                }],
+            ),
+        ]),
+        chrono_tz::UTC,
+    );
+    let no_match = ReportFilter {
+        core_uids: vec![crate::config::NO_MATCH_CORE_UID],
+        rows: RowScope::Closed,
+        axis: axis.clone(),
+        ..ReportFilter::default()
+    };
+    let no_match_rows = query_reports(&conn, &no_match, "closedate", false, 100)
+        .expect("read sentinel Report scope");
+    let no_match_totals = query_totals(&conn, &no_match)
+        .expect("total sentinel Report scope")
+        .quotes;
+    assert!(
+        no_match_rows.rows.is_empty(),
+        "the non-issued sentinel uid must not admit either physical source"
+    );
+    assert_eq!(no_match_totals.orders, 0);
+    assert!(no_match_totals.totals.is_empty());
+
+    let unscoped = ReportFilter {
+        rows: RowScope::Closed,
+        axis,
+        ..ReportFilter::default()
+    };
+    let unscoped_rows = query_reports(&conn, &unscoped, "closedate", false, 100)
+        .expect("read unscoped Report rows");
+    let unscoped_totals = query_totals(&conn, &unscoped)
+        .expect("total unscoped Report rows")
+        .quotes;
+    assert_eq!(
+        unscoped_rows.rows.len(),
+        2,
+        "an absent scope still reads both sources"
+    );
+    assert_eq!(unscoped_totals.orders, 2);
+    assert_eq!(unscoped_totals.totals[0].profit, 9.5);
+}
+
 /// `report_read.rs:query_chart_trade_history` — replacing `quote::effective_ordinal_expr` with
 /// the raw `basecurrency` column reads a COIN-M row's mislabeled persisted currency (USDT)
 /// instead of its market-derived one (BTC), so the hover card would show a BTC amount labeled

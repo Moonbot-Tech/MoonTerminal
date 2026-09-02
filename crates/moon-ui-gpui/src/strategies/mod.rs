@@ -88,8 +88,22 @@ pub struct StrategiesView {
     exchange_logos_ready: bool,
     /// Whether the settings popover is open in this process.
     settings_open: bool,
-    /// Concrete singleton Auto scope; `None` leaves the all-core Classic tree authoritative.
+    /// Cores this window may show, from whichever authority scoped it — the singleton Auto
+    /// owner's effective scope, or the Classic viewing preset's membership. `None` leaves the
+    /// all-core tree authoritative. Also confines write actions, by consequence: a core the tree
+    /// never rendered cannot be selected, staged or dragged.
     workspace_cores: Option<Vec<CoreId>>,
+    /// Scope marker over the tree's live-session universe, refreshed alongside `workspace_cores`.
+    /// It intentionally excludes disconnected configured cores that `workspace_cores` retains.
+    /// `None` whenever nothing is scope-bound; feeds the tree's `HiddenByPreset` empty state.
+    scope_marker: Option<crate::workspace::scope_marker::ScopeMarker>,
+    /// Order-sensitive fold of the live session ids the marker above was last counted over.
+    ///
+    /// The marker's universe is live sessions, which move on connect and disconnect — neither of
+    /// which raises a workspace revision, and neither of which shows up in `strategies_sig` when
+    /// the core in question is one the preset HIDES. This is the cheap signal that says the
+    /// expensive recount is worth paying for; the recount itself walks the group.
+    session_roster_sig: u64,
     /// Primary strategy key supplying the schema and sections.
     selected: Option<Key>,
     /// Multi-selection used for highlighting and merged parameter display.

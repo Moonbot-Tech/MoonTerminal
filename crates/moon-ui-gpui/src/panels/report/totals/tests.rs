@@ -71,7 +71,7 @@ fn historical_facts(
     status: &ValuationStatus,
     now_ms: i64,
 ) -> FooterFacts {
-    footer_facts(data, failed, status, now_ms)
+    footer_facts(data, failed, status, now_ms, None)
 }
 
 /// Collect the tones of a fact list, which is what the priority order is asserted against.
@@ -372,7 +372,14 @@ fn a_current_rate_total_is_labelled_apart_from_historical_profit() {
             }),
         });
         snapshot.valuation = mode;
-        footer_facts(Some(&snapshot), false, &ValuationStatus::default(), T0).essential[1]
+        footer_facts(
+            Some(&snapshot),
+            false,
+            &ValuationStatus::default(),
+            T0,
+            None,
+        )
+        .essential[1]
             .text
             .clone()
     };
@@ -572,7 +579,7 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
         "mixed scopes prefer their complete active-mode USDT amount"
     );
     mixed.valuation = ValuationMode::Current;
-    let facts = footer_facts(Some(&mixed), false, &ValuationStatus::default(), T0);
+    let facts = footer_facts(Some(&mixed), false, &ValuationStatus::default(), T0, None);
     assert_eq!(
         facts.tail.last().expect("current unified volume").text,
         "Volume at the current rate: 1.62M USDT",

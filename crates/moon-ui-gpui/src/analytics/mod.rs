@@ -191,6 +191,10 @@ struct AnalyticsWorkspaceScope {
     selected_core: Option<u64>,
     /// Concrete live group cores that bound actions and pinned-filter reads.
     core_ids: Vec<u64>,
+    /// Cores that survived availability and membership together, for the summary's scope marker.
+    membership_shown: usize,
+    /// Cores that survived availability alone, before the membership filter ran.
+    membership_total: usize,
 }
 
 impl AnalyticsWorkspaceScope {
@@ -208,6 +212,99 @@ impl AnalyticsWorkspaceScope {
     fn pins_core_filter(&self) -> bool {
         self.selected_core.is_some()
     }
+
+    /// Build the summary's scope marker.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts. The preset is always
+    ///     [`WorkspaceMode::AutoTrading`]: [`analytics_workspace_scope`] only produces `Some` while
+    ///     `Backend::singleton_workspace` has resolved a live Auto-focused group.
+    fn scope_marker(&self) -> crate::workspace::scope_marker::ScopeMarker {
+        crate::workspace::scope_marker::ScopeMarker::new(
+            Some(moon_core::config::WorkspaceMode::AutoTrading),
+            self.membership_shown,
+            self.membership_total,
+        )
+    }
+}
+
+/// Configured cores the singleton's VIEWING preset hides, with the counts its marker states.
+///
+/// Deliberately the HIDDEN set rather than the shown one: this window queries the REPLICA core
+/// universe (`AnalyticsView::cores`), which can name a core whose server was deleted and which
+/// therefore has no `workspace_membership` at all. `Backend::core_displayed` admits such a core,
+/// so subtracting a hidden set keeps it; intersecting with a config-derived shown set would drop
+/// it and lose money from the figures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AnalyticsDisplayScope {
+    /// Preset resolved through `Backend::display_preset(DisplayOwner::Singleton)`.
+    preset: Option<moon_core::config::WorkspaceMode>,
+    /// Configured cores this preset hides from Analytics' scoped data reads. Never empty — see
+    /// `analytics_display_scope`.
+    hidden_core_ids: Vec<u64>,
+    /// Every `config.servers` id, in configuration order, captured in the same walk as
+    /// `hidden_core_ids`.
+    ///
+    /// The bootstrap universe for the implicit "All" row: the replica core list arrives only WITH
+    /// a query's result, while this is complete the moment the window is built, so a first query
+    /// can be scoped exactly as the marker states instead of running unfiltered. See
+    /// `toolbar::analytics_core_filter_ids`, which consults it only while that replica list is
+    /// still empty.
+    configured_core_ids: Vec<u64>,
+    /// `config.servers.len()`, captured BEFORE the membership filter ran.
+    configured_total: usize,
+}
+
+impl AnalyticsDisplayScope {
+    /// Build the summary's scope marker.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts.
+    fn scope_marker(&self) -> crate::workspace::scope_marker::ScopeMarker {
+        crate::workspace::scope_marker::ScopeMarker::new(
+            self.preset,
+            self.configured_total - self.hidden_core_ids.len(),
+            self.configured_total,
+        )
+    }
+}
+
+/// Resolve which configured cores the singleton's VIEWING preset hides.
+///
+/// Independent of [`analytics_workspace_scope`] by construction: `Backend::display_preset` and
+/// `Backend::singleton_workspace` apply the SAME focus-and-live test, so
+/// `display_preset(Singleton) == Some(AutoTrading)` holds exactly when `singleton_workspace()`
+/// is `Some`. The two never both answer.
+///
+/// This is a READ narrowing only. Analytics' ACTION authority stays `analytics_workspace_scope`,
+/// which is `None` in Classic on purpose (`AnalyticsView::action_core_ids`).
+fn analytics_display_scope(backend: &Backend) -> Option<AnalyticsDisplayScope> {
+    let preset = backend.display_preset(crate::workspace::DisplayOwner::Singleton);
+    if preset != Some(moon_core::config::WorkspaceMode::Classic) {
+        // The Auto arm is already answered group-scoped by `analytics_workspace_scope`; without a
+        // live singleton owner, this window remains unscoped and shows every core.
+        return None;
+    }
+    let configured_core_ids: Vec<u64> = backend.config.servers.iter().map(|s| s.id).collect();
+    let configured_total = configured_core_ids.len();
+    let hidden_core_ids: Vec<u64> = backend
+        .config
+        .servers
+        .iter()
+        .filter(|server| !backend.core_displayed(preset, server.id))
+        .map(|server| server.id)
+        .collect();
+    if hidden_core_ids.is_empty() {
+        // Load-bearing: keeps every unaffected Classic state today byte-identical to before
+        // this fix.
+        return None;
+    }
+    Some(AnalyticsDisplayScope {
+        preset,
+        hidden_core_ids,
+        configured_core_ids,
+        configured_total,
+    })
 }
 
 /// Resolve the current singleton workspace without changing Analytics' retained selection.
@@ -229,6 +326,8 @@ fn analytics_workspace_scope(backend: &Backend) -> Option<AnalyticsWorkspaceScop
     Some(AnalyticsWorkspaceScope {
         selected_core: workspace.selected_core,
         core_ids: scope.ids().to_vec(),
+        membership_shown: scope.membership_shown(),
+        membership_total: scope.membership_total(),
     })
 }
 
@@ -324,6 +423,9 @@ pub struct AnalyticsView {
     /// Auto action scope mirrored from `WorkspaceRevision`; only a concrete rail core also pins
     /// the retained read filter.
     workspace_scope: Option<AnalyticsWorkspaceScope>,
+    /// Classic display-membership narrowing mirrored from `WorkspaceRevision`; READ side only.
+    /// Never consulted by `action_core_ids` — see `analytics_display_scope`.
+    display_scope: Option<AnalyticsDisplayScope>,
     sel_cores: HashSet<u64>,
     /// Explicit saved-group provenance for the caption beside the numeric core trigger.
     core_caption: toolbar::CoreSelectionCaption,
@@ -670,11 +772,13 @@ impl AnalyticsView {
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| {
             let previous_selection = this.effective_strategy_selection();
-            let next = analytics_workspace_scope(this.backend.read(cx));
-            if next == this.workspace_scope {
+            let next_workspace = analytics_workspace_scope(this.backend.read(cx));
+            let next_display = analytics_display_scope(this.backend.read(cx));
+            if next_workspace == this.workspace_scope && next_display == this.display_scope {
                 return;
             }
-            this.workspace_scope = next;
+            this.workspace_scope = next_workspace;
+            this.display_scope = next_display;
             if this.effective_strategy_selection() != previous_selection {
                 this.reconcile_workspace_strategy_scope();
             }
@@ -791,6 +895,7 @@ impl AnalyticsView {
             .unwrap_or(calendar::CalMode::Month);
         let session = backend.read(cx).ui_session.analytics.clone();
         let workspace_scope = analytics_workspace_scope(backend.read(cx));
+        let display_scope = analytics_display_scope(backend.read(cx));
 
         // From/to date+time fields: any day or clock change switches the period to Custom. The
         // popup stays open after a day is clicked so the clock drums under the calendar remain
@@ -868,6 +973,7 @@ impl AnalyticsView {
             core_refresh_needed: false,
             core_refresh_timer_armed: false,
             workspace_scope,
+            display_scope,
             sel_cores: session.sel_cores,
             core_caption: session.core_caption,
             side: SideFilter::All,
@@ -1341,13 +1447,55 @@ impl AnalyticsView {
             .map(|scope| scope.core_ids.as_slice())
     }
 
+    /// Configured cores the viewing preset hides from scoped Analytics data reads, or `None` when
+    /// it hides none.
+    pub(in crate::analytics) fn hidden_core_ids(&self) -> Option<&[u64]> {
+        self.display_scope
+            .as_ref()
+            .map(|s| s.hidden_core_ids.as_slice())
+    }
+
+    /// Configured cores the viewing preset counted, used only to expand an implicit "All" before
+    /// this window's replica core list has arrived.
+    ///
+    /// Empty whenever no preset narrows this window, which is also exactly when
+    /// [`Self::hidden_core_ids`] is `None` and the expansion never happens.
+    fn configured_core_ids(&self) -> &[u64] {
+        self.display_scope
+            .as_ref()
+            .map_or(&[], |s| s.configured_core_ids.as_slice())
+    }
+
+    /// The scope marker the Summary states, from whichever authority narrowed the read.
+    /// The two are mutually exclusive by construction (`analytics_display_scope`).
+    fn summary_scope_marker(&self) -> Option<crate::workspace::scope_marker::ScopeMarker> {
+        self.workspace_scope
+            .as_ref()
+            .map(AnalyticsWorkspaceScope::scope_marker)
+            .or_else(|| {
+                self.display_scope
+                    .as_ref()
+                    .map(AnalyticsDisplayScope::scope_marker)
+            })
+    }
+
     /// Return the effective core filter without overwriting the retained Classic selection.
     ///
     /// Returns:
-    ///     Pinned Auto workspace ids, the no-match sentinel for an empty pinned scope, retained
-    ///     user-selected ids when unpinned, or an empty vector for an unfiltered query.
+    ///     Pinned Auto workspace ids, the no-match sentinel for an empty pinned scope or a Classic
+    ///     membership narrowing that hides everything selected, retained user-selected ids narrowed
+    ///     by Classic membership when it hides at least one core, or an empty vector for an
+    ///     unfiltered query. A window whose replica core list has not arrived yet expands its
+    ///     implicit All against the CONFIG instead, so its very first query already states what
+    ///     the scope marker beside it claims.
     fn cores_selected(&self) -> Vec<u64> {
-        toolbar::analytics_core_filter_ids(&self.sel_cores, self.read_core_ids())
+        toolbar::analytics_core_filter_ids(
+            &self.sel_cores,
+            self.read_core_ids(),
+            self.hidden_core_ids(),
+            &self.cores,
+            self.configured_core_ids(),
+        )
     }
 
     /// Start accounting for a blocking background operation.
@@ -1872,7 +2020,13 @@ impl AnalyticsView {
         if self.core_filter_pinned() {
             return;
         }
-        let available = self.cores.iter().map(|(core, _)| *core).collect();
+        let hidden = self.hidden_core_ids();
+        let available = self
+            .cores
+            .iter()
+            .map(|(core, _)| *core)
+            .filter(|core| hidden.is_none_or(|h| !h.contains(core)))
+            .collect();
         if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
             self.core_caption.manual_selection_changed();
             self.core_selection_changed(cx);

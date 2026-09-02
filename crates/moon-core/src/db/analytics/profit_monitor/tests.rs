@@ -84,6 +84,37 @@ fn aggregates_exact_per_core_metrics_and_latest_nonblank_name() {
     assert!((beta.average_order() - 200.0).abs() < 1e-9);
 }
 
+/// `analytics/query/mod.rs::Query::period_predicate_on` and `Query::where_branches` must retain
+/// core narrowing. Removing both turns the no-match sentinel into an all-core Analytics read, so
+/// Profit Monitor would publish money and a comparable unit for a preset that contains no cores.
+#[test]
+fn profit_monitor_query_honours_the_no_match_core_uid() {
+    let connection = fixture();
+    let mut no_match = query(0, 200);
+    no_match.cores = vec![crate::config::NO_MATCH_CORE_UID];
+    let ProfitScope::Empty(empty) =
+        profit_monitor_on(&connection, &no_match).expect("read sentinel monitor scope")
+    else {
+        panic!("the no-match core uid must resolve to the empty monitor outcome");
+    };
+    assert!(
+        empty.cores.is_empty(),
+        "an empty monitor scope has no core rows and therefore no published total"
+    );
+
+    let ProfitScope::Comparable { data, .. } =
+        profit_monitor_on(&connection, &query(0, 200)).expect("read unscoped monitor scope")
+    else {
+        panic!("the populated single-quote fixture must remain comparable when unscoped");
+    };
+    assert_eq!(
+        data.cores.len(),
+        2,
+        "an absent core scope still reads both fixture cores"
+    );
+    assert!((data.cores.iter().map(|core| core.profit).sum::<f64>() - 8.0).abs() < 1e-9);
+}
+
 /// `profit_monitor.rs:profit_monitor_on` must return the split scope before constructing scalar
 /// rows; replacing that early return with a native projection makes this assertion red and lets
 /// the widget display a plausible but false sum of two quote currencies.

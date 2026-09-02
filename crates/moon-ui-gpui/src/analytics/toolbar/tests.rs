@@ -315,14 +315,14 @@ fn core_caption_tracks_explicit_group_application_without_surviving_manual_edits
 fn a_complete_explicit_selection_stays_a_bounded_query_filter() {
     let selected = HashSet::from([1, 2]);
     assert_eq!(
-        analytics_core_filter_ids(&selected, None)
+        analytics_core_filter_ids(&selected, None, None, &[], &[])
             .into_iter()
             .collect::<HashSet<_>>(),
         selected,
         "a complete explicit selection must remain a bounded query filter"
     );
     assert!(
-        analytics_core_filter_ids(&HashSet::new(), None).is_empty(),
+        analytics_core_filter_ids(&HashSet::new(), None, None, &[], &[]).is_empty(),
         "only the exclusive All state may produce an unfiltered query"
     );
 }
@@ -334,10 +334,13 @@ fn a_complete_explicit_selection_stays_a_bounded_query_filter() {
 fn workspace_query_wiring_preserves_retained_classic_selection() {
     let retained = HashSet::from([3, 5]);
 
-    assert_eq!(analytics_core_filter_ids(&retained, Some(&[11])), vec![11]);
+    assert_eq!(
+        analytics_core_filter_ids(&retained, Some(&[11]), None, &[], &[]),
+        vec![11]
+    );
     assert_eq!(retained, HashSet::from([3, 5]));
     assert_eq!(
-        analytics_core_filter_ids(&retained, None)
+        analytics_core_filter_ids(&retained, None, None, &[], &[])
             .into_iter()
             .collect::<HashSet<_>>(),
         retained
@@ -364,7 +367,57 @@ fn workspace_query_wiring_preserves_retained_classic_selection() {
 #[test]
 fn empty_workspace_scope_is_an_explicit_no_match_query() {
     assert_eq!(
-        analytics_core_filter_ids(&HashSet::new(), Some(&[])),
+        analytics_core_filter_ids(&HashSet::new(), Some(&[]), None, &[], &[]),
         vec![0]
+    );
+}
+
+/// `toolbar.rs:analytics_core_filter_ids` must turn implicit All into the configured cores before
+/// subtracting Classic-hidden membership while the replica universe is still empty. Reintroducing
+/// the bootstrap bypass would show a trader an aggregate USDT total over cores their `0 of 4`
+/// scope marker says are hidden until they touch a filter.
+#[test]
+fn a_fresh_hidden_implicit_all_query_is_a_no_match_not_an_unfiltered_query() {
+    let configured = [101, 303, 707, 911];
+    let hidden = configured;
+
+    assert_eq!(
+        analytics_core_filter_ids(&HashSet::new(), None, Some(&hidden), &[], &configured),
+        vec![0],
+        "hiding every configured core must produce the explicit no-match sentinel"
+    );
+}
+
+/// `toolbar.rs:analytics_core_filter_ids` must subtract Classic-hidden membership from configured
+/// cores before the replica universe loads. The item 1 bootstrap-bypass mutation would include
+/// all four cores in the query, so a trader's partial scope would show money from hidden cores.
+#[test]
+fn a_fresh_partially_hidden_implicit_all_query_uses_only_visible_configured_cores() {
+    let configured = [101, 303, 707, 911];
+    let partially_hidden = [303, 911];
+    let expected: HashSet<u64> = [101, 707].into_iter().collect();
+    let actual: HashSet<u64> = analytics_core_filter_ids(
+        &HashSet::new(),
+        None,
+        Some(&partially_hidden),
+        &[],
+        &configured,
+    )
+    .into_iter()
+    .collect();
+    assert_eq!(
+        actual, expected,
+        "a fresh partial scope must query exactly the configured cores it still shows"
+    );
+}
+
+/// `toolbar.rs:analytics_core_filter_ids` must preserve its `hidden = None` early return.
+/// Replacing it with a filtered empty slice would make an unhidden Analytics window query the
+/// no-match sentinel at startup and display no trades even though every core is in scope.
+#[test]
+fn a_fresh_unhidden_implicit_all_query_remains_unfiltered() {
+    assert!(
+        analytics_core_filter_ids(&HashSet::new(), None, None, &[], &[]).is_empty(),
+        "an absent hidden scope means every core, which the report filter represents as empty"
     );
 }

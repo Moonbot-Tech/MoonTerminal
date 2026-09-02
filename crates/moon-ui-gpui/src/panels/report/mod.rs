@@ -67,7 +67,8 @@ use rust_i18n::t;
 use crate::controls::date_range::{self, Bound};
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
-use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
+use crate::workspace::scope_marker::ScopeMarker;
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope, query_core_ids};
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
@@ -794,13 +795,76 @@ impl ReportPanel {
         if self.standalone {
             return None;
         }
-        let retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
-        let retained = if retained.is_empty() {
+        let retained = self.retained_core_ids();
+        let retained = Self::retained_core_scope(&retained);
+        Some(b.effective_workspace_scope(&self.group, retained))
+    }
+
+    /// Resolve the group's Report scope, widened when its session-derived universe is empty.
+    ///
+    /// Like [`Self::workspace_scope`], the Analytics-owned standalone window returns `None` and
+    /// keeps its exact `ReportScope`. Where it differs: an empty session-derived universe falls
+    /// back to that group's configured, non-hidden active cores instead of resolving to the whole,
+    /// unfiltered report database.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     Effective group scope, widened to configured active cores when its session universe is
+    ///     empty, or `None` for an explicit standalone report.
+    pub(super) fn report_scope(&self, b: &Backend) -> Option<EffectiveCoreScope> {
+        if self.standalone {
+            return None;
+        }
+        let retained = self.retained_core_ids();
+        let retained_scope = Self::retained_core_scope(&retained);
+        Some(
+            b.effective_workspace_scope(&self.group, retained_scope)
+                .or_configured(|| b.configured_workspace_scope(&self.group, retained_scope)),
+        )
+    }
+
+    /// Collect the panel's retained Classic filter as owned IDs.
+    ///
+    /// Returns:
+    ///     The panel's explicitly retained core selection, possibly empty.
+    fn retained_core_ids(&self) -> Vec<CoreId> {
+        self.sel_cores.iter().copied().collect()
+    }
+
+    /// Turn retained IDs into the borrowed filter `resolve_group_scope` expects.
+    ///
+    /// Args:
+    ///     retained: Owned retained IDs from [`Self::retained_core_ids`].
+    ///
+    /// Returns:
+    ///     `RetainedCoreScope::All` for an empty selection, else the explicit borrowed subset.
+    fn retained_core_scope(retained: &[CoreId]) -> RetainedCoreScope<'_> {
+        if retained.is_empty() {
             RetainedCoreScope::All
         } else {
-            RetainedCoreScope::Explicit(&retained)
-        };
-        Some(b.effective_workspace_scope(&self.group, retained))
+            RetainedCoreScope::Explicit(retained)
+        }
+    }
+
+    /// Build the totals row's scope marker.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     A marker derived from the same Report scope that [`Self::query_core_uids`] resolves, or
+    ///     `None` for the Analytics-owned standalone report, which keeps its exact retained scope
+    ///     untouched.
+    pub(super) fn scope_marker(&self, b: &Backend) -> Option<ScopeMarker> {
+        let scope = self.report_scope(b)?;
+        let preset = b.display_preset(crate::workspace::DisplayOwner::Group(&self.group));
+        Some(ScopeMarker::new(
+            preset,
+            scope.membership_shown(),
+            scope.membership_total(),
+        ))
     }
 
     /// Return whether this host's display lens suppresses the redundant core-name column.
@@ -816,13 +880,16 @@ impl ReportPanel {
             .is_some_and(|scope| scope.is_auto_core())
     }
 
-    /// Return deterministic core IDs used by rows, totals, exports, menus, and metadata queries.
+    /// Return deterministic core IDs used by the coin menu's bulk scope and the export identity
+    /// token; the QUERY goes through [`Self::query_core_uids`] instead.
     ///
     /// Args:
     ///     b: Backend snapshot containing workspace authority.
     ///
     /// Returns:
-    ///     Effective group IDs or the standalone report's sorted retained IDs.
+    ///     Effective group IDs or the standalone report's sorted retained IDs. Never carries the
+    ///     no-match sentinel — an action path must never see a scope narrower than what is really
+    ///     selected.
     pub(super) fn effective_core_ids(&self, b: &Backend) -> Vec<CoreId> {
         if let Some(scope) = self.workspace_scope(b) {
             return scope.ids().to_vec();
@@ -830,5 +897,42 @@ impl ReportPanel {
         let mut retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
         retained.sort_unstable();
         retained
+    }
+
+    /// Return the core IDs the Report's DB read must send, distinguishing a scope that hides
+    /// every core from a Report with no scope at all.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority.
+    ///
+    /// Returns:
+    ///     The scope's own IDs, or `vec![NO_MATCH_CORE_UID]` when this group HAS a universe
+    ///     ([`EffectiveCoreScope::membership_total`] above zero) and yet resolved to no IDs at
+    ///     all. [`Self::report_scope`] widens an empty session universe to the group's configured
+    ///     cores before this test runs, so `membership_total` here is never a starting-window or
+    ///     all-offline artifact. Three cases follow:
+    ///     - No configured active core in this group -> `membership_total == 0` -> unfiltered.
+    ///     - An empty session universe whose fallback retains a core ->
+    ///       `report_scope` makes `ids` non-empty -> scoped to that group's cores.
+    ///     - A preset hides every configured active core, or a retained selection matches none ->
+    ///       `membership_total > 0` with empty `ids` -> the no-match sentinel.
+    ///     A standalone Report has no scope ([`Self::report_scope`] returns `None`) and falls
+    ///     through to [`Self::effective_core_ids`] unchanged.
+    pub(super) fn query_core_uids(&self, b: &Backend) -> Vec<CoreId> {
+        // Resolve once here: `report_scope` walks the session universe and, when it is empty, its
+        // configured fallback before membership. One scope supplies both query IDs and the
+        // membership boundary for the sentinel decision.
+        let Some(scope) = self.report_scope(b) else {
+            // ABSENT scope. A standalone Report keeps its retained filter verbatim, where an empty
+            // selection still means "every core".
+            return self.effective_core_ids(b);
+        };
+        // PRESENT scope. `membership_total` counts the cores that survived AVAILABILITY, before
+        // membership ran, so it answers "does this group have a universe to scope against at all"
+        // — on whichever universe `or_configured` picked, session or configured. That is the
+        // honest test, and it is not `hides_anything()`: an explicit selection whose every core is
+        // offline resolves to no ids while membership hid nothing, and reading that as unfiltered
+        // would broaden a narrow selection to the whole fleet.
+        query_core_ids(scope.ids().to_vec(), scope.membership_total() > 0)
     }
 }

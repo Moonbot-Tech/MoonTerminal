@@ -127,6 +127,7 @@ fn selected_cores_update_their_unique_groups() {
             manual_strategy: None,
             trade: None,
             transport: None,
+            workspace_membership: crate::config::WorkspaceMembership::default(),
         });
     }
     let plan = plan_with(

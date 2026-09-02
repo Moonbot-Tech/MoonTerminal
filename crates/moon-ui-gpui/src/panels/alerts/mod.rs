@@ -554,7 +554,9 @@ impl AlertsPanel {
 
     /// Returns the group's cores in canonical order for the core selector.
     fn group_cores(&self, b: &Backend) -> OrderedCores {
-        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| {
+            s.group == self.group && b.core_displayed_in_group(&self.group, s.id)
+        })
     }
 
     /// Resolve the effective core scope used by row collection and action controls.

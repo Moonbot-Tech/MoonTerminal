@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use gpui::Context;
-use moon_core::config::{TransportVersion, WorkspaceMode};
+use moon_core::config::{NO_MATCH_CORE_UID, TransportVersion, WorkspaceMode};
 use moon_core::feed::{ConnFault, ConnStatus, CoreStartupStatus};
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
@@ -197,7 +197,7 @@ pub(crate) struct WorkspaceFocus {
 }
 
 impl WorkspaceFocus {
-    /// Create focus for one live Auto workspace group.
+    /// Create focus for one live group.
     ///
     /// Args:
     ///     group: Group whose interaction or toolbar launch established ownership.
@@ -255,6 +255,18 @@ impl WorkspaceCoreAvailability {
             && self.window != WorkspaceWindowState::Missing
     }
 
+    /// Return whether a configured core belongs in the session-independent fallback universe.
+    ///
+    /// `configured_workspace_scope` deliberately ignores `live_session` and `window` here, while
+    /// still excluding inactive groups and cores. That keeps an offline fallback from resurrecting
+    /// configuration the steady-state scope must never show.
+    ///
+    /// Returns:
+    ///     `true` for an active core in an active group, independent of session and window state.
+    pub(crate) fn is_configured_active(self) -> bool {
+        self.group_active && self.core_active
+    }
+
     /// Derive the localization-neutral roster status from the shared availability facts.
     ///
     /// Args:
@@ -273,6 +285,21 @@ impl WorkspaceCoreAvailability {
             WorkspaceCoreStatus::Problem
         }
     }
+}
+
+/// Which preset a surface displays under, for the per-core membership predicate.
+///
+/// See `Backend::display_preset`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DisplayOwner<'a> {
+    /// A window that owns a group: Shell, group panels, detached panels (`DetachedSpec.group`),
+    /// chart tabs.
+    Group(&'a str),
+    /// A singleton tool that INHERITS the last group whose window was focused, in either preset:
+    /// Analytics, Strategies, Profit Monitor. Global Assets (`AssetsScope::All`) and Settings need
+    /// no variant of their own — they never call `display_preset` at all, resolving their own
+    /// unscoped views by other means.
+    Singleton,
 }
 
 /// A panel's retained Classic filter supplied without transferring ownership or mutating it.
@@ -315,9 +342,39 @@ pub(crate) enum EffectiveScopeLabel {
 pub(crate) struct EffectiveCoreScope {
     kind: EffectiveScopeKind,
     ids: Vec<CoreId>,
+    /// Cores that survived availability and would be shown under the CURRENT preset. Left at 0 by
+    /// [`resolve_group_scope`], which has no view of the membership boundary; set by
+    /// `Backend::effective_workspace_scope` via [`Self::with_membership_counts`].
+    membership_shown: usize,
+    /// Cores that survived availability BEFORE the membership filter ran.
+    membership_total: usize,
 }
 
 impl EffectiveCoreScope {
+    /// Attach the membership boundary's shown/total pair, computed by the caller before Classic or
+    /// Auto retained filtering narrows `ids` further.
+    ///
+    /// Args:
+    ///     shown: Cores that survived availability and membership together.
+    ///     total: Cores that survived availability alone, before the membership filter ran.
+    ///
+    /// Returns:
+    ///     The same scope carrying the membership pair a later marker needs.
+    pub(crate) fn with_membership_counts(mut self, shown: usize, total: usize) -> Self {
+        self.membership_shown = shown;
+        self.membership_total = total;
+        self
+    }
+
+    /// Return cores that survived availability and membership together.
+    pub(crate) fn membership_shown(&self) -> usize {
+        self.membership_shown
+    }
+
+    /// Return cores that survived availability alone, before the membership filter ran.
+    pub(crate) fn membership_total(&self) -> usize {
+        self.membership_total
+    }
     /// Return the canonical valid IDs in this scope.
     ///
     /// Returns:
@@ -370,6 +427,77 @@ impl EffectiveCoreScope {
             EffectiveScopeKind::AutoCore => EffectiveScopeLabel::Core(self.ids[0]),
         }
     }
+
+    /// Fall back to a configured-cores scope when this one has no session-derived universe at all.
+    ///
+    /// `membership_total == 0` is the ONLY trigger, never the raw `ids.is_empty()` alone: an
+    /// explicit user selection naming only offline cores, in a group that still has live cores,
+    /// keeps `membership_total > 0` and must stay on this scope's own no-match sentinel rather
+    /// than widen to the group's whole configured set. `configured` is a closure rather than an
+    /// eager value so the config walk runs only when this scope's session universe is empty.
+    ///
+    /// Args:
+    ///     configured: Lazily resolves the configured-cores fallback scope.
+    ///
+    /// Returns:
+    ///     `self` unchanged, or `configured()`'s scope when this one has no session universe.
+    pub(crate) fn or_configured(
+        self,
+        configured: impl FnOnce() -> EffectiveCoreScope,
+    ) -> EffectiveCoreScope {
+        if self.ids.is_empty() && self.membership_total == 0 {
+            configured()
+        } else {
+            self
+        }
+    }
+}
+
+/// Turn a resolved scope's IDs into the query a DB read must send, distinguishing an ABSENT
+/// scope from a PRESENT-but-empty one.
+///
+/// `moon-core`'s DB reads treat an empty uid list as UNFILTERED (see
+/// `moon_core::db::ReportFilter::core_uids`), which is exactly right when there is no scope at
+/// all — but wrong when a scope IS in effect and every core it named has been filtered out.
+/// `scoped` is how the caller tells those apart.
+///
+/// **`scoped` is a per-caller JUDGEMENT, not one fixed expression** — an earlier draft of this
+/// contract demanded every caller pass `ScopeMarker::hides_anything()`, and that is now false for
+/// one of the three. What every caller MUST answer is "is an empty resolved list here a real
+/// exclusion, or simply the absence of a scope"; the right way to answer it depends on what can
+/// empty that surface's list:
+///
+/// - `panels::report::ReportPanel::query_core_uids` passes
+///   `EffectiveCoreScope::membership_total() > 0`, applied to the scope AFTER
+///   [`EffectiveCoreScope::or_configured`] has already substituted the group's configured
+///   universe for an empty session one. Its list can also be emptied by an explicit user
+///   selection naming only unavailable cores, which membership never hid, so `hides_anything()`
+///   would answer `false` there and wrongly broaden a narrow selection to the whole fleet.
+/// - `analytics::profit_monitor::model::scoped_query_core_ids` passes `hides_anything()`, behind
+///   a short-circuit to an empty vec. Its scope is purely membership, so no other cause can empty
+///   it, and `configured_total > 0` would wrongly filter when nothing is hidden.
+/// - `analytics::toolbar::analytics_core_filter_ids` passes `true` at both of its sites, having
+///   already established the scope is present at each.
+///
+/// The invariant that DOES hold everywhere: `scoped` is never the raw `ids.is_empty()`, which
+/// would make the sentinel unreachable, and a surface whose rows CAN be emptied by a cause its own
+/// marker cannot express owes the user some other statement of why — see that caller's own notes.
+///
+/// Args:
+///     ids: The scope's resolved core IDs, however it got them.
+///     scoped: Whether an empty `ids` here means a real exclusion rather than an absent scope.
+///         Never the raw `ids.is_empty()`.
+///
+/// Returns:
+///     `ids` unchanged when `scoped` is `false`, or `ids` is non-empty; otherwise
+///     `vec![moon_core::config::NO_MATCH_CORE_UID]`, the present-empty encoding that matches no
+///     row while core UIDs remain in their normal non-wrapping issued range.
+pub(crate) fn query_core_ids(ids: Vec<CoreId>, scoped: bool) -> Vec<CoreId> {
+    if scoped && ids.is_empty() {
+        vec![NO_MATCH_CORE_UID]
+    } else {
+        ids
+    }
 }
 
 /// Resolve a group panel's query scope without rewriting its retained Classic filter.
@@ -402,11 +530,15 @@ pub(crate) fn resolve_group_scope(
             return EffectiveCoreScope {
                 kind: EffectiveScopeKind::AutoCore,
                 ids: vec![core],
+                membership_shown: 0,
+                membership_total: 0,
             };
         }
         return EffectiveCoreScope {
             kind: EffectiveScopeKind::AutoOverview,
             ids: valid,
+            membership_shown: 0,
+            membership_total: 0,
         };
     }
 
@@ -414,6 +546,8 @@ pub(crate) fn resolve_group_scope(
         RetainedCoreScope::All => EffectiveCoreScope {
             kind: EffectiveScopeKind::RetainedAll,
             ids: valid,
+            membership_shown: 0,
+            membership_total: 0,
         },
         RetainedCoreScope::Explicit(retained_ids) => EffectiveCoreScope {
             kind: EffectiveScopeKind::RetainedSelection,
@@ -421,6 +555,8 @@ pub(crate) fn resolve_group_scope(
                 .into_iter()
                 .filter(|core| retained_ids.contains(core))
                 .collect(),
+            membership_shown: 0,
+            membership_total: 0,
         },
     }
 }
@@ -462,13 +598,11 @@ pub(crate) fn resolve_singleton_workspace(
     })
 }
 
-/// Clear singleton focus when its group loses Auto ownership.
-///
-/// The Backend uses this both when a group switches to Classic and when its primary window closes.
+/// Clear singleton focus when its group's live primary window closes.
 ///
 /// Args:
 ///     focus: Process-lifetime focus slot to reconcile.
-///     closed_group: Group that switched to Classic or lost its live primary window.
+///     closed_group: Group that lost its live primary window.
 ///
 /// Returns:
 ///     `true` when this group was the current owner and its focus was cleared.
@@ -491,7 +625,7 @@ pub(crate) fn close_workspace_owner(
 ///
 /// Args:
 ///     focus: Process-lifetime singleton owner slot to update.
-///     group: Auto group receiving active user interaction.
+///     group: Group receiving active user interaction.
 ///
 /// Returns:
 ///     `true` only when ownership moved, so callers publish no revision for repeated activity in
@@ -511,7 +645,7 @@ pub(crate) fn focus_workspace_owner(focus: &mut Option<WorkspaceFocus>, group: &
 ///
 /// Args:
 ///     focus: Process-lifetime singleton owner to reconcile in place.
-///     owner_valid: Whether the owner remains Auto, configured, and window-backed after all work.
+///     owner_valid: Whether the owner remains configured and window-backed after all work.
 ///
 /// Returns:
 ///     `true` only when an invalid owner was cleared during this final transition.
@@ -587,6 +721,8 @@ pub(crate) struct WorkspaceRosterSection {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorkspaceRosterSummary {
     pub(crate) configured: usize,
+    /// Configured cores before the membership filter ran, for the rail's own scope marker.
+    pub(crate) configured_total: usize,
     pub(crate) ready: usize,
     pub(crate) problem: usize,
 }
@@ -602,9 +738,13 @@ pub(crate) struct WorkspaceRoster {
 /// Derive visible roster rows while retaining inactive and unavailable configured cores.
 ///
 /// Args:
-///     inputs: Configured cores in canonical member order.
+///     inputs: Configured cores in canonical member order, already scoped to the rail's own
+///         Auto-Trading membership filter.
 ///     current_group: Group window whose Overview row is rendered.
 ///     selected_core: Valid selected Auto core, or `None` for Overview.
+///     configured_total: Configured cores BEFORE the membership filter ran, supplied by the
+///         caller — this function stays a pure "render every input you were given" and never
+///         filters or recomputes the pre-membership count itself.
 ///
 /// Returns:
 ///     Exchange-grouped roster and application-wide configured/ready/problem counts. Unknown
@@ -613,9 +753,11 @@ pub(crate) fn derive_workspace_roster(
     inputs: &[WorkspaceRosterInput],
     current_group: &str,
     selected_core: Option<CoreId>,
+    configured_total: usize,
 ) -> WorkspaceRoster {
     let mut summary = WorkspaceRosterSummary {
         configured: inputs.len(),
+        configured_total,
         ..WorkspaceRosterSummary::default()
     };
     let exchange_sections = crate::core_order::exchange_sections(
@@ -794,6 +936,8 @@ pub(crate) fn is_auto_overview_scope(
 ) -> bool {
     mode == WorkspaceMode::AutoTrading && valid_selected_core.is_none()
 }
+
+pub(crate) mod scope_marker;
 
 #[cfg(test)]
 mod tests;

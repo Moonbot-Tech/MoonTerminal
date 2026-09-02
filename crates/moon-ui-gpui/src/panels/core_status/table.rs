@@ -106,6 +106,9 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///     logos_ready: Whether the off-thread logo prewarm has landed.
 ///     sorted: Whether a column sort is active, which the headings explain.
 ///     state: Persisted table interaction state.
+///     backend: Shared terminal backend, handed to row builders that must not read this view.
+///     marker: This panel's scope marker, which swaps the empty-state sentence when the active
+///         preset hid every configured core.
 ///     cx: Panel context used for palette, empty-state localization, and the sort callback.
 ///
 /// Returns:
@@ -120,6 +123,7 @@ pub(super) fn core_status_table(
     sorted: bool,
     state: &Entity<MoonDataTableState>,
     backend: &Entity<Backend>,
+    marker: &ScopeMarker,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
     // Keyed on the CORES, not the lines: a table holding nothing but headings is not representable
@@ -150,7 +154,7 @@ pub(super) fn core_status_table(
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
         empty,
-        t!("core_status.empty").to_string(),
+        scope_marker::scope_empty_text(Some(marker), t!("core_status.empty").to_string()),
         p,
         cx,
         MoonDataTable::new(id, row_count, move |ix, _window, app| match &lines[ix] {

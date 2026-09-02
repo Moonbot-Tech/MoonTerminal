@@ -22,7 +22,9 @@ use rust_i18n::t;
 use super::{ConnRow, ConnRowIds, SettingsView, build_conn, sync_groups_from_servers};
 use crate::design;
 use crate::panels::common::{RadioMark, radio_items};
-use moon_core::config::{AppConfig, FeedFlags, Secret, ServerConfig, TransportVersion};
+use moon_core::config::{
+    AppConfig, FeedFlags, Secret, ServerConfig, TransportVersion, WorkspaceMembership,
+};
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
@@ -430,6 +432,8 @@ impl SettingsView {
                     trade: None,
                     // No key yet, so no mode to seed: pasting one fills this in.
                     transport: None,
+                    // A new core ships shown everywhere.
+                    workspace_membership: WorkspaceMembership::default(),
                 });
                 sync_groups_from_servers(&p.servers, &mut p.groups);
                 bcx.notify();
@@ -441,6 +445,7 @@ impl SettingsView {
         // Shut it rather than leave it pointing at nothing.
         self.feed_open = None;
         self.proto_open = None;
+        self.preset_open = None;
         self.picking = None;
         self.focused_conn_row = None;
         // The hint MOVES with this row: it pointed at this button, and the thing the newcomer needs
@@ -474,6 +479,7 @@ impl SettingsView {
         // See `add_server`: the keys the open menu was named by are gone.
         self.feed_open = None;
         self.proto_open = None;
+        self.preset_open = None;
         self.picking = None;
         self.focused_conn_row = None;
         cx.notify();
@@ -684,6 +690,109 @@ fn proto_dropdown(
         })
 }
 
+/// Build the workspace-preset selector for one server row.
+///
+/// Modelled line-for-line on [`proto_dropdown`] above, one difference only: the value is a
+/// bare `WorkspaceMembership` rather than an `Option<TransportVersion>`, because every row
+/// always has one -- there is no unset state to represent with a dash. Its three items are the
+/// whole enforcement of "a core may not be excluded from both presets": `WorkspaceMembership`
+/// has no fourth variant, so there is nothing else to offer.
+///
+/// Args:
+///     view: Settings state read for the row's current draft value.
+///     weak: Weak owner the select handler closes over.
+///     i: Draft index of the server being edited.
+///     ids: Precomputed element ids for the row.
+///     cx: Application context.
+///
+/// Returns:
+///     A compact dropdown bound to draft `servers[i].workspace_membership`.
+fn preset_dropdown(
+    view: &SettingsView,
+    weak: &WeakEntity<SettingsView>,
+    i: usize,
+    row_key: u64,
+    ids: &ConnRowIds,
+    cx: &App,
+) -> impl IntoElement {
+    let cur = {
+        let b = view.backend.read(cx);
+        b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .servers
+            .get(i)
+            .map(|s| s.workspace_membership)
+            .unwrap_or_default()
+    };
+    let open = view.preset_open == Some(row_key);
+
+    // Only the OPEN row pays for menu items, exactly as `proto_dropdown` above.
+    let items = if open {
+        let weak_select = weak.clone();
+        radio_items(
+            WorkspaceMembership::ALL.into_iter().map(|m| {
+                (
+                    m,
+                    SharedString::from(m.code()),
+                    SharedString::from(preset_label(m)),
+                )
+            }),
+            cur,
+            RadioMark::Check,
+            move |app, m| {
+                let _ = weak_select.update(app, |this, ctx| {
+                    let changed = this.backend.update(ctx, |b, bcx| {
+                        let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) else {
+                            return false;
+                        };
+                        if s.workspace_membership == m {
+                            return false;
+                        }
+                        s.workspace_membership = m;
+                        bcx.notify();
+                        true
+                    });
+                    if changed {
+                        ctx.notify();
+                    }
+                });
+            },
+        )
+    } else {
+        Vec::new()
+    };
+
+    let view_weak = weak.clone();
+    MoonDropdown::new(ids.preset.clone())
+        .label(SharedString::from(preset_label(cur)))
+        .trigger_caret(true)
+        .trigger_variant(MoonButtonVariant::Neutral)
+        .trigger_size(MoonButtonSize::Micro)
+        .trigger_width_scaled(72.0)
+        .menu_width_scaled(140.0)
+        .menu_size(MoonMenuSize::Compact)
+        .items(items)
+        .open(open)
+        // Controlled mode leaves the repaint to us, as on the transport menu beside it.
+        .on_open_change(move |now_open, _window, app| {
+            let _ = view_weak.update(app, |this, cx| {
+                this.preset_open = now_open.then_some(row_key);
+                cx.notify();
+            });
+        })
+}
+
+/// Localized label for one workspace-membership value, shared by the trigger and its menu items.
+fn preset_label(m: WorkspaceMembership) -> String {
+    match m {
+        WorkspaceMembership::Both => t!("conn.preset.both"),
+        WorkspaceMembership::ClassicOnly => t!("conn.preset.classic"),
+        WorkspaceMembership::AutoOnly => t!("conn.preset.auto"),
+    }
+    .to_string()
+}
+
 /// Render a server row ported from egui's `servers_panel`.
 ///
 /// A free function, not a method: `MoonVirtualList`'s row factory is `'static` and outlives the
@@ -821,6 +930,9 @@ pub(super) fn server_row(
         )
         .child(
             SettingsView::cell(52.0, false).child(proto_dropdown(view, weak, i, row_key, ids, cx)),
+        )
+        .child(
+            SettingsView::cell(72.0, false).child(preset_dropdown(view, weak, i, row_key, ids, cx)),
         )
         .child(
             SettingsView::cell(110.0, false)
@@ -984,6 +1096,16 @@ impl SettingsView {
                 false,
                 0.0,
                 t!("conn.tip.proto").to_string().into(),
+                p,
+                cx,
+            ))
+            .child(Self::col_head_tip(
+                "h-preset",
+                &t!("conn.col.preset"),
+                72.0,
+                false,
+                0.0,
+                t!("conn.tip.preset").to_string().into(),
                 p,
                 cx,
             ))

@@ -1,6 +1,6 @@
 //! Pure regressions for workspace scope, roster, navigation, ownership, and rail presentation.
 
-use moon_core::config::WorkspaceMode;
+use moon_core::config::{NO_MATCH_CORE_UID, WorkspaceMode};
 use moon_core::feed::{ConnStatus, CoreStartupStatus, ExchangeId};
 use moon_core::venue::CoreVenue;
 
@@ -10,10 +10,10 @@ use super::{
     WorkspaceCoreStatus, WorkspaceFocus, WorkspaceNavigationAction, WorkspaceRailDensity,
     WorkspaceRosterInput, WorkspaceWindowState, changed_auto_workspace_rail_width,
     derive_workspace_roster, focus_workspace_owner, is_auto_overview_scope,
-    plan_workspace_navigation, reconcile_workspace_focus, resolve_auto_workspace_surface,
-    resolve_group_scope, resolve_singleton_workspace, should_persist_normal_dock,
-    should_remember_classic_trade_core, should_return_to_report_after_main_close,
-    workspace_rail_density,
+    plan_workspace_navigation, query_core_ids, reconcile_workspace_focus,
+    resolve_auto_workspace_surface, resolve_group_scope, resolve_singleton_workspace,
+    should_persist_normal_dock, should_remember_classic_trade_core,
+    should_return_to_report_after_main_close, workspace_rail_density,
 };
 
 /// `workspace.rs:should_return_to_report_after_main_close` must require an actually closed last
@@ -275,6 +275,18 @@ fn singleton_scope_requires_the_last_auto_owner() {
     assert_eq!(owner.selected_core, Some(11));
 }
 
+/// `workspace.rs:resolve_singleton_workspace` must reject Classic even for a live focused group;
+/// removing its Auto-mode gate would make Analytics and Strategies treat a Classic group as their
+/// live Auto owner and retarget their selected-core actions.
+#[test]
+fn singleton_scope_stays_auto_only_for_a_live_classic_owner() {
+    assert_eq!(
+        resolve_singleton_workspace("classic", true, WorkspaceMode::Classic, Some(7), &[7]),
+        None,
+        "a focused Classic group supplies display membership, never an Auto singleton workspace"
+    );
+}
+
 /// Protects active detached-window input from repeatedly invalidating singleton consumers.
 ///
 /// Plausible breakage: assigning the owner unconditionally on every mouse event increments the
@@ -365,7 +377,7 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
         ),
         connecting,
     ];
-    let roster = derive_workspace_roster(&inputs, "alpha", Some(11));
+    let roster = derive_workspace_roster(&inputs, "alpha", Some(11), inputs.len());
 
     assert_eq!(roster.sections[0].venue, None);
     assert_eq!(
@@ -580,4 +592,149 @@ fn selectable_row(core: u64, group: &str) -> super::WorkspaceRosterRow {
         connection: Some(ConnStatus::Ready),
         startup: CoreStartupStatus::default(),
     }
+}
+
+/// Deleting `workspace.rs:EffectiveCoreScope::or_configured`'s fallback branch would make an
+/// all-offline group read fleet-wide money totals as its own instead of querying its configured cores.
+#[test]
+fn all_offline_scope_falls_back_to_its_configured_universe() {
+    let session = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 0);
+    let configured = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &[11, 22],
+        RetainedCoreScope::All,
+    )
+    .with_membership_counts(2, 2);
+
+    let chosen = session.or_configured(|| configured.clone());
+    assert_eq!(chosen.ids(), &[11, 22]);
+    assert_eq!(chosen.membership_total(), 2);
+    assert_eq!(
+        query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0,),
+        vec![11, 22]
+    );
+}
+
+/// Forcing `panels/report/mod.rs:ReportPanel::query_core_uids` to always pass a true sentinel flag would
+/// blank a starting group's Report even though no configured core universe exists yet.
+#[test]
+fn starting_scope_without_configured_cores_stays_unfiltered() {
+    let session = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 0);
+    let configured = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 0);
+
+    let chosen = session.or_configured(|| configured.clone());
+    assert_eq!(
+        query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0,),
+        Vec::<u64>::new()
+    );
+
+    let report_code = include_str!("../panels/report/mod.rs")
+        .lines()
+        .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        report_code.contains("query_core_ids(scope.ids().to_vec(), scope.membership_total() > 0)"),
+        "Report must preserve the membership-total sentinel flag for a starting empty group"
+    );
+}
+
+/// Deleting `workspace.rs:EffectiveCoreScope::or_configured`'s fallback branch would make startup
+/// and all-offline byte-identical inputs read fleet-wide Report rows instead of the group's own rows.
+#[test]
+fn startup_with_configured_cores_uses_the_group_and_not_the_sentinel() {
+    let session = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 0);
+    let configured = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &[11, 22],
+        RetainedCoreScope::All,
+    )
+    .with_membership_counts(2, 2);
+
+    let chosen = session.or_configured(|| configured.clone());
+    let query = query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0);
+    assert_eq!(query, vec![11, 22]);
+    assert!(!query.is_empty());
+    assert!(!query.contains(&NO_MATCH_CORE_UID));
+}
+
+/// Relaxing `workspace.rs:EffectiveCoreScope::or_configured` from `ids.is_empty() &&
+/// membership_total == 0` to only `ids.is_empty()` would broaden an offline explicit selection.
+#[test]
+fn offline_explicit_selection_stays_a_no_match() {
+    let session = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &[11],
+        RetainedCoreScope::Explicit(&[22]),
+    )
+    .with_membership_counts(1, 1);
+    let configured = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &[11, 22],
+        RetainedCoreScope::All,
+    )
+    .with_membership_counts(2, 2);
+
+    let chosen = session.clone().or_configured(|| configured.clone());
+    assert_eq!(chosen, session);
+    assert_eq!(
+        query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0,),
+        vec![NO_MATCH_CORE_UID]
+    );
+}
+
+/// Relaxing `workspace.rs:EffectiveCoreScope::or_configured` to fall back on every empty ID list
+/// would turn a preset that hides every available core into a fleet-wide Report query.
+#[test]
+fn preset_hiding_every_available_core_stays_a_no_match() {
+    let session = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 2);
+    let configured = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &[11, 22],
+        RetainedCoreScope::All,
+    )
+    .with_membership_counts(2, 2);
+
+    let chosen = session.clone().or_configured(|| configured.clone());
+    assert_eq!(chosen, session);
+    assert_eq!(
+        query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0,),
+        vec![NO_MATCH_CORE_UID]
+    );
+}
+
+/// Computing `backend/mod.rs:Backend::configured_workspace_scope`'s membership total after the preset filter
+/// would turn a fully hidden configured universe into an unfiltered fleet-wide Report query.
+#[test]
+fn fully_hidden_configured_universe_stays_a_no_match() {
+    let session = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 0);
+    let configured = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
+        .with_membership_counts(0, 2);
+
+    let chosen = session.or_configured(|| configured.clone());
+    assert_eq!(chosen.membership_total(), 2);
+    assert_eq!(
+        query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0,),
+        vec![NO_MATCH_CORE_UID]
+    );
+}
+
+/// Adding `live_session` to `workspace.rs:WorkspaceCoreAvailability::is_configured_active`, or
+/// dropping `core_active`, would exclude startup rows or include disabled cores in Report scope.
+#[test]
+fn configured_activity_ignores_liveness_and_window_but_requires_both_activity_flags() {
+    assert!(availability(true, true, false, WorkspaceWindowState::Missing).is_configured_active());
+    assert!(!availability(true, false, true, WorkspaceWindowState::Live).is_configured_active());
+    assert!(!availability(false, true, true, WorkspaceWindowState::Live).is_configured_active());
 }

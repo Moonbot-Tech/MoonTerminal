@@ -34,6 +34,7 @@ impl ChartTabs {
                 .sessions()
                 .iter()
                 .filter(|s| s.group == self.group)
+                .filter(|s| b.core_displayed_in_group(&self.group, s.id))
             {
                 let id = s.id;
                 let Some(d) = b.session.store().core(id) else {

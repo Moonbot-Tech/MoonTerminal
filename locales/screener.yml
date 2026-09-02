@@ -6,10 +6,19 @@ screener.window_title:
   ru: "MoonTerminal — Скринер"
   en: "MoonTerminal — Screener"
   es: "MoonTerminal — Screener"
+# Three different reasons the coin table can be empty, three different sentences. `screener.empty`
+# is the only one that asks for an action, so it is reserved for the only case where that action
+# helps: no core is connected at all. A connected core that has not published a book yet gets
+# `screener.empty_no_data`, and a core hidden by the workspace preset gets the shared
+# `workspace.scope.all_hidden` instead of either.
 screener.empty:
   ru: "Нет рыночных данных — подключите ядро"
   en: "No market data — connect a core"
   es: "Sin datos de mercado — conecte un núcleo"
+screener.empty_no_data:
+  ru: "Рыночные данные ещё не получены"
+  en: "No market data received yet"
+  es: "Aún no se han recibido datos de mercado"
 screener.coins:
   ru: "монет"
   en: "coins"

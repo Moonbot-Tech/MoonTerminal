@@ -15,6 +15,7 @@ use super::format::{
     ColumnFloor, ColumnMetrics, ProfitFloor, ProfitForm, ProfitLen, format_profit,
     plan_profit_column,
 };
+use super::model::scoped_query_core_ids;
 use super::rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
@@ -1451,5 +1452,54 @@ fn an_empty_previous_snapshot_is_not_a_baseline() {
     assert!(
         arrived.is_empty(),
         "a table filling up for the first time must not read as a table full of arrivals"
+    );
+}
+
+/// `profit_monitor/model.rs:scoped_query_core_ids` must retain only data-only previously seen
+/// cores, and keep an unhidden preset unfiltered: inverting its configured-core filter or returning
+/// `core_order` when nothing is hidden silently removes real core money from the monitor total.
+#[test]
+fn a_data_only_core_keeps_its_money_inside_a_scoped_read() {
+    let unhidden = LiveContext {
+        preset: Some(moon_core::config::WorkspaceMode::AutoTrading),
+        core_order: vec![1, 2],
+        configured_total: 2,
+        configured_core_ids: HashSet::from([1, 2]),
+        ..LiveContext::default()
+    };
+    assert_eq!(
+        scoped_query_core_ids(&unhidden, &[99]),
+        Vec::<u64>::new(),
+        "an unhidden preset must leave the database read unfiltered"
+    );
+
+    let hidden = LiveContext {
+        preset: Some(moon_core::config::WorkspaceMode::AutoTrading),
+        core_order: vec![1],
+        configured_total: 2,
+        configured_core_ids: HashSet::from([1, 2]),
+        ..LiveContext::default()
+    };
+    assert_eq!(
+        scoped_query_core_ids(&hidden, &[99]),
+        vec![1, 99],
+        "a previously observed core outside config.servers is data-only and must keep its money"
+    );
+    assert_eq!(
+        scoped_query_core_ids(&hidden, &[2]),
+        vec![1],
+        "a configured-but-hidden core is intentionally excluded by core_order"
+    );
+
+    let hides_every_configured_core = LiveContext {
+        core_order: Vec::new(),
+        configured_total: 2,
+        configured_core_ids: HashSet::from([1, 2]),
+        ..hidden
+    };
+    assert_eq!(
+        scoped_query_core_ids(&hides_every_configured_core, &[1, 2]),
+        vec![moon_core::config::NO_MATCH_CORE_UID],
+        "a present scope that resolves empty must fail closed instead of broadening to every core"
     );
 }

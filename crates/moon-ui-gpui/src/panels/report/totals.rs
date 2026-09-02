@@ -17,6 +17,7 @@ use rust_i18n::t;
 
 use super::query::ReportData;
 use crate::valuation_health;
+use crate::workspace::scope_marker::ScopeMarker;
 
 /// Colour role of one footer fact, resolved against the palette by the render file.
 ///
@@ -340,6 +341,7 @@ fn open_positions_fact(open: &db::OpenPositions) -> Option<FooterFact> {
 ///     failed: Whether the absent snapshot is a failed read rather than a pending one.
 ///     status: Health published by the valuation worker.
 ///     now_ms: Current wall-clock time in Unix milliseconds.
+///     marker: Workspace scope marker for this group, or `None` for a standalone report.
 ///
 /// Returns:
 ///     The essential head and the clip-ordered tail.
@@ -348,6 +350,7 @@ pub(super) fn footer_facts(
     failed: bool,
     status: &ValuationStatus,
     now_ms: i64,
+    marker: Option<&ScopeMarker>,
 ) -> FooterFacts {
     // The caption carries the order count, so the tally the row is a total OF can never be the
     // thing a narrow dock clips away. Without a snapshot there is no count to state.
@@ -548,6 +551,18 @@ pub(super) fn footer_facts(
     if let Some(mut open) = open_positions_fact(&data.open) {
         open.section_start = true;
         tail.push(open);
+    }
+    // The scope marker's own facts, appended last — never a second copy, and never rendered when
+    // the active preset hides nothing (decision 1). The closing hint line lives in the tooltip
+    // only (`render.rs`), never on the row itself.
+    if let Some(marker) = marker {
+        let mut facts = marker.facts().into_iter();
+        if let Some(first) = facts.next() {
+            let mut first = fact(first, FactTone::Soft, false);
+            first.section_start = true;
+            tail.push(first);
+            tail.extend(facts.map(|text| fact(text, FactTone::Soft, false)));
+        }
     }
     let trailing = vec![fact(
         t!("report.shown_top", n = data.rows.len()).to_string(),

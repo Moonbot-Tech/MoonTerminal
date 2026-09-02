@@ -234,6 +234,10 @@ pub struct ServerConfig {
     /// See [`TransportVersion`] for why this is stored at all instead of always reading the key.
     #[serde(default)]
     pub transport: Option<TransportVersion>,
+    /// In which workspace preset this core is displayed (Settings dropdown). Display only: an
+    /// excluded core still connects, still streams, and still writes to the databases.
+    #[serde(default)]
+    pub workspace_membership: WorkspaceMembership,
 }
 
 /// MoonProto transport mode, mirroring MoonBot's `V0 / V1 / V2` radio in Moon Proto settings.
@@ -333,6 +337,143 @@ pub fn transport_from_key(key: &str) -> Option<TransportVersion> {
 ///     The stored mode when there is one, otherwise whatever the key names.
 pub fn seeded_transport(current: Option<TransportVersion>, key: &str) -> Option<TransportVersion> {
     current.or_else(|| transport_from_key(key))
+}
+
+/// In which of the two workspace presets a core is displayed. Display only: an excluded core
+/// still connects, still streams, and still writes to the databases.
+///
+/// There is no fourth "excluded from both" variant, deliberately: that state is unrepresentable
+/// in memory, which is what makes it structurally impossible rather than merely disallowed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WorkspaceMembership {
+    /// Shown in both workspace presets.
+    #[default]
+    Both,
+    /// Shown only in the Classic preset.
+    ClassicOnly,
+    /// Shown only in the Auto Trading preset.
+    AutoOnly,
+}
+
+impl WorkspaceMembership {
+    /// Every membership value, in the order the Settings dropdown lists them.
+    pub const ALL: [Self; 3] = [Self::Both, Self::ClassicOnly, Self::AutoOnly];
+
+    /// Stable code persisted in `settings.toml`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::ClassicOnly => "classic",
+            Self::AutoOnly => "auto",
+        }
+    }
+
+    /// Parse a `settings.toml` code, returning `None` for an unknown code.
+    ///
+    /// Unknown values are deliberately not approximated to a membership based on their contents;
+    /// `Deserialize` conservatively maps them to `Default` (`Both`).
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code.trim() {
+            "both" => Some(Self::Both),
+            "classic" => Some(Self::ClassicOnly),
+            "auto" => Some(Self::AutoOnly),
+            _ => None,
+        }
+    }
+
+    /// Whether a core with this membership is displayed under the given workspace preset.
+    ///
+    /// The only place this semantic rule exists: every membership-aware surface calls this
+    /// instead of matching on the variants itself.
+    pub fn displays_in(self, preset: super::layout::WorkspaceMode) -> bool {
+        match self {
+            Self::Both => true,
+            Self::ClassicOnly => preset == super::layout::WorkspaceMode::Classic,
+            Self::AutoOnly => preset == super::layout::WorkspaceMode::AutoTrading,
+        }
+    }
+}
+
+impl Serialize for WorkspaceMembership {
+    /// Serialize the stable lowercase code used by `settings.toml`.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkspaceMembership {
+    /// Map an unknown string, i64/u64/f64/bool/unit, sequence, or map to the default.
+    ///
+    /// These forms are covered explicitly so a cosmetic field cannot reject the remaining
+    /// settings. Other data forms use the standard `serde::de::Visitor` rejection.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        /// Visitor for TOML forms that have a safe default membership.
+        struct AnyScalar;
+
+        impl<'de> serde::de::Visitor<'de> for AnyScalar {
+            type Value = WorkspaceMembership;
+
+            /// Describe accepted string codes for serde diagnostics.
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a workspace membership (both / classic / auto)")
+            }
+
+            /// Parse a string code, mapping an unknown code to the default.
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(WorkspaceMembership::from_code(v).unwrap_or_default())
+            }
+
+            // Invalid scalar values affect only this cosmetic field.
+            /// Map a signed 64-bit integer to the default.
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(WorkspaceMembership::default())
+            }
+
+            /// Map an unsigned 64-bit integer to the default.
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(WorkspaceMembership::default())
+            }
+
+            /// Map a floating-point value to the default.
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(WorkspaceMembership::default())
+            }
+
+            /// Map a Boolean value to the default.
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(WorkspaceMembership::default())
+            }
+
+            /// Map unit/null to the default.
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(WorkspaceMembership::default())
+            }
+
+            // Consume the entire invalid container so deserialization stays synchronized.
+            /// Consume an entire sequence and return the default.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(WorkspaceMembership::default())
+            }
+
+            /// Consume an entire map and return the default.
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(WorkspaceMembership::default())
+            }
+        }
+
+        d.deserialize_any(AnyScalar)
+    }
 }
 
 /// User-selected order for every core list in the application.

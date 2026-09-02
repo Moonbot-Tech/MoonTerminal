@@ -59,6 +59,7 @@ use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
+use crate::workspace::scope_marker::ScopeMarker;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
@@ -137,6 +138,9 @@ pub struct AssetsView {
     /// to cover rows it silently dropped — the same "partial sum shown as complete" the balance
     /// side of the footer is built to prevent.
     cached_value_excluded: usize,
+    /// Scope marker for the balance summary, or `None` for the global window — deliberately
+    /// outside workspace ownership, so it never hides a core. Rebuilt alongside `cached_aggs`.
+    cached_scope_marker: Option<ScopeMarker>,
     /// Fields hidden by the column selector, persisted per context through
     /// [`crate::persistence::table_persist`]. Empty means every field is shown; the action buttons
     /// are a field like any other and can be hidden too.
@@ -348,6 +352,7 @@ impl AssetsView {
             cached_wallets: Rc::new(Vec::new()),
             cached_total_value: 0.0,
             cached_value_excluded: 0,
+            cached_scope_marker: None,
             hidden_cols: Vec::new(),
             sort: None,
             table_state,
@@ -416,10 +421,37 @@ impl AssetsView {
     }
 
     /// Return connected scope cores in canonical order: one group or all groups.
+    ///
+    /// Unfiltered by workspace-preset membership on purpose — the retained-selection callers
+    /// (`toggle_exchange_cores`, `adopt_broadcast_core_filter`) reconcile `sel_cores` against this
+    /// list independently of what is currently displayed, and narrowing it here would let a
+    /// membership change silently drop a core from a retained filter instead of just hiding it.
+    /// The interactive picker uses [`Self::displayed_scope_cores`] instead.
     pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| match &self.scope {
             AssetsScope::Group(g) => &s.group == g,
             AssetsScope::All => true,
+        })
+    }
+
+    /// Return scope cores the active preset actually displays — what the `core_bar` picker should
+    /// offer, so it agrees with the table, wallets and totals it sits above.
+    ///
+    /// The global window (`AssetsScope::All`) passes `None`, and [`Backend::core_displayed`]
+    /// answers `true` for every core under `None` — the same "never hides a core" behavior
+    /// [`Self::scope_marker`] already documents for that window.
+    pub(super) fn displayed_scope_cores(&self, b: &Backend) -> OrderedCores {
+        let preset = match &self.scope {
+            AssetsScope::Group(group) => {
+                b.display_preset(crate::workspace::DisplayOwner::Group(group))
+            }
+            AssetsScope::All => None,
+        };
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| {
+            (match &self.scope {
+                AssetsScope::Group(g) => &s.group == g,
+                AssetsScope::All => true,
+            }) && b.core_displayed(preset, s.id)
         })
     }
 
@@ -441,6 +473,28 @@ impl AssetsView {
             RetainedCoreScope::Explicit(&retained)
         };
         Some(b.effective_workspace_scope(group, retained))
+    }
+
+    /// Build the balance summary's scope marker.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts, or `None` for the global
+    ///     window — deliberately outside workspace ownership (frozen contract §11.2), so it never
+    ///     hides a core and never lies about a scope it does not have.
+    pub(super) fn scope_marker(&self, b: &Backend) -> Option<ScopeMarker> {
+        let AssetsScope::Group(group) = &self.scope else {
+            return None;
+        };
+        let scope = self.effective_scope(b)?;
+        let preset = b.display_preset(crate::workspace::DisplayOwner::Group(group));
+        Some(ScopeMarker::new(
+            preset,
+            scope.membership_shown(),
+            scope.membership_total(),
+        ))
     }
 
     /// Return the exact core/name pairs used by Assets queries and render caches.

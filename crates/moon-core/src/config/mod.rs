@@ -94,7 +94,7 @@ pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
-    StratSlot, TransportVersion, seeded_transport,
+    StratSlot, TransportVersion, WorkspaceMembership, seeded_transport,
 };
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
@@ -753,6 +753,7 @@ impl AppConfig {
                 manual_strategy: None,
                 trade: None,
                 transport: servers::transport_from_key(&key),
+                workspace_membership: WorkspaceMembership::default(),
             })
             .collect();
         let mut config = Self {
@@ -933,6 +934,9 @@ impl AppConfig {
         // per-core generation it selects join this neutralization for the same reason: they are
         // terminal-local choices about which numbers this terminal sends with an order, not facts
         // about the connection itself, so toggling either must never reconnect the core.
+        // `workspace_membership` joins them for the same reason and at higher stakes: it is a
+        // purely cosmetic display filter by definition (an excluded core still connects), so
+        // toggling it must never reconnect the entire fleet.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
@@ -943,6 +947,7 @@ impl AppConfig {
                 strat_slots: None,
                 manual_strategy: None,
                 trade: None,
+                workspace_membership: WorkspaceMembership::default(),
                 ..s.clone()
             })
             .collect();
@@ -1018,6 +1023,23 @@ impl AppConfig {
         self.servers.iter().any(|s| !s.key.is_empty())
     }
 }
+
+/// Sentinel uid used to represent a present-but-empty core scope.
+///
+/// A caller that holds a scope which is PRESENT but EMPTY (every core it names has been filtered
+/// out) must query for something that matches nothing, rather than an empty uid list — an empty
+/// list means UNFILTERED everywhere it is read (see [`crate::db::ReportFilter`] and
+/// `crate::db::analytics::Query::cores`). On a normally reconciled configuration, uid 0 is
+/// outside the issued range: [`AppConfig::FIRST_ISSUED_UID`] is 1 and [`UidCounter`] advances from
+/// that floor. The counter's documented `u64::MAX` wrap remains an exceptional corrupt-state
+/// limitation, so this sentinel relies on the normal non-wrapping UID range rather than proving an
+/// absolute no-match invariant.
+///
+/// The `const _` assertion below ties this sentinel to the allocator floor at COMPILE TIME: any
+/// future change that lets `FIRST_ISSUED_UID` reach 0 fails the build here instead of silently
+/// invalidating the normal-range assumption this sentinel relies on.
+pub const NO_MATCH_CORE_UID: u64 = 0;
+const _: () = assert!(NO_MATCH_CORE_UID < AppConfig::FIRST_ISSUED_UID);
 
 #[cfg(test)]
 mod structural_sig_tests;
