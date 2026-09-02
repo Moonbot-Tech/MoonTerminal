@@ -275,7 +275,7 @@ pub const REGISTRY: &[ToolDef] = &[
     position::DEF,
 ];
 
-/// `def()` and `next()` index the registry; an empty one would panic in the frame loop.
+/// `def()` and `next_allowed()` index the registry; an empty one would panic in the frame loop.
 const _: () = assert!(!REGISTRY.is_empty());
 
 impl FigureTool {
@@ -290,10 +290,23 @@ impl FigureTool {
             .unwrap_or(&REGISTRY[0])
     }
 
-    /// Next tool in the cycle; the `switch_figure` hotkey advances through the registry and wraps.
-    pub fn next(self) -> FigureTool {
+    /// Next tool the `switch_figure` hotkey advances to, skipping every tool `allowed` refuses.
+    ///
+    /// The exclusion is Moonbot's own `HotKey` checkbox, which sits in the pencil panel beside the
+    /// line kind and marks whether the SELECTED tool takes part in the cycle. A tool is asked about
+    /// by identity rather than by a set passed in, so the caller keeps its own storage — the
+    /// terminal holds the exclusions in `hotkeys.toml`, and this crate stays free of that file.
+    ///
+    /// Two refusals it has to survive, and both come from the user rather than from a caller bug:
+    /// the CURRENT tool being excluded — the walk starts one step ahead, so it simply moves on —
+    /// and EVERY tool being excluded, which returns the current tool unchanged rather than looping
+    /// forever or landing on a tool the user switched off.
+    pub fn next_allowed(self, allowed: impl Fn(FigureTool) -> bool) -> FigureTool {
         let i = REGISTRY.iter().position(|d| d.tool == self).unwrap_or(0);
-        REGISTRY[(i + 1) % REGISTRY.len()].tool
+        (1..=REGISTRY.len())
+            .map(|step| REGISTRY[(i + step) % REGISTRY.len()].tool)
+            .find(|tool| allowed(*tool))
+            .unwrap_or(self)
     }
 }
 

@@ -291,6 +291,13 @@ impl SettingsView {
                     &hotkeys,
                     cx,
                 ),
+                self.hotkey_row(
+                    t!("hotkeys.fig_undo").to_string(),
+                    t!("hotkeys.fig_undo_hint").to_string(),
+                    HotkeySlot::FigUndo,
+                    &hotkeys,
+                    cx,
+                ),
             ],
             HotkeyGroup::OrderMove => vec![
                 self.hotkey_row(

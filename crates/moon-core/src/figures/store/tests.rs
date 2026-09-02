@@ -428,6 +428,52 @@ fn a_core_that_has_not_reported_disarms_nothing() {
     assert!(store.figures(1, "BTCUSDT")[0].alert);
 }
 
+/// The last figure DRAWN is the highest local id, which is not the same as the last slot of the
+/// vector once a core's own alerts have landed in it.
+///
+/// Plausible breakage: reading `.last()` deletes a Moonbot alert instead of the user's own figure
+/// — `set_server_figures` appends the server set AFTER the locals it retains — and that deletion
+/// travels to the core.
+#[test]
+fn the_last_local_figure_is_the_newest_one_this_chart_drew() {
+    let mut store = FigureStore::default();
+    assert_eq!(
+        store.last_local(1, "BTCUSDT"),
+        None,
+        "a chart that drew nothing has no last figure"
+    );
+
+    let first = store.add(1, "BTCUSDT", hline(100.0));
+    let second = store.add(1, "BTCUSDT", hline(200.0));
+    assert!(second > first);
+    assert_eq!(store.last_local(1, "BTCUSDT"), Some(second));
+
+    // A core's own alert lands in the same vector, after the locals and with a higher id.
+    let mut remote = hline(300.0);
+    remote.id = 9_000;
+    remote.from_server = true;
+    store.set_server_figures(HashMap::from([((1, "BTCUSDT".to_string()), vec![remote])]));
+    assert_eq!(
+        store.last_local(1, "BTCUSDT"),
+        Some(second),
+        "a server-owned alert is not something this terminal drew"
+    );
+
+    // Another core's market is a different chart, not a fallback for this one.
+    assert_eq!(store.last_local(2, "BTCUSDT"), None);
+    assert_eq!(store.last_local(1, "ETHUSDT"), None);
+
+    // Deleting walks backwards through the local figures and then stops.
+    store.remove(1, "BTCUSDT", second);
+    assert_eq!(store.last_local(1, "BTCUSDT"), Some(first));
+    store.remove(1, "BTCUSDT", first);
+    assert_eq!(
+        store.last_local(1, "BTCUSDT"),
+        None,
+        "the chart's own figures are gone; the core's alert is not ours to delete"
+    );
+}
+
 /// Server-owned figures are NOT this function's business. They are rebuilt wholesale by
 /// `set_server_figures`, so one Moonbot dropped is already gone by the time this runs; touching
 /// their flag here would fight that.

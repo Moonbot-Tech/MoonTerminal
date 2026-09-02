@@ -92,6 +92,77 @@ impl Backend {
             != Some(on)
     }
 
+    /// Whether `tool` takes part in the `switch_figure` cycle — Moonbot's `HotKey` checkbox.
+    ///
+    /// Reads the EXCLUSION list in `hotkeys.toml`, so a tool nobody has switched off answers `true`
+    /// without an entry anywhere; see `HotkeysConfig::switch_figure_skip`.
+    pub(crate) fn tool_in_cycle(&self, tool: FigureTool) -> bool {
+        !self
+            .config
+            .hotkeys
+            .switch_figure_skip
+            .iter()
+            .any(|key| key == tool.def().key)
+    }
+
+    /// Puts `tool` into the cycle or takes it out, returning whether anything changed.
+    ///
+    /// Marks the configuration for the coordination loop's routine save, like every other setting
+    /// written from a panel rather than from the Settings window.
+    pub(crate) fn set_tool_in_cycle(&mut self, tool: FigureTool, on: bool) -> bool {
+        if self.tool_in_cycle(tool) == on {
+            return false;
+        }
+        let key = tool.def().key;
+        let edit = |skip: &mut Vec<String>| {
+            if on {
+                skip.retain(|held| held != key);
+            } else if !skip.iter().any(|held| held == key) {
+                skip.push(key.to_string());
+            }
+        };
+        edit(&mut self.config.hotkeys.switch_figure_skip);
+        // The Settings draft takes the same edit, for the reason
+        // `settings::hotkeys::tab::confirm_core_pull` states about its own write: a later
+        // "Settings > Save" starts from `preview` and copies it over `config`, so a draft that
+        // never learned about this switch would silently roll it back to whatever the Settings
+        // window held when it opened.
+        if let Some(preview) = self.preview.as_mut() {
+            edit(&mut preview.hotkeys.switch_figure_skip);
+        }
+        self.config_dirty = true;
+        true
+    }
+
+    /// The tool the `switch_figure` hotkey advances to, honouring the exclusions.
+    pub(crate) fn next_fig_tool(&self) -> FigureTool {
+        self.fig_tool.next_allowed(|tool| self.tool_in_cycle(tool))
+    }
+
+    /// Deletes the last figure DRAWN on this chart — Moonbot's Ctrl+Z.
+    ///
+    /// A chart holding only the core's own alerts deletes nothing: they are not ours to remove, and
+    /// removing one here would remove it on the core. Whether the KEY is then consumed is the
+    /// caller's decision, not this answer — see `HotkeyAction::FigUndo`.
+    ///
+    /// The borrow is taken and released on its own line: `remove_figure` borrows the same `RefCell`
+    /// mutably, and a `Ref` still alive across that call is a panic inside the frame loop.
+    ///
+    /// Args:
+    ///     core: Core owning the chart.
+    ///     market: Market the chart is showing.
+    ///
+    /// Returns:
+    ///     Whether a figure was deleted.
+    pub(crate) fn undo_last_figure(&mut self, core: CoreId, market: &str) -> bool {
+        let last = self.figures.borrow().last_local(core, market);
+        let Some(id) = last else {
+            return false;
+        };
+        self.remove_figure(core, market, id);
+        true
+    }
+
     /// Whether the Sells-to-zone drawing mode is armed.
     pub(crate) fn sells_zone_armed(&self) -> bool {
         self.sells_zone_arm.is_some()

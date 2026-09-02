@@ -239,11 +239,37 @@ fn tool_cycle_visits_every_tool_once() {
     let mut seen = vec![first];
     let mut t = first;
     for _ in 1..REGISTRY.len() {
-        t = t.next();
+        t = t.next_allowed(|_| true);
         assert!(!seen.contains(&t), "cycle repeats {t:?} before wrapping");
         seen.push(t);
     }
-    assert_eq!(t.next(), first, "cycle must wrap to the first tool");
+    assert_eq!(
+        t.next_allowed(|_| true),
+        first,
+        "cycle must wrap to the first tool"
+    );
+}
+
+/// The cycle skips the tools Moonbot's `HotKey` checkbox switches off, and survives the two
+/// refusals a user can produce: the current tool excluded, and every tool excluded.
+///
+/// Plausible breakage: a filter applied to the STARTING index instead of to the candidates
+/// returns an excluded tool whenever the current one is excluded; a `while` that waits for an
+/// allowed tool hangs the frame loop when none is.
+#[test]
+fn tool_cycle_skips_the_tools_left_out_of_the_hotkey() {
+    let first = REGISTRY[0].tool;
+    let second = REGISTRY[1].tool;
+    let third = REGISTRY[2].tool;
+
+    // The immediate neighbour is excluded, so the cycle steps over it.
+    assert_eq!(first.next_allowed(|t| t != second), third);
+    // The CURRENT tool is excluded: the walk starts one ahead and never has to consider it.
+    assert_eq!(second.next_allowed(|t| t != second), third);
+    // Nothing is allowed: the tool stays put rather than looping or landing on an excluded one.
+    assert_eq!(first.next_allowed(|_| false), first);
+    // Exactly one tool is allowed and it is the current one: it stays selected.
+    assert_eq!(first.next_allowed(|t| t == first), first);
 }
 
 #[test]

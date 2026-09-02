@@ -1135,6 +1135,14 @@ chart.fig.custom_color:
   ru: "Свой цвет из палитры"
   en: "Custom color from the palette"
   es: "Color personalizado de la paleta"
+chart.fig.hotkey:
+  ru: "Хоткей"
+  en: "HotKey"
+  es: "Atajo"
+chart.fig.hotkey_tip:
+  ru: "Инструмент участвует в переборе по хоткею «Switch Figure». Снятая галочка убирает его из перебора, выбрать мышкой по-прежнему можно."
+  en: "The tool takes part in the \"Switch Figure\" hotkey cycle. Unchecked, it is skipped by the hotkey but can still be picked with the mouse."
+  es: "La herramienta participa en el ciclo del atajo \"Switch Figure\". Sin marcar, el atajo la omite, pero se puede seguir eligiendo con el ratón."
 chart.layout.orderbook:
   ru: "Стакан"
   en: "Order book"

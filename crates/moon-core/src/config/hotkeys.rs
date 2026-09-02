@@ -20,7 +20,7 @@ pub const MANUAL_STRATEGY_KEYS: usize = 10;
 ///
 /// 1: backfilled the slots that shipped unbound. 2: cleared `chart_shot` where the user had
 /// already given Ctrl+F10 to something else.
-const SCHEMA: u8 = 2;
+const SCHEMA: u8 = 3;
 
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
@@ -368,6 +368,28 @@ pub struct HotkeysConfig {
     /// Toggles the "Alert" checkbox on the selected figure (arms/disarms the chart alert).
     #[serde(default = "default_fig_alert")]
     pub fig_alert: String,
+    /// Deletes the LAST figure drawn on the chart the pointer rests on.
+    ///
+    /// Moonbot's own Ctrl+Z, which removes a drawn element — it is NOT an undo stack there and is
+    /// not one here: nothing brings the figure back, and an edit or a move is not what it reverts.
+    /// The key is free on every Moonbot default and on ours, and a text field keeps it: an input
+    /// with the keyboard resolves Ctrl+Z as its own Undo before the window root is reached.
+    #[serde(default = "default_fig_undo")]
+    pub fig_undo: String,
+    /// Registry keys ([`crate::figures::ToolDef::key`]) of the drawing tools left OUT of the
+    /// [`Self::switch_figure`] cycle — Moonbot's `HotKey` checkbox, which sits in its pencil panel
+    /// beside the line kind and says whether the selected tool takes part in the switching.
+    ///
+    /// An EXCLUSION list rather than an inclusion one, and that is the whole reason it can carry a
+    /// bare serde default: an absent or empty list means every tool participates, which is what a
+    /// fresh install means AND what every file written before this field existed meant. A tool
+    /// added to the registry later therefore takes part without being written into anybody's file.
+    ///
+    /// An unknown key is inert rather than an error — it is how a tool retired in a later build
+    /// leaves a file behind, and dropping it on load would rewrite a file the other build still
+    /// reads.
+    #[serde(default)]
+    pub switch_figure_skip: Vec<String>,
 
     /// Live Moonbot MultiOrders path: places a long from the order book.
     #[serde(default = "default_left_double")]
@@ -451,6 +473,8 @@ impl Default for HotkeysConfig {
             draw_channel: default_draw_channel(),
             fig_delete: default_fig_delete(),
             fig_alert: default_fig_alert(),
+            fig_undo: default_fig_undo(),
+            switch_figure_skip: Vec::new(),
             buy_set_click: default_left_double(),
             short_set_click: MouseGestureBinding::None,
             pending_long_click: MouseGestureBinding::None,
@@ -585,6 +609,8 @@ impl HotkeysConfig {
     /// collision check, and running it must NOT drag generation 1 along behind it, which is why
     /// each arm is gated on its own predecessor rather than on the aggregate.
     ///
+    /// Generation 2 → 3: the same check for `fig_undo`, which arrives on Ctrl+Z the same way.
+    ///
     /// Returns whether anything changed, so the caller can persist the stamp.
     pub(super) fn fill_unbound_slots(&mut self) -> bool {
         if self.schema >= SCHEMA {
@@ -598,6 +624,9 @@ impl HotkeysConfig {
         }
         if self.schema < 2 {
             self.clear_generation_2_collisions();
+        }
+        if self.schema < 3 {
+            self.clear_generation_3_collisions();
         }
         self.schema = SCHEMA;
         true
@@ -657,6 +686,22 @@ impl HotkeysConfig {
         clear_if_duplicate(&taken, &mut self.chart_shot, "Make Shot");
     }
 
+    /// Generation 2 -> 3: `fig_undo` ships on Ctrl+Z through its serde default, so it reaches an
+    /// existing file already filled and never passes through generation 1's empty-slot loop.
+    ///
+    /// Ctrl+Z is free on every default we and Moonbot ship, but nothing stops a user from having
+    /// given it to another action — and the figure layer resolves ABOVE the trading actions, so the
+    /// arriving default would quietly take a key that used to send an order. The NEW slot is the
+    /// one cleared, keeping the user's own choice, exactly as generations 1 and 2 did.
+    ///
+    /// Returns:
+    ///     Nothing; clears only the new figure-undo slot when its default collides.
+    fn clear_generation_3_collisions(&mut self) {
+        // Recomputed rather than reused: the generations above may have just changed slots.
+        let taken = self.bound_keys();
+        clear_if_duplicate(&taken, &mut self.fig_undo, "Delete last figure");
+    }
+
     /// Every keystroke this file already binds, for collision checks.
     ///
     /// Includes the preset and manual-strategy arrays: those are exactly where a user's own
@@ -689,6 +734,7 @@ impl HotkeysConfig {
             &self.draw_channel,
             &self.fig_delete,
             &self.fig_alert,
+            &self.fig_undo,
         ];
         named
             .into_iter()
@@ -806,6 +852,14 @@ fn default_fig_delete() -> String {
 
 fn default_fig_alert() -> String {
     "ctrl-b".into()
+}
+
+/// Moonbot's own key for removing a drawn element, and free on every shipped default here.
+///
+/// Returns:
+///     The default GPUI keystroke for deleting the last drawn figure.
+fn default_fig_undo() -> String {
+    "ctrl-z".into()
 }
 
 fn default_scale_plus() -> String {
