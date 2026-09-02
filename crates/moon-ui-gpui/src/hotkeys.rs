@@ -93,6 +93,15 @@ pub enum HotkeyAction {
     SwitchCharts,
     /// Delete the selected figure.
     FigDelete,
+    /// Delete the LAST figure drawn on the chart the pointer rests on — Moonbot's Ctrl+Z.
+    ///
+    /// Addressed by the POINTER and by nothing else, like the manual-order keys: [`pre_dispatch`]
+    /// gives the hovered PANE the key and keeps it there even when that pane has nothing to delete,
+    /// and with the pointer on no chart the action goes unhandled rather than falling back to a
+    /// chart the user is not looking at — this one deletes, and an armed figure's deletion travels
+    /// to the core. Not an undo stack in either terminal: nothing brings the figure back, and a
+    /// move or an edit is not what it reverts.
+    FigUndo,
     /// Toggle the selected figure's chart alert.
     FigAlert,
     /// Close the group window's active Main chart with the built-in plain Escape binding.
@@ -390,6 +399,10 @@ impl HotkeyAction {
                 | Self::PanicSell
                 | Self::PanicSellOne
                 | Self::FigAlert
+                // A held key repeats at the system rate, and each repeat would take another
+                // figure: unlike `FigDelete`, which runs out after the one selected figure, this
+                // one walks backwards through the whole chart until the finger comes off.
+                | Self::FigUndo
                 | Self::FigTool(_)
                 | Self::SwitchFigure
                 | Self::ChartShot
@@ -428,6 +441,9 @@ fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction
     }
     if p(&hk.fig_alert) {
         return Some(A::FigAlert);
+    }
+    if p(&hk.fig_undo) {
+        return Some(A::FigUndo);
     }
     // Shift-only Escape closes all Main stacks; the next branch matches modifier-free Escape.
     if event.key == "escape"
@@ -652,6 +668,31 @@ pub fn pre_dispatch(
         HotkeyAction::SplitOrder { parts } => with_hovered_chart(backend, cx, |panel, pcx| {
             panel.split_hovered_order(parts, pcx)
         }),
+        // The chart under the pointer owns the figures the user has been drawing, whichever window
+        // holds the keyboard.
+        HotkeyAction::FigUndo => match hovered_chart(backend, cx) {
+            // Consumed whether or not anything was deleted, which is where this parts company with
+            // the split above: falling through from a chart that has nothing drawn would send a
+            // DESTRUCTIVE key on to the calling window's active chart — a different chart, off to
+            // the side, that the user is not looking at. `FigAlert` refuses on the same grounds.
+            Some(chart) => {
+                // `target_at_cursor` and NOT `active_target`: a panel holds several PANES, and the
+                // one the pointer is in is the chart the user means. `active_target` answers the
+                // panel's own active pane, so over a stack it would delete the newest figure of a
+                // NEIGHBOURING coin — and send that coin's alert delete to the core.
+                if let Some((core, market)) = chart.read(cx).target_at_cursor() {
+                    backend.update(cx, |b, bcx| {
+                        if b.undo_last_figure(core, &market) {
+                            bcx.notify();
+                        }
+                    });
+                }
+                true
+            }
+            // The pointer is on no chart at all, so there is no chart this means. Unhandled, like
+            // every other cursor-addressed action with nothing under the cursor.
+            None => false,
+        },
         _ => false,
     }
 }
@@ -721,7 +762,7 @@ pub fn apply(
             // toggle does. Disarming first means the cycle starts from the tool the mode
             // interrupted rather than from the `Channel` it forced.
             b.disarm_sells_zone();
-            b.select_fig_tool(b.fig_tool.next());
+            b.select_fig_tool(b.next_fig_tool());
             bcx.notify();
             true
         }
@@ -841,14 +882,15 @@ pub fn apply(
             bcx.notify();
             true
         }
-        // Caller-routed actions have mixed scope: scale is window-specific; cursor placement and
-        // cancellation use `Backend::hovered_chart`; switching and active-chart closing are
-        // group-local; reset and close-all are application-global; and the chart shot needs the OS
-        // window plus the clipboard, neither of which reaches this function.
+        // Caller-routed actions have mixed scope: scale is window-specific; cursor placement,
+        // cancellation and the figure undo use `Backend::hovered_chart`; switching and active-chart
+        // closing are group-local; reset and close-all are application-global; and the chart shot
+        // needs the OS window plus the clipboard, neither of which reaches this function.
         A::ScalePlus
         | A::ScaleMinus
         | A::NewLong
         | A::NewShort
+        | A::FigUndo
         | A::SwitchCharts
         | A::ResetWindows
         | A::CancelHoveredOrder

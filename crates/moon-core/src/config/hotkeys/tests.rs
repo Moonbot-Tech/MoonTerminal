@@ -56,6 +56,57 @@ fn generation_2_yields_chart_shot_to_an_existing_binding() {
     );
 }
 
+/// Pins `hotkeys.rs::clear_generation_3_collisions`: the arriving Ctrl+Z default must yield to a
+/// user who had already given that keystroke away.
+///
+/// Plausible breakage: the figure layer resolves ABOVE the trading actions, so a duplicated Ctrl+Z
+/// would silently turn an order-sending key into "delete the last figure" — and the file's own
+/// generation gate would never look at it again.
+#[test]
+fn generation_3_yields_fig_undo_to_an_existing_binding() {
+    let mut existing_file = HotkeysConfig {
+        schema: 2,
+        new_long: "ctrl-z".into(),
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.new_long, "ctrl-z");
+    assert!(
+        existing_file.fig_undo.is_empty(),
+        "the new figure-undo default must yield to the user's existing binding"
+    );
+    assert_eq!(existing_file.schema, SCHEMA);
+}
+
+/// A file that has NOT given Ctrl+Z away keeps the shipped default, so the feature is not
+/// switched off for everybody by the collision check that exists for the few.
+#[test]
+fn generation_3_keeps_fig_undo_on_a_file_that_never_used_it() {
+    let mut existing_file = HotkeysConfig {
+        schema: 2,
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.fig_undo, "ctrl-z");
+}
+
+/// Every tool takes part in the switch-figure cycle until one is switched off, including in a file
+/// written before the exclusion list existed.
+///
+/// Plausible breakage: shipping an INCLUSION list would read an old file — and a fresh install —
+/// as "no tool participates", which is a hotkey that silently does nothing.
+#[test]
+fn no_tool_is_excluded_from_the_cycle_by_default() {
+    assert!(HotkeysConfig::default().switch_figure_skip.is_empty());
+    let old_file: HotkeysConfig =
+        toml::from_str("").expect("a hotkeys.toml with no keys at all must still load");
+    assert!(old_file.switch_figure_skip.is_empty());
+}
+
 /// Pins `hotkeys.rs::fill_unbound_slots` so generation 1 cannot re-run on a generation-1 file.
 ///
 /// Plausible breakage: collapsing the generation gates restores a deliberately cleared Cancel Buy

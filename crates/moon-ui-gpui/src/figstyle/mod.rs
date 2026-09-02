@@ -9,9 +9,11 @@
 //! figure will be drawn with ([`Target::ToolDefaults`], opened from the toolbar's settings button).
 //!
 //! Only the WRITE differs between the two, and it differs in exactly two functions — [`edit_style`]
-//! and [`edit_switch`]. An authorized figure edit goes through `Backend::edit_figure`, which
-//! persists the store and re-upserts an armed figure's blob; a stale Alerts-owned figure is refused
-//! before that write. A tool default goes to `Backend::fig_style_mut` and
+//! and [`edit_switch`]. A third writer, [`edit_hotkey_cycle`], belongs to the tool alone and is
+//! offered for no figure at all: it carries Moonbot's `HotKey` switch, which says whether the
+//! switch-figure hotkey stops on this tool. An authorized figure edit goes through
+//! `Backend::edit_figure`, which persists the store and re-upserts an armed figure's blob; a stale
+//! Alerts-owned figure is refused before that write. A tool default goes to `Backend::fig_style_mut` and
 //! `Backend::set_tool_setting`, where the next draft picks it up. Every row calls one of those two
 //! funnels and knows only the explicit [`WorkspaceAuthority`] supplied by its host.
 //!
@@ -28,7 +30,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonTooltipView, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
+    MoonTooltipView, h_flex, v_flex,
 };
 
 use moon_core::figures::{
@@ -106,6 +109,9 @@ struct Snapshot {
     /// The tool's own fill hue, when its fills are not the style's to pick.
     scale_swatch: Option<[u8; 3]>,
     switches: Vec<ToolSetting>,
+    /// The tool the hotkey row switches, and whether the switch-figure hotkey stops on it.
+    /// `None` for a drawn figure, which is not a tool and has no place in a cycle of tools.
+    hotkey_cycle: Option<(FigureTool, bool)>,
 }
 
 fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
@@ -122,6 +128,7 @@ fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
                 fills: def.fills && !fig.from_server,
                 scale_swatch: def.scale_swatch.map(|f| f()),
                 switches: fig.kind.shape().settings(),
+                hotkey_cycle: None,
             })
         }
         Target::ToolDefaults(tool) => {
@@ -131,6 +138,7 @@ fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
                 fills: def.fills,
                 scale_swatch: def.scale_swatch.map(|f| f()),
                 switches: backend.tool_settings(*tool),
+                hotkey_cycle: Some((*tool, backend.tool_in_cycle(*tool))),
             })
         }
     }
@@ -187,6 +195,26 @@ fn edit_style(
         }),
         Target::ToolDefaults(tool) => f(b.fig_style_mut(*tool)),
     }
+}
+
+/// Takes the tool in or out of the switch-figure cycle — Moonbot's `HotKey` checkbox.
+///
+/// The one write here that carries no [`WorkspaceAuthority`], and structurally rather than by
+/// omission: it takes a [`FigureTool`] and no target at all, so there is no figure — stale or
+/// otherwise — that it could reach. The row that calls it is rendered only for
+/// [`Target::ToolDefaults`], which `WorkspaceAuthority::guarded_core` already answers `None` for.
+///
+/// Args:
+///     backend: Application state holding the exclusion list, in `hotkeys.toml`.
+///     tool: The tool whose participation is being switched.
+///     on: Whether the hotkey should stop on this tool.
+///     app: Application context for the deferred callback.
+fn edit_hotkey_cycle(backend: &Entity<Backend>, tool: FigureTool, on: bool, app: &mut App) {
+    backend.update(app, |b, bcx| {
+        if b.set_tool_in_cycle(tool, on) {
+            bcx.notify();
+        }
+    });
 }
 
 /// Applies one of the tool's own switches to whichever target the panel is aimed at.
@@ -291,6 +319,13 @@ pub(crate) fn rows<V: 'static>(
         ))
         .child(label(&t!("chart.fig.kind")))
         .child(kind_row(backend, target, &authority, snap.style.kind));
+
+    // Moonbot puts its `HotKey` switch on the same line as the line kind, and it belongs to the
+    // TOOL: a figure already drawn has no place in a cycle of tools, so the row is absent there
+    // rather than shown disabled.
+    if let Some((tool, on)) = snap.hotkey_cycle {
+        rows = rows.child(hotkey_cycle_row(backend, tool, on, cx));
+    }
 
     if snap.fills {
         rows = rows
@@ -701,6 +736,47 @@ fn kind_row(
         );
     }
     row
+}
+
+/// Moonbot's `HotKey` switch for one tool: whether the switch-figure hotkey stops on it.
+///
+/// A checkbox rather than one more of [`switch_row`]'s chips: those are the TOOL's own switches,
+/// which come from the tool and are rendered from its list, while this one is about the hotkey and
+/// belongs to no tool's geometry.
+///
+/// Args:
+///     backend: Application state, updated by the deferred callback.
+///     tool: The tool this row switches.
+///     on: Whether the tool currently takes part in the cycle.
+///     cx: View context used for font-scaled geometry.
+///
+/// Returns:
+///     The rendered row.
+fn hotkey_cycle_row<V: 'static>(
+    backend: &Entity<Backend>,
+    tool: FigureTool,
+    on: bool,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let backend = backend.clone();
+    h_flex()
+        .id("figset-hotkey")
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .child(
+            MoonCheckbox::new("figset-hotkey-cb")
+                .checked(on)
+                .size(MoonCheckboxSize::Compact)
+                .label(t!("chart.fig.hotkey").to_string())
+                .on_change(move |checked: &bool, _window, app| {
+                    edit_hotkey_cycle(&backend, tool, *checked, app);
+                }),
+        )
+        .tooltip(|_window, cx| {
+            cx.new(|_| MoonTooltipView::new(t!("chart.fig.hotkey_tip").to_string()))
+                .into()
+        })
+        .into_any_element()
 }
 
 /// The tool's own switches, as chips that read as pressed when on. Labelled by the tool, so this

@@ -42,6 +42,7 @@ enum HotkeySlot {
     DrawChannel,
     FigDelete,
     FigAlert,
+    FigUndo,
 }
 
 /// Hotkey groups shown as sub-tabs below the built-in block, matching Moonbot's hotkey pages.
@@ -164,6 +165,7 @@ macro_rules! hotkey_field {
             HotkeySlot::DrawChannel => $($brw)+ $hotkeys.draw_channel,
             HotkeySlot::FigDelete => $($brw)+ $hotkeys.fig_delete,
             HotkeySlot::FigAlert => $($brw)+ $hotkeys.fig_alert,
+            HotkeySlot::FigUndo => $($brw)+ $hotkeys.fig_undo,
         }
     };
 }
@@ -358,6 +360,7 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::DrawChannel => "draw-channel".into(),
         HotkeySlot::FigDelete => "fig-delete".into(),
         HotkeySlot::FigAlert => "fig-alert".into(),
+        HotkeySlot::FigUndo => "fig-undo".into(),
     }
 }
 
@@ -394,5 +397,6 @@ fn slot_label(slot: HotkeySlot) -> String {
         HotkeySlot::DrawChannel => t!("hotkeys.draw_channel").to_string(),
         HotkeySlot::FigDelete => t!("hotkeys.fig_delete").to_string(),
         HotkeySlot::FigAlert => t!("hotkeys.fig_alert").to_string(),
+        HotkeySlot::FigUndo => t!("hotkeys.fig_undo").to_string(),
     }
 }

@@ -214,6 +214,23 @@ impl FigureStore {
             })
     }
 
+    /// The newest figure this chart DREW, or `None` when it drew none.
+    ///
+    /// "Newest" is the highest id rather than the last slot of the vector: [`Self::add`] hands ids
+    /// out in ascending order, but [`Self::set_server_figures`] rewrites the same vectors wholesale
+    /// on every reconcile, so a position stops meaning age as soon as a core's alerts land.
+    ///
+    /// Server-owned figures are excluded outright — an alert drawn in Moonbot is not something
+    /// this terminal drew — and a figure another core merely SHARES onto this market is excluded
+    /// by construction, because this reads the chart's own set and not [`Self::visible`].
+    pub fn last_local(&self, core: CoreId, market: &str) -> Option<u64> {
+        self.figures(core, market)
+            .iter()
+            .filter(|f| !f.from_server)
+            .map(|f| f.id)
+            .max()
+    }
+
     /// Adds a LOCAL figure and returns its ID.
     pub fn add(&mut self, core: CoreId, market: &str, mut fig: Figure) -> u64 {
         self.next_id += 1;

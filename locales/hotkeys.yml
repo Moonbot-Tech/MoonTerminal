@@ -490,6 +490,14 @@ hotkeys.fig_alert_hint:
   ru: "Заармить/разоружить chart-алерт по выделенной фигуре (ядро следит за пересечением цены)."
   en: "Arm/disarm a chart alert on the selected figure (the core watches for a price cross)."
   es: "Armar/desarmar una alerta de gráfico en la figura seleccionada (el núcleo vigila el cruce de precio)."
+hotkeys.fig_undo:
+  ru: "Удалить последнюю фигуру"
+  en: "Delete last figure"
+  es: "Eliminar la última figura"
+hotkeys.fig_undo_hint:
+  ru: "Удаляет последнюю нарисованную фигуру на чарте под курсором. Moonbot-дефолт: Ctrl+Z. Алерты, пришедшие с ядра, не трогает; в текстовом поле Ctrl+Z остаётся отменой ввода."
+  en: "Deletes the last figure drawn on the chart under the pointer. Moonbot default: Ctrl+Z. Alerts that came from the core are left alone, and inside a text field Ctrl+Z stays Undo."
+  es: "Elimina la última figura dibujada en el gráfico bajo el cursor. Valor por defecto de Moonbot: Ctrl+Z. No toca las alertas que llegan del núcleo y, dentro de un campo de texto, Ctrl+Z sigue siendo Deshacer."
 
 hotkeys.pull.title:
   ru: "Раскладка ядра"
