@@ -1210,6 +1210,68 @@ fn restore_persisted_filters_changed_is_exactly_the_full_tuple_compare() {
     );
 }
 
+/// Reverting `ReportPanel::query_core_uids` or `ReportPanel::scope_marker` to `workspace_scope`
+/// would let Report rows and their footer describe different scopes and misleadingly pair zero-of-zero with rows.
+#[test]
+fn report_rows_and_marker_read_one_report_scope() {
+    let report = code_only(include_str!("mod.rs"));
+    let query = braced_body(&report, "pub(super) fn query_core_uids(");
+    let marker = braced_body(&report, "pub(super) fn scope_marker(");
+
+    assert!(
+        query.contains("self.report_scope("),
+        "query rows must use the Report-specific scope"
+    );
+    assert!(
+        marker.contains("self.report_scope("),
+        "the marker must use the Report-specific scope"
+    );
+    assert!(
+        !marker.contains("self.workspace_scope("),
+        "the marker must not diverge to the session-only action scope"
+    );
+}
+
+/// Widening `ReportPanel::effective_core_ids` to `report_scope`, or removing `report_scope`'s
+/// configured fallback, would hand coin-menu actions and export identity cores wider than live sessions.
+#[test]
+fn report_actions_stay_session_derived_while_rows_fall_back_to_configured_cores() {
+    let report = code_only(include_str!("mod.rs"));
+    let action = braced_body(&report, "pub(super) fn effective_core_ids(");
+    let scoped_rows = braced_body(&report, "pub(super) fn report_scope(");
+
+    assert!(
+        action.contains("self.workspace_scope("),
+        "action paths must preserve their session-derived scope"
+    );
+    assert!(
+        !action.contains("report_scope"),
+        "action paths must not inherit the wider configured row scope"
+    );
+    assert!(
+        scoped_rows.contains(".or_configured(")
+            && scoped_rows.contains("configured_workspace_scope("),
+        "row scope must add the configured fallback only at the Report read boundary"
+    );
+}
+
+/// Replacing `ReportPanel::query_core_uids`'s membership-total flag with literal `true` would
+/// make a group during startup return no Report rows for the wrong reason.
+#[test]
+fn report_query_keeps_the_membership_total_sentinel_flag() {
+    let report = code_only(include_str!("mod.rs"));
+    let query = braced_body(&report, "pub(super) fn query_core_uids(");
+
+    assert!(
+        query.contains("scope.membership_total() > 0"),
+        "the sentinel decision must use the scope membership total"
+    );
+    assert!(
+        !query.contains("query_core_ids(scope.ids().to_vec(), true)"),
+        "the query must not force the sentinel for a starting empty group"
+    );
+}
+
 /// `set_period` must persist the picked preset even when it does not change the value displayed —
 /// a menu pick that merely re-confirms an already-shown implicit "all" (from a typed manual date)
 /// is still the user replacing the last stored real pick with this one.

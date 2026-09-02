@@ -886,3 +886,30 @@ fn fixed_header_rows_cannot_flex_shrink_between_modes() {
         "the explicit-height toolbar must be a non-shrinking flex child"
     );
 }
+
+/// Rebuilding `Backend::configured_workspace_scope` from live sessions would make an all-offline
+/// Report query use the fleet, while using availability or membership helpers would reintroduce liveness.
+#[test]
+fn configured_workspace_scope_is_derived_from_configuration_not_sessions() {
+    let backend = code_only(&read_src("backend/mod.rs"));
+    let configured = code_only(braced_body(
+        &backend,
+        "pub(crate) fn configured_workspace_scope(",
+    ));
+
+    assert!(
+        configured.contains(".servers") && configured.contains("is_configured_active()"),
+        "configured scope must enumerate configured servers and use configuration activity"
+    );
+    for forbidden in [
+        "group_cores(",
+        "core_belongs_to_group(",
+        ".is_available()",
+        "live_session",
+    ] {
+        assert!(
+            !configured.contains(forbidden),
+            "configured scope must not derive its universe through {forbidden}"
+        );
+    }
+}

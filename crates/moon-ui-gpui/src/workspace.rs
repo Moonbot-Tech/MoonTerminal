@@ -255,6 +255,18 @@ impl WorkspaceCoreAvailability {
             && self.window != WorkspaceWindowState::Missing
     }
 
+    /// Return whether a configured core belongs in the session-independent fallback universe.
+    ///
+    /// `configured_workspace_scope` deliberately ignores `live_session` and `window` here, while
+    /// still excluding inactive groups and cores. That keeps an offline fallback from resurrecting
+    /// configuration the steady-state scope must never show.
+    ///
+    /// Returns:
+    ///     `true` for an active core in an active group, independent of session and window state.
+    pub(crate) fn is_configured_active(self) -> bool {
+        self.group_active && self.core_active
+    }
+
     /// Derive the localization-neutral roster status from the shared availability facts.
     ///
     /// Args:
@@ -415,6 +427,30 @@ impl EffectiveCoreScope {
             EffectiveScopeKind::AutoCore => EffectiveScopeLabel::Core(self.ids[0]),
         }
     }
+
+    /// Fall back to a configured-cores scope when this one has no session-derived universe at all.
+    ///
+    /// `membership_total == 0` is the ONLY trigger, never the raw `ids.is_empty()` alone: an
+    /// explicit user selection naming only offline cores, in a group that still has live cores,
+    /// keeps `membership_total > 0` and must stay on this scope's own no-match sentinel rather
+    /// than widen to the group's whole configured set. `configured` is a closure rather than an
+    /// eager value so the config walk runs only when this scope's session universe is empty.
+    ///
+    /// Args:
+    ///     configured: Lazily resolves the configured-cores fallback scope.
+    ///
+    /// Returns:
+    ///     `self` unchanged, or `configured()`'s scope when this one has no session universe.
+    pub(crate) fn or_configured(
+        self,
+        configured: impl FnOnce() -> EffectiveCoreScope,
+    ) -> EffectiveCoreScope {
+        if self.ids.is_empty() && self.membership_total == 0 {
+            configured()
+        } else {
+            self
+        }
+    }
 }
 
 /// Turn a resolved scope's IDs into the query a DB read must send, distinguishing an ABSENT
@@ -432,10 +468,11 @@ impl EffectiveCoreScope {
 /// empty that surface's list:
 ///
 /// - `panels::report::ReportPanel::query_core_uids` passes
-///   `EffectiveCoreScope::membership_total() > 0`. Its list can also be emptied by an explicit
-///   user selection naming only unavailable cores, which membership never hid, so
-///   `hides_anything()` would answer `false` there and wrongly broaden a narrow selection to the
-///   whole fleet.
+///   `EffectiveCoreScope::membership_total() > 0`, applied to the scope AFTER
+///   [`EffectiveCoreScope::or_configured`] has already substituted the group's configured
+///   universe for an empty session one. Its list can also be emptied by an explicit user
+///   selection naming only unavailable cores, which membership never hid, so `hides_anything()`
+///   would answer `false` there and wrongly broaden a narrow selection to the whole fleet.
 /// - `analytics::profit_monitor::model::scoped_query_core_ids` passes `hides_anything()`, behind
 ///   a short-circuit to an empty vec. Its scope is purely membership, so no other cause can empty
 ///   it, and `configured_total > 0` would wrongly filter when nothing is hidden.

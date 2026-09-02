@@ -953,6 +953,62 @@ impl Backend {
         .with_membership_counts(membership_shown, membership_total)
     }
 
+    /// Resolve one group panel's fallback scope from its configured cores.
+    ///
+    /// The fallback universe for [`crate::workspace::EffectiveCoreScope::or_configured`] is built
+    /// from configuration rather than [`Self::group_cores`].
+    /// [`crate::workspace::WorkspaceCoreAvailability::is_configured_active`] deliberately ignores
+    /// the `live_session` value that [`Self::workspace_core_availability`] still computes, so an
+    /// offline group resolves to its own configured active cores instead of an empty
+    /// session-derived universe.
+    ///
+    /// `valid_auto_workspace_core` stays session-derived even here: [`resolve_group_scope`]'s Auto
+    /// branch and [`Self::is_auto_overview_scope`] state one rule in two places, and resolving a
+    /// pinned-but-offline Auto core against config would make the Report show core X while the
+    /// header still says Overview.
+    ///
+    /// Args:
+    ///     group: Owning group window.
+    ///     retained: Panel-owned Classic all/subset filter.
+    ///
+    /// Returns:
+    ///     Canonical configured core IDs selected by Classic, Auto Overview, or Auto selected-core
+    ///     mode.
+    pub(crate) fn configured_workspace_scope(
+        &self,
+        group: &str,
+        retained: crate::workspace::RetainedCoreScope<'_>,
+    ) -> crate::workspace::EffectiveCoreScope {
+        let mut available: Vec<CoreId> = self
+            .config
+            .servers
+            .iter()
+            .filter(|s| s.group == group)
+            .map(|s| s.id)
+            .collect();
+        CoreOrder::new(&self.config).sort_by(&mut available, |id| *id);
+        let available: Vec<CoreId> = available
+            .into_iter()
+            .filter(|core| {
+                self.workspace_core_availability(group, *core)
+                    .is_configured_active()
+            })
+            .collect();
+        let membership_total = available.len();
+        let cores: Vec<CoreId> = available
+            .into_iter()
+            .filter(|core| self.core_displayed_in_group(group, *core))
+            .collect();
+        let membership_shown = cores.len();
+        crate::workspace::resolve_group_scope(
+            self.workspace_mode(group),
+            self.valid_auto_workspace_core(group),
+            &cores,
+            retained,
+        )
+        .with_membership_counts(membership_shown, membership_total)
+    }
+
     /// Authorize a delayed core-specific action against the current Auto workspace.
     ///
     /// Args:
