@@ -365,7 +365,7 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
         ),
         connecting,
     ];
-    let roster = derive_workspace_roster(&inputs, "alpha", Some(11));
+    let roster = derive_workspace_roster(&inputs, "alpha", Some(11), inputs.len());
 
     assert_eq!(roster.sections[0].venue, None);
     assert_eq!(

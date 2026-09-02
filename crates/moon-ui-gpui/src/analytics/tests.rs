@@ -11,6 +11,8 @@ fn overview_leaves_the_core_filter_unpinned() {
     let scope = AnalyticsWorkspaceScope {
         selected_core: None,
         core_ids: vec![1, 2, 3],
+        membership_shown: 3,
+        membership_total: 3,
     };
     assert!(!scope.pins_core_filter());
 }
@@ -22,6 +24,8 @@ fn a_concrete_core_still_pins_the_filter() {
     let scope = AnalyticsWorkspaceScope {
         selected_core: Some(7),
         core_ids: vec![7],
+        membership_shown: 1,
+        membership_total: 1,
     };
     assert!(scope.pins_core_filter());
 }

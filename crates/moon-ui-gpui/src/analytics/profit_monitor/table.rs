@@ -348,6 +348,8 @@ pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColu
 ///     flash: Live arrival stamps, keyed by the core that closed the trade.
 ///     selection: Cores currently broadcast to the main window; empty means no filter.
 ///     scroll: Retained vertical-list position.
+///     scope_marker_tooltip: Workspace scope marker recovery text for the grand-total footer, or
+///         `None` when the active preset hides nothing.
 ///     palette: Active MoonUI palette.
 ///     view: Owning monitor entity receiving sortable-header actions.
 ///     cx: Application context used for rendering.
@@ -366,6 +368,7 @@ pub(super) fn table(
     flash: &crate::pulse::Arrivals<CoreId>,
     selection: &HashSet<CoreId>,
     scroll: &MoonVirtualListScrollHandle,
+    scope_marker_tooltip: Option<String>,
     palette: MoonPalette,
     view: Entity<ProfitMonitorView>,
     backend: Entity<Backend>,
@@ -669,7 +672,10 @@ pub(super) fn table(
     .text_size(design::t_title(cx))
     .font_weight(FontWeight::SEMIBOLD)
     .border_t(px(2.0))
-    .border_color(moon_alpha(palette.amber, 0.7));
+    .border_color(moon_alpha(palette.amber, 0.7))
+    .when_some(scope_marker_tooltip, |element, tip| {
+        element.tooltip(crate::panels::common::text_tooltip(tip))
+    });
 
     v_flex()
         .flex_1()

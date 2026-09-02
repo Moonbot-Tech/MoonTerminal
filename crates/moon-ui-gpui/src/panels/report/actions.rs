@@ -141,17 +141,18 @@ impl ReportPanel {
         // database and is still EMPTY until the first metadata batch lands — a Report created while
         // a filter is on air would otherwise never join it — while the live group holds cores that
         // have traded nothing yet and so appear in no report row.
+        let backend = self.backend.read(cx);
         let available: Vec<CoreId> = self
             .cores
             .iter()
             .map(|(core, _)| *core)
             .chain(
-                self.backend
-                    .read(cx)
+                backend
                     .group_cores(&self.group)
                     .into_iter()
                     .map(|(core, _)| core),
             )
+            .filter(|core| backend.core_displayed_in_group(&self.group, *core))
             .collect();
         if !crate::controls::apply_core_broadcast(&mut self.sel_cores, &broadcast, available) {
             return;

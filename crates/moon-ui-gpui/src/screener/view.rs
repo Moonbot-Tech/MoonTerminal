@@ -127,6 +127,15 @@ impl ScreenerView {
         })
         .detach();
 
+        // A membership-only save advances `workspace_revision` without notifying `Backend`, so the
+        // gate above never fires for it; observe the revision directly to pick up the new preset.
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            this.rebuild(cx);
+            cx.notify();
+        })
+        .detach();
+
         // Persist window position and size in the layout so the window reopens in the same geometry.
         cx.observe_window_bounds(window, |this, window, cx| {
             let geom = crate::window::windowing::window_geom_rect(window, cx);
@@ -166,12 +175,26 @@ impl ScreenerView {
 
         let b = self.backend.read(cx);
         let source = b.session.market_source();
+        // Screener is a group-less singleton, following the Strategies-window pattern (`mod.rs`),
+        // so it inherits the focused Auto workspace's preset rather than owning a group of its own.
+        let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+        // A retained core filter can point at a core the current preset just hid; keep it selected
+        // and it filters every group away, producing an unexplained empty view. Fall back to the
+        // all-cores view instead, same shape as `Backend::valid_auto_workspace_core`.
+        if let ScrSource::Core(only) = self.source
+            && !b.core_displayed(preset, only)
+        {
+            self.source = ScrSource::All;
+        }
         // Deduplicate by market-data provider: each group contains the consumer cores sharing that
         // provider. With a core filter, the group contains only that core for account-derived fields,
         // while market rows still come from its provider and charts open on the selected core.
         let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
         let mut names: HashMap<CoreId, SharedString> = HashMap::new();
         for s in b.session.sessions() {
+            if !b.core_displayed(preset, s.id) {
+                continue;
+            }
             names.insert(s.id, SharedString::from(s.name.clone()));
             if let ScrSource::Core(only) = self.source {
                 if s.id != only {
@@ -409,9 +432,10 @@ impl ScreenerView {
     fn source_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let (cores, venues) = {
             let b = self.backend.read(cx);
+            let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
             (
                 crate::core_order::CoreOrder::new(&b.config)
-                    .from_sessions(b.session.sessions(), |_| true),
+                    .from_sessions(b.session.sessions(), |s| b.core_displayed(preset, s.id)),
                 b.session.core_venues(),
             )
         };

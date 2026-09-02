@@ -302,7 +302,9 @@ impl OrdersPanel {
     ///
     /// Built on render so an open panel immediately reflects sort-mode changes.
     pub(super) fn group_cores(&self, b: &Backend) -> OrderedCores {
-        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| {
+            s.group == self.group && b.core_displayed_in_group(&self.group, s.id)
+        })
     }
 
     /// Toggle the retained Classic selected-core filter.

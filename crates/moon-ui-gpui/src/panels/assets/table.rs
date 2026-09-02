@@ -345,6 +345,7 @@ impl AssetsView {
             .child(super::balances::summary_group(
                 &self.cached_aggs,
                 &HashSet::new(),
+                self.cached_scope_marker.as_ref(),
                 cx,
             ))
     }

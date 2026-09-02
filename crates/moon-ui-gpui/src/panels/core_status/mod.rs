@@ -497,8 +497,23 @@ impl CoreStatusView {
     }
 
     /// Return this panel group's cores in canonical order.
+    ///
+    /// Unfiltered by workspace-preset membership on purpose — the retained-selection callers
+    /// (`toggle_exchange_cores`, `adopt_broadcast_core_filter`) reconcile `sel_cores` against this
+    /// list independently of what is currently displayed. The interactive picker uses
+    /// [`Self::displayed_scope_cores`] instead.
     pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
+    }
+
+    /// Return this panel group's cores the active preset actually displays — what the `core_bar`
+    /// picker should offer, so it agrees with the rows, which already route through
+    /// `effective_workspace_scope`.
+    pub(super) fn displayed_scope_cores(&self, b: &Backend) -> OrderedCores {
+        let preset = b.display_preset(crate::workspace::DisplayOwner::Group(&self.group));
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| {
+            s.group == self.group && b.core_displayed(preset, s.id)
+        })
     }
 
     /// Resolve the effective core scope without overwriting the retained Classic filter.
@@ -626,7 +641,10 @@ impl Render for CoreStatusView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::CORE_STATUS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::CORE_STATUS_RENDER_US);
-        let cores = self.scope_cores(self.backend.read(cx));
+        // The interactive picker must agree with the rows below it, which already route through
+        // `effective_workspace_scope`; `scope_cores` stays unfiltered for the retained-selection
+        // callers that still need the full list.
+        let cores = self.displayed_scope_cores(self.backend.read(cx));
         let rows = self.cached_rows.clone();
         let groups = self.cached_groups.clone();
         let p = MoonPalette::active(cx);

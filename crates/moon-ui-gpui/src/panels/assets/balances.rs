@@ -273,10 +273,26 @@ fn summary_tooltip(t: &ScopeTotals, tail: &[String]) -> String {
 /// Narrow-dock behaviour is the point of the two-child split below: the essentials resist
 /// shrinking while the tail is one clipping box. Trust survives that clipping twice over —
 /// through the amount colour ([`is_complete`]) and through the tooltip ([`summary_tooltip`]).
-pub(super) fn summary_group(aggs: &[CoreAgg], sel: &HashSet<CoreId>, cx: &App) -> impl IntoElement {
+///
+/// Args:
+///     aggs: Per-core balance aggregates for the current scope.
+///     sel: Retained core selection, or empty for every scoped core.
+///     marker: Workspace scope marker for this group, or `None` for the global window.
+///     cx: Application context used for rendering.
+pub(super) fn summary_group(
+    aggs: &[CoreAgg],
+    sel: &HashSet<CoreId>,
+    marker: Option<&ScopeMarker>,
+    cx: &App,
+) -> impl IntoElement {
     let p = MoonPalette::active(cx);
     let totals = scope_totals(aggs, sel);
-    let tail = facts(&totals);
+    let mut tail = facts(&totals);
+    // The scope marker's own facts, appended to this row's tail — never a second copy, and never
+    // rendered when the active preset hides nothing (decision 1).
+    if let Some(marker) = marker {
+        tail.extend(marker.facts());
+    }
     let tip = summary_tooltip(&totals, &tail);
     let color = if is_complete(&totals) {
         p.text

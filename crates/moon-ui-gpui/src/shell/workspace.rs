@@ -830,7 +830,8 @@ impl Shell {
                     .core(id)
                     .is_some_and(|core| core.status == ConnStatus::Ready)
             };
-            let inputs = servers
+            let configured_total = servers.len();
+            let mut inputs = servers
                 .iter()
                 .map(|server| {
                     let core = store.core(server.id);
@@ -846,16 +847,27 @@ impl Shell {
                             .map(|core| core.startup)
                             .unwrap_or_else(CoreStartupStatus::default),
                         fault: core.and_then(|core| core.fault.clone()),
+                        // Fed the WHOLE fleet, not the membership-filtered rows below: a hidden
+                        // core still connects, so a transport suggestion computed over a subset
+                        // would be wrong evidence (frozen contract §8).
                         mode_suggestion: crate::conn_diag::fleet_mode_suggestion(
                             server.id, &servers, is_ready,
                         ),
                     }
                 })
                 .collect::<Vec<_>>();
+            // The rail only ever renders inside an Auto window, so its viewing preset is a known
+            // constant. Rows are RETAINED here, on the already-built inputs, rather than by
+            // filtering `servers` itself above — `servers` still feeds `fleet_mode_suggestion`
+            // just above, which must see the whole fleet.
+            inputs.retain(|input| {
+                backend.core_displayed(Some(WorkspaceMode::AutoTrading), input.core)
+            });
             crate::workspace::derive_workspace_roster(
                 &inputs,
                 &self.group,
                 backend.valid_auto_workspace_core(&self.group),
+                configured_total,
             )
         };
 
@@ -909,16 +921,35 @@ impl Shell {
         .radius(0.0)
         .scrollbar_visibility(MoonScrollbarVisibility::Hover);
 
-        let summary = t!(
+        let mut summary = t!(
             "workspace.summary",
             configured = roster.summary.configured,
             ready = roster.summary.ready,
             problem = roster.summary.problem
         )
         .to_string();
+        // The rail's own scope marker: its viewing preset is always Auto, since it only ever
+        // renders inside an Auto window (frozen contract §5, the H3 rule's concrete instance).
+        let marker = crate::workspace::scope_marker::ScopeMarker::new(
+            Some(WorkspaceMode::AutoTrading),
+            roster.summary.configured,
+            roster.summary.configured_total,
+        );
+        let marker_facts = marker.facts();
+        for fact in &marker_facts {
+            summary.push(' ');
+            summary.push_str(fact);
+        }
         let summary_text = match density {
             WorkspaceRailDensity::Icon => icon_workspace_summary(roster.summary.configured),
             WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => summary.clone(),
+        };
+        // The closing hint line lives in the tooltip only — Icon density's bare count never gets
+        // it either, since both densities share this one tooltip.
+        let summary = if marker_facts.is_empty() {
+            summary
+        } else {
+            marker.tooltip(std::slice::from_ref(&summary))
         };
         v_flex()
             .size_full()
@@ -1294,6 +1325,10 @@ fn execute_workspace_navigation(
                 if !backend
                     .workspace_core_availability(&group, core)
                     .is_available()
+                    // The destination is about to SWITCH to Auto, so its viewing preset is that
+                    // constant, not the group's current (pre-transition) one (frozen contract
+                    // §10.4).
+                    || !backend.core_displayed(Some(WorkspaceMode::AutoTrading), core)
                 {
                     return None;
                 }

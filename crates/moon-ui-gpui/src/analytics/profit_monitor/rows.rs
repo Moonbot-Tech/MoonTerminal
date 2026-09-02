@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use moon_core::config::CoreGroup;
+use moon_core::config::{CoreGroup, WorkspaceMode};
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
@@ -71,6 +71,14 @@ pub(super) struct LiveContext {
     /// 5-second sample that a renamed core does — as a [`super::ContextChange::Regroup`], with no
     /// SQLite read behind it.
     pub(super) core_groups: Vec<CoreGroup>,
+    /// Preset this window displays under.
+    ///
+    /// The Profit Monitor is `DisplayOwner::Singleton`: it inherits the focused Auto workspace's
+    /// preset, `None` while no group is focused. Carried so [`crate::workspace::scope_marker`] can
+    /// build its facts from the same typed pair every other aggregate uses.
+    pub(super) preset: Option<WorkspaceMode>,
+    /// Configured cores before the membership filter ran.
+    pub(super) configured_total: usize,
 }
 
 /// One displayed row after the selected grouping axis has merged per-core data.

@@ -76,6 +76,8 @@ fn config_from_legacy_enc(plain: &[u8], uid_floor: Option<u64>) -> anyhow::Resul
             trade: None,
             // Left unset: the key this legacy entry carries seeds it on the next merge.
             transport: None,
+            // Left at the default: a legacy import predates this field entirely.
+            workspace_membership: servers::WorkspaceMembership::default(),
         })
         .collect();
     let mut config = AppConfig {
@@ -137,6 +139,8 @@ fn config_from_legacy_toml(text: &str, uid_floor: Option<u64>) -> anyhow::Result
             trade: None,
             // Left unset: the key this legacy entry carries seeds it on the next merge.
             transport: None,
+            // Left at the default: a legacy import predates this field entirely.
+            workspace_membership: servers::WorkspaceMembership::default(),
         }],
         groups: Vec::new(),
         language: super::Language::default(),

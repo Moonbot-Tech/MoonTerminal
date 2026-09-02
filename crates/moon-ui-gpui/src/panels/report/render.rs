@@ -457,13 +457,24 @@ impl Render for ReportPanel {
         // The row doubles as the selection bar: while rows are selected it carries their commands
         // and uses an accent tint to distinguish the active selection state.
         let selection_actions = self.selection_actions(p, cx);
+        let marker = self.scope_marker(self.backend.read(cx));
         let facts = totals::footer_facts(
             self.data.data().map(Arc::as_ref),
             matches!(self.data, LoadState::Failed(_)),
             &self.valuation_status,
             moon_core::util::now_unix_ms_i64(),
+            marker.as_ref(),
         );
-        let tip: SharedString = totals::footer_tooltip(&facts).into();
+        let base_tip = totals::footer_tooltip(&facts);
+        // The closing hint line lives in the tooltip only, never on the row itself — exactly as
+        // `panels/assets/balances.rs::summary_tooltip` appends its own hint.
+        let tip: SharedString = match &marker {
+            Some(marker) if marker.hides_anything() => {
+                marker.tooltip(std::slice::from_ref(&base_tip))
+            }
+            _ => base_tip,
+        }
+        .into();
         let body = design::t_body(cx);
         // Every fact is `flex_none`, which is load-bearing in the tail alone: earlier facts retain
         // their intrinsic widths while overflow clips the tail at its right edge.

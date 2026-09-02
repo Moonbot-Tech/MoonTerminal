@@ -56,12 +56,14 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
             .sessions()
             .iter()
             .filter(|s| s.group == group)
+            .filter(|s| b.core_displayed_in_group(group, s.id))
             .map(|s| s.id)
             .collect::<Vec<_>>()
     };
     let order = crate::core_order::CoreOrder::new(&b.config);
     let mut ids = match bucket {
         None | Some(ChartBucket::Shared) => group_cores(),
+        // Already the caller's own resolved bucket — not an enumeration, so it stays unfiltered.
         Some(ChartBucket::Core(id)) => vec![*id],
         Some(ChartBucket::Bundle(name)) => {
             let split = b.config.charts_split_by_core;
@@ -69,6 +71,7 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
                 .sessions()
                 .iter()
                 .filter(|s| s.group == group)
+                .filter(|s| b.core_displayed_in_group(group, s.id))
                 .filter(|s| {
                     b.config
                         .servers

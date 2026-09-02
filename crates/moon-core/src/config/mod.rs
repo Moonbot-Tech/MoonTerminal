@@ -94,7 +94,7 @@ pub use schema::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
-    StratSlot, TransportVersion, seeded_transport,
+    StratSlot, TransportVersion, WorkspaceMembership, seeded_transport,
 };
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
@@ -753,6 +753,7 @@ impl AppConfig {
                 manual_strategy: None,
                 trade: None,
                 transport: servers::transport_from_key(&key),
+                workspace_membership: WorkspaceMembership::default(),
             })
             .collect();
         let mut config = Self {
@@ -933,6 +934,9 @@ impl AppConfig {
         // per-core generation it selects join this neutralization for the same reason: they are
         // terminal-local choices about which numbers this terminal sends with an order, not facts
         // about the connection itself, so toggling either must never reconnect the core.
+        // `workspace_membership` joins them for the same reason and at higher stakes: it is a
+        // purely cosmetic display filter by definition (an excluded core still connects), so
+        // toggling it must never reconnect the entire fleet.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
@@ -943,6 +947,7 @@ impl AppConfig {
                 strat_slots: None,
                 manual_strategy: None,
                 trade: None,
+                workspace_membership: WorkspaceMembership::default(),
                 ..s.clone()
             })
             .collect();

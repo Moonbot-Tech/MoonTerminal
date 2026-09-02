@@ -603,7 +603,15 @@ fn core_selector(
     const SEL_H: f32 = 26.0;
 
     let b = backend.read(cx);
-    let cores = b.group_cores(group);
+    // Filtered here rather than at `Backend::group_cores`, whose other callers include the
+    // membership-authority functions themselves: dropping non-members here also keeps
+    // `raw_active_name` below from naming a hidden core, since it looks the active id up in this
+    // same filtered list.
+    let cores: Vec<(moon_core::session::CoreId, String)> = b
+        .group_cores(group)
+        .into_iter()
+        .filter(|(id, _)| b.core_displayed_in_group(group, *id))
+        .collect();
     let auto = b.workspace_mode(group) == WorkspaceMode::AutoTrading;
     let active = if auto {
         b.valid_auto_workspace_core(group)

@@ -67,6 +67,7 @@ use rust_i18n::t;
 use crate::controls::date_range::{self, Bound};
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
+use crate::workspace::scope_marker::ScopeMarker;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
@@ -801,6 +802,24 @@ impl ReportPanel {
             RetainedCoreScope::Explicit(&retained)
         };
         Some(b.effective_workspace_scope(&self.group, retained))
+    }
+
+    /// Build the totals row's scope marker.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts, or `None` for the
+    ///     Analytics-owned standalone report, which keeps its exact retained scope untouched.
+    pub(super) fn scope_marker(&self, b: &Backend) -> Option<ScopeMarker> {
+        let scope = self.workspace_scope(b)?;
+        let preset = b.display_preset(crate::workspace::DisplayOwner::Group(&self.group));
+        Some(ScopeMarker::new(
+            preset,
+            scope.membership_shown(),
+            scope.membership_total(),
+        ))
     }
 
     /// Return whether this host's display lens suppresses the redundant core-name column.

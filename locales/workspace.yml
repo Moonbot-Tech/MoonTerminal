@@ -5,6 +5,10 @@ workspace.mode.auto:
   ru: "Авто"
   en: "Auto"
   es: "Auto"
+workspace.mode.classic:
+  ru: "Классик"
+  en: "Classic"
+  es: "Clásico"
 workspace.mode.classic_tip:
   ru: "Обычное рабочее пространство с редактируемой раскладкой"
   en: "Standard workspace with an editable layout"
@@ -47,3 +51,18 @@ workspace.status.ready:
   ru: "Готово"
   en: "Ready"
   es: "Listo"
+# The scope marker every membership-filtered aggregate renders when the active preset hides at
+# least one configured core (`workspace::scope_marker::ScopeMarker`). Two facts, deliberately, so
+# the count survives when the preset name clips: "режим: авто · 12 из 20 ядер".
+workspace.scope.preset:
+  ru: "режим: %{mode}"
+  en: "mode: %{mode}"
+  es: "modo: %{mode}"
+workspace.scope.cores_n_of_m:
+  ru: "%{n} из %{total} ядер"
+  en: "%{n} of %{total} cores"
+  es: "%{n} de %{total} núcleos"
+workspace.scope.hint:
+  ru: "Часть ядер скрыта активным режимом рабочего пространства — переключите режим или проверьте видимость в Настройках → Подключения"
+  en: "Some cores are hidden by the active workspace preset — switch the preset or check visibility in Settings → Connections"
+  es: "Algunos núcleos están ocultos por el modo de espacio de trabajo activo — cambie el modo o revise la visibilidad en Ajustes → Conexiones"

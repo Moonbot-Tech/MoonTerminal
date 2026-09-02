@@ -89,6 +89,7 @@ impl AssetsView {
         }
         self.cached_total_value = sum;
         self.cached_value_excluded = excluded;
+        self.cached_scope_marker = self.scope_marker(b);
         self.cache_sig = Some(self.cache_key(sig));
     }
 

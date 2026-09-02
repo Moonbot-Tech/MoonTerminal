@@ -7,7 +7,7 @@ use gpui::*;
 use moon_ui::Root;
 
 use super::SettingsView;
-use moon_core::config::AppConfig;
+use moon_core::config::{AppConfig, ServerConfig, WorkspaceMembership};
 
 /// One core, projected to exactly what the window decision reads.
 ///
@@ -146,6 +146,25 @@ fn prune_orphaned_chart_specs(
     changed
 }
 
+/// Whether any core's workspace-preset membership changed between two saves.
+///
+/// Compared per stable `uid`, never positionally: the servers vector is reorderable, so an
+/// index-wise comparison would report a change whenever two rows merely swapped. A core absent
+/// from `before` (freshly added, and therefore already `struct_changed`) is not compared -- it
+/// has no prior value to differ from, and the caller only acts on this when `struct_changed` is
+/// false.
+fn membership_changed(before: &[ServerConfig], after: &[ServerConfig]) -> bool {
+    let before_by_uid: HashMap<u64, WorkspaceMembership> = before
+        .iter()
+        .map(|s| (s.uid, s.workspace_membership))
+        .collect();
+    after.iter().any(|s| {
+        before_by_uid
+            .get(&s.uid)
+            .is_some_and(|prior| *prior != s.workspace_membership)
+    })
+}
+
 /// Project a saved config down to the cores the window decision compares.
 fn cores_of(config: &AppConfig) -> Vec<CoreEntry> {
     config
@@ -253,6 +272,15 @@ impl SettingsView {
         let mode_changed = before.market_mode != after.market_mode;
         let split_changed = before.charts_split_by_core != after.charts_split_by_core;
         let delta = core_delta(&cores_of(before), &cores_of(&after));
+        // `structural_sig` is deliberately blind to `workspace_membership` (a cosmetic display
+        // toggle must not reconnect the fleet), so a membership-only save leaves `struct_changed`
+        // false and would otherwise change nothing on screen until a restart: every surface that
+        // filters by membership rebuilds from an observation of the workspace revision, which
+        // only the branches below publish. Checked independently of `struct_changed` so a save
+        // that changes ONLY membership still invalidates; gated on `!struct_changed` here only to
+        // avoid a second publish when the struct branch below already published one for the same
+        // save (a membership edit bundled with a structural one).
+        let membership_changed = membership_changed(&before.servers, &after.servers);
         let ui_theme_changed = before.ui_font_delta != after.ui_font_delta
             || before.ui_theme_mode != after.ui_theme_mode
             || before.ui_scale != after.ui_scale;
@@ -315,6 +343,17 @@ impl SettingsView {
             );
             // Both triggers of this branch rekey the buckets by definition.
             self.rebuild_group_windows(&delta, true, cx);
+        }
+
+        // A membership-only save reaches neither branch above (both require `struct_changed` or
+        // a bundle/split edit), so nothing else in this function would tell the membership-filtered
+        // surfaces to rebuild. Publish through the SAME publisher those branches already use —
+        // `struct_changed || delta.needs_window_rebuild(split_changed)` guards against a second
+        // publish when this save also triggered one of them.
+        if membership_changed && !struct_changed && !delta.needs_window_rebuild(split_changed) {
+            self.backend.update(cx, |b, bcx| {
+                b.publish_workspace_window_change(&[], bcx);
+            });
         }
     }
 

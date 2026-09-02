@@ -461,8 +461,18 @@ impl ReportPanel {
         // deleted cores with database-owned names.
         let (cores, live_cores, venues) = {
             let backend = self.backend.read(cx);
+            // Filtered on the DB rows before `from_db` ranks them, rather than after: this list is
+            // the retained Classic picker itself, so an offered-but-hidden row would let the user
+            // check a core the group window never shows. A core absent from `config.servers` (e.g.
+            // one deleted since it traded) is unaffected — `core_displayed_in_group` shows it.
+            let db_cores: Vec<(CoreId, String)> = self
+                .cores
+                .clone()
+                .into_iter()
+                .filter(|(id, _)| backend.core_displayed_in_group(&self.group, *id))
+                .collect();
             (
-                CoreOrder::new(&backend.config).from_db(self.cores.clone()),
+                CoreOrder::new(&backend.config).from_db(db_cores),
                 backend.group_cores(&self.group),
                 backend.session.core_venues(),
             )

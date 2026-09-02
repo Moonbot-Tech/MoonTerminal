@@ -47,6 +47,7 @@ use super::refresh::{
 use crate::controls::core_run::{RunSlots, run_scope_rev};
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
+use crate::workspace::scope_marker::ScopeMarker;
 use crate::{Backend, design};
 use format::{ColumnFloor, ProfitColumn};
 use model::{
@@ -437,6 +438,12 @@ impl ProfitMonitorView {
         .detach();
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _, cx| this.sync_context(cx))
+            .detach();
+        // A membership-only save advances `workspace_revision` without notifying `Backend`, so the
+        // sync_run_state observation above never fires for it; observe it directly so a hidden core
+        // and its money leave the table without waiting on the five-second context sampler.
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _, cx| this.sync_context(cx))
             .detach();
         broadcast::observe_core_filter(&backend, cx);
         let mut this = Self {
@@ -1078,6 +1085,20 @@ impl ProfitMonitorView {
                 // every core exactly once. A core saved into two groups appears in both sections
                 // on purpose; summing the sections instead would silently double its money here.
                 let total = fold_total(&rows);
+                // The Profit Monitor is `Singleton`: an Analytics surface that lists cores and folds
+                // them into money, so it inherits the focused Auto workspace's preset like every
+                // other aggregate. `self.live.preset` is `None`, and this marker stays empty, only
+                // while no group is focused; once one is, a hidden core's exclusion shows here same
+                // as it does on Assets and Core Status.
+                let scope_marker = ScopeMarker::new(
+                    self.live.preset,
+                    self.live.core_order.len(),
+                    self.live.configured_total,
+                );
+                let scope_marker_tooltip = scope_marker.hides_anything().then(|| {
+                    let facts = scope_marker.facts();
+                    scope_marker.tooltip(&facts)
+                });
                 let entries = if self.prefs.group_sections && self.group == GroupMode::Core {
                     let ungrouped = t!("profit_monitor.group.ungrouped").to_string();
                     sections::sectioned(
@@ -1112,6 +1133,7 @@ impl ProfitMonitorView {
                     &self.flash,
                     self.backend.read(cx).core_filter(),
                     &self.scroll,
+                    scope_marker_tooltip,
                     palette,
                     view,
                     self.backend.clone(),
@@ -1224,9 +1246,15 @@ fn window_width(window: &Window) -> f32 {
 ///     Context sufficient to regroup cached per-core aggregates.
 fn capture_live_context(backend: &Backend) -> LiveContext {
     let config = &backend.config;
+    // The Profit Monitor is an Analytics surface that lists cores and folds them into money, so
+    // it is `Singleton`: it inherits the focused Auto workspace's preset like Strategies, showing
+    // everything and marking nothing when no group is focused.
+    let preset = backend.display_preset(crate::workspace::DisplayOwner::Singleton);
+    let configured_total = config.servers.len();
     let core_names = config
         .servers
         .iter()
+        .filter(|server| backend.core_displayed(preset, server.id))
         .map(|server| (server.id, server.name.clone()))
         .collect();
     // The session's own admission rule, from `session::lifecycle`: a core inside a server group
@@ -1235,6 +1263,7 @@ fn capture_live_context(backend: &Backend) -> LiveContext {
     let active = config
         .servers
         .iter()
+        .filter(|server| backend.core_displayed(preset, server.id))
         // `group_ref`, not `group`: the latter clones a whole `GroupConfig` per server, and this
         // runs for every configured core on every five-second sample. An unlisted group defaults
         // to active (`GroupConfig::new`), which is what `is_none_or` states here.
@@ -1250,6 +1279,7 @@ fn capture_live_context(backend: &Backend) -> LiveContext {
     let mut core_order = config
         .servers
         .iter()
+        .filter(|server| backend.core_displayed(preset, server.id))
         .map(|server| server.id)
         .collect::<Vec<_>>();
     order.sort_by(&mut core_order, |core| *core);
@@ -1259,6 +1289,8 @@ fn capture_live_context(backend: &Backend) -> LiveContext {
         core_order,
         active,
         core_groups: config.core_groups.clone(),
+        preset,
+        configured_total,
     }
 }
 

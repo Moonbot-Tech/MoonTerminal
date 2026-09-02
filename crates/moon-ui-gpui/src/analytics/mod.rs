@@ -191,6 +191,10 @@ struct AnalyticsWorkspaceScope {
     selected_core: Option<u64>,
     /// Concrete live group cores that bound actions and pinned-filter reads.
     core_ids: Vec<u64>,
+    /// Cores that survived availability and membership together, for the summary's scope marker.
+    membership_shown: usize,
+    /// Cores that survived availability alone, before the membership filter ran.
+    membership_total: usize,
 }
 
 impl AnalyticsWorkspaceScope {
@@ -207,6 +211,20 @@ impl AnalyticsWorkspaceScope {
     ///     `true` only while the rail is on a concrete core.
     fn pins_core_filter(&self) -> bool {
         self.selected_core.is_some()
+    }
+
+    /// Build the summary's scope marker.
+    ///
+    /// Returns:
+    ///     A marker built from the membership boundary's own counts. The preset is always
+    ///     [`WorkspaceMode::AutoTrading`]: [`analytics_workspace_scope`] only produces `Some` while
+    ///     `Backend::singleton_workspace` has resolved a live Auto-focused group.
+    fn scope_marker(&self) -> crate::workspace::scope_marker::ScopeMarker {
+        crate::workspace::scope_marker::ScopeMarker::new(
+            Some(moon_core::config::WorkspaceMode::AutoTrading),
+            self.membership_shown,
+            self.membership_total,
+        )
     }
 }
 
@@ -229,6 +247,8 @@ fn analytics_workspace_scope(backend: &Backend) -> Option<AnalyticsWorkspaceScop
     Some(AnalyticsWorkspaceScope {
         selected_core: workspace.selected_core,
         core_ids: scope.ids().to_vec(),
+        membership_shown: scope.membership_shown(),
+        membership_total: scope.membership_total(),
     })
 }
 

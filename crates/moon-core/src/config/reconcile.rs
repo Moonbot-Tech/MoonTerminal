@@ -188,6 +188,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 manual_strategy: m.and_then(|m| m.manual_strategy.clone()),
                 trade: m.and_then(|m| m.trade.clone()),
                 transport,
+                workspace_membership: m.map(|m| m.workspace_membership).unwrap_or_default(),
             }
         })
         .collect();
@@ -302,6 +303,7 @@ pub fn split(
                 manual_strategy: s.manual_strategy.clone(),
                 trade: s.trade.clone(),
                 transport: s.transport,
+                workspace_membership: s.workspace_membership,
             })
             .collect(),
     };

@@ -94,7 +94,10 @@ impl Render for AssetsView {
         // per second through RenderGate, feed snapshots may publish after a one-second minimum;
         // without a visible view, the minimum interval rises to five seconds after domain events.
         moon_core::feed::note_assets_view_render();
-        let cores = self.scope_cores(self.backend.read(cx));
+        // The interactive picker must agree with the table, wallets and totals below it, all of
+        // which already route through membership; `scope_cores` stays unfiltered for the
+        // retained-selection callers that still need the full list.
+        let cores = self.displayed_scope_cores(self.backend.read(cx));
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
         let windowed = self.windowed;

@@ -275,6 +275,20 @@ impl WorkspaceCoreAvailability {
     }
 }
 
+/// Which preset a surface displays under, for the per-core membership predicate.
+///
+/// See `Backend::display_preset`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DisplayOwner<'a> {
+    /// A window that owns a group: Shell, group panels, detached panels (`DetachedSpec.group`),
+    /// chart tabs.
+    Group(&'a str),
+    /// A singleton tool that INHERITS the focused Auto workspace: Analytics, Strategies, Profit
+    /// Monitor. Global Assets (`AssetsScope::All`) and Settings need no variant of their own —
+    /// they never call `display_preset` at all, resolving their own unscoped views by other means.
+    Singleton,
+}
+
 /// A panel's retained Classic filter supplied without transferring ownership or mutating it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RetainedCoreScope<'a> {
@@ -315,9 +329,39 @@ pub(crate) enum EffectiveScopeLabel {
 pub(crate) struct EffectiveCoreScope {
     kind: EffectiveScopeKind,
     ids: Vec<CoreId>,
+    /// Cores that survived availability and would be shown under the CURRENT preset. Left at 0 by
+    /// [`resolve_group_scope`], which has no view of the membership boundary; set by
+    /// `Backend::effective_workspace_scope` via [`Self::with_membership_counts`].
+    membership_shown: usize,
+    /// Cores that survived availability BEFORE the membership filter ran.
+    membership_total: usize,
 }
 
 impl EffectiveCoreScope {
+    /// Attach the membership boundary's shown/total pair, computed by the caller before Classic or
+    /// Auto retained filtering narrows `ids` further.
+    ///
+    /// Args:
+    ///     shown: Cores that survived availability and membership together.
+    ///     total: Cores that survived availability alone, before the membership filter ran.
+    ///
+    /// Returns:
+    ///     The same scope carrying the membership pair a later marker needs.
+    pub(crate) fn with_membership_counts(mut self, shown: usize, total: usize) -> Self {
+        self.membership_shown = shown;
+        self.membership_total = total;
+        self
+    }
+
+    /// Return cores that survived availability and membership together.
+    pub(crate) fn membership_shown(&self) -> usize {
+        self.membership_shown
+    }
+
+    /// Return cores that survived availability alone, before the membership filter ran.
+    pub(crate) fn membership_total(&self) -> usize {
+        self.membership_total
+    }
     /// Return the canonical valid IDs in this scope.
     ///
     /// Returns:
@@ -402,11 +446,15 @@ pub(crate) fn resolve_group_scope(
             return EffectiveCoreScope {
                 kind: EffectiveScopeKind::AutoCore,
                 ids: vec![core],
+                membership_shown: 0,
+                membership_total: 0,
             };
         }
         return EffectiveCoreScope {
             kind: EffectiveScopeKind::AutoOverview,
             ids: valid,
+            membership_shown: 0,
+            membership_total: 0,
         };
     }
 
@@ -414,6 +462,8 @@ pub(crate) fn resolve_group_scope(
         RetainedCoreScope::All => EffectiveCoreScope {
             kind: EffectiveScopeKind::RetainedAll,
             ids: valid,
+            membership_shown: 0,
+            membership_total: 0,
         },
         RetainedCoreScope::Explicit(retained_ids) => EffectiveCoreScope {
             kind: EffectiveScopeKind::RetainedSelection,
@@ -421,6 +471,8 @@ pub(crate) fn resolve_group_scope(
                 .into_iter()
                 .filter(|core| retained_ids.contains(core))
                 .collect(),
+            membership_shown: 0,
+            membership_total: 0,
         },
     }
 }
@@ -587,6 +639,8 @@ pub(crate) struct WorkspaceRosterSection {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorkspaceRosterSummary {
     pub(crate) configured: usize,
+    /// Configured cores before the membership filter ran, for the rail's own scope marker.
+    pub(crate) configured_total: usize,
     pub(crate) ready: usize,
     pub(crate) problem: usize,
 }
@@ -602,9 +656,13 @@ pub(crate) struct WorkspaceRoster {
 /// Derive visible roster rows while retaining inactive and unavailable configured cores.
 ///
 /// Args:
-///     inputs: Configured cores in canonical member order.
+///     inputs: Configured cores in canonical member order, already scoped to the rail's own
+///         Auto-Trading membership filter.
 ///     current_group: Group window whose Overview row is rendered.
 ///     selected_core: Valid selected Auto core, or `None` for Overview.
+///     configured_total: Configured cores BEFORE the membership filter ran, supplied by the
+///         caller — this function stays a pure "render every input you were given" and never
+///         filters or recomputes the pre-membership count itself.
 ///
 /// Returns:
 ///     Exchange-grouped roster and application-wide configured/ready/problem counts. Unknown
@@ -613,9 +671,11 @@ pub(crate) fn derive_workspace_roster(
     inputs: &[WorkspaceRosterInput],
     current_group: &str,
     selected_core: Option<CoreId>,
+    configured_total: usize,
 ) -> WorkspaceRoster {
     let mut summary = WorkspaceRosterSummary {
         configured: inputs.len(),
+        configured_total,
         ..WorkspaceRosterSummary::default()
     };
     let exchange_sections = crate::core_order::exchange_sections(
@@ -794,6 +854,8 @@ pub(crate) fn is_auto_overview_scope(
 ) -> bool {
     mode == WorkspaceMode::AutoTrading && valid_selected_core.is_none()
 }
+
+pub(crate) mod scope_marker;
 
 #[cfg(test)]
 mod tests;

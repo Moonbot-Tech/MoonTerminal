@@ -13,7 +13,7 @@ use super::groups::{self, GroupConfig};
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
-use super::servers::{self, CoreSortMode, FeedFlags, TransportVersion};
+use super::servers::{self, CoreSortMode, FeedFlags, TransportVersion, WorkspaceMembership};
 use super::toml_io::ConfigLoad;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
@@ -261,6 +261,9 @@ pub struct ServerMeta {
     /// files and while no key has been read, in which case the key decides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<TransportVersion>,
+    /// This core's workspace-preset display membership; see `ServerConfig::workspace_membership`.
+    #[serde(default)]
+    pub workspace_membership: WorkspaceMembership,
 }
 
 #[derive(Default, Serialize, Deserialize)]

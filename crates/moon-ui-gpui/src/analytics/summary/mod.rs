@@ -141,6 +141,14 @@ impl AnalyticsView {
                         // the axis row below the chart is free for the date ticks.
                         let total: f64 = data.days.iter().map(|d| d.profit).sum();
                         let shown = data.core_days.len().min(cumulative::MAX_CORE_LINES);
+                        // Workspace scope marker: whether the active Auto preset itself hid a
+                        // core from this window's read, distinct from the line-cap fact above,
+                        // which only names how many of the (already scoped) cores got a curve.
+                        let marker = self
+                            .workspace_scope
+                            .as_ref()
+                            .map(super::AnalyticsWorkspaceScope::scope_marker);
+                        let marker_facts = marker.as_ref().map_or_else(Vec::new, |m| m.facts());
                         let head = h_flex()
                             .gap(design::ui_px(cx, 8.0))
                             .items_center()
@@ -157,6 +165,20 @@ impl AnalyticsView {
                                         )
                                         .to_string(),
                                     )
+                            }))
+                            .children((!marker_facts.is_empty()).then(|| {
+                                let text = marker_facts.join(" ");
+                                // Built from the SAME `Vec` the caption renders, per decision 1.
+                                let tip = marker
+                                    .as_ref()
+                                    .map(|m| m.tooltip(std::slice::from_ref(&text)))
+                                    .unwrap_or_default();
+                                div()
+                                    .id("an-summary-scope-marker")
+                                    .text_size(design::t_caption(cx))
+                                    .text_color(moon(p.text_muted))
+                                    .tooltip(crate::panels::common::text_tooltip(tip))
+                                    .child(text)
                             }))
                             .child(
                                 div()

@@ -663,29 +663,43 @@ impl Backend {
     ///
     /// A valid selected Auto workspace core takes precedence. Auto Overview and Classic then use
     /// the still-valid remembered header selection, followed by the visible chart target and the
-    /// group's first core. This keeps writes singular even while Overview shows all cores; display
-    /// surfaces must gate per-core figures with [`Self::is_auto_overview_scope`] before reading it.
+    /// group's first displayed core. Every branch consults workspace-preset membership, so a core
+    /// hidden by the current preset can never be armed even though it still connects and streams;
+    /// display surfaces must additionally gate per-core figures with
+    /// [`Self::is_auto_overview_scope`] before reading it.
     ///
     /// Args:
     ///     group: Window group whose command or core-settings control needs a concrete core.
     ///
     /// Returns:
-    ///     A live core belonging to the group, or `None` when the group has no live cores.
+    ///     A live, displayed core belonging to the group, or `None` when the group has no live
+    ///     core the current preset displays.
     pub(crate) fn active_trade_core(&self, group: &str) -> Option<CoreId> {
         if self.workspace_mode(group) == WorkspaceMode::AutoTrading
             && let Some(core) = self.valid_auto_workspace_core(group)
         {
             return Some(core);
         }
-        if let Some(&core) = self.layout.active_trade_core_by_group.get(group) {
-            if self.core_belongs_to_group(group, core) {
-                return Some(core);
-            }
+        if let Some(&core) = self.layout.active_trade_core_by_group.get(group)
+            && self.core_belongs_to_group(group, core)
+            && self.core_displayed_in_group(group, core)
+        {
+            return Some(core);
         }
         self.main_chart_target(group)
             .map(|(core, _)| core)
-            // Match the visible first core so the trade fallback and header selector agree.
-            .or_else(|| self.group_cores(group).first().map(|(id, _)| *id))
+            // A chart target is sticky and survives a settings save, so it needs the same
+            // membership gate as the remembered selection above: without it a core hidden from
+            // every surface would still be the one commands address.
+            .filter(|core| self.core_displayed_in_group(group, *core))
+            // Match the visible first core so the trade fallback and header selector agree; a
+            // hidden group leaves nothing to fall back to.
+            .or_else(|| {
+                self.group_cores(group)
+                    .iter()
+                    .find(|pair| self.core_displayed_in_group(group, pair.0))
+                    .map(|(id, _)| *id)
+            })
     }
 
     /// Set the group's active trading core in the shared durable Classic layout.
@@ -807,6 +821,63 @@ impl Backend {
         }
     }
 
+    /// The preset a surface displays UNDER — its own window's, never the core's group's.
+    ///
+    /// Membership is tested against the preset of the window DOING THE DISPLAYING, never against
+    /// the preset of the core's own group (the H3 rule).
+    ///
+    /// Args:
+    ///     owner: What kind of surface is asking — a group-owning window, or a singleton that
+    ///         inherits the focused Auto workspace.
+    ///
+    /// Returns:
+    ///     The resolved preset, or `None` when a singleton has no live focus — meaning show
+    ///     everything.
+    pub(crate) fn display_preset(
+        &self,
+        owner: crate::workspace::DisplayOwner<'_>,
+    ) -> Option<WorkspaceMode> {
+        match owner {
+            crate::workspace::DisplayOwner::Group(group) => Some(self.workspace_mode(group)),
+            crate::workspace::DisplayOwner::Singleton => {
+                let focus = self.workspace_focus.as_ref()?;
+                let group = focus.group();
+                let live = self.group_windows.contains_key(group)
+                    || self.opening_group_windows.contains(group);
+                live.then(|| self.workspace_mode(group))
+            }
+        }
+    }
+
+    /// Whether one configured core is displayed under a resolved preset.
+    ///
+    /// Args:
+    ///     preset: Resolved viewing preset, or `None` for unscoped (show everything).
+    ///     core: Core to test.
+    ///
+    /// Returns:
+    ///     `true` when `preset` is `None`, when the core is absent from `self.config.servers` (an
+    ///     unconfigured core cannot be hidden by a setting it does not have), or when its
+    ///     `workspace_membership` displays in `preset`.
+    pub(crate) fn core_displayed(&self, preset: Option<WorkspaceMode>, core: CoreId) -> bool {
+        let Some(preset) = preset else {
+            return true;
+        };
+        self.config
+            .servers
+            .iter()
+            .find(|server| server.id == core)
+            .is_none_or(|server| server.workspace_membership.displays_in(preset))
+    }
+
+    /// Convenience for group-owning callers: `display_preset(Group(group))` + `core_displayed`.
+    pub(crate) fn core_displayed_in_group(&self, group: &str, core: CoreId) -> bool {
+        self.core_displayed(
+            self.display_preset(crate::workspace::DisplayOwner::Group(group)),
+            core,
+        )
+    }
+
     /// Return a saved Auto core only while it remains a live member of the owning group.
     ///
     /// Args:
@@ -823,6 +894,7 @@ impl Backend {
                 self.workspace_core_availability(group, *core)
                     .is_available()
             })
+            .filter(|core| self.core_displayed_in_group(group, *core))
     }
 
     /// Return whether the group's visible scope names NO single core — the Auto Overview state.
@@ -857,7 +929,7 @@ impl Backend {
         group: &str,
         retained: crate::workspace::RetainedCoreScope<'_>,
     ) -> crate::workspace::EffectiveCoreScope {
-        let cores: Vec<CoreId> = self
+        let available: Vec<CoreId> = self
             .group_cores(group)
             .into_iter()
             .map(|(core, _)| core)
@@ -866,12 +938,19 @@ impl Backend {
                     .is_available()
             })
             .collect();
+        let membership_total = available.len();
+        let cores: Vec<CoreId> = available
+            .into_iter()
+            .filter(|core| self.core_displayed_in_group(group, *core))
+            .collect();
+        let membership_shown = cores.len();
         crate::workspace::resolve_group_scope(
             self.workspace_mode(group),
             self.valid_auto_workspace_core(group),
             &cores,
             retained,
         )
+        .with_membership_counts(membership_shown, membership_total)
     }
 
     /// Authorize a delayed core-specific action against the current Auto workspace.
@@ -889,6 +968,7 @@ impl Backend {
             return true;
         };
         self.core_belongs_to_group(group, core)
+            && self.core_displayed_in_group(group, core)
             && (self.workspace_mode(group) != WorkspaceMode::AutoTrading
                 || self
                     .effective_workspace_scope(group, crate::workspace::RetainedCoreScope::All)
@@ -1075,6 +1155,7 @@ impl Backend {
                 self.workspace_core_availability(group, *core)
                     .is_available()
             })
+            .filter(|core| self.core_displayed_in_group(group, *core))
             .collect::<Vec<_>>();
         crate::workspace::resolve_singleton_workspace(
             group,

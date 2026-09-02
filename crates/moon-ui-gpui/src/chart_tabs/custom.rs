@@ -344,6 +344,7 @@ impl ChartTabs {
                 .sessions()
                 .iter()
                 .filter(|s| s.group == self.group)
+                .filter(|s| b.core_displayed_in_group(&self.group, s.id))
             {
                 if s.id == core {
                     continue;
