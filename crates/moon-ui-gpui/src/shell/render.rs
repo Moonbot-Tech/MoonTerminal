@@ -225,9 +225,38 @@ impl Render for Shell {
         let (row_limits, toolbar_quote) = self.limits_for(row_target.as_ref(), cx);
         let toolbar_max_order = controls::MaxOrderReadout::of(row_limits);
 
+        // Auto Overview draws NO per-core header cluster at all — no gear, no manual-strategy
+        // switch — so the popups those elements own lose the only thing that could close them:
+        // their own `on_open_change`. Left alone the core-settings gear and the quick-select
+        // settings gear would spring back open over whichever core is selected NEXT, and a stale
+        // slot menu would reappear over its original button.
+        //
+        // Removing the ELEMENT is also why the blur below is not optional. A controlled
+        // `MoonPopover` runs its open→closed focus hand-back from its OWN render
+        // (MoonUI `popover.rs::sync_open_focus`, reached only through `MoonPopover::render`), so a
+        // popover that stops being rendered in the same frame its flag clears never hands focus
+        // back at all. Focus then sits on a handle nothing draws, the window's dispatch path goes
+        // empty, and EVERY hotkey is dead until the user clicks something else — the exact failure
+        // MoonUI documents at that function. Neither gear dismisses on an outside click, so the
+        // rail click that enters Overview really can leave focus inside one. Blurring hands focus
+        // back to the window root, which is what MoonUI's own close path does in this case.
+        let overview = self.backend.read(cx).is_auto_overview_scope(&self.group);
+        let overview_strands_focus = overview
+            && (self.core_settings_open || self.strat_slots_open || self.strat_slot_menu.is_some());
+        if overview && (self.strat_slots_open || self.strat_slot_menu.is_some()) {
+            // Closing the popup drops the slot menu with it — the same coupling a click-away
+            // already relies on.
+            self.set_strat_slots_open(false);
+        }
+
         // Drop the gear popup before building its content if the core it was seeded from is no
-        // longer the active one — its editors hold that core's values, not this one's.
+        // longer the active one — its editors hold that core's values, not this one's. In Overview
+        // it closes outright, on the predicate above.
         self.reconcile_core_settings_popup(cx);
+
+        if overview_strands_focus {
+            window.blur();
+        }
 
         // Build core-settings content only while the Shell-controlled `MoonPopover` is open; the
         // popover itself anchors the content to its button.

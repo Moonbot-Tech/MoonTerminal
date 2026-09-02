@@ -67,16 +67,23 @@ pub fn header(
     //
     // The scope check comes FIRST and is not a privacy nicety: `active_trade_core` falls through
     // to the group's first core in the Auto workspace Overview, so without it this row prints ONE
-    // arbitrary server's money directly beside a pill that reads "the whole group". The figure is
-    // HIDDEN rather than summed — the Assets panel owns the real cross-core total, on a surface
-    // that says so, and a double-click on this dash still opens it.
+    // arbitrary server's money directly beside a pill that reads "the whole group".
+    //
+    // `overview` is resolved ONCE here and threaded to every per-core element of this row —
+    // the balance figure, the manual-strategy cluster and the core-settings gear — because all
+    // three describe ONE account and mean nothing for the whole group. In Overview the row drops
+    // them outright, separators included, rather than drawing a dash and a switch that address a
+    // server the pill beside them does not name; the Assets panel owns the real cross-core total,
+    // on a surface that says so, and stays reachable through its dock tab. Re-reading the backend
+    // per element would let the three drift apart.
     //
     // The emulator/real tag shares this same `scoped_core`: fetching `emu_mode` through a
     // helper that calls `active_trade_core` first would read that arbitrary core even when the
     // helper then discards it.
-    let (balance, trade_emu) = {
+    let (overview, balance, trade_emu) = {
         let b = backend.read(cx);
-        let scoped_core = if b.is_auto_overview_scope(group) {
+        let overview = b.is_auto_overview_scope(group);
+        let scoped_core = if overview {
             None
         } else {
             b.active_trade_core(group)
@@ -94,20 +101,29 @@ pub fn header(
         let trade_emu = core
             .and_then(|cd| cd.client_settings.as_ref())
             .map(|cs| cs.emu_mode);
-        (balance, trade_emu)
+        (overview, balance, trade_emu)
     };
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
-    let manual = crate::controls::manual_strategy_controls(
-        group,
-        &backend,
-        &shell,
-        strat_slot_menu,
-        strat_slots_open,
-        chrome_width,
-        p,
-        cx,
-    );
+    //
+    // Overview is gated HERE rather than inside the control, so the function keeps its one meaning
+    // — "this core's manual strategies" — and every caller decides for itself whether it has a
+    // core to speak for. It cannot answer `None` on its own: it resolves through
+    // `Backend::active_trade_core`, whose Overview fallback returns the group's FIRST core.
+    let manual = (!overview)
+        .then(|| {
+            crate::controls::manual_strategy_controls(
+                group,
+                &backend,
+                &shell,
+                strat_slot_menu,
+                strat_slots_open,
+                chrome_width,
+                p,
+                cx,
+            )
+        })
+        .flatten();
     let update_state = updater.read(cx).state();
     h_flex()
         .w_full()
@@ -153,7 +169,12 @@ pub fn header(
                     cx,
                 ))
                 .children(header_trade_mode_tag(trade_emu))
-                .child({
+                // The gear edits ONE core's `CoreConfig`, so it goes with the rest of the
+                // per-core cluster in Overview. `Shell::reconcile_core_settings_popup` closes an
+                // already-open popup on the same predicate: without that, the state would stay
+                // open behind a button that is no longer drawn and the popup would reappear the
+                // moment a core is selected again.
+                .children((!overview).then(|| {
                     let shell = shell.clone();
                     header_gear_popover(
                         "core-gear",
@@ -180,16 +201,21 @@ pub fn header(
                     // gear itself are the dismissal paths, and this popup has all three.
                     .close_on_content_click(false)
                     .overlay_closable(false)
-                }),
+                })),
         )
-        .child(design::chrome_divider(cx, p))
-        .child(balance_label(
-            group.to_string(),
-            backend.clone(),
-            balance,
-            p,
-            cx,
-        ))
+        // The figure names ONE account, so the divider is gated with it rather than separately —
+        // hiding the label alone would leave a rule fencing off nothing, the same coupling the
+        // manual cluster below already makes.
+        .when(!overview, |row| {
+            row.child(design::chrome_divider(cx, p))
+                .child(balance_label(
+                    group.to_string(),
+                    backend.clone(),
+                    balance,
+                    p,
+                    cx,
+                ))
+        })
         // Shrinkable: the strategy summary inside truncates, so a long one yields space to the
         // right-hand readouts instead of pushing them off the window.
         .children(manual.map(|ms| {

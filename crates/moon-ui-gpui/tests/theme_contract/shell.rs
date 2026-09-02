@@ -179,7 +179,9 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
 
 /// `terminal_chrome.rs::header` and `controls/toolbar.rs::toolbar` must keep their Overview gates
 /// around `active_trade_core`: restoring a raw read would present one arbitrary server's balance
-/// or leverage as the Auto Overview group's figure.
+/// or leverage as the Auto Overview group's figure. Collapsing `header`'s
+/// `let manual = (!overview).then(...)` gate would also restore the manual-strategy toggle and
+/// quick-select buttons for an arbitrary core, where a left click can fire that core's strategy.
 #[test]
 fn overview_chrome_and_toolbar_do_not_read_an_arbitrary_trade_core() {
     let header = code_only(braced_body(
@@ -187,10 +189,17 @@ fn overview_chrome_and_toolbar_do_not_read_an_arbitrary_trade_core() {
         "pub fn header(",
     ));
     assert!(
-        header.contains(
-            "let scoped_core = if b.is_auto_overview_scope(group) {\n            None\n        } else {\n            b.active_trade_core(group)\n        };"
-        ),
+        header.contains("let overview = b.is_auto_overview_scope(group);")
+            && header.contains(
+                "let scoped_core = if overview {\n            None\n        } else {\n            b.active_trade_core(group)\n        };"
+            ),
         "header balance must use no core in Auto Overview before reading active_trade_core"
+    );
+    assert!(
+        header.contains(
+            "let manual = (!overview)\n        .then(|| {\n            crate::controls::manual_strategy_controls("
+        ),
+        "header must gate manual-strategy controls on Overview before active_trade_core can select an arbitrary core"
     );
 
     let toolbar = code_only(braced_body(
