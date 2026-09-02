@@ -93,15 +93,14 @@ pub(super) fn centered_alert(title: String, detail: String, cx: &App) -> AnyElem
 /// Args:
 ///     totals: Per-quote safe totals.
 ///     show_trades: Whether the current width retains the aggregate trade count.
-///     scope_marker: This surface's marker, built from the same live context the query used. This
-///         arm carried no marker at all before §4.3 — its totals are scoped exactly like the table's
-///         now, and it needs one just as much.
+///     scope_marker: This surface's marker, built from the same live context the query used. It
+///         reaches the viewer through the quote chips' HOVER only — see the note at the chips.
 ///     palette: Active MoonUI palette.
 ///     cx: Render context.
 ///
 /// Returns:
-///     Explanation and quote chips, with the aggregate trade count when space permits and a soft
-///     scope caption when the active preset hides at least one configured core.
+///     Explanation and quote chips, with the aggregate trade count when space permits. The chips
+///     carry the scope hint as a tooltip when the active preset hides at least one configured core.
 pub(super) fn split_body(
     totals: &moon_core::db::QuoteBreakdown,
     show_trades: bool,
@@ -110,6 +109,7 @@ pub(super) fn split_body(
     cx: &App,
 ) -> AnyElement {
     let mut chips = h_flex()
+        .id("pm-split-money")
         .flex_wrap()
         .justify_center()
         .gap(design::ui_px(cx, 6.0));
@@ -129,6 +129,15 @@ pub(super) fn split_body(
                 .child(amount),
         );
     }
+    // The scope reaches the viewer by HOVER, never as a caption. This window is ~612px wide in
+    // normal use and the marker's two facts clipped mid-word ("0 и…"), which reads as a rendering
+    // fault rather than as a scope — worse than saying nothing. The money is the right hover
+    // target: the question a scoped figure raises is asked while looking at the figure.
+    let chips = chips.when(scope_marker.hides_anything(), |row| {
+        row.tooltip(crate::panels::common::text_tooltip(
+            scope_marker.tooltip(&scope_marker.facts()),
+        ))
+    });
     v_flex()
         .flex_1()
         .w_full()
@@ -154,21 +163,6 @@ pub(super) fn split_body(
                 div()
                     .text_color(moon(palette.text_soft))
                     .child(t!("profit_monitor.trades_total", n = totals.orders).to_string()),
-            )
-        })
-        .when(scope_marker.hides_anything(), |body| {
-            // The same facts the Ready footer states, AND the same recovery hint: the marker's
-            // contract is that a surface which states its scope also says how to widen it, and a
-            // Split body states scoped money exactly as a Ready one does.
-            let facts = scope_marker.facts();
-            body.child(
-                div()
-                    .id("pm-split-scope-marker")
-                    .text_color(moon(palette.text_soft))
-                    .child(facts.join(" "))
-                    .tooltip(crate::panels::common::text_tooltip(
-                        scope_marker.tooltip(&facts),
-                    )),
             )
         })
         .into_any_element()
@@ -370,8 +364,9 @@ pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColu
 ///     selection: Cores currently broadcast to the main window; empty means no filter.
 ///     scroll: Retained vertical-list position.
 ///     scope_marker: This surface's marker, built from the same live context the scoped query used.
-///         Its facts are spliced into the grand-total footer's own label as visible text, and the
-///         same facts back the footer's tooltip — a tooltip alone is not a scope statement.
+///         Its facts reach the viewer through the grand-total footer's HOVER only, not as a
+///         caption — see the note at `scope_facts` for why this surface differs from the Report's
+///         and Assets' footers, which do state their scope in the row.
 ///     action_cores: Cores the header's own FLEET run cell may command, independent of the active
 ///         preset's display narrowing — see `LiveContext::action_core_ids`. Never the union of the
 ///         (possibly display-scoped) per-row `run_scopes` below, or a hidden core's row taking its
@@ -661,19 +656,14 @@ pub(super) fn table(
     .radius(0.0);
     let (total_profit, total_profit_sign) =
         format_profit(total.profit, total.last_profit, unit, form);
-    // Visible statement, not only a tooltip: a hidden marker never told anyone their money was
-    // scoped. Clips LAST, after the money, by riding the footer's own existing name cell — the
-    // same tail order the Report's footer already uses for its own facts.
+    // TOOLTIP ONLY, deliberately, and this surface is the exception among the filtering
+    // aggregates. The facts used to ride this label as a clipping tail, which is the right pattern
+    // for the Report's and Assets' full-width footers; here the window is ~612px and the name cell
+    // is one of six, so the tail never had room and always clipped mid-word ("Общий итог · режим:
+    // Классик · 0 и…"). A caption that cannot finish its own sentence states nothing and reads as
+    // a bug. The footer row below carries the same facts plus the recovery hint on hover.
     let scope_facts = scope_marker.facts();
-    let grand_total_label = if scope_facts.is_empty() {
-        t!("profit_monitor.grand_total").to_string()
-    } else {
-        format!(
-            "{} {}",
-            t!("profit_monitor.grand_total"),
-            scope_facts.join(" ")
-        )
-    };
+    let grand_total_label = t!("profit_monitor.grand_total").to_string();
     let footer = table_row(
         grand_total_label,
         total_profit,
