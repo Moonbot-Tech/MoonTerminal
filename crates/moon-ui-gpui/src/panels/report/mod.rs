@@ -721,6 +721,12 @@ pub struct ReportPanel {
     natural_widths: NaturalWidthsCache,
     /// Whether the panel is detached; docked tabs omit manual date fields for a compact filter row.
     detached: bool,
+    /// Whether the filter row's two selectors currently render compact, and what undoes that.
+    ///
+    /// Resolved from the row's own measured size rather than from the window's width: this panel
+    /// lives in a dock, where a narrow tab in a wide window is exactly the case a window-width
+    /// ladder gets wrong. Written only by the row probe in `render`.
+    wrap_fit: crate::controls::wrap_fit::WrapFit,
     /// Whether this panel owns the dedicated standalone Report tool window and its title bar.
     standalone: bool,
     // `table_state()` exposes the retained state to the detached window's automatic-width button.

@@ -1115,7 +1115,7 @@ pub fn toolbar(
                 .child(open_window_button(
                     "toolbar-strategies",
                     strategies_label,
-                    "icons/bot.svg",
+                    super::STRATEGIES_ICON,
                     fit.strategies_width,
                     Some(group.to_string()),
                     backend.clone(),

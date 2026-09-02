@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use moon_core::venue::CoreVenue;
 
 use super::{
-    CoreAllRowMode, core_menu_sections, core_selection_is_all, selection_summary,
+    CoreAllRowMode, core_menu_sections, core_selection_is_all, core_selection_summary,
     toggle_exchange_cores,
 };
 use crate::controls::venue_label;
@@ -51,7 +51,7 @@ fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
     );
 }
 
-/// `core_combo.rs:selection_summary` must format a one-core partial selection as a count. Restoring
+/// `core_combo.rs:core_selection_summary` must format a one-core partial selection as a count. Restoring
 /// the old sole-name branch exposes arbitrary server text instead of the compact summary promised
 /// by the shared selector.
 #[test]
@@ -63,7 +63,7 @@ fn one_selected_core_uses_the_compact_count_summary() {
     ];
     let selected = HashSet::from([1]);
 
-    let (summary, all_on) = selection_summary(
+    let summary = core_selection_summary(
         &cores,
         &selected,
         CoreAllRowMode::ImplicitOrComplete,
@@ -71,11 +71,12 @@ fn one_selected_core_uses_the_compact_count_summary() {
         &|n| format!("Cores: {n}"),
     );
 
-    assert_eq!(summary, "Cores: 1");
-    assert!(!all_on);
+    assert_eq!(summary.label, "Cores: 1");
+    assert!(!summary.all_on);
+    assert_eq!(summary.selected, 1);
 }
 
-/// `core_combo.rs:selection_summary` must preserve empty/full All semantics and reject a stale
+/// `core_combo.rs:core_selection_summary` must preserve empty/full All semantics and reject a stale
 /// equal-cardinality selection. Replacing membership counting with `selected.len() == cores.len()`
 /// makes missing current cores appear selected and labels an empty result as All.
 #[test]
@@ -83,13 +84,14 @@ fn all_summary_requires_every_available_core() {
     let cores = vec![(1, "First".to_string()), (2, "Second".to_string())];
 
     let summary = |selected: HashSet<u64>| {
-        selection_summary(
+        let out = core_selection_summary(
             &cores,
             &selected,
             CoreAllRowMode::ImplicitOrComplete,
             "All cores",
             &|n| format!("Cores: {n}"),
-        )
+        );
+        (out.label, out.all_on)
     };
     let empty = summary(HashSet::new());
     let full = summary(HashSet::from([1, 2]));
@@ -105,21 +107,23 @@ fn all_summary_requires_every_available_core() {
 /// `CoreAllRowMode::ImplicitOnly` must not check All for a complete explicit selection.
 ///
 /// Plausible edit this catches: routing `ImplicitOnly` through `core_selection_is_all` in
-/// `core_combo.rs:selection_summary`. On a one-core Analytics installation, clicking that core
+/// `core_combo.rs:core_selection_summary`. On a one-core Analytics installation, clicking that core
 /// would leave both its row and All checked.
 #[test]
 fn implicit_only_mode_keeps_a_complete_explicit_selection_out_of_all() {
     let cores = vec![(1, "Only core".to_string())];
     let selected = HashSet::from([1]);
 
+    let summary = core_selection_summary(
+        &cores,
+        &selected,
+        CoreAllRowMode::ImplicitOnly,
+        "All cores",
+        &|n| format!("Cores: {n}"),
+    );
+
     assert_eq!(
-        selection_summary(
-            &cores,
-            &selected,
-            CoreAllRowMode::ImplicitOnly,
-            "All cores",
-            &|n| format!("Cores: {n}"),
-        ),
+        (summary.label, summary.all_on),
         ("Cores: 1".to_string(), false)
     );
 }

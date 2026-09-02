@@ -130,6 +130,24 @@ pub fn glyph_btn_w(cx: &App) -> f32 {
     fit_h_value(cx, 26.0, 14.0, 6.0)
 }
 
+/// Rendered size of an Action-sized button's leading glyph.
+///
+/// MIRRORS MoonUI, like [`glyph_btn_w`]: `button_leading_icon_reservation` clamps the icon from the
+/// Action preset's own font metrics, `(font(10.5) + 1).clamp(10, 14)`. `MoonButton` and
+/// `MoonDropdown` apply it themselves; this exists for the callers that draw their own trigger
+/// content and must leave the component's room for it. The upstream helper is private, so nothing
+/// checks this automatically — if MoonUI's Action icon metrics move, this must follow.
+pub fn action_icon_px(cx: &App) -> f32 {
+    (font_value(cx, ACTION_LABEL_BASE) + 1.0).clamp(10.0, 14.0)
+}
+
+/// Rendered width an Action-sized leading glyph takes, including the gap after it.
+///
+/// The gap is MoonUI's own `ui(6)` for this size; see [`action_icon_px`] for the mirror's terms.
+pub fn action_icon_reservation(cx: &App) -> f32 {
+    action_icon_px(cx) + ui_value(cx, 6.0)
+}
+
 /// Ceiling for a header selector label (core, manual strategy).
 ///
 /// Those pills size to their content and both names are arbitrary user text, so without a ceiling

@@ -28,6 +28,7 @@
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
 //! - [`strips`] provides size and sell preset strips with native MoonUI interaction;
 //! - [`scale`] provides price-scale dropdowns for tabs, AddToChart stacks, and trade windows;
+//! - [`wrap_fit`] lets a wrapping panel row shrink its selectors before it takes a second line;
 //! - [`date_range`] provides the shared from/to date+time bounds of Report and Analytics;
 //! - [`toolbar`] composes the toolbar row.
 
@@ -50,11 +51,13 @@ mod scale;
 mod strips;
 pub(crate) mod toolbar;
 mod venue_label;
+pub(crate) mod wrap_fit;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
 pub(crate) use core_combo::{
-    CoreAllRowMode, core_combo, core_menu_sections, toggle_exchange_cores,
+    CoreAllRowMode, compact_core_trigger, core_combo, core_menu_sections, core_selection_summary,
+    toggle_exchange_cores,
 };
 pub(crate) use core_groups::group_is_applied;
 pub(crate) use core_host::{CoreComboHost, core_combo_extras};
@@ -72,6 +75,12 @@ pub(crate) use scale::{
 };
 pub use toolbar::toolbar;
 pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};
+
+/// The glyph that stands for "strategies" wherever a control sheds that word.
+///
+/// One asset path, because the identity is the point: the toolbar launcher and any selector that
+/// compacts to an icon must show the SAME glyph, or they read as two different things.
+pub(crate) const STRATEGIES_ICON: &str = "icons/bot.svg";
 
 /// Unscaled width of the shared core-selector trigger.
 ///
