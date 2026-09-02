@@ -7,10 +7,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
-    MoonSelectorSegment, MoonTag, MoonToggle, MoonToggleLabelSide, MoonToggleSize, MoonWindowFrame,
-    MoonWindowFrameBrand, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect,
+    MoonSelectorPill, MoonSelectorSegment, MoonTag, MoonWindowFrame, MoonWindowFrameBrand, h_flex,
 };
 use rust_i18n::t;
 
@@ -373,7 +372,20 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
     )
 }
 
-/// Build the persisted workspace-mode control as a compact Auto toggle.
+/// Build the persisted workspace-mode control as a compact two-item dropdown.
+///
+/// AUTO and MANUAL are two full modes rather than the two positions of one switch, so the header
+/// NAMES the current mode and lists both instead of showing a single labeled toggle: a toggle
+/// leaves the mode it is not showing unnamed, which is exactly the fact a user picking between two
+/// workspaces needs. Only the naming moved — `WorkspaceMode` and everything persisted under it are
+/// unchanged, and selection still writes through the same `Backend::set_workspace_mode` authority.
+///
+/// `MoonDropdown` rather than the `MoonSelectorPill` + `MoonPopover` pair the core selector uses
+/// below: that pattern parks its open state on `Shell`, which a two-item picker does not earn.
+/// The trigger is `Action`-sized like the header gear at :167 and takes a FIXED
+/// [`MODE_TRIGGER_W`] rather than a fitted range, so the two labels render at one width and the
+/// control cannot twitch as the mode changes — `fit_trigger_width` would clamp each label's own
+/// natural width into the range and give the two modes different widths.
 ///
 /// Args:
 ///     group: Group whose preset is selected.
@@ -381,36 +393,66 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
 ///     cx: Application context used to read the controlled mode.
 ///
 /// Returns:
-///     A compact MoonUI toggle that publishes mode changes through `WorkspaceRevision`.
+///     A compact MoonUI dropdown that publishes mode changes through `WorkspaceRevision`.
 fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> impl IntoElement {
+    /// Design-unit trigger width, FIXED rather than fitted: it holds the longer of the two item
+    /// labels in every locale plus the component's own caret suffix and padding, at the narrowest
+    /// supported UI font, so neither mode truncates and neither is narrower than the other.
+    const MODE_TRIGGER_W: f32 = 116.0;
+    /// Design-unit popup width: both rows plus their check column, at the trigger's own scale.
+    const MODE_MENU_W: f32 = 150.0;
+
     let mode = backend.read(cx).workspace_mode(group);
     let auto = mode == WorkspaceMode::AutoTrading;
-    let tooltip = if auto {
-        t!("workspace.mode.auto_tip").to_string()
+    let auto_label = t!("workspace.mode.auto_item").to_string();
+    let manual_label = t!("workspace.mode.classic_item").to_string();
+    let (label, tooltip) = if auto {
+        (
+            auto_label.clone(),
+            t!("workspace.mode.auto_tip").to_string(),
+        )
     } else {
-        t!("workspace.mode.classic_tip").to_string()
+        (
+            manual_label.clone(),
+            t!("workspace.mode.classic_tip").to_string(),
+        )
     };
     let backend = backend.clone();
     let group = group.to_string();
+    let items = crate::panels::radio_items(
+        [
+            (
+                WorkspaceMode::AutoTrading,
+                "header-workspace-mode-auto".into(),
+                auto_label.into(),
+            ),
+            (
+                WorkspaceMode::Classic,
+                "header-workspace-mode-manual".into(),
+                manual_label.into(),
+            ),
+        ],
+        mode,
+        crate::panels::RadioMark::Check,
+        move |app, mode| {
+            backend.update(app, |backend, backend_cx| {
+                backend.set_workspace_mode(&group, mode, backend_cx);
+            });
+        },
+    );
     div()
         .id("header-workspace-mode-tip")
         .tooltip(crate::panels::common::text_tooltip(tooltip))
         .child(
-            MoonToggle::new("header-workspace-mode")
-                .label(t!("workspace.mode.auto").to_string())
-                .label_side(MoonToggleLabelSide::Left)
-                .checked(auto)
-                .size(MoonToggleSize::Compact)
-                .on_change(move |checked, _, cx| {
-                    let mode = if *checked {
-                        WorkspaceMode::AutoTrading
-                    } else {
-                        WorkspaceMode::Classic
-                    };
-                    backend.update(cx, |backend, backend_cx| {
-                        backend.set_workspace_mode(&group, mode, backend_cx);
-                    });
-                }),
+            MoonDropdown::new("header-workspace-mode")
+                .label(label)
+                .trigger_caret(true)
+                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_size(MoonButtonSize::Action)
+                .trigger_width_scaled(MODE_TRIGGER_W)
+                .menu_width_scaled(MODE_MENU_W)
+                .menu_size(MoonMenuSize::Compact)
+                .items(items),
         )
 }
 

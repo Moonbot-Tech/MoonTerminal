@@ -1,4 +1,4 @@
-"""Generate the Classic and AutoTrading window replicas from the content model.
+"""Generate the MANUAL and AUTO window replicas from the content model.
 
 The template holds page chrome, CSS and behavioural JavaScript. This module is
 the only place that turns ``modes.yml`` / ``layouts.yml`` / ``zones.yml`` into
@@ -154,10 +154,7 @@ def render_header(mode_id: str, zones: dict[str, dict], problems: Problems) -> s
     n = lambda zid: _n(zones, zid, problems)
     auto = mode_id == "auto"
     if auto:
-        ws_inner = (
-            '<span data-i18n="ui.ws">Авто</span>'
-            '<span class="sw on" aria-hidden="true"></span>'
-        )
+        ws_inner = '<span data-i18n="ui.ws.auto">AUTO режим</span><span class="caret">▾</span>'
         core_inner = (
             '<span class="dot accent"></span>'
             '<span data-i18n="ui.overview">Полная сводка</span>'
@@ -166,7 +163,7 @@ def render_header(mode_id: str, zones: dict[str, dict], problems: Problems) -> s
         core_class = "pill is-pinned"
         balance = ""
     else:
-        ws_inner = '<span data-i18n="ui.ws">Авто</span><span class="caret">▾</span>'
+        ws_inner = '<span data-i18n="ui.ws.manual">MANUAL режим</span><span class="caret">▾</span>'
         core_inner = (
             '<span class="dot"></span><span class="mono">BinF1</span>'
             '<span class="caret">▾</span><span style="opacity:.5">⚙</span>'

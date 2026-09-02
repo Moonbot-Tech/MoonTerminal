@@ -30,12 +30,17 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tour import emit, knowledge, map as map_mod, paths, render as render_mod  # noqa: E402
-from tour.__main__ import main as tour_main  # noqa: E402
-from tour.content import Language, load as load_content  # noqa: E402
-from tour.errors import ContentError, Problems, TourError  # noqa: E402
-from tour.locales import load as load_locales  # noqa: E402
-from tour.theme import load as load_theme, resolve as resolve_theme  # noqa: E402
+from tour import emit, knowledge, paths
+from tour import map as map_mod
+from tour import render as render_mod
+from tour.__main__ import main as tour_main
+from tour.content import Language
+from tour.content import load as load_content
+from tour.errors import ContentError, Problems, TourError
+from tour.locales import load as load_locales
+from tour.theme import load as load_theme
+from tour.theme import resolve as resolve_theme
+
 
 @contextmanager
 def broken_content(filename: str, mutate: Callable[[dict], None]):
@@ -230,7 +235,7 @@ class KnowledgeBundle(unittest.TestCase):
                 target = href.split("#", 1)[0].split("?", 1)[0]
                 if href.startswith(knowledge.PUBLIC_BASE):
                     target = target.removeprefix(knowledge.PUBLIC_BASE).lstrip("/")
-                elif re.match(r"^[a-z][a-z0-9+.-]*:", href, re.I):
+                elif re.match(r"^[a-z][a-z0-9+.-]*:", href, re.IGNORECASE):
                     continue
                 else:
                     target = posixpath.normpath(
@@ -255,7 +260,7 @@ class KnowledgeBundle(unittest.TestCase):
         """Markdown escaping must not change the shortcut a user should press."""
         bundle, content = self.bundle()
         actual = re.findall(
-            r"^\| `([^`]*)` \|", bundle.files[Path("kb/hotkeys.md")], re.M
+            r"^\| `([^`]*)` \|", bundle.files[Path("kb/hotkeys.md")], re.MULTILINE
         )
         expected = [
             row["combo"] for group in content.hotkeys for row in group["rows"]
@@ -486,7 +491,7 @@ class Structure(unittest.TestCase):
 
     def test_every_clickable_region_has_a_zone(self):
         page, content, _ = build()
-        markup = re.sub(r"<script>.*?</script>", "", page, flags=re.S)
+        markup = re.sub(r"<script>.*?</script>", "", page, flags=re.DOTALL)
         ids = {z["id"] for z in content.zones}
         for zid in set(re.findall(r'data-zone="([^"]+)"', markup)):
             self.assertIn(zid, ids)
@@ -610,8 +615,8 @@ class WindowModes(unittest.TestCase):
         self.assertEqual(ids, ["classic", "auto"])
         self.assertFalse(content.modes[0]["default"])
         self.assertTrue(content.modes[1]["default"])
-        self.assertEqual(content.modes[0]["label"].get("ru"), "Базовый режим")
-        self.assertEqual(content.modes[1]["label"].get("ru"), "Авто торговля")
+        self.assertEqual(content.modes[0]["label"].get("ru"), "MANUAL режим")
+        self.assertEqual(content.modes[1]["label"].get("ru"), "AUTO режим")
         classic = [z for z in content.zones if z["mode"] == "classic"]
         auto = [z for z in content.zones if z["mode"] == "auto"]
         self.assertEqual(len(classic), 19)
@@ -623,7 +628,7 @@ class WindowModes(unittest.TestCase):
 
     def test_window_replicas_are_not_hardcoded_in_the_template(self):
         template = paths.TEMPLATE.read_text(encoding="utf-8")
-        markup = re.sub(r"<script>.*?</script>", "", template, flags=re.S)
+        markup = re.sub(r"<script>.*?</script>", "", template, flags=re.DOTALL)
         self.assertNotIn('data-zone="', markup)
         self.assertNotIn('id="app-classic"', markup)
         self.assertNotIn('id="app-auto"', markup)
@@ -633,7 +638,7 @@ class WindowModes(unittest.TestCase):
 
     def test_each_mode_map_exposes_exactly_its_zones(self):
         page, content, _ = build()
-        markup = re.sub(r"<script>.*?</script>", "", page, flags=re.S)
+        markup = re.sub(r"<script>.*?</script>", "", page, flags=re.DOTALL)
         for mode in content.modes:
             html = _app_markup(markup, mode["id"])
             self.assertTrue(html, mode["id"])
@@ -685,7 +690,7 @@ class WindowModes(unittest.TestCase):
             re.search(
                 r'function modeFromHash\(\)\{.*?return DEFAULT_MODE;\s*\}',
                 page,
-                flags=re.S,
+                flags=re.DOTALL,
             )
         )
 
@@ -711,7 +716,7 @@ class WindowModes(unittest.TestCase):
         page, _, _ = build()
         self.assertIn('.app-map[data-mode="classic"]{display:none}', page)
         self.assertIsNone(
-            re.search(r'^\.app-map\[data-mode="auto"\]\{display:none\}$', page, re.M)
+            re.search(r'^\.app-map\[data-mode="auto"\]\{display:none\}$', page, re.MULTILINE)
         )
         self.assertIn(
             'body:has(#mode-classic:checked) .app-map[data-mode="auto"]{display:none}',
@@ -725,7 +730,7 @@ class WindowModes(unittest.TestCase):
             r'@media\(max-width:760px\)\{\s*'
             r'(?P<body>\.auto-rail\{width:calc\(92px \* var\(--k\)\).*?)\n\}',
             template,
-            re.S,
+            re.DOTALL,
         )
         self.assertIsNotNone(narrow)
         css = narrow.group("body")

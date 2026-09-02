@@ -172,7 +172,7 @@ impl ScopeMarker {
     /// bullet rather than as punctuation. Same facts, same order, one joiner difference.
     ///
     /// Returns:
-    ///     `"режим: Классик · 3 из 56 ядер"`, or an empty string when nothing is hidden.
+    ///     `"режим: MANUAL · 3 из 56 ядер"`, or an empty string when nothing is hidden.
     pub(crate) fn line(&self) -> String {
         self.bare_facts().join(" · ")
     }

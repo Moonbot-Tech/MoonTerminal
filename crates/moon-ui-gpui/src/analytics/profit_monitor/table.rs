@@ -663,7 +663,7 @@ pub(super) fn table(
     // aggregates. The facts used to ride this label as a clipping tail, which is the right pattern
     // for the Report's and Assets' full-width footers; here the window is ~612px and the name cell
     // is one of six, so the tail never had room and always clipped mid-word ("Общий итог · режим:
-    // Классик · 0 и…"). A caption that cannot finish its own sentence states nothing and reads as
+    // MANUAL · 0 и…"). A caption that cannot finish its own sentence states nothing and reads as
     // a bug. The footer row below carries the same facts plus the recovery hint on hover.
     // `line`, not `facts`: this tooltip's body is the marker ALONE, so it is separated internally
     // but never prefixed — the tail form belongs to a footer that always has a head to its left.

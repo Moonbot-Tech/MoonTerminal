@@ -26,9 +26,9 @@ maps:
       ru: Режим воркспейса
       en: Workspace mode
     body:
-      ru: Переключает рабочее пространство группы. В режиме «Авто» терминал сам держит на графике монету
+      ru: Переключает рабочее пространство группы. В режиме AUTO терминал сам держит на графике монету
         активного ядра.
-      en: Switches the group's workspace. In Auto mode the terminal keeps the active core's coin on the
+      en: Switches the group's workspace. In AUTO mode the terminal keeps the active core's coin on the
         chart for you.
     src:
       code: locales/workspace.yml
@@ -248,11 +248,11 @@ maps:
       ru: Индикатор ядра, закреплённый рейкой
       en: Rail-pinned core indicator
     body:
-      ru: 'В Автоторговле пилюля в шапке отключена и без меню: она только показывает выбранное на левой
+      ru: 'В режиме AUTO пилюля в шапке отключена и без меню: она только показывает выбранное на левой
         рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в
         шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного
         случайного сервера.'
-      en: 'In AutoTrading the header pill is disabled and has no menu: it only mirrors the core chosen on
+      en: 'In AUTO the header pill is disabled and has no menu: it only mirrors the core chosen on
         the left rail, or Full summary. The gear still opens that core''s settings. Header balance is hidden
         while Overview is selected, so a single arbitrary server''s figure cannot sit next to a label that
         means the whole group.'
@@ -332,9 +332,9 @@ maps:
       en: Separate-window launchers
     body:
       ru: Монитор прибыли, Скринер и Настройки остаются общими на всё приложение. Стратегии и Аналитика
-        берут видимый состав ядер у последнего живого окна Автоторговли, с которым работал пользователь.
+        берут видимый состав ядер у последнего живого окна AUTO, с которым работал пользователь.
       en: Profit Monitor, Screener and Settings stay application-wide. Strategies and Analytics inherit
-        the visible core set from the last live AutoTrading window the user interacted with.
+        the visible core set from the last live AUTO window the user interacted with.
     src:
       code: workspace.rs — WorkspaceFocus; controls/toolbar.rs
   - id: summary
@@ -380,10 +380,10 @@ maps:
       en: Pinned charts and operational tabs
     body:
       ru: 'ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets,
-        CoreStatus, Log и Detects. News и Alerts (Фигуры) в Автоторговле нет: это панели только Classic.
+        CoreStatus, Log и Detects. News и Alerts (Фигуры) в режиме AUTO нет: это панели только для MANUAL.
         Открепить вкладку или график нельзя.'
       en: ChartTabs stays first, visually separate, and cannot be moved ahead of. After it come Report,
-        Assets, CoreStatus, Log and Detects. News and Alerts (Figures) are absent — they are Classic-only.
+        Assets, CoreStatus, Log and Detects. News and Alerts (Figures) are absent — they are MANUAL-only.
         Detaching a tab or a chart is rejected.
     src:
       code: shell/workspace.rs — AUTO_WORKSPACE_TAB_NAMES, AUTO_CLASSIC_ONLY_PANEL_NAMES
@@ -393,11 +393,11 @@ maps:
       ru: Область графика
       en: Chart area
     body:
-      ru: Тот же GPU-график, что в Classic. Колесо — зум по времени, Shift или Alt + колесо — прокрутка.
-        В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в Автоторговле
+      ru: Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка.
+        В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO
         возвращает на Report.
-      en: The same GPU chart as Classic. Wheel zooms by time, Shift or Alt + wheel pans. Overview does
-        not retarget the Main chart to some other core. Escape on the last Main chart in AutoTrading reveals
+      en: The same GPU chart as MANUAL. Wheel zooms by time, Shift or Alt + wheel pans. Overview does
+        not retarget the Main chart to some other core. Escape on the last Main chart in AUTO reveals
         Report.
     src:
       code: shell/workspace.rs — should_return_to_report_after_main_close
@@ -418,10 +418,10 @@ maps:
       ru: Нижняя поверхность ордеров
       en: Lower Orders surface
     body:
-      ru: Отдельная нижняя панель, не кандидат на стартовую вкладку Автоторговли. На первом запуске она
-        выше обычного на четыре строки таблицы. Открепить её из Автоторговли нельзя.
-      en: A separate lower panel, not a candidate for the AutoTrading start tab. On first run it is four
-        table rows taller than the previous seed. It cannot be detached from AutoTrading.
+      ru: Отдельная нижняя панель, не кандидат на стартовую вкладку режима AUTO. На первом запуске она
+        выше обычного на четыре строки таблицы. Открепить её из режима AUTO нельзя.
+      en: A separate lower panel, not a candidate for the AUTO start tab. On first run it is four
+        table rows taller than the previous seed. It cannot be detached from AUTO.
     src:
       code: shell/workspace.rs — default_auto_workspace_topology
   - id: status
