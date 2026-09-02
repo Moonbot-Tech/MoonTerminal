@@ -3,6 +3,48 @@
 
 use super::support::*;
 
+/// Replacing `Backend::effective_workspace_scope`'s pre-retained `cores.len()` membership count
+/// with the final retained scope count makes a money panel claim that its workspace preset hid
+/// cores that its local filter actually removed.
+#[test]
+fn marker_counts_come_from_the_membership_boundary() {
+    let scope_model = read_src("workspace.rs");
+    assert!(
+        scope_model.contains("computed by the caller before Classic or\n    /// Auto retained filtering narrows `ids` further"),
+        "EffectiveCoreScope documents that membership counts precede retained filtering"
+    );
+    let backend = read_src("backend/mod.rs");
+    let scope = code_only(braced_body(
+        &backend,
+        "pub(crate) fn effective_workspace_scope(",
+    ));
+    assert!(
+        scope.contains("let membership_shown = cores.len();"),
+        "shown count must come from membership-filtered cores, not retained IDs"
+    );
+    let total = scope
+        .find("let membership_total = available.len();")
+        .expect("membership total must be captured before filtering");
+    let membership_filter = scope
+        .find("let cores: Vec<CoreId> = available")
+        .expect("the membership filter must derive the displayed cores");
+    let shown = scope
+        .find("let membership_shown = cores.len();")
+        .expect("the asserted membership count must have a source position");
+    let retained = scope
+        .find("crate::workspace::resolve_group_scope(")
+        .expect("retained panel filtering must remain downstream of membership counts");
+
+    assert!(
+        total < membership_filter && membership_filter < shown && shown < retained,
+        "the marker must carry counts from the membership boundary before retained filtering"
+    );
+    assert!(
+        scope.contains(".with_membership_counts(membership_shown, membership_total)"),
+        "the resolved scope must receive the membership-boundary counts"
+    );
+}
+
 /// Catches adding a second `DockArea` or breaking the ordered Auto surface route. Removing either
 /// `chart_tabs/mod.rs` publication leaves a report coin hidden on Report or leaves an emptied Main
 /// on Charts; bypassing the group cursor can replay another window's or a rebuilt window's event.
