@@ -294,6 +294,10 @@ toolbar.core_config_area_general:
   ru: "Основные"
   en: "General"
   es: "General"
+toolbar.core_config_area_signals:
+  ru: "Звуковые алерты"
+  en: "Alert sounds"
+  es: "Sonidos de alerta"
 toolbar.core_config_area_leverage:
   ru: "Плечо"
   en: "Leverage"
@@ -490,14 +494,22 @@ core_settings.frame_actions:
   ru: "Действия"
   en: "Actions"
   es: "Acciones"
+core_settings.frame_alert_sounds:
+  ru: "Звуковые алерты"
+  en: "Alert sounds"
+  es: "Sonidos de alerta"
+core_settings.sell_alert_line:
+  ru: "Звук если до цены продажи меньше %{v}%"
+  en: "Sound when less than %{v}% is left to the sell price"
+  es: "Sonido cuando falta menos del %{v}% para el precio de venta"
+core_settings.buy_alert_line:
+  ru: "Звук если до цены покупки меньше %{v}%"
+  en: "Sound when less than %{v}% is left to the buy price"
+  es: "Sonido cuando falta menos del %{v}% para el precio de compra"
 core_settings.def_strategy:
   ru: "Стратегия алертов"
   en: "Alert strategy"
   es: "Estrategia de alerta"
-core_settings.def_strategy_search:
-  ru: "поиск…"
-  en: "search…"
-  es: "buscar…"
 core_settings.cancel_all:
   ru: "Отменить все ордера"
   en: "Cancel all orders"

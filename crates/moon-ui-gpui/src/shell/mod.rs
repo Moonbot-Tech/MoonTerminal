@@ -155,9 +155,6 @@ pub(crate) struct Shell {
     /// It cannot share `blacklist_input`: turning a state into a textarea is irreversible and
     /// would make the single-line field render as a narrow strip. Toggling synchronizes the text.
     blacklist_area: Entity<MoonInputState>,
-    /// Search field for the alert-strategy list in the core-settings popup.
-    /// The list can contain hundreds of strategies, so it is filtered and scrolled in the popup.
-    def_strategy_input: Entity<MoonInputState>,
     /// The open toolbar-metric popup and the address from which its slider and field were seeded.
     ///
     /// One field keeps TP, SL, and leverage mutually exclusive. The address travels with the open

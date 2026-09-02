@@ -41,6 +41,62 @@ sounds! {
     "yes_mast" => "YES_MAST.wav",
 }
 
+/// Moonbot's own sound list, in the order its settings dropdown shows it, read off that dropdown
+/// on 2026-09-02.
+///
+/// This is the table the PROTOCOL does not carry. `SignalsSettings`'s three sound fields are
+/// 1-based ordinals into this list — the wire says "1-based" and nothing more — so the index here
+/// is the ordinal MINUS ONE. Without it the settings popup could only show a bare number, which is
+/// what `as_alarm_no` still does.
+///
+/// The order is NOT alphabetical and must not be re-sorted: it is Moonbot's, and the ordinal is
+/// stored in the core's own config, so a re-ordering here silently re-points every core's setting
+/// at a different sound.
+///
+/// Labels keep Moonbot's own spelling, mixed case and all, because that is what the user picks from
+/// there; lowercasing one gives the stem in [`SOUNDS`], which is what [`play`] matches on. The
+/// sibling test pins both halves — every label resolves to an embedded sound, and the two lists
+/// hold the same set.
+pub const MB_SOUNDS: &[&str] = &[
+    "Alarm",
+    "BABYTOY",
+    "BARK",
+    "cork",
+    "ERROR",
+    "HALLO",
+    "PFIFF",
+    "Ringin",
+    "ringout",
+    "TurnOn",
+    "YES_MAST",
+    "ding1",
+    "ding2",
+    "Fatality",
+    "gold",
+    "milord",
+    "LetsRock",
+    "ComeGetSome",
+];
+
+/// Moonbot's label for a 1-based sound ordinal, or `None` when the core holds one this list has no
+/// entry for.
+///
+/// `None` rather than a fallback to the first sound: a core carrying an ordinal we cannot name is a
+/// core whose sound list differs from ours, and showing "Alarm" for it would write that back on the
+/// next OK and silently change the user's setting.
+pub fn mb_sound_name(ordinal: i32) -> Option<&'static str> {
+    usize::try_from(ordinal.checked_sub(1)?)
+        .ok()
+        .and_then(|i| MB_SOUNDS.get(i).copied())
+}
+
+/// Play the sound a 1-based Moonbot ordinal names, doing nothing when it names none.
+pub fn play_ordinal(ordinal: i32) {
+    if let Some(name) = mb_sound_name(ordinal) {
+        play(name);
+    }
+}
+
 /// Return sound stems for the sound-selection dropdowns (the Alerts window and the Core Status
 /// alert popup).
 pub fn names() -> impl Iterator<Item = &'static str> {
@@ -162,3 +218,6 @@ fn play_bytes(wav: &'static [u8]) {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 fn play_bytes(_wav: &'static [u8]) {}
+
+#[cfg(test)]
+mod tests;

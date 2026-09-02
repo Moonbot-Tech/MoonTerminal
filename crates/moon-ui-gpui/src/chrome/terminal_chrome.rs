@@ -171,6 +171,16 @@ pub fn header(
                             shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
                         },
                     )
+                    // The alert-sound pickers on the General tab are `MoonDropdown`s, whose menus
+                    // paint in their OWN deferred layers outside this popover's box; the bounds-
+                    // based `on_mouse_down_out` runs in the CAPTURE phase, so the click that picks
+                    // a sound would read as "outside" and shut the popup before the pick landed.
+                    // Until MoonUI suppresses that (the Popover entry in docs-internal/FORK_BUGS.md)
+                    // outside-click dismissal has to be off here — the same trade the detects,
+                    // core-status, tuner and chart-label popups already make. Cancel, OK and the
+                    // gear itself are the dismissal paths, and this popup has all three.
+                    .close_on_content_click(false)
+                    .overlay_closable(false)
                 }),
         )
         .child(design::chrome_divider(cx, p))
@@ -746,6 +756,10 @@ fn core_selector(
 /// with a content-width popover and its controlled open state. Shell owns that state through
 /// `on_open_change`, while the popover handles outside-click dismissal.
 ///
+/// Returns the `MoonPopover` itself rather than an opaque element so a caller whose content carries
+/// `MoonDropdown`s can switch that dismissal off — their menus paint in their own deferred layers
+/// and would read as an outside click. See the core-settings gear below.
+///
 /// Args:
 ///     id: Stable element identity; the popover derives its own id from it.
 ///     placement: Which corner of the trigger the popup hangs from.
@@ -767,7 +781,7 @@ pub(crate) fn header_gear_popover(
     content: Option<AnyElement>,
     trigger: impl IntoElement,
     on_open_change: impl Fn(bool, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> MoonPopover {
     MoonPopover::new(SharedString::from(format!("{id}-popover")))
         .placement(placement)
         .content_width_font(content_width)

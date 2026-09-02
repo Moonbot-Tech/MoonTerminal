@@ -34,6 +34,51 @@ fn usable_price(v: f64) -> bool {
     v.is_finite() && v > 0.0
 }
 
+/// How far the last price still has to travel to reach this order's EXIT price, in per cent of
+/// that price. `None` when either price is unusable.
+///
+/// Signed by DIRECTION and not by absolute distance, because "how much is left" is the question
+/// Moonbot's price-approach alert asks, and the answer runs the other way for a short: a long exits
+/// ABOVE the last price and a short BELOW it, so the same one-per-cent gap counts down from
+/// opposite sides. Taking `abs()` here would fire the alert on a price running AWAY from the exit,
+/// which is the opposite of what the setting means.
+///
+/// Once the price has gone past the exit the value is NEGATIVE, and deliberately so: that is what
+/// makes Moonbot's default level of zero mean "when the price has got there", rather than never.
+///
+/// Per cent, not a fraction — the level it is compared against is whole per cent on the wire.
+///
+/// `last` is supplied by the caller and deliberately NOT read from `r.price`: an `OrderRow` is only
+/// rebuilt when an order-TABLE batch is published, and price movement does not publish one — it
+/// arrives as a trace point on the order-LINE path. `r.price` is therefore as old as the last order
+/// change, which for a resting take-profit can be minutes. The order's own prices below are safe to
+/// read from the row, because those change only when the order does.
+pub(crate) fn pct_to_exit(r: &OrderRow, last: f64) -> Option<f64> {
+    let exit = r.sell_price;
+    if !usable_price(last) || !usable_price(exit) {
+        return None;
+    }
+    let left = if r.is_short { last - exit } else { exit - last };
+    Some(left / exit * 100.0)
+}
+
+/// The same for the order's ENTRY price: how far the last price still has to travel to reach it.
+///
+/// The direction flips once more. A long's entry waits BELOW the market and a short's ABOVE it, so
+/// what counts down is `last - entry` for the one and `entry - last` for the other.
+pub(crate) fn pct_to_entry(r: &OrderRow, last: f64) -> Option<f64> {
+    let entry = r.buy_price;
+    if !usable_price(last) || !usable_price(entry) {
+        return None;
+    }
+    let left = if r.is_short {
+        entry - last
+    } else {
+        last - entry
+    };
+    Some(left / entry * 100.0)
+}
+
 /// Return the position quantity used by the PnL calculations.
 ///
 /// When `filled` indicates an executed entry or active exit leg, use `remaining_size` when positive

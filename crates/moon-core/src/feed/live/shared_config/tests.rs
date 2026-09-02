@@ -228,6 +228,14 @@ fn every_rendered_field_survives_a_write_and_read_back() {
     wanted.leverage.fix_lev = 25;
     wanted.leverage.auto_fix_lev = true;
     wanted.leverage.lev_control = "x2".to_string();
+    // Every one of the six differs from its partner, so a sell/buy swap or a level/sound mix-up in
+    // `apply_signals` shows up as a mismatch instead of round-tripping through itself.
+    wanted.signals.play_sell_alert = true;
+    wanted.signals.sell_alert_level = 3;
+    wanted.signals.signal_sound_2 = 7;
+    wanted.signals.play_buy_alert = true;
+    wanted.signals.buy_alert_level = 5;
+    wanted.signals.buy_signal_sound = 6;
 
     let mut written = base.clone();
     apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
@@ -236,6 +244,7 @@ fn every_rendered_field_survives_a_write_and_read_back() {
     assert_eq!(round_tripped.btc_blink, wanted.btc_blink);
     assert_eq!(round_tripped.general, wanted.general);
     assert_eq!(round_tripped.leverage, wanted.leverage);
+    assert_eq!(round_tripped.signals, wanted.signals);
 }
 
 /// Regression target: `apply_core_config` must not write the manual block AT ALL — the terminal

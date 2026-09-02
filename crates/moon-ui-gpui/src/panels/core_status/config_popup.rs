@@ -684,9 +684,7 @@ impl CoreStatusView {
                 b.mark_backend_dirty(cx);
             });
         });
-        let play_name = cur;
         let p = MoonPalette::active(cx);
-        let enabled = play_name.is_some();
         let m = warn_cfg_metrics(cx);
         h_flex()
             .w_full()
@@ -703,33 +701,16 @@ impl CoreStatusView {
                     .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
-            // Square preview button: a fixed-size bordered box with the ▶ glyph centred.
-            .child(
-                div()
-                    .id(SharedString::from(format!("cs-warn-{id}-play")))
-                    // Square, and its side IS the control band, so it can never outgrow the row it
-                    // sits in nor leave a gap under it.
-                    .size(px(m.ctrl_h))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(design::ui_px(cx, 5.0))
-                    .border_1()
-                    .border_color(rgb(p.border))
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgb(if enabled { p.text_soft } else { p.text_dim }))
-                    .when(enabled, |el| {
-                        el.cursor_pointer()
-                            .hover(|s| s.border_color(rgb(p.accent)).text_color(rgb(p.accent)))
-                            .on_click(move |_, _, _| {
-                                if let Some(name) = play_name {
-                                    crate::media::sound::play(name);
-                                }
-                            })
-                    })
-                    .child("▶"),
-            )
+            // The square preview, shared with the core-settings alert pickers so the two sound
+            // controls in the application cannot drift apart. Its side IS the control band, so it
+            // can neither outgrow the row it sits in nor leave a gap under it.
+            .child(crate::panels::common::sound_preview_button(
+                SharedString::from(format!("cs-warn-{id}-play")),
+                cur,
+                px(m.ctrl_h),
+                p,
+                cx,
+            ))
     }
 }
 

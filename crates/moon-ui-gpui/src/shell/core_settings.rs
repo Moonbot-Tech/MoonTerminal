@@ -230,7 +230,6 @@ impl Shell {
         let editors = core_settings_popup::TextEditors {
             input: &self.blacklist_input,
             area: &self.blacklist_area,
-            def_strategy: &self.def_strategy_input,
         };
         core_settings_popup::core_settings_content(
             &ctx,

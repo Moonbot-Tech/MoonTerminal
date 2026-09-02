@@ -131,8 +131,9 @@ impl Shell {
             cx.notify();
             return;
         };
-        // The popup renders exactly four sections — AutoStart, BtcBlink, General, Leverage — and
-        // may write only those: the manual block belongs to the toolbar, never to a page this
+        // The popup renders exactly five sections — AutoStart, BtcBlink, General, Leverage and the
+        // Signals alerts — and may write only those: the manual block belongs to the toolbar, never
+        // to a page this
         // popup does not draw. Naming the mask here, rather than deriving it from what changed, is
         // what makes an OK unable to reach the manual block AT ALL, checkbox on or off — not merely
         // unlikely to in the common case.

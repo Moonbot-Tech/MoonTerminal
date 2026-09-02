@@ -75,7 +75,6 @@ pub(crate) struct TabCtx<'a> {
 pub(crate) struct TextEditors<'a> {
     pub(crate) input: &'a Entity<MoonInputState>,
     pub(crate) area: &'a Entity<MoonInputState>,
-    pub(crate) def_strategy: &'a Entity<MoonInputState>,
 }
 
 /// One numeric editor already created for this render, paired with the width it should occupy.
