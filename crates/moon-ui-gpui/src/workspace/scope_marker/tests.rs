@@ -113,6 +113,56 @@ fn the_footer_tooltip_repeats_the_row_then_closes_with_the_hint() {
     assert!(tooltip.ends_with(t!("workspace.scope.hint").as_ref()));
 }
 
+/// `ScopeMarker::line` is standalone punctuation, so it preserves fact order without a leading dot.
+///
+/// Plausible breakage: joining `facts()` directly restores a leading separator, making Analytics
+/// and Strategies captions begin with a stray bullet while still needing both localized facts.
+#[test]
+fn line_joins_the_footer_facts_without_a_leading_separator() {
+    let marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 3, 56);
+    let facts = marker.facts();
+    let expected_facts = facts
+        .iter()
+        .map(|fact| {
+            fact.strip_prefix("· ")
+                .expect("footer facts carry their own leading separator")
+        })
+        .collect::<Vec<_>>();
+    let line = marker.line();
+
+    assert!(!line.starts_with("· "));
+    assert_eq!(expected_facts.len(), 2);
+    assert_eq!(line.split(" · ").collect::<Vec<_>>(), expected_facts);
+}
+
+/// `ScopeMarker::tooltip` names an empty surface differently from a partially narrowed one.
+///
+/// Plausible breakage: always selecting `workspace.scope.hint` tells a user with no visible cores
+/// that only some are hidden, so the recovery text contradicts the empty surface.
+#[test]
+fn tooltip_uses_the_all_hidden_hint_only_when_every_core_is_hidden() {
+    let partially_hidden = ScopeMarker::new(Some(WorkspaceMode::Classic), 1, 3);
+    let all_hidden = ScopeMarker::new(Some(WorkspaceMode::Classic), 0, 3);
+
+    let partial_tooltip = partially_hidden.tooltip(&partially_hidden.facts());
+    let all_hidden_tooltip = all_hidden.tooltip(&all_hidden.facts());
+
+    assert_eq!(
+        partial_tooltip
+            .rsplit_once('\n')
+            .expect("a hidden scope tooltip includes a closing hint")
+            .1,
+        t!("workspace.scope.hint").as_ref()
+    );
+    assert_eq!(
+        all_hidden_tooltip
+            .rsplit_once('\n')
+            .expect("a hidden scope tooltip includes a closing hint")
+            .1,
+        t!("workspace.scope.all_hidden_hint").as_ref()
+    );
+}
+
 /// A hover is absent unless a marker is actively hiding a scope.
 ///
 /// Plausible breakage: dropping either gate attaches an empty tooltip bubble to an unscoped or
