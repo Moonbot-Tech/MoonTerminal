@@ -1220,12 +1220,14 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && filter_ids.contains("Some(cores) => return cores.to_vec()")
             && filter_ids.contains("let Some(hidden) = hidden else {")
             && filter_ids.contains("return selected.iter().copied().collect();")
-            && filter_ids.contains("if selected.is_empty() && universe.is_empty()")
             && filter_ids.contains("let base: Vec<u64> = if selected.is_empty() {")
+            && filter_ids.contains("if universe.is_empty() {")
+            && filter_ids.contains("configured.to_vec()")
             && filter_ids.contains("universe.iter().map(|(id, _)| *id).collect()")
             && filter_ids.contains("base.into_iter().filter(|id| !hidden.contains(id)).collect()")
-            && filter_ids.contains("query_core_ids(filtered, true)"),
-        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match, then subtract Classic hidden membership without making a fresh implicit-All window falsely empty"
+            && filter_ids.contains("query_core_ids(filtered, true)")
+            && !filter_ids.contains("if selected.is_empty() && universe.is_empty()"),
+        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match, then expand a fresh implicit All against configured cores before subtracting Classic hidden membership"
     );
     let workspace_observer = analytics
         .split("cx.observe(&workspace_revision")

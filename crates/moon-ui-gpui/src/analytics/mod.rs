@@ -242,6 +242,15 @@ struct AnalyticsDisplayScope {
     /// Configured cores this preset hides from Analytics' scoped data reads. Never empty — see
     /// `analytics_display_scope`.
     hidden_core_ids: Vec<u64>,
+    /// Every `config.servers` id, in configuration order, captured in the same walk as
+    /// `hidden_core_ids`.
+    ///
+    /// The bootstrap universe for the implicit "All" row: the replica core list arrives only WITH
+    /// a query's result, while this is complete the moment the window is built, so a first query
+    /// can be scoped exactly as the marker states instead of running unfiltered. See
+    /// `toolbar::analytics_core_filter_ids`, which consults it only while that replica list is
+    /// still empty.
+    configured_core_ids: Vec<u64>,
     /// `config.servers.len()`, captured BEFORE the membership filter ran.
     configured_total: usize,
 }
@@ -276,7 +285,8 @@ fn analytics_display_scope(backend: &Backend) -> Option<AnalyticsDisplayScope> {
         // live singleton owner, this window remains unscoped and shows every core.
         return None;
     }
-    let configured_total = backend.config.servers.len();
+    let configured_core_ids: Vec<u64> = backend.config.servers.iter().map(|s| s.id).collect();
+    let configured_total = configured_core_ids.len();
     let hidden_core_ids: Vec<u64> = backend
         .config
         .servers
@@ -292,6 +302,7 @@ fn analytics_display_scope(backend: &Backend) -> Option<AnalyticsDisplayScope> {
     Some(AnalyticsDisplayScope {
         preset,
         hidden_core_ids,
+        configured_core_ids,
         configured_total,
     })
 }
@@ -1444,6 +1455,17 @@ impl AnalyticsView {
             .map(|s| s.hidden_core_ids.as_slice())
     }
 
+    /// Configured cores the viewing preset counted, used only to expand an implicit "All" before
+    /// this window's replica core list has arrived.
+    ///
+    /// Empty whenever no preset narrows this window, which is also exactly when
+    /// [`Self::hidden_core_ids`] is `None` and the expansion never happens.
+    fn configured_core_ids(&self) -> &[u64] {
+        self.display_scope
+            .as_ref()
+            .map_or(&[], |s| s.configured_core_ids.as_slice())
+    }
+
     /// The scope marker the Summary states, from whichever authority narrowed the read.
     /// The two are mutually exclusive by construction (`analytics_display_scope`).
     fn summary_scope_marker(&self) -> Option<crate::workspace::scope_marker::ScopeMarker> {
@@ -1463,13 +1485,16 @@ impl AnalyticsView {
     ///     Pinned Auto workspace ids, the no-match sentinel for an empty pinned scope or a Classic
     ///     membership narrowing that hides everything selected, retained user-selected ids narrowed
     ///     by Classic membership when it hides at least one core, or an empty vector for an
-    ///     unfiltered query.
+    ///     unfiltered query. A window whose replica core list has not arrived yet expands its
+    ///     implicit All against the CONFIG instead, so its very first query already states what
+    ///     the scope marker beside it claims.
     fn cores_selected(&self) -> Vec<u64> {
         toolbar::analytics_core_filter_ids(
             &self.sel_cores,
             self.read_core_ids(),
             self.hidden_core_ids(),
             &self.cores,
+            self.configured_core_ids(),
         )
     }
 

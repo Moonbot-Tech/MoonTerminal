@@ -239,21 +239,48 @@ pub(super) fn sole_core_name<'a>(
 ///     hidden: Configured cores the Classic viewing preset hides, or `None` when it hides none.
 ///     universe: Every core this window's replica read can name, for expanding an implicit "All"
 ///         selection before subtracting `hidden` from it.
+///     configured: Every core the CONFIG names, as the same viewing preset counted them. Expands
+///         an implicit "All" while `universe` is still empty, and is never consulted otherwise.
 ///
 /// Returns:
 ///     Workspace ids when pinned (`hidden` never applies to a pinned Auto rail — the group already
-///     bounds it), every retained explicit id when unpinned and nothing is hidden, the unfiltered
-///     retained selection while the implicit All row cannot yet be expanded (`universe` still
-///     empty — a fresh window's first query, before its replica read has returned), or an empty
-///     unfiltered list for All once the universe is known. An empty pinned Auto group, and a
-///     non-`None` `hidden` whose subtraction leaves no core selected, both route through
-///     [`query_core_ids`] as a PRESENT-but-empty scope: see `moon_core::config::NO_MATCH_CORE_UID`
-///     for why an empty `Vec` there would mean "unfiltered" and reproduce the original bug.
+///     bounds it), every retained explicit id when unpinned and nothing is hidden, or the implicit
+///     All row expanded and narrowed by `hidden`. An empty pinned Auto group, and a non-`None`
+///     `hidden` whose subtraction leaves no core selected, both route through [`query_core_ids`]
+///     as a PRESENT-but-empty scope: see `moon_core::config::NO_MATCH_CORE_UID` for why an empty
+///     `Vec` there would mean "unfiltered" and reproduce the original bug.
+///
+///     **A fresh window expands "All" against `configured`, NOT against the empty `universe`.**
+///     The replica universe arrives only WITH the first query's own result, and no revision
+///     counter changes when it does, so a bootstrap answer is never revisited: an unfiltered first
+///     query is not a single frame, it stands until the user touches a filter. That is how a
+///     window whose marker reads `0 of 56` came to state a money total over 48 of them. `hidden`
+///     and the marker are both derived from the CONFIG (`analytics::analytics_display_scope`),
+///     which is complete at construction, so `configured` minus `hidden` is exactly the set the
+///     marker claims — at every shown count, not only zero — and needs no replica read at all.
+///     A scope that hides NOTHING never reaches this branch: it is `None` and returns unfiltered
+///     above, which is what keeps a still-loading unhidden window showing everything.
+///
+///     KNOWN LIMITATION, stated exactly rather than optimistically. A REPLICA core absent from
+///     the config — a deleted server whose rows survive — is not in `configured`, so a hiding
+///     preset excludes it from the first query. `moon_core::db::analytics::summary_data` does
+///     read `distinct_cores` UNFILTERED whatever the query's core list says, so that core reaches
+///     `AnalyticsView::cores` and every SUBSEQUENT query names it again — but nothing here starts
+///     a subsequent query: the metadata result only repaints (`analytics::mod`'s summary
+///     completion), and `core_metadata_due` arms no timer on the first read. **So an untouched
+///     window keeps that core out of its figures until something else reloads it.** Two things
+///     bound the cost. It is an UNDER-report of a core no longer configured, where the shape it
+///     replaces was an over-report across the entire hidden fleet; and it needs a hiding preset
+///     to happen at all, since a scope that hides nothing returns unfiltered above and names every
+///     replica core. Closing it properly needs a config-independent universe read on construction,
+///     which is a full-table walk added to a window-open path — deliberately not done here, and
+///     the honest comment is worth more than a hurried read.
 pub(super) fn analytics_core_filter_ids(
     selected: &HashSet<u64>,
     workspace: Option<&[u64]>,
     hidden: Option<&[u64]>,
     universe: &[(u64, String)],
+    configured: &[u64],
 ) -> Vec<u64> {
     match workspace {
         Some([]) => return query_core_ids(Vec::new(), true),
@@ -263,19 +290,12 @@ pub(super) fn analytics_core_filter_ids(
     let Some(hidden) = hidden else {
         return selected.iter().copied().collect();
     };
-    // A fresh window's replica universe starts empty and only arrives with the FIRST query's own
-    // result, after this same call already built that query. An empty `selected` (the implicit
-    // "All" row) can only be expanded against a non-empty `universe`; expanding it against an
-    // empty one would collapse to the no-match sentinel before a single core is known, turning a
-    // brand-new Classic-scoped window falsely empty instead of leaving it unfiltered for one frame
-    // like every other bootstrap read in this view. A non-empty EXPLICIT `selected` never depends
-    // on `universe` at all and is filtered against `hidden` unconditionally below, exactly as it
-    // always was.
-    if selected.is_empty() && universe.is_empty() {
-        return selected.iter().copied().collect();
-    }
     let base: Vec<u64> = if selected.is_empty() {
-        universe.iter().map(|(id, _)| *id).collect()
+        if universe.is_empty() {
+            configured.to_vec()
+        } else {
+            universe.iter().map(|(id, _)| *id).collect()
+        }
     } else {
         selected.iter().copied().collect()
     };
