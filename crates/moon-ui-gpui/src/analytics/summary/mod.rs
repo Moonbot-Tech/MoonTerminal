@@ -104,8 +104,9 @@ impl AnalyticsView {
                 else {
                     return placeholder;
                 };
-                let facts = marker.facts();
-                let text = facts.join(" ");
+                // `line`, not `facts`: nothing is drawn to the left of this caption, so the
+                // footer tail's leading separator would open the sentence with a stray bullet.
+                let text = marker.line();
                 let tip = marker.tooltip(std::slice::from_ref(&text));
                 return v_flex()
                     .child(
@@ -176,7 +177,10 @@ impl AnalyticsView {
                         // fact above, which only names how many of the (already scoped) cores
                         // got a curve.
                         let marker = self.summary_scope_marker();
-                        let marker_facts = marker.as_ref().map_or_else(Vec::new, |m| m.facts());
+                        // `line`, not `facts`: this caption is its OWN flex child with a gap
+                        // beside it, never a tail spliced onto a head, so a leading separator
+                        // would introduce nothing.
+                        let marker_line = marker.as_ref().map_or_else(String::new, |m| m.line());
                         let head = h_flex()
                             .gap(design::ui_px(cx, 8.0))
                             .items_center()
@@ -194,9 +198,9 @@ impl AnalyticsView {
                                         .to_string(),
                                     )
                             }))
-                            .children((!marker_facts.is_empty()).then(|| {
-                                let text = marker_facts.join(" ");
-                                // Built from the SAME `Vec` the caption renders, per decision 1.
+                            .children((!marker_line.is_empty()).then(|| {
+                                let text = marker_line.clone();
+                                // Built from the SAME string the caption renders, per decision 1.
                                 let tip = marker
                                     .as_ref()
                                     .map(|m| m.tooltip(std::slice::from_ref(&text)))

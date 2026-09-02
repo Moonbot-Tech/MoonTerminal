@@ -134,8 +134,11 @@ pub(super) fn split_body(
     // fault rather than as a scope — worse than saying nothing. The money is the right hover
     // target: the question a scoped figure raises is asked while looking at the figure.
     let chips = chips.when(scope_marker.hides_anything(), |row| {
+        // `line`, not `facts`: the marker IS the whole tooltip body here, with no head above it,
+        // so the tail's leading separator would open the bubble with a stray bullet.
+        let line = scope_marker.line();
         row.tooltip(crate::panels::common::text_tooltip(
-            scope_marker.tooltip(&scope_marker.facts()),
+            scope_marker.tooltip(std::slice::from_ref(&line)),
         ))
     });
     v_flex()
@@ -662,7 +665,9 @@ pub(super) fn table(
     // is one of six, so the tail never had room and always clipped mid-word ("Общий итог · режим:
     // Классик · 0 и…"). A caption that cannot finish its own sentence states nothing and reads as
     // a bug. The footer row below carries the same facts plus the recovery hint on hover.
-    let scope_facts = scope_marker.facts();
+    // `line`, not `facts`: this tooltip's body is the marker ALONE, so it is separated internally
+    // but never prefixed — the tail form belongs to a footer that always has a head to its left.
+    let scope_line = scope_marker.line();
     let grand_total_label = t!("profit_monitor.grand_total").to_string();
     let footer = table_row(
         grand_total_label,
@@ -707,7 +712,7 @@ pub(super) fn table(
     .border_color(moon_alpha(palette.amber, 0.7))
     .when(scope_marker.hides_anything(), |element| {
         element.tooltip(crate::panels::common::text_tooltip(
-            scope_marker.tooltip(&scope_facts),
+            scope_marker.tooltip(std::slice::from_ref(&scope_line)),
         ))
     });
 

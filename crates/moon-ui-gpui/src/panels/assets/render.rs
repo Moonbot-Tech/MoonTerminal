@@ -133,6 +133,14 @@ impl Render for AssetsView {
         } else {
             t!("assets.empty").to_string()
         };
+        // "no assets" asserts the account holds nothing; when the preset hid every core the
+        // account may be full and the panel simply cannot see it. The footer beside this already
+        // states "0 of N cores", so leaving the genuine copy here would have the two contradict
+        // each other in the same row.
+        let empty_msg = crate::workspace::scope_marker::scope_empty_text(
+            self.scope_marker(self.backend.read(cx)).as_ref(),
+            empty_msg,
+        );
         let table = table::assets_table(
             "assets-table",
             entries,

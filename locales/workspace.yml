@@ -66,6 +66,13 @@ workspace.scope.hint:
   ru: "Часть ядер скрыта активным режимом рабочего пространства — переключите режим или проверьте видимость в Настройках → Подключения"
   en: "Some cores are hidden by the active workspace preset — switch the preset or check visibility in Settings → Connections"
   es: "Algunos núcleos están ocultos por el modo de espacio de trabajo activo — cambie el modo o revise la visibilidad en Ajustes → Conexiones"
+# The same recovery advice for the case where the preset hid EVERY core, so the opening clause
+# cannot say "some". Only the first clause differs from `workspace.scope.hint`; the two are one
+# choice inside `ScopeMarker::tooltip`, gated on `hides_everything`.
+workspace.scope.all_hidden_hint:
+  ru: "Все ядра скрыты активным режимом рабочего пространства — переключите режим или проверьте видимость в Настройках → Подключения"
+  en: "Every core is hidden by the active workspace preset — switch the preset or check visibility in Settings → Connections"
+  es: "Todos los núcleos están ocultos por el modo de espacio de trabajo activo — cambie el modo o revise la visibilidad en Ajustes → Conexiones"
 # The empty state of a surface the preset emptied COMPLETELY, shared by every such surface
 # (`workspace::scope_marker::scope_empty_text`). Deliberately not per-surface and deliberately not
 # the surface's own "no orders" / "no data" / "connect a core" line: those assert that nothing

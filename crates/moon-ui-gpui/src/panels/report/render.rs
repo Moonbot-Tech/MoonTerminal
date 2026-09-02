@@ -55,10 +55,17 @@ impl ReportPanel {
         let selection = self.selection.clone();
         // Clip resized columns at the shared table host; an empty successful
         // result keeps the header and uses the panel overlay.
+        // "no reports under the filter (or the DB is empty)" sends the user to widen a filter or
+        // suspect their database; when the preset hid every core neither is true and neither
+        // helps. The totals row directly below already says "0 of N cores".
+        let empty_text = crate::workspace::scope_marker::scope_empty_text(
+            self.scope_marker(self.backend.read(cx)).as_ref(),
+            t!("report.empty").to_string(),
+        );
         crate::panels::common::data_table_host(
             "rep-table-host",
             row_count == 0,
-            t!("report.empty").to_string(),
+            empty_text,
             p,
             cx,
             MoonDataTable::new("report-table", row_count, move |ri, _window, _app| {

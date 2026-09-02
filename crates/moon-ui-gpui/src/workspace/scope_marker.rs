@@ -112,14 +112,15 @@ impl ScopeMarker {
         self.shown < self.configured
     }
 
-    /// Localized facts, in clipping priority order (most important first).
+    /// The localized facts themselves, in clipping priority order, carrying NO separator.
     ///
-    /// Empty whenever [`Self::hides_anything`] is `false` — a full scope states nothing, exactly
-    /// as decision 1 requires.
+    /// The separator is punctuation between neighbours, not part of a fact, so it belongs to
+    /// whoever joins them — [`Self::facts`] for a footer tail that always follows a head,
+    /// [`Self::line`] for a marker that stands alone.
     ///
     /// Returns:
-    ///     `· `-prefixed fact strings, or an empty `Vec`.
-    pub(crate) fn facts(&self) -> Vec<String> {
+    ///     Bare fact strings, or an empty `Vec` when nothing is hidden.
+    fn bare_facts(&self) -> Vec<String> {
         if !self.hides_anything() {
             return Vec::new();
         }
@@ -135,16 +136,45 @@ impl ScopeMarker {
             WorkspaceMode::AutoTrading => t!("workspace.mode.auto"),
         };
         vec![
-            format!("· {}", t!("workspace.scope.preset", mode = mode)),
-            format!(
-                "· {}",
-                t!(
-                    "workspace.scope.cores_n_of_m",
-                    n = fmt::group_thousands(&self.shown.to_string()),
-                    total = fmt::group_thousands(&self.configured.to_string())
-                )
-            ),
+            t!("workspace.scope.preset", mode = mode).to_string(),
+            t!(
+                "workspace.scope.cores_n_of_m",
+                n = fmt::group_thousands(&self.shown.to_string()),
+                total = fmt::group_thousands(&self.configured.to_string())
+            )
+            .to_string(),
         ]
+    }
+
+    /// Localized facts for a footer TAIL, in clipping priority order (most important first).
+    ///
+    /// Each fact carries its own leading `· ` because a tail is always drawn AFTER a head, and
+    /// each fact is its own clipping element: the separator has to travel with the fact it
+    /// introduces, or clipping the second fact would leave a dangling bullet behind.
+    ///
+    /// Empty whenever [`Self::hides_anything`] is `false` — a full scope states nothing, exactly
+    /// as decision 1 requires.
+    ///
+    /// Returns:
+    ///     `· `-prefixed fact strings, or an empty `Vec`.
+    pub(crate) fn facts(&self) -> Vec<String> {
+        self.bare_facts()
+            .into_iter()
+            .map(|fact| format!("· {fact}"))
+            .collect()
+    }
+
+    /// The marker as ONE standalone line, separated but never PREFIXED.
+    ///
+    /// A surface that renders the marker with nothing before it — the Analytics summary, the
+    /// Strategies tree, a hover tooltip whose whole body is the marker — has nothing for a leading
+    /// separator to separate it from, and [`Self::facts`]'s per-fact `· ` then reads as a stray
+    /// bullet rather than as punctuation. Same facts, same order, one joiner difference.
+    ///
+    /// Returns:
+    ///     `"режим: Классик · 3 из 56 ядер"`, or an empty string when nothing is hidden.
+    pub(crate) fn line(&self) -> String {
+        self.bare_facts().join(" · ")
     }
 
     /// Build the recovery tooltip from the SAME facts the row rendered.
@@ -162,7 +192,15 @@ impl ScopeMarker {
         }
         let mut out = tail.join(" ");
         out.push('\n');
-        out.push_str(&t!("workspace.scope.hint"));
+        // "Some cores are hidden" is false when every one of them is, and the difference is not
+        // pedantry: a user reading "some" next to an empty surface looks for the rest of the data,
+        // which is not there. Same recovery advice either way, so only the first clause moves.
+        let hint = if self.hides_everything() {
+            t!("workspace.scope.all_hidden_hint")
+        } else {
+            t!("workspace.scope.hint")
+        };
+        out.push_str(&hint);
         out
     }
 }

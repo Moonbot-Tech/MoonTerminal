@@ -283,12 +283,14 @@ impl StrategiesView {
                                     let Some(marker) = self.scope_marker.as_ref() else {
                                         return el;
                                     };
-                                    let facts = marker.facts();
-                                    let caption = facts.join(" ");
+                                    // `line`, not `facts`: this caption is centred under the
+                                    // headline with nothing to its left, so the footer tail's
+                                    // leading separator would open it with a stray bullet.
+                                    let caption = marker.line();
                                     if caption.is_empty() {
                                         return el;
                                     }
-                                    let tip = marker.tooltip(&facts);
+                                    let tip = marker.tooltip(std::slice::from_ref(&caption));
                                     let mut caption_el = div()
                                         .id("strat-tree-empty-caption")
                                         .text_size(design::t_caption(cx))
@@ -317,6 +319,33 @@ impl StrategiesView {
                             }
                         },
                     )),
+            )
+            // The scope marker for a PARTIAL hide, where the tree has rows and the empty overlay
+            // above never renders. Without it a three-core tree out of fifty-six looks like the
+            // whole fleet, and this window has no footer of its own to carry the fact — every
+            // other filtering surface states it, so silence here reads as "nothing is hidden".
+            // Withheld when the overlay is already saying it, or the sentence would appear twice.
+            .children(
+                self.scope_marker
+                    .as_ref()
+                    .filter(|marker| {
+                        marker.hides_anything()
+                            && empty != Some(empty_state::TreeEmptyState::HiddenByPreset)
+                    })
+                    .map(|marker| {
+                        let caption = marker.line();
+                        let tip = marker.tooltip(std::slice::from_ref(&caption));
+                        div()
+                            .id("strat-tree-scope-marker")
+                            .w_full()
+                            .flex_none()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .text_size(design::t_caption(cx))
+                            .text_color(moon(p.text_muted))
+                            .tooltip(crate::panels::common::text_tooltip(SharedString::from(tip)))
+                            .child(caption)
+                    }),
             )
             // Bottom action bar.
             .child(div().w_full().h(px(1.0)).bg(border))
