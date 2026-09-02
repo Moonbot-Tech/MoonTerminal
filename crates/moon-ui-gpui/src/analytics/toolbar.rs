@@ -234,19 +234,55 @@ pub(super) fn sole_core_name<'a>(
 /// Args:
 ///     selected: Retained explicit core ids; an empty set represents the unpinned All row.
 ///     workspace: Concrete Auto-workspace ids when a selected rail core pins Analytics.
+///     hidden: Configured cores the Classic viewing preset hides, or `None` when it hides none.
+///     universe: Every core this window's replica read can name, for expanding an implicit "All"
+///         selection before subtracting `hidden` from it.
 ///
 /// Returns:
-///     Workspace ids when pinned, every retained explicit id when unpinned, or an empty unfiltered
-///     list for All. An empty pinned Auto group uses core id zero, which cannot be assigned to a
-///     reconciled server, so it stays an explicit no-match query instead of broadening globally.
+///     Workspace ids when pinned (`hidden` never applies to a pinned Auto rail — the group already
+///     bounds it), every retained explicit id when unpinned and nothing is hidden, the unfiltered
+///     retained selection while the implicit All row cannot yet be expanded (`universe` still
+///     empty — a fresh window's first query, before its replica read has returned), or an empty
+///     unfiltered list for All once the universe is known. An empty pinned Auto group uses core id
+///     zero, which cannot be assigned to a reconciled server, so it stays an explicit no-match
+///     query instead of broadening globally; the same sentinel covers a non-`None` `hidden` whose
+///     subtraction leaves no core selected, since an empty `Vec` there would mean "unfiltered" and
+///     reproduce the original bug.
 pub(super) fn analytics_core_filter_ids(
     selected: &HashSet<u64>,
     workspace: Option<&[u64]>,
+    hidden: Option<&[u64]>,
+    universe: &[(u64, String)],
 ) -> Vec<u64> {
     match workspace {
-        Some([]) => vec![0],
-        Some(cores) => cores.to_vec(),
-        None => selected.iter().copied().collect(),
+        Some([]) => return vec![0],
+        Some(cores) => return cores.to_vec(),
+        None => {}
+    }
+    let Some(hidden) = hidden else {
+        return selected.iter().copied().collect();
+    };
+    // A fresh window's replica universe starts empty and only arrives with the FIRST query's own
+    // result, after this same call already built that query. An empty `selected` (the implicit
+    // "All" row) can only be expanded against a non-empty `universe`; expanding it against an
+    // empty one would collapse to the no-match sentinel before a single core is known, turning a
+    // brand-new Classic-scoped window falsely empty instead of leaving it unfiltered for one frame
+    // like every other bootstrap read in this view. A non-empty EXPLICIT `selected` never depends
+    // on `universe` at all and is filtered against `hidden` unconditionally below, exactly as it
+    // always was.
+    if selected.is_empty() && universe.is_empty() {
+        return selected.iter().copied().collect();
+    }
+    let base: Vec<u64> = if selected.is_empty() {
+        universe.iter().map(|(id, _)| *id).collect()
+    } else {
+        selected.iter().copied().collect()
+    };
+    let filtered: Vec<u64> = base.into_iter().filter(|id| !hidden.contains(id)).collect();
+    if filtered.is_empty() {
+        vec![0]
+    } else {
+        filtered
     }
 }
 
@@ -335,7 +371,17 @@ impl AnalyticsView {
                 .filter(|(core, _)| scope.core_ids.contains(core))
                 .cloned()
                 .collect(),
-            None => self.cores.clone(),
+            // Unpinned: the universe narrowed by whatever the Classic viewing preset hides — the
+            // pinned arm above is untouched, since Auto membership is a separate, group-scoped
+            // question `analytics_workspace_scope` already answers.
+            None => {
+                let hidden = self.hidden_core_ids();
+                self.cores
+                    .iter()
+                    .filter(|(core, _)| hidden.is_none_or(|h| !h.contains(core)))
+                    .cloned()
+                    .collect()
+            }
         };
         let core_caption = if workspace_pinned {
             sole_core_name(&presented_cores, &presented_selection)
@@ -620,7 +666,16 @@ impl AnalyticsView {
                     .filter(|(core, _)| scope.core_ids.contains(core))
                     .cloned()
                     .collect(),
-                None => self.cores.clone(),
+                // Unpinned: narrowed by whatever the Classic viewing preset hides, same as
+                // `tabs_bar`'s `presented_cores`; the pinned arm above is untouched.
+                None => {
+                    let hidden = self.hidden_core_ids();
+                    self.cores
+                        .iter()
+                        .filter(|(core, _)| hidden.is_none_or(|h| !h.contains(core)))
+                        .cloned()
+                        .collect()
+                }
             };
             (
                 crate::core_order::CoreOrder::new(&backend.config).from_db(db_cores),

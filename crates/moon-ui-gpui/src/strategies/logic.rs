@@ -19,11 +19,11 @@ use crate::Backend;
 /// Return whether one core belongs to the singleton's effective Strategies scope.
 ///
 /// Args:
-///     workspace: Concrete Auto ids, or `None` for Classic all-core behavior.
+///     workspace: Concrete scoped ids from Auto or Classic membership, or `None` when unscoped.
 ///     core: Core to test.
 ///
 /// Returns:
-///     `true` in Classic or when Auto currently exposes the core.
+///     `true` when the window is unscoped or its current scope includes the core.
 pub(super) fn strategy_core_is_visible(workspace: Option<&[CoreId]>, core: CoreId) -> bool {
     workspace.is_none_or(|cores| cores.contains(&core))
 }
@@ -32,7 +32,7 @@ pub(super) fn strategy_core_is_visible(workspace: Option<&[CoreId]>, core: CoreI
 ///
 /// Args:
 ///     keys: Retained primary or multi-selection keys.
-///     workspace: Concrete Auto ids, or `None` for Classic.
+///     workspace: Concrete scoped ids from Auto or Classic membership, or `None` when unscoped.
 ///
 /// Returns:
 ///     Only keys whose cores are currently visible.
@@ -51,7 +51,7 @@ pub(super) fn selected_key(st: &StrategiesView) -> Option<Key> {
         .filter(|(core, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
 }
 
-/// Return connected strategy-tree roots constrained to the singleton workspace when present.
+/// Return connected strategy-tree roots constrained to the singleton display scope when present.
 pub(super) fn visible_strategy_cores(
     st: &StrategiesView,
     backend: &Backend,

@@ -275,6 +275,18 @@ fn singleton_scope_requires_the_last_auto_owner() {
     assert_eq!(owner.selected_core, Some(11));
 }
 
+/// `workspace.rs:resolve_singleton_workspace` must reject Classic even for a live focused group;
+/// removing its Auto-mode gate would make Analytics and Strategies treat a Classic group as their
+/// live Auto owner and retarget their selected-core actions.
+#[test]
+fn singleton_scope_stays_auto_only_for_a_live_classic_owner() {
+    assert_eq!(
+        resolve_singleton_workspace("classic", true, WorkspaceMode::Classic, Some(7), &[7]),
+        None,
+        "a focused Classic group supplies display membership, never an Auto singleton workspace"
+    );
+}
+
 /// Protects active detached-window input from repeatedly invalidating singleton consumers.
 ///
 /// Plausible breakage: assigning the owner unconditionally on every mouse event increments the

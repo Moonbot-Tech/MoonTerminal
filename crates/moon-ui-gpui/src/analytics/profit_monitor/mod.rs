@@ -1247,8 +1247,8 @@ fn window_width(window: &Window) -> f32 {
 fn capture_live_context(backend: &Backend) -> LiveContext {
     let config = &backend.config;
     // The Profit Monitor is an Analytics surface that lists cores and folds them into money, so
-    // it is `Singleton`: it inherits the focused Auto workspace's preset like Strategies, showing
-    // everything and marking nothing when no group is focused.
+    // it is `Singleton`: it inherits the last focused group's preset (Auto or Classic) like
+    // Strategies, showing everything and marking nothing when no group is focused.
     let preset = backend.display_preset(crate::workspace::DisplayOwner::Singleton);
     let configured_total = config.servers.len();
     let core_names = config

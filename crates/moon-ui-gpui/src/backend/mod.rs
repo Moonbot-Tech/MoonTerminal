@@ -828,7 +828,7 @@ impl Backend {
     ///
     /// Args:
     ///     owner: What kind of surface is asking — a group-owning window, or a singleton that
-    ///         inherits the focused Auto workspace.
+    ///         inherits the last group whose window was focused, in either preset.
     ///
     /// Returns:
     ///     The resolved preset, or `None` when a singleton has no live focus — meaning show
@@ -1361,9 +1361,7 @@ impl Backend {
         }
         let mode_changed = self.workspace_mode(group) != mode;
         let focus_changed = match mode {
-            WorkspaceMode::Classic => {
-                crate::workspace::close_workspace_owner(&mut self.workspace_focus, group)
-            }
+            WorkspaceMode::Classic => false,
             WorkspaceMode::AutoTrading => {
                 crate::workspace::focus_workspace_owner(&mut self.workspace_focus, group)
             }
@@ -1459,7 +1457,13 @@ impl Backend {
         true
     }
 
-    /// Record a live Auto group as the owner of singleton scope.
+    /// Record a live group's window as the current singleton-tool owner.
+    ///
+    /// Any group whose window is live may own singleton scope now — this is the display-membership
+    /// question (`Backend::display_preset(DisplayOwner::Singleton)`), independent of Auto's own
+    /// selected-core question (`Backend::singleton_workspace`), which re-gates on
+    /// `WorkspaceMode::AutoTrading` itself inside `workspace::resolve_singleton_workspace` and is
+    /// therefore unaffected by widening this setter.
     ///
     /// Args:
     ///     group: Group whose toolbar or interaction established ownership.
@@ -1467,9 +1471,8 @@ impl Backend {
     ///
     /// Returns:
     ///     `true` when focus moved to this group.
-    pub(crate) fn focus_auto_workspace(&mut self, group: &str, cx: &mut Context<Self>) -> bool {
-        if self.workspace_mode(group) != WorkspaceMode::AutoTrading
-            || !self.group_windows.contains_key(group)
+    pub(crate) fn focus_singleton_owner(&mut self, group: &str, cx: &mut Context<Self>) -> bool {
+        if !self.group_windows.contains_key(group)
             || !crate::workspace::focus_workspace_owner(&mut self.workspace_focus, group)
         {
             return false;
@@ -1518,8 +1521,7 @@ impl Backend {
         cx: &mut Context<Self>,
     ) {
         let focus_valid = self.workspace_focus.as_ref().is_none_or(|focus| {
-            self.workspace_mode(focus.group()) == WorkspaceMode::AutoTrading
-                && self.group_is_configured(focus.group())
+            self.group_is_configured(focus.group())
                 && !closed_groups.iter().any(|group| group == focus.group())
                 && (self.group_windows.contains_key(focus.group())
                     || self.opening_group_windows.contains(focus.group()))

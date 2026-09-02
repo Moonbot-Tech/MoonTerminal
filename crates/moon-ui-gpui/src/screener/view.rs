@@ -176,7 +176,8 @@ impl ScreenerView {
         let b = self.backend.read(cx);
         let source = b.session.market_source();
         // Screener is a group-less singleton, following the Strategies-window pattern (`mod.rs`),
-        // so it inherits the focused Auto workspace's preset rather than owning a group of its own.
+        // so it inherits the last focused group's preset, Auto or Classic, rather than owning a
+        // group of its own.
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
         // A retained core filter can point at a core the current preset just hid; keep it selected
         // and it filters every group away, producing an unexplained empty view. Fall back to the

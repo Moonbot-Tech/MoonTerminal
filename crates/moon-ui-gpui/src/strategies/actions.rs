@@ -25,9 +25,9 @@ pub(super) struct FieldEditPlan {
 /// Return whether every captured target still belongs to the same workspace generation.
 ///
 /// Args:
-///     captured_generation: Auto generation captured by the producer, or `None` in Classic.
-///     current_generation: Auto generation visible immediately before dispatch.
-///     workspace: Current concrete Auto cores, or `None` in Classic.
+///     captured_generation: Generation captured by the producer, or `None` when unscoped.
+///     current_generation: Generation visible immediately before dispatch, or `None` when unscoped.
+///     workspace: Concrete scoped ids from Auto or Classic membership, or `None` when unscoped.
 ///     targets: Complete captured `(core, strategy)` identity set.
 ///
 /// Returns:
@@ -61,8 +61,8 @@ fn strategy_targets_exist(targets: &[Key], mut exists: impl FnMut(Key) -> bool) 
 /// Args:
 ///     captured: Immutable plan carried by the rendered Apply button.
 ///     current: Fresh plan derived immediately before dispatch.
-///     current_generation: Current Auto workspace generation, or `None` in Classic.
-///     workspace: Current concrete Auto core set, or `None` in Classic.
+///     current_generation: Current workspace generation, or `None` when unscoped.
+///     workspace: Concrete scoped ids from Auto or Classic membership, or `None` when unscoped.
 ///
 /// Returns:
 ///     `true` only when authority, targets, keys, and values are all unchanged.
@@ -86,10 +86,10 @@ impl StrategiesView {
     /// Args:
     ///     cores: Canonically ordered cores rendered by the Strategies tree.
     ///     store: Current strategy snapshots used by that render.
-    ///     cx: Application context used to capture the Auto workspace generation.
+    ///     cx: Application context used to capture the current workspace generation.
     ///
     /// Returns:
-    ///     Immutable action payload; hidden retained Classic staging is not included in Auto.
+    ///     Immutable action payload; retained staging outside the current scope is not included.
     pub(super) fn start_stop_plan(
         &self,
         cores: &[(CoreId, String)],
@@ -220,7 +220,7 @@ impl StrategiesView {
     /// Capture the exact workspace-visible field-edit payload represented by Apply.
     ///
     /// Args:
-    ///     cx: Application context used to capture the Auto workspace generation.
+    ///     cx: Application context used to capture the current workspace generation.
     ///
     /// Returns:
     ///     Canonical grouped edits plus every concrete `(core, strategy)` target.
@@ -263,7 +263,7 @@ impl StrategiesView {
         }
     }
 
-    /// Dispatch one exact field-edit plan and retain every hidden Classic draft.
+    /// Dispatch one exact field-edit plan and retain every draft hidden by the current scope.
     ///
     /// The current visible plan and workspace generation must still equal the producer snapshot;
     /// otherwise every target is refused before the first core command.
@@ -311,20 +311,21 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Capture or read the singleton Auto workspace generation for delayed action guards.
+    /// Capture or read the singleton workspace generation for delayed action guards.
     ///
     /// Args:
     ///     cx: Application context used to read the shared revision entity.
     ///
     /// Returns:
-    ///     Current generation in Auto, or `None` for intentionally unscoped Classic behavior.
+    ///     Current generation whenever `workspace_cores` scopes this window (Auto, or Classic
+    ///     membership hiding at least one core), or `None` when nothing confines it.
     pub(super) fn action_workspace_generation(&self, cx: &App) -> Option<u64> {
         self.workspace_cores.as_ref()?;
         let revision = self.backend.read(cx).workspace_revision();
         Some(revision.read(cx).generation())
     }
 
-    /// Discard workspace-visible field drafts while preserving hidden retained Classic drafts.
+    /// Discard workspace-visible field drafts while preserving drafts hidden by the current scope.
     ///
     /// Args:
     ///     cx: View context used to clear visible editor widgets and request repaint.

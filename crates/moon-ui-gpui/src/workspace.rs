@@ -197,7 +197,7 @@ pub(crate) struct WorkspaceFocus {
 }
 
 impl WorkspaceFocus {
-    /// Create focus for one live Auto workspace group.
+    /// Create focus for one live group.
     ///
     /// Args:
     ///     group: Group whose interaction or toolbar launch established ownership.
@@ -283,9 +283,10 @@ pub(crate) enum DisplayOwner<'a> {
     /// A window that owns a group: Shell, group panels, detached panels (`DetachedSpec.group`),
     /// chart tabs.
     Group(&'a str),
-    /// A singleton tool that INHERITS the focused Auto workspace: Analytics, Strategies, Profit
-    /// Monitor. Global Assets (`AssetsScope::All`) and Settings need no variant of their own —
-    /// they never call `display_preset` at all, resolving their own unscoped views by other means.
+    /// A singleton tool that INHERITS the last group whose window was focused, in either preset:
+    /// Analytics, Strategies, Profit Monitor. Global Assets (`AssetsScope::All`) and Settings need
+    /// no variant of their own — they never call `display_preset` at all, resolving their own
+    /// unscoped views by other means.
     Singleton,
 }
 
@@ -514,13 +515,11 @@ pub(crate) fn resolve_singleton_workspace(
     })
 }
 
-/// Clear singleton focus when its group loses Auto ownership.
-///
-/// The Backend uses this both when a group switches to Classic and when its primary window closes.
+/// Clear singleton focus when its group's live primary window closes.
 ///
 /// Args:
 ///     focus: Process-lifetime focus slot to reconcile.
-///     closed_group: Group that switched to Classic or lost its live primary window.
+///     closed_group: Group that lost its live primary window.
 ///
 /// Returns:
 ///     `true` when this group was the current owner and its focus was cleared.
@@ -543,7 +542,7 @@ pub(crate) fn close_workspace_owner(
 ///
 /// Args:
 ///     focus: Process-lifetime singleton owner slot to update.
-///     group: Auto group receiving active user interaction.
+///     group: Group receiving active user interaction.
 ///
 /// Returns:
 ///     `true` only when ownership moved, so callers publish no revision for repeated activity in
@@ -563,7 +562,7 @@ pub(crate) fn focus_workspace_owner(focus: &mut Option<WorkspaceFocus>, group: &
 ///
 /// Args:
 ///     focus: Process-lifetime singleton owner to reconcile in place.
-///     owner_valid: Whether the owner remains Auto, configured, and window-backed after all work.
+///     owner_valid: Whether the owner remains configured and window-backed after all work.
 ///
 /// Returns:
 ///     `true` only when an invalid owner was cleared during this final transition.

@@ -60,24 +60,78 @@ fn seed_selected_core_into(
     added
 }
 
-/// Resolve the singleton Auto owner's core roots and concrete rail selection together.
+/// Resolve the cores a Classic-focused singleton window may DISPLAY.
 ///
-/// One resolve for both answers: each `singleton_workspace()` call re-ranks the group's cores and
-/// re-checks every core's availability, so asking twice doubles the cost of opening this window
-/// and of every rail move it observes.
+/// [`singleton_strategy_scope`] answers only for an Auto owner, because
+/// `Backend::singleton_workspace` is Auto-only by construction
+/// (`workspace::resolve_singleton_workspace`). That is right for Auto's SELECTED-CORE question
+/// and wrong for the display one: under Classic the window never asked whether a core is a
+/// member of the preset it is being viewed under. This asks.
+///
+/// The universe is `config.servers` UNIONED with live sessions, not sessions alone: this list
+/// also gates retained per-core drafts (`logic::staged_count`, `logic::field_edit_count`), and a
+/// sessions-only list would silently drop a DISCONNECTED core's pending-change count — which is
+/// not a membership question. `Backend::core_displayed` admits any core absent from
+/// `config.servers`, so the union is exactly the complement of the hidden configured cores.
 ///
 /// Args:
-///     b: Backend supplying the singleton workspace and its effective scope.
+///     b: Backend supplying the display preset and the configured/live core universe.
 ///
 /// Returns:
-///     The visible core roots and the selected core, or `None` outside a singleton Auto owner.
+///     The shown cores, or `None` when unscoped (no Classic focus, or nothing is hidden) — the
+///     latter keeps every unaffected Classic state today byte-identical.
+fn singleton_display_cores(b: &Backend) -> Option<Vec<CoreId>> {
+    let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton)?;
+    if preset != moon_core::config::WorkspaceMode::Classic {
+        return None;
+    }
+    let preset = Some(preset);
+    let mut seen = HashSet::new();
+    let mut shown = Vec::new();
+    let mut excluded = false;
+    for id in b
+        .config
+        .servers
+        .iter()
+        .map(|server| server.id)
+        .chain(b.session.sessions().iter().map(|session| session.id))
+    {
+        if !seen.insert(id) {
+            continue;
+        }
+        if b.core_displayed(preset, id) {
+            shown.push(id);
+        } else {
+            excluded = true;
+        }
+    }
+    excluded.then_some(shown)
+}
+
+/// Resolve the singleton Auto owner's core roots and concrete rail selection together, or the
+/// Classic viewing preset's display membership.
+///
+/// One resolve for both Auto answers: each `singleton_workspace()` call re-ranks the group's
+/// cores and re-checks every core's availability, so asking twice doubles the cost of opening
+/// this window and of every rail move it observes. Outside an Auto owner, the viewing preset may
+/// still hide cores under Classic; `selected_core` is always `None` there, since
+/// Classic has no rail selection.
+///
+/// Args:
+///     b: Backend supplying the singleton workspace, its effective scope, and the Classic display
+///         preset.
+///
+/// Returns:
+///     The visible core roots and the selected core, or `None` when nothing is scope-bound.
 fn singleton_strategy_scope(b: &Backend) -> Option<(Vec<CoreId>, Option<CoreId>)> {
-    let workspace = b.singleton_workspace()?;
-    let cores = b
-        .effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All)
-        .ids()
-        .to_vec();
-    Some((cores, workspace.selected_core))
+    if let Some(workspace) = b.singleton_workspace() {
+        let cores = b
+            .effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All)
+            .ids()
+            .to_vec();
+        return Some((cores, workspace.selected_core));
+    }
+    singleton_display_cores(b).map(|cores| (cores, None))
 }
 
 /// Fold strategy and schema revisions only for cores visible in the current singleton scope.
@@ -209,9 +263,9 @@ impl StrategiesView {
                 return;
             }
             this.workspace_cores = next;
-            // Re-seed additively on an actual rail move because the singleton window outlives the
-            // selection. Existing expansions remain intact; returning to a manually collapsed core
-            // re-opens it.
+            // Re-seed additively when an Auto rail move changes the scope because the singleton
+            // window outlives the selection. Existing expansions remain intact; returning to a
+            // manually collapsed core re-opens it.
             let selected_core = scope.and_then(|(_, selected)| selected);
             seed_selected_core_into(
                 &mut this.expanded_cores,

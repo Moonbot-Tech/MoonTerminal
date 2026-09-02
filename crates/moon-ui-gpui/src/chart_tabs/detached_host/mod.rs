@@ -203,7 +203,7 @@ impl DetachedChartHost {
             if window.is_window_active() {
                 let group = this.group.clone();
                 this.backend
-                    .update(cx, |b, bcx| b.focus_auto_workspace(&group, bcx));
+                    .update(cx, |b, bcx| b.focus_singleton_owner(&group, bcx));
             }
         })
         .detach();

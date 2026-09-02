@@ -315,14 +315,14 @@ fn core_caption_tracks_explicit_group_application_without_surviving_manual_edits
 fn a_complete_explicit_selection_stays_a_bounded_query_filter() {
     let selected = HashSet::from([1, 2]);
     assert_eq!(
-        analytics_core_filter_ids(&selected, None)
+        analytics_core_filter_ids(&selected, None, None, &[])
             .into_iter()
             .collect::<HashSet<_>>(),
         selected,
         "a complete explicit selection must remain a bounded query filter"
     );
     assert!(
-        analytics_core_filter_ids(&HashSet::new(), None).is_empty(),
+        analytics_core_filter_ids(&HashSet::new(), None, None, &[]).is_empty(),
         "only the exclusive All state may produce an unfiltered query"
     );
 }
@@ -334,10 +334,13 @@ fn a_complete_explicit_selection_stays_a_bounded_query_filter() {
 fn workspace_query_wiring_preserves_retained_classic_selection() {
     let retained = HashSet::from([3, 5]);
 
-    assert_eq!(analytics_core_filter_ids(&retained, Some(&[11])), vec![11]);
+    assert_eq!(
+        analytics_core_filter_ids(&retained, Some(&[11]), None, &[]),
+        vec![11]
+    );
     assert_eq!(retained, HashSet::from([3, 5]));
     assert_eq!(
-        analytics_core_filter_ids(&retained, None)
+        analytics_core_filter_ids(&retained, None, None, &[])
             .into_iter()
             .collect::<HashSet<_>>(),
         retained
@@ -364,7 +367,7 @@ fn workspace_query_wiring_preserves_retained_classic_selection() {
 #[test]
 fn empty_workspace_scope_is_an_explicit_no_match_query() {
     assert_eq!(
-        analytics_core_filter_ids(&HashSet::new(), Some(&[])),
+        analytics_core_filter_ids(&HashSet::new(), Some(&[]), None, &[]),
         vec![0]
     );
 }

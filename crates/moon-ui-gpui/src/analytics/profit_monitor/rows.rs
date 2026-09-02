@@ -73,9 +73,10 @@ pub(super) struct LiveContext {
     pub(super) core_groups: Vec<CoreGroup>,
     /// Preset this window displays under.
     ///
-    /// The Profit Monitor is `DisplayOwner::Singleton`: it inherits the focused Auto workspace's
-    /// preset, `None` while no group is focused. Carried so [`crate::workspace::scope_marker`] can
-    /// build its facts from the same typed pair every other aggregate uses.
+    /// The Profit Monitor is `DisplayOwner::Singleton`: it inherits the last focused group's
+    /// preset (Auto or Classic), `None` while no group is focused. Carried so
+    /// [`crate::workspace::scope_marker`] can build its facts from the same typed pair every other
+    /// aggregate uses.
     pub(super) preset: Option<WorkspaceMode>,
     /// Configured cores before the membership filter ran.
     pub(super) configured_total: usize,

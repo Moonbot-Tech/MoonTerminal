@@ -15,6 +15,7 @@ mod charts;
 mod cumulative;
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use crate::load_state::Note;
 use moon_core::db::analytics::{Summary, TopTrade};
 use moon_core::util::fmt::{self, compact};
 
@@ -94,6 +95,35 @@ impl AnalyticsView {
     pub(super) fn summary_tab(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let data = match self.data.view(|d| d.cur.n == 0) {
             Ok(d) => d.clone(),
+            // An empty query result under a scope the viewing preset or the Auto rail narrowed
+            // must still say so — otherwise every core hidden reads as "nothing happened",
+            // rather than as the zero-core scope it actually is.
+            Err(Note::Empty) => {
+                let placeholder = super::note_el("an-summary-note", Note::Empty, 18.0, p, cx);
+                let Some(marker) = self.summary_scope_marker().filter(|m| m.hides_anything())
+                else {
+                    return placeholder;
+                };
+                let facts = marker.facts();
+                let text = facts.join(" ");
+                let tip = marker.tooltip(std::slice::from_ref(&text));
+                return v_flex()
+                    .child(
+                        div()
+                            .px(design::ui_px(cx, 18.0))
+                            .pt(design::ui_px(cx, 18.0))
+                            .child(
+                                div()
+                                    .id("an-summary-scope-marker")
+                                    .text_size(design::t_caption(cx))
+                                    .text_color(moon(p.text_muted))
+                                    .tooltip(crate::panels::common::text_tooltip(tip))
+                                    .child(text),
+                            ),
+                    )
+                    .child(placeholder)
+                    .into_any_element();
+            }
             Err(note) => return super::note_el("an-summary-note", note, 18.0, p, cx),
         };
         // Core series colors come from the server's SETTINGS (ServerConfig.color,
@@ -141,13 +171,11 @@ impl AnalyticsView {
                         // the axis row below the chart is free for the date ticks.
                         let total: f64 = data.days.iter().map(|d| d.profit).sum();
                         let shown = data.core_days.len().min(cumulative::MAX_CORE_LINES);
-                        // Workspace scope marker: whether the active Auto preset itself hid a
-                        // core from this window's read, distinct from the line-cap fact above,
-                        // which only names how many of the (already scoped) cores got a curve.
-                        let marker = self
-                            .workspace_scope
-                            .as_ref()
-                            .map(super::AnalyticsWorkspaceScope::scope_marker);
+                        // Scope marker: whether the active Auto preset OR the Classic viewing
+                        // preset hid a core from this window's read, distinct from the line-cap
+                        // fact above, which only names how many of the (already scoped) cores
+                        // got a curve.
+                        let marker = self.summary_scope_marker();
                         let marker_facts = marker.as_ref().map_or_else(Vec::new, |m| m.facts());
                         let head = h_flex()
                             .gap(design::ui_px(cx, 8.0))

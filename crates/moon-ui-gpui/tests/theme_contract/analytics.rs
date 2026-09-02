@@ -1208,15 +1208,25 @@ fn analytics_reopen_state_is_process_lifetime_only() {
     );
     let cores_selected = braced_body(&analytics, "fn cores_selected(");
     let read_core_ids = braced_body(&analytics, "fn read_core_ids(");
-    let filter_ids = braced_body(&toolbar, "pub(super) fn analytics_core_filter_ids(");
+    let filter_ids = code_only(braced_body(
+        &toolbar,
+        "pub(super) fn analytics_core_filter_ids(",
+    ));
     assert!(
         cores_selected.contains("&self.sel_cores")
             && cores_selected.contains("self.read_core_ids()")
             && read_core_ids.contains("scope.core_ids.as_slice()")
-            && filter_ids.contains("Some([]) => vec![0]")
-            && filter_ids.contains("Some(cores) => cores.to_vec()")
-            && filter_ids.contains("None => selected.iter().copied().collect()"),
-        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match, reading the filter (not action) authority"
+            && filter_ids.contains("Some([]) => return vec![0]")
+            && filter_ids.contains("Some(cores) => return cores.to_vec()")
+            && filter_ids.contains("let Some(hidden) = hidden else {")
+            && filter_ids.contains("return selected.iter().copied().collect();")
+            && filter_ids.contains("if selected.is_empty() && universe.is_empty()")
+            && filter_ids.contains("let base: Vec<u64> = if selected.is_empty() {")
+            && filter_ids.contains("universe.iter().map(|(id, _)| *id).collect()")
+            && filter_ids.contains("base.into_iter().filter(|id| !hidden.contains(id)).collect()")
+            && filter_ids.contains("if filtered.is_empty() {")
+            && filter_ids.contains("vec![0]"),
+        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match, then subtract Classic hidden membership without making a fresh implicit-All window falsely empty"
     );
     let workspace_observer = analytics
         .split("cx.observe(&workspace_revision")

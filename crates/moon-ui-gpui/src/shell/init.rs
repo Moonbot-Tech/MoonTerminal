@@ -348,7 +348,7 @@ impl Shell {
                 let group = this.group.clone();
                 this.backend.update(cx, |b, bcx| {
                     b.note_main_input(&group);
-                    b.focus_auto_workspace(&group, bcx);
+                    b.focus_singleton_owner(&group, bcx);
                 });
             }
         })

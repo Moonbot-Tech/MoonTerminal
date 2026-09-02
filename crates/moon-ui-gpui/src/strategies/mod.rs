@@ -88,7 +88,10 @@ pub struct StrategiesView {
     exchange_logos_ready: bool,
     /// Whether the settings popover is open in this process.
     settings_open: bool,
-    /// Concrete singleton Auto scope; `None` leaves the all-core Classic tree authoritative.
+    /// Cores this window may show, from whichever authority scoped it — the singleton Auto
+    /// owner's effective scope, or the Classic viewing preset's membership. `None` leaves the
+    /// all-core tree authoritative. Also confines write actions, by consequence: a core the tree
+    /// never rendered cannot be selected, staged or dragged.
     workspace_cores: Option<Vec<CoreId>>,
     /// Primary strategy key supplying the schema and sections.
     selected: Option<Key>,
