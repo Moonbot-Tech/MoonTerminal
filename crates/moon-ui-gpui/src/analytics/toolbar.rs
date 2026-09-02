@@ -22,6 +22,8 @@ use moon_core::db::integrity::Integrity;
 use moon_core::db::report_recovery::RecoveryNotice;
 use moon_core::db::{ProfitMetric, ReadFail, SideFilter};
 
+use crate::workspace::query_core_ids;
+
 /// One entry of the money-scale selector.
 ///
 /// The query stores two independent flags — the profit metric and the USDT preference — because
@@ -243,11 +245,10 @@ pub(super) fn sole_core_name<'a>(
 ///     bounds it), every retained explicit id when unpinned and nothing is hidden, the unfiltered
 ///     retained selection while the implicit All row cannot yet be expanded (`universe` still
 ///     empty — a fresh window's first query, before its replica read has returned), or an empty
-///     unfiltered list for All once the universe is known. An empty pinned Auto group uses core id
-///     zero, which cannot be assigned to a reconciled server, so it stays an explicit no-match
-///     query instead of broadening globally; the same sentinel covers a non-`None` `hidden` whose
-///     subtraction leaves no core selected, since an empty `Vec` there would mean "unfiltered" and
-///     reproduce the original bug.
+///     unfiltered list for All once the universe is known. An empty pinned Auto group, and a
+///     non-`None` `hidden` whose subtraction leaves no core selected, both route through
+///     [`query_core_ids`] as a PRESENT-but-empty scope: see `moon_core::config::NO_MATCH_CORE_UID`
+///     for why an empty `Vec` there would mean "unfiltered" and reproduce the original bug.
 pub(super) fn analytics_core_filter_ids(
     selected: &HashSet<u64>,
     workspace: Option<&[u64]>,
@@ -255,7 +256,7 @@ pub(super) fn analytics_core_filter_ids(
     universe: &[(u64, String)],
 ) -> Vec<u64> {
     match workspace {
-        Some([]) => return vec![0],
+        Some([]) => return query_core_ids(Vec::new(), true),
         Some(cores) => return cores.to_vec(),
         None => {}
     }
@@ -279,11 +280,7 @@ pub(super) fn analytics_core_filter_ids(
         selected.iter().copied().collect()
     };
     let filtered: Vec<u64> = base.into_iter().filter(|id| !hidden.contains(id)).collect();
-    if filtered.is_empty() {
-        vec![0]
-    } else {
-        filtered
-    }
+    query_core_ids(filtered, true)
 }
 
 /// Decide what the strip shows, given only the read outcome and whether the user opened it.

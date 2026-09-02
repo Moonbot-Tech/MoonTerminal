@@ -68,7 +68,7 @@ use crate::controls::date_range::{self, Bound};
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
 use crate::workspace::scope_marker::ScopeMarker;
-use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope, query_core_ids};
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
@@ -835,13 +835,16 @@ impl ReportPanel {
             .is_some_and(|scope| scope.is_auto_core())
     }
 
-    /// Return deterministic core IDs used by rows, totals, exports, menus, and metadata queries.
+    /// Return deterministic core IDs used by the coin menu's bulk scope and the export identity
+    /// token; the QUERY goes through [`Self::query_core_uids`] instead.
     ///
     /// Args:
     ///     b: Backend snapshot containing workspace authority.
     ///
     /// Returns:
-    ///     Effective group IDs or the standalone report's sorted retained IDs.
+    ///     Effective group IDs or the standalone report's sorted retained IDs. Never carries the
+    ///     no-match sentinel — an action path must never see a scope narrower than what is really
+    ///     selected.
     pub(super) fn effective_core_ids(&self, b: &Backend) -> Vec<CoreId> {
         if let Some(scope) = self.workspace_scope(b) {
             return scope.ids().to_vec();
@@ -849,5 +852,48 @@ impl ReportPanel {
         let mut retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
         retained.sort_unstable();
         retained
+    }
+
+    /// Return the core IDs the Report's DB read must send, distinguishing a scope that hides
+    /// every core from a Report with no scope at all.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority.
+    ///
+    /// Returns:
+    ///     The scope's own IDs, or `vec![NO_MATCH_CORE_UID]` when this group HAS an available
+    ///     universe ([`EffectiveCoreScope::membership_total`] above zero) and yet resolved to no
+    ///     IDs at all — whether because the preset hid every core or because an explicit selection
+    ///     names only unavailable ones. A group whose cores are not live yet reports a zero total
+    ///     and therefore stays unfiltered, so a starting window is never falsely empty. A
+    ///     standalone Report has no scope ([`Self::workspace_scope`] returns `None`) and falls
+    ///     through to [`Self::effective_core_ids`] unchanged.
+    pub(super) fn query_core_uids(&self, b: &Backend) -> Vec<CoreId> {
+        // Resolved ONCE: `effective_workspace_scope` walks the group, filters availability and
+        // then membership, so asking twice — once for the ids, once for the marker — would repeat
+        // that whole pass on every requery for no data dependency.
+        let Some(scope) = self.workspace_scope(b) else {
+            // ABSENT scope. A standalone Report keeps its retained filter verbatim, where an empty
+            // selection still means "every core".
+            return self.effective_core_ids(b);
+        };
+        // PRESENT scope. `membership_total` counts the cores that survived AVAILABILITY, before
+        // membership ran, so it answers "does this group have a universe to scope against at all".
+        // That is the honest test, and it is not `hides_anything()`: an explicit selection whose
+        // every core is offline resolves to no ids while membership hid nothing, and reading that
+        // as unfiltered would broaden a narrow selection to the whole fleet. A group with no live
+        // cores yet still reports zero here, so a starting window stays unfiltered.
+        //
+        // KNOWN CONSEQUENCE of that last clause, and it is a deliberate trade rather than an
+        // oversight. `Backend::group_cores` is session-derived, so "starting up" and "every core
+        // in this group just disconnected" are the SAME state here — both report zero — and this
+        // read therefore widens to every core in the report database when a live group goes fully
+        // offline. Narrowing it would blank a starting window instead, which the goal this code
+        // came from ruled out explicitly: an empty terminal for the wrong reason is worse than a
+        // wide one. Telling the two apart needs a universe that is not session-derived (the
+        // group's CONFIGURED cores), which this path does not have today. Pre-existing: an empty
+        // `core_uids` has always meant unfiltered, so this state read the same way before the
+        // sentinel existed.
+        query_core_ids(scope.ids().to_vec(), scope.membership_total() > 0)
     }
 }

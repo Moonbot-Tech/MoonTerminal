@@ -1024,5 +1024,22 @@ impl AppConfig {
     }
 }
 
+/// Sentinel uid used to represent a present-but-empty core scope.
+///
+/// A caller that holds a scope which is PRESENT but EMPTY (every core it names has been filtered
+/// out) must query for something that matches nothing, rather than an empty uid list — an empty
+/// list means UNFILTERED everywhere it is read (see [`crate::db::ReportFilter`] and
+/// `crate::db::analytics::Query::cores`). On a normally reconciled configuration, uid 0 is
+/// outside the issued range: [`AppConfig::FIRST_ISSUED_UID`] is 1 and [`UidCounter`] advances from
+/// that floor. The counter's documented `u64::MAX` wrap remains an exceptional corrupt-state
+/// limitation, so this sentinel relies on the normal non-wrapping UID range rather than proving an
+/// absolute no-match invariant.
+///
+/// The `const _` assertion below ties this sentinel to the allocator floor at COMPILE TIME: any
+/// future change that lets `FIRST_ISSUED_UID` reach 0 fails the build here instead of silently
+/// invalidating the normal-range assumption this sentinel relies on.
+pub const NO_MATCH_CORE_UID: u64 = 0;
+const _: () = assert!(NO_MATCH_CORE_UID < AppConfig::FIRST_ISSUED_UID);
+
 #[cfg(test)]
 mod structural_sig_tests;

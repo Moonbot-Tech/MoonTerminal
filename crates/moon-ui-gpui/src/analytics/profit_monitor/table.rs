@@ -42,6 +42,7 @@ use crate::controls::core_run::{RunKey, RunScope, RunSlots, reserved_cell, run_c
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use crate::media::exchange_logos::exchange_logo;
+use crate::workspace::scope_marker::ScopeMarker;
 use moon_core::venue::Brand;
 
 /// Render a centered neutral message.
@@ -92,14 +93,19 @@ pub(super) fn centered_alert(title: String, detail: String, cx: &App) -> AnyElem
 /// Args:
 ///     totals: Per-quote safe totals.
 ///     show_trades: Whether the current width retains the aggregate trade count.
+///     scope_marker: This surface's marker, built from the same live context the query used. This
+///         arm carried no marker at all before §4.3 — its totals are scoped exactly like the table's
+///         now, and it needs one just as much.
 ///     palette: Active MoonUI palette.
 ///     cx: Render context.
 ///
 /// Returns:
-///     Explanation and quote chips, with the aggregate trade count when space permits.
+///     Explanation and quote chips, with the aggregate trade count when space permits and a soft
+///     scope caption when the active preset hides at least one configured core.
 pub(super) fn split_body(
     totals: &moon_core::db::QuoteBreakdown,
     show_trades: bool,
+    scope_marker: ScopeMarker,
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -148,6 +154,21 @@ pub(super) fn split_body(
                 div()
                     .text_color(moon(palette.text_soft))
                     .child(t!("profit_monitor.trades_total", n = totals.orders).to_string()),
+            )
+        })
+        .when(scope_marker.hides_anything(), |body| {
+            // The same facts the Ready footer states, AND the same recovery hint: the marker's
+            // contract is that a surface which states its scope also says how to widen it, and a
+            // Split body states scoped money exactly as a Ready one does.
+            let facts = scope_marker.facts();
+            body.child(
+                div()
+                    .id("pm-split-scope-marker")
+                    .text_color(moon(palette.text_soft))
+                    .child(facts.join(" "))
+                    .tooltip(crate::panels::common::text_tooltip(
+                        scope_marker.tooltip(&facts),
+                    )),
             )
         })
         .into_any_element()
@@ -348,8 +369,14 @@ pub(super) fn profit_column(request: ColumnRequest<'_>, cx: &App) -> (ProfitColu
 ///     flash: Live arrival stamps, keyed by the core that closed the trade.
 ///     selection: Cores currently broadcast to the main window; empty means no filter.
 ///     scroll: Retained vertical-list position.
-///     scope_marker_tooltip: Workspace scope marker recovery text for the grand-total footer, or
-///         `None` when the active preset hides nothing.
+///     scope_marker: This surface's marker, built from the same live context the scoped query used.
+///         Its facts are spliced into the grand-total footer's own label as visible text, and the
+///         same facts back the footer's tooltip — a tooltip alone is not a scope statement.
+///     action_cores: Cores the header's own FLEET run cell may command, independent of the active
+///         preset's display narrowing — see `LiveContext::action_core_ids`. Never the union of the
+///         (possibly display-scoped) per-row `run_scopes` below, or a hidden core's row taking its
+///         own button with it would also narrow this table-wide cell, which commands rather than
+///         merely reports.
 ///     palette: Active MoonUI palette.
 ///     view: Owning monitor entity receiving sortable-header actions.
 ///     cx: Application context used for rendering.
@@ -368,7 +395,8 @@ pub(super) fn table(
     flash: &crate::pulse::Arrivals<CoreId>,
     selection: &HashSet<CoreId>,
     scroll: &MoonVirtualListScrollHandle,
-    scope_marker_tooltip: Option<String>,
+    scope_marker: ScopeMarker,
+    action_cores: &[CoreId],
     palette: MoonPalette,
     view: Entity<ProfitMonitorView>,
     backend: Entity<Backend>,
@@ -495,10 +523,11 @@ pub(super) fn table(
     } else {
         Vec::new()
     };
-    // The heading's own run cell commands EVERY core the table is showing. Built here, where the
-    // entries are still the plain vector, and passed in already rendered: the heading itself owns
-    // no backend and must not learn to.
-    let fleet = fleet_scope(&run_scopes, slots, prefs.header_controls)
+    // The heading's own run cell commands EVERY core its ACTION authority names, never only the
+    // ones the display scope happened to leave in `entries` — see `action_cores`'s own doc. Built
+    // here, where the entries are still the plain vector, and passed in already rendered: the
+    // heading itself owns no backend and must not learn to.
+    let fleet = fleet_scope(action_cores, slots, prefs.header_controls)
         .and_then(|scope| run_cell(&scope, &backend, palette, cx))
         .or_else(|| reserved_cell(slots, cx));
     let header = table_header(
@@ -632,8 +661,21 @@ pub(super) fn table(
     .radius(0.0);
     let (total_profit, total_profit_sign) =
         format_profit(total.profit, total.last_profit, unit, form);
+    // Visible statement, not only a tooltip: a hidden marker never told anyone their money was
+    // scoped. Clips LAST, after the money, by riding the footer's own existing name cell — the
+    // same tail order the Report's footer already uses for its own facts.
+    let scope_facts = scope_marker.facts();
+    let grand_total_label = if scope_facts.is_empty() {
+        t!("profit_monitor.grand_total").to_string()
+    } else {
+        format!(
+            "{} {}",
+            t!("profit_monitor.grand_total"),
+            scope_facts.join(" ")
+        )
+    };
     let footer = table_row(
-        t!("profit_monitor.grand_total").to_string(),
+        grand_total_label,
         total_profit,
         total_profit_sign,
         format_trade_count(total.trades),
@@ -673,8 +715,10 @@ pub(super) fn table(
     .font_weight(FontWeight::SEMIBOLD)
     .border_t(px(2.0))
     .border_color(moon_alpha(palette.amber, 0.7))
-    .when_some(scope_marker_tooltip, |element, tip| {
-        element.tooltip(crate::panels::common::text_tooltip(tip))
+    .when(scope_marker.hides_anything(), |element| {
+        element.tooltip(crate::panels::common::text_tooltip(
+            scope_marker.tooltip(&scope_facts),
+        ))
     });
 
     v_flex()
@@ -687,47 +731,34 @@ pub(super) fn table(
         .into_any_element()
 }
 
-/// Build the scope of the heading's own run cell: every core ANY line of the table commands.
+/// Build the scope of the heading's own run cell: every core its ACTION authority names.
 ///
-/// The one cell in the window that acts on the whole table, which is why it is assembled here and
-/// not in the per-line pass: its scope is the union of every line's own scope, deduplicated, so a
-/// core saved into three groups is commanded once and a group caption can never reach a core its
-/// own heading does not. Taken from `scope_cores` for exactly that reason — a caption stands for
-/// its configured members, which in Core mode include cores that closed no trade and therefore
-/// have no row.
+/// The one cell in the window that acts on the whole table, which is why it takes its OWN input
+/// rather than the per-line pass's: unioning the (possibly display-scoped) row scopes would let the
+/// active preset narrow this table-wide COMMAND cell the moment it hides a core that traded — see
+/// `LiveContext::action_core_ids`'s own doc for why that is a distinct failure from a hidden row
+/// losing its own button, which is fine. `action_cores` already comes deduplicated, one entry per
+/// configured server.
 ///
 /// Restart is deliberately withheld — "restart the fleet" is not an action this window offers, and
 /// the scope's own single-core guard would still hand it over on a table holding exactly one core.
 /// The status slot draws its folded dot, which reports rather than commands.
 ///
-/// Cost: one store lookup per core in the union, once per BODY build — like the flash, selection
-/// and logo passes beside it, and like them not per frame. Taken from the scopes the per-line pass
-/// already resolved rather than walking the entries a second time.
-///
 /// Args:
-///     scopes: The per-line run scopes, already resolved for this render.
+///     action_cores: Every core the header cell may command, resolved once per body build.
 ///     slots: Slots the table reserves, which decide what the cell may fill.
 ///     enabled: The `header_controls` preference; the cell exists only when it is on.
 ///
 /// Returns:
 ///     The heading's scope, or `None` when the table commands nothing — the preference is off, no
 ///     control slot is reserved, or no core is in scope.
-fn fleet_scope(scopes: &[Option<RunScope>], slots: RunSlots, enabled: bool) -> Option<RunScope> {
-    if !enabled || !(slots.trading || slots.auto) {
+fn fleet_scope(action_cores: &[CoreId], slots: RunSlots, enabled: bool) -> Option<RunScope> {
+    if !enabled || !(slots.trading || slots.auto) || action_cores.is_empty() {
         return None;
     }
-    let mut seen = HashSet::with_capacity(scopes.len());
-    let mut cores: Vec<CoreId> = Vec::with_capacity(scopes.len());
-    for scope in scopes.iter().flatten() {
-        for core in scope.cores.iter() {
-            if seen.insert(*core) {
-                cores.push(*core);
-            }
-        }
-    }
-    (!cores.is_empty()).then(|| RunScope {
+    Some(RunScope {
         key: RunKey::Fleet,
-        cores: cores.into(),
+        cores: action_cores.into(),
         reserve: slots,
         // Every reserved slot, the status dot included: this cell exists only because the heading
         // preference asked for it. The restart button is withheld by `allows_restart` alone.

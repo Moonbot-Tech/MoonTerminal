@@ -308,7 +308,10 @@ pub enum RowScope {
 /// Complete filter shared by Report rows, totals, export, and strategy discovery.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReportFilter {
-    /// Selected cores for the multi-select filter; empty means all cores.
+    /// Selected cores for the multi-select filter; empty means all cores. A caller holding a
+    /// scope that is PRESENT but EMPTY (every named core has been filtered out) must send
+    /// [`crate::config::NO_MATCH_CORE_UID`] rather than an empty list, or the read broadens to
+    /// every core instead of returning none.
     pub core_uids: Vec<u64>,
     pub date_from: Option<i64>,
     pub date_to: Option<i64>,

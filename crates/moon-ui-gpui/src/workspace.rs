@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use gpui::Context;
-use moon_core::config::{TransportVersion, WorkspaceMode};
+use moon_core::config::{NO_MATCH_CORE_UID, TransportVersion, WorkspaceMode};
 use moon_core::feed::{ConnFault, ConnStatus, CoreStartupStatus};
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
@@ -414,6 +414,52 @@ impl EffectiveCoreScope {
             EffectiveScopeKind::AutoOverview => EffectiveScopeLabel::Overview,
             EffectiveScopeKind::AutoCore => EffectiveScopeLabel::Core(self.ids[0]),
         }
+    }
+}
+
+/// Turn a resolved scope's IDs into the query a DB read must send, distinguishing an ABSENT
+/// scope from a PRESENT-but-empty one.
+///
+/// `moon-core`'s DB reads treat an empty uid list as UNFILTERED (see
+/// `moon_core::db::ReportFilter::core_uids`), which is exactly right when there is no scope at
+/// all — but wrong when a scope IS in effect and every core it named has been filtered out.
+/// `scoped` is how the caller tells those apart.
+///
+/// **`scoped` is a per-caller JUDGEMENT, not one fixed expression** — an earlier draft of this
+/// contract demanded every caller pass `ScopeMarker::hides_anything()`, and that is now false for
+/// one of the three. What every caller MUST answer is "is an empty resolved list here a real
+/// exclusion, or simply the absence of a scope"; the right way to answer it depends on what can
+/// empty that surface's list:
+///
+/// - `panels::report::ReportPanel::query_core_uids` passes
+///   `EffectiveCoreScope::membership_total() > 0`. Its list can also be emptied by an explicit
+///   user selection naming only unavailable cores, which membership never hid, so
+///   `hides_anything()` would answer `false` there and wrongly broaden a narrow selection to the
+///   whole fleet.
+/// - `analytics::profit_monitor::model::scoped_query_core_ids` passes `hides_anything()`, behind
+///   a short-circuit to an empty vec. Its scope is purely membership, so no other cause can empty
+///   it, and `configured_total > 0` would wrongly filter when nothing is hidden.
+/// - `analytics::toolbar::analytics_core_filter_ids` passes `true` at both of its sites, having
+///   already established the scope is present at each.
+///
+/// The invariant that DOES hold everywhere: `scoped` is never the raw `ids.is_empty()`, which
+/// would make the sentinel unreachable, and a surface whose rows CAN be emptied by a cause its own
+/// marker cannot express owes the user some other statement of why — see that caller's own notes.
+///
+/// Args:
+///     ids: The scope's resolved core IDs, however it got them.
+///     scoped: Whether an empty `ids` here means a real exclusion rather than an absent scope.
+///         Never the raw `ids.is_empty()`.
+///
+/// Returns:
+///     `ids` unchanged when `scoped` is `false`, or `ids` is non-empty; otherwise
+///     `vec![moon_core::config::NO_MATCH_CORE_UID]`, the present-empty encoding that matches no
+///     row while core UIDs remain in their normal non-wrapping issued range.
+pub(crate) fn query_core_ids(ids: Vec<CoreId>, scoped: bool) -> Vec<CoreId> {
+    if scoped && ids.is_empty() {
+        vec![NO_MATCH_CORE_UID]
+    } else {
+        ids
     }
 }
 

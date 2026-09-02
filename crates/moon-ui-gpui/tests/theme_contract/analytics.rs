@@ -1216,7 +1216,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
         cores_selected.contains("&self.sel_cores")
             && cores_selected.contains("self.read_core_ids()")
             && read_core_ids.contains("scope.core_ids.as_slice()")
-            && filter_ids.contains("Some([]) => return vec![0]")
+            && filter_ids.contains("Some([]) => return query_core_ids(Vec::new(), true)")
             && filter_ids.contains("Some(cores) => return cores.to_vec()")
             && filter_ids.contains("let Some(hidden) = hidden else {")
             && filter_ids.contains("return selected.iter().copied().collect();")
@@ -1224,8 +1224,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && filter_ids.contains("let base: Vec<u64> = if selected.is_empty() {")
             && filter_ids.contains("universe.iter().map(|(id, _)| *id).collect()")
             && filter_ids.contains("base.into_iter().filter(|id| !hidden.contains(id)).collect()")
-            && filter_ids.contains("if filtered.is_empty() {")
-            && filter_ids.contains("vec![0]"),
+            && filter_ids.contains("query_core_ids(filtered, true)"),
         "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match, then subtract Classic hidden membership without making a fresh implicit-All window falsely empty"
     );
     let workspace_observer = analytics
@@ -2528,8 +2527,8 @@ fn the_run_column_stays_wired_and_marks_what_the_core_has_not_confirmed() {
         table.contains("fn fleet_scope(")
             && table.contains("key: RunKey::Fleet")
             && table.contains(".children(run_cell)")
-            && table.contains("fleet_scope(&run_scopes, slots, prefs.header_controls)"),
-        "the heading's table-wide controls must be their own opt-in, built from the scopes the row pass already resolved"
+            && table.contains("fleet_scope(action_cores"),
+        "the heading's table-wide controls must be their own opt-in and command action authority independent of the rows' display scoping"
     );
     assert!(
         control.contains("fn allows_restart(&self) -> bool {")

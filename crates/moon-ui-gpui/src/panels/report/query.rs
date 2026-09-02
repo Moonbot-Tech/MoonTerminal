@@ -316,7 +316,7 @@ impl ReportPanel {
                 String::new()
             };
         ReportFilter {
-            core_uids: self.effective_core_ids(backend),
+            core_uids: self.query_core_uids(backend),
             date_from,
             date_to,
             // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;

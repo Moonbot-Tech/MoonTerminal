@@ -60,7 +60,10 @@ pub struct Query {
     /// UTC Unix seconds; `from < 0` means all history. `to` is exclusive.
     pub from: i64,
     pub to: i64,
-    /// Selected cores (multi-select, as in Orders); empty means all cores.
+    /// Selected cores (multi-select, as in Orders); empty means all cores. A caller holding a
+    /// scope that is PRESENT but EMPTY (every named core has been filtered out) must send
+    /// [`crate::config::NO_MATCH_CORE_UID`] rather than an empty list, or the read broadens to
+    /// every core instead of returning none.
     pub cores: Vec<u64>,
     // NOTE: `period_predicate` below is the ONLY place `from`/`to` meet the replica's date column.
     // Both bounds are true UTC while the column is core-local, so they cannot be compared without

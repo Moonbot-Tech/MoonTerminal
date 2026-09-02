@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Datelike, Utc};
 use chrono_tz::Tz;
+use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use super::rows::{LiveContext, MonitorRow};
@@ -434,11 +435,114 @@ pub(super) fn context_change(
         ContextChange::Reload {
             restart_clock: zone_changed,
         }
+    } else if query_scope_changed(before, after) {
+        // A preset flip (or a membership save landing) changes the SQL the scoped query sends —
+        // see `scoped_query_core_ids`. A plain `Regroup` over rows read under the OLD filter would
+        // keep showing money for cores the new filter no longer includes, so this outranks the
+        // generic equality check below and forces a real re-read instead.
+        ContextChange::Reload {
+            restart_clock: false,
+        }
     } else if before != after {
         ContextChange::Regroup
     } else {
         ContextChange::None
     }
+}
+
+/// Resolve the exact core-id filter the scoped Profit Monitor query should send.
+///
+/// Args:
+///     live: Current live context — `core_order` is the active preset's membership-filtered
+///         display set, `configured_core_ids` is every core `config.servers` names before that
+///         filter ran.
+///     previously_seen_cores: Every core the last successfully applied `ProfitMonitorSummary` named,
+///         carried forward the same way [`retain_last_known_venues`] carries a venue: this window
+///         has no cheap way to name every core WITH data short of `db::distinct_cores`'s full-table
+///         walk (its own doc says it "walks every core because it must NAME them all"), so it reuses
+///         what the last successful query already learned instead. Only entries ABSENT from
+///         `live.configured_core_ids` contribute anything — a hidden-but-still-configured core is
+///         already covered by `live.core_order` excluding it on purpose.
+///
+/// Returns:
+///     `Vec::new()` when the active preset (if any) hides no configured core — unfiltered, exactly
+///     as an absent scope has always meant. Otherwise `core_order` plus every data-only core named
+///     in `previously_seen_cores`, through [`crate::workspace::query_core_ids`] so an inclusion list
+///     that resolves empty becomes the no-match sentinel rather than "unfiltered".
+///
+///     **KNOWN LIMITATION, stated exactly rather than optimistically.** The carry-forward can only
+///     learn a data-only core from a read that RETURNED it, and a scoped read cannot discover one
+///     that is not already in its carry-forward list. So the list fills only once an UNFILTERED
+///     read has happened during this view's lifetime — which
+///     means a monitor window OPENED while the preset already hides something stays blind to a
+///     data-only core until hiding is switched off at least once. `ProfitMonitorView` is
+///     constructed fresh on every window open (`window.rs`), so closing and reopening under a
+///     hiding preset re-enters that state. Closing this properly needs an independent universe on
+///     construction — a `db::distinct_cores`-shaped read, which is what
+///     `analytics::toolbar::analytics_core_filter_ids` has and this window does not — and that is
+///     deliberately NOT done here: it is one full-table walk added to a window-open path, weighed
+///     against a narrow gap, and the honest comment is worth more than a hurried read.
+///
+///     **And "an unfiltered read" means one that returns a COMPARABLE result.** `moon-core`
+///     answers a successful but mixed-currency read with `ProfitScope::Split`, which discards the
+///     per-core list before the summary is built, so `ProfitLoadState::data` is `None` there too
+///     and nothing seeds. On a fleet whose quotes are not comparable, switching hiding off does
+///     NOT recover the core — the gap is permanent for that fleet, not merely until the next
+///     toggle. Stated exactly because two earlier drafts of this comment each claimed a recovery
+///     that does not happen.
+///
+///     **That recovery is only real because the caller keeps the list OUTSIDE the load state.**
+///     `analytics::toolbar::analytics_core_filter_ids` can document a one-cycle gap because its
+///     universe comes from `db::distinct_cores`, independent of any view state. This one does not:
+///     if it were read back from `ProfitLoadState`, every scope-narrowing reload would clear it
+///     first, the narrowed result would become the next read's universe, and the core would be
+///     gone permanently rather than for a cycle. `ProfitMonitorView::seen_data_cores` exists for
+///     exactly that reason and accumulates rather than replaces.
+pub(super) fn scoped_query_core_ids(
+    live: &LiveContext,
+    previously_seen_cores: &[CoreId],
+) -> Vec<CoreId> {
+    if !live.scope_marker().hides_anything() {
+        return Vec::new();
+    }
+    let mut ids = live.core_order.clone();
+    ids.extend(
+        previously_seen_cores
+            .iter()
+            .copied()
+            .filter(|core| !live.configured_core_ids.contains(core)),
+    );
+    crate::workspace::query_core_ids(ids, true)
+}
+
+/// Whether two live contexts would resolve [`scoped_query_core_ids`] to a different core set.
+///
+/// Independent of `previously_seen_cores`, which [`scoped_query_core_ids`] also takes: that
+/// contribution is driven by the last DATABASE read, not by anything a context sample observes, so
+/// it cannot itself flip between two samples and is deliberately left out of this comparison.
+///
+/// Args:
+///     before: Context represented by the currently visible table.
+///     after: Newly sampled context.
+///
+/// Returns:
+///     `true` when the scoped query's inclusion list would differ: hiding started or stopped, or
+///     the set of cores hidden changed while hiding stayed in effect.
+fn query_scope_changed(before: &LiveContext, after: &LiveContext) -> bool {
+    let before_hides = before.scope_marker().hides_anything();
+    let after_hides = after.scope_marker().hides_anything();
+    if before_hides != after_hides {
+        return true;
+    }
+    // `configured_core_ids` belongs here beside `core_order` because BOTH feed the inclusion list:
+    // the visible cores come from one, and the carry-forward is whatever the previous read named
+    // MINUS the other. A core that was data-only and becomes configured-but-hidden changes nothing
+    // about `core_order` — it is hidden, so it never enters it — while silently dropping out of the
+    // carry-forward, so the query narrows with no sign here and the table would keep that core's
+    // money on screen over rows that no longer include it.
+    before_hides
+        && (before.core_order != after.core_order
+            || before.configured_core_ids != after.configured_core_ids)
 }
 
 /// Preserve the last known venue while a core is temporarily disconnected.
