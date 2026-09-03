@@ -47,6 +47,7 @@ mod schema;
 mod store;
 pub(crate) mod toml_io;
 mod uid_counter;
+mod wire_id;
 
 #[cfg(test)]
 mod tests;

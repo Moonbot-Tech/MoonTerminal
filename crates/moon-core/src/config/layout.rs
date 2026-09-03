@@ -556,6 +556,7 @@ pub struct WindowLayout {
     ///
     /// A live session with the same stable UID must still belong to the group before the UI uses
     /// the value. Stale entries remain references for the durable UID high-water mark.
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default)]
     pub active_trade_core_by_group: HashMap<String, u64>,
     /// Workspace preset selected independently for each group window.
@@ -568,6 +569,7 @@ pub struct WindowLayout {
     ///
     /// Stale UIDs remain durable high-water references but are resolved as Overview until that
     /// configured live core returns to the group.
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default, deserialize_with = "de_lenient_map")]
     pub auto_workspace_core_by_group: HashMap<String, u64>,
     /// Last eligible top-level Auto workspace tab selected independently for each group.
@@ -1517,6 +1519,7 @@ pub struct DockSplitSlot {
 /// (survives configuration reordering), and the market by the core's canonical name.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderTicker {
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     pub core_uid: u64,
     pub market: String,
 }

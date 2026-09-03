@@ -46,3 +46,39 @@ fn first_run_theme_is_light_only_for_an_absent_settings_file() {
         );
     }
 }
+
+/// A core-issued strategy id uses the whole `u64` range while a TOML integer is an `i64`, so one
+/// pinned strategy above that ceiling used to abort `toml::to_string` for the WHOLE file: every
+/// setting in the application stopped saving, and the only visible sign was
+/// "out-of-range value for u64 type" beside the Save button. Both id fields go through
+/// `config::wire_id`; this asserts the file they live in survives the value.
+#[test]
+fn a_core_issued_strategy_id_cannot_break_the_whole_settings_file() {
+    let id = u64::MAX;
+    let stored = format!(
+        "[[servers]]\n\
+         uid = 1\n\
+         name = \"Core\"\n\
+         default_alert_strategy = \"{id}\"\n\
+         [servers.manual_strategy]\n\
+         strategy = \"Manual1\"\n\
+         id = \"{id}\"\n"
+    );
+
+    let file: SettingsFile = toml::from_str(&stored).expect("string form must load");
+    let text =
+        toml::to_string_pretty(&file).expect("an id above i64::MAX must not abort the write");
+    let reread: SettingsFile = toml::from_str(&text).expect("our own output must load");
+
+    for parsed in [&file, &reread] {
+        assert_eq!(parsed.servers[0].default_alert_strategy, id);
+        assert_eq!(
+            parsed.servers[0]
+                .manual_strategy
+                .as_ref()
+                .expect("manual strategy section")
+                .id,
+            id
+        );
+    }
+}

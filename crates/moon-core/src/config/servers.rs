@@ -62,7 +62,11 @@ pub struct ManualStratState {
     /// live snapshot before every order can hand back a DIFFERENT strategy — with its own stop —
     /// for a selection the trader never touched. Pinning the id makes the choice stable; the name
     /// takes over only once that id is gone from the core.
-    #[serde(default)]
+    ///
+    /// Persisted through `config::wire_id`: the id comes from the core and uses the whole `u64`
+    /// range, while a TOML integer is an `i64`, so one pinned strategy used to make the entire
+    /// `settings.toml` unwritable — and with it every other setting in the application.
+    #[serde(default, with = "crate::config::wire_id")]
     pub id: u64,
     /// Whether this core follows Moonbot's OWN stop rule for a manual-strategy order.
     ///
@@ -147,10 +151,12 @@ pub struct ServerConfig {
     /// Runtime core id (CoreId). Since schema v11 it EQUALS `uid`, making it stable across
     /// loads and server additions/removals/reordering; it was previously positional. Panels,
     /// data, databases, subscriptions, and layout bind to it within a session.
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     pub id: u64,
     /// Stable core identifier that survives renaming and reordering. Metadata from settings.toml
     /// binds through it to a server in servers.enc. 0 means unassigned (older file/new entry)
     /// and is assigned during save.
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default)]
     pub uid: u64,
     #[serde(default)]
@@ -192,7 +198,11 @@ pub struct ServerConfig {
     /// Default alert strategy (Def Strategy): id of this core's strategy of type "Alerts",
     /// automatically assigned to a new alert when its Alert checkbox is enabled. 0 means none.
     /// This is local terminal config because the protocol does not provide the core default.
-    #[serde(default)]
+    ///
+    /// Core-issued, so it goes through `config::wire_id` like its persisted twin
+    /// `ServerMeta::default_alert_strategy` — even though `reconcile::split` sends only
+    /// uid/name/key into `servers.enc` and nothing encodes this struct today.
+    #[serde(default, with = "crate::config::wire_id")]
     pub default_alert_strategy: u64,
     /// Whether this core keeps its OWN manual-trading generation ([`Self::trade`]) instead of
     /// sharing its group's. Defaults to `false`, deliberately: turning this on by default would

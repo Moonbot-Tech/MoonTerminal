@@ -199,6 +199,7 @@ pub(crate) fn resolve_ui_theme_mode(
 pub struct ServerEntry {
     /// Stable core identifier (see `ServerConfig::uid`). A 0 in older files is assigned
     /// on first load (see `reconcile::merge`).
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default)]
     pub uid: u64,
     pub name: String,
@@ -217,6 +218,7 @@ pub struct ServersFile {
 /// (see `reconcile::merge`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerMeta {
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default)]
     pub uid: u64,
     /// Duplicated from servers.enc for plaintext-file readability and legacy binding.
@@ -238,7 +240,11 @@ pub struct ServerMeta {
     #[serde(default)]
     pub chart_bundle: String,
     /// Default alert strategy (id of type "Alerts"); see `ServerConfig::default_alert_strategy`.
-    #[serde(default)]
+    ///
+    /// A core-issued id, so it uses the whole `u64` range and goes through `config::wire_id`:
+    /// TOML integers are `i64`, and one id above that ceiling used to abort the entire
+    /// `settings.toml` write rather than just this field.
+    #[serde(default, with = "crate::config::wire_id")]
     pub default_alert_strategy: u64,
     /// Per-core manual-trading opt-in; see `ServerConfig::own_trade_config`. The alias reads files
     /// written under the flag's previous name.
@@ -353,6 +359,7 @@ pub struct SettingsFile {
     ///
     /// Zero falls back to one past the highest surviving uid. This field is the only durable
     /// record of deleted high-water marks, so losing it also loses that history.
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default)]
     pub next_uid: u64,
     #[serde(default)]
