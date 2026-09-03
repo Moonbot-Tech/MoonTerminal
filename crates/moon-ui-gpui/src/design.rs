@@ -113,9 +113,27 @@ pub fn chrome_section(cx: &App) -> Div {
         .gap(ui_px(cx, CHROME_GAP))
 }
 
-/// Rendered width that makes a SQUARE one-symbol button — the report export (`⇩`) and the column
-/// selectors, whether they draw a unicode glyph (`▦`, still the case in Alerts, Assets, Orders,
-/// Screener and the Analytics tuner) or a MoonUI icon asset (the Report toolbar).
+/// Icon standing for "which columns does this table show", on every column selector in the app.
+///
+/// All six pickers — Orders, Figures, Assets, the Screener, the Analytics tuner list and the
+/// Report toolbar — draw THIS asset, for the reason [`CORE_COMPACT_ICON`] gives for the compact
+/// core selector: the trigger carries no label, so the icon IS the name, and a second glyph for
+/// the same concept would read as a different control.
+///
+/// It replaced `▦` (U+25A6), which is absent from the default Windows font stack and rendered as
+/// two hollow squares. The embedded MoonUI set carries no `filter`, `columns` or `sliders` icon;
+/// `layout-dashboard` is its nearest reading — a table's own layout is exactly what these menus
+/// change — and it is the only candidate that does NOT collide with `icons/settings-2.svg`, which
+/// the Orders toolbar already draws on the sort/settings dropdown standing right beside its
+/// column picker. `eye.svg` was rejected: it reads as row visibility, not column layout.
+///
+/// The trigger is left CHILDLESS at every site so `MoonButton` takes its square icon-only layout;
+/// [`glyph_btn_w`] then keeps the cell square on the UI slider while `MoonButton::render` sizes
+/// the icon from the size preset's own font metrics, on the Font slider.
+pub const COLUMN_SELECTOR_ICON: &str = "icons/layout-dashboard.svg";
+
+/// Rendered width that makes a SQUARE one-symbol button — the report export (`⇩`) and the
+/// Action-sized column selectors, which draw [`COLUMN_SELECTOR_ICON`] rather than a glyph.
 ///
 /// It returns the button's own drawn height, so the caller must pass it to a RENDERED width
 /// (`MoonDropdown::trigger_width`, `MoonButton::width`), never to a `*_scaled` variant: MoonUI

@@ -976,21 +976,9 @@ impl ReportPanel {
                     })
             }),
         );
-        // An icon button rather than a list field, and a MoonUI ASSET rather than a unicode glyph:
-        // the former `▦` (U+25A6) is absent from the default Windows font stack and drew as tofu.
-        // `icons/settings-2.svg` is the closest the embedded set has to a filter affordance — it
-        // carries no `filter`, `columns` or `sliders` icon — and the Orders panel's own options
-        // dropdown already triggers on it. That the asset ALSO means "settings" in the window
-        // chrome is accepted, not overlooked: the localized `report.columns_menu` tooltip is what
-        // names this control, and the alternative (`eye.svg`) reads as row visibility, not as the
-        // filter the menu actually is.
-        //
-        // The two scales split, and neither follows the other. An icon-only trigger is left
-        // childless so MoonButton takes its square icon-only layout, and `glyph_btn_w` — the
-        // button's own drawn height — keeps the cell square on the UI slider. The GLYPH is sized
-        // separately by `MoonButton::render`, from the Action preset's own font metrics, so it
-        // rides the Font slider; `design::action_icon_px` mirrors that formula for the callers
-        // that must leave room for it by hand.
+        // An icon button instead of a list field, matching every other column selector; the asset
+        // and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract. The tooltip is
+        // localized; the icon stays outside the locale dictionary per locales/README.
         div()
             .id("rep-cols-tip")
             .tooltip(crate::panels::common::text_tooltip(
@@ -998,7 +986,7 @@ impl ReportPanel {
             ))
             .child(
                 MoonDropdown::new("rep-cols")
-                    .trigger_icon("icons/settings-2.svg")
+                    .trigger_icon(design::COLUMN_SELECTOR_ICON)
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
                     .trigger_width(design::glyph_btn_w(cx))

@@ -111,7 +111,7 @@ const STRAT_MIN_PANEL_W: f32 = 740.0;
 ///
 /// Identity (kind, core) plus the headline numbers (trades, profit, Profit %, Avg order, winrate,
 /// PF) — the set that fits beside a readable name. The tails (avg / best / worst) and the edit
-/// stamp stay one click away in the ▦ selector rather than squeezing the name out of the row.
+/// stamp stay one click away in the column selector rather than squeezing the name out of the row.
 /// `strat_columns_default_fits` holds this honest.
 pub(in crate::analytics) const STRAT_COLS_DEFAULT: u16 = COL_BIT_KIND
     | COL_BIT_CORE

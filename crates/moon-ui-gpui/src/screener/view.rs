@@ -539,8 +539,9 @@ impl ScreenerView {
         let view = cx.entity();
         let visible_count = self.visible_cols.len();
         let mut menu = MoonDropdown::new("screener-columns")
-            // Use the shared column-selector glyph button instead of a text-field trigger.
-            .segment(moon_ui::MoonButtonSegment::new("▦"))
+            // The shared column-selector icon button instead of a text-field trigger; the asset
+            // and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract.
+            .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))
