@@ -14,12 +14,12 @@ maps:
       ru: Бренд и перетаскивание
       en: Brand and window drag
     body:
-      ru: 'Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI
-        сам рисует разделитель — поэтому второго терминал не добавляет.'
-      en: The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of
-        it, which is why the terminal never adds a second one.
+      ru: 'Логотип MoonTerminal и зона захвата окна: за неё окно таскается по экрану. Логотип и
+        разделитель правее него терминал рисует сам — рамка MoonUI знает только свой Moonbot.'
+      en: The MoonTerminal logo doubles as the window's drag handle. The terminal draws both the mark
+        and the separator right of it itself — the MoonUI frame only knows its own Moonbot lockup.
     src:
-      code: chrome/terminal_chrome.rs — brand_cluster
+      code: chrome/terminal_chrome.rs — header brand cluster
   - id: ws
     n: 2
     title:
@@ -229,12 +229,12 @@ maps:
       ru: Бренд и перетаскивание
       en: Brand and window drag
     body:
-      ru: 'Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI
-        сам рисует разделитель — поэтому второго терминал не добавляет.'
-      en: The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of
-        it, which is why the terminal never adds a second one.
+      ru: 'Логотип MoonTerminal и зона захвата окна: за неё окно таскается по экрану. Логотип и
+        разделитель правее него терминал рисует сам — рамка MoonUI знает только свой Moonbot.'
+      en: The MoonTerminal logo doubles as the window's drag handle. The terminal draws both the mark
+        and the separator right of it itself — the MoonUI frame only knows its own Moonbot lockup.
     src:
-      code: chrome/terminal_chrome.rs — brand_cluster
+      code: chrome/terminal_chrome.rs — header brand cluster
   - id: ws
     n: 2
     title:

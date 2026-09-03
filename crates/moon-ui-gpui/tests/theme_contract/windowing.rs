@@ -340,6 +340,10 @@ fn terminal_windows_use_closed_window_frame_api() {
             let trimmed = line.trim();
             let is_windowing = rel_text == "window/windowing.rs";
             let is_design = rel_text == "design.rs";
+            // The ONE screen allowed to place a brand mark by hand: the main header, because
+            // `MoonWindowFrame` draws MoonUI's own Moonbot lockup and the product ships the
+            // MoonTerminal one. See `docs/WINDOWING.md`; everywhere else the frame still chooses.
+            let is_main_header = rel_text == "chrome/terminal_chrome.rs";
             if trimmed.contains("MoonWindowChrome::new")
                 || trimmed.contains("MoonWindowChromeButton")
                 || trimmed.contains("WindowControlArea::Drag")
@@ -349,7 +353,13 @@ fn terminal_windows_use_closed_window_frame_api() {
                     && (trimmed.contains("logo_sized(")
                         || trimmed.contains("logo_mark(")
                         || trimmed.contains("design::logo_sized")
-                        || trimmed.contains("design::logo_mark")))
+                        || trimmed.contains("design::logo_mark")
+                        // Reaching for the asset by hand is the same violation as calling the
+                        // helper, and the only way past a check that names helpers alone. A
+                        // comment is free to NAME the folder — only code that opens a file in it
+                        // is the violation, hence the trailing slash and the comment guard.
+                        || (!trimmed.starts_with("//") && trimmed.contains("assets/brand/"))
+                        || (!is_main_header && trimmed.contains("header_logo("))))
                 || (!is_windowing && trimmed.contains("WindowOptions {"))
             {
                 violations.push(format!("{}:{}: {}", path.display(), line_ix + 1, trimmed));

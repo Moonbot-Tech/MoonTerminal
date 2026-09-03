@@ -7,7 +7,7 @@ use gpui::*;
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{MoonMetrics, MoonPalette, MoonTheme, MoonTone, rgba_from};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 const M: MoonMetrics = MoonMetrics::TERMINAL;
 
@@ -191,6 +191,11 @@ pub const HEADER_LABEL_MAX_W: f32 = 260.0;
 /// readouts would disappear at the same width and the priority above would be a comment rather
 /// than a behaviour. Usable only because [`HEADER_LABEL_MAX_W`] bounds the clusters that would
 /// otherwise grow without limit.
+///
+/// These are TUNED window widths, not values derived from what the row holds, so the brand's own
+/// width does not enter them: the MoonTerminal lockup is 36px wider than the Moonbot one these
+/// were set against, and the `flex_1` drag spacer absorbs the difference. Re-tune them by looking
+/// at the row, not by arithmetic on the mark.
 const HEADER_BRAND_MIN_W: f32 = 1400.0;
 const TICKER_DELTAS_MIN_W: f32 = 1200.0;
 const TICKER_MIN_W: f32 = 1000.0;
@@ -252,11 +257,52 @@ pub fn platform_window_decorations() -> Option<WindowDecorations> {
     }
 }
 
-const LOGO_GLOW_SVG_RAW: &str = include_str!("../../../assets/brand/moonbot-logo.svg");
-const LOGO_SRC_W: f32 = 199.0;
+/// The MoonTerminal lockup, one cut per colour scheme.
+///
+/// Each file already carries its own wordmark colour — `#E7E7E7` in the dark cut, `#17202A` in the
+/// light one, with the blue "Terminal" shared — so the terminal PICKS a file instead of patching a
+/// fill the way the old single-cut Moonbot asset needed. A custom palette therefore no longer
+/// recolours the brand, which is the point of a brand asset.
+const LOGO_SVG_DARK: &str = include_str!("../../../assets/brand/moonterminal-logo-blue-dark.svg");
+const LOGO_SVG_LIGHT: &str = include_str!("../../../assets/brand/moonterminal-logo-blue-light.svg");
+const LOGO_SRC_W: f32 = 283.23;
 const LOGO_SRC_H: f32 = 43.0;
-const LOGO_GLOW_VIEW_W: f32 = LOGO_SRC_W * 1.2;
-const LOGO_GLOW_VIEW_H: f32 = LOGO_SRC_W * 1.2;
+/// Factor carrying every lockup size across the brand swap, from the 199px-wide Moonbot mark the
+/// sizes below were tuned against to the 283.23px-wide MoonTerminal one.
+///
+/// The port keeps the ICON's drawn size rather than the box it sat in: only the wordmark got
+/// longer, and holding a width tuned for the shorter mark would shrink the whole lockup by a third
+/// and read as a different, smaller logo. Spelling the factor ONCE is the load-bearing part —
+/// these five sizes live in two files, and hand-multiplying each one is how four of them stay
+/// right while the fifth quietly does not.
+const LOGO_PORT_SCALE: f32 = LOGO_SRC_W / 199.0;
+
+/// Width of the placeholder lockup a chart stack draws while it holds no charts.
+pub const EMPTY_STACK_LOGO_W: f32 = 220.0 * LOGO_PORT_SCALE;
+
+/// Share of a chart slot's width the same placeholder covers, bounded by [`CHART_LOGO_MIN_W`] and
+/// [`CHART_LOGO_MAX_W`] — a floor so it stays legible in a small pane, a ceiling so it stays a
+/// watermark in a large one.
+///
+/// The floor is ported like everything else: leaving it where it was would have kept exactly the
+/// small panes — the ones that need it — drawing an icon a third smaller than before. It buys that
+/// at the far end: a pane narrower than the floor itself now clips the LOCKUP, where the shorter
+/// mark still fitted. That pane is under 256 logical px wide — narrower than the placeholder it
+/// would be showing — and between there and 643 px, where the share takes over, the floor is what
+/// keeps the icon at its designed size. The glow frame is [`LOGO_GLOW_SCALE`] times these widths
+/// and overhangs sooner, which costs nothing visible: its aura reaches zero opacity at that edge.
+pub const CHART_LOGO_SLOT_SHARE: f32 = 0.28 * LOGO_PORT_SCALE;
+pub const CHART_LOGO_MIN_W: f32 = 180.0 * LOGO_PORT_SCALE;
+pub const CHART_LOGO_MAX_W: f32 = 280.0 * LOGO_PORT_SCALE;
+
+/// Header lockup width: the header strip is height-constrained, so the longer wordmark has to buy
+/// its room in width, or the mark shrinks inside a row whose height cannot follow it.
+const HEADER_LOGO_W: f32 = 86.0 * LOGO_PORT_SCALE;
+
+/// How much wider than the lockup the glow canvas is; the aura fills the difference.
+const LOGO_GLOW_SCALE: f32 = 1.2;
+/// The glow canvas is SQUARE, so the aura reads as a disc rather than a flat ellipse.
+const LOGO_GLOW_VIEW: f32 = LOGO_SRC_W * LOGO_GLOW_SCALE;
 
 pub fn solid(hex: u32) -> Rgba {
     rgb(hex)
@@ -1056,32 +1102,72 @@ pub fn r_container(cx: &App) -> Pixels {
     ui_px(cx, R_CONTAINER_BASE)
 }
 
-/// Brand-book navy for the Moonbot wordmark in the light theme.
+/// Return the lockup cut that belongs to a colour scheme.
 ///
-/// Navy lacks contrast in the dark theme, where the wordmark uses `p.text` instead.
-const LOGO_WORDMARK_NAVY: u32 = 0x0C2C4A;
+/// Each file carries its own wordmark colour, so the scheme picks a FILE; nothing recolours the
+/// brand at runtime, and a custom palette therefore cannot repaint it.
+fn logo_svg(light: bool) -> &'static str {
+    if light { LOGO_SVG_LIGHT } else { LOGO_SVG_DARK }
+}
 
-pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
-    let p = MoonPalette::active(cx);
-    let text = if p.is_light() {
-        LOGO_WORDMARK_NAVY
-    } else {
-        p.text
-    };
-    let text_fill = format!("#{text:06X}");
-    let logo =
-        LOGO_GLOW_SVG_RAW.replace(r##"fill="#E7E7E7""##, &format!(r##"fill="{text_fill}""##));
-    let paths = logo
-        .split_once(r#"<g clip-path="url(#clip0_3800_3393)">"#)
-        .and_then(|(_, rest)| rest.split_once("</g>"))
-        .map(|(paths, _)| paths)
-        .unwrap_or("");
-    let cx = LOGO_GLOW_VIEW_W * 0.5;
-    let cy = LOGO_GLOW_VIEW_H * 0.5;
-    let r = LOGO_GLOW_VIEW_W * 0.5;
-    let logo_x = (LOGO_GLOW_VIEW_W - LOGO_SRC_W) * 0.5;
-    let logo_y = (LOGO_GLOW_VIEW_H - LOGO_SRC_H) * 0.5;
-    let (aura_0_color, aura_1_color, aura_2_color, aura_0, aura_1, aura_2) = if p.is_light() {
+/// Return everything the lockup's root `<svg>` wraps, for embedding in a composed document.
+///
+/// The cut is the root tag itself, not the first `<path>`: an export is free to wrap its paths in
+/// a `<g>` or to declare a `<defs>`/`<clipPath>` ahead of them, and starting at the first path
+/// would drop those opening tags while keeping their closing ones — unbalanced markup usvg rejects
+/// outright, which paints NOTHING and looks exactly like a decode failure. Whatever the file
+/// carries travels as-is; a `<title>` among it is inert inside a rasterized document.
+///
+/// Returns an empty string if the file has no root tag to cut at, which the asset test catches.
+fn logo_paths(svg: &str) -> &str {
+    svg.split_once("<svg")
+        .and_then(|(_, rest)| rest.split_once('>'))
+        .and_then(|(_, inner)| inner.rsplit_once("</svg>"))
+        .map_or("", |(inner, _)| inner)
+}
+
+/// Wrap SVG source in the GPUI image every element builder here takes.
+fn svg_image(svg: impl Into<Vec<u8>>) -> Arc<Image> {
+    Arc::new(Image::from_bytes(ImageFormat::Svg, svg.into()))
+}
+
+/// The brand cuts as decoded images, indexed by `is_light()`.
+///
+/// Built once because there are only ever two of them. GPUI keys its raster cache on a hash of the
+/// bytes, so consecutive frames already shared one texture; what repeated per frame was the 6.9KB
+/// copy and the hash upstream of that cache, inside the header's own render.
+static LOGO_IMAGES: LazyLock<[Arc<Image>; 2]> =
+    LazyLock::new(|| [svg_image(logo_svg(false)), svg_image(logo_svg(true))]);
+
+/// The composed glow documents, indexed by `is_light()`.
+///
+/// Two, for the reason [`LOGO_IMAGES`] gives: the colour scheme is the document's ONLY input. The
+/// caller's `width` never enters it — that sizes the element afterwards — so re-composing this
+/// ~7.5KB string per empty pane per frame produced the same two documents forever.
+static GLOW_IMAGES: LazyLock<[Arc<Image>; 2]> =
+    LazyLock::new(|| [svg_image(glow_svg(false)), svg_image(glow_svg(true))]);
+
+/// The header lockup: the brand at the left end of the main window's titlebar.
+///
+/// Sized off [`HEADER_LOGO_W`] through `ui()` — the UI-scale track MoonUI's own brand used — so the
+/// mark follows the interface scale but NOT the font slider, matching the separator beside it.
+///
+/// The asset is decoded whole, unlike in [`glow_svg`], which has to splice it into a document of
+/// its own: here the file IS the document, so there is nothing to rewrite.
+pub fn header_logo(cx: &App) -> impl IntoElement {
+    let width = ui_value(cx, HEADER_LOGO_W);
+    img(LOGO_IMAGES[usize::from(MoonPalette::active(cx).is_light())].clone())
+        .w(px(width))
+        .h(px(width * (LOGO_SRC_H / LOGO_SRC_W)))
+}
+
+/// Compose the glow document for one colour scheme: the aura disc with the lockup centred on it.
+fn glow_svg(light: bool) -> String {
+    let paths = logo_paths(logo_svg(light));
+    let centre = LOGO_GLOW_VIEW * 0.5;
+    let logo_x = (LOGO_GLOW_VIEW - LOGO_SRC_W) * 0.5;
+    let logo_y = (LOGO_GLOW_VIEW - LOGO_SRC_H) * 0.5;
+    let (aura_0_color, aura_1_color, aura_2_color, aura_0, aura_1, aura_2) = if light {
         (
             "#BFF5C9",
             "#AEEFC1",
@@ -1093,41 +1179,33 @@ pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
     } else {
         ("#00BCFF", "#1A76FF", "#0A5CFF", 0.30, 0.19, 0.07)
     };
-    let svg = format!(
-        r##"<svg width="{view_w}" height="{view_h}" viewBox="0 0 {view_w} {view_h}" fill="none" xmlns="http://www.w3.org/2000/svg">
+    format!(
+        r##"<svg width="{view}" height="{view}" viewBox="0 0 {view} {view}" fill="none" xmlns="http://www.w3.org/2000/svg">
 <defs>
-  <radialGradient id="moonbot_aura" cx="50%" cy="50%" r="50%">
+  <radialGradient id="brand_aura" cx="50%" cy="50%" r="50%">
     <stop offset="0%" stop-color="{aura_0_color}" stop-opacity="{aura_0:.3}"/>
     <stop offset="34%" stop-color="{aura_1_color}" stop-opacity="{aura_1:.3}"/>
     <stop offset="68%" stop-color="{aura_2_color}" stop-opacity="{aura_2:.3}"/>
     <stop offset="100%" stop-color="{aura_2_color}" stop-opacity="0"/>
   </radialGradient>
 </defs>
-<circle cx="{cx}" cy="{cy}" r="{r}" fill="url(#moonbot_aura)"/>
+<circle cx="{centre}" cy="{centre}" r="{centre}" fill="url(#brand_aura)"/>
 <g transform="translate({logo_x} {logo_y})">{paths}</g>
 </svg>"##,
-        view_w = LOGO_GLOW_VIEW_W,
-        view_h = LOGO_GLOW_VIEW_H,
-        cx = cx,
-        cy = cy,
-        r = r,
-        logo_x = logo_x,
-        logo_y = logo_y,
-        aura_0_color = aura_0_color,
-        aura_1_color = aura_1_color,
-        aura_2_color = aura_2_color,
-        aura_0 = aura_0,
-        aura_1 = aura_1,
-        aura_2 = aura_2,
-        paths = paths,
-    );
-    let frame_w = width * (LOGO_GLOW_VIEW_W / 199.0);
-    img(Arc::new(Image::from_bytes(
-        ImageFormat::Svg,
-        svg.into_bytes(),
-    )))
-    .w(px(frame_w))
-    .h(px(frame_w * (LOGO_GLOW_VIEW_H / LOGO_GLOW_VIEW_W)))
+        view = LOGO_GLOW_VIEW,
+    )
+}
+
+/// The glowing placeholder an empty chart surface draws; `width` is the lockup's own width.
+///
+/// The element is the square glow canvas around it, hence the [`LOGO_GLOW_SCALE`] factor: taking
+/// the LOCKUP width keeps every caller's number comparable to the artwork rather than to a frame
+/// whose size the aura decides.
+pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
+    let frame_w = width * LOGO_GLOW_SCALE;
+    img(GLOW_IMAGES[usize::from(MoonPalette::active(cx).is_light())].clone())
+        .w(px(frame_w))
+        .h(px(frame_w))
 }
 
 /// Vertical 1px group separator.

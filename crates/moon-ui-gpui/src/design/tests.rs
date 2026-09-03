@@ -1,4 +1,4 @@
-//! Regression coverage for exact batched text measurement.
+//! Regression coverage for exact batched text measurement and for the brand assets.
 
 use super::{FontId, FontWeight, MonoGlyphWidthCache, wrap_text};
 use std::collections::HashMap;
@@ -104,4 +104,54 @@ fn an_unbreakable_word_is_cut_rather_than_looped() {
 
     // And zero lines is a legitimate ask: it prints nothing rather than looping.
     assert!(wrap_text("anything", 10.0, 0, measure).is_empty());
+}
+
+/// The brand cuts: scheme name, asset source, and the wordmark colour that cut must carry.
+const BRAND_CUTS: [(&str, &str, &str); 2] = [
+    ("dark", super::LOGO_SVG_DARK, "#E7E7E7"),
+    ("light", super::LOGO_SVG_LIGHT, "#17202A"),
+];
+
+/// Both cuts must survive [`super::logo_paths`], which splices them into the glow document.
+///
+/// The extraction is string surgery on an asset nobody rebuilds when they re-export it, and its
+/// failure is SILENT at runtime: an empty result draws an aura with no mark, indistinguishable
+/// from a decode failure. So the check belongs here rather than in a bug report.
+#[test]
+fn brand_cuts_survive_the_glow_extraction() {
+    for (name, svg, _) in BRAND_CUTS {
+        let inner = super::logo_paths(svg);
+        assert!(inner.contains("<path"), "{name} cut lost its paths");
+        assert!(
+            !inner.contains("<svg"),
+            "{name} cut kept its root tag, which cannot nest in the glow document"
+        );
+    }
+}
+
+/// Each cut must match the geometry constants that place it and carry its own scheme's wordmark.
+///
+/// `LOGO_SRC_W`/`LOGO_SRC_H` centre the mark in the glow frame and scale every lockup width, so a
+/// re-export at another viewBox leaves them describing the previous drawing — which no compiler
+/// and no eye catches until the mark sits off-centre. The colours are the other half of the same
+/// contract: picking a FILE per scheme is what keeps a custom palette from repainting the brand,
+/// and swapping the two files is invisible until someone looks at the header in one theme.
+#[test]
+fn brand_cuts_match_their_geometry_and_scheme() {
+    for (name, svg, wordmark) in BRAND_CUTS {
+        let view_box = svg
+            .split_once("viewBox=\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(value, _)| value)
+            .unwrap_or_else(|| panic!("{name} cut has no viewBox"));
+        assert_eq!(
+            view_box,
+            format!("0 0 {} {}", super::LOGO_SRC_W, super::LOGO_SRC_H),
+            "{name} cut was re-exported at a different size than design.rs assumes"
+        );
+        assert!(
+            svg.contains(wordmark),
+            "{name} cut lost the wordmark colour its scheme is picked for"
+        );
+    }
 }

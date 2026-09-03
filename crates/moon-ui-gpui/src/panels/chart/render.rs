@@ -631,8 +631,13 @@ impl Render for ChartPanel {
         // Live open-order figures for the chart's active pane, assembled beside the closed-trade
         // badge above. The two share a row but nothing else: this reads the live session store,
         // that one a durable report snapshot.
-        //
-        let logo_w = ((slot_w as f32 / ppp) * 0.28).clamp(180.0, 280.0);
+
+        // Placeholder lockup width for this pane. The share and its bounds are brand geometry, so
+        // they live with the artwork in `design`, not as three literals in a panel.
+        let logo_w = ((slot_w as f32 / ppp) * crate::design::CHART_LOGO_SLOT_SHARE).clamp(
+            crate::design::CHART_LOGO_MIN_W,
+            crate::design::CHART_LOGO_MAX_W,
+        );
         div()
             .id("chart-slot")
             .size_full()

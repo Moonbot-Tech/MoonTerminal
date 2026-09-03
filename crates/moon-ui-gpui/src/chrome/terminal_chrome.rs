@@ -9,7 +9,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
     MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect,
-    MoonSelectorPill, MoonSelectorSegment, MoonTag, MoonWindowFrame, MoonWindowFrameBrand, h_flex,
+    MoonSelectorPill, MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
 
@@ -136,19 +136,29 @@ pub fn header(
         // internally, so the seams line up.
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .bg(rgb(p.shell_high))
-        // Brand draws its OWN trailing separator (MoonWindowFrame::brand_cluster), so the
-        // groups below add only the seams after them. It is also the FIRST thing this row gives
-        // up on a narrow window (`design::header_brand_visible`): dropping the mark to `None`
-        // keeps the drag region and takes the rule with it, so the space goes to the readouts
-        // that carry information instead.
+        // The brand carries its OWN trailing separator, so the groups below add only the seams
+        // after them. It is also the FIRST thing this row gives up on a narrow window
+        // (`design::header_brand_visible`): dropping the mark keeps the drag region and takes the
+        // rule with it, so the space goes to the readouts that carry information instead.
+        //
+        // The cluster is assembled here rather than through `MoonWindowFrame::brand_cluster`,
+        // which draws MoonUI's own Moonbot lockup: the terminal ships the MoonTerminal one from
+        // `assets/brand`. Only the drag handle comes from the frame — that region is what makes
+        // the titlebar grabbable, and `brand_cluster` is nothing more than that handle plus the
+        // two children added below, at the same `CHROME_GAP` and the same rule height. The rule
+        // itself is `chrome_divider`, not MoonUI's fainter `border` copy of it: owning the cluster
+        // means this seam answers to the same contrast rule as every other seam in the row.
         .child(
             MoonWindowFrame::main("terminal-header-brand-drag", 0.0)
-                .brand(if design::header_brand_visible(cx, chrome_width) {
-                    MoonWindowFrameBrand::Default
-                } else {
-                    MoonWindowFrameBrand::None
+                .drag_handle()
+                .flex()
+                .items_center()
+                .gap(design::ui_px(cx, design::CHROME_GAP))
+                .when(design::header_brand_visible(cx, chrome_width), |cluster| {
+                    cluster
+                        .child(design::header_logo(cx))
+                        .child(design::chrome_divider(cx, p))
                 })
-                .brand_cluster(cx)
                 .flex_none()
                 .h_full(),
         )
