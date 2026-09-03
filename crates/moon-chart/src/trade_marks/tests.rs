@@ -110,3 +110,22 @@ fn trade_hit_area_grows_with_the_drawn_arrow_scale() {
         vec![0]
     );
 }
+
+/// The shipped graphics settings must survive their own normalizer.
+///
+/// `normalize_chart_graphics` exists because this value is COMPARED — a chart re-bakes its base
+/// texture when its settings differ from the ones it drew with — so a value that the normalizer
+/// still moves differs from itself on every notification, which is a re-bake per frame rather than
+/// a wrong pixel. The defaults are handed straight to a chart by
+/// `WindowLayout::reset_chart_graphics_default`, without passing the normalizer on the way, and
+/// this is what keeps that shortcut honest: a `def_*` that ever drifts outside its own clamp fails
+/// here rather than in the frame loop.
+#[test]
+fn the_shipped_graphics_survive_their_own_normalizer() {
+    let shipped = ChartGraphicsCfg::default();
+    assert_eq!(
+        normalize_chart_graphics(shipped),
+        shipped,
+        "a shipped graphics default sits outside the range its own normalizer accepts"
+    );
+}

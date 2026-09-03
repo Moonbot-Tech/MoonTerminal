@@ -20,7 +20,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::apply_all::{ApplyAll, KindTargets};
+use super::apply_all::{ApplyAll, ApplyMode, KindTargets};
 use super::common::StackSetting;
 use crate::design;
 
@@ -130,32 +130,71 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
                 }),
         );
     }
-    let go_entity = entity.clone();
+    // The slots the reset addresses, taken before the values are moved into the press: the reset
+    // needs nothing else from them, and the press it travels in is built from these alone.
+    let reset_slots: Vec<_> = values.iter().filter_map(|v| v.global_slot()).collect();
     let pressed = ApplyAll {
         values,
         x_ppm,
         targets,
-        as_default,
+        mode: match as_default {
+            true => ApplyMode::SetDefault,
+            false => ApplyMode::Tabs,
+        },
     };
-    let go = MoonButton::new(SharedString::from(format!("{id_prefix}-apply-go")))
-        .label(match as_default {
+    // One builder for both buttons: they differ in their wording, their weight and the press they
+    // carry, and in nothing else — the click does the same three things either way.
+    //
+    // NO tooltip on either, deliberately: this row renders INSIDE a popover, and MoonUI defers a
+    // tooltip at priority 2 against the popover's 30 000, so a hint here would paint under the
+    // surface it belongs to and never be seen (docs-internal/FORK_BUGS.md). What the buttons do is
+    // stated in the sentence above them instead.
+    let press_button =
+        |suffix: &str, label: String, variant: MoonButtonVariant, apply: ApplyAll| {
+            let entity = entity.clone();
+            MoonButton::new(SharedString::from(format!("{id_prefix}-apply-{suffix}")))
+                .label(label)
+                .size(MoonButtonSize::Micro)
+                .variant(variant)
+                // A press with no ticks reaches nothing, so the button says so instead of
+                // accepting the click. The click path is guarded too — `ChartTabs::apply_all`
+                // returns on an empty target set, which is also where a detached window's queued
+                // press lands — so this is the wording, not the safety.
+                .disabled(!targets.any())
+                .on_click(move |_, _w, app| {
+                    let apply = apply.clone();
+                    entity.update(app, |this, cx| {
+                        this.apply_press_mut().open = false;
+                        this.perform_apply(apply, cx);
+                        cx.notify();
+                    });
+                })
+                .render()
+        };
+    let go = press_button(
+        "go",
+        match as_default {
             true => t!("chart.defaults.set").to_string(),
             false => t!("chart.defaults.apply").to_string(),
-        })
-        .size(MoonButtonSize::Micro)
-        .variant(MoonButtonVariant::Soft)
-        .disabled(!targets.any())
-        .on_click(move |_, _w, app| {
-            let apply = pressed.clone();
-            go_entity.update(app, |this, cx| {
-                this.apply_press_mut().open = false;
-                if apply.targets.any() {
-                    this.perform_apply(apply, cx);
-                }
-                cx.notify();
-            });
-        })
-        .render();
+        },
+        MoonButtonVariant::Soft,
+        pressed,
+    );
+    // Offered only where the values HAVE a default: the ⚙ popup's settings are per-tab, and a
+    // button to reset a default they do not have would name nothing.
+    let reset = as_default.then(|| {
+        press_button(
+            "reset",
+            t!("chart.defaults.reset").to_string(),
+            MoonButtonVariant::Ghost,
+            ApplyAll {
+                values: Vec::new(),
+                x_ppm: None,
+                targets,
+                mode: ApplyMode::ResetDefault(reset_slots),
+            },
+        )
+    });
     Some(
         v_flex()
             .gap_1()
@@ -165,13 +204,39 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
                     .text_color(rgb(p.text_muted))
                     // Two different sentences on purpose: setting a default also CLEARS what hides
                     // it, and a reader about to overwrite the tuning of several windows should read
-                    // that in the popup rather than discover it afterwards.
+                    // that in the popup rather than discover it afterwards. It is also the ONLY
+                    // explanation these buttons get — a tooltip inside a popover is invisible in
+                    // this fork — so it says what each of them does.
                     .child(match as_default {
                         true => t!("chart.defaults.set_hint").to_string(),
                         false => t!("chart.defaults.apply_hint").to_string(),
                     }),
             )
-            .child(h_flex().gap_2().items_center().child(ticks).child(go))
+            .child(
+                // WRAPS at both levels, because NOTHING in this row can shrink: a `MoonPopover`
+                // is a fixed width, a `MoonButton` is `flex_shrink_0` with a label that does not
+                // truncate, and so is a `MoonCheckbox`. A row of four ticks and two buttons
+                // therefore has a hard minimum, and in a language with long words it used to be
+                // past the popup's edge. The outer wrap puts the buttons on a line of their own,
+                // the inner one stacks the pair when even that line is too narrow.
+                //
+                // What this still does NOT bound is one button whose label alone is wider than the
+                // popup: nothing can break that, so the labels are kept short instead.
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .flex_wrap()
+                    .child(ticks)
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .flex_wrap()
+                            .child(go)
+                            .children(reset),
+                    ),
+            )
             .into_any_element(),
     )
 }

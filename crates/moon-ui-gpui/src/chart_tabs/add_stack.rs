@@ -56,7 +56,8 @@ pub(crate) struct AddChartStack {
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Tab chart-drawing settings (`None` = the global `layout.chart_graphics` default).
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
-    /// Tab chart captions (`None` = the global `layout.chart_labels` default).
+    /// Tab chart captions (`None` = the default of the tab's KIND, which for a comparison is a
+    /// shipped set of its own rather than Main's; see `moon_core::config::ChartTabKind`).
     chart_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Captions a panel's own right-click menu produced, on their way to the host that persists
     /// them. See `panels::chart::volume_menu` for why they travel rather than being written here.

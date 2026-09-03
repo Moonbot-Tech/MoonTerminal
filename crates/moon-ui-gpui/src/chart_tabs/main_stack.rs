@@ -54,7 +54,8 @@ pub(crate) struct MainChartStack {
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Chart-drawing settings for the tab; `None` uses the global `layout.chart_graphics` default.
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
-    /// Chart captions for the tab; `None` uses the global `layout.chart_labels` default.
+    /// Chart captions for the tab; `None` uses the default of the tab's KIND — the main chart is
+    /// a comparison while the anchor lock is on, and then follows the comparison set.
     chart_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Captions a panel's own right-click menu produced, on their way to the host that persists
     /// them. See `panels::chart::volume_menu` for why they travel rather than being written here.

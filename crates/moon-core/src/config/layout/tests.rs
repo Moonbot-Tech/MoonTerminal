@@ -1557,7 +1557,8 @@ fn the_trade_window_falls_back_to_its_own_captions() {
             "the built-in trade set prints the live figure {field:?}"
         );
     }
-    // The other two kinds still follow Main, which the split has not touched.
+    // AddTo — the one kind that ships no captions of its own — still follows Main, which the split
+    // has not touched.
     assert_eq!(
         layout.chart_labels_for(ChartTabKind::AddTo),
         &layout.chart_labels
@@ -1599,10 +1600,15 @@ fn separating_the_kinds_does_not_hand_the_trade_window_mains_captions() {
         &ChartLabelsCfg::trade_default(),
         "the trade window kept its own set when the kinds were separated"
     );
-    // And the two tab kinds kept the set they were showing at that moment, which IS Main's old one.
+    // And the one tab kind that follows Main kept the set it was showing at that moment, which IS
+    // Main's old one. A comparison is skipped by the freeze for the trade window's reason.
     assert_eq!(
         layout.chart_labels_for(ChartTabKind::AddTo),
         &ChartLabelsCfg::default()
+    );
+    assert!(
+        layout.chart_defaults_compare.chart_labels.is_none(),
+        "a comparison ships its own captions and must not be frozen at a copy of Main's"
     );
     // The trade window's slot stays EMPTY rather than frozen at a copy of the shipped set: it does
     // not follow Main, so there is nothing to separate it from — and a copy taken today would
@@ -1642,6 +1648,138 @@ fn storing_one_kinds_captions_separates_nothing() {
     // And the press that IS meant to separate them still does.
     assert!(layout.set_chart_labels_default(ChartTabKind::Main, edited.clone()));
     assert!(layout.chart_defaults_addto.chart_labels.is_some());
+}
+
+/// A comparison opens on ITS OWN captions, not on the main chart's.
+///
+/// Several panes of one coin stand side by side there, each a third of the usual width: the live
+/// default's per-market blocks are printed once per pane, and what tells the panes apart — the
+/// venue, the scale, the spread against the anchor — is what the tab is read by.
+#[test]
+fn a_comparison_falls_back_to_its_own_captions() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::config::chart_labels::{ChartLabelField, ChartLabelsCfg};
+
+    let layout = WindowLayout::default();
+    let compare = layout.chart_labels_for(ChartTabKind::Compare);
+    assert_eq!(compare, &ChartLabelsCfg::compare_default());
+    assert_ne!(
+        compare, &layout.chart_labels,
+        "a comparison must not inherit the main chart's captions"
+    );
+    // It prints what a comparison is read by, including the one field that has nothing to say
+    // anywhere else.
+    for field in [
+        ChartLabelField::CompareDelta,
+        ChartLabelField::ArbColumn,
+        ChartLabelField::ScaleBadge,
+    ] {
+        assert!(
+            compare.any_drawn(|f| f == field),
+            "the built-in comparison set does not print {field:?}"
+        );
+    }
+    // And none of the per-market blocks that would be repeated in every pane.
+    for field in [
+        ChartLabelField::WindowBuyVolume,
+        ChartLabelField::SessionProfit,
+        ChartLabelField::Funding,
+    ] {
+        assert!(
+            !compare.any_drawn(|f| f == field),
+            "the built-in comparison set repeats the per-market figure {field:?} in every pane"
+        );
+    }
+    // AddTo is the only tab kind left following Main.
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::AddTo),
+        &layout.chart_labels
+    );
+}
+
+/// Resetting one kind's default puts THAT kind back on the shipped set and leaves its neighbours
+/// exactly where they were.
+///
+/// This is the only way back to a shipped set once a default has been stored over it — a profile
+/// that pressed "make default" once holds a frozen copy in every kind — so it has to be reachable
+/// per kind, and it must never be a way to lose the other three.
+#[test]
+fn resetting_one_kinds_captions_leaves_the_other_kinds_alone() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::config::chart_labels::{ChartLabelsCfg, LabelPreset};
+
+    let mut layout = WindowLayout::default();
+    let mut mine = ChartLabelsCfg::empty();
+    mine.push_preset(LabelPreset::Scale);
+    assert!(layout.set_chart_labels_default(ChartTabKind::Compare, mine.clone()));
+    let mut windows = ChartLabelsCfg::empty();
+    windows.push_preset(LabelPreset::Funding);
+    assert!(layout.set_chart_labels_default(ChartTabKind::AddTo, windows.clone()));
+    assert_eq!(layout.chart_labels_for(ChartTabKind::Compare), &mine);
+
+    assert!(layout.reset_chart_labels_default(ChartTabKind::Compare));
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::Compare),
+        &ChartLabelsCfg::compare_default(),
+        "an emptied slot must fall back to the kind's own shipped set"
+    );
+    // Emptied rather than filled with a copy: a later build that improves the shipped set has to
+    // reach this profile.
+    assert!(layout.chart_defaults_compare.chart_labels.is_none());
+    // The neighbours kept every value they held.
+    assert_eq!(layout.chart_labels_for(ChartTabKind::AddTo), &windows);
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::Trade),
+        &ChartLabelsCfg::trade_default()
+    );
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::Main),
+        &ChartLabelsCfg::default()
+    );
+    // Nothing left to remove, so a second press moves nothing and must not dirty the file.
+    assert!(!layout.reset_chart_labels_default(ChartTabKind::Compare));
+}
+
+/// Resetting MAIN takes the shipped value — its default is the base field and cannot be emptied —
+/// and must not drag the kinds that were following it along.
+#[test]
+fn resetting_main_takes_the_shipped_set_without_moving_the_others() {
+    use crate::config::chart_defaults::ChartTabKind;
+    use crate::config::chart_labels::{ChartLabelsCfg, LabelPreset};
+    use crate::market::candles::CandleViewCfg;
+
+    let mut layout = WindowLayout::default();
+    let mut mine = ChartLabelsCfg::empty();
+    mine.push_preset(LabelPreset::Instrument);
+    assert!(layout.set_chart_labels_default(ChartTabKind::Main, mine.clone()));
+    let mut windows = ChartLabelsCfg::empty();
+    windows.push_preset(LabelPreset::Position);
+    assert!(layout.set_chart_labels_default(ChartTabKind::AddTo, windows.clone()));
+
+    assert!(layout.reset_chart_labels_default(ChartTabKind::Main));
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::Main),
+        &ChartLabelsCfg::default()
+    );
+    assert_eq!(
+        layout.chart_labels_for(ChartTabKind::AddTo),
+        &windows,
+        "resetting the main chart must not reach into another kind's stored default"
+    );
+
+    // The same for a setting no kind ships its own of: emptying a non-Main slot returns it to
+    // FOLLOWING Main rather than to a value of its own.
+    let dense = CandleViewCfg {
+        tf_min: 1,
+        ..CandleViewCfg::default()
+    };
+    assert!(layout.set_candle_view_default(ChartTabKind::Compare, dense));
+    assert_eq!(layout.candle_view_for(ChartTabKind::Compare), dense);
+    assert!(layout.reset_candle_view_default(ChartTabKind::Compare));
+    assert_eq!(
+        layout.candle_view_for(ChartTabKind::Compare),
+        layout.candle_view
+    );
 }
 
 /// `WindowLayout` must stay SMALL, because it is moved on the stack.
