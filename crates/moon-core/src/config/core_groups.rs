@@ -41,6 +41,7 @@ pub struct CoreGroup {
     /// User-supplied label, trimmed and non-empty after sanitizing.
     pub name: String,
     /// Member core uids, in the order they were saved, without duplicates.
+    // wire-id-exempt: terminal-issued, never a core id — see `config::wire_id`.
     #[serde(default)]
     pub cores: Vec<u64>,
 }
