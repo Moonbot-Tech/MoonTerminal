@@ -497,6 +497,11 @@ fn the_assets_wallets_header_caret_stays_passive() {
 /// The Assets wallet roster groups core rows by venue identity and resolves logos only after an
 /// off-thread prewarm, while every core keeps the trust-aware balance figure and click behavior.
 ///
+/// Mutation: remove the cached automatic width from `bottom`, its render refill, its cache
+/// invalidation, the name tooltip, or the non-shrinking figure wrapper. The pure width helper
+/// would remain green while live Wallets either used a stale/default width or clipped a balance
+/// into a misleading number beside a name the user could no longer recover on hover.
+///
 /// The roster has two shapes — grouped under exchange headings and flat, chosen by the section's
 /// persisted preference — and both must reach the SAME row builder: a second copy of the row would
 /// be the one that forgets the transfer-asset refresh a click owes the core it selects. So the
@@ -546,9 +551,14 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
         "crate::media::exchange_logos::exchange_logo",
         "img(logo)",
         "super::balances::figure(Some(agg), p, cx)",
+        ".id(SharedString::from(format!(\"asset-core-name-{cid}\")))",
+        ".tooltip(crate::panels::common::text_tooltip(core_name.clone()))",
+        ".flex_none()",
         ".on_click(cx.listener(move |this",
         "this.overview_wallet_pick = Some(cid)",
         "this.selected_core = Some(cid)",
+        ".cached_roster_auto_w",
+        "roster_width::resolved(&self.roster_widths.read(cx).column_widths, auto_w)",
         ".min_w(design::font_w_px(cx, roster_width::MIN_BASE_W))",
         ".flex_shrink_1()",
     ] {
@@ -557,9 +567,31 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
             "grouped Assets roster must retain {needle:?}"
         );
     }
+    let figure_child = row
+        .find(".child(super::balances::figure(Some(agg), p, cx))")
+        .expect("wallet core rows must render a balance figure");
+    let figure_cell = row[..figure_child]
+        .rsplit_once(".child(")
+        .expect("the balance figure must remain inside its own wrapper")
+        .1;
+    assert!(
+        figure_cell.contains(".flex_none()"),
+        "the wallet balance figure must stay in a non-shrinking wrapper"
+    );
     assert!(
         bottom.contains("asset-exchange-unknown") && !bottom.contains("status_dot"),
         "unknown exchange headings stay explicit without a fake logo or status dot"
+    );
+
+    let render = code_only(&read_src("panels/assets/render.rs"));
+    assert!(
+        render.contains("self.ensure_roster_auto_w(cx);"),
+        "Assets render must refill the automatic roster width before building Wallets"
+    );
+    let cache = code_only(&read_src("panels/assets/cache.rs"));
+    assert!(
+        cache.contains("self.cached_roster_auto_w = None;"),
+        "Assets cache rebuild must invalidate the automatic roster width with its aggregates"
     );
 }
 

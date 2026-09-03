@@ -102,6 +102,14 @@ impl Render for AssetsView {
         let p = MoonPalette::active(cx);
         let windowed = self.windowed;
         let show_wallets = self.wallets_visible(cx);
+        // The roster's content width is measured HERE and nowhere else: this is the only place
+        // holding both `&mut self` and an `App`, while `rebuild_cache`, which invalidates it, has
+        // no context to measure with. Behind the same flag as the section that reads it, so a
+        // table-only Classic tab pays nothing — and BEFORE the first builder below, each of which
+        // borrows `self` for the rest of this function.
+        if show_wallets {
+            self.ensure_roster_auto_w(cx);
+        }
 
         let count = entries.len();
         // Natural table height is its header plus rows, or zero when empty. This lets the table grow

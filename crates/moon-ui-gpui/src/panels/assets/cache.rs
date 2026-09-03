@@ -73,6 +73,10 @@ impl AssetsView {
         self.sort_entries(&mut entries);
         self.cached_entries = Rc::new(entries);
         self.cached_aggs = Rc::new(self.per_core(b));
+        // The roster's measured width is a property of these aggregates, so it dies with them.
+        // Clearing rather than recomputing: measuring needs an `App` this method does not have,
+        // and the first `render` that actually shows the wallets section refills it.
+        self.cached_roster_auto_w = None;
         self.cached_all_futures = self.all_scope_cores_futures(b);
         self.rebuild_wallet_cache(b);
         // Skip non-finite row values so one bad price cannot turn the whole Σ into `NaN`, but

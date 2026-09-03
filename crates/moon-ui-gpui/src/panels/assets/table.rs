@@ -98,6 +98,31 @@ pub(super) struct RosterDragAnchor {
     pub(super) base_w: f32,
 }
 
+/// Presentation inputs the roster's measured width depends on, beside the aggregates themselves.
+///
+/// Mirrors `panels::report::widths`'s `NaturalWidthsEnvironment`, which exists for exactly this
+/// reason: a content-measured width is valid only for the typography and the LANGUAGE it was
+/// measured in, and neither of those bumps a DATA revision — `assets_sig` hashes core ids and
+/// their `*_rev` counters and nothing else. Settings applies a language or scale change LIVE to
+/// open windows, so keying the width on `cached_aggs` alone would leave the column sized for the
+/// previous locale until some balance happened to move, which on a quiet account is never.
+///
+/// The localized part is real rather than theoretical: `balances::figure_width` measures the
+/// trust markers `assets.balance_stale` / `assets.balance_unpriced`, whose length differs per
+/// language.
+#[derive(Clone, PartialEq)]
+pub(super) struct RosterWidthEnv {
+    /// Rendered body text size, which moves with the theme base and the Font slider. Covers the
+    /// caption size too — it is derived from the same base.
+    body_bits: u32,
+    /// UI geometry scale, which moves the row's padding and the figure's internal gap.
+    ui_bits: u32,
+    /// Font-width scale: the divisor that turns a rendered measurement back into base units.
+    scale_bits: u32,
+    /// Active locale, because the measured trust markers are localized.
+    locale: String,
+}
+
 /// GPUI drag payload identifying the panel whose roster divider is being dragged. Carries no
 /// visual.
 ///
@@ -350,6 +375,17 @@ impl AssetsView {
             ))
     }
 
+    /// Unscaled horizontal padding on each side of a roster row. SHARED by the row that draws it
+    /// and by [`AssetsView::ensure_roster_auto_w`], which sizes the column around it — the two
+    /// numbers must be the same number, not two copies free to drift.
+    const ROSTER_ROW_PAD: f32 = 8.0;
+
+    /// Rendered gap between a roster row's name cell and its figure — the `gap_2` that
+    /// [`AssetsView::wallet_core_row`] applies, restated so the width arithmetic can account for
+    /// it. Chrome, not text: `gap_2` is a fixed rem step and is deliberately NOT run through the
+    /// Font slider.
+    const ROSTER_ROW_GAP_PX: f32 = 8.0;
+
     /// Build one selectable core row of the wallet section's left list.
     ///
     /// Shared by both shapes of that list — grouped under exchange headings and flat — so the two
@@ -378,16 +414,35 @@ impl AssetsView {
             .id(SharedString::from(format!("asset-core-{cid}")))
             .w_full()
             .h(design::fit_h_px(cx, 24.0, 13.0, 5.0))
-            .px(design::ui_px(cx, 8.0))
+            .px(design::ui_px(cx, Self::ROSTER_ROW_PAD))
             .items_center()
             .justify_between()
             .gap_2()
             .cursor_pointer()
             .text_color(rgb(p.text))
-            .child(div().flex_1().min_w_0().truncate().child(core_name))
+            // The name yields FIRST and the figure never does: the roster is sized to show both
+            // (`roster_width::auto_base`), but a user drag or a genuinely narrow dock can still
+            // undercut that, and a half-drawn balance is worse than a shortened name — the name
+            // survives on hover, a clipped number reads as a different number. Hence `truncate`
+            // here and `flex_none` on the figure below.
+            .child(
+                div()
+                    .id(SharedString::from(format!("asset-core-name-{cid}")))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    // No `occlude`, unlike the resize handle: the click belongs to the row, and
+                    // this cell only needs a hover target for the tooltip.
+                    .tooltip(crate::panels::common::text_tooltip(core_name.clone()))
+                    .child(core_name),
+            )
             // Per-core trust, rendered by the module that owns the vocabulary — so a core
             // shown as current here cannot be one the footer total counts as stale.
-            .child(super::balances::figure(Some(agg), p, cx))
+            .child(
+                div()
+                    .flex_none()
+                    .child(super::balances::figure(Some(agg), p, cx)),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let AssetsScope::Group(_) = &this.scope {
                     if let Some(scope) = this.effective_scope(this.backend.read(cx)) {
@@ -504,6 +559,60 @@ impl AssetsView {
                 cx.notify();
             }
         });
+    }
+
+    /// Refill [`AssetsView::cached_roster_auto_w`] when the aggregates it is derived from moved.
+    ///
+    /// Measures the WIDEST ROW rather than the widest name plus the widest figure: the two cells
+    /// belong to one aggregate, and the longest name rarely sits on the row carrying the longest
+    /// balance — combining maxima that never coexist would reserve width no row asks for and
+    /// starve all three wallet columns for nothing. Every row is measured, not only distinct
+    /// names, because the figure differs per core even where the name repeats.
+    ///
+    /// Called from `render`, which is the only place holding both `&mut self` and an `App`;
+    /// `rebuild_cache` owns the invalidation but has no context to measure with.
+    ///
+    /// Args:
+    ///     cx: Application context used to measure text and read the active font scale.
+    ///
+    /// Returns:
+    ///     Nothing; a slot that is already filled is left alone.
+    pub(super) fn ensure_roster_auto_w(&mut self, cx: &App) {
+        // Re-measure when the aggregates moved (`rebuild_cache` cleared the slot) OR when the
+        // presentation the measurement was taken under moved — see [`RosterWidthEnv`]. Both are
+        // needed: a language switch changes the width without touching the data, and new data
+        // changes it without touching the language.
+        let env = RosterWidthEnv {
+            body_bits: f32::from(design::t_body(cx)).to_bits(),
+            ui_bits: f32::from(design::ui_px(cx, 1.0)).to_bits(),
+            scale_bits: design::font_scale(cx).to_bits(),
+            locale: rust_i18n::locale().to_string(),
+        };
+        if self
+            .cached_roster_auto_w
+            .as_ref()
+            .is_some_and(|(_, measured_under)| *measured_under == env)
+        {
+            return;
+        }
+        // Everything on the row that is neither the name nor the figure: its horizontal padding,
+        // twice, and the `gap_2` between the two cells. The resize strip is deliberately NOT
+        // added — it is absolutely positioned over the column's right edge, so it consumes no
+        // flex space and already sits inside that right padding.
+        let chrome =
+            2.0 * f32::from(design::ui_px(cx, Self::ROSTER_ROW_PAD)) + Self::ROSTER_ROW_GAP_PX;
+        let widest_row = self
+            .cached_aggs
+            .iter()
+            .map(|agg| {
+                design::mono_body_text_width(cx, &agg.name, FontWeight::NORMAL.0)
+                    + super::balances::figure_width(Some(agg), cx)
+            })
+            .fold(0.0f32, f32::max);
+        self.cached_roster_auto_w = Some((
+            roster_width::auto_base(widest_row, chrome, design::font_scale(cx)),
+            env,
+        ));
     }
 
     /// Collapsible Wallets section: a selectable balance-aware core list plus the Spot,
@@ -675,7 +784,23 @@ impl AssetsView {
         // unscaled units — see that module) rather than as the fixed law above: the column tracks
         // the Font slider like every other metric in the panel, and the user can drag it wider
         // himself via the resize handle at its right edge, with the result persisted.
-        let base_w = roster_width::resolved(&self.roster_widths.read(cx).column_widths);
+        //
+        // And the DEFAULT is now measured rather than fixed. 420 px was chosen against the names
+        // above, but a name is the user's own free text: at the shipped width every row read
+        // `AWS$22 ~ F-BN / SHOT_FUT (SU…`, ellipsized exactly at the sub-account that says which
+        // row it is, while the three wallet columns beside it held one short entry each. The
+        // column is sized to its widest name plus the figure it must not overlap, floored at the
+        // shipped width and capped at `MAX_BASE_W` (`roster_width::auto_base`); a stored drag
+        // still wins, and double-click drops back onto this measurement.
+        //
+        // Measured once per aggregate rebuild by `ensure_roster_auto_w`, which `render` calls
+        // before it reaches this section; an empty slot here means the section is being drawn
+        // outside that path, and the shipped default is the honest answer rather than a guess.
+        let auto_w = self
+            .cached_roster_auto_w
+            .as_ref()
+            .map_or(roster_width::DEFAULT_BASE_W, |(width, _)| *width);
+        let base_w = roster_width::resolved(&self.roster_widths.read(cx).column_widths, auto_w);
         let left = v_flex()
             .relative()
             .w(design::font_w_px(cx, base_w))
