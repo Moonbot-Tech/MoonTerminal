@@ -248,53 +248,16 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            let (axis_pos, price_axis_w, glass_w, chart_w) = horizontal_chart_layout(
-                rect.w,
+            let areas = pane_layout(
+                *rect,
                 self.orderbook_only,
                 self.orderbook_enabled,
+                self.time_axis_visible,
                 self.price_axis_pos,
                 self.last_ppp,
             );
-            // A hidden time axis reserves no label gutter, allowing the plot to use the full height.
-            let time_axis_h = if self.time_axis_visible {
-                moon_chart::TIME_AXIS_H * self.last_ppp
-            } else {
-                0.0
-            };
-            let plot_h = (rect.h - time_axis_h).max(1.0);
-            // Left places the axis gutter on the left, shifts the plot right, and keeps the book at
-            // the right edge. Right starts the plot at the left edge, then places the book and the
-            // axis gutter to its right. Hide removes the axis, starts the plot at the left edge,
-            // and keeps the book at the right edge.
-            let axis_on_left = matches!(
-                axis_pos,
-                crate::persistence::chart_persist::PriceAxisPos::Left
-            );
-            let chart_x = if axis_on_left {
-                rect.x + price_axis_w
-            } else {
-                rect.x
-            };
-            let glass_x = if matches!(
-                axis_pos,
-                crate::persistence::chart_persist::PriceAxisPos::Right
-            ) {
-                chart_x + chart_w
-            } else {
-                rect.x + (rect.w - glass_w).max(1.0)
-            };
-            let chart_area = Rect {
-                x: chart_x,
-                y: rect.y,
-                w: chart_w,
-                h: plot_h,
-            };
-            let glass_area = Rect {
-                x: glass_x,
-                y: rect.y,
-                w: glass_w,
-                h: plot_h,
-            };
+            let (chart_area, glass_area) = (areas.plot, areas.glass);
+            let plot_h = chart_area.h;
             pane.view
                 .ensure_default_window(chart_area.w, self.present_rate_hz, self.default_x_ppm);
             // A framing request asked for outside a prepared frame lands HERE, at the first width
@@ -907,7 +870,7 @@ impl ChartDataState {
             let mut next_view =
                 view::view_gpu(&pane.view, area_win, res, self.last_ppp, view_style);
             next_view.pad = view_time0
-                + (chart_area.w + glass_w)
+                + (chart_area.w + glass_area.w)
                     / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             if pr.view != next_view {
                 pr.view = next_view;
@@ -1062,7 +1025,7 @@ impl ChartDataState {
             // Order-book-only mode forces the book on even when the Order Book toggle is cleared.
             pr.orderbook_only = self.orderbook_only;
             // Store the effective axis position, including forced hiding in book-only mode, for labels.
-            pr.price_axis_pos = axis_pos;
+            pr.price_axis_pos = areas.axis_pos;
             pr.time_axis_visible = self.time_axis_visible;
             pr.prospective_usd = self.prospective_usd;
             let orderbook_on = self.orderbook_enabled || self.orderbook_only;

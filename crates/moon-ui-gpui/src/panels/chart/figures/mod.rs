@@ -95,8 +95,8 @@ impl ChartPanel {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return false;
         };
-        // Leave the order-book/reserved control zone to trading input.
-        if self.glass_pane_at(pos).is_some() {
+        // Leave trading space — the order book, its reserved strip, a whole broom pane — alone.
+        if self.chart_gesture_pane_at(pos).is_none() {
             return false;
         }
         let Some(map) = self.pane_map(pane) else {
@@ -629,10 +629,7 @@ impl ChartPanel {
 
     /// Return the nearest figure-body ID under the cursor within the scaled hit threshold.
     fn fig_hit_at(&self, pos: (f32, f32), cx: &Context<Self>) -> Option<u64> {
-        let pane = self.input.pane_at(pos.0, pos.1)?;
-        if self.glass_pane_at(pos).is_some() {
-            return None;
-        }
+        let pane = self.chart_gesture_pane_at(pos)?;
         let (core, market) = self.fig_pane_key(pane)?;
         let map = self.pane_map(pane)?;
         let threshold = HIT_PX * self.last_ppp.max(1.0);
@@ -691,7 +688,7 @@ impl ChartPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // `fig_hit_at` excludes the order-book zone through `glass_pane_at`.
+        // `fig_hit_at` excludes trading space through `chart_gesture_pane_at`.
         let Some(id) = self.fig_hit_at(local_pos, cx) else {
             return false;
         };

@@ -685,7 +685,7 @@ impl ChartPanel {
         }
         // Use the hover gate in separate-zone chart space so only the start cross competes. A nearer
         // Sell line must not shadow a cross that was presented with the pointer cursor.
-        let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
+        let cross_only = self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some();
         let Some(hit) = self.hit_order_line(pos, cross_only, cx) else {
             return false;
         };
@@ -993,7 +993,7 @@ impl ChartPanel {
         self.order_hover_probe = Some(pos);
         // In separate-zone mode, full line interaction belongs to the order book. In chart space,
         // use the reduced hit test for the click-to-cancel start cross only.
-        let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
+        let cross_only = self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some();
         let next = self
             .hit_order_line(pos, cross_only, cx)
             .map(|hit| OrderHoverKey {
@@ -1041,7 +1041,7 @@ impl ChartPanel {
             return false;
         }
         // Separate-zone mode permits order-line dragging only inside the order book.
-        if self.separate_zones(cx) && self.glass_pane_at(pos).is_none() {
+        if self.separate_zones(cx) && self.chart_gesture_pane_at(pos).is_some() {
             return false;
         }
         let Some(hit) = self.hit_order_line(pos, false, cx) else {

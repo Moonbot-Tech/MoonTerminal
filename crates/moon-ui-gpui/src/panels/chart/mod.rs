@@ -455,7 +455,7 @@ impl ChartPanel {
         // rather than a rule every future Live call site has to remember.
         panel.chart.set_historical(true);
         // Turned off through the same field the live path uses, so the engine's own layout gives
-        // the book's width back to the plot (`horizontal_chart_layout` sets `glass_w = 0`).
+        // the book's width back to the plot (`pane_layout` gives the book zero width).
         panel.orderbook_enabled = false;
         // `new_main` retained a book reference for the focus market a moment ago; this releases it
         // before any coordination tick can read the demand set, so a historical viewer never
@@ -1471,10 +1471,15 @@ impl ChartPanel {
     }
 
     /// Enables book-only broom mode: rendering hides the plot and price axis and expands the book.
+    ///
+    /// The book-reference sync runs for the same reason [`Self::set_orderbook_enabled`] runs it:
+    /// this mode draws the book whether or not that toggle is set, and depth arrives only for a
+    /// subscribed market.
     pub fn set_orderbook_only(&mut self, only: bool, cx: &mut Context<Self>) {
         if self.orderbook_only != only {
             self.orderbook_only = only;
             self.view_dirty = true;
+            self.sync_orderbook_refs(cx);
             cx.notify();
         }
     }

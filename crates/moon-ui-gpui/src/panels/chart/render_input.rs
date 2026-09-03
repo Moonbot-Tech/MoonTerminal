@@ -121,6 +121,12 @@ pub(super) fn scroll_wheel(
     if this.main_stack_scroll && this.window_pos_in_glass_zone(e.position) {
         return;
     }
+    // A book-only broom pane has no plot to zoom: its X window is one pixel wide, so a wheel here
+    // moves nothing on screen and only feeds a nonsense scale to whatever reads the view later.
+    // Left unconsumed on purpose, so a surrounding stack scrolls instead.
+    if this.orderbook_only {
+        return;
+    }
     let sf = window.scale_factor();
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
@@ -602,8 +608,11 @@ pub(super) fn mouse_down_middle(
         return;
     }
     // Shift+middle-click on the graph synchronizes the time X scale across charts in THIS window,
-    // matching Moonbot. A trading gesture bound to Shift+middle-click takes priority above.
-    if within && e.modifiers.shift && this.sync_x_scale_window(window, cx) {
+    // matching Moonbot. A trading gesture bound to Shift+middle-click takes priority above. Never
+    // from a book-only broom pane: its plot is floored at one pixel, so `ensure_default_window` has
+    // already rebuilt `px_per_ms` for a one-pixel window, and publishing THAT would rescale every
+    // chart in the window to a span of months.
+    if within && !this.orderbook_only && e.modifiers.shift && this.sync_x_scale_window(window, cx) {
         cx.stop_propagation();
     }
 }

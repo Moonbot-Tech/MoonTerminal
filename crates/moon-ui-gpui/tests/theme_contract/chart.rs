@@ -983,3 +983,36 @@ fn chart_label_name_budget_uses_the_button_s_ui_scale() {
         "name_budget must subtract MoonButton padding with the UI scale"
     );
 }
+
+/// Every hit test in the chart reads the engine's own `chartdx::pane_layout` instead of deriving a
+/// second copy of the split. `local_pane_areas` answers where a click lands; `plot_metrics_for`
+/// feeds wheel zoom, drag pan and snap-to-live; `try_dblclick_to_main` decides where the
+/// open-on-Main double click is refused. Each derived its own book width once, which is how they
+/// came to work against a plot the engine does not draw — narrowed on a cramped pane, absent when
+/// the book is off, and on a book-only broom pane floored at a single pixel while the book covers
+/// everything.
+#[test]
+fn chart_hit_testing_reads_the_engines_own_pane_layout() {
+    const READERS: &[(&str, &str)] = &[
+        ("panels/chart/geom.rs", "fn local_pane_areas("),
+        ("chartdx/input.rs", "fn areas_of("),
+        ("chartdx/input.rs", "fn plot_metrics_for("),
+        ("chartdx/input.rs", "fn try_dblclick_to_main("),
+    ];
+    for (file, signature) in READERS {
+        let source = code_only(&read_src(file));
+        let body = braced_body(&source, signature);
+        assert!(
+            !body.contains("GLASS_ZONE_PX"),
+            "{file}:{signature} must not derive an order-book width of its own"
+        );
+    }
+    for (file, signature) in READERS {
+        let source = code_only(&read_src(file));
+        let body = braced_body(&source, signature);
+        assert!(
+            body.contains("pane_layout(") || body.contains("areas_of("),
+            "{file}:{signature} must take its geometry from the shared layout"
+        );
+    }
+}
