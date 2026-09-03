@@ -115,7 +115,9 @@ fn subsection_header_row(
         .gap_2()
         .items_center()
         .pl(px(CONN_TABLE_INSET))
-        .pr_1()
+        // A row of the same virtual list as the core rows, so it clears the overlay scrollbar the
+        // same way; `pr_1` alone left the member count under the track once the list overflowed.
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
         .py_0p5()
         .child(
             div()
@@ -316,6 +318,11 @@ fn group_header_row(
         .gap_1()
         .items_center()
         .px_1()
+        // Overrides the `px_1` right inset only: this row ends in live controls -- the proto
+        // dropdown, the icon popover and the "+ core" button -- and it is a row of the same
+        // virtual list, whose overlay scrollbar would otherwise paint over and swallow clicks on
+        // the right edge of that button.
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
         .py_0p5()
         .rounded(design::r_button(cx))
         .bg(rgb(p.panel_high))

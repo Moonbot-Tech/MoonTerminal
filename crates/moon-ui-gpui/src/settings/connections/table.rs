@@ -994,6 +994,10 @@ pub(super) fn server_row(
         .gap_1()
         .items_center()
         .py_0p5()
+        // The list's scrollbar is an overlay that reserves no width of its own, so the status dot,
+        // the reconnect glyph and the delete button rendered beneath it. The header subtracts the
+        // same gutter, or the two stop lining up.
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
         .children(
             ConnColId::ALL
                 .into_iter()
@@ -1130,6 +1134,9 @@ impl SettingsView {
             .gap_1()
             .items_center()
             .pl(px(CONN_TABLE_INSET))
+            // The same gutter every row of the list below reserves for its overlay scrollbar, so
+            // the headings stay over their own columns.
+            .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
             .pb(px(3.0))
             .border_b_1()
             .border_color(rgb(p.border))
