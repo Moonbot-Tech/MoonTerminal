@@ -27,6 +27,9 @@ use moon_core::session::CoreId;
 use moon_ui::{
     MoonPalette, MoonSliderEvent, MoonSliderState, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
+use rust_i18n::t;
+
+use crate::workspace::scope_marker::{self, ScopeMarker};
 
 /// Number of latest five-minute OHLC buckets retained for a card's candle chart, approximately two
 /// hours. At a typical 75-130 px chart width, 24 buckets leave roughly 3-5 px per outlined candle;
@@ -416,9 +419,9 @@ impl DetectsPanel {
     }
 
     /// Arms a one-second refresh timer while the queue is nonempty. On wake it clears the armed
-    /// flag, prunes expired cards against wall-clock time, notifies if cards remain so their
-    /// countdowns update, and rearms itself. If pruning empties the queue, the timer stops and this
-    /// callback does not issue a final notification.
+    /// flag, prunes expired cards against wall-clock time, notifies so their countdowns update,
+    /// and rearms itself. Pruning to zero stops the timer but still issues its FINAL
+    /// notification: that render is the one that replaces the last card with the empty state.
     fn arm_prune_timer(&mut self, cx: &mut Context<Self>) {
         if self.prune_timer_armed || self.items.is_empty() {
             return;
@@ -430,9 +433,13 @@ impl DetectsPanel {
             let alive = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.prune_timer_armed = false;
-                    this.prune(now_unix_ms());
-                    // Refresh countdowns and reflect removals while at least one card remains.
-                    if !this.items.is_empty() {
+                    let pruned = this.prune(now_unix_ms());
+                    // Refresh countdowns while cards remain, and paint the transition to empty
+                    // exactly once. Gating this on a non-empty queue alone left the LAST expired
+                    // card painted until some unrelated notification arrived — harmless while an
+                    // empty feed drew nothing, but it is now the render that puts the
+                    // empty-state sentence on screen.
+                    if pruned || !this.items.is_empty() {
                         cx.notify();
                     }
                     this.arm_prune_timer(cx);
@@ -510,6 +517,53 @@ impl DetectsPanel {
     }
 }
 
+/// Pick the sentence an EMPTY detection feed states, in the house precedence.
+///
+/// A feed with no visible card is several different facts, and they must not share a string:
+/// only the no-cores one asks the user to go and connect something.
+///
+/// Two orderings here are load-bearing, and both were wrong in this function's first draft.
+///
+/// **The empty UNIVERSE is checked first.** A card outlives the session that produced it — it
+/// stays in the queue for its whole `KeepAlert` and [`Self::ingest`] never evicts one whose core
+/// disappeared — so a disconnect mid-`KeepAlert` leaves cards retained, nothing visible, and no
+/// core available. Asking about the retained cards first would blame the scope for hiding
+/// detects when the cores behind them are simply gone. The PARTIAL version of that state — one
+/// core of several goes away while its siblings sit idle — is settled by the caller instead,
+/// which counts only cards whose core is still available (see `retained` below); the count and
+/// this ordering are two halves of one rule. `available` counts
+/// `WorkspaceCoreAvailability::is_available` (`workspace.rs:251`), which is group and core
+/// activation plus a live session and a live window — hence "available", never "connected".
+///
+/// **The shared hidden-by-preset sentence applies ONLY when data really was excluded.**
+/// [`scope_marker::scope_empty_text`] switches on membership alone, and its contract is that the
+/// data exists and the preset is what withholds it. A Detects feed can be empty with a full
+/// scope-hiding preset simply because nothing ever fired, and there the shared sentence would
+/// send the user to widen a preset that is hiding nothing. So it is reached only under
+/// `retained > 0`.
+///
+/// Args:
+///     marker: This group's scope marker, built from the same membership counts presentation
+///         filters on.
+///     retained: Cards this panel holds whose core is STILL AVAILABLE — the ones a preset change
+///         could actually bring back. Nonzero with nothing visible means detects DID arrive and
+///         presentation is what hides them. A card whose core has gone away is deliberately NOT
+///         counted: it is unreachable rather than hidden, and no scope change reveals it.
+///     available: Group cores that survived availability — the universe the feed could ever
+///         show. Zero means nothing here can detect at all.
+///
+/// Returns:
+///     One localized sentence, already resolved; never empty.
+fn empty_feed_text(marker: &ScopeMarker, retained: usize, available: usize) -> String {
+    if available == 0 {
+        t!("detects.empty_no_cores").to_string()
+    } else if retained > 0 {
+        scope_marker::scope_empty_text(Some(marker), t!("detects.empty_filtered").to_string())
+    } else {
+        t!("detects.empty").to_string()
+    }
+}
+
 /// Signature that makes the panel re-ingest: a hash of every group core's detect revision, PLUS the
 /// AddToChart setting as its own value. The setting belongs here because flipping it changes which
 /// rows the feed accepts, and this is what wakes EVERY panel of the group — the one whose checkbox
@@ -560,7 +614,8 @@ impl Render for DetectsPanel {
     ///     cx: Panel context providing workspace scope, theme, and configuration.
     ///
     /// Returns:
-    ///     Toolbar and filtered card grid without discarding out-of-scope retained cards.
+    ///     Toolbar and filtered card grid without discarding out-of-scope retained cards, or the
+    ///     toolbar above one centred sentence naming why the feed is empty.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::DETECTS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::DETECTS_RENDER_US);
@@ -574,12 +629,35 @@ impl Render for DetectsPanel {
         // The chart theme supplies colors for card candle and line vectors.
         let theme = self.backend.read(cx).config.chart_theme().clone();
         let now = now_unix_ms();
-        let visible_cores = self
-            .backend
-            .read(cx)
-            .effective_workspace_scope(&self.group, crate::workspace::RetainedCoreScope::All)
-            .ids()
-            .to_vec();
+        // The scope value is kept, not consumed straight into its ids: its membership counts are
+        // what tells an empty feed whether a preset is hiding a full one.
+        let (marker, visible_cores, available_cores, retained_reachable) = {
+            let b = self.backend.read(cx);
+            let scope =
+                b.effective_workspace_scope(&self.group, crate::workspace::RetainedCoreScope::All);
+            let available = scope.membership_total();
+            let marker = ScopeMarker::new(
+                b.display_preset(crate::workspace::DisplayOwner::Group(&self.group)),
+                scope.membership_shown(),
+                available,
+            );
+            // Count only the retained cards a preset change could actually bring BACK. A card
+            // whose core has gone unavailable is unreachable, not hidden: deactivating a server
+            // makes `SessionManager::reconcile` drop the core outright
+            // (`moon-core/src/session/lifecycle.rs:304`), and nothing evicts the card it left
+            // behind until its `KeepAlert` expires. Counting it as retained would tell a
+            // multi-core group whose other cores are merely idle that the scope is hiding
+            // detects, and send the user widening a preset that can never reveal them.
+            let retained_reachable = self
+                .items
+                .iter()
+                .filter(|it| {
+                    b.workspace_core_availability(&self.group, it.core)
+                        .is_available()
+                })
+                .count();
+            (marker, scope.ids().to_vec(), available, retained_reachable)
+        };
 
         // Place the gear-triggered configuration toolbar and divider above the feed.
         let toolbar = popup::toolbar(self, &cfg, p, cx);
@@ -588,6 +666,7 @@ impl Render for DetectsPanel {
         // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
         // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
+        let mut shown = 0usize;
         for it in self.items.iter().rev().filter(|item| {
             detection_core_visible(item.core, &visible_cores)
                 && detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)
@@ -614,16 +693,47 @@ impl Render for DetectsPanel {
                     }),
                 );
             container = container.child(card);
+            shown += 1;
         }
 
-        let scroll = div()
-            .id("detects-scroll")
-            .flex_1()
-            .w_full()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .p_2()
-            .child(container);
+        // An empty feed states WHY it is empty instead of painting a blank pane under the gear.
+        // Same element the Log panel uses for `log.empty_filtered` (`panels/log/view.rs`): one
+        // centred, muted line filling the space the card grid would have taken. It replaces the
+        // scroll box rather than sitting inside it — an empty scroll container would still own the
+        // `flex_1` slot and leave the sentence pinned to the top-left corner.
+        let body: AnyElement = if shown == 0 {
+            div()
+                .flex_1()
+                .w_full()
+                .min_h(px(0.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                // `items_center` + `justify_center` centre the text BOX, not the lines inside it.
+                // The Log panel needs no more than that because its empty copy is two words; these
+                // sentences wrap at any realistic dock width, and without this the centred empty
+                // state reads left-aligned exactly where it is most cramped.
+                .text_center()
+                .p_2()
+                .text_size(crate::design::t_body(cx))
+                .text_color(rgb(p.text_soft))
+                .child(empty_feed_text(
+                    &marker,
+                    retained_reachable,
+                    available_cores,
+                ))
+                .into_any_element()
+        } else {
+            div()
+                .id("detects-scroll")
+                .flex_1()
+                .w_full()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .p_2()
+                .child(container)
+                .into_any_element()
+        };
 
         v_flex()
             .id("detects")
@@ -634,7 +744,7 @@ impl Render for DetectsPanel {
             .bg(rgb(p.table_body))
             .child(toolbar)
             .child(divider)
-            .child(scroll)
+            .child(body)
     }
 }
 
