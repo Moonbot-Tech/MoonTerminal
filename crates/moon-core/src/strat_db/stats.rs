@@ -41,6 +41,7 @@ fn open_rw() -> Option<Connection> {
     }
     let conn = Connection::open(&path).ok()?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    crate::db::trace::install_on(&conn);
     Some(conn)
 }
 

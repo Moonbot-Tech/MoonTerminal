@@ -148,6 +148,10 @@ impl KlineCache {
             log::warn!("kline cache schema failed {}: {e}", path.display());
             return None;
         }
+        // This one connection also serves `Op::Merge`/`Op::MergeBatch` on the worker thread
+        // below, so a hook installed here captures background WRITE timings too, mixed in with
+        // the `Op::Read` ones — unlike every other call site, which only ever opens a reader.
+        crate::db::trace::install_on(&conn);
         let (tx, rx) = mpsc::channel::<Op>();
         std::thread::Builder::new()
             .name("kline-cache".into())

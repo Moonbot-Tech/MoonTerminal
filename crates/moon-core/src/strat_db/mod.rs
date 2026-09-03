@@ -278,6 +278,7 @@ fn open_ro(path: &std::path::Path) -> rusqlite::Result<Connection> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    crate::db::trace::install_on(&conn);
     Ok(conn)
 }
 

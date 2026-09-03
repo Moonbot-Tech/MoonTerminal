@@ -32,7 +32,7 @@
 //! "creations" sharing one timestamp, some of them at unix epoch 1. "No later than X" is a
 //! fact; "added on X" from the same row is a lie the user cannot see through.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
@@ -324,15 +324,59 @@ struct Head {
 ///
 /// The ids are `i64`/`u64` formatted as decimals, so there is nothing here a string could
 /// inject; binding them instead would mean rebuilding the SQL per selection size anyway.
+///
+/// GROUPED BY CORE, and that grouping is the whole point. SQLite parses `a OR b OR c` into a
+/// LEFT-DEEP tree, so an `OR` chain with one term per selected strategy has a depth equal to
+/// the selection size — and past `SQLITE_MAX_EXPR_DEPTH` (1000) the statement does not run
+/// slowly, it fails to prepare: `Expression tree is too large`, the whole panel down. Measured
+/// on a replica with 2 420 `strategyid@core_uid` groups, where every period failed. Factoring
+/// the repeated `s.core_uid = C` out of each group makes the depth the number of DISTINCT
+/// CORES (tens) instead, and an `IN (…)` right-hand side is a flat expression LIST that costs
+/// no depth per element.
+///
+/// One id in a group still emits `= id` rather than `IN (id)`: same plan, and it keeps the
+/// generated SQL readable for the ordinary small selection. Groups and ids are emitted in
+/// sorted order so one selection always renders one string.
+///
+/// THE CEILING MOVED, IT DID NOT VANISH. What is joined by `OR` is now one term per distinct
+/// core, so a selection spanning ~1000 distinct CORES would hit the same wall again. That is a
+/// far higher ceiling on a variable a user cannot push — the core count is the fleet's shape,
+/// not the size of a selection — but it is a bound, not a guarantee, and it is written here so
+/// the next person reads it instead of rediscovering it.
 fn scope_sql(targets: &[(i64, Option<u64>)]) -> String {
-    let terms: Vec<String> = targets
+    let mut by_core: BTreeMap<Option<i64>, BTreeSet<i64>> = BTreeMap::new();
+    for (sid, core) in targets {
+        by_core
+            .entry(core.map(|c| c as i64))
+            .or_default()
+            .insert(*sid);
+    }
+    let terms: Vec<String> = by_core
         .iter()
-        .map(|(sid, core)| match core {
-            Some(c) => format!("(s.strategy_id = {sid} AND s.core_uid = {})", *c as i64),
-            None => format!("s.strategy_id = {sid}"),
+        .map(|(core, sids)| {
+            let ids = strategy_id_predicate(sids);
+            match core {
+                Some(c) => format!("(s.core_uid = {c} AND s.strategy_id {ids})"),
+                None => format!("s.strategy_id {ids}"),
+            }
         })
         .collect();
     format!(" AND ({})", terms.join(" OR "))
+}
+
+/// `= id` for a lone strategy, `IN (…)` for several — the comparison half of [`scope_sql`]'s
+/// per-core term. Never called with an empty set: a group exists only because a target put an
+/// id in it.
+fn strategy_id_predicate(sids: &BTreeSet<i64>) -> String {
+    if sids.len() == 1 {
+        let only = sids
+            .iter()
+            .next()
+            .expect("a set of len 1 has a first element");
+        return format!("= {only}");
+    }
+    let list: Vec<String> = sids.iter().map(i64::to_string).collect();
+    format!("IN ({})", list.join(", "))
 }
 
 /// Read-only handle on the strategy database.
@@ -351,6 +395,7 @@ fn open_strategies() -> ReadResult<Connection> {
     // landing under our snapshot surfaces to the user as a read failure. Same 3s the
     // strategy store's own reader uses.
     let _ = conn.busy_timeout(Duration::from_secs(3));
+    super::trace::install_on(&conn);
     Ok(conn)
 }
 

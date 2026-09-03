@@ -234,6 +234,7 @@ pub(crate) fn run(path: &Path) -> Integrity {
         Err(e) => return classify_pragma_error(e, "открытие"),
     };
     let _ = conn.busy_timeout(Duration::from_secs(30));
+    super::trace::install_on(&conn);
 
     // HARD DEADLINE. `busy_timeout` bounds lock waiting, not statement runtime,
     // and the scan holds a WAL read snapshot for its whole duration — which

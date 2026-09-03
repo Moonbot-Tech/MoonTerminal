@@ -14,6 +14,7 @@ fn open_strategies_ro() -> Option<Connection> {
     let conn =
         Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    crate::db::trace::install_on(&conn);
     Some(conn)
 }
 
