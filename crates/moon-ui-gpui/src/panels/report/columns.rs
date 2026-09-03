@@ -629,8 +629,9 @@ fn cell_tooltip(col: &str, text: &str) -> Option<String> {
 /// Return the font weight a GENERIC Report data cell's text is drawn — and MEASURED — with.
 ///
 /// The two profit columns carry the number the table exists to be read for, so they are weighted
-/// above the rest of the row. Their sibling `profitbtc`/`gainedbtc` share the same sign colouring
-/// but not the weight: weighting every numeric column would flatten the emphasis back out.
+/// above the rest of the row. Their sibling `profitbtc` shares the same sign colouring but not the
+/// weight: weighting every numeric column would flatten the emphasis back out. `spentbtc` and
+/// `gainedbtc` carry neither — they are amounts, not results.
 ///
 /// The coin column is deliberately not part of this rule. It renders through the specialized
 /// `coin_cell` element at `BOLD`; this predicate governs generic Report cells and the corresponding
@@ -673,6 +674,21 @@ fn is_numeric_report_column(col: &str) -> bool {
             | "taskid"
     ) || col.ends_with("delta")
         || col.ends_with("ratio")
+}
+
+/// Decimals one money cell prints, resolved from the ROW's own quote currency.
+///
+/// Stated once because two money arms read it: a second copy would let `spent` and `profit` drift
+/// apart on the same row, which is exactly the mismatch this column's formatting exists to remove.
+/// A row naming no quote falls back to two decimals, matching the totals row's own fallback.
+///
+/// Args:
+///     quote: The row's quote currency, or `None` when the schema carries none.
+///
+/// Returns:
+///     Fractional digit count for that row's money cells.
+fn money_decimals(quote: Option<QuoteCurrency>) -> usize {
+    quote.map_or(2, |currency| currency.display_decimals())
 }
 
 /// Formats a database value and optional text color for display in a report cell.
@@ -736,7 +752,20 @@ pub(super) fn cell(
         // `valuation_rate` deliberately has no arm: applied rates span roughly 1e5 (BTC) down to
         // 1e-2 (IDR), and the generic numeric path already answers that with eight significant
         // digits, where the two decimals the profit cells use would flatten most rates to `0.00`.
-        "profitbtc" | "gainedbtc" | "profitpct" | "valuation_profit_usdt" => {
+        // `spent` and `gained` are AMOUNTS, not results: they carry no sign and no profit/loss
+        // colour, but they are money and need the same per-quote precision the profit cells
+        // resolve. Without an arm of their own they fall through to the generic path, where
+        // `value_to_string` prints eight raw decimals — `98.9518728` beside `profit USDT`'s
+        // `+2.12`. No thousands grouping, because no other money cell in this table groups and one
+        // pretty column reads as an inconsistency rather than as polish.
+        "spentbtc" | "gainedbtc" => {
+            let decimals = money_decimals(quote);
+            let text = as_f64(v)
+                .map(|x| format!("{x:.decimals$}"))
+                .unwrap_or_default();
+            (text, None)
+        }
+        "profitbtc" | "profitpct" | "valuation_profit_usdt" => {
             let n = as_f64(v);
             let color = match n {
                 Some(x) if x > 0.0 => Some(p.green),
@@ -751,7 +780,7 @@ pub(super) fn cell(
             // one is a ratio, the other is always USDT whatever the row is denominated in.
             let decimals = match col {
                 "profitpct" | db::VALUATION_PROFIT_COLUMN => 2,
-                _ => quote.map_or(2, |currency| currency.display_decimals()),
+                _ => money_decimals(quote),
             };
             let text = n
                 .map(|x| {
