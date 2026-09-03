@@ -10,6 +10,7 @@ fn candle(t_open_ms: i64, low: f32, high: f32, close: f32) -> ChartCandle {
         low,
         close,
         volume: 1.0,
+        quote_volume: 0.0,
     }
 }
 

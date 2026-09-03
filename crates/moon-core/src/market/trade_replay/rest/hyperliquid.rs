@@ -102,7 +102,8 @@ pub(super) fn classify(status: u16) -> Result<(), FetchError> {
 /// Rows are OBJECTS with terse keys: `t` the open time in MILLISECONDS as a JSON number, `T` the
 /// close time, `o`/`h`/`l`/`c` the prices as STRINGS, `v` base-asset volume as a string, and `n`
 /// the trade count. `v` is genuinely base volume, so unlike Gate futures and OKX swaps there is no
-/// contract unit to reconcile here.
+/// contract unit to reconcile here. `candleSnapshot` carries no turnover figure at all, so
+/// [`ChartCandle::quote_volume`] is filled from [`crate::market::candles::estimate_quote_volume`].
 ///
 /// The envelope carries no "this bar has closed" FLAG, so unlike Gate spot and OKX this parser
 /// filters nothing here. It does carry `T`, the bar's scheduled close time, which a clock could be
@@ -132,13 +133,19 @@ pub(super) fn parse_klines(body: &Value) -> Result<Vec<ChartCandle>, FetchError>
 /// Returns:
 ///     The bar, or `None` when the object is malformed.
 fn parse_row(row: &Value) -> Option<ChartCandle> {
+    let open = cell_f32(row.get("o")?)?;
+    let high = cell_f32(row.get("h")?)?;
+    let low = cell_f32(row.get("l")?)?;
+    let close = cell_f32(row.get("c")?)?;
+    let volume = row.get("v").and_then(cell_f32).unwrap_or(0.0);
     Some(ChartCandle {
         t_open_ms: cell_i64(row.get("t")?)? as f64,
-        open: cell_f32(row.get("o")?)?,
-        high: cell_f32(row.get("h")?)?,
-        low: cell_f32(row.get("l")?)?,
-        close: cell_f32(row.get("c")?)?,
-        volume: row.get("v").and_then(cell_f32).unwrap_or(0.0),
+        open,
+        high,
+        low,
+        close,
+        volume,
+        quote_volume: crate::market::candles::estimate_quote_volume(volume, open, high, low, close),
     })
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::market::candles::estimate_quote_volume;
 
 fn candle(t: f64, p: f32) -> ChartCandle {
     ChartCandle {
@@ -8,6 +9,152 @@ fn candle(t: f64, p: f32) -> ChartCandle {
         low: p - 1.0,
         close: p + 0.5,
         volume: 10.0,
+        quote_volume: 0.0,
+    }
+}
+
+/// Encodes cache rows independently of the cache writer so migration tests can preserve real v1
+/// bytes while asserting the reader's public row values.
+fn packed_rows(rows: &[ChartCandle], day_start: i64, include_quote: bool) -> Vec<u8> {
+    let mut blob = Vec::new();
+    for row in rows {
+        blob.extend_from_slice(&((row.t_open_ms as i64 - day_start) as u32).to_le_bytes());
+        for value in [row.open, row.high, row.low, row.close, row.volume] {
+            blob.extend_from_slice(&value.to_le_bytes());
+        }
+        if include_quote {
+            blob.extend_from_slice(&row.quote_volume.to_le_bytes());
+        }
+    }
+    blob
+}
+
+/// `market/kline_cache.rs:read_rows` dropping the v1 table read or letting it beat v2 makes
+/// pre-upgrade candles disappear or replaces current quote turnover with a legacy estimate.
+#[test]
+fn cache_reads_both_formats_and_v2_wins_per_timestamp() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("v2 schema");
+    let day = 20_000 * DAY_MS;
+    let mut legacy_only = candle(day as f64, 10.0);
+    legacy_only.quote_volume = 0.0;
+    let mut legacy_shared = candle((day + 60_000) as f64, 20.0);
+    legacy_shared.quote_volume = 0.0;
+    let mut current_shared = candle((day + 60_000) as f64, 90.0);
+    current_shared.quote_volume = 900.0;
+    let mut current_only = candle((day + 120_000) as f64, 30.0);
+    current_only.quote_volume = 300.0;
+    conn.execute(
+        "INSERT INTO chunks(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params!["x", "PAIR", 5, day / DAY_MS, packed_rows(&[legacy_only, legacy_shared], day, false), 0],
+    ).expect("legacy rows");
+    conn.execute(
+        "INSERT INTO chunks_v2(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params!["x", "PAIR", 5, day / DAY_MS, packed_rows(&[current_shared, current_only], day, true), 0],
+    ).expect("current rows");
+
+    let rows = read_rows(&conn, "x", "PAIR", 5, day, day + 120_000).expect("merged read");
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.t_open_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![day, day + 60_000, day + 120_000]
+    );
+    assert_eq!(
+        rows[1].open, 90.0,
+        "the precise v2 row wins over the same legacy timestamp"
+    );
+    assert_eq!(rows[1].quote_volume, 900.0);
+    assert_eq!(
+        rows[0].quote_volume,
+        estimate_quote_volume(
+            legacy_only.volume,
+            legacy_only.open,
+            legacy_only.high,
+            legacy_only.low,
+            legacy_only.close
+        )
+    );
+}
+
+/// `market/kline_cache.rs:upsert_one` writing into `chunks` would replace the 24-byte legacy blob
+/// with a 28-byte row, corrupting it for an older executable and any unupgraded reader.
+#[test]
+fn cache_merges_only_into_v2_without_rewriting_legacy_chunk_bytes() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("v2 schema");
+    let day = 20_001 * DAY_MS;
+    let legacy = candle(day as f64, 10.0);
+    let original = packed_rows(&[legacy], day, false);
+    conn.execute(
+        "INSERT INTO chunks(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params!["x", "PAIR", 5, day / DAY_MS, &original, 0],
+    ).expect("legacy row");
+    let mut incoming = candle((day + 60_000) as f64, 20.0);
+    incoming.quote_volume = 200.0;
+    assert!(upsert_one(&conn, "x", "PAIR", 5, &[incoming], 1).expect("v2 merge"));
+    let after: Vec<u8> = conn
+        .query_row(
+            "SELECT rows FROM chunks WHERE exchange='x' AND market='PAIR' AND kind=5 AND day=?1",
+            [day / DAY_MS],
+            |row| row.get(0),
+        )
+        .expect("legacy chunk remains");
+    assert_eq!(
+        after, original,
+        "the immutable v1 blob must remain byte-identical"
+    );
+}
+
+/// `market/kline_cache.rs:init_schema` retaining only `chunks` lets `chunks_v2` grow forever,
+/// eventually consuming the cache disk budget even though the same market data has aged out.
+#[test]
+fn retention_removes_expired_rows_from_both_cache_tables() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("v2 schema");
+    let kind = 5;
+    let today = now_unix_ms() / DAY_MS;
+    let expired = today - retention_days(kind) - 1;
+    let current = today;
+    for (table, quote) in [("chunks", false), ("chunks_v2", true)] {
+        for day in [expired, current] {
+            let mut row = candle((day * DAY_MS) as f64, 10.0);
+            row.quote_volume = 100.0;
+            let sql = format!(
+                "INSERT INTO {table}(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)"
+            );
+            conn.execute(
+                &sql,
+                rusqlite::params![
+                    "x",
+                    "PAIR",
+                    kind,
+                    day,
+                    packed_rows(&[row], day * DAY_MS, quote),
+                    0
+                ],
+            )
+            .expect("seed retention row");
+        }
+    }
+    init_schema(&conn).expect("retention rerun");
+    for table in ["chunks", "chunks_v2"] {
+        let expired_count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE day=?1"),
+                [expired],
+                |row| row.get(0),
+            )
+            .expect("expired count");
+        let current_count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE day=?1"),
+                [current],
+                |row| row.get(0),
+            )
+            .expect("current count");
+        assert_eq!(expired_count, 0, "{table} drops expired chunks");
+        assert_eq!(current_count, 1, "{table} keeps current chunks");
     }
 }
 
@@ -18,9 +165,9 @@ fn pack_unpack_roundtrip() {
         candle(day_start as f64, 5.0),
         candle((day_start + 60_000) as f64, 6.0),
     ];
-    let blob = pack_rows(rows.iter(), day_start);
-    assert_eq!(blob.len(), 2 * ROW_BYTES);
-    let back = unpack_rows(&blob, day_start);
+    let blob = pack_rows_v2(rows.iter(), day_start);
+    assert_eq!(blob.len(), 2 * ROW_BYTES_V2);
+    let back = unpack_rows_v2(&blob, day_start);
     assert_eq!(back.len(), 2);
     assert_eq!(back[0].t_open_ms, rows[0].t_open_ms);
     assert_eq!(back[1].open, 6.0);

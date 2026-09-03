@@ -19,13 +19,38 @@ use super::{
 fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCandle {
     let (open, high, low, close) =
         crate::market::candles::normalize_ohlc(r.open(), r.high(), r.low(), r.close());
+    let volume = r.volume();
     crate::market::candles::ChartCandle {
         t_open_ms: r.unix_millis() as f64,
         open,
         high,
         low,
         close,
-        volume: r.volume(),
+        volume,
+        quote_volume: crate::market::candles::estimate_quote_volume(volume, open, high, low, close),
+    }
+}
+
+/// Convert one 5-minute snapshot ring row into a chart candle, normalizing shuffled wire fields
+/// exactly as [`deep_row_candle`] does.
+///
+/// Rows in this ring are stamped at the END of their period — moonproto seals a 5-minute candle
+/// with the seal time, and the server's own snapshot is pushed in end-stamped as well. Shift back
+/// one period so the open aligns with every other base, which is what `detect_snapshot` already
+/// does for the same ring. Without it the whole snapshot layer sat one bucket late and its
+/// boundary rows resampled into the wrong coarse bucket.
+fn snap5_row_candle(r: &moonproto::state::Candle5mRow) -> crate::market::candles::ChartCandle {
+    let (open, high, low, close) =
+        crate::market::candles::normalize_ohlc(r.open(), r.high(), r.low(), r.close());
+    let volume = r.volume();
+    crate::market::candles::ChartCandle {
+        t_open_ms: (r.time().unix_millis() - SNAP5_TF_MS) as f64,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        quote_volume: crate::market::candles::estimate_quote_volume(volume, open, high, low, close),
     }
 }
 
@@ -743,23 +768,7 @@ impl MarketDataSource {
                                 let t = r.unix_millis();
                                 t >= from_base_ms && t <= to_ms
                             })
-                            .map(|r| {
-                                let (open, high, low, close) =
-                                    crate::market::candles::normalize_ohlc(
-                                        r.open(),
-                                        r.high(),
-                                        r.low(),
-                                        r.close(),
-                                    );
-                                ChartCandle {
-                                    t_open_ms: r.unix_millis() as f64,
-                                    open,
-                                    high,
-                                    low,
-                                    close,
-                                    volume: r.volume(),
-                                }
-                            }),
+                            .map(deep_row_candle),
                     );
                 }
                 let have_deep = !deep_part.is_empty();
@@ -775,29 +784,7 @@ impl MarketDataSource {
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
-                        snap_part.extend(cursor.server_candle_rows.iter().map(|r| {
-                            let (open, high, low, close) = crate::market::candles::normalize_ohlc(
-                                r.open(),
-                                r.high(),
-                                r.low(),
-                                r.close(),
-                            );
-                            ChartCandle {
-                                // Rows in this ring are stamped at the END of their period —
-                                // moonproto seals a 5-minute candle with the seal time, and the
-                                // server's own snapshot is pushed in end-stamped as well. Shift
-                                // back one period so the open aligns with every other base, which
-                                // is what `detect_snapshot` already does for the same ring. Without
-                                // it the whole snapshot layer sat one bucket late and its boundary
-                                // rows resampled into the wrong coarse bucket.
-                                t_open_ms: (r.time().unix_millis() - SNAP5_TF_MS) as f64,
-                                open,
-                                high,
-                                low,
-                                close,
-                                volume: r.volume(),
-                            }
-                        }));
+                        snap_part.extend(cursor.server_candle_rows.iter().map(snap5_row_candle));
                         crate::market::candles::orient_range_rows(&mut snap_part);
                     }
                 } else if cp.tf_ms < SNAP5_TF_MS {
@@ -817,23 +804,7 @@ impl MarketDataSource {
                         );
                         cursor
                             .ring_rows_5m
-                            .extend(cursor.server_candle_rows.iter().map(|r| {
-                                let (open, high, low, close) =
-                                    crate::market::candles::normalize_ohlc(
-                                        r.open(),
-                                        r.high(),
-                                        r.low(),
-                                        r.close(),
-                                    );
-                                ChartCandle {
-                                    t_open_ms: (r.time().unix_millis() - SNAP5_TF_MS) as f64,
-                                    open,
-                                    high,
-                                    low,
-                                    close,
-                                    volume: r.volume(),
-                                }
-                            }));
+                            .extend(cursor.server_candle_rows.iter().map(snap5_row_candle));
                         crate::market::candles::orient_range_rows(&mut cursor.ring_rows_5m);
                     }
                 }

@@ -20,6 +20,15 @@
 //!
 //! Every constant below is in LOGICAL pixels and is multiplied by the device scale exactly once, at
 //! the point of use in the chartdx adapter — the same rule [`crate::trade_marks`] states.
+//!
+//! # Why the band is QUOTE-denominated
+//!
+//! Base-currency volume looks huge on a cheap coin and tiny on an expensive one, which makes the
+//! band show an asset quantity rather than the money traded — a thin coin at ~0.0001 read "1.28M"
+//! for about 128 USDT of real turnover. Quote turnover is what the reference terminal (Moonbot)
+//! prints, so the bars and their scale labels use the selected market's monetary unit rather than
+//! an arbitrary count of base units. Markets with different quote currencies are not directly
+//! comparable.
 
 use moon_core::market::ChartCandle;
 use moon_core::market::candles::candle_intersects_window;
@@ -50,11 +59,13 @@ pub struct VolumeSample {
     /// series, and they are wider on screen than the selected timeframe, so visibility has to be
     /// judged per candle rather than against one series-wide width.
     pub tf_ms: f64,
-    /// Bucket volume in the base currency.
-    pub volume: f32,
+    /// This bucket's turnover in the QUOTE currency — a real figure carried on the candle, or an
+    /// estimate where the source had none, but never a base-volume proxy. See the module doc for
+    /// why the band reads turnover rather than base volume.
+    pub quote_volume: f32,
 }
 
-/// Max and mean bucket volume over the candles currently on screen.
+/// Max and mean bucket turnover, in the quote currency, over the candles currently on screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolumeStats {
     pub max: f32,
@@ -80,7 +91,7 @@ pub fn collect_samples(
         VolumeSample {
             t_open_ms: c.t_open_ms,
             tf_ms: if own > 0.0 { own } else { series_tf_ms },
-            volume: c.volume.max(0.0),
+            quote_volume: c.quote_volume.max(0.0),
         }
     }));
 }
@@ -104,8 +115,8 @@ pub fn visible_volume_stats(
         if !candle_intersects_window(s.t_open_ms, s.tf_ms, from_ms, to_ms) {
             continue;
         }
-        max = max.max(s.volume);
-        sum += s.volume as f64;
+        max = max.max(s.quote_volume);
+        sum += s.quote_volume as f64;
         count += 1;
     }
     if count == 0 || max <= 0.0 {

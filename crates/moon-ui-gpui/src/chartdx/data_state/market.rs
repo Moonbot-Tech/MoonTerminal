@@ -733,7 +733,9 @@ impl ChartDataState {
                         &crate::diag::CHART_CANDLE_UPLOAD_LEN,
                         pr.candle_upload.len() as u64,
                     );
-                    // Retain a compact copy for the bottom band's visible-range statistics.
+                    // Retain a compact copy for the bottom band's visible-range statistics, in
+                    // QUOTE-currency turnover. That makes its bars and labels monetary amounts in
+                    // this market rather than arbitrary base-unit counts.
                     // `history_buffers` is cleared on entry to every read and refilled only when
                     // the series revision moved, so this block is the only place it is populated -
                     // and a plain pan, which must rescale the band, does not reach it.

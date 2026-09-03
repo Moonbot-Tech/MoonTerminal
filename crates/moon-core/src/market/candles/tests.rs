@@ -18,7 +18,85 @@ fn candle(t: f64, o: f32, h: f32, l: f32, c: f32, v: f32) -> ChartCandle {
         low: l,
         close: c,
         volume: v,
+        quote_volume: 0.0,
     }
+}
+
+/// `market/candles.rs:estimate_quote_volume` replacing OHLC4 with close makes range-only history
+/// report an extreme rather than its midpoint, so the quote-money band misstates turnover.
+#[test]
+fn quote_turnover_estimate_is_bounded_midpoint_based_and_orientation_invariant() {
+    let volume = 7.0;
+    let estimate = estimate_quote_volume(volume, 12.0, 20.0, 10.0, 18.0);
+    assert!((volume * 10.0..=volume * 20.0).contains(&estimate));
+
+    let range_only = estimate_quote_volume(volume, 20.0, 20.0, 10.0, 10.0);
+    assert_eq!(range_only, volume * (20.0 + 10.0) * 0.5);
+    assert_eq!(
+        range_only,
+        estimate_quote_volume(volume, 10.0, 20.0, 10.0, 20.0),
+        "orienting a range-only row must not change its OHLC4 turnover estimate"
+    );
+    for invalid in [0.0, -1.0, f32::NAN] {
+        assert_eq!(estimate_quote_volume(invalid, 12.0, 20.0, 10.0, 18.0), 0.0);
+    }
+    assert_eq!(
+        estimate_quote_volume(volume, f32::NAN, 20.0, 10.0, 18.0),
+        0.0
+    );
+}
+
+/// `market/candles.rs:aggregate_trades` and `resample` estimating instead of summing price times
+/// quantity makes a live chart disagree with the exact trades that formed a candle.
+#[test]
+fn tick_turnover_stays_exact_through_late_resend_and_resample() {
+    let trades = [
+        tick(1.0 * M, 10.0, 2.0),
+        tick(6.0 * M, 20.0, 3.0),
+        tick(2.0 * M, 30.0, 1.0),
+    ];
+    let mut buckets = Vec::new();
+    aggregate_trades(&trades, TF5, &mut buckets);
+    assert_eq!(
+        buckets[0].quote_volume, 50.0,
+        "late resend adds its own price times quantity"
+    );
+    assert_eq!(buckets[1].quote_volume, 60.0);
+
+    let mut coarse = Vec::new();
+    resample(&buckets, 15 * 60_000, &mut coarse);
+    assert_eq!(
+        coarse[0].quote_volume, 110.0,
+        "a coarse bucket sums exact child turnover"
+    );
+}
+
+/// `market/candles.rs:compose_with_coarse` dropping the copied turnover field makes history-tail
+/// buckets render as zero quote money even though their cached data is present.
+#[test]
+fn coarse_composition_preserves_the_cached_quote_turnover() {
+    let minute = 60_000.0;
+    let mut cached = candle(5.0 * minute, 10.0, 12.0, 9.0, 11.0, 3.0);
+    cached.quote_volume = 33.0;
+    let mut out = Vec::new();
+    compose_with_coarse(
+        &[
+            candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+            candle(10.0 * minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+        ],
+        minute,
+        &[CoarseLayer {
+            rows: &[cached],
+            tf_ms: 5.0 * minute,
+        }],
+        &mut out,
+    );
+    assert_eq!(
+        out.iter()
+            .find(|(c, _)| c.t_open_ms == cached.t_open_ms)
+            .map(|(c, _)| c.quote_volume),
+        Some(33.0)
+    );
 }
 
 const M: f64 = 60_000.0;
@@ -34,13 +112,11 @@ fn aggregate_basic_buckets() {
     ];
     let mut out = Vec::new();
     aggregate_trades(&trades, TF5, &mut out);
-    assert_eq!(
-        out,
-        vec![
-            candle(0.0, 10.0, 12.0, 10.0, 11.0, 4.0),
-            candle(5.0 * M, 9.0, 9.0, 9.0, 9.0, 3.0),
-        ]
-    );
+    let mut first = candle(0.0, 10.0, 12.0, 10.0, 11.0, 4.0);
+    first.quote_volume = 45.0;
+    let mut second = candle(5.0 * M, 9.0, 9.0, 9.0, 9.0, 3.0);
+    second.quote_volume = 27.0;
+    assert_eq!(out, vec![first, second]);
 }
 
 #[test]

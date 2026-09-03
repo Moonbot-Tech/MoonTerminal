@@ -96,9 +96,16 @@ pub(super) fn classify(status: u16, body: &Value) -> Result<(), FetchError> {
 /// Parse a BitGet candle envelope into bars.
 ///
 /// One parser serves both markets on purpose. Spot rows carry eight cells and futures rows seven —
-/// the extra spot cell is a second quote-volume figure at the end — but indices 0 through 5 are
-/// identical on both, and index 5 is the only volume this parser reads. Splitting this into two
-/// functions would duplicate the positional contract without pinning anything the other does not.
+/// the extra spot cell is a second quote-volume figure at the end — but indices 0 through 6 are
+/// identical on both, and this parser reads index 5 (base volume) and index 6 (quote volume);
+/// the spot-only trailing cell at index 7 is redundant with index 6 and is never read. Splitting
+/// this into two functions would duplicate the positional contract without pinning anything the
+/// other does not.
+///
+/// The vendor names index 6 `quoteVolume` and the spot-only index 7 `usdtVolume`. They agree for a
+/// USDT-quoted market — every recorded fixture beside this module is one, which is why it cannot
+/// distinguish them — and differ only on a non-USDT-quoted spot market, where `quoteVolume` (index
+/// 6) is the one that actually matches [`ChartCandle::quote_volume`]'s contract.
 ///
 /// ```text
 /// [ open_time_ms, open, high, low, close, base_volume, quote_volume, (spot only) quote_volume ]
@@ -136,6 +143,7 @@ fn parse_row(row: &Value) -> Option<ChartCandle> {
         low: cell_f32(cells.get(3)?)?,
         close: cell_f32(cells.get(4)?)?,
         volume: cell_f32(cells.get(5)?).unwrap_or(0.0),
+        quote_volume: cell_f32(cells.get(6)?).unwrap_or(0.0),
     })
 }
 

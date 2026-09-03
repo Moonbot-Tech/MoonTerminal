@@ -212,6 +212,56 @@ pub struct ChartCandle {
     pub close: f32,
     /// Total trade volume in the bucket, denominated in the base currency.
     pub volume: f32,
+    /// Turnover in the bucket, denominated in the quote currency.
+    ///
+    /// Carried as DATA rather than computed at render time, because `volume * price` uses the
+    /// CURRENT price and is wrong for every historical bar. `0.0` means "nothing traded, or this
+    /// source does not know". Where a source has no turnover of its own, the value is an
+    /// estimate and is produced ONLY by [`estimate_quote_volume`].
+    pub quote_volume: f32,
+}
+
+/// Estimates a bucket's quote-currency turnover from its OHLC and base volume, for sources that
+/// report no turnover of their own.
+///
+/// Returns `volume * ((open + high + low + close) * 0.25)` (OHLC4, averaged before multiplying so
+/// the result cannot overflow to infinity ahead of that averaging), or `0.0` when any input is
+/// negative, any input is non-finite, or the computed result itself is not finite.
+///
+/// True turnover is `volume * vwap` with `vwap` somewhere in `[low, high]`. OHLC4 itself lies in
+/// `[low + (high - low) / 4, high - (high - low) / 4]`, so the estimate's worst-case error is
+/// `|err| <= 0.75 * (high - low) * volume` — a quarter of the `(high - low) * volume` bound a
+/// `close`-based estimate would carry.
+///
+/// OHLC4 is also chosen for RANGE-ONLY rows, where `open == high` and `close == low` and
+/// [`orient_range_rows`] may later swap them: OHLC4 collapses to `(high + low) / 2` on those rows
+/// and is invariant under that swap, whereas `close` would pick a different extreme each time.
+///
+/// # Args
+/// * `volume` - base-currency volume for the bucket; rejected if negative.
+/// * `open`, `high`, `low`, `close` - the bucket's OHLC; each rejected if negative, since a real
+///   price is never negative and `unpack_rows_v1` calls this on raw persisted bytes with no
+///   upstream validation of its own.
+///
+/// # Returns
+/// The estimated quote-currency turnover, or `0.0` when any input is invalid or the result would
+/// not be finite.
+pub fn estimate_quote_volume(volume: f32, open: f32, high: f32, low: f32, close: f32) -> f32 {
+    if !(volume.is_finite()
+        && open.is_finite()
+        && high.is_finite()
+        && low.is_finite()
+        && close.is_finite())
+        || volume < 0.0
+        || open < 0.0
+        || high < 0.0
+        || low < 0.0
+        || close < 0.0
+    {
+        return 0.0;
+    }
+    let estimate = volume * ((open + high + low + close) * 0.25);
+    if estimate.is_finite() { estimate } else { 0.0 }
 }
 
 /// Returns the timeframe bucket start for a timestamp, floored on the Unix-epoch grid.
@@ -313,6 +363,7 @@ pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>)
                 last.low = last.low.min(t.price);
                 last.close = t.price;
                 last.volume += t.qty.max(0.0);
+                last.quote_volume += t.price * t.qty.max(0.0);
             }
             Some(last) if open_ms > last.t_open_ms => {
                 out.push(candle_from_tick(open_ms, t));
@@ -324,6 +375,7 @@ pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>)
                     c.high = c.high.max(t.price);
                     c.low = c.low.min(t.price);
                     c.volume += t.qty.max(0.0);
+                    c.quote_volume += t.price * t.qty.max(0.0);
                 }
                 // Ignore a trade older than the entire series because its window has moved on.
             }
@@ -339,6 +391,7 @@ fn candle_from_tick(open_ms: f64, t: &Tick) -> ChartCandle {
         low: t.price,
         close: t.price,
         volume: t.qty.max(0.0),
+        quote_volume: t.price * t.qty.max(0.0),
     }
 }
 
@@ -355,6 +408,7 @@ pub fn resample(rows: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
                 last.low = last.low.min(r.low);
                 last.close = r.close;
                 last.volume += r.volume;
+                last.quote_volume += r.quote_volume;
             }
             _ => out.push(ChartCandle {
                 t_open_ms: open_ms,
@@ -381,7 +435,8 @@ pub struct CandleSeries {
     /// Oldest bucket this series accumulates from trades itself.
     ///
     /// Buckets at or after it are trade-derived and may be added to; earlier ones still hold a
-    /// base candle whose volume is already complete. `INFINITY` while nothing is trade-derived.
+    /// base candle whose volume and turnover are already complete. `INFINITY` while nothing is
+    /// trade-derived.
     live_from: f64,
 }
 
@@ -443,6 +498,9 @@ pub struct CoarseLayer<'a> {
 ///    a hole this function had already counted as filled. Order is load-bearing: the gap
 ///    diagnostic, the volume band's visible-range statistics and hit-testing all walk this array in
 ///    sequence.
+///
+/// Every candle, series or filler, is copied whole into the output, so `quote_volume` travels
+/// with it automatically and needs no field-by-field handling here.
 pub fn compose_with_coarse(
     series: &[ChartCandle],
     series_tf_ms: f64,
@@ -699,6 +757,7 @@ impl CandleSeries {
                     last.low = last.low.min(t.price);
                     last.close = t.price;
                     last.volume += t.qty.max(0.0);
+                    last.quote_volume += t.price * t.qty.max(0.0);
                     changed = true;
                 }
                 Some(last) if open_ms > last.t_open_ms => {
@@ -723,6 +782,7 @@ impl CandleSeries {
                         c.high = c.high.max(t.price);
                         c.low = c.low.min(t.price);
                         c.volume += t.qty.max(0.0);
+                        c.quote_volume += t.price * t.qty.max(0.0);
                         changed = true;
                     }
                 }

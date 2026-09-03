@@ -6,13 +6,20 @@
 //! occupied by a smaller timeframe, without repeated full exchange downloads that consume
 //! rate-limit weight.
 //!
-//! Schema: one `chunks` table stores a packed blob of daily rows keyed by exchange,
-//! market, kind, and day. The exchange key is a stable `ExchangeId` (code + DEX hash),
-//! NOT a CoreId, so cores on the same exchange share the cache. Deduplication follows
-//! naturally from the PRIMARY KEY plus a merge by `t_open` within each chunk, where
-//! incoming rows override stored ones. Each row uses 24 bytes (`u32 offset_ms + 5×f32`),
-//! so one day of 1-minute data is about 34 KB per coin. Startup retention varies by kind;
-//! see `retention_days` (30 days for 1 minute, 15 for 5 minutes, 10 years for larger kinds).
+//! Schema: two tables store a packed blob of daily rows keyed by exchange, market, kind,
+//! and day. The exchange key is a stable `ExchangeId` (code + DEX hash), NOT a CoreId, so
+//! cores on the same exchange share the cache. Deduplication follows naturally from the
+//! PRIMARY KEY plus a merge by `t_open` within each chunk, where incoming rows override
+//! stored ones. Startup retention varies by kind; see `retention_days` (30 days for 1
+//! minute, 15 for 5 minutes, 10 years for larger kinds).
+//!
+//! `chunks` is the legacy v1 table, 24 bytes a row (`u32 offset_ms + 5×f32`, no turnover),
+//! and is now READ-ONLY: nothing writes to it any more. `chunks_v2` is the write target,
+//! 28 bytes a row (`u32 offset_ms + 6×f32`, the sixth being quote-currency turnover). A
+//! read merges both per key — v1 decoded with an estimated turnover, then a v2 row at the
+//! same offset overrides it — so an old row is superseded rather than rewritten, and an
+//! older executable that only knows `chunks` keeps reading exactly the v1 data it always
+//! did. See `read_rows` and `upsert_one`.
 //!
 //! Database open, schema creation, and startup retention run synchronously. After that
 //! setup, queued reads and writes run on a dedicated worker because `Connection` is not
@@ -27,7 +34,11 @@ use std::time::Duration;
 use super::candles::ChartCandle;
 
 const DAY_MS: i64 = 86_400_000;
-const ROW_BYTES: usize = 24;
+/// Bytes per row in the legacy v1 `chunks` table: `u32 offset_ms + 5×f32` (no turnover).
+const ROW_BYTES_V1: usize = 24;
+/// Bytes per row in the `chunks_v2` table: `u32 offset_ms + 6×f32`, the sixth being
+/// quote-currency turnover.
+const ROW_BYTES_V2: usize = 28;
 /// Read-response timeout that avoids hanging when the cache thread is busy or dead.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -233,14 +244,47 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             rows BLOB NOT NULL,
             updated_ms INTEGER NOT NULL,
             PRIMARY KEY(exchange, market, kind, day)
+        );
+        CREATE TABLE IF NOT EXISTS chunks_v2(
+            exchange TEXT NOT NULL,
+            market TEXT NOT NULL,
+            kind INTEGER NOT NULL,
+            day INTEGER NOT NULL,
+            rows BLOB NOT NULL,
+            updated_ms INTEGER NOT NULL,
+            PRIMARY KEY(exchange, market, kind, day)
         );",
     )?;
-    // At startup, delete daily chunks older than the retention limit for their kind.
+    // Marks the schema generation for a future migration to read; nothing here gates on it.
+    conn.pragma_update(None, "user_version", 2)?;
+    // At startup, delete daily chunks older than the retention limit for their kind, in both the
+    // read-only v1 table and the v2 table that replaced it as the write target — otherwise
+    // `chunks` alone would grow without bound now that nothing prunes it by writing over it.
+    //
+    // ONE statement per table rather than one per kind: `PRIMARY KEY(exchange, market, kind, day)`
+    // leaves `kind` and `day` alone unable to use an index (the two leading key columns are
+    // unconstrained here), so a per-kind loop was 7 full scans per table, run SYNCHRONOUSLY inside
+    // `KlineCache::open` on a database the module doc measures in hundreds of MB. The CASE
+    // expression folds all seven kinds' cutoffs into one scan, and `retention_days` stays the
+    // single authority for the three distinct numbers it can produce across those seven kinds —
+    // bound as parameters here, never hard-coded into the SQL. Only the seven listed kinds are
+    // pruned, exactly as before; an unlisted kind's chunk is untouched by either statement.
     let today = now_unix_ms() / DAY_MS;
-    let mut del = conn.prepare("DELETE FROM chunks WHERE kind = ?1 AND day < ?2")?;
-    for kind in [0u32, 1, 5, 30, 60, 240, 1440] {
-        let _ = del.execute(rusqlite::params![kind, today - retention_days(kind)]);
-    }
+    let cutoffs = rusqlite::params![
+        today - retention_days(1),
+        today - retention_days(5),
+        today - retention_days(1440),
+    ];
+    let _ = conn.execute(
+        "DELETE FROM chunks WHERE kind IN (0,1,5,30,60,240,1440)
+         AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 THEN ?2 ELSE ?3 END",
+        cutoffs,
+    );
+    let _ = conn.execute(
+        "DELETE FROM chunks_v2 WHERE kind IN (0,1,5,30,60,240,1440)
+         AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 THEN ?2 ELSE ?3 END",
+        cutoffs,
+    );
     Ok(())
 }
 
@@ -444,6 +488,11 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
 /// transaction and commit management, allowing both a single merge and a batch of
 /// thousands to use the caller's chosen commit granularity.
 ///
+/// Writes go to `chunks_v2` ONLY — the existing base it merges against is read from
+/// `chunks_v2` alone too, never from the legacy `chunks`. `chunks` is left untouched forever;
+/// see the module doc for why an `upsert_one` that instead decoded and rewrote it would risk
+/// destroying rows it failed to fully understand.
+///
 /// Returns:
 ///     Whether any chunk was written. `false` means every row failed the timestamp/`high` filter,
 ///     which is a successful call that stored nothing — the distinction the liveness line needs,
@@ -476,7 +525,7 @@ fn upsert_one(
     for (day, day_rows) in by_day {
         let existing: Option<Vec<u8>> = conn
             .query_row(
-                "SELECT rows FROM chunks WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
+                "SELECT rows FROM chunks_v2 WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
                 rusqlite::params![exchange, market, kind_min, day],
                 |r| r.get(0),
             )
@@ -484,16 +533,16 @@ fn upsert_one(
         let day_start = day * DAY_MS;
         let mut merged: BTreeMap<u32, ChartCandle> = BTreeMap::new();
         if let Some(blob) = existing {
-            for c in unpack_rows(&blob, day_start) {
+            for c in unpack_rows_v2(&blob, day_start) {
                 merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
             }
         }
         for r in day_rows {
             merged.insert((r.t_open_ms as i64 - day_start) as u32, r.clone());
         }
-        let blob = pack_rows(merged.values(), day_start);
+        let blob = pack_rows_v2(merged.values(), day_start);
         conn.execute(
-            "INSERT OR REPLACE INTO chunks(exchange, market, kind, day, rows, updated_ms)
+            "INSERT OR REPLACE INTO chunks_v2(exchange, market, kind, day, rows, updated_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![exchange, market, kind_min, day, blob, now],
         )?;
@@ -501,6 +550,19 @@ fn upsert_one(
     Ok(true)
 }
 
+/// Reads rows for one key across both tables, merging v1 under v2 per bucket offset.
+///
+/// v1 (`chunks`) is read-only and never gets a real turnover figure, so its rows are decoded
+/// with an estimate. v2 (`chunks_v2`) is the write target and preserves the turnover available at
+/// write time: a real figure from a source that reports one, or an OHLC4 estimate otherwise. Both
+/// are queried by day, each carrying its own `updated_ms`, and merged into ONE
+/// `BTreeMap<u32, ChartCandle>` PER DAY: normally v1 inserted first and v2 second, so a v2 row at
+/// the same offset overrides its v1 counterpart — the same "newer overrides older" rule
+/// [`upsert_one`] already applies within v2 alone. **The one exception is a DOWNGRADE**: an older
+/// executable that has never heard of `chunks_v2` writes fresh data into `chunks` only, so on a
+/// day where the v1 chunk's `updated_ms` is NEWER than v2's, the insertion order is reversed (v2
+/// first, v1 second) so that fresher v1 data wins instead of being silently shadowed by a stale
+/// v2 chunk. A day present in only one table is unaffected either way.
 fn read_rows(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -509,23 +571,70 @@ fn read_rows(
     from_ms: i64,
     to_ms: i64,
 ) -> rusqlite::Result<Vec<ChartCandle>> {
-    let mut stmt = conn.prepare(
-        "SELECT day, rows FROM chunks
-         WHERE exchange=?1 AND market=?2 AND kind=?3 AND day BETWEEN ?4 AND ?5
-         ORDER BY day",
-    )?;
+    let from_day = from_ms / DAY_MS;
+    let to_day = to_ms / DAY_MS;
+    let mut v1_chunks: BTreeMap<i64, (Vec<u8>, i64)> = BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT day, rows, updated_ms FROM chunks
+             WHERE exchange=?1 AND market=?2 AND kind=?3 AND day BETWEEN ?4 AND ?5",
+        )?;
+        let mut q = stmt.query(rusqlite::params![
+            exchange, market, kind_min, from_day, to_day
+        ])?;
+        while let Some(row) = q.next()? {
+            v1_chunks.insert(row.get(0)?, (row.get(1)?, row.get(2)?));
+        }
+    }
+    let mut v2_chunks: BTreeMap<i64, (Vec<u8>, i64)> = BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT day, rows, updated_ms FROM chunks_v2
+             WHERE exchange=?1 AND market=?2 AND kind=?3 AND day BETWEEN ?4 AND ?5",
+        )?;
+        let mut q = stmt.query(rusqlite::params![
+            exchange, market, kind_min, from_day, to_day
+        ])?;
+        while let Some(row) = q.next()? {
+            v2_chunks.insert(row.get(0)?, (row.get(1)?, row.get(2)?));
+        }
+    }
+    let days: std::collections::BTreeSet<i64> =
+        v1_chunks.keys().chain(v2_chunks.keys()).copied().collect();
     let mut out = Vec::new();
-    let mut q = stmt.query(rusqlite::params![
-        exchange,
-        market,
-        kind_min,
-        from_ms / DAY_MS,
-        to_ms / DAY_MS
-    ])?;
-    while let Some(row) = q.next()? {
-        let day: i64 = row.get(0)?;
-        let blob: Vec<u8> = row.get(1)?;
-        for c in unpack_rows(&blob, day * DAY_MS) {
+    for day in days {
+        let day_start = day * DAY_MS;
+        let v1 = v1_chunks.get(&day);
+        let v2 = v2_chunks.get(&day);
+        // v1 newer than v2 only happens after a downgrade wrote fresh data an upgraded build never
+        // saw; insert it SECOND there so it wins, instead of the normal v1-then-v2 order.
+        let v1_is_newer = match (v1, v2) {
+            (Some((_, v1_ms)), Some((_, v2_ms))) => v1_ms > v2_ms,
+            _ => false,
+        };
+        let mut merged: BTreeMap<u32, ChartCandle> = BTreeMap::new();
+        let insert_v1 = |merged: &mut BTreeMap<u32, ChartCandle>| {
+            if let Some((blob, _)) = v1 {
+                for c in unpack_rows_v1(blob, day_start) {
+                    merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
+                }
+            }
+        };
+        let insert_v2 = |merged: &mut BTreeMap<u32, ChartCandle>| {
+            if let Some((blob, _)) = v2 {
+                for c in unpack_rows_v2(blob, day_start) {
+                    merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
+                }
+            }
+        };
+        if v1_is_newer {
+            insert_v2(&mut merged);
+            insert_v1(&mut merged);
+        } else {
+            insert_v1(&mut merged);
+            insert_v2(&mut merged);
+        }
+        for c in merged.into_values() {
             let t = c.t_open_ms as i64;
             if t >= from_ms && t <= to_ms {
                 out.push(c);
@@ -535,20 +644,24 @@ fn read_rows(
     Ok(out)
 }
 
-fn pack_rows<'a>(rows: impl Iterator<Item = &'a ChartCandle>, day_start: i64) -> Vec<u8> {
+/// Packs rows into the `chunks_v2` 28-byte-per-row layout: `u32 offset_ms + 6×f32`, the sixth
+/// being `quote_volume`. Rows arrive already carrying a real or estimated turnover value, so this
+/// writes it as-is rather than computing anything.
+fn pack_rows_v2<'a>(rows: impl Iterator<Item = &'a ChartCandle>, day_start: i64) -> Vec<u8> {
     let mut out = Vec::new();
     for r in rows {
         out.extend_from_slice(&((r.t_open_ms as i64 - day_start) as u32).to_le_bytes());
-        for v in [r.open, r.high, r.low, r.close, r.volume] {
+        for v in [r.open, r.high, r.low, r.close, r.volume, r.quote_volume] {
             out.extend_from_slice(&v.to_le_bytes());
         }
     }
     out
 }
 
-fn unpack_rows(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
-    let mut out = Vec::with_capacity(blob.len() / ROW_BYTES);
-    for chunk in blob.chunks_exact(ROW_BYTES) {
+/// Unpacks `chunks_v2`'s 28-byte rows, reading the stored `quote_volume` directly.
+fn unpack_rows_v2(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
+    let mut out = Vec::with_capacity(blob.len() / ROW_BYTES_V2);
+    for chunk in blob.chunks_exact(ROW_BYTES_V2) {
         let off = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
         let f = |i: usize| f32::from_le_bytes(chunk[i..i + 4].try_into().unwrap());
         out.push(ChartCandle {
@@ -558,6 +671,28 @@ fn unpack_rows(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
             low: f(12),
             close: f(16),
             volume: f(20),
+            quote_volume: f(24),
+        });
+    }
+    out
+}
+
+/// Unpacks the legacy `chunks` table's 24-byte rows, which carry no turnover of their own — see
+/// [`crate::market::candles::estimate_quote_volume`] for the estimate and its error bound.
+fn unpack_rows_v1(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
+    let mut out = Vec::with_capacity(blob.len() / ROW_BYTES_V1);
+    for chunk in blob.chunks_exact(ROW_BYTES_V1) {
+        let off = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
+        let f = |i: usize| f32::from_le_bytes(chunk[i..i + 4].try_into().unwrap());
+        let (open, high, low, close, volume) = (f(4), f(8), f(12), f(16), f(20));
+        out.push(ChartCandle {
+            t_open_ms: (day_start + off as i64) as f64,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            quote_volume: super::candles::estimate_quote_volume(volume, open, high, low, close),
         });
     }
     out

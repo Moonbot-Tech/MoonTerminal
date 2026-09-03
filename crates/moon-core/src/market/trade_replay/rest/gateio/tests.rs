@@ -67,6 +67,33 @@ fn gate_futures_keeps_unknown_base_volume_at_zero() {
     );
 }
 
+/// `rest/gateio.rs:parse_spot_row` or `parse_futures_row` reading a base or contract cell for
+/// quote turnover makes the chart's money band silently disagree with recorded Gate turnover.
+#[test]
+fn gate_routes_keep_quote_turnover_separate_from_base_or_contract_units() {
+    let spot_body = fixture("spot");
+    let spot = parse_spot_klines(&spot_body).expect("spot fixture parses");
+    let spot_quote = spot_body[0][1]
+        .as_str()
+        .expect("spot quote cell")
+        .parse::<f32>()
+        .expect("finite spot quote");
+    assert_eq!(spot[0].quote_volume, spot_quote);
+
+    let futures_body = fixture("futures");
+    let futures = parse_futures_klines(&futures_body).expect("futures fixture parses");
+    let futures_quote = futures_body[0]["sum"]
+        .as_str()
+        .expect("futures turnover cell")
+        .parse::<f32>()
+        .expect("finite futures quote");
+    assert_eq!(futures[0].quote_volume, futures_quote);
+    assert_eq!(
+        futures[0].volume, 0.0,
+        "a contract count is never invented as base volume"
+    );
+}
+
 /// `rest/gateio.rs:classify` treating Gate's known 400 labels as transient gives users a retry for
 /// a market that does not exist instead of the permanent missing-symbol verdict.
 #[test]
