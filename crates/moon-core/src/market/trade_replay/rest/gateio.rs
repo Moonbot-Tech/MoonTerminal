@@ -144,6 +144,7 @@ fn parse_spot_row(row: &Value) -> Option<ChartCandle> {
         low: cell_f32(cells.get(4)?)?,
         close: cell_f32(cells.get(2)?)?,
         volume: cell_f32(cells.get(6)?).unwrap_or(0.0),
+        quote_volume: cell_f32(cells.get(1)?).unwrap_or(0.0),
     })
 }
 
@@ -153,7 +154,7 @@ fn parse_spot_row(row: &Value) -> Option<ChartCandle> {
 /// `l`, `c` and `sum` arrive as strings — which is why every cell goes through the shared readers
 /// that accept either.
 ///
-/// # This route reports NO volume, deliberately
+/// # This route reports NO base volume, deliberately — but DOES report quote turnover
 ///
 /// Gate's futures candle carries `v`, a count of CONTRACTS, and `sum`, the turnover in the quote
 /// asset. It carries no base-asset amount at all, and the contract multiplier that would convert
@@ -163,9 +164,12 @@ fn parse_spot_row(row: &Value) -> Option<ChartCandle> {
 /// type promises a different one — off by the multiplier, and silently so. Deriving it from
 /// `sum / close` was rejected for the same reason: that is an estimate, not a measurement.
 ///
-/// Zero is this module's existing spelling of "no volume for this bar" — every other parser here
-/// falls back to it — so the candles are served and the volume histogram is simply empty for this
-/// one route.
+/// `sum`, unlike `v`, needs no multiplier: it is already quote-asset turnover and feeds
+/// [`ChartCandle::quote_volume`] directly.
+///
+/// Zero is this module's existing spelling of "no base volume for this bar" — every other parser
+/// here falls back to it — so the candles are served and the base-volume histogram is simply
+/// empty for this one route.
 ///
 /// Args:
 ///     body: Decoded response.
@@ -195,6 +199,7 @@ fn parse_futures_row(row: &Value) -> Option<ChartCandle> {
         close: cell_f32(row.get("c")?)?,
         // Not `v`: see this module's `parse_futures_klines` docstring.
         volume: 0.0,
+        quote_volume: cell_f32(row.get("sum")?).unwrap_or(0.0),
     })
 }
 

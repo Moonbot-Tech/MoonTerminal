@@ -850,6 +850,36 @@ pub struct ChartHistoryCursor {
     /// explicit reset can independently rebuild the series; writeback waits for the fingerprint to
     /// advance, normally when a new bucket arrives.
     last_deep_sig: u64,
+    /// The resolved `exchange_key` (`"{code}:{dex}"`, `history.rs`'s cache address) from the last
+    /// pass, `None` before the provider's `ExchangeId` was ever resolved.
+    ///
+    /// Keyed on the ADDRESS rather than on the derived `deep_quote: bool` a first cut of this fix
+    /// used: neither `cache_stale` nor `series_reset` otherwise tracks the exchange key at all, so
+    /// a bool derived from it cannot see every transition the key itself can. Two cases that a
+    /// bool misses and the key catches:
+    /// - A **SPOT** provider's `deep_quote` is `false` before its identity resolves and `false`
+    ///   after — the bool never changes, so a bool-keyed version never re-reads the now-addressable
+    ///   cache and that core's history stays empty for the whole session.
+    /// - A provider **ELECTION** that changes which core answers for a market changes the exchange
+    ///   key (and therefore the cache address) without necessarily changing `deep_quote` — e.g. two
+    ///   futures cores on the same brand. `cache_stale` never tracked the key either, so this was a
+    ///   pre-existing bug; keying invalidation on the key fixes it for free, which is why it is now
+    ///   IN scope rather than the adjacent bug batch 2 left alone.
+    ///
+    /// Stores the owned `String` rather than a hash: the key is a handful of bytes
+    /// (`"{code}:{08x-dex-hash}"`), resolved once per pass per panel rather than in a hot loop, so
+    /// a hash would trade a real equality check for a collision risk to save a copy nobody
+    /// measured as expensive.
+    ///
+    /// `Option` rather than a bare key so "never resolved" is representable — but note what that
+    /// actually buys: `cursor.last_exchange_key != exchange_key` is `true` on the very first pass
+    /// too (`None != Some(_)`), so the first pass IS technically read as "changed". That is
+    /// harmless rather than incorrect: on the first pass `cache_kind` is already `None` and
+    /// `series_reset` is already `true` via `!candle_series.is_valid()`, so the extra transition
+    /// signals nothing new. The `Option` earns its keep on RE-entry instead — a market whose
+    /// provider identity is known, then goes unknown, then resolves again — where `None` still
+    /// reads as a fresh unknown rather than colliding with any real key string.
+    last_exchange_key: Option<String>,
 }
 
 impl ChartHistoryCursor {

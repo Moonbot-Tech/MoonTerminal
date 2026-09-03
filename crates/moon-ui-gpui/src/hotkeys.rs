@@ -795,6 +795,12 @@ pub fn apply(
             bcx.notify();
             true
         }
+        // Auto Overview draws no manual-strategy cluster (`chrome::terminal_chrome::header`), so
+        // the hotkey has nothing to report back through: `active_core` there is the group's
+        // FALLBACK core, and firing this would enable MS and re-seed that one server's exits with
+        // no switch, no pill and no summary on screen to say it happened — and the next order
+        // would go out under it. Refusing lets the key propagate, exactly like the no-core arm.
+        A::ManualStrategy(_) if b.is_auto_overview_scope(group) => false,
         A::ManualStrategy(i) => match active_core {
             Some(core) => {
                 if crate::controls::select_manual_strategy(b, core, i) {

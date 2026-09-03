@@ -6,6 +6,7 @@ fn candle(t_open_ms: f64, volume: f32) -> ChartCandle {
     ChartCandle {
         t_open_ms,
         volume,
+        quote_volume: volume,
         ..ChartCandle::default()
     }
 }
@@ -18,17 +19,17 @@ fn visible_stats_follow_the_shared_half_open_window_over_only_visible_buckets() 
         VolumeSample {
             t_open_ms: 0.0,
             tf_ms: 10.0,
-            volume: 100.0,
+            quote_volume: 100.0,
         },
         VolumeSample {
             t_open_ms: 5.0,
             tf_ms: 10.0,
-            volume: 10.0,
+            quote_volume: 10.0,
         },
         VolumeSample {
             t_open_ms: 20.0,
             tf_ms: 10.0,
-            volume: 30.0,
+            quote_volume: 30.0,
         },
     ];
 
@@ -84,9 +85,39 @@ fn visible_stats_refuse_empty_and_zero_volume_windows() {
     let zeros = [VolumeSample {
         t_open_ms: 0.0,
         tf_ms: 10.0,
-        volume: 0.0,
+        quote_volume: 0.0,
     }];
     assert_eq!(visible_volume_stats(&zeros, 0.0, 10.0), None);
+}
+
+/// `volume_bars.rs:collect_samples` reading base `ChartCandle::volume` instead of quote turnover
+/// restores the misleading million-unit band while the market's actual turnover is modest.
+#[test]
+fn collected_samples_use_quote_turnover_and_clamp_only_that_value() {
+    let candles = [
+        ChartCandle {
+            t_open_ms: 0.0,
+            volume: 1_280_000.0,
+            quote_volume: 128.0,
+            ..ChartCandle::default()
+        },
+        ChartCandle {
+            t_open_ms: 10.0,
+            volume: 1.0,
+            quote_volume: -2.0,
+            ..ChartCandle::default()
+        },
+    ];
+    let mut samples = Vec::new();
+    collect_samples(&candles, &[10.0, 10.0], 10.0, &mut samples);
+    assert_eq!(
+        samples[0].quote_volume, 128.0,
+        "the independently supplied quote turnover is the band input"
+    );
+    assert_eq!(
+        samples[1].quote_volume, 0.0,
+        "negative quote turnover cannot build a reciprocal scale"
+    );
 }
 
 /// `volume_bars.rs:clamp_band_fraction` — returning `frac` unchanged (dropping the clamp)

@@ -6,10 +6,12 @@
 //! and reconnect requests use [`Backend`].
 //!
 //! This module owns per-row editor state through [`ConnRow`] and [`build_conn`], plus group
-//! synchronization from servers. [`table`] owns core rows, columns, headers, feed controls, and
-//! add/delete actions; [`tab`] owns pending/group/exchange branches, icon picking, selectors, and
-//! tab assembly.
+//! synchronization from servers. [`columns`] owns the ONE column specification the header and the
+//! core rows are both built from; [`table`] owns core rows, headers, feed controls, and add/delete
+//! actions; [`tab`] owns pending/group/exchange branches, icon picking, selectors, and tab
+//! assembly.
 
+mod columns;
 mod entries;
 mod tab;
 mod table;

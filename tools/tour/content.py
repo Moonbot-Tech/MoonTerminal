@@ -461,7 +461,7 @@ def _load_layouts(doc: dict, problems: Problems) -> dict[str, list]:
 
 def _load_zones(doc: dict, r: _Resolver, locales: Locales, problems: Problems) -> list[dict]:
     """Read per-mode zone lists into one flattened table tagged with ``mode``."""
-    zones = []
+    zones: list[dict] = []
     blocks = doc.get("maps")
     if not isinstance(blocks, list):
         problems.add("zones.yml", "maps must be a list of mode blocks")

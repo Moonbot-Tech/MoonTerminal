@@ -90,27 +90,52 @@ fn auto_workspace_keeps_one_dock_and_the_chart_route() {
     );
 }
 
-/// Catches swapping the checked-state arms in
-/// `chrome/terminal_chrome.rs:workspace_mode_selector`; the compact switch would enter Classic
-/// when enabled and Auto when disabled.
+/// Catches swapping the `WorkspaceMode` values in
+/// `chrome/terminal_chrome.rs:workspace_mode_selector`'s dropdown rows; choosing AUTO or MANUAL
+/// would silently save the opposite workspace mode.
 #[test]
-fn header_workspace_mode_uses_a_compact_toggle_with_direct_state_mapping() {
+fn header_workspace_mode_maps_dropdown_rows_and_current_trigger() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
     let selector = code_only(braced_body(&chrome, "fn workspace_mode_selector("));
+    let trigger = chain_between(
+        &selector,
+        "let (label, tooltip) = if auto {",
+        "    let backend = backend.clone();",
+        "workspace-mode trigger label",
+    );
+    let row_for = |row_id: &str| {
+        let id_at = selector
+            .find(row_id)
+            .unwrap_or_else(|| panic!("workspace-mode dropdown row must contain `{row_id}`"));
+        let start = selector[..id_at]
+            .rfind("(\n")
+            .unwrap_or_else(|| panic!("workspace-mode dropdown row `{row_id}` must start a tuple"));
+        let end = selector[id_at..]
+            .find("\n            ),")
+            .unwrap_or_else(|| panic!("workspace-mode dropdown row `{row_id}` must end a tuple"));
+        &selector[start..id_at + end]
+    };
+    let auto_row = row_for("header-workspace-mode-auto");
+    let manual_row = row_for("header-workspace-mode-manual");
 
     assert!(
-        selector.contains("MoonToggle::new(\"header-workspace-mode\")")
-            && selector.contains(".label(t!(\"workspace.mode.auto\").to_string())")
-            && selector.contains(".checked(auto)")
-            && selector.contains(".size(MoonToggleSize::Compact)")
-            && !selector.contains("MoonSegmentedControl"),
-        "the header must use one labeled compact toggle instead of two mode buttons"
+        selector.contains("let auto = mode == WorkspaceMode::AutoTrading;")
+            && selector.contains("t!(\"workspace.mode.auto_item\").to_string()")
+            && selector.contains("t!(\"workspace.mode.classic_item\").to_string()")
+            && trigger.contains("auto_label.clone()")
+            && trigger.contains("manual_label.clone()"),
+        "the trigger must name AUTO for AutoTrading and MANUAL for Classic"
     );
     assert!(
-        selector.contains(
-            "if *checked {\n                        WorkspaceMode::AutoTrading\n                    } else {\n                        WorkspaceMode::Classic"
-        ) && selector.contains("backend.set_workspace_mode(&group, mode, backend_cx)"),
-        "checked must map to Auto and unchecked to Classic through the shared backend authority"
+        auto_row.contains("WorkspaceMode::AutoTrading")
+            && auto_row.contains("auto_label.into()")
+            && manual_row.contains("WorkspaceMode::Classic")
+            && manual_row.contains("manual_label.into()"),
+        "AUTO and MANUAL dropdown rows must retain their distinct workspace-mode mappings"
+    );
+    assert!(
+        selector.contains("backend.set_workspace_mode(&group, mode, backend_cx)"),
+        "dropdown selection must keep using the shared workspace-mode persistence authority"
     );
 }
 

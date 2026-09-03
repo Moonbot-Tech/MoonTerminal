@@ -118,10 +118,17 @@ pub fn fetch_klines(
         KlineRoute::Hyperliquid => hyperliquid::fetch(agent, route, market, from_ms, to_ms)?,
     };
     let mut rows = match route {
-        KlineRoute::BinanceSpot | KlineRoute::BinanceUsdM | KlineRoute::BinanceCoinM => {
-            binance::parse_klines(&value)?
-        }
-        KlineRoute::Bybit => bybit::parse_klines(&value)?,
+        // COIN-M's row carries no quote-turnover cell, only a base-asset one to estimate from —
+        // see `binance::QuoteSource`'s doc.
+        KlineRoute::BinanceSpot | KlineRoute::BinanceUsdM => binance::parse_klines(
+            &value,
+            binance::QuoteSource::Cell(binance::QUOTE_VOLUME_CELL),
+        )?,
+        KlineRoute::BinanceCoinM => binance::parse_klines(
+            &value,
+            binance::QuoteSource::EstimateFromBase(binance::COIN_M_BASE_VOLUME_CELL),
+        )?,
+        KlineRoute::Bybit => bybit::parse_klines(&value, category)?,
         KlineRoute::GateSpot => gateio::parse_spot_klines(&value)?,
         KlineRoute::GateFutures => gateio::parse_futures_klines(&value)?,
         KlineRoute::BitgetSpot | KlineRoute::BitgetFutures => bitget::parse_klines(&value)?,

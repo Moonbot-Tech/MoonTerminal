@@ -81,13 +81,18 @@ const MS_TOGGLE_W: f32 = 70.0;
 const PILL_CHROME_W: f32 = 40.0;
 /// Reduced picker-pill label cap used once the button row has already dropped to zero buttons.
 const REDUCED_PILL_MAX_W: f32 = 120.0;
-/// Conservative reservation for the rest of the header (brand, workspace toggle, core selector and
-/// its gear, balance, the strategy-parameter summary, the trailing spacer's minimum, and the
-/// ticker/quiet/clock/window-control cluster once visible) — sections this cluster does not own
-/// and cannot measure without touching them, the same reasoning `design::ticker_visible` uses for
-/// its own flat threshold rather than a live remainder. Needs an on-screen check. At
+/// Conservative reservation for the rest of the header (brand, the workspace-mode dropdown, core
+/// selector and its gear, balance, the strategy-parameter summary, the trailing spacer's minimum,
+/// and the ticker/quiet/clock/window-control cluster once visible) — sections this cluster does
+/// not own and cannot measure without touching them, the same reasoning `design::ticker_visible`
+/// uses for its own flat threshold rather than a live remainder. Needs an on-screen check. At
 /// design-reference scale like every other estimate below.
-const HEADER_OTHER_SECTIONS_W: f32 = 760.0;
+///
+/// The workspace section grew when its compact toggle became a mode-naming dropdown
+/// (`chrome/terminal_chrome.rs::workspace_mode_selector`, fixed trigger); this reservation moved
+/// with it, because a budget that under-reserves lets THIS cluster claim room the header has
+/// already spent.
+const HEADER_OTHER_SECTIONS_W: f32 = 778.0;
 
 /// One quick-select button slot: `(slot index, strategy name, resolved strategy id, caption,
 /// numeric fallback caption)`.

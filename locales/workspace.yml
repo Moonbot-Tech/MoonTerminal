@@ -1,18 +1,33 @@
 # Auto-trading workspace selector, navigation rail, and availability labels.
 _version: 2
 
+# The two workspace modes. AUTO and MANUAL are NAMES, not words: they stay Latin capitals in every
+# locale, like BUY/SELL/ON/OFF above in README's "намеренно НЕ переводим" list, so the mode a user
+# names in a screenshot or a chat is the same string everywhere.
+#
+# Two key shapes per mode, deliberately. The SHORT name is what an aggregate's scope marker
+# interpolates ("режим: MANUAL"), where the word "режим" is already the sentence. The `_item` label
+# is what the header dropdown lists, where the row must say what KIND of thing it selects.
 workspace.mode.auto:
-  ru: "Авто"
-  en: "Auto"
-  es: "Auto"
+  ru: "AUTO"
+  en: "AUTO"
+  es: "AUTO"
 workspace.mode.classic:
-  ru: "Классик"
-  en: "Classic"
-  es: "Clásico"
+  ru: "MANUAL"
+  en: "MANUAL"
+  es: "MANUAL"
+workspace.mode.auto_item:
+  ru: "AUTO режим"
+  en: "AUTO mode"
+  es: "Modo AUTO"
+workspace.mode.classic_item:
+  ru: "MANUAL режим"
+  en: "MANUAL mode"
+  es: "Modo MANUAL"
 workspace.mode.classic_tip:
-  ru: "Обычное рабочее пространство с редактируемой раскладкой"
-  en: "Standard workspace with an editable layout"
-  es: "Espacio de trabajo estándar con un diseño editable"
+  ru: "Ручной режим: раскладка своя у каждого сервера и редактируется, окна можно откреплять"
+  en: "Manual mode: the layout is per-server and editable, and windows can be detached"
+  es: "Modo manual: el diseño es propio de cada servidor y editable, y las ventanas se pueden separar"
 workspace.mode.auto_tip:
   ru: "Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено"
   en: "Auto-trading workspace; layout is shared across servers and window detachment is disabled"
@@ -53,7 +68,7 @@ workspace.status.ready:
   es: "Listo"
 # The scope marker every membership-filtered aggregate renders when the active preset hides at
 # least one configured core (`workspace::scope_marker::ScopeMarker`). Two facts, deliberately, so
-# the count survives when the preset name clips: "режим: авто · 12 из 20 ядер".
+# the count survives when the preset name clips: "режим: AUTO · 12 из 20 ядер".
 workspace.scope.preset:
   ru: "режим: %{mode}"
   en: "mode: %{mode}"

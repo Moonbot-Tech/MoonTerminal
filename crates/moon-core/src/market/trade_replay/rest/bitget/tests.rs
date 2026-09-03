@@ -30,6 +30,25 @@ fn bitget_reads_base_volume_from_cell_five_on_both_row_shapes() {
     }
 }
 
+/// `rest/bitget.rs:parse_row` taking cell 5 for quote turnover makes both recorded row shapes
+/// show base quantity in a money-denominated chart band.
+#[test]
+fn bitget_reads_quote_turnover_from_cell_six_on_both_row_shapes() {
+    for name in ["spot", "futures"] {
+        let body = fixture(name);
+        let bars = parse_klines(&body).expect("recorded fixture parses");
+        let expected = body["data"][0][6]
+            .as_str()
+            .expect("quote turnover cell")
+            .parse::<f32>()
+            .expect("finite quote turnover");
+        assert_eq!(
+            bars[0].quote_volume, expected,
+            "{name} preserves its quote-turnover cell"
+        );
+    }
+}
+
 /// `rest/bitget.rs:classify` losing either documented 400 code turns a permanently unknown market
 /// into a retryable error, giving the user a retry button that cannot succeed.
 #[test]

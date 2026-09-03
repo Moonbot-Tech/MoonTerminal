@@ -90,8 +90,10 @@ impl RenderState {
             let plot_right = plot_left + plot_w;
             // Bottom-volume scale readout: the visible maximum against the band's top
             // reference line and the visible average against its own. Without them the two lines
-            // say "some scale" rather than a quantity, and the band cannot be compared between
-            // coins or across timeframes.
+            // say "some scale" rather than a quantity, and the band cannot be compared across
+            // timeframes in this market. Quote-currency turnover gives the labels a monetary unit
+            // rather than a base-unit count whose monetary meaning moves with price; markets with
+            // different quote currencies remain separate scales.
             if volume_style.m[0] >= 0.5 {
                 if let Some(stats) = volume_stats {
                     // Band height mirrors the shader exactly, in logical units. `vol_band_h()` is

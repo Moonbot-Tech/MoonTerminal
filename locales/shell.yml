@@ -35,6 +35,13 @@ status.license:
   ru: "Лицензия: %{value}"
   en: "License: %{value}"
   es: "Licencia: %{value}"
+# Tooltip on the status bar's version readout. The readout itself is the bare `v0.34.2` (or `dev`
+# for a build with no release tag reachable from HEAD) — a value, not prose, so it is not stored
+# here. This is the full build line a tester is asked to quote, matching what startup.rs logs.
+status.version_tooltip:
+  ru: "Релиз %{release} · сборка %{build} · MoonUI %{moonui}"
+  en: "Release %{release} · build %{build} · MoonUI %{moonui}"
+  es: "Versión %{release} · compilación %{build} · MoonUI %{moonui}"
 # Active trading-core selector in the header: text shown when the group has no cores.
 header.no_cores:
   ru: "нет ядер"

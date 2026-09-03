@@ -1010,6 +1010,7 @@ impl MarketDataSource {
                                 low: l,
                                 close: cl,
                                 volume: 0.0,
+                                quote_volume: 0.0,
                             });
                         }
                     });

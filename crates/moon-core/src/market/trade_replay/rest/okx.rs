@@ -162,6 +162,9 @@ fn parse_row(row: &Value, volume_cell: usize) -> Option<ChartCandle> {
         low: cell_f32(cells.get(3)?)?,
         close: cell_f32(cells.get(4)?)?,
         volume: cells.get(volume_cell).and_then(cell_f32).unwrap_or(0.0),
+        // `volCcyQuote` (cell 7) is correct for both spot and swap, unlike base volume — no
+        // per-market cell selection is needed here.
+        quote_volume: cells.get(7).and_then(cell_f32).unwrap_or(0.0),
     })
 }
 

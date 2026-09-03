@@ -572,11 +572,11 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
     <div class="shead"><span class="snum">01</span><h2 data-i18n="map.h">Карта окна</h2></div>
     <div class="maphead">
       <p class="slead" data-mode-lead="classic">Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.</p>
-      <p class="slead" data-mode-lead="auto">Девятнадцать зон рабочего пространства Автоторговля — левая рейка ядер, закреплённые графики и общая раскладка без открепления окон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.</p>
+      <p class="slead" data-mode-lead="auto">Девятнадцать зон рабочего пространства AUTO — левая рейка ядер, закреплённые графики и общая раскладка без открепления окон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.</p>
       <div class="map-controls">
         <div class="seg mode-switch" role="radiogroup" aria-label="Рабочее пространство">
-          <label class="mode-opt" title="Обычное рабочее пространство с редактируемой раскладкой"><input class="tour-mode-input" type="radio" name="tour-mode" id="mode-classic" value="classic"><span class="mode-label">Базовый режим</span></label>
-          <label class="mode-opt" title="Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено"><input class="tour-mode-input" type="radio" name="tour-mode" id="mode-auto" value="auto" checked><span class="mode-label">Авто торговля</span></label>
+          <label class="mode-opt" title="Ручной режим: раскладка своя у каждого сервера и редактируется, окна можно откреплять"><input class="tour-mode-input" type="radio" name="tour-mode" id="mode-classic" value="classic"><span class="mode-label">MANUAL режим</span></label>
+          <label class="mode-opt" title="Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено"><input class="tour-mode-input" type="radio" name="tour-mode" id="mode-auto" value="auto" checked><span class="mode-label">AUTO режим</span></label>
         </div>
         <button class="toggle" id="showall" type="button" aria-pressed="true" data-i18n="map.all">Все номера</button>
       </div>
@@ -587,7 +587,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <div class="app app-map reveal" data-mode="classic" id="app-classic">
         <div class="hdr">
           <button class="z brand" data-zone="brand" type="button"><i class="zn">1</i><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.6A8.6 8.6 0 1 1 9.9 3.9a6.9 6.9 0 0 0 10.6 10.7Z" fill="currentColor"/></svg></button>
-          <button class="z pill ghost" data-zone="ws" type="button"><i class="zn">2</i><span data-i18n="ui.ws">Авто</span><span class="caret">▾</span></button>
+          <button class="z pill ghost" data-zone="ws" type="button"><i class="zn">2</i><span data-i18n="ui.ws.manual">MANUAL режим</span><span class="caret">▾</span></button>
           <button class="z pill" data-zone="core" type="button"><i class="zn">3</i><span class="dot"></span><span class="mono">BinF1</span><span class="caret">▾</span><span style="opacity:.5">⚙</span></button>
           <button class="z" data-zone="balance" type="button" style="padding:0 6px"><i class="zn">4</i><span style="color:var(--text-muted)" data-i18n="ui.balance">Баланс:</span><span class="mono" style="font-weight:600"> 975.45</span><span class="mono" style="color:var(--text-muted)">/2492 USDT</span></button>
           <span class="grow"></span>
@@ -735,7 +735,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <div class="app app-map reveal" data-mode="auto" id="app-auto">
         <div class="hdr">
           <button class="z brand" data-zone="brand" type="button"><i class="zn">1</i><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.6A8.6 8.6 0 1 1 9.9 3.9a6.9 6.9 0 0 0 10.6 10.7Z" fill="currentColor"/></svg></button>
-          <button class="z pill ghost" data-zone="ws" type="button"><i class="zn">2</i><span data-i18n="ui.ws">Авто</span><span class="sw on" aria-hidden="true"></span></button>
+          <button class="z pill ghost" data-zone="ws" type="button"><i class="zn">2</i><span data-i18n="ui.ws.auto">AUTO режим</span><span class="caret">▾</span></button>
           <button class="z pill is-pinned" data-zone="core" type="button"><i class="zn">3</i><span class="dot accent"></span><span data-i18n="ui.overview">Полная сводка</span><span style="opacity:.5">⚙</span></button>
           <span class="grow"></span>
           <button class="z" data-zone="ticker" type="button" style="padding:0 6px"><i class="zn">4</i>
@@ -888,10 +888,10 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
     </div>
     <noscript>
     <div class="ns-maps wrap">
-    <h3>Базовый режим</h3>
+    <h3>MANUAL режим</h3>
     <ol>
       <li><strong>Бренд и перетаскивание</strong> — Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет.</li>
-      <li><strong>Режим воркспейса</strong> — Переключает рабочее пространство группы. В режиме «Авто» терминал сам держит на графике монету активного ядра.</li>
+      <li><strong>Режим воркспейса</strong> — Переключает рабочее пространство группы. В режиме AUTO терминал сам держит на графике монету активного ядра.</li>
       <li><strong>Активное ядро и его шестерёнка</strong> — Выбор ядра, к которому относятся баланс, торговые кнопки и график. Шестерёнка открывает настройки именно этого ядра — блэклист, плечо, режим позиции.</li>
       <li><strong>Баланс ядра</strong> — Свободный и общий USDT активного торгового ядра, как их отдаёт сервер. Если число устарело или курс посчитать не удалось, терминал показывает это, а не выдаёт старую цифру за живую.</li>
       <li><strong>Тикер курса</strong> — Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро</li>
@@ -910,11 +910,11 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <li><strong>Тело панели</strong> — Таблица активной вкладки. Ширины колонок, их видимость и сортировка запоминаются отдельно для дока и для открепленного окна — одна панель в двух местах не спорит сама с собой.</li>
       <li><strong>Статус-бар</strong> — Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются. Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM.</li>
     </ol>
-    <h3>Авто торговля</h3>
+    <h3>AUTO режим</h3>
     <ol>
       <li><strong>Бренд и перетаскивание</strong> — Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет.</li>
       <li><strong>Режим воркспейса</strong> — Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено</li>
-      <li><strong>Индикатор ядра, закреплённый рейкой</strong> — В Автоторговле пилюля в шапке отключена и без меню: она только показывает выбранное на левой рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного случайного сервера.</li>
+      <li><strong>Индикатор ядра, закреплённый рейкой</strong> — В режиме AUTO пилюля в шапке отключена и без меню: она только показывает выбранное на левой рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного случайного сервера.</li>
       <li><strong>Тикер курса</strong> — Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро</li>
       <li><strong>Часы</strong> — Часы выбранного часового пояса. Клик — сменить пояс; переход на летнее время автоматический</li>
       <li><strong>Размер ордера F1–F6</strong> — Размер ордера F1–F6 · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить. Те же слоты висят на клавишах F1…F6.</li>
@@ -922,14 +922,14 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
       <li><strong>Риск: стоп-лосс</strong> — Тумблер защиты от провала цены и значение стоп-лосса. Значение правится во всплывашке рядом.</li>
       <li><strong>Выход: TP и фикс-продажи</strong> — Тейк-профит и полоса фиксированных продаж S1–S6. Фиксированная продажа S · клик — задействовать · двойной клик — правка · Ctrl+колесо — изменить.</li>
       <li><strong>Live / Пауза</strong> — Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо).</li>
-      <li><strong>Запуск отдельных окон</strong> — Монитор прибыли, Скринер и Настройки остаются общими на всё приложение. Стратегии и Аналитика берут видимый состав ядер у последнего живого окна Автоторговли, с которым работал пользователь.</li>
+      <li><strong>Запуск отдельных окон</strong> — Монитор прибыли, Скринер и Настройки остаются общими на всё приложение. Стратегии и Аналитика берут видимый состав ядер у последнего живого окна AUTO, с которым работал пользователь.</li>
       <li><strong>Сводка по ядрам</strong> — Счётчики «ядер / готово / проблем» считаются по всему приложению, а не по выбранному на рейке ядру. Узкая рейка сжимает строку до числа ядер, полный текст остаётся в подсказке.</li>
       <li><strong>Полная сводка</strong> — Все доступные ядра группы Main</li>
       <li><strong>Дерево ядер по биржам</strong> — Заголовки бирж идут по живым метаданным рынка, неизвестная биржа — первой; ядра внутри — в каноническом порядке. Отключённые и недоступные строки остаются видимыми и клик по ним ничего не меняет. Клик по ядру этой группы меняет только её Auto-область; клик по ядру другой группы открывает уже существующее окно той группы, панели между окнами не переезжают.</li>
-      <li><strong>Закреплённые графики и рабочие вкладки</strong> — ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets, CoreStatus, Log и Detects. News и Alerts (Фигуры) в Автоторговле нет: это панели только Classic. Открепить вкладку или график нельзя.</li>
-      <li><strong>Область графика</strong> — Тот же GPU-график, что в Classic. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в Автоторговле возвращает на Report.</li>
+      <li><strong>Закреплённые графики и рабочие вкладки</strong> — ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets, CoreStatus, Log и Detects. News и Alerts (Фигуры) в режиме AUTO нет: это панели только для MANUAL. Открепить вкладку или график нельзя.</li>
+      <li><strong>Область графика</strong> — Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO возвращает на Report.</li>
       <li><strong>Стакан</strong> — Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода.</li>
-      <li><strong>Нижняя поверхность ордеров</strong> — Отдельная нижняя панель, не кандидат на стартовую вкладку Автоторговли. На первом запуске она выше обычного на четыре строки таблицы. Открепить её из Автоторговли нельзя.</li>
+      <li><strong>Нижняя поверхность ордеров</strong> — Отдельная нижняя панель, не кандидат на стартовую вкладку режима AUTO. На первом запуске она выше обычного на четыре строки таблицы. Открепить её из режима AUTO нельзя.</li>
       <li><strong>Статус-бар</strong> — Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются. Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM. Выбранное на рейке ядро эти цифры не сужает.</li>
     </ol>
     </div>
@@ -1066,9 +1066,13 @@ const T = {
     "ru": "Страница собрана из данных репозитория: палитра и метрики — из зафиксированного снимка темы MoonUI; подписи и пояснения — из проверенной модели тура и выбранных locales/*.yml. Это схема, а не запись живой сессии.",
     "en": "This page is assembled from repository data: palette and metrics come from a committed MoonUI theme snapshot; labels and explanations come from the validated tour model and selected locales/*.yml. It is a schematic, not a live-session capture."
   },
-  "ui.ws": {
-    "ru": "Авто",
-    "en": "Auto"
+  "ui.ws.auto": {
+    "ru": "AUTO режим",
+    "en": "AUTO mode"
+  },
+  "ui.ws.manual": {
+    "ru": "MANUAL режим",
+    "en": "MANUAL mode"
   },
   "ui.overview": {
     "ru": "Полная сводка",
@@ -1237,18 +1241,18 @@ const T = {
 };
 
 /* ------------------------------------------------------------------
-   Режимы Classic / AutoTrading и их зоны.
+   Режимы MANUAL / AUTO и их зоны.
    ------------------------------------------------------------------ */
 const DEFAULT_MODE = "auto";
 const MODES = {
   "classic": {
     "label": {
-      "ru": "Базовый режим",
-      "en": "Classic"
+      "ru": "MANUAL режим",
+      "en": "MANUAL mode"
     },
     "tip": {
-      "ru": "Обычное рабочее пространство с редактируемой раскладкой",
-      "en": "Standard workspace with an editable layout"
+      "ru": "Ручной режим: раскладка своя у каждого сервера и редактируется, окна можно откреплять",
+      "en": "Manual mode: the layout is per-server and editable, and windows can be detached"
     },
     "lead": {
       "ru": "Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.",
@@ -1292,11 +1296,11 @@ const MODES = {
         "n": 2,
         "ru": [
           "Режим воркспейса",
-          "Переключает рабочее пространство группы. В режиме «Авто» терминал сам держит на графике монету активного ядра."
+          "Переключает рабочее пространство группы. В режиме AUTO терминал сам держит на графике монету активного ядра."
         ],
         "en": [
           "Workspace mode",
-          "Switches the group's workspace. In Auto mode the terminal keeps the active core's coin on the chart for you."
+          "Switches the group's workspace. In AUTO mode the terminal keeps the active core's coin on the chart for you."
         ],
         "src": "locales/workspace.yml"
       },
@@ -1508,16 +1512,16 @@ const MODES = {
   },
   "auto": {
     "label": {
-      "ru": "Авто торговля",
-      "en": "AutoTrading"
+      "ru": "AUTO режим",
+      "en": "AUTO mode"
     },
     "tip": {
       "ru": "Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено",
       "en": "Auto-trading workspace; layout is shared across servers and window detachment is disabled"
     },
     "lead": {
-      "ru": "Девятнадцать зон рабочего пространства Автоторговля — левая рейка ядер, закреплённые графики и общая раскладка без открепления окон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.",
-      "en": "Nineteen AutoTrading workspace zones — the left core rail, pinned charts, and a shared layout with window detachment disabled. Hover the window and their outlines appear; click any of them, or walk through with Tab."
+      "ru": "Девятнадцать зон рабочего пространства AUTO — левая рейка ядер, закреплённые графики и общая раскладка без открепления окон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.",
+      "en": "Nineteen AUTO workspace zones — the left core rail, pinned charts, and a shared layout with window detachment disabled. Hover the window and their outlines appear; click any of them, or walk through with Tab."
     },
     "order": [
       "brand",
@@ -1569,11 +1573,11 @@ const MODES = {
         "n": 3,
         "ru": [
           "Индикатор ядра, закреплённый рейкой",
-          "В Автоторговле пилюля в шапке отключена и без меню: она только показывает выбранное на левой рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного случайного сервера."
+          "В режиме AUTO пилюля в шапке отключена и без меню: она только показывает выбранное на левой рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного случайного сервера."
         ],
         "en": [
           "Rail-pinned core indicator",
-          "In AutoTrading the header pill is disabled and has no menu: it only mirrors the core chosen on the left rail, or Full summary. The gear still opens that core's settings. Header balance is hidden while Overview is selected, so a single arbitrary server's figure cannot sit next to a label that means the whole group."
+          "In AUTO the header pill is disabled and has no menu: it only mirrors the core chosen on the left rail, or Full summary. The gear still opens that core's settings. Header balance is hidden while Overview is selected, so a single arbitrary server's figure cannot sit next to a label that means the whole group."
         ],
         "src": "chrome/terminal_chrome.rs — core_selector .disabled(auto)"
       },
@@ -1665,11 +1669,11 @@ const MODES = {
         "n": 11,
         "ru": [
           "Запуск отдельных окон",
-          "Монитор прибыли, Скринер и Настройки остаются общими на всё приложение. Стратегии и Аналитика берут видимый состав ядер у последнего живого окна Автоторговли, с которым работал пользователь."
+          "Монитор прибыли, Скринер и Настройки остаются общими на всё приложение. Стратегии и Аналитика берут видимый состав ядер у последнего живого окна AUTO, с которым работал пользователь."
         ],
         "en": [
           "Separate-window launchers",
-          "Profit Monitor, Screener and Settings stay application-wide. Strategies and Analytics inherit the visible core set from the last live AutoTrading window the user interacted with."
+          "Profit Monitor, Screener and Settings stay application-wide. Strategies and Analytics inherit the visible core set from the last live AUTO window the user interacted with."
         ],
         "src": "workspace.rs — WorkspaceFocus; controls/toolbar.rs"
       },
@@ -1713,11 +1717,11 @@ const MODES = {
         "n": 15,
         "ru": [
           "Закреплённые графики и рабочие вкладки",
-          "ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets, CoreStatus, Log и Detects. News и Alerts (Фигуры) в Автоторговле нет: это панели только Classic. Открепить вкладку или график нельзя."
+          "ChartTabs всегда первая, визуально отделена и её нельзя переставить вперёд. Дальше — Report, Assets, CoreStatus, Log и Detects. News и Alerts (Фигуры) в режиме AUTO нет: это панели только для MANUAL. Открепить вкладку или график нельзя."
         ],
         "en": [
           "Pinned charts and operational tabs",
-          "ChartTabs stays first, visually separate, and cannot be moved ahead of. After it come Report, Assets, CoreStatus, Log and Detects. News and Alerts (Figures) are absent — they are Classic-only. Detaching a tab or a chart is rejected."
+          "ChartTabs stays first, visually separate, and cannot be moved ahead of. After it come Report, Assets, CoreStatus, Log and Detects. News and Alerts (Figures) are absent — they are MANUAL-only. Detaching a tab or a chart is rejected."
         ],
         "src": "shell/workspace.rs — AUTO_WORKSPACE_TAB_NAMES, AUTO_CLASSIC_ONLY_PANEL_NAMES"
       },
@@ -1725,11 +1729,11 @@ const MODES = {
         "n": 16,
         "ru": [
           "Область графика",
-          "Тот же GPU-график, что в Classic. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в Автоторговле возвращает на Report."
+          "Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO возвращает на Report."
         ],
         "en": [
           "Chart area",
-          "The same GPU chart as Classic. Wheel zooms by time, Shift or Alt + wheel pans. Overview does not retarget the Main chart to some other core. Escape on the last Main chart in AutoTrading reveals Report."
+          "The same GPU chart as MANUAL. Wheel zooms by time, Shift or Alt + wheel pans. Overview does not retarget the Main chart to some other core. Escape on the last Main chart in AUTO reveals Report."
         ],
         "src": "shell/workspace.rs — should_return_to_report_after_main_close"
       },
@@ -1749,11 +1753,11 @@ const MODES = {
         "n": 18,
         "ru": [
           "Нижняя поверхность ордеров",
-          "Отдельная нижняя панель, не кандидат на стартовую вкладку Автоторговли. На первом запуске она выше обычного на четыре строки таблицы. Открепить её из Автоторговли нельзя."
+          "Отдельная нижняя панель, не кандидат на стартовую вкладку режима AUTO. На первом запуске она выше обычного на четыре строки таблицы. Открепить её из режима AUTO нельзя."
         ],
         "en": [
           "Lower Orders surface",
-          "A separate lower panel, not a candidate for the AutoTrading start tab. On first run it is four table rows taller than the previous seed. It cannot be detached from AutoTrading."
+          "A separate lower panel, not a candidate for the AUTO start tab. On first run it is four table rows taller than the previous seed. It cannot be detached from AUTO."
         ],
         "src": "shell/workspace.rs — default_auto_workspace_topology"
       },

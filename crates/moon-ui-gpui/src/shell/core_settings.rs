@@ -74,7 +74,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Drop the gear popup once it no longer belongs to the core it was seeded from.
+    /// Drop the gear popup once it no longer belongs to the core it was seeded from — or once the
+    /// group has no single core for it to belong to at all.
     ///
     /// The active trading core moves without producing an event to hang this on — the header
     /// selector, a Main-chart coin switch, a core being disabled — so it is reconciled at render
@@ -87,6 +88,20 @@ impl Shell {
             return;
         }
         let b = self.backend.read(cx);
+        // Auto Overview hides the gear itself (`chrome::terminal_chrome::header`), so an open
+        // popup would be stranded: nothing draws it, nothing can dismiss it, and it would spring
+        // back the moment a core is selected again. The check has to be its own, ahead of the
+        // active-core resolution below — `active_trade_core` falls through to the group's first
+        // core in Overview and would happily keep the popup alive over an arbitrary server.
+        if b.is_auto_overview_scope(&self.group) {
+            if self.core_settings_draft.is_some() {
+                log::info!(
+                    "core settings popup closed with unsaved edits: the group left a single-core scope"
+                );
+            }
+            self.close_core_settings_popup();
+            return;
+        }
         let active = b.active_trade_core(&self.group);
         let Some(core) = resolve_core_settings_write(self.core_settings_target, active) else {
             if self.core_settings_draft.is_some() {

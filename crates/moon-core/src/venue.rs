@@ -364,6 +364,48 @@ pub const fn venue(code: u8) -> Option<Venue> {
     }
 }
 
+/// Whether a deep-history row from the core reporting this platform code carries its wire
+/// `volume` in quote money rather than base coins.
+///
+/// Keyed on the CODE alone, deliberately NOT on [`MarketKind`]: the only MEASURED fact behind
+/// this whole predicate is Binance Futures itself (code 4, below), and it does not generalise.
+/// Binance USD-M's own REST kline cell 5 is BASE for the same market, so the core's deep-push
+/// convention diverges from the exchange's own REST convention — the core is normalising on its
+/// own, by a rule no other venue's API can be read off. Keying on `MarketKind` would have
+/// asserted "every futures venue behaves like Binance Futures" from a sample of one; keying on
+/// the code keeps the claim exactly as wide as the evidence.
+///
+/// | code | brand / kind | quote? | status |
+/// |---|---|---|---|
+/// | 2 | Bybit Futures | `false` | UNVERIFIED |
+/// | 4 | Binance Futures | `true` | **MEASURED**: the live kline cache holds deep `kind = 1` rows whose `volume` slot is USDT turnover — 218,653,600 for one BTCUSDT minute — confirmed against a measured `8.07T` band label before this fix |
+/// | 6 | Binance Quarterly (COIN-M) | `false` | UNVERIFIED |
+/// | 9 | Gate Futures | `false` | UNVERIFIED |
+/// | 11 | BitGet Futures | `false` | UNVERIFIED |
+/// | 13 | Hyperliquid Futures | `false` | UNVERIFIED, and specifically IMPLAUSIBLE: `market/trade_replay/rest/hyperliquid.rs`'s own `parse_klines` doc states, from measurement, that its `v` cell "is genuinely base volume" and that `candleSnapshot` "carries no turnover figure at all" — the core has no quote figure to relay there |
+/// | 15 | OKX Futures | `false` | UNVERIFIED |
+///
+/// `false` is the STATUS-QUO branch: it is the behaviour that shipped before this task, for
+/// every code including 4 before this fix. Widening a code to `true` can improve its future band,
+/// but cannot repair already-persisted rows; the separate coarse-kind read migration
+/// (`crate::market::kline_cache::legacy_volume_is_quote`) does that. A wrong `true` would corrupt
+/// freshly written rows with a 3650-day retention and no migration path. An unknown or newer code
+/// — including the shipped fixture's exchange code `200`, where `venue(200) == None` — also
+/// returns `false`, keeping that fixture's read path byte-for-byte unchanged.
+///
+/// **To promote a code**: open that core's chart on a liquid market, read the volume band's
+/// magnitude against the market's real per-minute turnover, and if they agree, flip that one
+/// code's row in the table above to `true`. Never flip a row on inference from another venue.
+///
+/// Args:
+///     code: Platform ordinal reported by a core, from `ServerInfo::exchange_code`.
+///
+/// Returns:
+///     `true` for code 4 (Binance Futures) only; `false` for every other code, measured or not.
+pub const fn deep_volume_is_quote(code: u8) -> bool {
+    code == 4
+}
+
 /// Every venue the arbitrage column can list, in print order, with the spelling it is listed under.
 ///
 /// THE arbitrage roster, and deliberately here rather than beside the chart: a venue is a venue,

@@ -25,6 +25,22 @@ fn okx_uses_the_market_specific_base_volume_cell() {
     );
 }
 
+/// `rest/okx.rs:parse_row` reading either market's base-volume cell for turnover makes the band
+/// report contracts or base units rather than OKX's `volCcyQuote` money value.
+#[test]
+fn okx_reads_quote_turnover_from_cell_seven_for_spot_and_swap() {
+    for (name, cell) in [("spot", SPOT_VOLUME_CELL), ("swap", SWAP_VOLUME_CELL)] {
+        let body = fixture(name);
+        let bars = parse_klines(&body, cell).expect("recorded fixture parses");
+        let expected = body["data"][0][7]
+            .as_str()
+            .expect("quote turnover cell")
+            .parse::<f32>()
+            .expect("finite quote turnover");
+        assert_eq!(bars[0].quote_volume, expected, "{name} uses volCcyQuote");
+    }
+}
+
 /// `rest/okx.rs:classify` accepting every 2xx response as success stores an unknown instrument as
 /// an authoritative empty replay window instead of showing the user a permanent missing-market verdict.
 #[test]

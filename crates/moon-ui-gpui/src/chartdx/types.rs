@@ -97,6 +97,10 @@ pub struct CandleGpu {
     pub high: f32,
     pub low: f32,
     pub close: f32,
+    /// This candle's turnover in the QUOTE currency, not base volume — the bottom volume band is
+    /// its only consumer. The field keeps the generic name because the three shader counterparts
+    /// call this ordered slot `volume`/`vol`; its position in the `repr(C)` record, rather than the
+    /// Rust identifier, is the wire-layout contract shared by the backends.
     pub volume: f32,
     /// Candle-specific time frame in relative milliseconds; zero uses series `style.tf_rel_ms`.
     ///
@@ -188,7 +192,7 @@ pub fn fill_candle_upload(
         high: c.high,
         low: c.low,
         close: c.close,
-        volume: c.volume,
+        volume: c.quote_volume,
         tf_rel: tf_ms.get(i).copied().unwrap_or(0.0),
     }));
 }

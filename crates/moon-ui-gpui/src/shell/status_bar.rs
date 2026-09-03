@@ -9,6 +9,7 @@ use moon_core::config::TransportVersion;
 use moon_core::feed::ConnStatus;
 use moon_core::metrics::MetricsSnapshot;
 use moon_core::session::{ConnSummary, CoreId, LicenseSummary};
+use moon_core::update::BuildIdentity;
 use std::collections::HashMap;
 
 use crate::design;
@@ -161,6 +162,52 @@ impl Shell {
                     }),
                 MoonStatusItem::group_separator().gap_after(8.0),
             ]);
+        }
+        // The running build's own version, immediately left of the moonbot.pro link.
+        //
+        // It reads the SAME embedded baseline the updater compares against
+        // (`update.rs:start_polling`), so what the user sees here is exactly what decides whether
+        // the header offers an update — a separate source could disagree with the button beside
+        // it. `ReleaseVersion`'s Display owns the `vMAJOR.MINOR.PATCH` form; a build with no
+        // canonical tag reachable from HEAD embeds `unknown`, which fails to parse and is shown
+        // as `dev` rather than as a version the updater never trusted.
+        //
+        // Kept to its bare value in both layouts: the footer degrades by clipping a
+        // priority-ordered tail, so a caption here would cost `moonbot.pro` its place long
+        // before it earned one. The build line the tooltip carries is the same triple
+        // `startup.rs` logs at boot, which is what a tester is asked for.
+        let release_base = option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown");
+        let version_label = match BuildIdentity::from_release_base(release_base).baseline() {
+            Some(version) => version.to_string(),
+            None => "dev".to_string(),
+        };
+        // The tooltip carries the RAW `release_base`, not the rendered label, so its three facts
+        // are byte-identical to the boot line in `startup.rs`. The two genuinely differ: a legacy
+        // two-component tag parses with patch 0 (`release.rs:ReleaseVersion::parse`) and renders
+        // as `v0.5.0`, and an untagged build embeds `unknown` and renders as `dev`. The short
+        // label is for glancing; the tooltip is what a tester is asked to quote back, so it must
+        // not normalize the fact away.
+        let version_tooltip = t!(
+            "status.version_tooltip",
+            release = release_base,
+            build = option_env!("MOONTERMINAL_GIT_REV").unwrap_or("unknown"),
+            moonui = option_env!("MOONUI_GIT_REV").unwrap_or("unknown")
+        )
+        .to_string();
+        // Compact drops the group rule and takes the inner gap, exactly as the left groups do.
+        // The right region is `overflow_hidden` with no `flex_none` in the pinned MoonUI
+        // (`moon-ui-components/src/status_bar.rs`), so its trailing `moonbot.pro` is what a
+        // clipped bar loses first — every unit of width this readout does not spend is width the
+        // link keeps. Hence a bare value, no caption, and no rule at the width where it matters.
+        right_items.push(
+            MoonStatusItem::new(version_label)
+                .id("terminal-version")
+                .color(p.text_soft)
+                .gap_after(if compact { inner_gap } else { group_gap })
+                .tooltip(version_tooltip),
+        );
+        if !compact {
+            right_items.push(MoonStatusItem::group_separator().gap_after(group_gap));
         }
         right_items.push(
             MoonStatusItem::new("moonbot.pro")

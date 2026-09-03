@@ -7,10 +7,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
-    MoonSelectorSegment, MoonTag, MoonToggle, MoonToggleLabelSide, MoonToggleSize, MoonWindowFrame,
-    MoonWindowFrameBrand, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect,
+    MoonSelectorPill, MoonSelectorSegment, MoonTag, MoonWindowFrame, MoonWindowFrameBrand, h_flex,
 };
 use rust_i18n::t;
 
@@ -68,16 +67,23 @@ pub fn header(
     //
     // The scope check comes FIRST and is not a privacy nicety: `active_trade_core` falls through
     // to the group's first core in the Auto workspace Overview, so without it this row prints ONE
-    // arbitrary server's money directly beside a pill that reads "the whole group". The figure is
-    // HIDDEN rather than summed — the Assets panel owns the real cross-core total, on a surface
-    // that says so, and a double-click on this dash still opens it.
+    // arbitrary server's money directly beside a pill that reads "the whole group".
+    //
+    // `overview` is resolved ONCE here and threaded to every per-core element of this row —
+    // the balance figure, the manual-strategy cluster and the core-settings gear — because all
+    // three describe ONE account and mean nothing for the whole group. In Overview the row drops
+    // them outright, separators included, rather than drawing a dash and a switch that address a
+    // server the pill beside them does not name; the Assets panel owns the real cross-core total,
+    // on a surface that says so, and stays reachable through its dock tab. Re-reading the backend
+    // per element would let the three drift apart.
     //
     // The emulator/real tag shares this same `scoped_core`: fetching `emu_mode` through a
     // helper that calls `active_trade_core` first would read that arbitrary core even when the
     // helper then discards it.
-    let (balance, trade_emu) = {
+    let (overview, balance, trade_emu) = {
         let b = backend.read(cx);
-        let scoped_core = if b.is_auto_overview_scope(group) {
+        let overview = b.is_auto_overview_scope(group);
+        let scoped_core = if overview {
             None
         } else {
             b.active_trade_core(group)
@@ -95,20 +101,29 @@ pub fn header(
         let trade_emu = core
             .and_then(|cd| cd.client_settings.as_ref())
             .map(|cs| cs.emu_mode);
-        (balance, trade_emu)
+        (overview, balance, trade_emu)
     };
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
-    let manual = crate::controls::manual_strategy_controls(
-        group,
-        &backend,
-        &shell,
-        strat_slot_menu,
-        strat_slots_open,
-        chrome_width,
-        p,
-        cx,
-    );
+    //
+    // Overview is gated HERE rather than inside the control, so the function keeps its one meaning
+    // — "this core's manual strategies" — and every caller decides for itself whether it has a
+    // core to speak for. It cannot answer `None` on its own: it resolves through
+    // `Backend::active_trade_core`, whose Overview fallback returns the group's FIRST core.
+    let manual = (!overview)
+        .then(|| {
+            crate::controls::manual_strategy_controls(
+                group,
+                &backend,
+                &shell,
+                strat_slot_menu,
+                strat_slots_open,
+                chrome_width,
+                p,
+                cx,
+            )
+        })
+        .flatten();
     let update_state = updater.read(cx).state();
     h_flex()
         .w_full()
@@ -154,7 +169,12 @@ pub fn header(
                     cx,
                 ))
                 .children(header_trade_mode_tag(trade_emu))
-                .child({
+                // The gear edits ONE core's `CoreConfig`, so it goes with the rest of the
+                // per-core cluster in Overview. `Shell::reconcile_core_settings_popup` closes an
+                // already-open popup on the same predicate: without that, the state would stay
+                // open behind a button that is no longer drawn and the popup would reappear the
+                // moment a core is selected again.
+                .children((!overview).then(|| {
                     let shell = shell.clone();
                     header_gear_popover(
                         "core-gear",
@@ -181,16 +201,21 @@ pub fn header(
                     // gear itself are the dismissal paths, and this popup has all three.
                     .close_on_content_click(false)
                     .overlay_closable(false)
-                }),
+                })),
         )
-        .child(design::chrome_divider(cx, p))
-        .child(balance_label(
-            group.to_string(),
-            backend.clone(),
-            balance,
-            p,
-            cx,
-        ))
+        // The figure names ONE account, so the divider is gated with it rather than separately —
+        // hiding the label alone would leave a rule fencing off nothing, the same coupling the
+        // manual cluster below already makes.
+        .when(!overview, |row| {
+            row.child(design::chrome_divider(cx, p))
+                .child(balance_label(
+                    group.to_string(),
+                    backend.clone(),
+                    balance,
+                    p,
+                    cx,
+                ))
+        })
         // Shrinkable: the strategy summary inside truncates, so a long one yields space to the
         // right-hand readouts instead of pushing them off the window.
         .children(manual.map(|ms| {
@@ -233,6 +258,29 @@ pub fn header(
                 }
                 _ => t!("update.tooltip").to_string(),
             };
+            // An offered update is the only call to action this header ever grows, and it appears
+            // on a window whose every other control is `Panel` — so neutral panel chrome is
+            // exactly what a user scanning the row does not stop on.
+            //
+            // `Green` rather than the `Blue` primary variant, and the reason is contrast, not
+            // taste. Every tinted MoonUI variant paints its LABEL in the accent colour over a
+            // ~10% wash of it, so the label's legibility is the palette token's own contrast
+            // against this header. In the light theme `Blue` resolves to `p.accent` `#009DFF`
+            // (`button.rs:866`, `tokens.rs:190`) — about 2.5:1 on `shell_high`, far under the
+            // 4.5:1 floor, and this label is 10px `Micro`. `Amber` `#B97824` is no better at
+            // ~3.6:1. `Green` is the one accent MoonUI gave a light-specific foreground,
+            // `green_text` `#0E6E45` (`tokens.rs:186`, `success_fg` at `button.rs:868`), which
+            // clears the floor at roughly 6:1 while staying the accent in the dark theme. It is
+            // also the right semantic: something good is available, not something wrong.
+            //
+            // Every other state keeps `Panel` deliberately. Installing/Restarting already read as
+            // busy through `loading(busy)`, and Failed already reads through its retry label —
+            // accenting those would advertise an action that is either underway or just refused.
+            let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {
+                MoonButtonVariant::Green
+            } else {
+                MoonButtonVariant::Panel
+            };
             let busy = update_state.busy();
             let updater = updater.clone();
             design::chrome_section(cx)
@@ -244,7 +292,7 @@ pub fn header(
                             MoonButton::new("terminal-update")
                                 .label(label)
                                 .size(MoonButtonSize::Micro)
-                                .variant(MoonButtonVariant::Panel)
+                                .variant(variant)
                                 .loading(busy)
                                 .on_click(move |_, _window, cx| {
                                     crate::update::UpdateController::start_install(&updater, cx);
@@ -350,7 +398,20 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
     )
 }
 
-/// Build the persisted workspace-mode control as a compact Auto toggle.
+/// Build the persisted workspace-mode control as a compact two-item dropdown.
+///
+/// AUTO and MANUAL are two full modes rather than the two positions of one switch, so the header
+/// NAMES the current mode and lists both instead of showing a single labeled toggle: a toggle
+/// leaves the mode it is not showing unnamed, which is exactly the fact a user picking between two
+/// workspaces needs. Only the naming moved — `WorkspaceMode` and everything persisted under it are
+/// unchanged, and selection still writes through the same `Backend::set_workspace_mode` authority.
+///
+/// `MoonDropdown` rather than the `MoonSelectorPill` + `MoonPopover` pair the core selector uses
+/// below: that pattern parks its open state on `Shell`, which a two-item picker does not earn.
+/// The trigger is `Action`-sized like the header gear at :167 and takes a FIXED
+/// [`MODE_TRIGGER_W`] rather than a fitted range, so the two labels render at one width and the
+/// control cannot twitch as the mode changes — `fit_trigger_width` would clamp each label's own
+/// natural width into the range and give the two modes different widths.
 ///
 /// Args:
 ///     group: Group whose preset is selected.
@@ -358,36 +419,70 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
 ///     cx: Application context used to read the controlled mode.
 ///
 /// Returns:
-///     A compact MoonUI toggle that publishes mode changes through `WorkspaceRevision`.
+///     A compact MoonUI dropdown that publishes mode changes through `WorkspaceRevision`.
 fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> impl IntoElement {
+    /// Design-unit trigger width, FIXED rather than fitted: it holds the longer of the two SHORT
+    /// mode names (`MANUAL`) in every locale plus the component's own caret suffix and padding,
+    /// at the narrowest supported UI font, so neither mode truncates and neither is narrower
+    /// than the other. The trigger shows only the bare name to keep the header short; the rows
+    /// below spell out «… режим» / «… mode» because a menu has the room to say what it selects.
+    const MODE_TRIGGER_W: f32 = 84.0;
+    /// Design-unit popup width: both rows plus their check column, at the trigger's own scale.
+    const MODE_MENU_W: f32 = 150.0;
+
     let mode = backend.read(cx).workspace_mode(group);
     let auto = mode == WorkspaceMode::AutoTrading;
-    let tooltip = if auto {
-        t!("workspace.mode.auto_tip").to_string()
+    let auto_label = t!("workspace.mode.auto").to_string();
+    let manual_label = t!("workspace.mode.classic").to_string();
+    let menu_auto_label = t!("workspace.mode.auto_item").to_string();
+    let menu_manual_label = t!("workspace.mode.classic_item").to_string();
+    let (label, tooltip) = if auto {
+        (
+            auto_label.clone(),
+            t!("workspace.mode.auto_tip").to_string(),
+        )
     } else {
-        t!("workspace.mode.classic_tip").to_string()
+        (
+            manual_label.clone(),
+            t!("workspace.mode.classic_tip").to_string(),
+        )
     };
     let backend = backend.clone();
     let group = group.to_string();
+    let items = crate::panels::radio_items(
+        [
+            (
+                WorkspaceMode::AutoTrading,
+                "header-workspace-mode-auto".into(),
+                menu_auto_label.into(),
+            ),
+            (
+                WorkspaceMode::Classic,
+                "header-workspace-mode-manual".into(),
+                menu_manual_label.into(),
+            ),
+        ],
+        mode,
+        crate::panels::RadioMark::Check,
+        move |app, mode| {
+            backend.update(app, |backend, backend_cx| {
+                backend.set_workspace_mode(&group, mode, backend_cx);
+            });
+        },
+    );
     div()
         .id("header-workspace-mode-tip")
         .tooltip(crate::panels::common::text_tooltip(tooltip))
         .child(
-            MoonToggle::new("header-workspace-mode")
-                .label(t!("workspace.mode.auto").to_string())
-                .label_side(MoonToggleLabelSide::Left)
-                .checked(auto)
-                .size(MoonToggleSize::Compact)
-                .on_change(move |checked, _, cx| {
-                    let mode = if *checked {
-                        WorkspaceMode::AutoTrading
-                    } else {
-                        WorkspaceMode::Classic
-                    };
-                    backend.update(cx, |backend, backend_cx| {
-                        backend.set_workspace_mode(&group, mode, backend_cx);
-                    });
-                }),
+            MoonDropdown::new("header-workspace-mode")
+                .label(label)
+                .trigger_caret(true)
+                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_size(MoonButtonSize::Action)
+                .trigger_width_scaled(MODE_TRIGGER_W)
+                .menu_width_scaled(MODE_MENU_W)
+                .menu_size(MoonMenuSize::Compact)
+                .items(items),
         )
 }
 
