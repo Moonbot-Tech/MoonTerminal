@@ -50,10 +50,11 @@ use gpui::*;
 use moon_core::db::{ChartTradeRecord, TradeMeta};
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
-    TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource,
-    replay_window,
+    TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries,
+    TradeReplaySource, replay_window,
 };
 use moon_core::session::CoreId;
+use moon_core::venue::Brand;
 
 pub(crate) use window::open_trade_window;
 
@@ -73,9 +74,27 @@ pub(crate) enum TradeWindowState {
     /// five-minute bucket — a wrong label over real-money data, which is worse than an honest gap.
     /// A typed number rather than a formatted string, because this value is produced beside
     /// `moon-core` data and only the UI can localize the sentence around it.
+    ///
+    /// The next four fields exist for the same reason: the caption cannot ask the network again
+    /// for a fact only the fetch answer holds, so each is read off the series once, in `apply`,
+    /// before it is moved into the panel.
     Ready {
         source: TradeReplaySource,
         tf_min: u16,
+        /// How the tick attempt for this window ended — what a `Klines1m` caption NAMES as its
+        /// reason. `Served` only ever rides a `Ticks` source.
+        tick_status: TickStatus,
+        /// Bucket the `Ticks` points were thinned to, in ms; `0` means raw. Meaningless (and
+        /// always `0`) on `Klines1m`.
+        bucket_ms: i64,
+        /// Whether the `Ticks` points cover only part of the window. Always `false` on
+        /// `Klines1m`.
+        partial: bool,
+        /// Brand of the venue the rows came from, so a `NoRoute` caption can name it. Read off
+        /// `series.venue` rather than kept as a `TradeWindowView` field: `window.rs`'s
+        /// construction of that struct is outside this branch's file bounds, so nothing here may
+        /// add a field it would have to initialize.
+        brand: Brand,
     },
     /// Nothing to draw, for a reason the window names.
     Empty(TradeReplayEmpty),
@@ -233,10 +252,9 @@ pub(super) fn trade_labels(
 /// test without a GPUI harness — nothing in this repo renders GPUI in tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Fold {
-    /// Whether `outcome` replaces `state` at all. A drawn window regressing to an error or an
-    /// empty message is never wanted, so once `state` is [`TradeWindowState::Ready`] only a
-    /// strictly better answer — a tick series for the exact request already on screen — is let
-    /// through.
+    /// Whether `outcome` replaces `state` at all. A drawn window never regresses to an error or
+    /// empty message; once it is [`TradeWindowState::Ready`], only a tick upgrade or a terminal
+    /// answer that resolves its provisional `Pending` caption is let through.
     pub accept: bool,
     /// Whether the user's own candle mode should be restored before this outcome is drawn.
     pub restore_candle_mode: bool,
@@ -261,14 +279,22 @@ pub(super) fn fold_outcome(
     outcome: &TradeReplayOutcome,
 ) -> Fold {
     let accept = match state {
-        // Protocol item 3 guarantees the worker never sends a second `Empty` or `Failed`, so this
-        // arm only ever meets a tick `Ready`, but the rule is stated for what it means rather than
-        // for what the worker happens to send: a chart already showing something never regresses.
-        TradeWindowState::Ready { .. } => matches!(
-            outcome,
-            TradeReplayOutcome::Ready(series)
-                if series.source == TradeReplaySource::Ticks && !series.is_empty()
-        ),
+        // The rule is stated for what it means rather than for what the worker happens to send
+        // (the existing comment's own standard): a chart already showing something never
+        // regresses, but a caption that is still PROVISIONAL may be resolved. So a `Ready` state
+        // whose tick status has not answered yet accepts a second `Ready` outcome once that
+        // outcome's own status has moved past `Pending` and actually carries rows — the only
+        // thing that turns "пробуем тики…" into a stated reason. A state whose status is already
+        // terminal (a settled `Ticks` series, or a `Klines1m` reason already printed) accepts
+        // nothing.
+        TradeWindowState::Ready { tick_status, .. } => {
+            *tick_status == TickStatus::Pending
+                && matches!(
+                    outcome,
+                    TradeReplayOutcome::Ready(series)
+                        if series.tick_status != TickStatus::Pending && !series.is_empty()
+                )
+        }
         // Loading, Empty or Failed has nothing on screen to protect.
         TradeWindowState::Loading | TradeWindowState::Empty(_) | TradeWindowState::Failed(_) => {
             true
@@ -635,6 +661,12 @@ impl TradeWindowView {
                 // range: a floor of one minute for anything finer, and no `as` wrap for anything
                 // absurdly coarse.
                 let tf_min = (series.tf_ms / 60_000).clamp(1, i64::from(u16::MAX)) as u16;
+                // Same reasoning, same moment: the caption's four remaining facts are the series'
+                // alone to give.
+                let tick_status = series.tick_status;
+                let bucket_ms = series.bucket_ms;
+                let partial = series.partial;
+                let brand = series.venue.brand;
                 if fold.restore_candle_mode {
                     self.restore_candle_mode(cx);
                 }
@@ -642,7 +674,14 @@ impl TradeWindowView {
                 if fold.frame {
                     self.framed_this_sequence = true;
                 }
-                TradeWindowState::Ready { source, tf_min }
+                TradeWindowState::Ready {
+                    source,
+                    tf_min,
+                    tick_status,
+                    bucket_ms,
+                    partial,
+                    brand,
+                }
             }
             TradeReplayOutcome::Empty(empty) => TradeWindowState::Empty(empty),
             TradeReplayOutcome::Failed(failure) => {

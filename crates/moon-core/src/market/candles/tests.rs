@@ -736,3 +736,73 @@ fn compose_with_coarse_preserves_empty_single_and_contiguous_series_inputs() {
         "empty layers leave an already complete fine series untouched"
     );
 }
+
+/// `market/candles.rs:thin_ticks` synthesising bucket-mid points or dropping its role ordering
+/// lies about when a market traded and can draw points out of chronological order.
+#[test]
+fn thin_ticks_keeps_only_real_ascending_points_and_copies_non_positive_buckets() {
+    let input = vec![
+        tick(0.0, 10.0, 1.0),
+        tick(100.0, 14.0, 2.0),
+        tick(200.0, 8.0, 3.0),
+        tick(300.0, 12.0, 4.0),
+        tick(1_000.0, 20.0, 5.0),
+        tick(1_100.0, 18.0, 6.0),
+        tick(1_200.0, 22.0, 7.0),
+        tick(1_300.0, 19.0, 8.0),
+        tick(1_400.0, 21.0, 9.0),
+    ];
+    let mut thinned = Vec::new();
+    thin_ticks(&input, 1_000, &mut thinned);
+
+    assert!(
+        thinned.iter().all(|point| input.iter().any(|source| {
+            source.time_ms == point.time_ms
+                && source.price == point.price
+                && source.qty == point.qty
+        })),
+        "every emitted point must be an exact time, price, and quantity observed in the input"
+    );
+    assert!(
+        thinned
+            .windows(2)
+            .all(|pair| pair[0].time_ms <= pair[1].time_ms),
+        "thinned points must stay ascending for the chart consumer"
+    );
+    for bucket in [0_i64, 1_i64] {
+        assert!(
+            thinned
+                .iter()
+                .filter(|point| (point.time_ms as i64).div_euclid(1_000) == bucket)
+                .count()
+                <= 4,
+            "a bucket may keep at most first, high, low, and last real points"
+        );
+    }
+
+    let mut copied = Vec::new();
+    thin_ticks(&input, 0, &mut copied);
+    assert_eq!(
+        copied
+            .iter()
+            .map(|point| (point.time_ms, point.price, point.qty))
+            .collect::<Vec<_>>(),
+        input
+            .iter()
+            .map(|point| (point.time_ms, point.price, point.qty))
+            .collect::<Vec<_>>(),
+        "bucket_ms == 0 must preserve raw ticks unchanged"
+    );
+    thin_ticks(&input, -1, &mut copied);
+    assert_eq!(
+        copied
+            .iter()
+            .map(|point| (point.time_ms, point.price, point.qty))
+            .collect::<Vec<_>>(),
+        input
+            .iter()
+            .map(|point| (point.time_ms, point.price, point.qty))
+            .collect::<Vec<_>>(),
+        "negative bucket widths also copy input unchanged"
+    );
+}

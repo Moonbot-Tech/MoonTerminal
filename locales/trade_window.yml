@@ -43,12 +43,45 @@ trade_window.source.ticks:
   en: "exchange ticks"
   es: "ticks del exchange"
 
+trade_window.source.ticks_bucketed:
+  ru: "тики с биржи, шаг %{secs} с"
+  en: "exchange ticks, %{secs} s step"
+  es: "ticks del exchange, paso de %{secs} s"
+
+# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
+# словаре не хранится.
+trade_window.source.ticks_edges:
+  ru: "края закрыты свечами %{min} мин"
+  en: "edges filled by %{min}-minute candles"
+  es: "bordes cubiertos por velas de %{min} min"
+
 # Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
-# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки.
-trade_window.source.candles_tf:
-  ru: "свечи %{min} мин"
-  en: "%{min}-minute candles"
-  es: "velas de %{min} min"
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
+# всегда называют причину, по которой окно показывает их вместо тиков.
+trade_window.source.candles_ticks_pending:
+  ru: "свечи %{min} мин, тики ещё грузятся"
+  en: "%{min}-minute candles, still fetching ticks"
+  es: "velas de %{min} min, cargando ticks todavía"
+
+trade_window.source.candles_no_route:
+  ru: "свечи %{min} мин — у %{brand} нет тиков"
+  en: "%{min}-minute candles - %{brand} has no public ticks"
+  es: "velas de %{min} min - %{brand} no ofrece ticks"
+
+trade_window.source.candles_retention:
+  ru: "свечи %{min} мин — биржа хранит тики только %{hours} ч"
+  en: "%{min}-minute candles - the exchange keeps ticks for only %{hours} h"
+  es: "velas de %{min} min - el exchange guarda ticks solo %{hours} h"
+
+trade_window.source.candles_no_trades:
+  ru: "свечи %{min} мин — сделок за это время не было"
+  en: "%{min}-minute candles - the exchange had no trades here"
+  es: "velas de %{min} min - el exchange no tuvo operaciones aquí"
+
+trade_window.source.candles_failed:
+  ru: "свечи %{min} мин — тики не загрузились"
+  en: "%{min}-minute candles - could not load ticks"
+  es: "velas de %{min} min - no se pudieron cargar los ticks"
 
 trade_window.empty.no_data:
   ru: "За это время по рынку нет данных."

@@ -21,6 +21,8 @@ fn bars_only_series() -> TradeReplaySeries {
         window: ReplayWindow {
             from_ms: 0,
             to_ms: 2 * MINUTE_MS,
+            open_ms: 0,
+            close_ms: 2 * MINUTE_MS,
             over_budget: false,
         },
         tf_ms: MINUTE_MS,
@@ -31,6 +33,9 @@ fn bars_only_series() -> TradeReplaySeries {
         ],
         ticks: Vec::new(),
         identity: 42,
+        tick_status: TickStatus::Pending,
+        bucket_ms: 0,
+        partial: false,
     }
 }
 
@@ -158,6 +163,8 @@ fn cache_coverage_rejects_prefixes_and_oversized_holes() {
     let window = ReplayWindow {
         from_ms: 0,
         to_ms: 5 * MINUTE_MS,
+        open_ms: 0,
+        close_ms: 5 * MINUTE_MS,
         over_budget: false,
     };
     let exact = [0, 1, 2, 3, 4, 5]
@@ -400,6 +407,8 @@ fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
     let window = ReplayWindow {
         from_ms: 1_000,
         to_ms: 7_200_999,
+        open_ms: 1_000,
+        close_ms: 7_200_999,
         over_budget: false,
     };
 
@@ -430,5 +439,128 @@ fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
     assert!(
         slices.windows(2).all(|pair| pair[0].1 + 1 == pair[1].0),
         "adjacent requests neither leave a market-data gap nor re-fetch a boundary millisecond"
+    );
+}
+
+/// `market/trade_replay/mod.rs:tick_plan` sorting tiles by clock time instead of focus-first
+/// spends the budget on lead context and makes a partial replay omit the trade itself.
+#[test]
+fn tick_plan_prioritizes_focus_and_keeps_every_prefix_contiguous_after_clipping() {
+    let window = replay_window(100_000, 100_000).expect("a same-second scalp has floor context");
+    let earliest_ms = window.from_ms + 20 * MINUTE_MS;
+    let plan = tick_plan(window, Some(60 * MINUTE_MS), Some(earliest_ms));
+    let focus = window.focus();
+
+    assert!(
+        plan.focus_len > 0,
+        "the retained focus must have at least one slice"
+    );
+    assert!(
+        plan.slices[0].0 <= window.open_ms && window.open_ms <= plan.slices[0].1,
+        "the 80-minute scalp's entry belongs to the very first fetched slice"
+    );
+    let focus_slices = &plan.slices[..plan.focus_len];
+    assert_eq!(
+        focus_slices.first().map(|slice| slice.0),
+        Some(focus.0),
+        "the focus prefix begins at the independently derived focus edge"
+    );
+    assert_eq!(
+        focus_slices.last().map(|slice| slice.1),
+        Some(focus.1),
+        "the focus prefix reaches the independently derived focus edge"
+    );
+    assert!(
+        plan.slices.iter().all(|(from, _)| *from >= earliest_ms),
+        "retention clipping must exclude tiles older than the route can answer"
+    );
+    for prefix_len in 1..=plan.slices.len() {
+        let mut prefix = plan.slices[..prefix_len].to_vec();
+        prefix.sort_unstable();
+        assert!(
+            prefix.windows(2).all(|pair| pair[0].1 + 1 == pair[1].0),
+            "prefix {prefix_len} must form one gap-free covered interval rather than a comb"
+        );
+    }
+}
+
+/// `market/trade_replay/mod.rs:fit_ticks` dropping its terminal stride or thinning an already
+/// fitting input can overflow the GPU ring or alter raw trade points without need.
+#[test]
+fn fit_ticks_obeys_every_budget_boundary_and_preserves_raw_inputs_that_fit() {
+    let raw = (0..10)
+        .map(|index| crate::feed::types::Tick {
+            time_ms: (index * 100) as f64,
+            price: 100.0 + index as f32,
+            qty: 1.0,
+            side: crate::feed::types::Side::Buy,
+        })
+        .collect::<Vec<_>>();
+
+    for budget in [0, 1, 2, 3] {
+        let (result, _) = fit_ticks(raw.clone(), budget);
+        assert!(
+            result.len() <= budget,
+            "a ten-row input must never exceed requested budget {budget}"
+        );
+    }
+    for budget in [10, 11] {
+        let (result, bucket_ms) = fit_ticks(raw.clone(), budget);
+        assert_eq!(
+            result
+                .iter()
+                .map(|tick| (tick.time_ms, tick.price, tick.qty))
+                .collect::<Vec<_>>(),
+            raw.iter()
+                .map(|tick| (tick.time_ms, tick.price, tick.qty))
+                .collect::<Vec<_>>(),
+            "a raw vector that fits budget {budget} stays unchanged"
+        );
+        assert_eq!(bucket_ms, 0, "an already fitting vector reports raw ticks");
+    }
+    let (empty, bucket_ms) = fit_ticks(Vec::new(), 0);
+    assert!(empty.is_empty(), "empty input stays empty at zero budget");
+    assert_eq!(bucket_ms, 0, "empty input already fits and remains raw");
+}
+
+/// `market/trade_replay/mod.rs:tick_identity_salt` including tick-status payload makes identical
+/// candle rows re-upload merely because a tick attempt changed from pending to failed.
+#[test]
+fn kline_tick_statuses_keep_the_same_chart_revision_while_ticks_change_it() {
+    let pending = bars_only_series();
+    let mut failed = pending.clone();
+    failed.tick_status = TickStatus::Failed;
+    let mut tick_upgrade = pending.clone();
+    tick_upgrade.source = TradeReplaySource::Ticks;
+    tick_upgrade.tick_status = TickStatus::Served;
+    tick_upgrade.ticks = vec![crate::feed::types::Tick {
+        time_ms: MINUTE_MS as f64,
+        price: 101.0,
+        qty: 1.0,
+        side: crate::feed::types::Side::Buy,
+    }];
+
+    let read_revision = |series: &TradeReplaySeries| {
+        let mut out = ChartHistoryBuffers::default();
+        series
+            .read_into(
+                0.0,
+                0.0,
+                (2 * MINUTE_MS) as f32,
+                Some(&candle_params(0)),
+                &mut out,
+            )
+            .revision
+    };
+
+    assert_eq!(
+        read_revision(&pending),
+        read_revision(&failed),
+        "pending and failed candle fallbacks carry identical rows and therefore one revision"
+    );
+    assert_ne!(
+        read_revision(&pending),
+        read_revision(&tick_upgrade),
+        "a tick upgrade must have its own revision so the pane uploads its new points"
     );
 }

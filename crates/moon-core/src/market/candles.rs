@@ -484,6 +484,74 @@ pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>)
     }
 }
 
+/// Thins a tick run to at most four REAL points per bucket, never inventing one.
+///
+/// A candle can fabricate an OHLC body because nobody reads its open/close as "a trade happened
+/// at that exact instant" — a chart POINT is read exactly that way, so a bucket-mid point with no
+/// matching trade would be a lie about when the market moved. Keeping the first, highest, lowest
+/// and last real tick per bucket instead preserves the shape a candle would draw (open/high/low/
+/// close) while every emitted point stays a value that actually traded.
+///
+/// Args:
+///     ticks: Ascending by time (the caller sorts).
+///     bucket_ms: Bucket width; `<= 0` emits the input unchanged — there is nothing to thin to.
+///     out: Cleared first, then filled ascending, the same discipline [`aggregate_trades`] uses.
+pub(crate) fn thin_ticks(ticks: &[Tick], bucket_ms: i64, out: &mut Vec<Tick>) {
+    out.clear();
+    if bucket_ms <= 0 {
+        out.extend_from_slice(ticks);
+        return;
+    }
+    let mut open_ms: Option<f64> = None;
+    // Indices into `ticks` for the four roles of the bucket currently being collected.
+    let mut first_i = 0usize;
+    let mut last_i = 0usize;
+    let mut high_i = 0usize;
+    let mut low_i = 0usize;
+    // Emits one bucket's up-to-four representative ticks, ascending, each index kept once — a
+    // quiet bucket with a single trade collapses all four roles onto the same index.
+    let flush =
+        |first_i: usize, high_i: usize, low_i: usize, last_i: usize, out: &mut Vec<Tick>| {
+            let mut idx = [first_i, high_i, low_i, last_i];
+            idx.sort_unstable();
+            let mut prev: Option<usize> = None;
+            for i in idx {
+                if prev != Some(i) {
+                    out.push(ticks[i]);
+                    prev = Some(i);
+                }
+            }
+        };
+
+    for (i, t) in ticks.iter().enumerate() {
+        let this_open = bucket_open_ms(t.time_ms, bucket_ms);
+        match open_ms {
+            Some(open) if open == this_open => {
+                last_i = i;
+                if t.price > ticks[high_i].price {
+                    high_i = i;
+                }
+                if t.price < ticks[low_i].price {
+                    low_i = i;
+                }
+            }
+            _ => {
+                if open_ms.is_some() {
+                    flush(first_i, high_i, low_i, last_i, out);
+                }
+                open_ms = Some(this_open);
+                first_i = i;
+                last_i = i;
+                high_i = i;
+                low_i = i;
+            }
+        }
+    }
+    if open_ms.is_some() {
+        flush(first_i, high_i, low_i, last_i, out);
+    }
+}
+
 fn candle_from_tick(open_ms: f64, t: &Tick) -> ChartCandle {
     ChartCandle {
         t_open_ms: open_ms,
