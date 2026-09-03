@@ -8,7 +8,6 @@
 use crate::chartdx::pane::Container;
 use moon_chart::paint::now_unix_ms;
 use moon_chart::view::{ChartView, Rect};
-use moon_chart::{GLASS_ZONE_PX, PRICE_AXIS_W};
 use moon_core::session::CoreId;
 
 /// Mouse button subset used by chart navigation instead of `winit::MouseButton`.
@@ -37,11 +36,22 @@ pub struct ChartInput {
     pub hovered_pane: Option<usize>,
     /// Pane layout from the previous render, in device pixels, used for input hit testing.
     pub pane_rects: Vec<(usize, Rect)>,
-    /// Price-axis position published during render.
+    /// Price-axis position published during render, as CONFIGURED — book-only broom mode hides it,
+    /// and that is resolved by the shared layout, not here.
     ///
     /// This controls plot width and the left offset used to calculate `cursor_x`; its default is
     /// `Left`, matching the panel default.
     pub price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
+    /// Whether this panel draws only its order book, published during render. Broom mode gives the
+    /// book the whole pane and floors the plot at one pixel, which navigation has to know: the
+    /// width it pans and zooms against is the drawn one or none of it agrees.
+    pub orderbook_only: bool,
+    /// Whether this panel's order book is drawn at all, published during render. With it off the
+    /// book's width goes back to the plot, so navigation must not keep subtracting it.
+    pub orderbook_enabled: bool,
+    /// Whether the time axis reserves its gutter, published during render. Navigation reads only
+    /// horizontal extents, but the layout it shares with the engine answers for both.
+    pub time_axis_visible: bool,
     /// Market queued by an eligible chart double-click for the caller to take and open on Main.
     pub pending_to_main: Option<(CoreId, String)>,
 
@@ -63,6 +73,20 @@ pub struct ChartInput {
 }
 
 impl ChartInput {
+    /// This pane's areas as the ENGINE lays them out. Navigation asks the same function `prepare`
+    /// does, or it pans and zooms against a width nothing drew — a cramped pane's narrowed book, a
+    /// disabled book's width handed back to the plot, a broom pane's plot floored at one pixel.
+    fn areas_of(&self, rect: &Rect, ppp: f32) -> crate::chartdx::PaneAreas {
+        crate::chartdx::pane_layout(
+            *rect,
+            self.orderbook_only,
+            self.orderbook_enabled,
+            self.time_axis_visible,
+            self.price_axis_pos,
+            ppp,
+        )
+    }
+
     fn plot_metrics_for(&self, pane: Option<usize>, fallback_w: f32, ppp: f32) -> (f32, f32) {
         let Some(idx) = pane else {
             return (
@@ -76,22 +100,9 @@ impl ChartInput {
                 self.last_ptr.0.clamp(0.0, fallback_w.max(1.0)),
             );
         };
-        use crate::persistence::chart_persist::PriceAxisPos;
-        let price_axis_w = if matches!(self.price_axis_pos, PriceAxisPos::Hide) {
-            0.0
-        } else {
-            PRICE_AXIS_W * ppp
-        };
-        let glass_w = GLASS_ZONE_PX.min(r.w * 0.5);
-        let plot_w = (r.w - price_axis_w - glass_w).max(1.0);
-        // Reserve a left offset only for a left-side axis; right-side or hidden axes start at the slot edge.
-        let left_off = if matches!(self.price_axis_pos, PriceAxisPos::Left) {
-            price_axis_w
-        } else {
-            0.0
-        };
-        let cursor_x = (self.last_ptr.0 - r.x - left_off).clamp(0.0, plot_w);
-        (plot_w, cursor_x)
+        let plot = self.areas_of(r, ppp).plot;
+        let cursor_x = (self.last_ptr.0 - plot.x).clamp(0.0, plot.w);
+        (plot.w, cursor_x)
     }
 
     /// Return the hovered pane's mutable view for pan or zoom operations.
@@ -111,14 +122,16 @@ impl ChartInput {
     }
 
     /// Queue the hovered pane's market after a chart-area double-click.
-    fn try_dblclick_to_main(&mut self, container: &Container) {
+    fn try_dblclick_to_main(&mut self, container: &Container, ppp: f32) {
         let Some(idx) = self.hovered_pane else { return };
         let Some((_, r)) = self.pane_rects.iter().find(|(i, _)| *i == idx) else {
             return;
         };
-        // Ignore double-clicks in the right-side order-book/glass zone.
-        let glass_w = GLASS_ZONE_PX.min(r.w * 0.5);
-        if self.last_ptr.0 >= r.x + r.w - glass_w {
+        // Ignore double-clicks in the order book's own RECTANGLE, wherever the engine put it: left
+        // of an outboard right-side axis gutter, narrowed on a cramped pane, the whole pane in
+        // broom mode — where this gesture therefore has nowhere left to fire, which is the intent.
+        let glass = self.areas_of(r, ppp).glass;
+        if glass.w > 0.0 && self.last_ptr.0 >= glass.x {
             return;
         }
         self.pending_to_main = container.target(idx);
@@ -209,7 +222,7 @@ impl ChartInput {
                     self.last_lmb_ms = now;
                     self.last_lmb_pos = (px, py);
                     if dbl && allow_dbl_to_main {
-                        self.try_dblclick_to_main(container);
+                        self.try_dblclick_to_main(container, ppp);
                     }
                     self.lmb_down = true;
                     self.lmb_x_active = false;

@@ -240,12 +240,13 @@ impl Render for ChartPanel {
         // bounds. Input hit testing receives the engine's current pane rectangles separately.
         let axis_panes = self.chart.axis_panes();
         self.input.pane_rects = self.chart.pane_rects();
-        // Input hit testing needs the axis side to account for plot inset/width. Broom mode hides it.
-        self.input.price_axis_pos = if self.orderbook_only {
-            crate::persistence::chart_persist::PriceAxisPos::Hide
-        } else {
-            self.price_axis_pos
-        };
+        // Input hit testing takes the inputs `chartdx::pane_layout` needs and lets it derive the
+        // effective axis position — including the hiding broom mode applies — rather than being
+        // handed a pre-resolved one that only half the arithmetic knew about.
+        self.input.price_axis_pos = self.price_axis_pos;
+        self.input.orderbook_only = self.orderbook_only;
+        self.input.orderbook_enabled = self.orderbook_enabled;
+        self.input.time_axis_visible = self.time_axis_visible;
         // Place each corner close button on its graph pane in Main and AddToChart. Closing Main's
         // coin returns it to the logo. Convert pane-layout device pixels to slot logical pixels,
         // and collect these positions once for the overlay list.
@@ -306,7 +307,9 @@ impl Render for ChartPanel {
         };
         // With separate zones and a hidden order book, shade the right-side order control zone so
         // users can distinguish order-placement clicks from chart double-clicks that open Main.
-        // A visible book already marks this area, so do not duplicate it. Tuple fields are
+        // A visible book already marks this area, so do not duplicate it. Neither does a book-only
+        // broom pane, whose book covers the whole slot: there is no boundary left to draw, and a
+        // strip on the right would name one where the whole pane trades. Tuple fields are
         // (idx, logical left, logical top, logical width, logical height), converted from axis_panes
         // device pixels by dividing by ppp, like the close buttons.
         // `!self.historical` for the reason the strip exists at all: it marks where an
@@ -315,26 +318,15 @@ impl Render for ChartPanel {
         let show_zone_marker = self.show_zone
             && !self.historical
             && self.separate_zones(cx)
-            && !self.orderbook_enabled;
+            && !self.orderbook_drawn();
         let zone_markers: Vec<(usize, f32, f32, f32, f32)> = if show_zone_marker {
             axis_panes
                 .iter()
                 .map(|(idx, rect, _)| {
-                    let zone_w = moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5);
-                    // A hidden time axis reserves no label gutter, so the zone reaches the slot bottom.
-                    let time_axis_h = if self.time_axis_visible {
-                        moon_chart::TIME_AXIS_H * ppp
-                    } else {
-                        0.0
-                    };
-                    let plot_h = (rect.h - time_axis_h).max(1.0);
-                    (
-                        *idx,
-                        (rect.x + rect.w - zone_w) / ppp,
-                        rect.y / ppp,
-                        zone_w / ppp,
-                        plot_h / ppp,
-                    )
+                    // The rectangle the CLICKS use, converted to logical pixels — shading anything
+                    // else would promise a boundary the hit test does not honour.
+                    let zone = self.control_zone_of(*rect);
+                    (*idx, zone.x / ppp, zone.y / ppp, zone.w / ppp, zone.h / ppp)
                 })
                 .collect()
         } else {

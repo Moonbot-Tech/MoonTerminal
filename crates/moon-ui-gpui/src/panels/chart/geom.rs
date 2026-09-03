@@ -91,6 +91,11 @@ impl ChartPanel {
             .separate_control_zones
     }
 
+    /// Returns whether a window position lies over the order book, or over the strip reserved for
+    /// it, whatever the zone setting says: the Main stack asks this to hand the WHEEL to the stack
+    /// instead of zooming the chart under it. It reads the same rectangle as
+    /// [`Self::control_zone_rect`], so a book-only broom pane — book across its whole width — gives
+    /// the stack the wheel everywhere on it rather than only along its right edge.
     pub(crate) fn window_pos_in_glass_zone(&self, pos: Point<Pixels>) -> bool {
         let Some(((x, y), within)) = self.chart_local(pos) else {
             return false;
@@ -98,33 +103,67 @@ impl ChartPanel {
         if !within {
             return false;
         }
-        let rects = if self.input.pane_rects.is_empty() {
-            self.chart.pane_rects()
-        } else {
-            self.input.pane_rects.clone()
-        };
-        rects.iter().any(|(_, r)| {
-            if x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h {
-                return false;
-            }
-            let glass_w = moon_chart::GLASS_ZONE_PX.min(r.w * 0.5);
-            x >= r.x + r.w - glass_w
+        self.with_pane_rects(|rects| {
+            rects.iter().any(|(_, r)| {
+                if x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h {
+                    return false;
+                }
+                // Everything from the zone's left edge rightwards, over the pane's FULL height: the
+                // wheel belongs to the stack over the book, over an axis gutter beside it and over
+                // the time-axis band beneath it alike. Only that left edge is a boundary here.
+                x >= self.control_zone_of(*r).x
+            })
         })
     }
 
-    /// Returns whether a window position lies in the trading control zone while zones are separate:
-    /// the visible order book or the reserved right strip when it is hidden. This is the same
-    /// `control_zone_rect` used for order placement. Trading actions, order dragging, order menus,
-    /// and hotkeys remain active there, while pan, zoom, Main navigation, and fullscreen toggling are
-    /// suppressed. Returns false when Main uses unified zones.
+    /// Returns whether a window position is closed to chart gestures — pan, zoom, the open-on-Main
+    /// double click, fullscreen toggling — because it belongs to trading instead.
+    ///
+    /// Two different reasons answer yes, and they are separate questions. A book-only broom pane
+    /// says yes over ALL of it: there is no plot on it to pan or open, so nothing there can mean
+    /// chart, and the Settings toggle has no say — it governs whether to split a pane that HAS
+    /// both. An ordinary pane says yes inside its control zone while that toggle is on, where
+    /// trading actions, order dragging, order menus and hotkeys stay live.
     pub(crate) fn window_pos_in_control_zone(&self, pos: Point<Pixels>, cx: &App) -> bool {
-        if !self.separate_zones(cx) {
+        // Cheapest first: an ordinary pane under unified zones answers no without touching geometry,
+        // and that is the common case on Main.
+        if !self.orderbook_only && !self.separate_zones(cx) {
             return false;
         }
         let Some((local, within)) = self.chart_local(pos) else {
             return false;
         };
-        within && self.glass_pane_at(local).is_some()
+        // On no pane at all — an empty stack slot, the gap between panes — the answer is no. Chart
+        // gestures have nothing to act on there either, but claiming the point would swallow the
+        // press instead of leaving it to whoever owns that space.
+        within
+            && self.pane_at_with_fallback(local).is_some()
+            && self.chart_gesture_pane_at(local).is_none()
+    }
+
+    /// The pane holding a local point, from the render's published rectangles or, before the first
+    /// render publishes any, the engine's current layout.
+    ///
+    /// `ChartInput::pane_at` answers the same question WITHOUT that fallback; every hit test in
+    /// this file goes through here so the two halves of one gesture cannot disagree on a chart
+    /// whose first frame has not landed.
+    pub(super) fn pane_at_with_fallback(&self, pos: (f32, f32)) -> Option<usize> {
+        self.with_pane_rects(|rects| local_pane_rect_at(pos.0, pos.1, rects))
+            .map(|(idx, _)| idx)
+    }
+
+    /// The pane whose CHART SPACE holds this point, or `None` when the point belongs to trading —
+    /// the order book, the strip reserved for it, or anywhere on a book-only broom pane.
+    ///
+    /// The one statement of "this is chart, not book", so a gesture added later cannot get the
+    /// question half right: figure drawing, figure hit testing and the chart-space order-cross gate
+    /// all ask it, and each of them used to spell it out again.
+    pub(super) fn chart_gesture_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
+        let pane = self.pane_at_with_fallback(pos)?;
+        if self.orderbook_only || self.glass_pane_at(pos).is_some() {
+            return None;
+        }
+        Some(pane)
     }
 
     /// Returns whether a position is inside any pane rectangle, including its glass/order-book zone.
@@ -137,17 +176,26 @@ impl ChartPanel {
         if !within {
             return false;
         }
-        let rects = if self.input.pane_rects.is_empty() {
-            self.chart.pane_rects()
-        } else {
-            self.input.pane_rects.clone()
-        };
-        local_pos_in_any_pane_rect(x, y, &rects)
+        self.with_pane_rects(|rects| local_pos_in_any_pane_rect(x, y, rects))
     }
 
     /// Returns whether the latest right-button gesture moved the price scale rather than clicking.
     pub(crate) fn rmb_was_moved(&self) -> bool {
         self.input.rmb_moved()
+    }
+
+    /// Run `f` over this panel's pane rectangles in device pixels.
+    ///
+    /// Input arrives before the first render has published `input.pane_rects` — a wheel event over
+    /// a freshly opened chart — so the engine's current layout stands in for them. Borrowed rather
+    /// than returned: hit testing runs on the pointer path, and the steady-state branch must not
+    /// allocate a vector per event.
+    fn with_pane_rects<R>(&self, f: impl FnOnce(&[(usize, moon_chart::view::Rect)]) -> R) -> R {
+        if self.input.pane_rects.is_empty() {
+            f(&self.chart.pane_rects())
+        } else {
+            f(&self.input.pane_rects)
+        }
     }
 
     fn local_pane_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
@@ -165,71 +213,23 @@ impl ChartPanel {
             })
     }
 
-    fn local_pane_areas(
-        &self,
-        pane: usize,
-    ) -> Option<(moon_chart::view::Rect, moon_chart::view::Rect)> {
-        let rect = self.local_pane_rect(pane)?;
-        // Approximate the ordinary pane split for input hit-testing: Left, Right, or Hide shifts the
-        // plot, book, and axis gutter. Broom mode hides the local axis, but unlike ChartDataState
-        // this helper still derives glass width from `orderbook_enabled` and does not model the
-        // engine's full-width book-only rendering.
-        use crate::persistence::chart_persist::PriceAxisPos;
-        let axis_pos = if self.orderbook_only {
-            PriceAxisPos::Hide
-        } else {
-            self.price_axis_pos
-        };
-        let price_axis_w = if matches!(axis_pos, PriceAxisPos::Hide) {
-            0.0
-        } else {
-            moon_chart::PRICE_AXIS_W * self.last_ppp
-        };
-        let time_axis_h = if self.time_axis_visible {
-            moon_chart::TIME_AXIS_H * self.last_ppp
-        } else {
-            0.0
-        };
-        let plot_h = (rect.h - time_axis_h).max(1.0);
-        let glass_cap = rect.w * 0.5;
-        let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
-        let chart_w_base = rect.w - price_axis_w - glass_base;
-        let glass_w = if !self.orderbook_enabled {
-            0.0
-        } else if chart_w_base < glass_base * 2.0 {
-            (moon_chart::GLASS_ZONE_PX * 0.8).min(glass_cap)
-        } else {
-            glass_base
-        };
-        let axis_on_left = matches!(axis_pos, PriceAxisPos::Left);
-        let chart_x = if axis_on_left {
-            rect.x + price_axis_w
-        } else {
-            rect.x
-        };
-        let chart_w = (rect.w - price_axis_w - glass_w).max(1.0);
-        let glass_x = if matches!(axis_pos, PriceAxisPos::Right) {
-            chart_x + chart_w
-        } else {
-            rect.x + (rect.w - glass_w).max(1.0)
-        };
-        let plot = moon_chart::view::Rect {
-            x: chart_x,
-            y: rect.y,
-            w: chart_w,
-            h: plot_h,
-        };
-        let glass = moon_chart::view::Rect {
-            x: glass_x,
-            y: rect.y,
-            w: glass_w,
-            h: plot_h,
-        };
-        Some((plot, glass))
+    /// This pane's areas as the ENGINE lays them out — the same call `prepare` makes, so hit
+    /// testing cannot answer for a layout that was never drawn. The copy that used to live here
+    /// derived the book's width from the Order Book toggle alone and never learned about book-only
+    /// broom mode, where the book takes the whole pane.
+    fn local_pane_areas(&self, rect: moon_chart::view::Rect) -> crate::chartdx::PaneAreas {
+        crate::chartdx::pane_layout(
+            rect,
+            self.orderbook_only,
+            self.orderbook_enabled,
+            self.time_axis_visible,
+            self.price_axis_pos,
+            self.last_ppp,
+        )
     }
 
     pub(super) fn local_plot_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
-        self.local_pane_areas(pane).map(|(plot, _)| plot)
+        Some(self.local_pane_areas(self.local_pane_rect(pane)?).plot)
     }
 
     /// Build a pane's plot mapping, or return `None` when the pane has no valid view.
@@ -261,37 +261,41 @@ impl ChartPanel {
         })
     }
 
-    fn local_glass_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
-        self.local_pane_areas(pane).map(|(_, glass)| glass)
+    /// Whether this panel DRAWS an order book, which is not the same question as its Order Book
+    /// toggle: broom mode draws one regardless, exactly as `ChartDataState` decides it.
+    pub(super) fn orderbook_drawn(&self) -> bool {
+        self.orderbook_enabled || self.orderbook_only
     }
 
-    /// Returns a pane's order-control zone in device pixels. With the book visible on a narrow pane,
-    /// the local glass width is `(GLASS_ZONE_PX * 0.8).min(rect.w * 0.5)`. With the book hidden it
-    /// reserves the full capped base width, `GLASS_ZONE_PX.min(rect.w * 0.5)`, over the chart's right
-    /// edge so order interaction and the boundary marker remain available.
     pub(super) fn control_zone_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
-        if self.orderbook_enabled {
-            return self.local_glass_rect(pane).filter(|g| g.w > 0.0);
+        Some(self.control_zone_of(self.local_pane_rect(pane)?))
+    }
+
+    /// A pane's order-control zone in device pixels, taken from the pane rectangle the caller
+    /// already holds.
+    ///
+    /// The book's OWN area whenever one is drawn, so a cramped pane's narrowed book and a book-only
+    /// broom pane's full-width one are each exactly the zone they look like. With no book at all it
+    /// reserves `GLASS_ZONE_PX.min(rect.w * 0.5)` over the chart's right edge instead, so order
+    /// interaction and the boundary marker still have somewhere to live.
+    pub(super) fn control_zone_of(&self, rect: moon_chart::view::Rect) -> moon_chart::view::Rect {
+        let areas = self.local_pane_areas(rect);
+        if self.orderbook_drawn() {
+            return areas.glass;
         }
-        let rect = self.local_pane_rect(pane)?;
-        let time_axis_h = if self.time_axis_visible {
-            moon_chart::TIME_AXIS_H * self.last_ppp
-        } else {
-            0.0
-        };
-        let plot_h = (rect.h - time_axis_h).max(1.0);
         let w = moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5);
-        Some(moon_chart::view::Rect {
-            x: rect.x + (rect.w - w).max(1.0),
+        moon_chart::view::Rect {
+            x: rect.x + (rect.w - w).max(0.0),
             y: rect.y,
             w,
-            h: plot_h,
-        })
+            h: areas.plot.h,
+        }
     }
 
     pub(super) fn glass_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
-        let pane = self.input.pane_at(pos.0, pos.1)?;
+        let pane = self.pane_at_with_fallback(pos)?;
         let zone = self.control_zone_rect(pane)?;
+        // A zone of zero width is a pane with no book and no reserved strip; nothing to be inside.
         (zone.w > 0.0
             && pos.0 >= zone.x
             && pos.0 <= zone.x + zone.w
@@ -320,7 +324,17 @@ impl ChartPanel {
 }
 
 fn local_pos_in_any_pane_rect(x: f32, y: f32, rects: &[(usize, moon_chart::view::Rect)]) -> bool {
+    local_pane_rect_at(x, y, rects).is_some()
+}
+
+/// The pane rectangle holding a point, if any.
+fn local_pane_rect_at(
+    x: f32,
+    y: f32,
+    rects: &[(usize, moon_chart::view::Rect)],
+) -> Option<(usize, moon_chart::view::Rect)> {
     rects
         .iter()
-        .any(|(_, r)| x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+        .find(|(_, r)| x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+        .copied()
 }

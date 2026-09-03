@@ -75,10 +75,17 @@ impl ChartPanel {
         }
     }
 
-    /// Synchronizes backend order-book references to this panel's markets when the book is enabled,
-    /// or to an empty set when disabled. Called after market-set changes and book toggles.
+    /// Synchronizes backend order-book references to this panel's markets when the book is drawn,
+    /// or to an empty set when it is not. Called after market-set changes and book toggles.
+    ///
+    /// "Drawn" is [`ChartPanel::orderbook_drawn`], not this window's Order Book toggle: broom mode
+    /// shows the book with that toggle cleared, and a subscription following the toggle alone left
+    /// such a pane rendering an empty book — with, since the whole pane is its trading zone, an
+    /// invitation to place orders against no depth.
     pub(super) fn sync_orderbook_refs(&mut self, cx: &mut App) {
-        let want: HashSet<(CoreId, String)> = if self.orderbook_enabled {
+        // A HISTORICAL viewer holds no live subscription whatever the flags say: `new_historical`
+        // clears `orderbook_enabled` for that reason, and broom mode must not be a way back in.
+        let want: HashSet<(CoreId, String)> = if !self.historical && self.orderbook_drawn() {
             self.registered_markets.clone()
         } else {
             HashSet::new()

@@ -48,6 +48,8 @@ mod text;
 /// The caption editor formats its sample line with the chart's OWN formatter, never a second
 /// spelling of it.
 pub(crate) use text::preview_row;
+#[cfg(test)]
+mod tests;
 pub mod types;
 #[cfg(windows)]
 pub mod userdata;
@@ -1090,47 +1092,60 @@ impl ChartDataHandle {
     }
 }
 
-/// Resolve the horizontal plot and order-book widths shared by data preparation and navigation.
+/// Where a pane's plot and order book sit, in device pixels.
+///
+/// Both rectangles together, because they answer one question: a caller handed only widths has to
+/// place them itself, which is how three copies of the placement came to exist. The engine draws
+/// these rectangles and the panel hit-tests them, so what is DRAWN and what is CLICKABLE are the
+/// same arithmetic or they drift — book-only broom mode, where the book takes the whole pane, is
+/// the case that punished the drift hardest.
+#[derive(Clone, Copy)]
+pub(crate) struct PaneAreas {
+    /// Effective axis position: broom mode hides the price axis whatever the tab configured.
+    pub axis_pos: crate::persistence::chart_persist::PriceAxisPos,
+    /// The plot area. Its width is floored at one pixel, so an unpresented slot and a broom pane
+    /// both report a plot that exists but holds nothing.
+    pub plot: Rect,
+    /// The order book's area, `w == 0.0` when no book is drawn.
+    pub glass: Rect,
+}
+
+/// Lay one pane out into its plot and order-book areas.
 ///
 /// Args:
-///     rect_w: Full pane width in device pixels.
-///     orderbook_only: Whether the plot collapses behind the order book.
-///     orderbook_enabled: Whether the normal order-book zone is visible.
+///     rect: The pane's full rectangle in device pixels.
+///     orderbook_only: Whether the plot collapses behind the order book (broom mode).
+///     orderbook_enabled: Whether the ordinary order-book zone is drawn.
+///     time_axis_visible: Whether the time axis reserves its gutter under both areas.
 ///     price_axis_pos: Configured per-tab price-axis position.
 ///     pixel_scale: Device pixels per logical pixel.
 ///
 /// Returns:
-///     Effective axis position, axis width, order-book width, and plot width.
-fn horizontal_chart_layout(
-    rect_w: f32,
+///     The pane's [`PaneAreas`].
+pub(crate) fn pane_layout(
+    rect: Rect,
     orderbook_only: bool,
     orderbook_enabled: bool,
+    time_axis_visible: bool,
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     pixel_scale: f32,
-) -> (
-    crate::persistence::chart_persist::PriceAxisPos,
-    f32,
-    f32,
-    f32,
-) {
+) -> PaneAreas {
+    use crate::persistence::chart_persist::PriceAxisPos;
     let axis_pos = if orderbook_only {
-        crate::persistence::chart_persist::PriceAxisPos::Hide
+        PriceAxisPos::Hide
     } else {
         price_axis_pos
     };
-    let price_axis_w = if matches!(
-        axis_pos,
-        crate::persistence::chart_persist::PriceAxisPos::Hide
-    ) {
+    let price_axis_w = if matches!(axis_pos, PriceAxisPos::Hide) {
         0.0
     } else {
         moon_chart::PRICE_AXIS_W * pixel_scale
     };
-    let glass_cap = rect_w * 0.5;
+    let glass_cap = rect.w * 0.5;
     let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
-    let chart_w_base = rect_w - price_axis_w - glass_base;
+    let chart_w_base = rect.w - price_axis_w - glass_base;
     let glass_w = if orderbook_only {
-        (rect_w - price_axis_w).max(1.0)
+        (rect.w - price_axis_w).max(1.0)
     } else if !orderbook_enabled {
         0.0
     } else if chart_w_base < glass_base * 2.0 {
@@ -1138,8 +1153,42 @@ fn horizontal_chart_layout(
     } else {
         glass_base
     };
-    let chart_w = (rect_w - price_axis_w - glass_w).max(1.0);
-    (axis_pos, price_axis_w, glass_w, chart_w)
+    let chart_w = (rect.w - price_axis_w - glass_w).max(1.0);
+    // Left puts the axis gutter on the left and shifts the plot right; Right and Hide start the
+    // plot at the pane's edge. The book follows the plot only for a right-side axis, which leaves
+    // that gutter outboard of it; otherwise it sits against the pane's right edge.
+    let chart_x = if matches!(axis_pos, PriceAxisPos::Left) {
+        rect.x + price_axis_w
+    } else {
+        rect.x
+    };
+    let glass_x = if matches!(axis_pos, PriceAxisPos::Right) {
+        chart_x + chart_w
+    } else {
+        rect.x + (rect.w - glass_w).max(0.0)
+    };
+    // A hidden time axis reserves no label gutter, letting both areas use the full height.
+    let time_axis_h = if time_axis_visible {
+        moon_chart::TIME_AXIS_H * pixel_scale
+    } else {
+        0.0
+    };
+    let h = (rect.h - time_axis_h).max(1.0);
+    PaneAreas {
+        axis_pos,
+        plot: Rect {
+            x: chart_x,
+            y: rect.y,
+            w: chart_w,
+            h,
+        },
+        glass: Rect {
+            x: glass_x,
+            y: rect.y,
+            w: glass_w,
+            h,
+        },
+    }
 }
 
 struct ChartDataState {

@@ -1108,8 +1108,8 @@ impl ChartEngine {
     ///
     /// The interval is REQUESTED rather than applied: the plot width is knowable only inside a
     /// prepared frame, and this method is reached from application code that commonly runs before
-    /// the first present. It used to measure the width itself, through `pane_rects` and
-    /// `horizontal_chart_layout`, both of which floor an unpresented slot at ONE PIXEL rather than
+    /// the first present. It used to measure the width itself, through `pane_rects` and the shared
+    /// pane layout, both of which floor an unpresented slot at ONE PIXEL rather than
     /// reporting that they do not know - so the interval was framed for a one-pixel plot and the
     /// visible span at the real width came out wider by the ratio of the two, drawing correct axes
     /// over an empty plot. The view now holds the request until a real width exists, and re-applies
