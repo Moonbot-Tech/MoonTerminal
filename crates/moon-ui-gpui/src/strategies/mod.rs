@@ -155,8 +155,24 @@ pub struct StrategiesView {
     field_colors: HashMap<String, ([u8; 3], Entity<MoonColorPickerState>)>,
     /// Field whose contextual helper or autocomplete is open.
     focused_field: Option<String>,
-    /// Expanded cores in the strategy tree.
+    /// Cores the user expanded by hand in the strategy tree — the only expansion that persists.
     expanded_cores: HashSet<CoreId>,
+    /// Core opened because the Auto rail selected it, or `None` under Classic and Auto Overview.
+    ///
+    /// An OVERLAY over [`Self::expanded_cores`], never a member of it: the union is what renders and
+    /// what the Expand/Collapse-all caret reads, but only `expanded_cores` reaches
+    /// `StrategiesSessionState`, so a rail seed is never inherited by a later window or another scope.
+    /// `Option` rather than a set is deliberate — the rail names at most one core, and the type is what
+    /// makes a rail move REPLACE the previous seed instead of accumulating it.
+    rail_expanded_core: Option<CoreId>,
+    /// Auto rail selection last resolved for this view.
+    ///
+    /// Distinct from the overlay because the overlay is the USER'S to clear: collapsing the seeded
+    /// core's caret empties the overlay and deliberately leaves this field alone, so a later
+    /// workspace revision that resolves the SAME rail selection recognises it as unchanged and does
+    /// not reopen the row. Only a rail selection that actually MOVED — including moving to `None`
+    /// under Auto Overview — re-seeds.
+    rail_seen_core: Option<CoreId>,
     /// Expanded tree folders keyed by core and path.
     expanded_folders: HashSet<(CoreId, String)>,
     /// Field-dependency rules from `param_deps.toml`, hot-reloaded only with the opt-in environment flag.

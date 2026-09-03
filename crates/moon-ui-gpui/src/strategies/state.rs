@@ -4,14 +4,17 @@ use super::*;
 
 use crate::workspace::scope_marker::ScopeMarker;
 
-/// Seed the tree's expanded cores from the Auto rail selection.
+/// Resolve the Auto rail's seeded core, the overlay `StrategiesView::rail_expanded_core` holds.
 ///
 /// The window is opened from a rail that already says which server the user is working on, so
-/// opening it fully collapsed makes them re-find that server by hand every time.
+/// opening it fully collapsed makes them re-find that server by hand every time. The result
+/// REPLACES any previous seed rather than accumulating it: the rail names at most one core, and a
+/// stale seed for a core the rail left must not linger as if the user had expanded it by hand.
 ///
 /// The intersection with the visible scope keeps two validity levels distinct: `selected_core` is
 /// validated against live cores, while the tree is built from the effective workspace scope. The
-/// guard prevents any narrower scope from seeding a node that never renders.
+/// guard prevents any narrower scope from seeding a node that never renders. A `None` workspace
+/// slice (not scope-bound) still seeds.
 ///
 /// A core whose strategies are all filtered out does not enter the tree at all; the seeded
 /// expansion is harmless there and takes effect as soon as the filter admits it.
@@ -21,45 +24,60 @@ use crate::workspace::scope_marker::ScopeMarker;
 ///     workspace_cores: Cores the window may show, or `None` when it is not scope-bound.
 ///
 /// Returns:
-///     The set of cores to open with; empty whenever there is nothing unambiguous to expand.
-fn initial_expanded_cores(
+///     The core to open with, or `None` whenever there is nothing unambiguous to expand.
+fn rail_seed_core(
     selected_core: Option<CoreId>,
     workspace_cores: Option<&[CoreId]>,
-) -> HashSet<CoreId> {
-    let Some(core) = selected_core else {
-        return HashSet::new();
-    };
+) -> Option<CoreId> {
+    let core = selected_core?;
     if workspace_cores.is_some_and(|cores| !cores.contains(&core)) {
-        return HashSet::new();
+        return None;
     }
-    HashSet::from([core])
+    Some(core)
 }
 
-/// Insert the Auto-selected core into an existing expansion set without replacing it.
-///
-/// Opening or focusing Strategies from a rail that already names a server must show that
-/// server's strategies without an extra click. Other cores the user expanded stay expanded;
-/// an empty seed (Classic, Auto Overview, or a core outside the visible scope) is a no-op.
+/// Whether the retained expansion state considers `core` open: hand-expanded, or the current
+/// Auto rail seed.
 ///
 /// Args:
-///     expanded: Live or restored set of expanded cores.
-///     selected_core: Concrete Auto rail selection, or `None` for Classic and Auto Overview.
-///     workspace_cores: Cores the window may show, or `None` when it is not scope-bound.
+///     expanded: Cores the user expanded by hand.
+///     rail: The current rail overlay, if any.
+///     core: Core being tested.
 ///
 /// Returns:
-///     Whether at least one core was newly inserted.
-fn seed_selected_core_into(
+///     `true` when either source counts `core` as open.
+pub(super) fn core_is_open(expanded: &HashSet<CoreId>, rail: Option<CoreId>, core: CoreId) -> bool {
+    expanded.contains(&core) || rail == Some(core)
+}
+
+/// Toggle one core's expansion across both the persisted set and the rail overlay.
+///
+/// Collapsing clears the rail seed too when it names this core: otherwise a click meant to close
+/// the row would leave it reopened by the overlay on the very next frame. Expanding writes only
+/// the persisted set, matching every other hand-expansion site — the overlay is exclusively an
+/// Auto rail concern.
+///
+/// Deliberately leaves `StrategiesView::rail_seen_core` untouched: that field tracks what the rail
+/// last resolved to, not what the user is currently showing, so a later unrelated revision that
+/// resolves the same rail selection recognises it as unchanged instead of reopening this row.
+///
+/// Args:
+///     expanded: Cores the user expanded by hand, mutated in place.
+///     rail: The current rail overlay, mutated in place.
+///     core: Core being toggled.
+pub(super) fn toggle_core_expansion(
     expanded: &mut HashSet<CoreId>,
-    selected_core: Option<CoreId>,
-    workspace_cores: Option<&[CoreId]>,
-) -> bool {
-    let seed = initial_expanded_cores(selected_core, workspace_cores);
-    if seed.is_empty() {
-        return false;
+    rail: &mut Option<CoreId>,
+    core: CoreId,
+) {
+    if core_is_open(expanded, *rail, core) {
+        expanded.remove(&core);
+        if *rail == Some(core) {
+            *rail = None;
+        }
+    } else {
+        expanded.insert(core);
     }
-    let added = seed.iter().any(|core| !expanded.contains(core));
-    expanded.extend(seed);
-    added
 }
 
 /// Resolve the cores a Classic-focused singleton window may DISPLAY.
@@ -200,8 +218,10 @@ impl StrategiesView {
     /// Create the Strategies view and subscribe it to search, tree, backend, and window events.
     ///
     /// A process-lifetime snapshot restores browsing state after the window is closed and
-    /// reopened. Construction then additively seeds the Auto rail's selected core when it belongs
-    /// to the visible workspace scope, so a collapsed snapshot still opens that server's list.
+    /// reopened. Construction then seeds the Auto rail's selected core into the `rail_expanded_core`
+    /// overlay when it belongs to the visible workspace scope, so a collapsed snapshot still opens
+    /// that server's list — the overlay, never the restored snapshot itself, which is why a rail
+    /// seed never survives into another window or scope.
     ///
     /// Args:
     ///     backend: Shared state supplying strategy data and workspace scope.
@@ -254,15 +274,13 @@ impl StrategiesView {
             .fold(0u64, |acc, s| acc.wrapping_mul(31).wrapping_add(s.id));
         let selected_core = scope.and_then(|(_, selected)| selected);
         let initial_sig = strategies_sig(backend.read(cx), workspace_cores.as_deref());
-        let mut expanded_cores = match &session {
+        let expanded_cores = match &session {
             Some(s) => s.expanded_cores.clone(),
             None => HashSet::new(),
         };
-        seed_selected_core_into(
-            &mut expanded_cores,
-            selected_core,
-            workspace_cores.as_deref(),
-        );
+        let rail_seed = rail_seed_core(selected_core, workspace_cores.as_deref());
+        let rail_expanded_core = rail_seed;
+        let rail_seen_core = rail_seed;
 
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
@@ -357,22 +375,32 @@ impl StrategiesView {
             this.scope_marker = marker;
             let scope = singleton_strategy_scope(this.backend.read(cx));
             let next = scope.as_ref().map(|(cores, _)| cores.clone());
+            // Recomputed BEFORE the shape-equality return below: a single-core group's Overview and
+            // AutoCore id vectors are equal, so a live rail move between them would otherwise never
+            // reach this observer's body at all.
+            let selected_core = scope.as_ref().and_then(|(_, selected)| *selected);
+            let rail = rail_seed_core(selected_core, next.as_deref());
+            // Compared against `rail_seen_core`, never the overlay: the overlay is the user's to
+            // clear (`toggle_core_expansion`), and comparing against it would resurrect a
+            // hand-collapsed core on the next unrelated revision. `rail_seen_core` tracks what the
+            // rail last resolved to regardless of what the user did with the overlay afterwards, so
+            // only a rail selection that actually MOVED re-seeds.
+            let rail_moved = rail != this.rail_seen_core;
+            if rail_moved {
+                // REPLACE, never extend: the overlay is what the rail says NOW. `None` under Auto
+                // Overview is the live-window twin of "a seed is never carried into another scope".
+                this.rail_seen_core = rail;
+                this.rail_expanded_core = rail;
+                this.tree_cache = None;
+                this.last_tree_shape = None;
+            }
             if next == this.workspace_cores {
-                if marker_moved {
+                if marker_moved || rail_moved {
                     cx.notify();
                 }
                 return;
             }
             this.workspace_cores = next;
-            // Re-seed additively when an Auto rail move changes the scope because the singleton
-            // window outlives the selection. Existing expansions remain intact; returning to a
-            // manually collapsed core re-opens it.
-            let selected_core = scope.and_then(|(_, selected)| selected);
-            seed_selected_core_into(
-                &mut this.expanded_cores,
-                selected_core,
-                this.workspace_cores.as_deref(),
-            );
             this.last_sig = strategies_sig(this.backend.read(cx), this.workspace_cores.as_deref());
             this.tree_cache = None;
             this.last_tree_shape = None;
@@ -504,6 +532,8 @@ impl StrategiesView {
             field_colors: HashMap::new(),
             focused_field: None,
             expanded_cores,
+            rail_expanded_core,
+            rail_seen_core,
             expanded_folders: session
                 .as_ref()
                 .map(|s| s.expanded_folders.clone())
@@ -550,28 +580,39 @@ impl StrategiesView {
         });
     }
 
-    /// Expand the Auto-selected core in a live Strategies view without collapsing anything else.
+    /// Reseed a live Strategies view from the Auto-selected core while preserving hand expansions.
     ///
-    /// Used when focusing an already-open window. Construction seeds the same way before the
+    /// Used when focusing an already-open window. Construction seeds the same overlay before the
     /// first paint; this path must also drop the tree cache so the next frame rebuilds the
-    /// selected core's subtree.
+    /// selected core's subtree. Nothing is persisted here: the rail overlay never reaches
+    /// `StrategiesSessionState`, so there is nothing for `persist_session` to save.
+    ///
+    /// Compared against the OVERLAY, not `rail_seen_core`: focusing an already-open window
+    /// deliberately REOPENS the seeded core even if the user had collapsed it by hand, which is
+    /// why this path disagrees with the `workspace_revision` observer's comparison.
     ///
     /// Args:
-    ///     cx: View context used to persist the session and notify.
+    ///     cx: View context used to read the current scope and notify.
     pub(super) fn ensure_auto_selected_core_expanded(&mut self, cx: &mut Context<Self>) {
         let selected_core =
             singleton_strategy_scope(self.backend.read(cx)).and_then(|(_, selected)| selected);
-        if !seed_selected_core_into(
-            &mut self.expanded_cores,
-            selected_core,
-            self.workspace_cores.as_deref(),
-        ) {
+        let rail = rail_seed_core(selected_core, self.workspace_cores.as_deref());
+        if rail == self.rail_expanded_core && rail == self.rail_seen_core {
             return;
         }
+        self.rail_seen_core = rail;
+        self.rail_expanded_core = rail;
         self.tree_cache = None;
         self.last_tree_shape = None;
-        self.persist_session(cx);
         cx.notify();
+    }
+
+    /// Toggle one core's expansion from a tree click, over both expansion fields.
+    ///
+    /// Args:
+    ///     core: Core whose row was clicked.
+    pub(super) fn toggle_core_expanded(&mut self, core: CoreId) {
+        toggle_core_expansion(&mut self.expanded_cores, &mut self.rail_expanded_core, core);
     }
 
     // ── Selection ───────────────────────────────────────────────────────────

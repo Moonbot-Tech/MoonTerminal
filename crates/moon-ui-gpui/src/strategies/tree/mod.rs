@@ -48,13 +48,20 @@ fn constrain_folder_drag_to_tree(tree: Div) -> Div {
 /// A process snapshot can hold expansion for cores that left the Auto rail while the window was
 /// closed. Counting those leftover ids as "expanded" would make a visibly collapsed tree run the
 /// collapse branch on the first click.
+///
+/// The rail overlay counts as expanded too, or a freshly Auto-seeded window renders with a core
+/// already open while the caret still points "expand" — the first click would then run the EXPAND
+/// branch over an already-open tree instead of collapsing it.
 fn visible_tree_collapsed(
     expanded_cores: &HashSet<CoreId>,
     expanded_folders: &HashSet<(CoreId, String)>,
+    rail: Option<CoreId>,
     cores: &[(CoreId, String)],
 ) -> bool {
     cores.iter().all(|(core, _)| {
-        !expanded_cores.contains(core) && expanded_folders.iter().all(|(c, _)| c != core)
+        !expanded_cores.contains(core)
+            && rail != Some(*core)
+            && expanded_folders.iter().all(|(c, _)| c != core)
     })
 }
 
@@ -147,7 +154,12 @@ impl StrategiesView {
                 }),
         };
 
-        let collapsed = visible_tree_collapsed(&self.expanded_cores, &self.expanded_folders, cores);
+        let collapsed = visible_tree_collapsed(
+            &self.expanded_cores,
+            &self.expanded_folders,
+            self.rail_expanded_core,
+            cores,
+        );
         let settings =
             self.settings_popover(super::settings::settings_trigger(self.settings_open), p, cx);
 
@@ -227,6 +239,7 @@ impl StrategiesView {
                                             let coll = visible_tree_collapsed(
                                                 &this.expanded_cores,
                                                 &this.expanded_folders,
+                                                this.rail_expanded_core,
                                                 &cores,
                                             );
                                             this.expand_collapse_toggle(&cores, store, coll);

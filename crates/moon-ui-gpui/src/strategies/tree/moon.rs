@@ -373,7 +373,12 @@ fn build_core_root(
     let cd = store.core(core)?;
     // Nothing below a collapsed core can render, so it needs only the totals in its own caption.
     // Search and reveal paths force their required core/folder chain open before this build runs.
-    let core_open = searching || view.expanded_cores.contains(&core);
+    // Direct field reads, not `state::core_is_open(...)`: the contract scanner
+    // (`the_tree_cache_signature_covers_every_input_the_build_reads`, in
+    // `tests/theme_contract/strategies.rs`) walks this function for `view.<field>` reads and
+    // requires each one hashed in the tree signature, and an accessor would hide the second field.
+    let core_open =
+        searching || view.expanded_cores.contains(&core) || view.rail_expanded_core == Some(core);
 
     // One pass feeds both the visible set and every folder count.
     let mut counts = if core_open {
@@ -1196,7 +1201,7 @@ fn core_folder_row(
                 window.focus(&this.focus, cx);
                 match &target {
                     ToggleTarget::Core(c) => {
-                        toggle(&mut this.expanded_cores, *c);
+                        this.toggle_core_expanded(*c);
                         this.selected_folder = Some((*c, String::new()));
                     }
                     ToggleTarget::Folder(c, path) => {

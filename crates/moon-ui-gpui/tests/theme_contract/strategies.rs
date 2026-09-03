@@ -399,9 +399,14 @@ fn tree_state_events_reassert_the_windows_own_expansion() {
 fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
     let src = read_src("strategies/tree/moon.rs");
     let body = braced_body(&src, "fn build_core_root(");
+    // Whitespace-stripped so a `core_open` binding rustfmt wraps across lines is found the same
+    // way as one written inline.
+    let packed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
-        body.contains("searching || view.expanded_cores.contains(&core)"),
-        "an open core must include the search-forced case"
+        packed.contains(
+            "searching||view.expanded_cores.contains(&core)||view.rail_expanded_core==Some(core)"
+        ),
+        "an open core must cover the search-forced case, hand expansion, AND the rail overlay"
     );
     let call_at = body
         .find("build_core_subtree(")
@@ -1128,16 +1133,13 @@ fn a_core_folder_row_marker_stays_passive() {
     );
 }
 
-/// `strategies/state.rs::StrategiesView::new` restores the snapshot then additively re-seeds
-/// the Auto-selected core into that set.
+/// `strategies/state.rs::StrategiesView::new` restores the persisted set UNCHANGED and seeds the
+/// Auto rail's selection into a separate overlay field, never into `expanded_cores` itself.
 ///
-/// Mutation: restore `Some(s) => s.expanded_cores.clone()` without the following
-/// `seed_selected_core_into(...)` call, so a stored empty set is kept. After collapsing the
-/// selected Auto core, close and reopen Strategies; the core stays collapsed and the user
-/// re-finds the server by hand.
-///
-/// The construction-local `&mut expanded_cores` argument is what distinguishes restore-path
-/// seeding from the live observer (`&mut this.expanded_cores`) inside the same function.
+/// Mutation: replace the two-field initialisation with an insert of the seed into the restored
+/// set (the pre-`48bd2266` shape: `expanded_cores.extend(rail_seed)` /
+/// `expanded_cores.insert(core)`). Every rail-visited core would then stay unfolded in Auto
+/// Overview for the whole process lifetime — the reported bug, in full.
 #[test]
 fn strategies_window_seeds_expansion_from_the_auto_workspace() {
     let ctor = code_only(&braced_body(
@@ -1147,13 +1149,19 @@ fn strategies_window_seeds_expansion_from_the_auto_workspace() {
     assert!(
         ctor.contains("Some(s) => s.expanded_cores.clone()")
             && ctor.contains("None => HashSet::new()")
-            && ctor.contains("seed_selected_core_into(")
-            && ctor.contains("&mut expanded_cores,"),
-        "construction must restore the snapshot then additively seed the Auto-selected core"
+            && ctor.contains("rail_seed_core(")
+            && ctor.contains("rail_expanded_core"),
+        "construction must restore the persisted set as-is and seed the rail overlay separately"
     );
     assert!(
         !ctor.contains("expanded_cores: HashSet::new()"),
-        "construction must not assign an empty expansion field, bypassing restore-and-seed"
+        "construction must not assign an empty expansion field, bypassing restore"
+    );
+    assert!(
+        !ctor.contains("&mut expanded_cores")
+            && !ctor.contains("expanded_cores.insert(")
+            && !ctor.contains("expanded_cores.extend("),
+        "the rail seed must never be written into the persisted expansion set"
     );
 }
 
@@ -1163,9 +1171,12 @@ fn strategies_window_seeds_expansion_from_the_auto_workspace() {
 /// snapshot into `WindowLayout`. Closing the tool window would then forget expansion, selection,
 /// and filters, or a full application restart would incorrectly retain them.
 ///
-/// A stored empty expansion is not a reason to skip Auto-rail re-seed: construction restores
-/// the snapshot, then `seed_selected_core_into` additively inserts the selected core so the
-/// user does not re-find the server by hand after collapsing it and reopening the window.
+/// Construction restores the persisted set as-is and seeds the Auto rail's selection into the
+/// separate `rail_expanded_core` overlay, never into `expanded_cores` itself; the live workspace
+/// observer moves only that overlay too. `capture` must mirror the same split: it snapshots
+/// `expanded_cores` alone, so a "fix" that captured the union of both fields would let a rail
+/// seed outlive the window that received it and reappear as if the user had expanded it by
+/// hand, in another scope or window — and no runtime test in the tree would notice.
 #[test]
 fn strategies_reopen_state_is_process_lifetime_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1203,8 +1214,7 @@ fn strategies_reopen_state_is_process_lifetime_only() {
         state.contains("let session = backend.read(cx).ui_session.strategies.clone();")
             && state.contains("Some(s) => s.expanded_cores.clone()")
             && state.contains("None => HashSet::new()")
-            && state.contains("seed_selected_core_into(")
-            && state.contains("&mut expanded_cores,")
+            && state.contains("rail_seed_core(")
             && state.contains("input.default_value(s.search.clone())")
             && state.contains("b.ui_session.strategies = Some(snapshot)")
             && state.contains("this.reconcile_ui_folders(this.backend.read(cx).session.store())")
@@ -1223,9 +1233,18 @@ fn strategies_reopen_state_is_process_lifetime_only() {
     );
     let observer = code_only(&braced_body(&state, "cx.observe(&workspace_revision,"));
     assert!(
-        observer.contains("seed_selected_core_into(")
-            && observer.contains("&mut this.expanded_cores,"),
-        "the live window's workspace observer must stay additive while the window is open"
+        observer.contains("this.rail_seen_core = rail") && !observer.contains("this.expanded_cores"),
+        "the live window's workspace observer must move only the rail overlay, never the persisted set"
+    );
+    let capture = code_only(&braced_body(&session, "pub(super) fn capture("));
+    assert!(
+        capture.contains("expanded_cores: view.expanded_cores.clone()") && !capture.contains("rail"),
+        "capture must snapshot the persisted set alone, never the rail overlay"
+    );
+    let session_struct = code_only(&braced_body(&session, "pub(crate) struct StrategiesSessionState"));
+    assert!(
+        !session_struct.contains("rail"),
+        "StrategiesSessionState must never carry a rail overlay field"
     );
     assert!(
         !ui_session.contains("Serialize")
