@@ -38,7 +38,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::venue_caps::KlineRoute;
+use super::venue_caps::{KlineRoute, TradeRoute};
+use crate::feed::types::Tick;
 use crate::market::candles::ChartCandle;
 
 /// Bounded lifetime of one HTTP request.
@@ -147,6 +148,100 @@ pub fn fetch_klines(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(rows)
+}
+
+/// Continuation token for one public-trade page.
+///
+/// FIVE variants, because the venues genuinely paginate five ways and abusing one venue's
+/// semantics for another silently truncates a window: Binance walks forward by aggregate-trade
+/// id; OKX and Bitget walk BACKWARD by trade id; Gate spot
+/// walks by 1-based `page`; Gate futures walks by row `offset`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TradeCursor {
+    /// Binance: next aggregate-trade id to ask for, walking forward.
+    FromId(u64),
+    /// Timestamp-bound `after` cursor. No current trade route emits it; OKX switches to
+    /// [`Self::LessThanId`] after its initial timestamp-bound request.
+    AfterMs(i64),
+    /// Bitget: next `idLessThan` bound, walking backward.
+    LessThanId(u64),
+    /// Gate spot: next 1-based page number.
+    Page(u32),
+    /// Gate futures: next row offset.
+    Offset(u32),
+}
+
+/// One fetched page of public trades.
+#[derive(Clone, Debug)]
+pub struct TradePage {
+    /// Rows in the vendor's OWN order — never sorted here. The global ascending sort and window
+    /// clip belong to [`super::worker::serve_ticks`], after every page of a stage is in.
+    pub ticks: Vec<Tick>,
+    /// Continuation, Some ONLY when this page was FULL and the window is not yet covered.
+    ///
+    /// A full Gate futures page is NEVER accepted as complete: that endpoint truncates silently
+    /// at `limit` with no error, so a full page means "ask again", never "that was all".
+    pub next: Option<TradeCursor>,
+}
+
+/// Fetch one page of public trades.
+///
+/// The match below is deliberately exhaustive and carries no `_` arm, matching
+/// [`fetch_klines`]'s own discipline. No `category` parameter, deliberately: [`fetch_klines`]
+/// carries one only for [`KlineRoute::Bybit`], Bybit has NO trade route, and Bitget derives its
+/// required `productType` from the route itself. A parameter with no valid consumer is a
+/// boundary leak, not future-proofing.
+///
+/// Args:
+///     agent: Shared client.
+///     route: Which endpoint family to ask.
+///     market: Exchange-native market name, as the core reports it.
+///     from_ms: First millisecond of this request's slice, inclusive.
+///     to_ms: Last millisecond of this request's slice, inclusive.
+///     cursor: Continuation from a previous page of this same slice, or `None` for the first.
+///
+/// Returns:
+///     One page of ticks in the vendor's own order, or a classified failure.
+pub fn fetch_trades(
+    agent: &ureq::Agent,
+    route: TradeRoute,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+    cursor: Option<TradeCursor>,
+) -> Result<TradePage, FetchError> {
+    match route {
+        TradeRoute::BinanceSpotAggTrades
+        | TradeRoute::BinanceUsdMAggTrades
+        | TradeRoute::BinanceCoinMAggTrades => {
+            let value = binance::fetch_trades(
+                agent,
+                route,
+                market,
+                from_ms,
+                to_ms,
+                route.max_rows(),
+                cursor,
+            )?;
+            binance::parse_agg_trades(&value, to_ms, route.max_rows())
+        }
+        TradeRoute::GateSpotTrades => {
+            let value = gateio::fetch_trades(agent, route, market, from_ms, to_ms, cursor)?;
+            gateio::parse_spot_trades(&value, route.max_rows(), cursor)
+        }
+        TradeRoute::GateFuturesTrades => {
+            let value = gateio::fetch_trades(agent, route, market, from_ms, to_ms, cursor)?;
+            gateio::parse_futures_trades(&value, route.max_rows(), cursor)
+        }
+        TradeRoute::BitgetSpotFills | TradeRoute::BitgetMixFills => {
+            let value = bitget::fetch_trades(agent, route, market, from_ms, to_ms, cursor)?;
+            bitget::parse_fills(&value, route.max_rows(), from_ms)
+        }
+        TradeRoute::OkxHistoryTrades => {
+            let value = okx::fetch_trades(agent, route, market, to_ms, route.max_rows(), cursor)?;
+            okx::parse_history_trades(&value, route.max_rows(), from_ms)
+        }
+    }
 }
 
 /// Decode one response body and put it through that venue's classifier.

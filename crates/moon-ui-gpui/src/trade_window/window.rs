@@ -195,20 +195,30 @@ pub(crate) fn open_trade_window(
         // minute rows into that coarser bucket
         // (`moon-core/src/market/trade_replay/mod.rs`: the caller's `tf_ms` wins, and a wider one
         // resamples), while the caption underneath claims minutes. That is the whole of the user's
-        // "нужны минутные свечи, а не 5минутные".
+        // "I need one-minute candles, not five-minute candles."
         //
         // Only `tf_min` is forced. Starting from the EFFECTIVE settings rather than
         // `CandleViewCfg::default()` keeps the user's candle mode, outline width, in-zone colours
         // and MoonShot corridor exactly as they are on their own charts.
+        // Captured immediately BEFORE the candle-stage force below, so `TradeWindowView::apply`
+        // can hand it back to `restore_candle_mode` once a tick outcome lands and that force's
+        // reason is gone. A window that never gets past the candle stage never reaches the
+        // restore path either, and keeps the forced mode for its whole life by construction —
+        // which is exactly right, since a candle replay genuinely has no ticks to fall back to.
+        let mut user_candle_mode = 0;
         panel.update(cx, |panel, pcx| {
             let mut view = panel.effective_candle_view(pcx);
             view.tf_min = 1;
-            // The SECOND thing the effective settings can carry that makes this window useless:
-            // candle mode Off is a pure TICK chart, and a candle replay has no ticks. Inherited
-            // unchanged it would draw an empty pane under a caption naming candles — the same
-            // dishonesty the timeframe pin exists to remove, one step further along. A user who
-            // turned candles off on their live chart still asked to SEE this trade, so the window
-            // falls back to the shipped drawing mode rather than to nothing.
+            user_candle_mode = view.mode;
+            // THE INITIAL CANDLE-MODE FORCE. It holds until a tick outcome arrives: a fresh
+            // request yields candles before its optional tick upgrade, while a settled tick-cache
+            // hit can yield ticks as its FIRST outcome. Candle mode Off is a pure TICK chart, and
+            // a candle replay has no ticks. Inherited unchanged it would draw an empty pane under
+            // a caption naming candles — the same dishonesty the timeframe pin exists to remove,
+            // one step further along. A user who turned candles off on their live chart still
+            // asked to SEE this trade, so the window falls back to the shipped drawing mode rather
+            // than to nothing, until `apply` restores the real choice once a tick series is on
+            // offer.
             if view.mode == moon_core::market::candles::CANDLE_MODE_OFF {
                 view.mode = moon_core::market::CandleViewCfg::default().mode;
             }
@@ -238,6 +248,8 @@ pub(crate) fn open_trade_window(
                 market: market.clone(),
                 stamps: stamps.clone(),
                 state: TradeWindowState::Loading,
+                framed_this_sequence: false,
+                user_candle_mode,
                 meta,
                 strategy_pending: !named,
                 // Nothing searched yet; the first notification does the walk.

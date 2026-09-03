@@ -17,9 +17,10 @@
 
 use serde_json::Value;
 
-use super::{FetchError, cell_f32, cell_i64};
+use super::{FetchError, TradeCursor, TradePage, cell_f32, cell_i64};
+use crate::feed::types::{Side, Tick};
 use crate::market::candles::ChartCandle;
-use crate::market::trade_replay::venue_caps::KlineRoute;
+use crate::market::trade_replay::venue_caps::{KlineRoute, TradeRoute};
 
 /// Fetch one page and return the decoded body.
 ///
@@ -144,6 +145,168 @@ fn parse_row(row: &Value) -> Option<ChartCandle> {
         close: cell_f32(cells.get(4)?)?,
         volume: cell_f32(cells.get(5)?).unwrap_or(0.0),
         quote_volume: cell_f32(cells.get(6)?).unwrap_or(0.0),
+    })
+}
+
+/// Fetch one page of public fills and return the decoded body.
+///
+/// Args:
+///     agent: Shared client.
+///     route: [`TradeRoute::BitgetSpotFills`] or [`TradeRoute::BitgetMixFills`].
+///     market: Exchange-native market name, e.g. `BTCUSDT`.
+///     from_ms: First millisecond of this slice, inclusive.
+///     to_ms: Last millisecond of this slice, inclusive; the vendor caps one request's span at
+///         7 days, see [`super::super::venue_caps::TradeRoute::max_query_ms`].
+///     cursor: Continuation from a previous page, or `None` for the first page.
+///
+/// Returns:
+///     The decoded response, or a classified failure.
+pub(super) fn fetch_trades(
+    agent: &ureq::Agent,
+    route: TradeRoute,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+    cursor: Option<TradeCursor>,
+) -> Result<Value, FetchError> {
+    let futures = matches!(route, TradeRoute::BitgetMixFills);
+    let mut request = agent
+        .get(route.url())
+        .query("symbol", market)
+        .query("startTime", from_ms.to_string())
+        .query("endTime", to_ms.to_string())
+        .query("limit", route.max_rows().to_string());
+    if futures {
+        request = request.query("productType", "USDT-FUTURES");
+    }
+    if let Some(TradeCursor::LessThanId(id)) = cursor {
+        request = request.query("idLessThan", id.to_string());
+    }
+    let response = request
+        .call()
+        .map_err(|error| FetchError::Transient(error.to_string()))?;
+    super::decode_and_classify(response, "bitget", classify_fills)
+}
+
+/// Classify a BitGet fills-history response by status and envelope `code`.
+///
+/// **Assumption, not settled by vendor docs read for this task**: `fills-history` shares its
+/// unknown-symbol codes (`40034` mix, `400172` spot) with `history-candles`. No vendor page for
+/// this specific endpoint documents its own unknown-symbol code the way the candle endpoint's
+/// pages do — see [`classify`] for the pair this borrows. If a later reader finds this endpoint
+/// answers a different code for an unknown symbol, that market falls through to `Transient`
+/// below rather than being misclassified as permanent, so the failure mode of a wrong guess here
+/// is a retry loop, not a silently wrong "this market does not exist".
+///
+/// Args:
+///     status: HTTP status.
+///     body: Decoded response.
+///
+/// Returns:
+///     `Ok(())` on success, or the classified failure.
+pub(super) fn classify_fills(status: u16, body: &Value) -> Result<(), FetchError> {
+    if !(200..300).contains(&status) {
+        return Err(FetchError::Transient(format!("bitget HTTP {status}")));
+    }
+    let code = body.get("code").and_then(Value::as_str).unwrap_or_default();
+    match code {
+        "00000" => Ok(()),
+        "40034" | "400172" => Err(FetchError::UnknownSymbol),
+        "" => Err(FetchError::Transient(format!(
+            "bitget HTTP {status}: empty code"
+        ))),
+        other => {
+            let message = body.get("msg").and_then(Value::as_str).unwrap_or("unknown");
+            Err(FetchError::Transient(format!("bitget {other}: {message}")))
+        }
+    }
+}
+
+/// Parse a BitGet fills envelope into a page of ticks.
+///
+/// Rows arrive DESCENDING (newest first, per the vendor's own doc), so the oldest row in this
+/// page is the LAST one — that is what both the next cursor and the window-covered check key on.
+///
+/// Args:
+///     body: Decoded response.
+///     max_rows: Row cap that was sent, so a FULL page can be told from a short, final one.
+///     from_ms: Left edge of the slice, so completeness is judged from the oldest row's own
+///         timestamp rather than assumed from the row count alone.
+///
+/// Returns:
+///     The page, or a failure when the envelope is missing.
+pub(super) fn parse_fills(
+    body: &Value,
+    max_rows: usize,
+    from_ms: i64,
+) -> Result<TradePage, FetchError> {
+    let rows = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| FetchError::Transient("bitget: missing data".to_string()))?;
+    let ticks: Vec<Tick> = rows.iter().filter_map(parse_fill_row).collect();
+    // A page holding a malformed row alongside valid ones can still finish pagination with a
+    // non-empty tick vector that is silently missing rows — a hole must send the window to
+    // candles instead of drawing a partial tape as if it were whole.
+    if ticks.len() < rows.len() {
+        return Err(FetchError::Transient(format!(
+            "bitget: page held {} unparseable row(s) of {} (parsed {})",
+            rows.len() - ticks.len(),
+            rows.len(),
+            ticks.len()
+        )));
+    }
+    let oldest_id = rows
+        .last()
+        .and_then(|r| r.get("tradeId"))
+        .and_then(cell_i64)
+        .map(|v| v as u64);
+    let oldest_time_ms = rows.last().and_then(|r| r.get("ts")).and_then(cell_i64);
+    let full = rows.len() >= max_rows;
+    let covered = oldest_time_ms.is_some_and(|t| t <= from_ms);
+    let next = match (full, covered, oldest_id) {
+        (true, false, Some(id)) => Some(TradeCursor::LessThanId(id)),
+        // Full page, window not covered, but the oldest row's own `tradeId` did not parse: the
+        // cursor to continue from is unknowable. Treating this as completion would silently ship
+        // a truncated window as a whole one.
+        (true, false, None) => {
+            return Err(FetchError::Transient(
+                "bitget: full page, window not covered, but the oldest row's tradeId did not parse"
+                    .to_string(),
+            ));
+        }
+        _ => None,
+    };
+    Ok(TradePage { ticks, next })
+}
+
+/// Parse one BitGet fills row.
+///
+/// The vendor's own `side` casing contradicts itself between its field table and its worked
+/// example, so it is read case-insensitively here rather than trusted literally.
+///
+/// Args:
+///     row: One element of `data`.
+///
+/// Returns:
+///     The tick, or `None` when the row is malformed.
+fn parse_fill_row(row: &Value) -> Option<Tick> {
+    let price = cell_f32(row.get("price")?)?;
+    let qty = cell_f32(row.get("size")?)?;
+    let time_ms = cell_i64(row.get("ts")?)? as f64;
+    let side = match row
+        .get("side")
+        .and_then(Value::as_str)?
+        .eq_ignore_ascii_case("sell")
+    {
+        true => Side::Sell,
+        false => Side::Buy,
+    };
+    Some(Tick {
+        time_ms,
+        price,
+        qty,
+        side,
     })
 }
 

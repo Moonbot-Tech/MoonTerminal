@@ -291,6 +291,48 @@ pub fn pages(window: ReplayWindow, bar_ms: i64, max_rows: usize) -> Vec<(i64, i6
     out
 }
 
+/// Split one window into requests no larger than a trade route's documented query span.
+///
+/// The frozen shape [`super::worker`] and every `rest::<venue>::fetch_trades` build against:
+/// `None` answers one slice covering the whole window; `Some(span)` tiles the window into
+/// requests of at most `span` ms with no gap and no overlap, the same tiling discipline [`pages`]
+/// uses for the kline pager, just keyed on a request's time SPAN rather than its row count —
+/// several trade routes ([`super::venue_caps::TradeRoute::max_query_ms`]) cap a request's window
+/// rather than its row count.
+///
+/// A non-positive span returns no slices: unlike [`pages`], which derives its step from a
+/// `bar_ms * max_rows` product that route constants keep positive, a caller here supplies the
+/// span directly. [`super::venue_caps::TradeRoute::max_query_ms`] represents an unbounded route
+/// as `None`, so every `Some` value remains a finite vendor-imposed request window.
+///
+/// Args:
+///     window: The window to cover.
+///     max_span_ms: Widest span one request may cover, or `None` when the route documents no
+///         cap.
+///
+/// Returns:
+///     Inclusive `(from_ms, to_ms)` pairs in ascending order; empty when `max_span_ms` is
+///     `Some(n)` with `n <= 0`, which no route reports.
+pub fn time_slices(window: ReplayWindow, max_span_ms: Option<i64>) -> Vec<(i64, i64)> {
+    let Some(span) = max_span_ms else {
+        return vec![(window.from_ms, window.to_ms)];
+    };
+    if span <= 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut cursor = window.from_ms;
+    while cursor <= window.to_ms {
+        let end = cursor.saturating_add(span - 1).min(window.to_ms);
+        out.push((cursor, end));
+        if end == window.to_ms {
+            break;
+        }
+        cursor = end + 1;
+    }
+    out
+}
+
 /// Whether cached rows already cover a window densely enough to skip the network.
 ///
 /// COVERAGE, not presence, is the question. A partial prefix is exactly what a previously
@@ -370,6 +412,30 @@ pub fn replay_revision(identity: u64, tf_ms: i64, from_bucket: i64, to_bucket: i
     hash.max(1)
 }
 
+/// Per-source salt for [`replay_revision`], so a tick series and its sibling candle series of the
+/// same identity, timeframe and window never share a revision.
+///
+/// The bug this exists to prevent: [`TradeReplaySeries::read_into`] derives `revision` from
+/// `(identity, tf_ms, from_bucket, to_bucket)`, and a tick upgrade shares every one of those four
+/// with the kline series it replaces — same `identity` ([`super::worker`] never changes it
+/// between the two outcomes), same window, same `tf_ms == 60_000`. Unsalted, the upgrade's
+/// revision would equal the one the pane already shipped, `read_into`'s `candles_changed` would
+/// stay `false`, and the pane would keep drawing exchange klines forever under the new tick
+/// points.
+///
+/// Args:
+///     source: Which kind of series is being read.
+///
+/// Returns:
+///     `0` for [`TradeReplaySource::Klines1m`], so every existing revision stays bit-identical to
+///     today's; a fixed non-zero constant for [`TradeReplaySource::Ticks`].
+pub fn tick_identity_salt(source: TradeReplaySource) -> u64 {
+    match source {
+        TradeReplaySource::Klines1m => 0,
+        TradeReplaySource::Ticks => 0x9E37_79B9_7F4A_7C15,
+    }
+}
+
 /// One trade's frozen market history, ready to be drawn.
 #[derive(Clone, Debug)]
 pub struct TradeReplaySeries {
@@ -381,9 +447,14 @@ pub struct TradeReplaySeries {
     pub window: ReplayWindow,
     /// Timeframe of [`Self::candles`] in milliseconds; one minute for every current route.
     pub tf_ms: i64,
-    /// Bars in ascending open time; empty when [`Self::source`] is [`TradeReplaySource::Ticks`].
+    /// Bars in ascending open time. A [`TradeReplaySource::Klines1m`] series carries these alone;
+    /// a [`TradeReplaySource::Ticks`] series carries these TOO — its own aggregated candles,
+    /// computed from [`Self::ticks`] via [`crate::market::candles::aggregate_trades`] — alongside
+    /// the points, never instead of them.
     pub candles: Vec<ChartCandle>,
-    /// Trade points in ascending time; empty when the source is bars.
+    /// Trade points in ascending time. Empty when [`Self::source`] is
+    /// [`TradeReplaySource::Klines1m`]; carried alongside [`Self::candles`] for
+    /// [`TradeReplaySource::Ticks`], never in place of them.
     pub ticks: Vec<Tick>,
     /// Stable discriminator feeding [`replay_revision`], so two open windows never collide.
     pub identity: u64,
@@ -459,8 +530,13 @@ impl TradeReplaySeries {
         let to_ms = ((epoch_ms + f64::from(to_rel_ms.max(from_rel_ms))).round() as i64)
             .max(from_ms.saturating_add(1));
         let tf_ms = candle_params.map_or(self.tf_ms, |p| p.tf_ms).max(1);
+        // Salted by source: a tick series and its sibling candle series otherwise share
+        // `(identity, tf_ms, from_bucket, to_bucket)` bit-for-bit (§4 of the tick-replay plan),
+        // so the tick upgrade's revision would equal the one the pane already shipped and
+        // `candles_changed` below would stay false forever. See `tick_identity_salt`.
+        let salted_identity = self.identity ^ tick_identity_salt(self.source);
         let revision = replay_revision(
-            self.identity,
+            salted_identity,
             tf_ms,
             from_ms.div_euclid(tf_ms),
             to_ms.div_euclid(tf_ms),
@@ -469,7 +545,8 @@ impl TradeReplaySeries {
         read.candles_revision = revision;
 
         // Points first: they are re-emitted whole on every read, because a frozen series has no
-        // live edge to drain incrementally and the whole window is a few hundred rows at most.
+        // live edge to drain incrementally and the whole window is bounded — a few hundred rows
+        // for a candle-only series, or up to `worker::TICK_BUDGET` for a tick one.
         out.ticks.extend(
             self.ticks
                 .iter()

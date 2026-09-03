@@ -64,6 +64,40 @@
 //! distinguish an unknown coin from an outage**: both answer HTTP 500 with a body of literally
 //! `null`, so its classifier calls every failure transient, which is the direction that caches
 //! nothing.
+//!
+//! # The trade-route directory, in one table
+//!
+//! [`TradeRoute`] is the same idea one level down: which venues can answer a public "trades
+//! between T1 and T2" question, for the trade-detail window's tick replay. Every row was read off
+//! the vendor's own documentation, same discipline as the kline table above. Bybit, Hyperliquid
+//! and HTX document no such endpoint reachable from this build, so [`trade_route`] answers
+//! [`None`] for all three — the same honest degradation [`kline_route`] already gives HTX.
+//!
+//! | route | endpoint | gate key | rows/page | max query window | retention | cursor | order | unknown-symbol | doc |
+//! |---|---|---|---|---|---|---|---|---|---|
+//! | `BinanceSpotAggTrades` | `/api/v3/aggTrades` | `data-api.binance.vision` | 1000 | none documented | none documented | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints |
+//! | `BinanceUsdMAggTrades` | `/fapi/v1/aggTrades` | `fapi.binance.com` | 1000 | **< 1 h** | **48 h** | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/.../derivatives/usds-margined-futures/market-data/rest-api/Compressed-Aggregate-Trades-List |
+//! | `BinanceCoinMAggTrades` | `/dapi/v1/aggTrades` | `dapi.binance.com` | 1000 | **< 1 h** | **48 h** | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/.../derivatives/coin-margined-futures/market-data/rest-api/Compressed-Aggregate-Trades-List |
+//! | `GateSpotTrades` | `/api/v4/spot/trades` | `api.gateio.ws` | 1000 | none (page cap `limit*(page-1) <= 100000`) | ~30 d | `from`/`to` in **SECONDS** + `page` | undocumented | label `INVALID_CURRENCY_PAIR` | gateio/gateapi-python docs/SpotApi.md |
+//! | `GateFuturesTrades` | `/api/v4/futures/usdt/trades` | `api.gateio.ws` | **undocumented, default 100** | none | none documented | `from`/`to` in **SECONDS** + `offset` | undocumented | label `CONTRACT_NOT_FOUND` | gateio/gateapi-python docs/FuturesApi.md |
+//! | `BitgetSpotFills` | `/api/v2/spot/market/fills-history` | `api.bitget.com` | 1000 | **7 d** | **90 d** | `idLessThan` | **desc** | envelope `code != "00000"` | bitget.com/api-doc/classic/spot/market/Get-Market-Trades |
+//! | `BitgetMixFills` | `/api/v2/mix/market/fills-history` | `api.bitget.com` | 1000 | **7 d** | **90 d** | `idLessThan` (+`productType` required) | **desc** | envelope `code != "00000"` | bitget.com/api-doc/classic/contract/market/Get-Fills-History |
+//! | `OkxHistoryTrades` | `/api/v5/market/history-trades` | `www.okx.com` | **100** | none (no `startTime`/`endTime` at all) | **3 months** | `type=2&after=<ms>` for the FIRST page, `type=1&after=<tradeId>` for every later one | **desc** | HTTP 200 + `code 51001` | okx.com/docs-v5/en/#order-book-trading-market-data-get-trades-history |
+//!
+//! Two venue facts that are silently wrong when mistaken: **Binance futures (both arms) retain
+//! only 48 hours of aggTrades**, so the retention check must run before any request is spent; and
+//! **Gate's `from`/`to` are in SECONDS**, while every other timestamp in this module is
+//! milliseconds.
+//!
+//! **Three trade routes report a CONTRACT count where `Tick::qty` is documented as base-currency
+//! quantity**, and this is deliberate rather than an oversight: `OkxHistoryTrades`
+//! (SWAP instruments only — `sz` is base currency for SPOT), `BinanceCoinMAggTrades` (`q` on a
+//! dapi row, with no `baseQty` alternative), and `GateFuturesTrades` (`size`, whose base amount
+//! depends on the contract's `quanto_multiplier`). No code compensates for this: the chart's
+//! volume bars stay shape-correct because the drawn scale is window-relative and a per-instrument
+//! multiplier is a constant that cancels out of it, and a tick series' aggregated candles never
+//! reach the shared kline cache where an absolute figure could be read as genuine history. See
+//! each route's own parser for the fact restated in the vendor's own terms.
 
 use crate::venue::{Brand, MarketKind, Venue};
 
@@ -212,6 +246,178 @@ impl KlineRoute {
             // Documented cap on one `candleSnapshot` response.
             Self::Hyperliquid => 500,
         }
+    }
+}
+
+/// Route serving PUBLIC individual trades over a bounded past window.
+///
+/// A variant is a REQUEST SHAPE, exactly as [`KlineRoute`] is one level up: the host, the query
+/// grammar, the pagination cursor and the response envelope differ per family, and [`super::rest`]
+/// matches on this to build and parse the call. Coverage is narrower than [`KlineRoute`]'s on
+/// purpose — Bybit and Hyperliquid document no public trade-history endpoint this build can use,
+/// and HTX inherits [`kline_route`]'s own reason for answering [`None`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TradeRoute {
+    /// `GET https://data-api.binance.vision/api/v3/aggTrades`.
+    BinanceSpotAggTrades,
+    /// `GET https://fapi.binance.com/fapi/v1/aggTrades` — retains only 48h, `< 1h` per request.
+    BinanceUsdMAggTrades,
+    /// `GET https://dapi.binance.com/dapi/v1/aggTrades` — retains only 48h, `< 1h` per request.
+    BinanceCoinMAggTrades,
+    /// `GET https://api.gateio.ws/api/v4/spot/trades` — `from`/`to` in SECONDS.
+    GateSpotTrades,
+    /// `GET https://api.gateio.ws/api/v4/futures/usdt/trades` — `from`/`to` in SECONDS, truncates
+    /// silently at its page size with no error.
+    GateFuturesTrades,
+    /// `GET https://api.bitget.com/api/v2/spot/market/fills-history` — answers descending.
+    BitgetSpotFills,
+    /// `GET https://api.bitget.com/api/v2/mix/market/fills-history` — answers descending, needs
+    /// `productType`.
+    BitgetMixFills,
+    /// `GET https://www.okx.com/api/v5/market/history-trades` — spot and swap alike, no
+    /// `startTime`/`endTime` at all; paginates backward with `after` only.
+    OkxHistoryTrades,
+}
+
+impl TradeRoute {
+    /// Return the fully qualified request URL for this route.
+    ///
+    /// Returns:
+    ///     Absolute HTTPS endpoint, without any query string.
+    pub const fn url(self) -> &'static str {
+        match self {
+            Self::BinanceSpotAggTrades => "https://data-api.binance.vision/api/v3/aggTrades",
+            Self::BinanceUsdMAggTrades => "https://fapi.binance.com/fapi/v1/aggTrades",
+            Self::BinanceCoinMAggTrades => "https://dapi.binance.com/dapi/v1/aggTrades",
+            Self::GateSpotTrades => "https://api.gateio.ws/api/v4/spot/trades",
+            Self::GateFuturesTrades => "https://api.gateio.ws/api/v4/futures/usdt/trades",
+            Self::BitgetSpotFills => "https://api.bitget.com/api/v2/spot/market/fills-history",
+            Self::BitgetMixFills => "https://api.bitget.com/api/v2/mix/market/fills-history",
+            Self::OkxHistoryTrades => "https://www.okx.com/api/v5/market/history-trades",
+        }
+    }
+
+    /// Rate-limit key, and it is DERIVED, never re-typed: every arm returns the corresponding
+    /// [`KlineRoute`]'s own [`KlineRoute::host`].
+    ///
+    /// [`super::gate::ReplayGate`] keys pacing and refusal history by this literal, so a second
+    /// hand-typed copy of the same string is two production authorities that can drift on a later
+    /// endpoint change and split ONE real IP budget into two independent permits. Delegation makes
+    /// that drift unrepresentable rather than merely tested.
+    ///
+    /// Returns:
+    ///     Bare host name, without scheme or path.
+    pub const fn host(self) -> &'static str {
+        match self {
+            Self::BinanceSpotAggTrades => KlineRoute::BinanceSpot.host(),
+            Self::BinanceUsdMAggTrades => KlineRoute::BinanceUsdM.host(),
+            Self::BinanceCoinMAggTrades => KlineRoute::BinanceCoinM.host(),
+            Self::GateSpotTrades => KlineRoute::GateSpot.host(),
+            Self::GateFuturesTrades => KlineRoute::GateFutures.host(),
+            Self::BitgetSpotFills => KlineRoute::BitgetSpot.host(),
+            Self::BitgetMixFills => KlineRoute::BitgetFutures.host(),
+            Self::OkxHistoryTrades => KlineRoute::OkxSpot.host(),
+        }
+    }
+
+    /// Largest number of rows one request may ask for.
+    ///
+    /// Returns:
+    ///     Maximum rows per request.
+    pub const fn max_rows(self) -> usize {
+        match self {
+            Self::BinanceSpotAggTrades
+            | Self::BinanceUsdMAggTrades
+            | Self::BinanceCoinMAggTrades => 1_000,
+            Self::GateSpotTrades => 1_000,
+            // UNDOCUMENTED: this is the MEASURED default page size, not a vendor-stated cap.
+            Self::GateFuturesTrades => 100,
+            Self::BitgetSpotFills | Self::BitgetMixFills => 1_000,
+            Self::OkxHistoryTrades => 100,
+        }
+    }
+
+    /// Largest span one REQUEST may cover, or [`None`] when the vendor documents no cap.
+    ///
+    /// NEVER expressed as `i64::MAX`: [`None`] preserves the distinction between no documented
+    /// cap and a finite maximum span.
+    ///
+    /// Returns:
+    ///     Widest request window in milliseconds, or `None` when unbounded.
+    pub const fn max_query_ms(self) -> Option<i64> {
+        const HOUR_MS: i64 = 3_600_000;
+        const DAY_MS: i64 = 24 * HOUR_MS;
+        match self {
+            Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => Some(HOUR_MS),
+            Self::BitgetSpotFills | Self::BitgetMixFills => Some(7 * DAY_MS),
+            Self::BinanceSpotAggTrades
+            | Self::GateSpotTrades
+            | Self::GateFuturesTrades
+            | Self::OkxHistoryTrades => None,
+        }
+    }
+
+    /// How far back the vendor documents that this endpoint answers, or [`None`] when it
+    /// documents no limit.
+    ///
+    /// Evaluated by [`super::worker::inside_retention`] BEFORE any request is spent, so an
+    /// out-of-retention window costs zero.
+    ///
+    /// Returns:
+    ///     Retention window in milliseconds, or `None` when unbounded.
+    pub const fn retention_ms(self) -> Option<i64> {
+        const HOUR_MS: i64 = 3_600_000;
+        const DAY_MS: i64 = 24 * HOUR_MS;
+        match self {
+            Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => Some(48 * HOUR_MS),
+            Self::GateSpotTrades => Some(30 * DAY_MS),
+            Self::BitgetSpotFills | Self::BitgetMixFills => Some(90 * DAY_MS),
+            Self::OkxHistoryTrades => Some(90 * DAY_MS),
+            Self::BinanceSpotAggTrades | Self::GateFuturesTrades => None,
+        }
+    }
+}
+
+/// Return the public-trade route this venue is served by, if this build knows one.
+///
+/// EVERY arm spelled out; no `_` catch-all, same discipline as [`kline_route`].
+///
+/// `(Binance, Quarterly)` maps to [`TradeRoute::BinanceCoinMAggTrades`], NOT to `None`:
+/// `venue.rs:260-265` defines [`MarketKind::Quarterly`] as Binance COIN-M and `venue.rs:323-326`
+/// maps the reachable `QBinance` code to it, so a blanket "Quarterly -> None" rule would make the
+/// COIN-M route unreachable here exactly as it would in [`kline_route`].
+///
+/// [`None`] for Bybit, Hyperliquid, HTX — none document a public trade-history endpoint this
+/// build can reach — and for the Gate / BitGet / OKX `Quarterly` arms, which name no product
+/// those brands actually have, the same reason [`kline_route`] already gives them.
+///
+/// Args:
+///     venue: Venue resolved from the core's reported platform ordinal.
+///
+/// Returns:
+///     The route, or `None` when no verified public trade endpoint exists for it in this build.
+pub const fn trade_route(venue: Venue) -> Option<TradeRoute> {
+    match (venue.brand, venue.kind) {
+        (Brand::Binance, MarketKind::Spot) => Some(TradeRoute::BinanceSpotAggTrades),
+        (Brand::Binance, MarketKind::Futures) => Some(TradeRoute::BinanceUsdMAggTrades),
+        (Brand::Binance, MarketKind::Quarterly) => Some(TradeRoute::BinanceCoinMAggTrades),
+        (Brand::Gate, MarketKind::Spot) => Some(TradeRoute::GateSpotTrades),
+        (Brand::Gate, MarketKind::Futures) => Some(TradeRoute::GateFuturesTrades),
+        (Brand::BitGet, MarketKind::Spot) => Some(TradeRoute::BitgetSpotFills),
+        (Brand::BitGet, MarketKind::Futures) => Some(TradeRoute::BitgetMixFills),
+        (Brand::Okx, MarketKind::Spot) | (Brand::Okx, MarketKind::Futures) => {
+            Some(TradeRoute::OkxHistoryTrades)
+        }
+        // Neither venue documents a public trade-history endpoint reachable from this build.
+        (Brand::Bybit, _) => None,
+        (Brand::Hyperliquid, _) => None,
+        // HTX has no trade route either, for the same reason `kline_route` gives it none.
+        (Brand::Htx, _) => None,
+        // `venue` yields no quarterly market for these three brands today; spelled out rather
+        // than folded into a catch-all for the same reason `kline_route` spells them out.
+        (Brand::Gate, MarketKind::Quarterly)
+        | (Brand::BitGet, MarketKind::Quarterly)
+        | (Brand::Okx, MarketKind::Quarterly) => None,
     }
 }
 

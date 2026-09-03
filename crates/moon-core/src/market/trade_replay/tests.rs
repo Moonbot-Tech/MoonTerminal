@@ -348,3 +348,87 @@ fn replay_window_keeps_trade_and_floors_when_trimming_the_budget() {
         "replay_window discarding floors above MAX_SPAN_MS would hide that the request exceeds its budget"
     );
 }
+
+/// `market/trade_replay/mod.rs:TradeReplaySeries::read_into` dropping the source identity salt,
+/// or salting `Klines1m`, makes a tick upgrade leave exchange candles on screen or makes every
+/// existing replay look changed to the chart.
+#[test]
+fn tick_and_kline_replays_keep_distinct_revisions_without_changing_kline_revision() {
+    let kline = bars_only_series();
+    let mut ticks = kline.clone();
+    ticks.source = TradeReplaySource::Ticks;
+    ticks.ticks = vec![crate::feed::types::Tick {
+        time_ms: MINUTE_MS as f64,
+        price: 101.0,
+        qty: 2.0,
+        side: crate::feed::types::Side::Buy,
+    }];
+
+    let mut kline_out = ChartHistoryBuffers::default();
+    let kline_read = kline.read_into(
+        0.0,
+        0.0,
+        (2 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut kline_out,
+    );
+    let mut tick_out = ChartHistoryBuffers::default();
+    let tick_read = ticks.read_into(
+        0.0,
+        0.0,
+        (2 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut tick_out,
+    );
+
+    let unchanged_kline_revision = replay_revision(kline.identity, MINUTE_MS, 0, 2);
+    assert_eq!(
+        kline_read.revision, unchanged_kline_revision,
+        "Klines1m keeps the established replay revision for the same identity and window"
+    );
+    assert_ne!(
+        tick_read.revision, kline_read.revision,
+        "a tick upgrade must force its aggregated candles to replace already shipped klines"
+    );
+}
+
+/// `market/trade_replay/mod.rs:time_slices` representing an unlimited query span as a saturating
+/// integer can make pagination step backwards forever, hanging the sole replay worker and every
+/// later trade-detail window.
+#[test]
+fn time_slices_keeps_unbounded_windows_whole_and_bounded_windows_gap_free() {
+    let window = ReplayWindow {
+        from_ms: 1_000,
+        to_ms: 7_200_999,
+        over_budget: false,
+    };
+
+    assert_eq!(
+        time_slices(window, None),
+        vec![(window.from_ms, window.to_ms)],
+        "an unlimited route issues one request for precisely its requested window"
+    );
+
+    let span_ms = 3_600_000;
+    let slices = time_slices(window, Some(span_ms));
+    assert_eq!(
+        slices.first().copied(),
+        Some((window.from_ms, window.from_ms + span_ms - 1)),
+        "the first bounded request starts at the requested left edge and consumes one legal span"
+    );
+    assert_eq!(
+        slices.last().copied().map(|(_, end)| end),
+        Some(window.to_ms),
+        "the final bounded request reaches the requested right edge"
+    );
+    assert!(
+        slices
+            .iter()
+            .all(|(start, end)| end >= start && end - start < span_ms),
+        "each slice stays strictly within the documented exclusive maximum span"
+    );
+    assert!(
+        slices.windows(2).all(|pair| pair[0].1 + 1 == pair[1].0),
+        "adjacent requests neither leave a market-data gap nor re-fetch a boundary millisecond"
+    );
+}
