@@ -416,12 +416,6 @@ impl AnalyticsView {
     /// Row of KPI tiles with deltas against the previous period.
     fn kpi_row(&self, d: &Summary, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (cur, prev) = (&d.cur, &d.prev);
-        // A missing or zero comparison value has no meaningful percentage
-        // delta, so the KPI tile renders an em dash.
-        let delta = |c: f64, pr: Option<f64>| -> Option<f64> {
-            let pr = pr?;
-            (pr.abs() > f64::EPSILON).then(|| (c - pr) / pr.abs() * 100.0)
-        };
         let profit_el = colored_value(p, cur.profit, format!("{}", fmt_signed(cur.profit)));
         let dd_el = div()
             .text_color(moon(p.orange))
@@ -444,48 +438,48 @@ impl AnalyticsView {
                     unit = crate::analytics::pnl_unit_label()
                 ),
                 profit_el,
-                delta(cur.profit, prev.as_ref().map(|v| v.profit)),
-                false,
+                pct_delta(cur.profit, prev.as_ref().map(|v| v.profit)),
+                DeltaGood::Up,
             ))
             .child(kpi(
                 p,
                 cx,
                 t!("analytics.kpi.trades"),
                 plain_value(p, cur.n.to_string()),
-                delta(cur.n as f64, prev.as_ref().map(|v| v.n as f64)),
-                false,
+                pct_delta(cur.n as f64, prev.as_ref().map(|v| v.n as f64)),
+                DeltaGood::Up,
             ))
             .child(kpi(
                 p,
                 cx,
                 t!("analytics.kpi.winrate"),
                 plain_value(p, format!("{:.1}%", cur.winrate())),
-                delta(cur.winrate(), prev.as_ref().map(|v| v.winrate())),
-                false,
+                pct_delta(cur.winrate(), prev.as_ref().map(|v| v.winrate())),
+                DeltaGood::Up,
             ))
             .child(kpi(
                 p,
                 cx,
                 t!("analytics.kpi.pf"),
                 plain_value(p, format!("{:.2}", cur.pf)),
-                delta(cur.pf, prev.as_ref().map(|v| v.pf)),
-                false,
+                pct_delta(cur.pf, prev.as_ref().map(|v| v.pf)),
+                DeltaGood::Up,
             ))
             .child(kpi(
                 p,
                 cx,
                 t!("analytics.kpi.maxdd"),
                 dd_el,
-                delta(cur.max_dd, prev.as_ref().map(|v| v.max_dd)),
-                true,
+                pct_delta(cur.max_dd, prev.as_ref().map(|v| v.max_dd)),
+                DeltaGood::Down,
             ))
             .child(kpi(
                 p,
                 cx,
                 t!("analytics.kpi.avg"),
                 avg_el,
-                delta(cur.avg, prev.as_ref().map(|v| v.avg)),
-                false,
+                pct_delta(cur.avg, prev.as_ref().map(|v| v.avg)),
+                DeltaGood::Up,
             ))
             .child(kpi(
                 p,
@@ -495,8 +489,8 @@ impl AnalyticsView {
                     p,
                     format!("{:.0} {}", cur.avg_dur_min, t!("analytics.minutes")),
                 ),
-                delta(cur.avg_dur_min, prev.as_ref().map(|v| v.avg_dur_min)),
-                true,
+                pct_delta(cur.avg_dur_min, prev.as_ref().map(|v| v.avg_dur_min)),
+                DeltaGood::Neither,
             ))
     }
 }
@@ -515,41 +509,128 @@ fn colored_value(p: MoonPalette, v: f64, text: String) -> AnyElement {
         .into_any_element()
 }
 
+/// Which direction of change is GOOD for a metric, and therefore which colour its delta takes.
+///
+/// Two of the seven tiles are not "up is good", and each is a different case. Max Drawdown is
+/// stored as a MAGNITUDE — `Summary::max_dd` is `max(peak - cum)` and never negative — so ▲ means
+/// a DEEPER drawdown and is the bad direction, even though the value printed beside it carries a
+/// leading minus. Average duration has no good direction at all: a longer hold is neither a win
+/// nor a loss, so its delta is toned down rather than claiming one.
+///
+/// That neutral tone is `text_soft`, not `text_muted`, and the difference is not cosmetic:
+/// `text_muted` on `panel` measures 3.50:1 on the Terminal palette and 3.70:1 on the Light one,
+/// under the 4.5:1 floor for normal text at caption size. It is the right token for the em dash
+/// and for the "vs previous period" suffix — chrome, and an ABSENCE of a figure — but the neutral
+/// delta is a FIGURE the user reads. `text_soft` clears the floor in both themes (5.09:1 and
+/// 6.96:1) and is already this tile's own label colour, so nothing new enters the palette.
+enum DeltaGood {
+    /// Growth is good: profit, trades, winrate, profit factor, average trade.
+    Up,
+    /// Shrinkage is good: drawdown.
+    Down,
+    /// Neither direction is good: duration.
+    Neither,
+}
+
+impl DeltaGood {
+    /// Pick the palette token for a delta whose ROUNDED sign is `sign`.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     sign: Sign of the delta, classified from the rounded percentage.
+    ///
+    /// Returns:
+    ///     `0xRRGGBB` token for the delta text.
+    fn tone(self, p: MoonPalette, sign: fmt::DeltaSign) -> u32 {
+        match self {
+            Self::Up => sign.pick(p.green, p.orange, p.text_soft),
+            Self::Down => sign.pick(p.orange, p.green, p.text_soft),
+            Self::Neither => p.text_soft,
+        }
+    }
+}
+
+/// Percentage change of `cur` against the previous period's `prev`.
+///
+/// A missing or zero comparison value has no meaningful percentage delta, so the KPI tile renders
+/// an em dash. The denominator is `|prev|`, so the sign of the result is the sign of the CHANGE and
+/// never of the baseline.
+///
+/// Args:
+///     cur: Current-period value.
+///     prev: Previous-period value, when one was loaded.
+///
+/// Returns:
+///     Change in percent, or `None` when there is nothing to compare against.
+fn pct_delta(cur: f64, prev: Option<f64>) -> Option<f64> {
+    let prev = prev?;
+    (prev.abs() > f64::EPSILON).then(|| (cur - prev) / prev.abs() * 100.0)
+}
+
+/// Arrow text and palette token for one KPI delta — the whole colour rule of the row, in one place.
+///
+/// [`fmt::pct`] classifies the sign from the ROUNDED percentage, so the arrow and the colour can
+/// never disagree with the digits rendered beside them, and a delta that rounds away to zero — or
+/// was never comparable — returns `None` and leaves the tile its em dash. `pct` prints that sign
+/// into the text too, which the arrow already carries, hence the trim.
+///
+/// Routing the digits through `pct` also puts this row on the module's ONE rounding rule —
+/// [`fmt::round_to`]'s half-away-from-zero, the rule [`fmt::signed_amount`] documents at length —
+/// instead of `{:.1}`'s half-to-even. Every exactly representable midpoint therefore moves by a
+/// tenth of a point: `0.25%` renders `0.3%` where it used to render `0.2%`, and a delta of exactly
+/// `0.05%` now shows `0.1%` where it used to fall under the old `> 0.05` guard into the em dash.
+/// That is the point of the change, not a side effect of it — the alternative is a KPI row that
+/// rounds differently from every other figure on the window.
+///
+/// Args:
+///     delta: Percentage change against the previous period, when comparable.
+///     good: Which direction of change this metric calls good.
+///     p: Active MoonUI palette.
+///
+/// Returns:
+///     The `"▲ 168.7%"`-shaped text with its `0xRRGGBB` token, or `None` for the em dash.
+fn delta_parts(delta: Option<f64>, good: DeltaGood, p: MoonPalette) -> Option<(String, u32)> {
+    let (text, sign) = delta.and_then(|d| fmt::pct(d, 1))?;
+    if sign == fmt::DeltaSign::Zero {
+        return None;
+    }
+    Some((
+        format!(
+            "{} {}",
+            sign.pick("▲", "▼", ""),
+            text.trim_start_matches('-')
+        ),
+        good.tone(p, sign),
+    ))
+}
+
 /// KPI tile: label (caption, muted) + large value + a ▲▼ delta.
-/// `invert` — growth in this metric is bad (drawdown, duration).
+/// `good` — which direction of change this metric calls good; see [`DeltaGood`].
 fn kpi(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
     label: impl std::fmt::Display,
     value: AnyElement,
     delta: Option<f64>,
-    invert: bool,
+    good: DeltaGood,
 ) -> impl IntoElement {
-    let delta_el = match delta {
-        Some(d) if d.is_finite() && d.abs() > 0.05 => {
-            let good = if invert { d < 0.0 } else { d > 0.0 };
-            let col = if good { p.green } else { p.orange };
-            h_flex()
-                .gap(design::ui_px(cx, 4.0))
-                .items_center()
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(col))
-                        .child(format!(
-                            "{} {:.1}%",
-                            if d > 0.0 { "▲" } else { "▼" },
-                            d.abs()
-                        )),
-                )
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(t!("analytics.vs_prev").to_string()),
-                )
-                .into_any_element()
-        }
+    let delta_el = match delta_parts(delta, good, p) {
+        Some((text, col)) => h_flex()
+            .gap(design::ui_px(cx, 4.0))
+            .items_center()
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(col))
+                    .child(text),
+            )
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.vs_prev").to_string()),
+            )
+            .into_any_element(),
         _ => div()
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_muted))
