@@ -696,32 +696,44 @@ impl Render for DetectsPanel {
             shown += 1;
         }
 
-        // An empty feed states WHY it is empty instead of painting a blank pane under the gear.
-        // Same element the Log panel uses for `log.empty_filtered` (`panels/log/view.rs`): one
-        // centred, muted line filling the space the card grid would have taken. It replaces the
-        // scroll box rather than sitting inside it — an empty scroll container would still own the
-        // `flex_1` slot and leave the sentence pinned to the top-left corner.
+        // An empty feed states WHY it is empty instead of painting a blank pane under the gear. It
+        // replaces the scroll box rather than sitting inside it — an empty scroll container would
+        // still own the `flex_1` slot and leave the sentence pinned to the top-left corner.
+        //
+        // A COLUMN, not the Log panel's centred row, and the text carries its own definite width.
+        // These sentences are whole clauses where `log.empty_filtered` is two words, so at a ~290px
+        // side dock they have to WRAP — and a centred flex ROW cannot wrap them. GPUI measures text
+        // with `wrap_width = known_dimensions.width.or(Definite(available))` (moon-gpui
+        // `elements/text.rs:650`), so the min-content probe taffy runs to fix a row item's automatic
+        // minimum width comes back with the whole one-line sentence: the item refuses to shrink,
+        // overflows a narrow panel symmetrically under `justify_center`, and is clipped on BOTH
+        // sides. `.text_center()` cannot save it — it centres lines inside a box already wider than
+        // the panel. Giving the text `w_full` makes its width DEFINITE, which is the one input the
+        // measure above needs; `max_w` then keeps a wide, undocked panel from stretching one clause
+        // across the whole pane. Same shape as `analytics/render.rs`'s `quote_split_note`, and the
+        // row-axis mirror of the rule pinned in `tests/theme_contract/shell.rs`.
         let body: AnyElement = if shown == 0 {
-            div()
+            v_flex()
                 .flex_1()
                 .w_full()
                 .min_h(px(0.0))
-                .flex()
                 .items_center()
                 .justify_center()
-                // `items_center` + `justify_center` centre the text BOX, not the lines inside it.
-                // The Log panel needs no more than that because its empty copy is two words; these
-                // sentences wrap at any realistic dock width, and without this the centred empty
-                // state reads left-aligned exactly where it is most cramped.
-                .text_center()
-                .p_2()
+                .px_3()
+                .py_2()
                 .text_size(crate::design::t_body(cx))
                 .text_color(rgb(p.text_soft))
-                .child(empty_feed_text(
-                    &marker,
-                    retained_reachable,
-                    available_cores,
-                ))
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(crate::design::font_w_px(cx, 560.0))
+                        .text_center()
+                        .child(empty_feed_text(
+                            &marker,
+                            retained_reachable,
+                            available_cores,
+                        )),
+                )
                 .into_any_element()
         } else {
             div()
