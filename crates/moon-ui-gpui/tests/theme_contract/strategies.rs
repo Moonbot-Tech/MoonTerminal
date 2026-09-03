@@ -1264,15 +1264,20 @@ fn strategies_reopen_state_is_process_lifetime_only() {
     );
     let observer = code_only(&braced_body(&state, "cx.observe(&workspace_revision,"));
     assert!(
-        observer.contains("this.rail_seen_core = rail") && !observer.contains("this.expanded_cores"),
+        observer.contains("this.rail_seen_core = rail")
+            && !observer.contains("this.expanded_cores"),
         "the live window's workspace observer must move only the rail overlay, never the persisted set"
     );
     let capture = code_only(&braced_body(&session, "pub(super) fn capture("));
     assert!(
-        capture.contains("expanded_cores: view.expanded_cores.clone()") && !capture.contains("rail"),
+        capture.contains("expanded_cores: view.expanded_cores.clone()")
+            && !capture.contains("rail"),
         "capture must snapshot the persisted set alone, never the rail overlay"
     );
-    let session_struct = code_only(&braced_body(&session, "pub(crate) struct StrategiesSessionState"));
+    let session_struct = code_only(&braced_body(
+        &session,
+        "pub(crate) struct StrategiesSessionState",
+    ));
     assert!(
         !session_struct.contains("rail"),
         "StrategiesSessionState must never carry a rail overlay field"

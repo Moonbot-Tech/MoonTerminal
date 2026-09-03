@@ -119,7 +119,11 @@ fn collapsing_a_core_open_via_both_sources_clears_both() {
     let mut rail = Some(1);
     toggle_core_expansion(&mut expanded, &mut rail, 1);
     assert!(!core_is_open(&expanded, rail, 1));
-    assert_eq!(expanded, HashSet::new(), "the persisted membership must clear");
+    assert_eq!(
+        expanded,
+        HashSet::new(),
+        "the persisted membership must clear"
+    );
     assert_eq!(rail, None, "the overlay must clear in the same call");
 }
 
@@ -135,7 +139,11 @@ fn unrelated_revision_after_a_hand_collapse_does_not_reopen_it() {
     let mut rail_seen = rail;
     toggle_core_expansion(&mut expanded, &mut rail, 1);
     assert_eq!(rail, None, "collapsing A must clear the overlay");
-    assert_eq!(rail_seen, Some(1), "rail_seen_core is untouched by a hand collapse");
+    assert_eq!(
+        rail_seen,
+        Some(1),
+        "rail_seen_core is untouched by a hand collapse"
+    );
 
     let resolved = rail_seed_core(Some(1), Some(&workspace));
 
@@ -148,7 +156,11 @@ fn unrelated_revision_after_a_hand_collapse_does_not_reopen_it() {
         rail_seen = resolved;
         rail = resolved;
     }
-    assert_eq!(rail_seen, Some(1), "an unmoved rail must leave rail_seen_core untouched");
+    assert_eq!(
+        rail_seen,
+        Some(1),
+        "an unmoved rail must leave rail_seen_core untouched"
+    );
     assert!(!core_is_open(&expanded, rail, 1), "A must stay collapsed");
 
     let would_move_against_overlay = resolved != rail;
