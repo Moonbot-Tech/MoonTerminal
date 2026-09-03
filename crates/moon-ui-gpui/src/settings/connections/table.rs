@@ -967,9 +967,13 @@ pub(super) fn server_row(
             .state(&row.group)
             .small()
             .into_any_element(),
+        // An empty bundle field is the DEFAULT, not an omission, so the placeholder names what
+        // the field would hold rather than nudging: it is a bundle NAME (`ChartBucket::Bundle`
+        // in `moon-core/src/config/servers.rs`), which an empty white cell said nothing about.
         MoonInput::new(ids.bundle.clone())
             .state(&row.bundle)
             .small()
+            .placeholder(t!("conn.bundle_ph").to_string())
             .into_any_element(),
         feed_popover(view, weak, i, row_key, ids, cx).into_any_element(),
         MoonColorPicker::new(&row.color).into_any_element(),
@@ -1016,7 +1020,7 @@ impl SettingsView {
     /// `min_w_0()` is the load-bearing part: gpui's default `min_size: auto` is the CONTENT-based
     /// automatic minimum, which clamps a flex item UP to its child's min-content width. A control
     /// that renders wider than its column would then eat free space in the rows that the header
-    /// still had -- and since only the header can hand that space to its two growing columns,
+    /// still had -- and since only the header can hand that space to its growing columns,
     /// every column after them drifted, further with each one. Pinned to the basis, an oversized
     /// child overlaps instead of shifting the grid.
     ///
