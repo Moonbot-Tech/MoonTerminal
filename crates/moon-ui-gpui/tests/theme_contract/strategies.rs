@@ -1133,6 +1133,37 @@ fn a_core_folder_row_marker_stays_passive() {
     );
 }
 
+/// `strategies/tree/moon.rs::core_folder_row` keeps its counter cluster passive.
+///
+/// Mutation: add `.cursor_pointer()` to the `counts_row_id` cluster. That installs an
+/// interactive hitbox over the counters, so a click on the rightmost numbers no longer reaches
+/// the row handler that expands or collapses the core; clicking elsewhere on the same row still
+/// works and makes the regression look flaky.
+#[test]
+fn a_core_folder_row_counter_cluster_stays_passive() {
+    let src = read_src("strategies/tree/moon.rs");
+    let row = code_only(braced_body(&src, "fn core_folder_row("));
+    let cluster = chain_between(
+        &row,
+        "h_flex()\n                .id(counts_row_id)",
+        ".tooltip(crate::panels::common::text_tooltip(counts.tip))",
+        "core/folder counter cluster",
+    );
+
+    assert!(
+        cluster.contains(".flex_none()")
+            && cluster.contains(".child(counts_slot(counts.primary, COUNTS_SLOT_W, step, app))")
+            && cluster.contains(".child(counts_slot(counts.orders, ORDERS_SLOT_W, step, app))"),
+        "the identified counter cluster must retain both fixed counter slots"
+    );
+    assert!(
+        !cluster.contains(".cursor_pointer()")
+            && !cluster.contains(".hover(")
+            && !cluster.contains(".on_click("),
+        "the counter cluster must remain passive so clicks on its numbers reach the row handler"
+    );
+}
+
 /// `strategies/state.rs::StrategiesView::new` restores the persisted set UNCHANGED and seeds the
 /// Auto rail's selection into a separate overlay field, never into `expanded_cores` itself.
 ///

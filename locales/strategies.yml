@@ -325,6 +325,18 @@ strat.deleted_folder:
   ru: "Удалённые"
   en: "Deleted"
   es: "Eliminadas"
+strat.tree_counts_tip:
+  ru: "Включённых стратегий из общего числа в этой ветке (с учётом фильтров по типу и стороне)"
+  en: "Enabled strategies out of the total in this branch (kind and side filters applied)"
+  es: "Estrategias activadas del total en esta rama (con los filtros de tipo y lado aplicados)"
+strat.tree_open_orders_tip:
+  ru: "В скобках — открытые ордера ядра"
+  en: "In brackets — the core's open orders"
+  es: "Entre paréntesis — las órdenes abiertas del núcleo"
+strat.tree_deleted_count_tip:
+  ru: "Сколько удалённых на сервере, но сохранённых локально стратегий показано в этой папке"
+  en: "How many server-deleted, locally kept strategies this folder is showing"
+  es: "Cuántas estrategias eliminadas en el servidor y conservadas localmente muestra esta carpeta"
 strat.menu_restore:
   ru: "Восстановить"
   en: "Restore"
