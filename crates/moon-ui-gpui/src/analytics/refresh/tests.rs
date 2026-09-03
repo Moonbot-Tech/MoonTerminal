@@ -4,9 +4,63 @@ use std::time::{Duration, Instant};
 
 use super::{
     BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh, core_metadata_wait,
-    report_result_is_stale, strategy_base_allows_axis, visible_refresh,
+    preserve_on_catch_up_failure, report_result_is_stale, strategy_base_allows_axis,
+    visible_refresh,
 };
 use crate::analytics::Tab;
+use moon_core::db::{FailKind, ReadFail};
+use std::sync::Arc;
+
+/// Construct a classified database failure without depending on display text.
+fn failure(kind: FailKind) -> ReadFail {
+    ReadFail::Failed {
+        kind,
+        msg: Arc::from("test failure"),
+    }
+}
+
+/// `analytics/refresh.rs:preserve_on_catch_up_failure` must preserve only a Busy failure that an
+/// automatic retry can still erase. Broadening the predicate lets a permanent failure, NotReady,
+/// or the final exhausted Busy failure leave stale Analytics numbers looking current forever.
+#[test]
+fn catch_up_preservation_requires_busy_and_an_available_retry() {
+    for (label, error, is_busy) in [
+        ("Busy", failure(FailKind::Busy), true),
+        ("Corrupt", failure(FailKind::Corrupt), false),
+        ("Other", failure(FailKind::Other), false),
+        ("NotReady", ReadFail::NotReady, false),
+        ("IncomparableQuote", ReadFail::IncomparableQuote, false),
+        ("PeriodOutOfRange", ReadFail::PeriodOutOfRange, false),
+    ] {
+        for after_report in [false, true] {
+            for retry_allowance in [false, true] {
+                assert_eq!(
+                    preserve_on_catch_up_failure(after_report, &error, retry_allowance),
+                    after_report && is_busy && retry_allowance,
+                    "{label}: after_report={after_report}, retry_allowance={retry_allowance}"
+                );
+            }
+        }
+    }
+}
+
+/// `analytics/refresh.rs:BusyRetryBudget::has_allowance` must read without spending a retry.
+/// Letting this publication query increment attempts exhausts a transient Busy recovery budget
+/// before `claim` schedules the retry, leaving stale data or a false error.
+#[test]
+fn checking_the_busy_retry_allowance_does_not_consume_an_attempt() {
+    let mut budget = BusyRetryBudget::default();
+
+    assert!(budget.has_allowance());
+    assert!(budget.has_allowance());
+    assert!(budget.claim());
+    assert!(budget.has_allowance());
+    assert!(budget.claim());
+    assert!(budget.has_allowance());
+    assert!(budget.claim());
+    assert!(!budget.has_allowance());
+    assert!(!budget.claim());
+}
 
 /// `analytics/refresh.rs:report_result_is_stale` must compare the start and completion
 /// generations; removing that comparison lets a scan started before a new trade clear the

@@ -23,7 +23,7 @@ fn current_and_previous_failures_remain_visible() {
     let mut days = ProfitLoadState::<Vec<DayCell>>::default();
     let mut previous = LoadState::<Option<moon_core::db::analytics::CellTotals>>::default();
 
-    let failed = apply_calendar_results(&mut days, &mut previous, Err(failure()), true);
+    let failed = apply_calendar_results(&mut days, &mut previous, Err(failure()), true, false);
     assert!(failed);
 
     assert!(matches!(
@@ -40,6 +40,49 @@ fn current_and_previous_failures_remain_visible() {
             ..
         })
     ));
+}
+
+/// `analytics/calendar/mod.rs:apply_calendar_results` must leave both settled Calendar snapshots
+/// intact for a report-driven failure. Returning `false` or applying that failure clears the cells,
+/// so `cal_dirty` can stop the catch-up and the visible calendar stays stale or flashes blank.
+#[test]
+fn report_catch_up_failure_preserves_current_and_previous_calendar_snapshots() {
+    let mut days = ProfitLoadState::Ready {
+        unit: None,
+        data: Arc::new(vec![DayCell {
+            start: 123,
+            ..Default::default()
+        }]),
+    };
+    let mut previous = LoadState::Ready(Arc::new(Some(Default::default())));
+    let original_days = days.data().expect("settled Calendar cells").clone();
+    let original_previous = previous
+        .data()
+        .expect("settled previous-period total")
+        .clone();
+    let failure = ReadFail::Failed {
+        kind: FailKind::Busy,
+        msg: Arc::from("busy calendar"),
+    };
+
+    assert!(
+        apply_calendar_results(&mut days, &mut previous, Err(failure), true, true),
+        "a failed period read must keep Calendar dirty for the bounded retry"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &original_days,
+            days.data().expect("preserved Calendar cells")
+        ),
+        "the catch-up failure must retain the exact current-cell snapshot"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &original_previous,
+            previous.data().expect("preserved previous-period total")
+        ),
+        "the catch-up failure must retain the exact comparison snapshot"
+    );
 }
 
 /// Replacing `calendar::hour_start`'s gap rejection with the shared picker clamp would map both

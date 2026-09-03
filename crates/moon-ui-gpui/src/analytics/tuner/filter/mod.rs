@@ -219,7 +219,8 @@ impl AnalyticsView {
                 if this.tuner.hist_seq == hist_req {
                     this.tuner.hist_loading = false;
                     hist_error = histogram.as_ref().err().cloned();
-                    this.tuner.hist.apply(histogram);
+                    let keep_hist = this.keep_on_busy(after_report, hist_error.as_ref());
+                    this.tuner.hist.apply_or_keep(histogram, keep_hist);
                     this.tuner.hist_dirty = super::super::refresh::report_result_is_stale(
                         report_req,
                         this.current_report_generation(),
@@ -234,9 +235,12 @@ impl AnalyticsView {
                     return;
                 }
                 let error = stats.as_ref().err().cloned();
-                // A completed non-data result clears stale numbers because
-                // values under a changed period label must belong to it.
-                this.tuner.stats.apply(stats);
+                // A completed non-data result clears stale numbers, unless it is transient
+                // contention with retry allowance left (`keep_on_busy`) — values
+                // under a changed period label must belong to it, but a settled snapshot the
+                // bounded retry is about to replace anyway must not blink through it.
+                let keep_stats = this.keep_on_busy(after_report, error.as_ref());
+                this.tuner.stats.apply_or_keep(stats, keep_stats);
                 // `strategy_filters` is intentionally lossy and reports an unreadable row as
                 // `found=false`. An automatic report refresh must not turn that ambiguity into
                 // an empty Save baseline; explicit scope changes may clear the old strategy.
@@ -312,7 +316,8 @@ impl AnalyticsView {
                     return;
                 }
                 let error = stats.as_ref().err().cloned();
-                this.tuner.stats.apply(stats);
+                let keep_stats = this.keep_on_busy(after_report, error.as_ref());
+                this.tuner.stats.apply_or_keep(stats, keep_stats);
                 this.tuner.apply_strategy_read(filters, after_report);
                 this.tuner.dirty = super::super::refresh::report_result_is_stale(
                     report_req,

@@ -150,10 +150,18 @@ impl AnalyticsView {
                     profiles.is_err() || stats.is_err() || slider.is_err() || current.is_none(),
                 );
                 // The profile, slider colors, and KPI are independent load surfaces, so each
-                // retains its own classified error instead of collapsing it to "no data".
-                this.time_tuner.profiles.apply(profiles);
-                this.time_tuner.slider.apply(slider);
-                this.time_tuner.stats.apply(stats);
+                // retains its own classified error instead of collapsing it to "no data" — unless
+                // that error is transient contention with retry allowance left (`keep_on_busy`),
+                // in which case its own settled snapshot survives the catch-up instead of
+                // blinking through the failure.
+                let keep_profiles = this.keep_on_busy(after_report, profiles.as_ref().err());
+                let keep_slider = this.keep_on_busy(after_report, slider.as_ref().err());
+                let keep_stats = this.keep_on_busy(after_report, stats.as_ref().err());
+                this.time_tuner
+                    .profiles
+                    .apply_or_keep(profiles, keep_profiles);
+                this.time_tuner.slider.apply_or_keep(slider, keep_slider);
+                this.time_tuner.stats.apply_or_keep(stats, keep_stats);
                 this.time_tuner.apply_current_read(current, after_report);
                 if after_report {
                     this.settle_report_refresh_retry(retry.as_ref(), cx);

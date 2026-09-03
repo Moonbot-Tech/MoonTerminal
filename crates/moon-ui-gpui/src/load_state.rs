@@ -74,6 +74,23 @@ impl<T> LoadState<T> {
         };
     }
 
+    /// Keep revalidation stale data only for a caller-approved transient failure.
+    ///
+    /// `NotReady` never qualifies: it is a completed absence, so preserving data would promise a
+    /// recovery that no retry can provide.
+    pub(crate) fn apply_or_keep(&mut self, r: Result<T, ReadFail>, keep_on_failure: bool) {
+        let keeps = keep_on_failure
+            && matches!(r, Err(ref e) if !matches!(e, ReadFail::NotReady))
+            && matches!(self, LoadState::Loading { stale: Some(_) });
+        if keeps {
+            if let LoadState::Loading { stale: Some(v) } = self {
+                *self = LoadState::Ready(Arc::clone(v));
+            }
+            return;
+        }
+        self.apply(r);
+    }
+
     /// What this surface should render: either the data, or the placeholder
     /// standing in for it. `empty` decides whether loaded data counts as empty.
     ///

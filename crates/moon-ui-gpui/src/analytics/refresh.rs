@@ -9,8 +9,15 @@
 //! runs immediately: [`RefreshUrgency`] is what separates the two, and it is the difference
 //! between a tuner tab that opens now and one that opens a second from now. The `db_active`
 //! interlock is unaffected: nothing here ever overlaps work already in flight.
+//!
+//! [`preserve_on_catch_up_failure`] is the one rule every writer-driven completion handler
+//! consults before publishing a failed read: only transient contention with retry allowance
+//! left may keep a settled surface on screen instead of the classified error, because that is
+//! the only kind of failure the bounded [`BusyRetryBudget`] retry will actually clear.
 
 use std::time::{Duration, Instant};
+
+use moon_core::db::{FailKind, ReadFail};
 
 use super::Tab;
 
@@ -56,6 +63,13 @@ impl BusyRetryBudget {
         }
         self.attempts += 1;
         true
+    }
+
+    /// Whether a Busy failure can still be corrected automatically.
+    ///
+    /// This is read-only because only `claim` may spend an attempt.
+    pub(super) fn has_allowance(&self) -> bool {
+        self.attempts < MAX_BUSY_RETRIES
     }
 
     /// Close a retry episode after a read completes without SQLite contention.
@@ -131,6 +145,26 @@ pub(super) fn report_result_is_stale(
     read_failed: bool,
 ) -> bool {
     read_failed || started_generation != current_generation
+}
+
+/// Decide whether a writer-driven catch-up may keep a settled snapshot for a failed read.
+///
+/// Only a Busy failure with another retry may be hidden: any other result, including an exhausted
+/// Busy budget, must publish so stale values never look current without a correction path.
+///
+/// Args:
+///     after_report: Whether this is a writer-driven catch-up rather than a manual reload.
+///     error: The classified failure this read completed with.
+///     retry_allowance: Whether another automatic Busy retry remains for this episode.
+///
+/// Returns:
+///     `true` only when the failure is transient contention AND a retry will actually follow.
+pub(super) fn preserve_on_catch_up_failure(
+    after_report: bool,
+    error: &ReadFail,
+    retry_allowance: bool,
+) -> bool {
+    after_report && error.kind() == Some(FailKind::Busy) && retry_allowance
 }
 
 /// Decide whether the compact Strategies base may continue into its visible axis.

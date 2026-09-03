@@ -38,6 +38,10 @@ use moon_core::db::{ProfitScope, ProfitUnit, ReadResult};
 ///     previous: Previous-month aggregate UI load state.
 ///     period_result: Current cells and optional comparison from one SQLite snapshot.
 ///     has_previous: Whether the active mode requested a comparison period.
+///     preserve_on_failure: Whether a same-scope catch-up failure should keep the visible days
+///         and previous-period cells instead of publishing the classified error — decided by the
+///         caller via `refresh::preserve_on_catch_up_failure` (transient contention with retry
+///         allowance left; every other failure is still published).
 ///
 /// Returns:
 ///     `true` when the shared period read failed.
@@ -46,6 +50,7 @@ fn apply_calendar_results(
     previous: &mut LoadState<Option<CellTotals>>,
     period_result: ReadResult<ProfitScope<CalendarPeriod>>,
     has_previous: bool,
+    preserve_on_failure: bool,
 ) -> bool {
     match period_result {
         Ok(ProfitScope::Comparable { unit, data: period }) => {
@@ -67,8 +72,10 @@ fn apply_calendar_results(
             false
         }
         Err(error) => {
-            days.apply(Err(error.clone()));
-            previous.apply(if has_previous { Err(error) } else { Ok(None) });
+            if !preserve_on_failure {
+                days.apply(Err(error.clone()));
+                previous.apply(if has_previous { Err(error) } else { Ok(None) });
+            }
             true
         }
     }
@@ -741,7 +748,10 @@ impl AnalyticsView {
     /// Start the Calendar query with optional post-commit metadata chaining.
     ///
     /// Args:
-    ///     after_report: Whether to preserve report-style catch-up and retry semantics.
+    ///     after_report: Whether to preserve report-style catch-up and retry semantics, including
+    ///         keeping the visible cells over a same-scope failure that is transient contention
+    ///         with retry allowance left (`refresh::preserve_on_catch_up_failure`) — every other
+    ///         failure still publishes the classified error.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to execute and publish the reads.
     fn reload_calendar_inner(
@@ -803,18 +813,23 @@ impl AnalyticsView {
                     .cloned();
                 let metadata_failed = data.cores.as_ref().is_some_and(|cores| cores.is_err())
                     || data.undated.is_err();
+                // Peek at `data.period`'s error before it moves into the call below: only
+                // transient contention with retry allowance left may keep the visible cells.
+                let preserve_on_failure = !matches!(this.cal_days, ProfitLoadState::Loading)
+                    && this.keep_on_busy(after_report, data.period.as_ref().err());
                 let read_failed = apply_calendar_results(
                     &mut this.cal_days,
                     &mut this.cal_prev,
                     data.period,
                     has_previous,
+                    preserve_on_failure,
                 );
                 if let Some(Ok(cores)) = data.cores {
                     this.cores = cores;
                     this.last_cores_at = Some(std::time::Instant::now());
                     this.core_refresh_needed = false;
                 }
-                this.apply_undated_result(data.undated, true);
+                this.apply_undated_result(data.undated, after_report);
                 this.cal_dirty = super::refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),

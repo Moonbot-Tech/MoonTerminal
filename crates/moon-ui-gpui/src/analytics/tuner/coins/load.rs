@@ -207,7 +207,8 @@ impl AnalyticsView {
                     this.current_report_generation(),
                     read_failed,
                 );
-                this.coins.stats.apply(stats);
+                let keep_stats = this.keep_on_busy(after_report, stats.as_ref().err());
+                this.coins.stats.apply_or_keep(stats, keep_stats);
                 // Only a confirmed strategies snapshot may replace the baseline. On a failed
                 // read, preserving both sets is safer than replaying the draft against a
                 // fabricated empty list and silently changing the next Save.
@@ -216,7 +217,8 @@ impl AnalyticsView {
                 // left to show; fall back before the table renders "no matches".
                 this.coins.settle_filter();
                 if !edited {
-                    this.coins.kpi.apply(kpi);
+                    let keep_kpi = this.keep_on_busy(after_report, kpi.as_ref().err());
+                    this.coins.kpi.apply_or_keep(kpi, keep_kpi);
                     this.coins.kpi_bl = bl_n;
                     this.coins.kpi_wl = wl_n;
                 } else {
