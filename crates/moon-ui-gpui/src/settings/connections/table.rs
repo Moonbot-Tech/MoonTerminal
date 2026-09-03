@@ -1039,6 +1039,13 @@ impl SettingsView {
         } else {
             d
         };
+        // A cap, where a column has one, bounds growth WITHOUT freezing the column: it still
+        // shrinks when the window is too narrow for the row, which `flex_grow_0().flex_shrink_0()`
+        // below would not.
+        let d = match col.max_width(micro) {
+            Some(max) => d.max_w(px(max)),
+            None => d,
+        };
         if spec.grow {
             d.flex_grow_1()
         } else {

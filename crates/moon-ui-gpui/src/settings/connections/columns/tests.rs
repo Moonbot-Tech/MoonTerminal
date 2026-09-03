@@ -46,24 +46,32 @@ fn indent_parts_match_the_header_inset() {
     );
 }
 
-/// `columns.rs:CONN_COLS` must preserve the three Micro-trigger columns. Replacing `h-preset`'s
-/// 72px `MicroTrigger` policy with a 92px `Raw` width makes the control stop scaling with its
-/// rendered trigger and lets the header and server row disagree at non-default font scales.
+/// `columns.rs:CONN_COLS` must preserve each column's declared scaling policy. Replacing
+/// any of `h-name`, `h-key` or `h-group`'s `TextScaled` policies with `Raw`, or `h-preset`'s
+/// `MicroTrigger` policy with `Raw`, makes the header and server row disagree with their controls
+/// at non-default font scales.
 #[test]
 fn widths_follow_the_frozen_per_column_policy() {
     const MICRO_COLUMNS: [ConnColId; 3] = [ConnColId::Proto, ConnColId::Preset, ConnColId::Data];
+    const TEXT_SCALED_COLUMNS: [ConnColId; 3] = [ConnColId::Name, ConnColId::Key, ConnColId::Group];
     const SCALES: [f32; 3] = [0.75, 1.0, 1.3];
 
     for column in ConnColId::ALL {
         let basis = column.spec().basis;
         let is_micro = MICRO_COLUMNS.contains(&column);
+        let is_text_scaled = TEXT_SCALED_COLUMNS.contains(&column);
         let expected_policy = if is_micro {
             ConnColWidth::MicroTrigger
+        } else if is_text_scaled {
+            ConnColWidth::TextScaled
         } else {
             ConnColWidth::Raw
         };
         for scale in SCALES {
-            let expected_width = if is_micro { basis * scale } else { basis };
+            let expected_width = match expected_policy {
+                ConnColWidth::Raw => basis,
+                ConnColWidth::MicroTrigger | ConnColWidth::TextScaled => basis * scale,
+            };
             assert_eq!(
                 column.width(MicroTriggerMetrics {
                     scale,
@@ -82,9 +90,8 @@ fn widths_follow_the_frozen_per_column_policy() {
     }
 }
 
-/// `columns.rs:CONN_COLS` must let only Name and Group absorb spare width: Key is excluded because
-/// its masked content has no readable length to reward with width. Turning `h-key.grow` back on
-/// wastes space on dots, while removing growth from Name or Group truncates user-entered text;
+/// `columns.rs:CONN_COLS` must let Name, Key and Group absorb spare width without making any of
+/// them rigid at the default window size. Removing growth from one truncates user-entered text;
 /// every visible header label also needs help text.
 #[test]
 fn growth_and_tooltips_match_the_text_column_contract() {
@@ -92,7 +99,7 @@ fn growth_and_tooltips_match_the_text_column_contract() {
         .into_iter()
         .filter(|column| column.spec().grow)
         .collect();
-    assert_eq!(growing, [ConnColId::Name, ConnColId::Group]);
+    assert_eq!(growing, [ConnColId::Name, ConnColId::Key, ConnColId::Group]);
 
     for column in ConnColId::ALL {
         let spec = column.spec();
@@ -102,5 +109,81 @@ fn growth_and_tooltips_match_the_text_column_contract() {
                 "{column:?} has a label without a tooltip"
             );
         }
+    }
+}
+
+/// `columns.rs:CONN_COLS` must cap only Key and Group through their own policies. Removing either
+/// cap lets that column consume wide-window space, while resolving either cap as raw pixels makes
+/// its readable character count shrink when the user raises the Font setting.
+#[test]
+fn caps_match_the_text_column_contract_at_each_font_scale() {
+    const MICRO_COLUMNS: [ConnColId; 3] = [ConnColId::Proto, ConnColId::Preset, ConnColId::Data];
+    const TEXT_SCALED_COLUMNS: [ConnColId; 3] = [ConnColId::Name, ConnColId::Key, ConnColId::Group];
+    const SCALES: [f32; 3] = [0.75, 1.0, 1.3];
+
+    for column in ConnColId::ALL {
+        let expected_cap = match column {
+            ConnColId::Key => Some(260.0),
+            ConnColId::Group => Some(140.0),
+            _ => None,
+        };
+        let expected_policy = if MICRO_COLUMNS.contains(&column) {
+            ConnColWidth::MicroTrigger
+        } else if TEXT_SCALED_COLUMNS.contains(&column) {
+            ConnColWidth::TextScaled
+        } else {
+            ConnColWidth::Raw
+        };
+
+        assert_eq!(column.spec().max, expected_cap, "{column:?} cap reference");
+        for scale in SCALES {
+            let metrics = MicroTriggerMetrics {
+                scale,
+                min_width: 0.0,
+            };
+            let expected_max = expected_cap.map(|cap| match expected_policy {
+                ConnColWidth::Raw => cap,
+                ConnColWidth::MicroTrigger | ConnColWidth::TextScaled => cap * scale,
+            });
+            assert_eq!(
+                column.max_width(metrics),
+                expected_max,
+                "{column:?} cap at scale {scale}"
+            );
+
+            if let Some(expected_max) = expected_max {
+                let expected_basis = column.width(metrics);
+                assert!(
+                    expected_max > expected_basis,
+                    "{column:?} cap must exceed its basis at scale {scale}"
+                );
+            }
+        }
+    }
+}
+
+/// `columns.rs:CONN_COLS` must leave Name as the only uncapped growing column and resolve Name
+/// wider than Key wider than Group at every finite Font scale. Changing `h-key` from `TextScaled`
+/// to `Raw` makes Group outrank the masked Key at a hand-edited +10 Font delta, leaving less room
+/// for the user-entered name.
+#[test]
+fn name_is_the_only_uncapped_growing_column_with_the_widest_narrow_width() {
+    let uncapped_growing: Vec<_> = ConnColId::ALL
+        .into_iter()
+        .filter(|column| column.spec().grow && column.spec().max.is_none())
+        .collect();
+    assert_eq!(uncapped_growing, [ConnColId::Name]);
+
+    const SCALES: [f32; 5] = [0.75, 1.0, 1.3, 1.6, 2.0];
+    for scale in SCALES {
+        let metrics = MicroTriggerMetrics {
+            scale,
+            min_width: 0.0,
+        };
+        assert!(
+            ConnColId::Name.width(metrics) > ConnColId::Key.width(metrics)
+                && ConnColId::Key.width(metrics) > ConnColId::Group.width(metrics),
+            "Name, Key and Group must shrink in resolved-width order at scale {scale}"
+        );
     }
 }
