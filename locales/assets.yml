@@ -171,6 +171,10 @@ assets.market_sell_confirm:
   ru: "Продажа по маркету"
   en: "Market sell"
   es: "Venta a mercado"
+assets.market_sell_no_price:
+  ru: "Продажа отменена: у рынка нет текущей цены, а без неё ордер выставить нельзя."
+  en: "Sale cancelled: the market has no current price, and the order needs one."
+  es: "Venta cancelada: el mercado no tiene precio actual y la orden lo necesita."
 assets.market_sell_q:
   ru: "Точно продать %{coin} по маркету?"
   en: "Really market-sell %{coin}?"

@@ -476,9 +476,14 @@ pub enum CoreCmd {
     /// (`TDoClosePositionCommand`). This performs a live exchange action.
     MarketSellPosition { market: String },
     /// Sell a market's spot token at market from the Market Sell button on an Assets holding row.
-    /// This uses moonproto `trade().sell_order(SellOrderParams{market, price:0=market, size})`
-    /// (`TDoSellOrderCommand`) and performs a live exchange action.
-    MarketSellToken { market: String, size: f64 },
+    /// This uses moonproto `trade().sell_order(SellOrderParams)` (`TDoSellOrderCommand`), whose
+    /// size field carries the account's balance currency rather than the coin — the feed converts
+    /// `qty` with `price`, so both must describe the same market. This is a live exchange action.
+    MarketSellToken {
+        market: String,
+        qty: f64,
+        price: f64,
+    },
     /// Cancel pending buy orders for a market from the Cancel Buy button. The feed reads the
     /// retained snapshot, selects the market's pre-fill buy-phase orders in `OS_None` or `BuySet`,
     /// and sends `orders().cancel(uid)` for each. This is a live action.

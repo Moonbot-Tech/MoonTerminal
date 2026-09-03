@@ -883,8 +883,8 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::MarketSellPosition { market }) => {
                 trade::market_sell_position(client, server.id, market);
             }
-            Ok(CoreCmd::MarketSellToken { market, size }) => {
-                trade::market_sell_token(client, server.id, market, size);
+            Ok(CoreCmd::MarketSellToken { market, qty, price }) => {
+                trade::market_sell_token(client, server.id, market, qty, price);
             }
             Ok(CoreCmd::CancelMarketBuys { market }) => {
                 trade::cancel_market_buys(client, server.id, &market);

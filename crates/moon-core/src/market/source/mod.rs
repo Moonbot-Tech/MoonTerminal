@@ -745,7 +745,6 @@ pub enum LatestPriceError {
     NoProvider,
     NoClient,
     NoSnapshot,
-    NoHistoryReaders,
     NoPrice,
 }
 
@@ -755,7 +754,6 @@ impl std::fmt::Display for LatestPriceError {
             Self::NoProvider => f.write_str("no provider"),
             Self::NoClient => f.write_str("no client"),
             Self::NoSnapshot => f.write_str("no snapshot"),
-            Self::NoHistoryReaders => f.write_str("no history readers"),
             Self::NoPrice => f.write_str("no price"),
         }
     }
