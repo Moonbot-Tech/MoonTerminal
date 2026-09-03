@@ -21,6 +21,7 @@ use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
+use super::super::refresh::CatchUpOutcome;
 use super::super::summary::{fmt_signed, sign_color};
 use super::kpi::kpi_matrix_card;
 use crate::design;
@@ -36,7 +37,7 @@ impl AnalyticsView {
         self.reload_time_inner(false, true, cx);
     }
 
-    /// Recompute report-stale time data and retry transient database contention.
+    /// Recompute report-stale time data through the writer-driven catch-up path.
     ///
     /// Args:
     ///     show_overlay: Whether queued user work requires blocking progress feedback.
@@ -127,23 +128,9 @@ impl AnalyticsView {
                 if this.time_tuner.seq != req {
                     return; // the period/filters/strategy/grid have already changed
                 }
-                let retry = profiles
-                    .as_ref()
-                    .err()
-                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    .or_else(|| {
-                        stats
-                            .as_ref()
-                            .err()
-                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    })
-                    .or_else(|| {
-                        slider
-                            .as_ref()
-                            .err()
-                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    })
-                    .cloned();
+                let profiles_outcome = CatchUpOutcome::of_read(&profiles);
+                let stats_outcome = CatchUpOutcome::of_read(&stats);
+                let slider_outcome = CatchUpOutcome::of_read(&slider);
                 this.time_tuner.dirty = super::super::refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
@@ -151,12 +138,13 @@ impl AnalyticsView {
                 );
                 // The profile, slider colors, and KPI are independent load surfaces, so each
                 // retains its own classified error instead of collapsing it to "no data" — unless
-                // that error is transient contention with retry allowance left (`keep_on_busy`),
-                // in which case its own settled snapshot survives the catch-up instead of
-                // blinking through the failure.
-                let keep_profiles = this.keep_on_busy(after_report, profiles.as_ref().err());
-                let keep_slider = this.keep_on_busy(after_report, slider.as_ref().err());
-                let keep_stats = this.keep_on_busy(after_report, stats.as_ref().err());
+                // that outcome is transient with a scheduled correction left
+                // (`keep_on_catch_up`), in which case its own settled snapshot survives the
+                // catch-up instead of blinking through the intermediate result.
+                let keep_profiles =
+                    this.keep_on_catch_up(after_report, profiles_outcome, report_req);
+                let keep_slider = this.keep_on_catch_up(after_report, slider_outcome, report_req);
+                let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
                 this.time_tuner
                     .profiles
                     .apply_or_keep(profiles, keep_profiles);
@@ -164,7 +152,10 @@ impl AnalyticsView {
                 this.time_tuner.stats.apply_or_keep(stats, keep_stats);
                 this.time_tuner.apply_current_read(current, after_report);
                 if after_report {
-                    this.settle_report_refresh_retry(retry.as_ref(), cx);
+                    let transient = profiles_outcome.is_transient()
+                        || stats_outcome.is_transient()
+                        || slider_outcome.is_transient();
+                    this.settle_report_refresh_retry(transient, cx);
                 }
                 cx.notify();
             },

@@ -10,14 +10,17 @@
 //! between a tuner tab that opens now and one that opens a second from now. The `db_active`
 //! interlock is unaffected: nothing here ever overlaps work already in flight.
 //!
-//! [`preserve_on_catch_up_failure`] is the one rule every writer-driven completion handler
-//! consults before publishing a failed read: only transient contention with retry allowance
-//! left may keep a settled surface on screen instead of the classified error, because that is
-//! the only kind of failure the bounded [`BusyRetryBudget`] retry will actually clear.
+//! [`preserve_on_catch_up`] is the rule every writer-driven completion handler in the Analytics
+//! window's own surfaces -- Summary, Strategies, Calendar and the three tuner axes -- consults
+//! before publishing a failed or split read: only a transient outcome with a scheduled
+//! correction (retry allowance or a newer generation) left may keep a settled surface on screen
+//! instead of the classified result, because that is the only kind of outcome the bounded
+//! [`BusyRetryBudget`] retry -- or the writer's own next generation -- will actually clear. The
+//! Profit Monitor keeps its own separate Busy-retry flow and does not consult this rule.
 
 use std::time::{Duration, Instant};
 
-use moon_core::db::{FailKind, ReadFail};
+use moon_core::db::{FailKind, ProfitScope, ReadFail, ReadResult};
 
 use super::Tab;
 
@@ -33,7 +36,7 @@ const CORE_METADATA_INTERVAL: Duration = Duration::from_secs(60);
 /// Maximum automatic retries for one report generation under persistent SQLite contention.
 const MAX_BUSY_RETRIES: u8 = 3;
 
-/// Bounded retry allowance for transient database contention.
+/// Bounded retry allowance for a transient database outcome.
 #[derive(Default)]
 pub(super) struct BusyRetryBudget {
     attempts: u8,
@@ -65,14 +68,14 @@ impl BusyRetryBudget {
         true
     }
 
-    /// Whether a Busy failure can still be corrected automatically.
+    /// Whether a transient outcome can still be corrected automatically.
     ///
     /// This is read-only because only `claim` may spend an attempt.
     pub(super) fn has_allowance(&self) -> bool {
         self.attempts < MAX_BUSY_RETRIES
     }
 
-    /// Close a retry episode after a read completes without SQLite contention.
+    /// Close a retry episode after a read completes without a transient outcome.
     pub(super) fn resolve(&mut self) {
         self.attempts = 0;
         self.active = false;
@@ -147,30 +150,117 @@ pub(super) fn report_result_is_stale(
     read_failed || started_generation != current_generation
 }
 
-/// Decide whether a writer-driven catch-up may keep a settled snapshot for a failed read.
+/// Classification of a completed report-derived read for catch-up preservation.
 ///
-/// Only a Busy failure with another retry may be hidden: any other result, including an exhausted
-/// Busy budget, must publish so stale values never look current without a correction path.
+/// `Transient` is deliberately wider than a bare `Busy` failure only in that a `Split` scope still
+/// short of full valuation coverage joins it, correctable by the writer's own next generation. A
+/// `NotReady` schema gap during a replica reset is a COMPLETED absence, not a momentary one: it
+/// stays `Settled` and publishes now. See the module docs and `CatchUpOutcome::of_scope` for the
+/// narrowed Split rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CatchUpOutcome {
+    /// A real result: publish it.
+    Replacement,
+    /// Correctable by a scheduled retry or a newer generation; may be hidden behind the last
+    /// settled snapshot instead of publishing.
+    Transient,
+    /// Durable: no correction is coming, so it must publish now.
+    Settled,
+}
+
+/// Classify a failed read into [`CatchUpOutcome::Transient`] or [`CatchUpOutcome::Settled`].
+///
+/// Only `Busy` is transient: it is the sole failure kind the bounded retry actually clears.
+/// `NotReady` is a completed absence rather than proof of momentariness (see the module docs).
+fn classify_fail(error: &ReadFail) -> CatchUpOutcome {
+    if error.kind() == Some(FailKind::Busy) {
+        CatchUpOutcome::Transient
+    } else {
+        CatchUpOutcome::Settled
+    }
+}
+
+impl CatchUpOutcome {
+    /// Classify a plain fallible report read.
+    ///
+    /// Args:
+    ///     result: The completed read.
+    ///
+    /// Returns:
+    ///     `Replacement` for `Ok`, otherwise the failure's transient/settled classification.
+    pub(super) fn of_read<T>(result: &Result<T, ReadFail>) -> Self {
+        match result {
+            Ok(_) => CatchUpOutcome::Replacement,
+            Err(error) => classify_fail(error),
+        }
+    }
+
+    /// Classify a scope-shaped report read.
+    ///
+    /// `Split` is transient only while the valuation worker demonstrably still has eligible rows
+    /// left to value; an unknown-quote identity or a worker that finished unroutable rows is a
+    /// durable safety verdict and must publish (see the module's CORRECTION A).
+    ///
+    /// Args:
+    ///     result: The completed scope read.
+    ///
+    /// Returns:
+    ///     `Replacement` for `Comparable`/`Empty`, the narrowed Split classification for `Split`,
+    ///     otherwise the failure's transient/settled classification.
+    pub(super) fn of_scope<T>(result: &ReadResult<ProfitScope<T>>) -> Self {
+        match result {
+            Ok(ProfitScope::Split(totals)) => {
+                if totals.unknown_orders == 0
+                    && totals.valuation.is_some_and(|coverage| {
+                        coverage.valued_orders + coverage.unavailable_orders
+                            < coverage.eligible_orders
+                    })
+                {
+                    CatchUpOutcome::Transient
+                } else {
+                    CatchUpOutcome::Settled
+                }
+            }
+            Ok(ProfitScope::Comparable { .. } | ProfitScope::Empty(_)) => {
+                CatchUpOutcome::Replacement
+            }
+            Err(error) => classify_fail(error),
+        }
+    }
+
+    /// Whether this outcome is a scheduled-correction candidate.
+    pub(super) fn is_transient(self) -> bool {
+        matches!(self, CatchUpOutcome::Transient)
+    }
+}
+
+/// Decide whether a writer-driven catch-up may keep a settled snapshot instead of publishing.
+///
+/// Only a transient outcome with a scheduled correction still open may be hidden: any other
+/// result, including an exhausted retry budget with no newer generation pending, must publish so
+/// stale values never look current without a correction path.
 ///
 /// Args:
 ///     after_report: Whether this is a writer-driven catch-up rather than a manual reload.
-///     error: The classified failure this read completed with.
-///     retry_allowance: Whether another automatic Busy retry remains for this episode.
+///     outcome: The classified outcome this read completed with.
+///     retry_allowance: Whether another automatic transient retry remains for this episode.
+///     superseded: Whether a newer generation is already pending behind this read.
 ///
 /// Returns:
-///     `true` only when the failure is transient contention AND a retry will actually follow.
-pub(super) fn preserve_on_catch_up_failure(
+///     `true` only when the outcome is transient AND a correction is already scheduled.
+pub(super) fn preserve_on_catch_up(
     after_report: bool,
-    error: &ReadFail,
+    outcome: CatchUpOutcome,
     retry_allowance: bool,
+    superseded: bool,
 ) -> bool {
-    after_report && error.kind() == Some(FailKind::Busy) && retry_allowance
+    after_report && outcome == CatchUpOutcome::Transient && (retry_allowance || superseded)
 }
 
 /// Decide whether the compact Strategies base may continue into its visible axis.
 ///
 /// The axis is a child of the compound base refresh. Starting it after a partial base failure
-/// wastes another scan and lets its success resolve the parent's active Busy retry episode.
+/// wastes another scan and lets its success resolve the parent's active transient retry episode.
 ///
 /// Args:
 ///     data_failed: Whether the strategy-list aggregate failed.

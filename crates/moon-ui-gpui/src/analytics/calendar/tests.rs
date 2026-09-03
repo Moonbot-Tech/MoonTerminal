@@ -85,6 +85,51 @@ fn report_catch_up_failure_preserves_current_and_previous_calendar_snapshots() {
     );
 }
 
+/// `analytics/calendar/mod.rs:apply_calendar_results` must preserve both settled Calendar
+/// snapshots for a transient Split result and keep Calendar dirty. Publishing Split unconditionally
+/// flashes incomplete cells, while returning false stops the catch-up that would replace them.
+#[test]
+fn transient_split_preserves_calendar_snapshots_and_requests_a_catch_up() {
+    let mut days = ProfitLoadState::Ready {
+        unit: None,
+        data: Arc::new(vec![DayCell {
+            start: 456,
+            ..Default::default()
+        }]),
+    };
+    let mut previous = LoadState::Ready(Arc::new(Some(Default::default())));
+    let original_days = days.data().expect("settled Calendar cells").clone();
+    let original_previous = previous
+        .data()
+        .expect("settled previous-period total")
+        .clone();
+
+    assert!(
+        apply_calendar_results(
+            &mut days,
+            &mut previous,
+            Ok(moon_core::db::ProfitScope::Split(Default::default())),
+            true,
+            true,
+        ),
+        "a transient Split result must keep Calendar dirty for its scheduled correction"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &original_days,
+            days.data().expect("preserved Calendar cells")
+        ),
+        "a transient Split must retain the exact current-cell snapshot"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &original_previous,
+            previous.data().expect("preserved previous-period total")
+        ),
+        "a transient Split must retain the exact comparison snapshot"
+    );
+}
+
 /// Replacing `calendar::hour_start`'s gap rejection with the shared picker clamp would map both
 /// Warsaw 02:00 and 03:00 to the same bucket and duplicate that hour's profit in the Day grid.
 #[test]

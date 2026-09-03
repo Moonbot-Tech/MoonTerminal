@@ -3,6 +3,46 @@
 
 use super::support::*;
 
+/// `analytics/mod.rs:observe_report_axis` must send a machine axis observation through the Writer
+/// refresh path instead of reload, while `observe_valuation_mode` remains a real scope reload.
+/// Merging these paths blanks and dims Analytics on every feed reconnect; removing the valuation
+/// reload leaves an actual mode change under stale values.
+#[test]
+fn report_axis_observation_uses_writer_refresh_while_valuation_mode_reloads() {
+    let analytics = read_src("analytics/mod.rs");
+    let report_axis = code_only(braced_body(&analytics, "fn observe_report_axis("));
+    let valuation_mode = code_only(braced_body(&analytics, "fn observe_valuation_mode("));
+
+    assert!(
+        !report_axis.contains("reload("),
+        "a report-axis observation must not blank the settled surface through reload"
+    );
+    assert!(
+        report_axis.contains("self.request_report_refresh(")
+            && report_axis.contains("RefreshUrgency::Writer,")
+            && report_axis.contains("false,"),
+        "a report-axis observation must request a nonblocking Writer refresh"
+    );
+    for required in [
+        "self.seq = self.seq.wrapping_add(1);",
+        "self.cal_seq = self.cal_seq.wrapping_add(1);",
+        "self.cancel_latest_reads();",
+        "self.tuner.invalidate();",
+        "self.time_tuner.invalidate();",
+        "self.coins.invalidate();",
+        "self.coin_lists.invalidate();",
+    ] {
+        assert!(
+            report_axis.contains(required),
+            "a report-axis observation must retire every stale read identity: {required}"
+        );
+    }
+    assert!(
+        valuation_mode.contains("self.reload("),
+        "a valuation-mode change remains a real scope change and must reload"
+    );
+}
+
 /// Every retained view that caches civil-time presentation must observe the one shared display
 /// zone revision published by the header clock.
 ///
@@ -1425,7 +1465,7 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
         manual.contains("self.reload_strategy_base(false, true, true, cx)"),
         "manual scope refresh must retire values from the previous scope"
     );
-    let preserve_snapshot = "let preserve_snapshot = !matches!(this.strategy_data, ProfitLoadState::Loading)\n                    && this.keep_on_busy(after_report, data_error.as_ref());";
+    let preserve_snapshot = "let preserve_snapshot = !matches!(this.strategy_data, ProfitLoadState::Loading)\n                    && this.keep_on_catch_up(after_report, data_outcome, report_req);";
     assert!(
         reload.contains(preserve_snapshot),
         "only a settled strategy snapshot may survive an automatic report refresh"
@@ -1437,7 +1477,7 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
         "automatic strategy result publication",
     );
     assert!(
-        automatic_result.contains("this.keep_on_busy(after_report, data_error.as_ref())")
+        automatic_result.contains("this.keep_on_catch_up(after_report, data_outcome, report_req)")
             && !automatic_result.contains("if !preserve_snapshot || data_error.is_none() {")
             && automatic_result.contains("this.strategy_data.apply(data)")
             && automatic_result.contains("this.strat_core_w = None;")
@@ -1538,7 +1578,7 @@ fn summary_catch_up_preserves_only_a_retryable_busy_snapshot() {
         "Summary completion must distinguish automatic settled snapshots from initial loading"
     );
     assert!(
-        decision.contains("this.keep_on_busy(after_report, data_error.as_ref())")
+        decision.contains("this.keep_on_catch_up(after_report, data_outcome, report_req)")
             && !decision.contains("if !preserve_snapshot || data_error.is_none() {")
             && decision.contains("this.data.apply(data);"),
         "only a retryable Busy failure may retain the Summary snapshot"
@@ -1601,11 +1641,11 @@ fn report_generation_bookkeeping_has_no_repaint_and_each_completion_has_one() {
     }
 }
 
-/// `analytics/mod.rs:apply_undated_result` must call `keep_on_busy` before it publishes an error.
-/// Dropping that gate flashes a retryable Busy catch-up, while broadening it hides an exhausted
-/// Busy failure and leaves the retained undated count falsely current forever.
+/// `analytics/mod.rs:apply_undated_result` must call `keep_on_catch_up` before it publishes an
+/// error. Dropping that gate flashes a retryable Busy catch-up, while broadening it hides an
+/// exhausted Busy failure and leaves the retained undated count falsely current forever.
 #[test]
-fn undated_busy_gate_runs_before_the_error_is_published() {
+fn undated_catch_up_gate_runs_before_the_error_is_published() {
     let analytics = read_src("analytics/mod.rs");
     let apply = braced_body(&analytics, "fn apply_undated_result(");
     let failure_arm = code_only(braced_body(apply, "Err(error) =>"));
@@ -1617,7 +1657,7 @@ fn undated_busy_gate_runs_before_the_error_is_published() {
     );
 
     assert!(
-        before_error.contains("self.keep_on_busy(after_report, Some(&error))"),
+        before_error.contains("self.keep_on_catch_up(after_report, outcome, started_generation)"),
         "the retryable-Busy gate must run before the undated error can replace a retained count"
     );
 }
