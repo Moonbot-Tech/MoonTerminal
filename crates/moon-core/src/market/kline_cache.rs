@@ -21,6 +21,25 @@
 //! older executable that only knows `chunks` keeps reading exactly the v1 data it always
 //! did. See `read_rows` and `upsert_one`.
 //!
+//! A v1 row's `volume` slot is not always base coins: Binance Futures deep-history rows carry
+//! quote-currency turnover instead. Which producer wrote a v1 row, by kind, decides whether that
+//! reinterpretation is SOUND to apply on read:
+//!
+//! | kind | producers under the real exchange key | reinterpreted? |
+//! |---|---|---|
+//! | 1 | deep write-back (`history.rs` `deep_kind_min == 1`) AND trade-replay REST | never — two producers, ambiguous |
+//! | 5 | deep write-back (`deep_kind_min == 5`) AND recorder tick aggregation | never — two producers, ambiguous |
+//! | 30 / 60 / 240 / 1440 | deep write-back ONLY | yes, when the venue is quote-denominated |
+//!
+//! [`crate::fixture::shift_candles`] also rewrites `chunks`, but only in a private bench copy
+//! under its fixed unknown code-200 key. It is not a live producer and cannot make a real
+//! exchange's rows ambiguous; [`legacy_volume_is_quote`] leaves that key unchanged.
+//!
+//! See [`legacy_volume_is_quote`] for the full argument. `chunks_v2` rows are NEVER
+//! reinterpreted on read, at any kind: goal E (`chunks_v2`) was unreleased when this
+//! reinterpretation shipped, so no v2 row poisoned by the old bug ever existed in the field —
+//! there is nothing for a v2 migration to correct.
+//!
 //! Database open, schema creation, and startup retention run synchronously. After that
 //! setup, queued reads and writes run on a dedicated worker because `Connection` is not
 //! `Sync`. Writes are nonblocking; reads use a reply channel with a timeout because an
@@ -601,6 +620,7 @@ fn read_rows(
     }
     let days: std::collections::BTreeSet<i64> =
         v1_chunks.keys().chain(v2_chunks.keys()).copied().collect();
+    let v1_volume_is_quote = legacy_volume_is_quote(exchange, kind_min);
     let mut out = Vec::new();
     for day in days {
         let day_start = day * DAY_MS;
@@ -615,7 +635,7 @@ fn read_rows(
         let mut merged: BTreeMap<u32, ChartCandle> = BTreeMap::new();
         let insert_v1 = |merged: &mut BTreeMap<u32, ChartCandle>| {
             if let Some((blob, _)) = v1 {
-                for c in unpack_rows_v1(blob, day_start) {
+                for c in unpack_rows_v1(blob, day_start, v1_volume_is_quote) {
                     merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
                 }
             }
@@ -677,14 +697,23 @@ fn unpack_rows_v2(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
     out
 }
 
-/// Unpacks the legacy `chunks` table's 24-byte rows, which carry no turnover of their own — see
-/// [`crate::market::candles::estimate_quote_volume`] for the estimate and its error bound.
-fn unpack_rows_v1(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
+/// Unpacks the legacy `chunks` table's 24-byte rows, which carry a single wire `volume` figure
+/// and no turnover of their own.
+///
+/// Pure byte decoder: no venue knowledge, no string parsing — `volume_is_quote` is resolved by
+/// the caller ([`legacy_volume_is_quote`]) from the key this blob was read under. When `false`,
+/// `volume` is taken as base and `quote_volume` is the OHLC4 estimate, exactly as before this
+/// flag existed. When `true`, the stored `volume` slot IS quote money: `quote_volume` becomes
+/// that figure and `volume` becomes the OHLC4-derived base estimate — see
+/// [`crate::market::candles::split_wire_volume`] for the arithmetic and its error bound.
+fn unpack_rows_v1(blob: &[u8], day_start: i64, volume_is_quote: bool) -> Vec<ChartCandle> {
     let mut out = Vec::with_capacity(blob.len() / ROW_BYTES_V1);
     for chunk in blob.chunks_exact(ROW_BYTES_V1) {
         let off = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
         let f = |i: usize| f32::from_le_bytes(chunk[i..i + 4].try_into().unwrap());
         let (open, high, low, close, volume) = (f(4), f(8), f(12), f(16), f(20));
+        let (volume, quote_volume) =
+            super::candles::split_wire_volume(volume, open, high, low, close, volume_is_quote);
         out.push(ChartCandle {
             t_open_ms: (day_start + off as i64) as f64,
             open,
@@ -692,10 +721,53 @@ fn unpack_rows_v1(blob: &[u8], day_start: i64) -> Vec<ChartCandle> {
             low,
             close,
             volume,
-            quote_volume: super::candles::estimate_quote_volume(volume, open, high, low, close),
+            quote_volume,
         });
     }
     out
+}
+
+/// Whether a v1 (`chunks`) row stored under this key has its wire `volume` slot in quote money
+/// rather than base coins.
+///
+/// `true` only when ALL of: the part of `exchange` before `':'` parses as a `u8`; that code's
+/// venue is quote-denominated ([`crate::venue::deep_volume_is_quote`]); and `kind_min` is one of
+/// the COARSE kinds 30, 60, 240 or 1440.
+///
+/// # Why parsing the key here is sound
+/// The `exchange` key format (`"{code}:{dex}"`) is defined by this module's own doc above
+/// (`kline_cache.rs:9-11`), so decoding it here is not reaching into a stranger's private format
+/// — the cache already owns that string's shape.
+///
+/// # Why reinterpreting ONLY these kinds is sound
+/// The coarse kinds 30/60/240/1440 have exactly ONE producer under the real exchange key:
+/// `deep_row_candle`'s writeback (`history.rs:645-650` native backfill, `:834` deep response). All
+/// three lenses of the goal's plan review independently re-derived and confirmed this. Kinds 1 and
+/// 5 are deliberately EXCLUDED even on a quote-denominated venue: kind 1 is also written by
+/// trade-replay REST (`trade_replay/worker.rs:443`) and kind 5 also by the background recorder's
+/// tick aggregation (`source/refresh.rs:198-207`), and a persisted row cannot say which producer
+/// wrote it — reinterpreting it would be a coin flip. Those two age out in 30 and 15 days
+/// (`retention_days`) and are superseded by correct v2 rows the next time a deep response arrives,
+/// so the bounded staleness is left alone rather than guessed at. A magnitude heuristic ("does
+/// `quote_volume` look like `estimate_quote_volume(volume, ..)`?") is REJECTED for the same
+/// producer-ambiguous rows: EVERY v1 row satisfies it trivially, since v1 stores no turnover of
+/// its own, and it would also misfire on legitimate base-denominated v2 rows.
+///
+/// An unknown or unparsable exchange code returns `false`, which keeps the shipped fixture
+/// (`fixtures/chart-ace/klines.sqlite`, code `200`, `venue(200) == None`) byte-for-byte unchanged.
+///
+/// `chunks_v2` rows are NEVER reinterpreted by this or any other function: goal E (`chunks_v2`) is
+/// unreleased as of this change (`git tag --contains 143c6b50` is empty), so no poisoned v2 row
+/// has ever shipped, and post-fix v2 rows are correct by construction.
+fn legacy_volume_is_quote(exchange: &str, kind_min: u32) -> bool {
+    let quote_kind = matches!(kind_min, 30 | 60 | 240 | 1440);
+    let quote_venue = exchange
+        .split(':')
+        .next()
+        .and_then(|s| s.parse::<u8>().ok())
+        .map(crate::venue::deep_volume_is_quote)
+        .unwrap_or(false);
+    quote_kind && quote_venue
 }
 
 fn now_unix_ms() -> i64 {

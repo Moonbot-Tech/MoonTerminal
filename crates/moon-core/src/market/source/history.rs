@@ -15,43 +15,93 @@ use super::{
     trade_price_range,
 };
 
-/// Convert a retained CoinCard row into a chart candle, normalizing shuffled wire fields.
-fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCandle {
-    let (open, high, low, close) =
-        crate::market::candles::normalize_ohlc(r.open(), r.high(), r.low(), r.close());
-    let volume = r.volume();
+/// Convert a bucket's OHLC plus a single wire volume figure into a chart candle, normalizing the
+/// OHLC and splitting the volume into its base/quote pair. The ONLY place either adapter below
+/// computes a volume pair, so `deep_row_candle` and `snap5_row_candle` cannot drift apart on it.
+///
+/// Args:
+///     t_open_ms: Bucket open time, Unix milliseconds.
+///     open, high, low, close: The bucket's OHLC, pre-normalization.
+///     volume: The wire volume figure as the source reported it.
+///     volume_is_quote: `true` when `volume` is quote-currency turnover (a Binance Futures row),
+///         `false` when it is base-currency volume — see `crate::venue::deep_volume_is_quote`.
+///
+/// Returns:
+///     The chart candle with normalized OHLC and both volume fields resolved.
+fn wire_row_candle(
+    t_open_ms: f64,
+    open: f32,
+    high: f32,
+    low: f32,
+    close: f32,
+    volume: f32,
+    volume_is_quote: bool,
+) -> crate::market::candles::ChartCandle {
+    let (open, high, low, close) = crate::market::candles::normalize_ohlc(open, high, low, close);
+    let (volume, quote_volume) =
+        crate::market::candles::split_wire_volume(volume, open, high, low, close, volume_is_quote);
     crate::market::candles::ChartCandle {
-        t_open_ms: r.unix_millis() as f64,
+        t_open_ms,
         open,
         high,
         low,
         close,
         volume,
-        quote_volume: crate::market::candles::estimate_quote_volume(volume, open, high, low, close),
+        quote_volume,
     }
 }
 
-/// Convert one 5-minute snapshot ring row into a chart candle, normalizing shuffled wire fields
-/// exactly as [`deep_row_candle`] does.
+/// Convert a retained CoinCard row into a chart candle.
+///
+/// Args:
+///     r: The retained deep-history row.
+///     volume_is_quote: Whether the core's `volume` slot for this row is quote-currency turnover
+///         rather than base — resolved once per pass from the row's venue.
+fn deep_row_candle(
+    r: &moonproto::DeepPrice,
+    volume_is_quote: bool,
+) -> crate::market::candles::ChartCandle {
+    wire_row_candle(
+        r.unix_millis() as f64,
+        r.open(),
+        r.high(),
+        r.low(),
+        r.close(),
+        r.volume(),
+        volume_is_quote,
+    )
+}
+
+/// Convert one 5-minute snapshot ring row into a chart candle.
 ///
 /// Rows in this ring are stamped at the END of their period — moonproto seals a 5-minute candle
 /// with the seal time, and the server's own snapshot is pushed in end-stamped as well. Shift back
 /// one period so the open aligns with every other base, which is what `detect_snapshot` already
 /// does for the same ring. Without it the whole snapshot layer sat one bucket late and its
-/// boundary rows resampled into the wrong coarse bucket.
-fn snap5_row_candle(r: &moonproto::state::Candle5mRow) -> crate::market::candles::ChartCandle {
-    let (open, high, low, close) =
-        crate::market::candles::normalize_ohlc(r.open(), r.high(), r.low(), r.close());
-    let volume = r.volume();
-    crate::market::candles::ChartCandle {
-        t_open_ms: (r.time().unix_millis() - SNAP5_TF_MS) as f64,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        quote_volume: crate::market::candles::estimate_quote_volume(volume, open, high, low, close),
-    }
+/// boundary rows resampled into the wrong coarse bucket. This shift is unrelated to the volume
+/// question below and must not move.
+///
+/// The ring row is a moonproto `DeepPrice` under a different wire shape (`Candle5mRow`, built by
+/// `Candle5mRow::from_deep_price`): same Delphi record, same core, same `volume` field, so it
+/// takes the same `volume_is_quote` flag as [`deep_row_candle`] rather than always being treated
+/// as base.
+///
+/// Args:
+///     r: The retained 5-minute snapshot ring row.
+///     volume_is_quote: Whether this row's `volume` slot is quote-currency turnover.
+fn snap5_row_candle(
+    r: &moonproto::state::Candle5mRow,
+    volume_is_quote: bool,
+) -> crate::market::candles::ChartCandle {
+    wire_row_candle(
+        (r.time().unix_millis() - SNAP5_TF_MS) as f64,
+        r.open(),
+        r.high(),
+        r.low(),
+        r.close(),
+        r.volume(),
+        volume_is_quote,
+    )
 }
 
 /// Lower bound of every history-retry delay in this file, in seconds.
@@ -442,16 +492,33 @@ impl MarketDataSource {
             // Pair the local kline-cache handle with the exchange key so cores on one exchange share
             // cached rows and provider election can change without changing the cache address.
             // CoreId itself is a stable uid since schema v11, but it identifies one core.
-            let (kline_cache, exchange_key) = {
+            let (kline_cache, exchange_key, deep_quote) = {
                 let inner = self.inner.read().expect("market source poisoned");
+                let exchange = inner.provider_exchange.get(&provider);
                 (
                     inner.kline_cache.clone(),
-                    inner
-                        .provider_exchange
-                        .get(&provider)
-                        .map(|e| format!("{}:{:08x}", e.code, e.dex)),
+                    exchange.map(|e| format!("{}:{:08x}", e.code, e.dex)),
+                    exchange.is_some_and(|e| crate::venue::deep_volume_is_quote(e.code)),
                 )
             };
+            // Neither `cache_stale` nor `series_reset` below otherwise keys on the exchange key, so
+            // a chart that first reads before the provider's `ExchangeId` is known — or whose
+            // provider is later RE-ELECTED to a core on a different exchange key — would keep
+            // reading/writing the STALE cache address forever, since `set_provider_exchanges` only
+            // overwrites `provider_exchange` and invalidates nothing. Keyed on the ADDRESS
+            // (`exchange_key`) rather than on the derived `deep_quote` bool: a bool cannot see a
+            // spot provider's identity resolving (its `deep_quote` stays `false` throughout) or a
+            // same-`deep_quote` provider election, both of which change the real cache address.
+            // Comparing against the cursor's stored key turns either arrival into an explicit
+            // transition: force a full cache re-read now, and fold the transition into
+            // `series_reset` below so the composed series is rebuilt too. Note `None != Some(_)` is
+            // also `true` on the very first pass — that reads as "changed" too, which is harmless
+            // rather than incorrect: `cache_kind` is already `None` and `series_reset` is already
+            // `true` via `!candle_series.is_valid()` on that same first pass.
+            let exchange_key_changed = cursor.last_exchange_key != exchange_key;
+            if exchange_key_changed {
+                cursor.cache_kind = None;
+            }
             // Subscribe to the core's live timeframe bars. Event::LiveCandle appends or replaces
             // the last retained tf_candles row. Without it, deep rows freeze at response time and
             // coarse-timeframe series can lag by hours. The subscription is global to the client
@@ -646,7 +713,9 @@ impl MarketDataSource {
                                     ex.clone(),
                                     market.to_string(),
                                     native_kind_min,
-                                    rows.iter().map(deep_row_candle).collect(),
+                                    rows.iter()
+                                        .map(|r| deep_row_candle(r, deep_quote))
+                                        .collect(),
                                 );
                                 // The merge enters the FIFO queue before the future read, so the
                                 // prefix reread sees the new rows.
@@ -738,9 +807,11 @@ impl MarketDataSource {
                 || !cursor.candle_series.is_valid()
                 || cursor.candle_series.tf_ms() != cp.tf_ms
                 || (cursor.candle_trades.is_none() && trade_reader.is_some())
-                || deep_rows_sig != cursor.last_deep_sig;
+                || deep_rows_sig != cursor.last_deep_sig
+                || exchange_key_changed;
             if series_reset {
                 cursor.last_deep_sig = deep_rows_sig;
+                cursor.last_exchange_key = exchange_key.clone();
                 cursor.server_candle_rows.clear();
                 cursor.server_candles.clear();
                 let from_base_ms =
@@ -768,7 +839,7 @@ impl MarketDataSource {
                                 let t = r.unix_millis();
                                 t >= from_base_ms && t <= to_ms
                             })
-                            .map(deep_row_candle),
+                            .map(|r| deep_row_candle(r, deep_quote)),
                     );
                 }
                 let have_deep = !deep_part.is_empty();
@@ -784,7 +855,12 @@ impl MarketDataSource {
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
-                        snap_part.extend(cursor.server_candle_rows.iter().map(snap5_row_candle));
+                        snap_part.extend(
+                            cursor
+                                .server_candle_rows
+                                .iter()
+                                .map(|r| snap5_row_candle(r, deep_quote)),
+                        );
                         crate::market::candles::orient_range_rows(&mut snap_part);
                     }
                 } else if cp.tf_ms < SNAP5_TF_MS {
@@ -802,9 +878,12 @@ impl MarketDataSource {
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
-                        cursor
-                            .ring_rows_5m
-                            .extend(cursor.server_candle_rows.iter().map(snap5_row_candle));
+                        cursor.ring_rows_5m.extend(
+                            cursor
+                                .server_candle_rows
+                                .iter()
+                                .map(|r| snap5_row_candle(r, deep_quote)),
+                        );
                         crate::market::candles::orient_range_rows(&mut cursor.ring_rows_5m);
                     }
                 }
@@ -829,7 +908,11 @@ impl MarketDataSource {
                             cursor.cache_written_sig = deep_rows_sig;
                             let full: Vec<ChartCandle> = snapshot
                                 .tf_candles(market, deep_kind)
-                                .map(|rows| rows.iter().map(deep_row_candle).collect())
+                                .map(|rows| {
+                                    rows.iter()
+                                        .map(|r| deep_row_candle(r, deep_quote))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             cache.merge(ex.clone(), market.to_string(), deep_kind_min, full);
                         }

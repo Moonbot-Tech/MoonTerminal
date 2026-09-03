@@ -5,6 +5,21 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// `history.rs:wire_row_candle` re-inlining a base-volume estimate in either adapter, or passing
+/// `false` at a call site, makes quote-denominated futures rows render as volume times price.
+#[test]
+fn wire_rows_preserve_quote_turnover_only_for_quote_denominated_sources() {
+    let quote_wire = wire_row_candle(1_000.0, 90.0, 120.0, 80.0, 110.0, 12_000.0, true);
+    let base_wire = wire_row_candle(2_000.0, 90.0, 120.0, 80.0, 110.0, 12_000.0, false);
+
+    // OHLC4 is 100, calculated here rather than through the production helper.
+    assert_eq!(quote_wire.quote_volume, 12_000.0);
+    assert_eq!(quote_wire.volume, 120.0);
+    assert_ne!(quote_wire.quote_volume, 12_000.0 * 100.0);
+    assert_eq!(base_wire.volume, 12_000.0);
+    assert_eq!(base_wire.quote_volume, 12_000.0 * 100.0);
+}
+
 /// `history.rs:native_backfill_due` must keep an elapsed retry due while a just-claimed or
 /// clock-earlier retry remains blocked; changing the due comparison would either suppress missing
 /// history or multiply requests against the MoonBot core.
