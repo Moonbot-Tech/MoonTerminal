@@ -92,7 +92,7 @@ const REDUCED_PILL_MAX_W: f32 = 120.0;
 /// (`chrome/terminal_chrome.rs::workspace_mode_selector`, fixed trigger); this reservation moved
 /// with it, because a budget that under-reserves lets THIS cluster claim room the header has
 /// already spent.
-const HEADER_OTHER_SECTIONS_W: f32 = 810.0;
+const HEADER_OTHER_SECTIONS_W: f32 = 778.0;
 
 /// One quick-select button slot: `(slot index, strategy name, resolved strategy id, caption,
 /// numeric fallback caption)`.

@@ -421,17 +421,21 @@ fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
 /// Returns:
 ///     A compact MoonUI dropdown that publishes mode changes through `WorkspaceRevision`.
 fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> impl IntoElement {
-    /// Design-unit trigger width, FIXED rather than fitted: it holds the longer of the two item
-    /// labels in every locale plus the component's own caret suffix and padding, at the narrowest
-    /// supported UI font, so neither mode truncates and neither is narrower than the other.
-    const MODE_TRIGGER_W: f32 = 116.0;
+    /// Design-unit trigger width, FIXED rather than fitted: it holds the longer of the two SHORT
+    /// mode names (`MANUAL`) in every locale plus the component's own caret suffix and padding,
+    /// at the narrowest supported UI font, so neither mode truncates and neither is narrower
+    /// than the other. The trigger shows only the bare name to keep the header short; the rows
+    /// below spell out «… режим» / «… mode» because a menu has the room to say what it selects.
+    const MODE_TRIGGER_W: f32 = 84.0;
     /// Design-unit popup width: both rows plus their check column, at the trigger's own scale.
     const MODE_MENU_W: f32 = 150.0;
 
     let mode = backend.read(cx).workspace_mode(group);
     let auto = mode == WorkspaceMode::AutoTrading;
-    let auto_label = t!("workspace.mode.auto_item").to_string();
-    let manual_label = t!("workspace.mode.classic_item").to_string();
+    let auto_label = t!("workspace.mode.auto").to_string();
+    let manual_label = t!("workspace.mode.classic").to_string();
+    let menu_auto_label = t!("workspace.mode.auto_item").to_string();
+    let menu_manual_label = t!("workspace.mode.classic_item").to_string();
     let (label, tooltip) = if auto {
         (
             auto_label.clone(),
@@ -450,12 +454,12 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
             (
                 WorkspaceMode::AutoTrading,
                 "header-workspace-mode-auto".into(),
-                auto_label.into(),
+                menu_auto_label.into(),
             ),
             (
                 WorkspaceMode::Classic,
                 "header-workspace-mode-manual".into(),
-                manual_label.into(),
+                menu_manual_label.into(),
             ),
         ],
         mode,
