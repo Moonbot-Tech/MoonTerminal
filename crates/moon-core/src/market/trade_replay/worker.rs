@@ -919,6 +919,7 @@ fn serve_ticks(
             ticks,
             bucket_ms,
             partial,
+            covered,
             stage.candles.clone(),
         ),
         venue_refused,
@@ -1148,6 +1149,9 @@ where
 ///     ticks: Trade points, ascending, already clipped to the harvest's covered range.
 ///     bucket_ms: The bucket [`fit_ticks`] thinned the points to; `0` means raw.
 ///     partial: Whether `ticks` covers only part of `request.window`.
+///     covered: The walk's own exhaustive span, carried onto the series verbatim — the chart
+///         withholds the bars lying inside it, and only this range knows that a covered minute
+///         with no trade in it is still covered.
 ///     candles: The exchange klines to carry as the bar layer.
 ///
 /// Returns:
@@ -1158,6 +1162,7 @@ fn compose_ticks(
     ticks: Vec<Tick>,
     bucket_ms: i64,
     partial: bool,
+    covered: (i64, i64),
     candles: Vec<ChartCandle>,
 ) -> TradeReplaySeries {
     TradeReplaySeries {
@@ -1171,6 +1176,7 @@ fn compose_ticks(
         tick_status: TickStatus::Served,
         bucket_ms,
         partial,
+        covered: Some(covered),
     }
 }
 
@@ -1223,6 +1229,8 @@ fn compose(
         tick_status: TickStatus::Pending,
         bucket_ms: 0,
         partial: false,
+        // No tick walk ran, so there is no covered span and the chart keeps every bar.
+        covered: None,
     }
 }
 
