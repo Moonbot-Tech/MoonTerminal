@@ -74,12 +74,41 @@ fn market_sell_yes_revalidates_scope_before_dispatch() {
     let authority = callback
         .find("market_sell_core_is_authorized(")
         .expect("Yes must validate the captured core");
+    // Matched WITHOUT the `b.session` prefix: rustfmt breaks a deeply indented call across lines,
+    // and this test pins dispatch ORDER, not the receiver's formatting.
     let position = callback
-        .find("b.session.market_sell_position(")
+        .find(".market_sell_position(")
         .expect("position sell command must remain reachable");
     let token = callback
-        .find("b.session.market_sell_token(")
+        .find(".market_sell_token(")
         .expect("token sell command must remain reachable");
 
     assert!(scope_read < authority && authority < position && authority < token);
+}
+
+/// A spot sale must send a live price it read at dispatch, never a zero and never the rendered one.
+///
+/// Mutation: go back to `price=0`, or carry `e.row.price` into the confirmation. The zero is what
+/// made the core invent `quantity=499.99999` for a 0.005 BTC holding, and a wallet-derived row
+/// prices in USDT rather than in the market's quote (2026-09-03).
+#[test]
+fn a_spot_market_sell_reads_a_live_price_before_dispatch() {
+    let source = include_str!("../table.rs");
+    let callback = source
+        .split_once("MoonButton::new(\"assets-msell-yes\")")
+        .expect("Market Sell Yes callback must exist")
+        .1;
+    let live = callback
+        .find(".latest_price(core, &market_c)")
+        .expect("Yes must re-read the live quote price");
+    let token = callback
+        .find(".market_sell_token(")
+        .expect("token sell command must remain reachable");
+
+    assert!(live < token, "the live price must be read before dispatch");
+    let call = &callback[token..];
+    assert!(
+        call.contains("qty, price)") || call.contains("qty,\n") && call.contains("price,"),
+        "the token sale must carry the held quantity and the freshly read price"
+    );
 }

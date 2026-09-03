@@ -94,3 +94,40 @@ fn refuses_when_no_active_sell_order() {
         SplitTarget::Ambiguous
     );
 }
+
+/// The order size IS the coin quantity; only the price is derived.
+///
+/// Regression target, measured on Bitget 2026-09-03: sizing the order in the account's balance
+/// currency instead sent `size=79.679` for a 198.01 AERO holding, and the core sold exactly
+/// 79.67 AERO — the number taken as coins and snapped to the lot step. The same mistake on
+/// MANTRA offered $0.37 of a $103 holding and was rejected for the venue's 1 USDT minimum.
+#[test]
+fn a_spot_market_sale_sends_the_coin_quantity_as_the_size() {
+    let (limit, size) = market_sell_terms(198.01, 0.5031).expect("a priced holding has terms");
+
+    assert_eq!(
+        size, 198.01,
+        "the whole held quantity must ride as the size"
+    );
+    // Ported from the core's own sale, which priced at exactly `last * 0.8` and filled at market.
+    assert!((limit - 0.40248).abs() < 1e-9, "limit price was {limit}");
+    assert!(limit < 0.5031, "a sell must price THROUGH the book to fill");
+}
+
+/// Inputs that cannot produce an order size send nothing, rather than a zero the core reinterprets.
+///
+/// Mutation: restore the old `price=0` call. A zero price is precisely the input whose fallback
+/// inside the core produced the runaway quantity, so it must not reach the wire.
+#[test]
+fn unpriced_or_empty_holdings_yield_no_sell_terms() {
+    assert!(market_sell_terms(0.005, 0.0).is_none());
+    assert!(market_sell_terms(0.005, -1.0).is_none());
+    assert!(market_sell_terms(0.005, f64::NAN).is_none());
+    assert!(market_sell_terms(0.005, f64::INFINITY).is_none());
+    assert!(market_sell_terms(0.0, 78_528.68).is_none());
+    assert!(market_sell_terms(-0.005, 78_528.68).is_none());
+    assert!(market_sell_terms(f64::NAN, 78_528.68).is_none());
+    // A finite price cannot overflow the limit, which only ever scales it DOWN, so an absurd but
+    // finite pair is not a refusal — the venue's own filters are what reject it.
+    assert!(market_sell_terms(f64::MAX, f64::MAX).is_some());
+}

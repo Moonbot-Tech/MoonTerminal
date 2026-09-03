@@ -419,11 +419,20 @@ impl SessionManager {
     }
 
     /// Sell a core market's spot token at market from the Market Sell button on a holding row.
-    /// `size` is the quantity in the base coin, usually the full balance.
-    pub fn market_sell_token(&self, core: CoreId, market: String, size: f64) -> Result<()> {
+    ///
+    /// `qty` is the coin quantity, usually the full balance, and `price` the market's own last
+    /// price: the wire carries the order size in the account's balance currency, so the feed
+    /// multiplies the two. Passing a price from another market silently resizes the order.
+    pub fn market_sell_token(
+        &self,
+        core: CoreId,
+        market: String,
+        qty: f64,
+        price: f64,
+    ) -> Result<()> {
         self.send_core_cmd(
             core,
-            CoreCmd::MarketSellToken { market, size },
+            CoreCmd::MarketSellToken { market, qty, price },
             "market sell token",
         )
     }

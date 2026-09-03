@@ -203,27 +203,29 @@ impl MarketDataSource {
         let snapshot = client
             .snapshot_versioned()
             .ok_or(LatestPriceError::NoSnapshot)?;
-        let readers = snapshot
-            .market_history_readers(market)
-            .ok_or(LatestPriceError::NoHistoryReaders)?;
-
-        let mut trades = Vec::new();
-        if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
-            reader.copy_last(1, &mut trades);
-            if let Some(row) = trades.last() {
-                if row.price.is_finite() && row.price > 0.0 {
-                    return Ok(row.price);
+        // History is an OPTIMIZATION here, not a requirement: moonproto builds a history store only
+        // for markets inside the client's `TradeStorageScope`, so demanding readers used to fail
+        // outright on a market whose `p_last` the snapshot holds — with the fallback below sitting
+        // unreachable underneath. Every caller wants the last price, not the store it came from.
+        if let Some(readers) = snapshot.market_history_readers(market) {
+            let mut trades = Vec::new();
+            if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
+                reader.copy_last(1, &mut trades);
+                if let Some(row) = trades.last() {
+                    if row.price.is_finite() && row.price > 0.0 {
+                        return Ok(row.price);
+                    }
                 }
             }
-        }
 
-        let mut last_prices = Vec::new();
-        if let Some(reader) = readers.last_prices {
-            reader.copy_last(1, &mut last_prices);
-            if let Some(row) = last_prices.last() {
-                let price = row.price();
-                if price.is_finite() && price > 0.0 {
-                    return Ok(price);
+            let mut last_prices = Vec::new();
+            if let Some(reader) = readers.last_prices {
+                reader.copy_last(1, &mut last_prices);
+                if let Some(row) = last_prices.last() {
+                    let price = row.price();
+                    if price.is_finite() && price > 0.0 {
+                        return Ok(price);
+                    }
                 }
             }
         }

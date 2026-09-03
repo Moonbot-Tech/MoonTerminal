@@ -1068,12 +1068,12 @@ fn actions_cell(
 ) -> MoonDataCell {
     // An open position or positive spot balance is sellable only when its `<coin><quote>` market
     // actually exists on the core. For example, a USDC account may have no USDTUSDC market.
-    let size = if e.row.qty.abs() > 0.0 {
+    let qty = if e.row.qty.abs() > 0.0 {
         e.row.qty.abs()
     } else {
         e.row.qty_full.abs()
     };
-    let sellable = is_position || size > 0.0;
+    let sellable = is_position || qty > 0.0;
     if !sellable || e.row.market.is_empty() || !e.market_exists {
         return MoonDataCell::text(String::new());
     }
@@ -1084,6 +1084,9 @@ fn actions_cell(
     let view_ms = view.clone();
     let market_ms = market.clone();
     let coin_ms = e.row.coin.clone();
+    // A position closes through its own command and carries no quantity; a spot holding sells this
+    // one, which rides as the order size unchanged.
+    let spot_qty = (!is_position).then_some(qty);
     let el = h_flex()
         .w_full()
         .h_full()
@@ -1102,8 +1105,7 @@ fn actions_cell(
                         view_ms.clone(),
                         core,
                         market_ms.clone(),
-                        is_position,
-                        size,
+                        spot_qty,
                         coin_ms.clone(),
                         window,
                         app,
@@ -1128,6 +1130,25 @@ fn actions_cell(
     MoonDataCell::element(el)
 }
 
+/// Why a confirmed Market Sell was not sent, so the window can name the guard that stopped it.
+enum MarketSellRefusal {
+    /// Navigation removed the captured core from the panel's live scope.
+    ScopeChanged,
+    /// No live price, and `TDoSellOrderCommand` has no market-order flag to send instead: a
+    /// priceless order is the very input that made the core invent a quantity of its own.
+    NoPrice,
+}
+
+impl MarketSellRefusal {
+    /// The localized warning shown to whoever pressed Yes.
+    fn message(&self) -> String {
+        match self {
+            Self::ScopeChanged => t!("assets.market_sell_scope_changed").to_string(),
+            Self::NoPrice => t!("assets.market_sell_no_price").to_string(),
+        }
+    }
+}
+
 /// Decide whether a confirmation captured for one core still has dispatch authority.
 ///
 /// Args:
@@ -1150,27 +1171,26 @@ fn market_sell_core_is_authorized(
 ///
 /// Only the Yes button submits the irreversible action: `market_sell_position` closes a position,
 /// while `market_sell_token` sells a spot balance. A group-owned dialog revalidates its captured
-/// core against the current effective workspace scope immediately before either command.
+/// core against the current effective workspace scope immediately before either command, and a
+/// spot sale additionally reads a live price, without which the core invents a quantity.
 ///
 /// Args:
 ///     view: Assets entity retaining host scope and Backend authority.
 ///     core: Core captured from the rendered row.
 ///     market: Resolved market submitted on confirmation.
-///     is_position: Whether to close a position instead of selling a spot balance.
-///     size: Spot quantity used only when `is_position` is false.
+///     spot_qty: Coin quantity of a spot holding, sent as the order size; `None` closes a
+///         position instead.
 ///     coin: Display token interpolated into the confirmation question.
 ///     window: Window that owns the unique dialog and refusal notification.
 ///     app: Application context used to build the dialog.
 ///
 /// Returns:
-///     Nothing; stale group authority closes with a visible warning and sends no command.
-#[allow(clippy::too_many_arguments)]
+///     Nothing; every refusal closes with a visible warning and sends no command.
 fn open_market_sell_confirm(
     view: Entity<AssetsView>,
     core: CoreId,
     market: String,
-    is_position: bool,
-    size: f64,
+    spot_qty: Option<f64>,
     coin: String,
     window: &mut Window,
     app: &mut App,
@@ -1232,7 +1252,7 @@ fn open_market_sell_confirm(
                                 .variant(MoonButtonVariant::Danger)
                                 .label(format!("  {}  ", t!("dialogs.yes")))
                                 .on_click(move |_, window, cx| {
-                                    let authorized = confirm_view.update(cx, |this, cx| {
+                                    let refusal = confirm_view.update(cx, |this, cx| {
                                         let b = this.backend.read(cx);
                                         let effective_scope = this.effective_scope(b);
                                         if !market_sell_core_is_authorized(
@@ -1240,17 +1260,37 @@ fn open_market_sell_confirm(
                                             effective_scope.as_ref().map(|scope| scope.ids()),
                                             core,
                                         ) {
-                                            return false;
+                                            return Some(MarketSellRefusal::ScopeChanged);
                                         }
-                                        // Close a position at market, or sell the remaining spot token.
-                                        let res = if is_position {
-                                            b.session.market_sell_position(core, market_c.clone())
-                                        } else {
-                                            b.session.market_sell_token(
-                                                core,
-                                                market_c.clone(),
-                                                size,
-                                            )
+                                        // Close a position at market, or sell the remaining spot
+                                        // token. The price guard runs here rather than in the
+                                        // feed: only this side can say why nothing was sent.
+                                        let res = match spot_qty {
+                                            None => b
+                                                .session
+                                                .market_sell_position(core, market_c.clone()),
+                                            Some(qty) => {
+                                                // The LIVE quote-denominated price, not the one
+                                                // rendered into the row: a wallet-derived row
+                                                // prices in USDT, and a confirmation left open
+                                                // goes stale against the book it must cross.
+                                                let price = b
+                                                    .session
+                                                    .market_source()
+                                                    .latest_price(core, &market_c)
+                                                    .ok()
+                                                    .map(f64::from)
+                                                    .filter(|p| p.is_finite() && *p > 0.0);
+                                                let Some(price) = price else {
+                                                    return Some(MarketSellRefusal::NoPrice);
+                                                };
+                                                b.session.market_sell_token(
+                                                    core,
+                                                    market_c.clone(),
+                                                    qty,
+                                                    price,
+                                                )
+                                            }
                                         };
                                         if let Err(err) = res {
                                             log::warn!(
@@ -1258,13 +1298,11 @@ fn open_market_sell_confirm(
                                             );
                                         }
                                         cx.notify();
-                                        true
+                                        None
                                     });
-                                    if !authorized {
+                                    if let Some(refusal) = refusal {
                                         window.push_notification(
-                                            MoonNotification::warning(
-                                                t!("assets.market_sell_scope_changed").to_string(),
-                                            ),
+                                            MoonNotification::warning(refusal.message()),
                                             cx,
                                         );
                                     }

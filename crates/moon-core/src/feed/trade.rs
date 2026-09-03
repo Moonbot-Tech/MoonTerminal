@@ -163,16 +163,70 @@ pub(super) fn market_sell_position(client: &MoonClient, server_id: u64, market: 
     );
 }
 
+/// Fraction of the market price a spot `Market sell` prices its limit order at.
+///
+/// Ported from the core's own sale on the 2026-09-03 BinKEAUSDC run: last ask 78528.68 priced the
+/// order at 62822.94 — exactly `* 0.8` — and it filled at 78528.67. A venue that refuses a price
+/// this far out corrects it itself: Bitget answered `25205 trading price cannot be below 2%` and
+/// the core retried at its own bound, filling on the second try (2026-09-03 AERO).
+const MARKET_SELL_PRICE_FACTOR: f64 = 0.8;
+
+/// Wire terms for a spot market sale: `(limit price, order size)`.
+///
+/// The size is the COIN QUANTITY, and the only field that was ever wrong here is the price.
+/// Measured on Bitget, 2026-09-03: a sale sent as `size=103.79, price=0.0035616` came back as
+/// `Sell: 103.8 MANTRA` and was rejected for `less than the minimum amount 1 USDT` (103.78 coins
+/// ≈ $0.37) instead of selling the 29141.29 held; a second, `size=79.679`, sold exactly
+/// `79.67 AERO` out of 198.01. The core takes the number as coins and rounds it to the lot step.
+///
+/// Do NOT carry `NewOrderParams::size` semantics over: an OPENING order says how much balance
+/// currency to spend, while this command says how much coin to sell. They are different commands.
+///
+/// The price is what breaks a spot Market Sell: `TDoSellOrderCommand` has no market-order flag
+/// (unlike `ClosePosition`, which carries a real `market_sell` bool), and `price=0` is not a
+/// market order. Sent with a zero, a 0.005 BTC holding reached Binance as `quantity=499.99999` —
+/// `0.005 / 1e-5`, the lot step the core substituted for the zero — and NOTIONAL rejected it five
+/// times (2026-09-03 BinKEAUSDC log). Moonbot's own Market Sell instead prices a LIMIT order far
+/// enough through the book to fill like a market one, which is what this reproduces.
+///
+/// Args:
+///     qty: Coin quantity being sold, which rides as the order size unchanged.
+///     price: Last market price in the market's quote currency.
+///
+/// Returns:
+///     `None` unless both inputs and the limit they produce are finite and positive — the zero
+///     price is exactly the input that produced the runaway quantity above.
+fn market_sell_terms(qty: f64, price: f64) -> Option<(f64, f64)> {
+    if !qty.is_finite() || qty <= 0.0 || !price.is_finite() || price <= 0.0 {
+        return None;
+    }
+    let limit = price * MARKET_SELL_PRICE_FACTOR;
+    (limit.is_finite() && limit > 0.0).then_some((limit, qty))
+}
+
 /// Sells a market's SPOT TOKEN at market (`TDoSellOrderCommand`), as triggered by the Assets
-/// holding row's `Market sell` button. `price=0` means a market order; `size` is the base-coin
-/// amount.
-pub(super) fn market_sell_token(client: &MoonClient, server_id: u64, market: String, size: f64) {
+/// holding row's `Market sell` button. See [`market_sell_terms`] for what actually rides in the
+/// two numeric fields; terms that cannot be built send nothing at all.
+pub(super) fn market_sell_token(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    qty: f64,
+    price: f64,
+) {
+    let Some((limit, size)) = market_sell_terms(qty, price) else {
+        log::warn!(
+            "core {} market sell token {market}: qty={qty} price={price} yields no sendable order terms, nothing sent",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    };
     report(
         server_id,
-        format!("market sell token {market} size={size}"),
+        format!("market sell token {market} qty={qty} size={size} limit={limit}"),
         client
             .trade()
-            .sell_order(SellOrderParams::new(market, 0.0, size)),
+            .sell_order(SellOrderParams::new(market, limit, size)),
     );
 }
 
