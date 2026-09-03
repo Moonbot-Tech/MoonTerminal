@@ -1483,6 +1483,9 @@ fn the_main_tab_row_is_gated_and_addresses_charts_by_identity() {
 ///
 /// The contract is: both call sites opt into the overflow menu, the strip yields with
 /// `flex_1`/`min_w_0`, and neighbouring chrome is a flex sibling rather than an overlay.
+/// The shared row also paints `shell_high` across that sibling and carries the strip's full-width
+/// one-pixel bottom rule: deleting either builder during a layout refactor restores the dark
+/// toolbar band or the visibly broken hairline at the strip/chrome seam.
 #[test]
 fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
     let strip = code_only(braced_body(
@@ -1512,6 +1515,28 @@ fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
     assert!(
         strip.contains(".children(coin_dismiss)") && strip.contains(".children(fig_dismiss)"),
         "dismiss layers must stay on the chart body so they cannot cover the in-row cluster"
+    );
+    let tab_row = chain_between(
+        &strip,
+        "h_flex()\n                    .h(px(strip_h))",
+        ".child(right_cluster),",
+        "the shared chart tab row",
+    );
+    assert!(
+        tab_row.contains(".bg(rgb(p_strip.shell_high))"),
+        "the shared tab row must paint shell_high behind the in-flow chrome cluster"
+    );
+    let continued_rule = chain_between(
+        tab_row,
+        ".bg(rgb(p_strip.shell_high))",
+        ".child(div().flex_1().min_w_0().h_full().child(strip))",
+        "the chart tab row surface and strip slot",
+    );
+    assert!(
+        continued_rule.contains(
+            ".child(\n                        div()\n                            .absolute()\n                            .left(px(0.0))\n                            .bottom(px(0.0))\n                            .w_full()\n                            .h(px(1.0))\n                            .bg(rgba_from(p_strip.border, 0.78)),"
+        ),
+        "the row must continue the strip's full-width one-pixel bottom rule behind the chrome"
     );
 
     let row = code_only(braced_body(
