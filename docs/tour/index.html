@@ -890,7 +890,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
     <div class="ns-maps wrap">
     <h3>MANUAL режим</h3>
     <ol>
-      <li><strong>Бренд и перетаскивание</strong> — Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет.</li>
+      <li><strong>Бренд и перетаскивание</strong> — Логотип MoonTerminal и зона захвата окна: за неё окно таскается по экрану. Логотип и разделитель правее него терминал рисует сам — рамка MoonUI знает только свой Moonbot.</li>
       <li><strong>Режим воркспейса</strong> — Переключает рабочее пространство группы. В режиме AUTO терминал сам держит на графике монету активного ядра.</li>
       <li><strong>Активное ядро и его шестерёнка</strong> — Выбор ядра, к которому относятся баланс, торговые кнопки и график. Шестерёнка открывает настройки именно этого ядра — блэклист, плечо, режим позиции.</li>
       <li><strong>Баланс ядра</strong> — Свободный и общий USDT активного торгового ядра, как их отдаёт сервер. Если число устарело или курс посчитать не удалось, терминал показывает это, а не выдаёт старую цифру за живую.</li>
@@ -912,7 +912,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
     </ol>
     <h3>AUTO режим</h3>
     <ol>
-      <li><strong>Бренд и перетаскивание</strong> — Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет.</li>
+      <li><strong>Бренд и перетаскивание</strong> — Логотип MoonTerminal и зона захвата окна: за неё окно таскается по экрану. Логотип и разделитель правее него терминал рисует сам — рамка MoonUI знает только свой Moonbot.</li>
       <li><strong>Режим воркспейса</strong> — Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено</li>
       <li><strong>Индикатор ядра, закреплённый рейкой</strong> — В режиме AUTO пилюля в шапке отключена и без меню: она только показывает выбранное на левой рейке ядро или «Полную сводку». Шестерёнка по-прежнему открывает настройки этого ядра. Баланс в шапке скрыт, пока выбрана сводка, — иначе рядом с подписью «вся группа» оказалась бы цифра одного случайного сервера.</li>
       <li><strong>Тикер курса</strong> — Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро</li>
@@ -1284,13 +1284,13 @@ const MODES = {
         "n": 1,
         "ru": [
           "Бренд и перетаскивание",
-          "Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет."
+          "Логотип MoonTerminal и зона захвата окна: за неё окно таскается по экрану. Логотип и разделитель правее него терминал рисует сам — рамка MoonUI знает только свой Moonbot."
         ],
         "en": [
           "Brand and window drag",
-          "The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of it, which is why the terminal never adds a second one."
+          "The MoonTerminal logo doubles as the window's drag handle. The terminal draws both the mark and the separator right of it itself — the MoonUI frame only knows its own Moonbot lockup."
         ],
-        "src": "chrome/terminal_chrome.rs — brand_cluster"
+        "src": "chrome/terminal_chrome.rs — header brand cluster"
       },
       "ws": {
         "n": 2,
@@ -1549,13 +1549,13 @@ const MODES = {
         "n": 1,
         "ru": [
           "Бренд и перетаскивание",
-          "Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет."
+          "Логотип MoonTerminal и зона захвата окна: за неё окно таскается по экрану. Логотип и разделитель правее него терминал рисует сам — рамка MoonUI знает только свой Moonbot."
         ],
         "en": [
           "Brand and window drag",
-          "The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of it, which is why the terminal never adds a second one."
+          "The MoonTerminal logo doubles as the window's drag handle. The terminal draws both the mark and the separator right of it itself — the MoonUI frame only knows its own Moonbot lockup."
         ],
-        "src": "chrome/terminal_chrome.rs — brand_cluster"
+        "src": "chrome/terminal_chrome.rs — header brand cluster"
       },
       "ws": {
         "n": 2,

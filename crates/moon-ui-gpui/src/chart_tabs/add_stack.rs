@@ -1130,7 +1130,10 @@ impl Render for AddChartStack {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(crate::design::logo_glow_sized(cx, 220.0))
+                .child(crate::design::logo_glow_sized(
+                    cx,
+                    crate::design::EMPTY_STACK_LOGO_W,
+                ))
                 .into_any_element();
             // Measured here too: a window resized while the tab holds no charts would otherwise
             // leave a stale size behind, and the first frame WITH charts would divide by it.

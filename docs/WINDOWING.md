@@ -211,7 +211,7 @@ native hit-зон используется `MoonWindowFrame` из MoonUI.
 MoonTerminal использует три визуальных класса окон:
 
 - Главное окно: одно основное окно терминала. Только оно имеет полный wordmark
-  `Moonbot` в header. В API это `MoonWindowFrameKind::Main`.
+  `MoonTerminal` в header. В API это `MoonWindowFrameKind::Main`.
 - Tool/secondary окна: настройки, стратегии, debug, detached chart и другие
   вспомогательные окна. Они имеют маленький mark без надписи Moonbot. В API это
   `Tool`, `DetachedPanel`, `DetachedChart`, `Debug`.
@@ -224,6 +224,17 @@ MoonTerminal использует три визуальных класса ок�
 - `Main` -> full logo;
 - `Tool` / `DetachedPanel` / `DetachedChart` / `Debug` -> small mark;
 - `Popup` -> no logo.
+
+Единственное исключение — full logo главного окна: `MoonWindowFrame` рисует свой
+Moonbot-lockup, зашитый в компонент, а продукт называется MoonTerminal. Поэтому
+header главного окна собирает бренд-кластер сам (`chrome/terminal_chrome.rs`):
+drag-зону по-прежнему даёт `MoonWindowFrame::drag_handle()`, а лого и разделитель —
+`design::header_logo` над ассетами `assets/brand/`. Геометрия кластера та же, что у
+`brand_cluster` (`CHROME_GAP`, линейка 16px), но линейку рисует `design::chrome_divider`:
+раз кластер собирает терминал, шов подчиняется тому же контрасту, что и остальные швы
+строки, а не более бледному `border` из MoonUI. Вернуть `brand_cluster` следует ровно
+тогда, когда `MoonWindowFrame` научится принимать чужой lockup. Для mark-окон и popup-ов
+правило ниже действует без изменений.
 
 Для titlebar-зоны использовать:
 
@@ -247,6 +258,10 @@ MoonTerminal использует три визуальных класса ок�
 Если в экране хочется "просто поставить логотип" или "просто нарисовать x",
 это значит, что в MoonUI не хватает нужного `MoonWindowFrameKind` или helper в
 `MoonWindowFrame`. Исправлять надо MoonUI-контракт, а не конкретный экран.
+Единственное записанное исключение — брендовый lockup главного окна выше: пока в
+`MoonWindowFrame` нет варианта под чужой логотип, его рисует `design::header_logo`
+из `chrome/terminal_chrome.rs`. Оно записано здесь и закреплено тестом, а не
+заведено по месту, — второго такого исключения быть не должно.
 
 Прямые использования в terminal UI запрещены:
 
@@ -256,6 +271,9 @@ MoonTerminal использует три визуальных класса ок�
 - `start_window_move`;
 - `titlebar_double_click`;
 - `logo_sized` / `logo_mark` вне самого brand/helper слоя;
+- `design::header_logo` вне `chrome/terminal_chrome.rs` и открытие файла по пути
+  `assets/brand/` вне `design.rs` (назвать папку в комментарии можно) — логотип
+  берется у `MoonWindowFrame`, а единственное исключение описано выше;
 - `WindowOptions { ... }` вне `windowing.rs`.
 
 Запрет закреплен тестом `terminal_windows_use_closed_window_frame_api` в

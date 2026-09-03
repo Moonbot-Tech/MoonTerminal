@@ -1621,7 +1621,10 @@ impl Render for MainChartStack {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(crate::design::logo_glow_sized(cx, 220.0))
+                .child(crate::design::logo_glow_sized(
+                    cx,
+                    crate::design::EMPTY_STACK_LOGO_W,
+                ))
                 .into_any_element();
             // Measured here too, for the reason the fullscreen branch keeps its probe: a resize
             // taken while the stack is empty must not leave a size the first divided frame uses.
