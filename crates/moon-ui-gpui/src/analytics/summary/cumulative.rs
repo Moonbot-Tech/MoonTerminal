@@ -12,7 +12,10 @@ use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 
 use super::super::AnalyticsView;
-use super::charts::{CHART_H, PopupMode, bucket_label, bucket_popup, core_color, muted_caption};
+use super::charts::{
+    CHART_H, PLOT_W_NOMINAL, PopupMode, bucket_label, bucket_popup, core_color, muted_caption,
+    widest_label_w,
+};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{CoreSeries, DayPoint};
@@ -23,8 +26,6 @@ use moon_core::db::analytics::{CoreSeries, DayPoint};
 /// apart. The hover popup has its own, larger limit (`POPUP_ROWS`), so a core with no line
 /// can still be read there.
 pub(super) const MAX_CORE_LINES: usize = 12;
-/// Width of one swing label ("+12345.67"), in font units.
-const LABEL_W: f32 = 62.0;
 /// A swing is confirmed once the curve retraces this share of the TOTAL's own range.
 /// Smaller → every wiggle becomes a label; larger → only the biggest moves survive.
 const SWING_FRAC: f32 = 0.07;
@@ -112,6 +113,72 @@ fn swing_labels(pts: &[f32]) -> Vec<usize> {
         out = swing_points(pts, thresh);
     }
     out
+}
+
+/// Second placement pass: drop the swings whose label RECTANGLE would land on an already-kept
+/// one. `swing_labels` only bounds the label COUNT — a curve with fourteen genuine turns still
+/// puts fourteen 62-unit labels across a ~390px plot, which is where "-2911.63" ended up on top
+/// of "-2511.95". A count cannot see that; a rectangle can.
+///
+/// Both axes are tested, because either alone is wrong here: two labels at the same X are fine
+/// when the curve moved far vertically between them, and two labels at the same height are fine
+/// when they sit weeks apart. Only an overlap in BOTH is unreadable.
+///
+/// The survivor of a collision is always the BIGGER move — the boxes are considered in
+/// descending |value| order, so the label that gets dropped is the one that says less. A label
+/// is never nudged off its point: a number drawn away from the point it belongs to lies about
+/// when the swing happened, which is worse than not drawing it.
+///
+/// Args:
+///     boxes: One `(x_centre, y_centre, value)` per candidate label, in plot pixels.
+///     w: Label width in pixels.
+///     h: Label height in pixels.
+///
+/// Returns:
+///     Indices INTO `boxes` of the labels to draw, ascending.
+fn place_labels(boxes: &[(f32, f32, f64)], w: f32, h: f32) -> Vec<usize> {
+    // Descending |value|, with the index as the tie-break so the result never depends on sort
+    // stability — two swings of the exact same magnitude must not swap between frames.
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|&a, &b| {
+        boxes[b]
+            .2
+            .abs()
+            .total_cmp(&boxes[a].2.abs())
+            .then(a.cmp(&b))
+    });
+    let mut kept: Vec<usize> = Vec::new();
+    for i in order {
+        let (x, y, _) = boxes[i];
+        let clear = kept.iter().all(|&j| {
+            let (kx, ky, _) = boxes[j];
+            (x - kx).abs() >= w || (y - ky).abs() >= h
+        });
+        if clear {
+            kept.push(i);
+        }
+    }
+    kept.sort_unstable();
+    kept
+}
+
+/// How far a label is pulled left of its point, as a multiple of the label width.
+///
+/// A label is centred on its point, except at the very ends: there it is pulled fully inside,
+/// or half of it would hang past the card's edge and nothing clips it.
+///
+/// This is a function rather than two copies of the same `if` because BOTH the layout and the
+/// collision pass need it: the pass compares label CENTRES, and a centre computed as `frac * w`
+/// is off by half a label at `frac == 0` — exactly where the first swing sits — which is enough
+/// to call a real overlap clear.
+fn label_shift(frac: f32) -> f32 {
+    if frac <= 0.0 {
+        0.0
+    } else if frac >= 1.0 {
+        -1.0
+    } else {
+        -0.5
+    }
 }
 
 /// Cumulative profit: the total as an area + line, the per-core curves inside it, swing
@@ -212,13 +279,21 @@ pub(super) fn cumulative_area(
     // moment the UI font-size slider grows it. 1.7× covers gpui's own line height (≈1.618×).
     // Clamped: at an extreme font scale the band could otherwise eat the whole plot.
     let lift = f32::from(design::ui_px(cx, 3.0));
-    let band = f32::from(design::t_caption(cx)) * 1.7 + lift;
+    let label_h = f32::from(design::t_caption(cx)) * 1.7;
+    // The swings decide whether there is a band at all: a single-bucket period has no turn to
+    // label, and reserving the strip anyway would shorten the curve for text that never comes.
+    let swings = swing_labels(&pts);
+    let band = if swings.is_empty() {
+        0.0
+    } else {
+        label_h + lift
+    };
     let plot_h = (CHART_H - band).max(20.0);
     // Labels: resolved HERE against the same vmin/span the canvas paints with, so the
     // points can move into the paint closure instead of being cloned for it.
-    let labels: Vec<(f32, f32, String, u32)> = swing_labels(&pts)
-        .into_iter()
-        .map(|k| {
+    let cands: Vec<(f32, f32, String, u32)> = swings
+        .iter()
+        .map(|&k| {
             let y_up = (pts[k] - vmin) / span * (plot_h - 2.0) + 1.0;
             let frac = if n > 1 {
                 k as f32 / (n - 1) as f32
@@ -232,6 +307,27 @@ pub(super) fn cumulative_area(
                 super::sign_color(p, cum[k]),
             )
         })
+        .collect();
+    // Collision pass over the rectangles as they will actually be laid out — so the X here is
+    // the label's true CENTRE, `label_shift` included, not the bare point it hangs from. The
+    // X positions are fractions of a width this function never learns, so they resolve against
+    // `PLOT_W_NOMINAL`; the Y positions are already the real pixel offsets. Only the label
+    // WIDTH tracks the font — it is MEASURED off the longest label actually formatted, so the
+    // box the pass tests is the box that lands, at any font size; the plot width is layout and
+    // must not grow with the Font slider.
+    let lwf = widest_label_w(cands.iter().map(|(_, _, t, _)| t.as_str()), cx);
+    let lw = px(lwf);
+    let boxes: Vec<(f32, f32, f64)> = swings
+        .iter()
+        .zip(&cands)
+        .map(|(&k, (frac, y_up, _, _))| {
+            let left = frac * PLOT_W_NOMINAL + label_shift(*frac) * lwf;
+            (left + lwf / 2.0, *y_up, cum[k])
+        })
+        .collect();
+    let labels: Vec<(f32, f32, String, u32)> = place_labels(&boxes, lwf, label_h)
+        .into_iter()
+        .map(|i| cands[i].clone())
         .collect();
 
     let pts_paint = pts;
@@ -334,17 +430,8 @@ pub(super) fn cumulative_area(
                 .child(canvas_el),
         )
         .child(hover_row(n, hover, p, cx));
-    let lw = design::font_w_px(cx, LABEL_W);
     for (frac, y_up, text, col) in labels {
-        // Centred on its point, except at the very ends: there the label is pulled fully
-        // inside, or half of it would hang past the card's edge (nothing clips it).
-        let shift = if frac <= 0.0 {
-            px(0.0)
-        } else if frac >= 1.0 {
-            -lw
-        } else {
-            -lw / 2.0
-        };
+        let shift = lw * label_shift(frac);
         stack = stack.child(
             div()
                 .absolute()
@@ -355,6 +442,16 @@ pub(super) fn cumulative_area(
                 .flex()
                 .justify_center()
                 .whitespace_nowrap()
+                // A chip behind the digits. The twelve per-core curves run straight through
+                // this band, and a bare number drawn over three of them is unreadable however
+                // well it is placed. The label is NOT moved off its point to dodge them —
+                // a number drawn away from its point lies about when the swing happened — so
+                // the lines are dimmed behind it instead. Panel-toned and rounded so it reads
+                // as chrome rather than as data. No padding, deliberately: the chip is exactly
+                // the box `place_labels` measured, and padding it would make the drawn
+                // rectangle wider than the one the collision pass cleared.
+                .rounded(design::ui_px(cx, 3.0))
+                .bg(moon_alpha(p.panel, 0.82))
                 .text_size(design::t_caption(cx))
                 .text_color(moon(col))
                 .child(text),

@@ -1,6 +1,6 @@
 //! Unit tests for the pure selection and normalization rules behind the per-core ranking.
 
-use super::{core_rank_rows, core_rank_stats, overview_ranges};
+use super::{core_rank_rows, core_rank_stats, overview_ranges, thinned_labels};
 use moon_core::db::analytics::CoreSeries;
 
 /// Build the minimum core series needed by ranking helpers.
@@ -70,4 +70,17 @@ fn ranking_bars_share_one_absolute_scale() {
 
     assert_eq!(rows[0].magnitude_pct, 50.0);
     assert_eq!(rows[1].magnitude_pct, 100.0);
+}
+
+/// `charts.rs:thinned_labels` must keep only separated bucket labels, prioritizing larger absolute profits.
+/// Deleting its separation predicate labels adjacent bars together, while natural ordering hides the largest adjacent daily move.
+#[test]
+fn thinned_labels_keep_spaced_daily_extremes() {
+    let labels = thinned_labels(&[90.0, -100.0, 80.0, 0.0, 70.0], 100.0, 30.0);
+
+    assert_eq!(
+        labels,
+        vec![1, 4],
+        "only the largest daily move in each overlapping label region may remain"
+    );
 }

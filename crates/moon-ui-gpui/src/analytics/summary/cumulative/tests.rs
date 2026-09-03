@@ -1,4 +1,30 @@
-use super::{MAX_SWING_LABELS, swing_labels, swing_points};
+use super::{MAX_SWING_LABELS, place_labels, swing_labels, swing_points};
+
+/// `cumulative.rs:place_labels` must retain labels separated vertically by one full label height.
+/// Changing its clear-on-either-axis `||` to `&&` drops a readable swing label, hiding a period move.
+#[test]
+fn place_labels_keeps_labels_clear_on_one_axis() {
+    let labels = place_labels(&[(0.0, 0.0, 100.0), (0.0, 10.0, 50.0)], 10.0, 10.0);
+
+    assert_eq!(
+        labels,
+        vec![0, 1],
+        "vertical clearance must keep both labels"
+    );
+}
+
+/// `cumulative.rs:place_labels` must prefer the larger absolute move when label rectangles overlap.
+/// Replacing its descending-magnitude ordering with natural order keeps the smaller swing and hides the period's largest move.
+#[test]
+fn place_labels_keeps_the_larger_colliding_move() {
+    let labels = place_labels(&[(0.0, 0.0, 12.0), (2.0, 1.0, -30.0)], 10.0, 10.0);
+
+    assert_eq!(
+        labels,
+        vec![1],
+        "the larger absolute move must survive the collision"
+    );
+}
 
 /// A saw that turns at EVERY bucket: the threshold must be backed off until the labels
 /// fit, or the chart becomes a wall of overlapping numbers.
