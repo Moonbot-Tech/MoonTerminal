@@ -1446,3 +1446,26 @@ fn a_label_timeframe_round_trips_only_when_it_was_chosen() {
     let back: ChartLabelsCfg = serde_json::from_str(&chosen).expect("reads");
     assert_eq!(back.rows[0].parts[0].tf, LabelTf::H4);
 }
+
+/// Every shipped set must be a fixpoint of `sanitize`.
+///
+/// These values are COMPARED — a panel's settings signature is rebuilt on every backend
+/// notification, and one side of that comparison has been through the repair while the other has
+/// not. A shipped set that `sanitize` still moves would therefore differ from itself forever, which
+/// is a repaint per notification rather than a wrong pixel: the failure this asserts against is
+/// silent and permanent.
+#[test]
+fn the_shipped_sets_survive_their_own_repair() {
+    for (name, shipped) in [
+        ("default", ChartLabelsCfg::default()),
+        ("trade", ChartLabelsCfg::trade_default()),
+        ("compare", ChartLabelsCfg::compare_default()),
+    ] {
+        let mut repaired = shipped.clone();
+        repaired.sanitize();
+        assert_eq!(
+            repaired, shipped,
+            "the {name} set is not a sanitize fixpoint"
+        );
+    }
+}

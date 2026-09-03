@@ -183,6 +183,22 @@ impl GlobalSlot {
         }
     }
 
+    /// Put one KIND's default for this setting back to the shipped one, reporting whether it moved.
+    ///
+    /// Carries no value, unlike [`Self::write_default`]: a reset lands on what the terminal ships,
+    /// and the press that performs one reads the popup only to learn WHICH slots it is about.
+    pub(crate) fn reset_default(
+        self,
+        layout: &mut moon_core::config::WindowLayout,
+        kind: moon_core::config::ChartTabKind,
+    ) -> bool {
+        match self {
+            GlobalSlot::CandleView => layout.reset_candle_view_default(kind),
+            GlobalSlot::Graphics => layout.reset_chart_graphics_default(kind),
+            GlobalSlot::Labels => layout.reset_chart_labels_default(kind),
+        }
+    }
+
     /// The Main stack's own value for this setting, or `None` when it follows its kind's default.
     pub(crate) fn main_value(self, main: &super::MainChartStack) -> Option<StackSetting> {
         match self {

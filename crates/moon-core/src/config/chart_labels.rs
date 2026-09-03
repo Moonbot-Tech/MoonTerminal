@@ -1264,6 +1264,99 @@ impl ChartLabelsCfg {
         cfg
     }
 
+    /// The working set a COMPARISON opens with.
+    ///
+    /// Its own value rather than [`Self::default`] for the reason the trade window has one: a
+    /// comparison is READ differently. Several panes of the same coin stand side by side, and the
+    /// question asked of them is where this venue is against that one — so the figures that
+    /// describe ONE market in depth are what has to go. The live default's volume block, its
+    /// measuring block and its session counters are printed three or four times over on such a
+    /// tab, in panes a third the width, and none of them is what the eye is there for.
+    ///
+    /// What stays is what a comparison is read by: which venue this pane is, how far its scale
+    /// reaches, what is open on it, the venue roster, and the spread against the anchor. The last
+    /// one — [`ChartLabelField::CompareDelta`] — is fed only on a book-only broom follower
+    /// (`chartdx::text::captions`), so on any other pane it prints nothing and takes no room, the
+    /// way every optional figure here behaves. It appears in no other shipped set for the same
+    /// reason.
+    ///
+    /// Transcribed from the developer's own comparison tab on 2026-09-03, the way
+    /// [`Self::default`] was transcribed from their main chart: a set that has been USED rather
+    /// than assembled. Two SIZES come with it, which is where this set parts company with
+    /// `default`'s "no sizes at all", and they go in OPPOSITE directions on purpose: against
+    /// [`LABEL_SIZE_MULT_DEFAULT`] the badge is a step up and the venue roster a step down. In a
+    /// pane a third of the usual width the badge is what a glance checks first, and the roster is
+    /// a dozen lines that have to fit beside the plot at all. The cost is the one `default`
+    /// documents — these two captions no longer follow that number if it moves — and it is
+    /// accepted here because the sizes ARE the layout on a narrow pane.
+    ///
+    /// It follows the LOCK rather than the pane's width, and that is the intended reading: the
+    /// anchor lock is a state the reader puts on and takes off, and while it is on the question
+    /// being asked of the chart is "this venue against that one" whether the pane is a third of the
+    /// screen or all of it. Locking a single full-width main chart therefore re-dresses it too, and
+    /// unlocking hands it back the set of the kind its place gives it — nothing is written to the
+    /// profile either way.
+    ///
+    /// It is a DEFAULT, not a fixture: the moment the reader sets one for comparisons, theirs is
+    /// what opens. See [`super::chart_defaults::ChartTabKind::Compare`].
+    pub fn compare_default() -> Self {
+        // Stated as STEPS from the shared size rather than as absolutes, so this pair keeps its
+        // relationship to that number if it ever moves — which is the property `default`'s "no
+        // sizes at all" protects, kept here at the one place a size is worth spending.
+        const BADGE_STEP: f32 = 0.2;
+        const ROSTER_STEP: f32 = 0.25;
+
+        let mut cfg = Self::empty();
+
+        // The same block the live default opens with, in the control strip: on a tab where every
+        // pane is the same coin, the venue under it is the pane's whole identity.
+        cfg.push_prepared(instrument_row(true));
+
+        // The Y-scale badge, a step ABOVE the shared size: two panes are only comparable while
+        // their scales are, and this is the caption that states one. Through the preset rather than
+        // hand-built, so its band and alignment cannot drift from the catalogue's.
+        if let Some(ix) = cfg.push_preset(LabelPreset::Scale) {
+            cfg.rows[ix].parts[0].style.size_mult = Some(LABEL_SIZE_MULT_DEFAULT + BADGE_STEP);
+        }
+
+        // What is open on THIS venue, as one line along the plot's top-left edge: the reason a
+        // comparison is usually being looked at. Every figure keeps its caption, unlike the live
+        // default's copy of this module — on a tab of near-identical panes the bare percentage
+        // beside a bare amount is the one place a reader has to guess which is which.
+        let mut orders = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+        orders.preset = Some(LabelPreset::Position);
+        orders.placement = LabelFlow::Row;
+        orders.push_part(ChartLabelField::OpenOrders);
+        orders.push_part(ChartLabelField::OpenPnlMoney);
+        orders.push_part(ChartLabelField::OpenPnlPct);
+        orders.push_part(ChartLabelField::Exposure);
+        cfg.push_prepared(orders);
+
+        // The venue roster down the left edge, a step BELOW the shared size: it is the tallest
+        // module the chart prints and a narrow pane has to hold all of it. Only a spread worth
+        // acting on is coloured, exactly as the live default sets it.
+        if let Some(ix) = cfg.push_preset(LabelPreset::Arbitrage) {
+            let row = &mut cfg.rows[ix];
+            row.gap = 8;
+            row.parts[0].style.color = Some(LabelColor::BySign);
+            row.parts[0].style.color_min_pct = Some(0.5);
+            row.parts[0].style.size_mult = Some(LABEL_SIZE_MULT_DEFAULT - ROSTER_STEP);
+        }
+
+        // The spread against the anchor, in the strip's bottom band where the pane's own numbers
+        // end. No preset and no name: the field names itself, and there is no module for it to be
+        // one of.
+        cfg.push_row(
+            ChartLabelField::CompareDelta,
+            LabelZone::ZoneBottom,
+            LabelAlign::Right,
+        );
+
+        // Repaired here for [`Self::trade_default`]'s reason: one shape wherever it is compared.
+        cfg.sanitize();
+        cfg
+    }
+
     /// A configuration with no rows at all.
     ///
     /// Public because "print nothing" is a legitimate choice a user can reach by removing every

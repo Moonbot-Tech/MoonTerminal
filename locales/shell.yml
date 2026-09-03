@@ -995,13 +995,17 @@ chart.defaults.apply:
   en: "Apply"
   es: "Aplicar"
 chart.defaults.set_hint:
-  ru: "Дефолт для выбранных видов. Собственные настройки их вкладок будут сброшены — в скобках сколько."
-  en: "Default for the ticked kinds. Their tabs' own settings are cleared — the count is in brackets."
-  es: "Predeterminado para los tipos marcados. Los ajustes propios de sus pestañas se borran: el número va entre paréntesis."
+  ru: "Дефолт для выбранных видов. «Сбросить» убирает их дефолт: где есть заводской набор — вернётся он, иначе вид снова следует «Основным». Обе кнопки сбрасывают свои настройки этих вкладок — в скобках сколько."
+  en: "Default for the ticked kinds. \"Reset\" drops theirs: a kind with a shipped set of its own gets it back, otherwise it follows Main again. Both buttons clear those tabs' own settings — the count is in brackets."
+  es: "Predeterminado para los tipos marcados. «Restablecer» quita el suyo: el tipo que trae un conjunto de fábrica lo recupera; si no, vuelve a seguir a «Principales». Ambos botones borran los ajustes propios de esas pestañas: el número entre paréntesis."
 chart.defaults.apply_hint:
   ru: "Записать эти значения всем вкладкам выбранных видов. У этих настроек дефолта нет."
   en: "Write these values into every tab of the ticked kinds. These settings have no default."
   es: "Escribir estos valores en cada pestaña de los tipos marcados. Estos ajustes no tienen predeterminado."
+chart.defaults.reset:
+  ru: "Сбросить"
+  en: "Reset"
+  es: "Restablecer"
 chart.candles.title:
   ru: "Свечи и трейды"
   en: "Candles & trades"

@@ -976,7 +976,9 @@ pub struct WindowLayout {
         deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
     )]
     pub chart_defaults_addto: Box<super::chart_defaults::ChartTabDefaults>,
-    /// Defaults for tabs under the anchor lock, wherever they live. Empty means "follow Main".
+    /// Defaults for tabs under the anchor lock, wherever they live. Empty means "follow Main" for
+    /// the candles and the graphics, and this kind's OWN shipped set for the captions — see
+    /// [`super::chart_labels::ChartLabelsCfg::compare_default`].
     #[serde(
         default,
         deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
@@ -1643,7 +1645,7 @@ impl WindowLayout {
         let split = self.split_defaults(
             |d| &mut d.chart_labels,
             |l, k| l.chart_labels_for(k).clone(),
-            // The trade window ships its own captions; see the guard inside.
+            // The trade window and a comparison both ship their own captions; see the guard inside.
             |k| k.builtin_labels().is_some(),
         );
         // `|` rather than `||`: the store must run even when the separation already reported a
@@ -1671,6 +1673,67 @@ impl WindowLayout {
         match self.kind_defaults_mut(kind) {
             Some(d) => d.chart_labels.replace(value.clone()) != Some(value),
             None => std::mem::replace(&mut self.chart_labels, value.clone()) != value,
+        }
+    }
+
+    /// Put one kind's candle default back to what the terminal ships, reporting whether it moved.
+    ///
+    /// Two different acts under one word, because "back to the shipped set" means two different
+    /// things depending on where the kind's default lives:
+    ///
+    /// - a non-Main kind's slot is EMPTIED, so it follows again whatever it followed before anyone
+    ///   pressed anything — its own built-in set where it has one, Main where it does not. Storing
+    ///   today's shipped value instead would freeze the kind on a copy, and a later build that
+    ///   improved that set would never reach the reader.
+    /// - Main's default IS the base field and cannot be emptied, so it takes the shipped value —
+    ///   through the setter, whose separation pass keeps the other kinds where they are. Without
+    ///   that, resetting the main chart would drag every kind still following it along, which is
+    ///   the one thing a per-kind reset must not do. The cost is deliberate and worth naming: a
+    ///   kind that held nothing is left holding a copy of what it was showing, so it is now
+    ///   detached from Main. Moving it instead — silently redressing tabs the reader did not tick
+    ///   — is the worse of the two.
+    ///
+    /// "The shipped set" therefore means what the kind ships FOR THIS SETTING, and only the
+    /// captions have any: a comparison and the trade window answer
+    /// [`super::chart_defaults::ChartTabKind::builtin_labels`], while candles and graphics ship
+    /// none at all. For everything else — and for `AddTo` even in the captions — an emptied slot
+    /// means "follow Main again" rather than a set of its own.
+    pub fn reset_candle_view_default(&mut self, kind: super::chart_defaults::ChartTabKind) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.candle_view.take().is_some(),
+            None => {
+                self.set_candle_view_default(kind, crate::market::candles::CandleViewCfg::default())
+            }
+        }
+    }
+
+    /// Put one kind's graphics default back to the shipped set; see
+    /// [`Self::reset_candle_view_default`].
+    pub fn reset_chart_graphics_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.chart_graphics.take().is_some(),
+            None => self.set_chart_graphics_default(kind, ChartGraphicsCfg::default()),
+        }
+    }
+
+    /// Put one kind's caption default back to the shipped set; see
+    /// [`Self::reset_candle_view_default`].
+    ///
+    /// Emptying the slot is what hands a comparison and the trade window their OWN shipped
+    /// captions back, rather than Main's: both kinds answer
+    /// [`super::chart_defaults::ChartTabKind::builtin_labels`].
+    pub fn reset_chart_labels_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.chart_labels.take().is_some(),
+            None => {
+                self.set_chart_labels_default(kind, super::chart_labels::ChartLabelsCfg::default())
+            }
         }
     }
 

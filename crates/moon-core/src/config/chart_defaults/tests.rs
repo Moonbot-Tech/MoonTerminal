@@ -52,16 +52,50 @@ fn the_tab_kinds_are_every_kind_but_the_trade_window() {
     assert_eq!(ChartTabKind::TAB_KINDS.to_vec(), expected);
 }
 
-/// Only the trade window ships captions of its own; every other kind follows the Main default.
+/// Two kinds ship captions of their own — the trade window and a comparison — because both draw
+/// something the live default's figures do not describe: a market that stopped moving hours ago,
+/// and the same market several times over in panes a third the width. The other two follow Main.
 #[test]
-fn only_the_trade_window_ships_its_own_captions() {
+fn the_kinds_that_ship_their_own_captions() {
     for kind in ChartTabKind::ALL {
+        let ships = matches!(kind, ChartTabKind::Trade | ChartTabKind::Compare);
         assert_eq!(
             kind.builtin_labels().is_some(),
-            kind == ChartTabKind::Trade,
+            ships,
             "{kind:?} disagrees about shipping its own captions"
         );
     }
+    // Two sets, not one shared by both: they answer different questions and would have been one
+    // function if they did not.
+    assert_ne!(
+        ChartTabKind::Trade.builtin_labels(),
+        ChartTabKind::Compare.builtin_labels()
+    );
+    // Shared and stable: this is read on every settings comparison, and a fresh clone per read
+    // would make a panel's signature differ from itself.
+    assert!(std::ptr::eq(
+        ChartTabKind::Compare.builtin_labels().expect("a set"),
+        ChartTabKind::Compare.builtin_labels().expect("a set")
+    ));
+}
+
+/// A reset walk visits Main FIRST and still visits every kind.
+///
+/// Resetting Main separates the kinds that follow it — that is what keeps a press on the main chart
+/// from moving a kind the reader never ticked — so a kind the same press also resets has to be
+/// emptied AFTER that separation, or it keeps a frozen copy of the value being discarded. The order
+/// is the whole mechanism, and the caller that walks it lives in another crate.
+#[test]
+fn a_reset_walk_starts_at_main_and_reaches_every_kind() {
+    assert_eq!(ChartTabKind::RESET_ORDER[0], ChartTabKind::Main);
+    let mut sorted = ChartTabKind::RESET_ORDER.to_vec();
+    let mut all = ChartTabKind::ALL.to_vec();
+    sorted.sort_by_key(|k| format!("{k:?}"));
+    all.sort_by_key(|k| format!("{k:?}"));
+    assert_eq!(
+        sorted, all,
+        "a reset must reach exactly the kinds that exist"
+    );
 }
 
 /// The runtime classifier never produces the trade window: that kind is set by the window itself,

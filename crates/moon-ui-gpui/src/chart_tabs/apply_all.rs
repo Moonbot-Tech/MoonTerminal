@@ -14,12 +14,15 @@
 //! it follows the default live, so overwriting the default changed Main as surely as editing it,
 //! and a press from anywhere else had to freeze Main first to stop it.
 //!
-//! Split apart, both halves get simpler. A press either:
+//! Split apart, both halves get simpler. A press does one of three things ([`ApplyMode`]):
 //!
-//! - **sets the default** for the kinds it names ([`ApplyAll::as_default`]) — which also CLEARS the
-//!   override of every tab of those kinds, open or closed, so they follow the new default rather
-//!   than each keeping a frozen copy of it. A later change of that default reaches them again;
-//!   copying, which is what the old press did, was a one-way ticket.
+//! - **sets the default** for the kinds it names — which also CLEARS the override of every tab of
+//!   those kinds, open or closed, so they follow the new default rather than each keeping a frozen
+//!   copy of it. A later change of that default reaches them again; copying, which is what the old
+//!   press did, was a one-way ticket.
+//! - **resets the default** of those kinds to the set the terminal ships, clearing the same
+//!   overrides — the only way back to a shipped set once a default has been stored over it, and
+//!   the reason it is a press rather than a per-tab button: the value it removes is per KIND.
 //! - **writes the values** into the tabs of those kinds as their own overrides. This is what the ⚙
 //!   layout popup does, because its values have no default to set: they are per-tab only.
 //!
@@ -77,10 +80,27 @@ impl KindTargets {
     }
 }
 
-/// One press: what to write, where it lands, and whether it becomes a default.
+/// What a press does with the values it carries.
 ///
-/// A value that has a default of its own carries that fact through [`StackSetting::global_slot`],
-/// so a press cannot name a default and a value that disagree.
+/// Only a setting that HAS a default can be addressed by the two default modes, which
+/// [`StackSetting::global_slot`] answers — so a press cannot name a default and a value that
+/// disagree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ApplyMode {
+    /// Write the values into the tabs of the targeted kinds, as their own overrides.
+    Tabs,
+    /// Store the values as those kinds' defaults, dropping the overrides that hid them.
+    SetDefault,
+    /// Put those kinds' defaults back to the shipped set, dropping the same overrides.
+    ///
+    /// Carries the SLOTS rather than riding on the press's values, which it would only read the
+    /// slots out of: a reset lands on what the terminal ships, so a value it carried could only be
+    /// noise — and the whole caption configuration is over six kilobytes, copied on every render of
+    /// the row that offers the button.
+    ResetDefault(Vec<GlobalSlot>),
+}
+
+/// One press: what to write, where it lands, and what it does there.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ApplyAll {
     /// Values the press carries, applied in this order.
@@ -90,9 +110,8 @@ pub(crate) struct ApplyAll {
     pub x_ppm: Option<f32>,
     /// Which kinds of tab the press addresses.
     pub targets: KindTargets,
-    /// Whether this press sets those kinds' DEFAULTS and clears their tabs' overrides, rather than
-    /// writing the values into those tabs as overrides.
-    pub as_default: bool,
+    /// What the press does with its values.
+    pub mode: ApplyMode,
 }
 
 /// A detached window's press, queued through Backend for its group's tab strip to perform.
@@ -162,30 +181,55 @@ impl super::ChartTabs {
         if !apply.targets.any() {
             return;
         }
-        match apply.as_default {
-            true => self.set_kind_defaults(apply, cx),
-            false => self.write_into_kinds(apply, cx),
+        match apply.mode {
+            ApplyMode::SetDefault | ApplyMode::ResetDefault(_) => self.set_kind_defaults(apply, cx),
+            ApplyMode::Tabs => self.write_into_kinds(apply, cx),
         }
         cx.notify();
     }
 
-    /// Store the pressed values as the targeted kinds' defaults, and drop the overrides that hid them.
+    /// Store the pressed values as the targeted kinds' defaults — or put those defaults back to the
+    /// shipped set — and drop the overrides that hid them either way.
+    ///
+    /// One path for both because everything AFTER the layout write is the same act: a stored
+    /// override outlives whichever way the default moved, and a window that never heard about the
+    /// press keeps drawing the value it holds. Splitting them would have duplicated that, and the
+    /// copy left behind is where the next half-fix lives.
     fn set_kind_defaults(&mut self, apply: ApplyAll, cx: &mut Context<Self>) {
-        let slots = pressed_slots(&apply.values);
+        let slots = match &apply.mode {
+            ApplyMode::ResetDefault(slots) => slots.clone(),
+            _ => pressed_slots(&apply.values),
+        };
         if slots.is_empty() {
             // Nothing storable, but the candle popup's X scale still travels: it has no default of
             // its own and rides along with the press.
             self.apply_x_ppm(&apply, cx);
             return;
         }
+        let reset = matches!(apply.mode, ApplyMode::ResetDefault(_));
         let targets = apply.targets;
         let rebuild_orderbook = apply.values.iter().any(|v| v.rebuilds_orderbook_demand());
         self.backend.update(cx, |b, bcx| {
             let mut moved = false;
-            for kind in ChartTabKind::ALL.into_iter().filter(|k| targets.has(*k)) {
-                for value in &apply.values {
-                    if let Some(slot) = value.global_slot() {
-                        moved |= slot.write_default(&mut b.layout, kind, value.clone());
+            match reset {
+                true => {
+                    // In `RESET_ORDER`, which puts Main first for the reason stated there.
+                    for kind in ChartTabKind::RESET_ORDER
+                        .into_iter()
+                        .filter(|k| targets.has(*k))
+                    {
+                        for slot in &slots {
+                            moved |= slot.reset_default(&mut b.layout, kind);
+                        }
+                    }
+                }
+                false => {
+                    for kind in ChartTabKind::ALL.into_iter().filter(|k| targets.has(*k)) {
+                        for value in &apply.values {
+                            if let Some(slot) = value.global_slot() {
+                                moved |= slot.write_default(&mut b.layout, kind, value.clone());
+                            }
+                        }
                     }
                 }
             }
@@ -224,6 +268,8 @@ impl super::ChartTabs {
         });
         // Including this strip's own stacks, through the same path every other window takes.
         self.drain_default_clears(cx);
+        // A reset carries no scale to begin with — `x_ppm` is what the popup SHOWS, and a press
+        // that removes stored values has nothing to spread — so this is a no-op for one.
         self.apply_x_ppm(&apply, cx);
     }
 
