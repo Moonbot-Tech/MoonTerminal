@@ -113,8 +113,9 @@ pub fn chrome_section(cx: &App) -> Div {
         .gap(ui_px(cx, CHROME_GAP))
 }
 
-/// Rendered width that makes a glyph button SQUARE — the column selector (`▦`) and the report
-/// export (`⇩`).
+/// Rendered width that makes a SQUARE one-symbol button — the report export (`⇩`) and the column
+/// selectors, whether they draw a unicode glyph (`▦`, still the case in Alerts, Assets, Orders,
+/// Screener and the Analytics tuner) or a MoonUI icon asset (the Report toolbar).
 ///
 /// It returns the button's own drawn height, so the caller must pass it to a RENDERED width
 /// (`MoonDropdown::trigger_width`, `MoonButton::width`), never to a `*_scaled` variant: MoonUI

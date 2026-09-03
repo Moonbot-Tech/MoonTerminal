@@ -152,7 +152,7 @@ report.selection.restore_queued:
   ru: "Поставлено на восстановление: %{n}. Выбор снимется после ответа ядра."
   en: "Queued for restore: %{n}. Selection clears after the core response."
   es: "En cola para restaurar: %{n}. La selección se borra tras la respuesta del núcleo."
-# The ▦ glyph is added separately in code; the dictionary contains text only.
+# The trigger draws a MoonUI icon asset, added in code; the dictionary contains text only.
 report.columns_menu:
   ru: "Колонки"
   en: "Columns"
