@@ -6,7 +6,10 @@
 use moon_core::db::valuation::{
     FailureKind, ValuationFault, ValuationMode, ValuationStage, ValuationStatus,
 };
-use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteVolume, TradedVolume, ValuationCoverage};
+use moon_core::db::{
+    EntrySpend, QuoteBreakdown, QuoteCurrency, QuoteSpend, QuoteVolume, ReportFilter, TradedVolume,
+    ValuationCoverage,
+};
 
 use super::{FactTone, FooterFacts, footer_facts, footer_tooltip};
 use crate::panels::report::query::ReportData;
@@ -41,6 +44,24 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
 ///     The same snapshot carrying the supplied volume state.
 fn with_volume(mut snapshot: ReportData, volume: TradedVolume) -> ReportData {
     snapshot.totals.traded_volume = volume;
+    snapshot
+}
+
+/// Attach a complete native average-order carrier that is independent of the Report profit groups.
+fn with_average_order(mut snapshot: ReportData) -> ReportData {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    snapshot.totals.entry_spend = EntrySpend {
+        totals: vec![QuoteSpend {
+            currency: usdt,
+            spent: 100.0,
+            profit: 10.0,
+            orders: 1,
+        }],
+        counted_orders: 1,
+        valued_orders: 0,
+        usdt_spent: 0.0,
+        usdt_profit: 0.0,
+    };
     snapshot
 }
 
@@ -871,5 +892,70 @@ fn open_positions_fact_clips_before_traded_volume() {
         volume_ix < open_ix,
         "traded volume must precede the open-positions tally so a narrow dock clips the open \
          tally away first, got tail = {texts:?}"
+    );
+}
+
+/// `totals.rs::single_core_scope` must exclude `NO_MATCH_CORE_UID`. Dropping that conjunct would
+/// render an average-order percentage for a workspace preset that intentionally names no core.
+#[test]
+fn no_match_scope_has_no_average_order_fact() {
+    let mut snapshot = with_average_order(data(vec![(Some(1), 10.0, 1)], 1));
+    snapshot.filter = std::sync::Arc::new(ReportFilter {
+        core_uids: vec![moon_core::config::NO_MATCH_CORE_UID],
+        ..ReportFilter::default()
+    });
+
+    assert!(
+        super::average_order_fact(&snapshot, ValuationMode::Historical).is_none(),
+        "the no-match sentinel represents an empty visible scope, not one selected core"
+    );
+}
+
+/// `totals.rs::footer_facts` must push the average-order fact after traded volume and before open
+/// positions. Moving it after open positions would make it survive longer than the more important
+/// open tally or disrupt the footer's documented narrow-dock clipping priority.
+#[test]
+fn average_order_fact_clips_between_volume_and_open_positions() {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let mut snapshot = with_volume(
+        with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),
+        TradedVolume {
+            totals: vec![QuoteVolume {
+                currency: usdt,
+                amount: 420.0,
+                orders: 1,
+                reconstructed: 1,
+            }],
+            eligible_orders: 1,
+            reconstructed_orders: 1,
+            valued_orders: 1,
+            usdt: Some(420.0),
+            ..Default::default()
+        },
+    );
+    snapshot.filter = std::sync::Arc::new(ReportFilter {
+        core_uids: vec![7],
+        ..ReportFilter::default()
+    });
+    snapshot.open = moon_core::db::OpenPositions::from_groups(vec![(Some(1), 50.0, 1)]);
+
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+    let texts: Vec<&str> = facts.tail.iter().map(|fact| fact.text.as_str()).collect();
+    let volume_ix = texts
+        .iter()
+        .position(|text| text.starts_with("Volume"))
+        .expect("the volume fixture must make its fact visible");
+    let average_ix = texts
+        .iter()
+        .position(|text| text.contains("avg order"))
+        .expect("the complete one-core fixture must make its average fact visible");
+    let open_ix = texts
+        .iter()
+        .position(|text| text.starts_with("open:"))
+        .expect("the open-position fixture must make its fact visible");
+
+    assert!(
+        volume_ix < average_ix && average_ix < open_ix,
+        "the average-order fact must remain between volume and open positions, got tail = {texts:?}"
     );
 }

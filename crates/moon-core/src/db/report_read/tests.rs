@@ -475,6 +475,61 @@ fn traded_volume_report(quote: i64) -> Connection {
     conn
 }
 
+/// `report_read.rs::entry_spend_sql` must retain its non-Funding predicate. Dropping
+/// `AND {funding}` would count the deliberately positive-spend Funding row in the average-order
+/// denominator, quietly moving every single-core Report percentage and understating exclusions.
+#[test]
+fn average_order_spend_excludes_positive_spend_funding_rows() {
+    let conn = traded_volume_report(1);
+    let totals = query_totals(
+        &conn,
+        &ReportFilter {
+            core_uids: vec![1],
+            ..ReportFilter::default()
+        },
+    )
+    .expect("query average-order spend")
+    .quotes;
+
+    assert_eq!(
+        totals.orders, 3,
+        "two trades plus the Funding row are closed"
+    );
+    assert_eq!(totals.entry_spend.counted_orders, 2);
+    assert_eq!(totals.entry_spend.totals.len(), 1);
+    let usdt = &totals.entry_spend.totals[0];
+    assert_eq!(usdt.orders, 2);
+    assert_eq!(usdt.spent, 3.0, "only the 1.0 and 2.0 trade spends count");
+    assert_eq!(
+        usdt.profit, 50.0,
+        "the denominator and profit share those two rows"
+    );
+}
+
+/// `report_read.rs::query_totals_attempt` must keep `spend_offset = volume_offset + 5`. Moving
+/// it one column in either direction reads volume data as spend data or reads past the result,
+/// producing a wrong or failed Report average-order footer.
+#[test]
+fn average_order_spend_columns_follow_the_complete_volume_block() {
+    let conn = traded_volume_report(1);
+    let totals = query_totals(
+        &conn,
+        &ReportFilter {
+            core_uids: vec![1],
+            ..ReportFilter::default()
+        },
+    )
+    .expect("query ordered aggregate columns")
+    .quotes;
+
+    let usdt = totals
+        .entry_spend
+        .totals
+        .first()
+        .expect("the independently seeded USDT rows create one spend bucket");
+    assert_eq!((usdt.orders, usdt.spent, usdt.profit), (2, 3.0, 50.0));
+}
+
 /// Removing the exit leg, signing short quantity, reusing `spentbtc`, moving the closed/Funding
 /// predicates into `build_where`, or coupling volume completeness to profit coverage turns one of
 /// these exact assertions red and would misstate the current filtered Report footer.
