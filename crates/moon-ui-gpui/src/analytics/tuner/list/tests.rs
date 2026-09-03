@@ -6,8 +6,8 @@
 use moon_core::db::analytics::GroupStat;
 
 use super::{
-    SORT_NAME, StratListFilter, VisibleKey, VisibleRows, filter_sort_indices, memo_is_fresh,
-    restore_strat_sort,
+    SORT_NAME, StratListFilter, VisibleKey, VisibleRows, core_names_changed, filter_sort_indices,
+    memo_is_fresh, restore_strat_sort,
 };
 
 /// A group with just the fields these tests filter and sort on.
@@ -21,6 +21,67 @@ fn g(name: &str, kind: &str, alive: Option<i64>, bl: i64, profit: f64) -> GroupS
         profit,
         ..Default::default()
     }
+}
+
+/// A group whose Core column either names one core or summarizes several.
+fn core_group(core: &str, cores_n: i64) -> GroupStat {
+    let mut group = g(core, "K", Some(2), 0, 0.0);
+    group.core = core.to_string();
+    group.cores_n = cores_n;
+    group
+}
+
+/// `analytics/tuner/list/mod.rs:core_names_changed` must compare the set of names measured by
+/// the Core column. Replacing its set comparison with row order would remeasure every glyph after
+/// an otherwise identical report refresh, restoring the writer-path hitch this cache avoids.
+#[test]
+fn core_name_changes_ignore_row_order_and_multi_core_summaries() {
+    let old = vec![core_group("Alpha", 1), core_group("Beta", 1)];
+    let reordered = vec![core_group("Beta", 1), core_group("Alpha", 1)];
+    let with_summary_only = vec![
+        core_group("Beta", 1),
+        core_group("Alpha", 1),
+        core_group("Many cores", 2),
+    ];
+    let with_new_single_core = vec![
+        core_group("Alpha", 1),
+        core_group("Beta", 1),
+        core_group("Gamma", 1),
+    ];
+
+    assert!(
+        !core_names_changed(Some(&old), Some(&reordered)),
+        "the same measured names in another row order retain the width cache"
+    );
+    assert!(
+        !core_names_changed(Some(&old), Some(&with_summary_only)),
+        "a multi-core summary is not a separately measured Core-column name"
+    );
+    assert!(
+        core_names_changed(Some(&old), Some(&with_new_single_core)),
+        "a newly measured single-core name needs a fresh width"
+    );
+    assert!(
+        core_names_changed(Some(&old), Some(&[core_group("Alpha", 1)])),
+        "a disappearing measured name also changes the rendered column"
+    );
+}
+
+/// `analytics/tuner/list/mod.rs:core_names_changed` must treat an unpublished replacement as no
+/// change. Treating `new == None` as changed clears the settled width cache for every failed or
+/// split read, bringing the visible writer-path hitch back without new names to measure.
+#[test]
+fn unpublished_core_names_do_not_invalidate_a_settled_width() {
+    let old = vec![core_group("Alpha", 1)];
+
+    assert!(
+        core_names_changed(None, Some(&old)),
+        "the first published Core-column set needs an initial measurement"
+    );
+    assert!(
+        !core_names_changed(Some(&old), None),
+        "a failed or split replacement publishes no names and keeps the old width"
+    );
 }
 
 /// The default key over group set `base`: no search, no kind, no list filter, active-only off,

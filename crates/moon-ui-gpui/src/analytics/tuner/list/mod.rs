@@ -33,7 +33,8 @@ use super::{
 };
 use crate::design;
 use crate::design::moon;
-use moon_core::db::analytics::GroupStat;
+use moon_core::db::ProfitScope;
+use moon_core::db::analytics::{GroupStat, StrategyBase};
 
 /// "Which strategies name coins in a list?" — the list filter of the strategy table.
 ///
@@ -242,6 +243,45 @@ pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &Visible
 /// nothing changed" is the whole objective, and it is invisible from the rendered output.
 fn memo_is_fresh(cached: Option<&VisibleRows>, key: &VisibleKey) -> bool {
     cached.is_some_and(|c| &c.key == key)
+}
+
+/// Whether a published group set changes the names measured for the core-column width.
+///
+/// This matches `core_col_w`'s `cores_n <= 1` filter so the cache invalidates only when its
+/// measured text changes; multi-core rows render an aggregate instead of a name. No new group
+/// set means no replacement was published, while a missing old set must measure the first one.
+pub(in crate::analytics) fn core_names_changed(
+    old: Option<&[GroupStat]>,
+    new: Option<&[GroupStat]>,
+) -> bool {
+    let Some(new) = new else {
+        return false;
+    };
+    let Some(old) = old else {
+        return true;
+    };
+    fn names(rows: &[GroupStat]) -> std::collections::HashSet<&str> {
+        rows.iter()
+            .filter(|g| g.cores_n <= 1)
+            .map(|g| g.core.as_str())
+            .collect()
+    }
+    names(old) != names(new)
+}
+
+/// Borrow the strategy rows a just-completed base read published, when it published any.
+///
+/// `Split` carries no comparable group set (only raw per-quote totals), and a failed read
+/// carries none at all — both read as "nothing new to measure", not as "the set became empty".
+pub(in crate::analytics) fn published_groups(
+    result: &moon_core::db::ReadResult<ProfitScope<StrategyBase>>,
+) -> Option<&[GroupStat]> {
+    match result {
+        Ok(ProfitScope::Comparable { data, .. }) | Ok(ProfitScope::Empty(data)) => {
+            Some(&data.strategies)
+        }
+        Ok(ProfitScope::Split(_)) | Err(_) => None,
+    }
 }
 
 impl AnalyticsView {

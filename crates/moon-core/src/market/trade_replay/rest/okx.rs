@@ -5,9 +5,10 @@
 
 use serde_json::Value;
 
-use super::{FetchError, cell_f32, cell_i64};
+use super::{FetchError, TradeCursor, TradePage, cell_f32, cell_i64};
+use crate::feed::types::{Side, Tick};
 use crate::market::candles::ChartCandle;
-use crate::market::trade_replay::venue_caps::KlineRoute;
+use crate::market::trade_replay::venue_caps::{KlineRoute, TradeRoute};
 
 /// Positional index of the cell holding BASE-asset volume on a SPOT row.
 pub(super) const SPOT_VOLUME_CELL: usize = 5;
@@ -165,6 +166,156 @@ fn parse_row(row: &Value, volume_cell: usize) -> Option<ChartCandle> {
         // `volCcyQuote` (cell 7) is correct for both spot and swap, unlike base volume — no
         // per-market cell selection is needed here.
         quote_volume: cells.get(7).and_then(cell_f32).unwrap_or(0.0),
+    })
+}
+
+/// Fetch one page of public trades and return the decoded body.
+///
+/// # No time range at all — the FIRST page anchors on a timestamp, every later one on a trade id
+///
+/// `history-trades` has no `startTime`/`endTime` pair whatsoever, unlike the candle endpoint. The
+/// FIRST page of a slice has nothing else to anchor to, so it uses `type=2&after=<right edge
+/// ms>`, walking strictly backward from the slice's own right edge.
+///
+/// Every LATER page switches to `type=1&after=<oldest row's tradeId>` instead of continuing with
+/// `type=2` at the previous page's oldest timestamp. `type=2`'s `after` is EXCLUSIVE of the given
+/// millisecond, and a full 100-row page routinely ends in the middle of several trades sharing
+/// one millisecond on a liquid pair; continuing from that same timestamp would silently drop
+/// every sibling trade at the boundary, a hole `full`/`covered` never notice and that ships as a
+/// complete window. A trade id has no such collision.
+///
+/// Args:
+///     agent: Shared client.
+///     route: [`TradeRoute::OkxHistoryTrades`].
+///     market: Exchange-native instrument id, e.g. `BTC-USDT` or `BTC-USDT-SWAP`.
+///     to_ms: Right edge of this slice, inclusive; the first page's `after` bound.
+///     max_rows: Row cap for this request.
+///     cursor: Continuation from a previous page, or `None` for the first page.
+///
+/// Returns:
+///     The decoded response, or a classified failure.
+pub(super) fn fetch_trades(
+    agent: &ureq::Agent,
+    route: TradeRoute,
+    market: &str,
+    to_ms: i64,
+    max_rows: usize,
+    cursor: Option<TradeCursor>,
+) -> Result<Value, FetchError> {
+    let request = agent
+        .get(route.url())
+        .query("instId", market)
+        .query("limit", max_rows.to_string());
+    let request = match cursor {
+        Some(TradeCursor::LessThanId(id)) => {
+            request.query("type", "1").query("after", id.to_string())
+        }
+        None => request.query("type", "2").query("after", to_ms.to_string()),
+        Some(_) => {
+            debug_assert!(
+                false,
+                "okx trade route hands back only LessThanId after the first page"
+            );
+            request.query("type", "2").query("after", to_ms.to_string())
+        }
+    };
+    let response = request
+        .call()
+        .map_err(|error| FetchError::Transient(error.to_string()))?;
+    super::decode_and_classify(response, "okx", classify)
+}
+
+/// Parse an OKX `history-trades` envelope into a page of ticks.
+///
+/// Rows arrive DESCENDING (newest first, walking backward), so the oldest row in this page is
+/// the LAST one — that is what both the next cursor and the window-covered check key on.
+///
+/// Args:
+///     body: Decoded response.
+///     max_rows: Row cap that was sent, so a FULL page can be told from a short, final one.
+///     from_ms: Left edge of the slice, so completeness is judged from the oldest row's own
+///         timestamp rather than assumed from the row count alone.
+///
+/// Returns:
+///     The page, or a failure when the envelope is missing.
+pub(super) fn parse_history_trades(
+    body: &Value,
+    max_rows: usize,
+    from_ms: i64,
+) -> Result<TradePage, FetchError> {
+    let rows = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| FetchError::Transient("okx: missing data".to_string()))?;
+    let ticks: Vec<Tick> = rows.iter().filter_map(parse_trade_row).collect();
+    // A page holding a malformed row alongside valid ones can still finish pagination with a
+    // non-empty tick vector that is silently missing rows — a hole must send the window to
+    // candles instead of drawing a partial tape as if it were whole.
+    if ticks.len() < rows.len() {
+        return Err(FetchError::Transient(format!(
+            "okx: page held {} unparseable row(s) of {} (parsed {})",
+            rows.len() - ticks.len(),
+            rows.len(),
+            ticks.len()
+        )));
+    }
+    let oldest_ms = rows.last().and_then(|r| r.get("ts")).and_then(cell_i64);
+    let oldest_id = rows
+        .last()
+        .and_then(|r| r.get("tradeId"))
+        .and_then(cell_i64)
+        .map(|v| v as u64);
+    let full = rows.len() >= max_rows;
+    let covered = oldest_ms.is_some_and(|t| t < from_ms);
+    let next = match (full, covered, oldest_id) {
+        // Continuations paginate by TRADE ID, never by timestamp — see `fetch_trades`'s doc for
+        // why the boundary millisecond is unsafe to resume from.
+        (true, false, Some(id)) => Some(TradeCursor::LessThanId(id)),
+        // Full page, window not covered, but the oldest row's own `tradeId` did not parse: the
+        // cursor to continue from is unknowable. Treating this as completion would silently ship
+        // a truncated window as a whole one.
+        (true, false, None) => {
+            return Err(FetchError::Transient(
+                "okx: full page, window not covered, but the oldest row's tradeId did not parse"
+                    .to_string(),
+            ));
+        }
+        _ => None,
+    };
+    Ok(TradePage { ticks, next })
+}
+
+/// Parse one OKX `history-trades` row.
+///
+/// **Unit note**: `sz` is a base-asset amount for SPOT but a CONTRACT COUNT for swap/futures —
+/// [`TradeRoute::OkxHistoryTrades`] serves both markets through this one parser, unlike the
+/// kline sibling, which is deliberately split into `OkxSpot`/`OkxSwap` for exactly this reason
+/// (see `venue_caps.rs`'s doc on `OkxSwap`). No base-asset amount is available from this endpoint
+/// for a swap instrument, so `Tick::qty` holds contracts there. The chart's volume bars stay
+/// shape-correct regardless: the chart normalises the visible window against its own maximum
+/// `qty`, and a per-instrument contract multiplier is a constant that cancels out of that
+/// normalisation — only an ABSOLUTE volume figure would be wrong, and a tick series' aggregated
+/// candles never reach the shared SQLite kline cache where one could be read. See
+/// `venue_caps.rs`'s trade-route table for the same note.
+///
+/// Args:
+///     row: One element of `data`.
+///
+/// Returns:
+///     The tick, or `None` when the row is malformed.
+fn parse_trade_row(row: &Value) -> Option<Tick> {
+    let price = cell_f32(row.get("px")?)?;
+    let qty = cell_f32(row.get("sz")?)?;
+    let time_ms = cell_i64(row.get("ts")?)? as f64;
+    let side = match row.get("side").and_then(Value::as_str)? {
+        "sell" => Side::Sell,
+        _ => Side::Buy,
+    };
+    Some(Tick {
+        time_ms,
+        price,
+        qty,
+        side,
     })
 }
 

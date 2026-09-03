@@ -1,5 +1,7 @@
 use super::*;
 
+use serde_json::json;
+
 fn fixture(name: &str) -> Value {
     let text = match name {
         "spot" => include_str!("fixtures/spot_klines.json"),
@@ -60,5 +62,39 @@ fn bitget_unknown_symbol_codes_are_permanent() {
     assert_eq!(
         classify(400, &fixture("futures_unknown")),
         Err(FetchError::UnknownSymbol)
+    );
+}
+
+/// `rest/bitget.rs:parse_fills` treating a full, uncovered page with an unparseable oldest
+/// `tradeId` as complete silently ships a truncated tick window as a complete chart.
+#[test]
+fn bitget_rejects_a_full_uncovered_page_without_a_cursor() {
+    let body = json!({
+        "data": [
+            {"price": "100", "size": "1", "ts": "2000", "side": "buy", "tradeId": "101"},
+            {"price": "99", "size": "1", "ts": "1000", "side": "sell", "tradeId": "not-an-id"}
+        ]
+    });
+
+    assert!(
+        parse_fills(&body, 2, 0).is_err(),
+        "an uncovered full page cannot be complete when its continuation cursor is unknowable"
+    );
+}
+
+/// `rest/bitget.rs:parse_fills` dropping its raw-row guard accepts a partly malformed page and
+/// draws a gap-ridden tick series as complete market history.
+#[test]
+fn bitget_rejects_a_page_with_any_unparseable_row() {
+    let body = json!({
+        "data": [
+            {"price": "100", "size": "1", "ts": "2000", "side": "buy", "tradeId": "101"},
+            {"size": "1", "ts": "1000", "side": "sell", "tradeId": "100"}
+        ]
+    });
+
+    assert!(
+        parse_fills(&body, 2, 0).is_err(),
+        "a response with a malformed row is incomplete even when another row parsed"
     );
 }

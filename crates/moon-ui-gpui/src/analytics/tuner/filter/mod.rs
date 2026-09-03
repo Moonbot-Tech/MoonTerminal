@@ -25,6 +25,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::super::refresh::CatchUpOutcome;
 use super::super::{AnalyticsView, LoadState};
 pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
 use crate::design;
@@ -216,10 +217,13 @@ impl AnalyticsView {
             },
             move |this, (stats, histogram, strat), cx| {
                 let mut hist_error = None;
+                let mut hist_outcome = CatchUpOutcome::Replacement;
                 if this.tuner.hist_seq == hist_req {
                     this.tuner.hist_loading = false;
+                    hist_outcome = CatchUpOutcome::of_read(&histogram);
                     hist_error = histogram.as_ref().err().cloned();
-                    this.tuner.hist.apply(histogram);
+                    let keep_hist = this.keep_on_catch_up(after_report, hist_outcome, report_req);
+                    this.tuner.hist.apply_or_keep(histogram, keep_hist);
                     this.tuner.hist_dirty = super::super::refresh::report_result_is_stale(
                         report_req,
                         this.current_report_generation(),
@@ -227,16 +231,20 @@ impl AnalyticsView {
                     );
                 }
                 if this.tuner.seq != req {
-                    if let Some(error) = hist_error.as_ref() {
-                        this.settle_report_refresh_retry(Some(error), cx);
+                    if hist_error.is_some() {
+                        this.settle_report_refresh_retry(hist_outcome.is_transient(), cx);
                     }
                     cx.notify();
                     return;
                 }
+                let stats_outcome = CatchUpOutcome::of_read(&stats);
                 let error = stats.as_ref().err().cloned();
-                // A completed non-data result clears stale numbers because
-                // values under a changed period label must belong to it.
-                this.tuner.stats.apply(stats);
+                // A completed non-data result clears stale numbers, unless it is a transient
+                // outcome with a scheduled correction left (`keep_on_catch_up`) — values
+                // under a changed period label must belong to it, but a settled snapshot with a
+                // scheduled correction must not blink through the intermediate result.
+                let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.tuner.stats.apply_or_keep(stats, keep_stats);
                 // `strategy_filters` is intentionally lossy and reports an unreadable row as
                 // `found=false`. An automatic report refresh must not turn that ambiguity into
                 // an empty Save baseline; explicit scope changes may clear the old strategy.
@@ -246,15 +254,8 @@ impl AnalyticsView {
                     this.current_report_generation(),
                     error.is_some(),
                 );
-                let retry_error = error
-                    .as_ref()
-                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    .or_else(|| {
-                        hist_error
-                            .as_ref()
-                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    });
-                this.settle_report_refresh_retry(retry_error, cx);
+                let transient = stats_outcome.is_transient() || hist_outcome.is_transient();
+                this.settle_report_refresh_retry(transient, cx);
                 cx.notify();
             },
         );
@@ -311,8 +312,10 @@ impl AnalyticsView {
                 if this.tuner.seq != req {
                     return;
                 }
+                let stats_outcome = CatchUpOutcome::of_read(&stats);
                 let error = stats.as_ref().err().cloned();
-                this.tuner.stats.apply(stats);
+                let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.tuner.stats.apply_or_keep(stats, keep_stats);
                 this.tuner.apply_strategy_read(filters, after_report);
                 this.tuner.dirty = super::super::refresh::report_result_is_stale(
                     report_req,
@@ -320,7 +323,7 @@ impl AnalyticsView {
                     error.is_some(),
                 );
                 if after_report {
-                    this.settle_report_refresh_retry(error.as_ref(), cx);
+                    this.settle_report_refresh_retry(stats_outcome.is_transient(), cx);
                 }
                 cx.notify();
             },

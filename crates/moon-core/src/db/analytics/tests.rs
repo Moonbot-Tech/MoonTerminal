@@ -1160,3 +1160,65 @@ fn min_closedate_uses_the_axis_converted_instant_not_the_smaller_raw_value() {
 
     remove_db(&path);
 }
+
+/// `db/analytics/mod.rs:min_closedate` must preserve the `closedate > 0` predicate and compare
+/// each core after its axis conversion when C2 replaces the grouped query. Including a core whose
+/// only rows are non-positive would make every all-history Analytics surface start at an invented
+/// epoch instead of the first real trade; an empty replica must still use the documented floor 1.
+#[test]
+fn min_closedate_skips_non_positive_cores_and_keeps_the_empty_floor() {
+    const ONLY_NON_POSITIVE_CORE: u64 = 4;
+    const OFFSET_CORE: u64 = 8;
+    const OFFSET_SECS: i32 = -3_600;
+    const FIRST_TRUE_INSTANT: i64 = 1_700_300_000;
+
+    let path = temp_db("min-closedate-positive");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            (ONLY_NON_POSITIVE_CORE, -99, 1.0, "ZEROLESS"),
+            (ONLY_NON_POSITIVE_CORE, 0, 2.0, "ZEROLESS"),
+            (
+                OFFSET_CORE,
+                FIRST_TRUE_INSTANT + i64::from(OFFSET_SECS),
+                3.0,
+                "OFFSET",
+            ),
+            (
+                OFFSET_CORE,
+                FIRST_TRUE_INSTANT + 86_400 + i64::from(OFFSET_SECS),
+                4.0,
+                "OFFSET",
+            ),
+        ],
+    );
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([(
+            OFFSET_CORE,
+            vec![crate::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: OFFSET_SECS,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+
+    assert_eq!(
+        min_closedate(&conn, &axis).expect("resolve positive multi-core floor"),
+        FIRST_TRUE_INSTANT,
+        "only the offset core contributes a positive close, and its axis converts it to the independently seeded true instant"
+    );
+    drop(conn);
+    remove_db(&path);
+
+    let empty_path = temp_db("min-closedate-empty");
+    let empty = build_replica(&empty_path, &[]);
+    assert_eq!(
+        min_closedate(&empty, &crate::db::ReportAxis::identity_core_local())
+            .expect("resolve empty history floor"),
+        1,
+        "an empty replica has no per-core minimum and therefore keeps the public all-history sentinel"
+    );
+    drop(empty);
+    remove_db(&empty_path);
+}

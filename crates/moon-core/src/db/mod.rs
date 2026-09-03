@@ -32,6 +32,7 @@ mod report_read;
 pub mod report_recovery;
 #[cfg(test)]
 mod test_support;
+pub mod trace;
 mod trade_meta;
 pub mod tuner;
 pub mod valuation;
@@ -995,6 +996,7 @@ pub fn open_reader() -> ReadResult<Connection> {
     // before report-derived views can open readers; an absent file remains a normal not-ready state.
     let _ = valuation::attach(&conn)?;
     read_cancel::install_current(&conn)?;
+    trace::install_on(&conn);
     Ok(conn)
 }
 
@@ -1282,11 +1284,13 @@ pub fn open_readonly() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
     // Same reasoning as `open_reader`: only a genuine absence may report `NotReady`.
     metadata_gate(&path, "отчёты(ro): доступ к файлу")?;
-    Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|e| read_fail("отчёты(ro)", e))
+    .map_err(|e| read_fail("отчёты(ro)", e))?;
+    trace::install_on(&conn);
+    Ok(conn)
 }
 
 #[cfg(test)]

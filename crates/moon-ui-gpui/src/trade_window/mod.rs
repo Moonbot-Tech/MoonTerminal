@@ -50,10 +50,11 @@ use gpui::*;
 use moon_core::db::{ChartTradeRecord, TradeMeta};
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
-    TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource,
-    replay_window,
+    TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries,
+    TradeReplaySource, replay_window,
 };
 use moon_core::session::CoreId;
+use moon_core::venue::Brand;
 
 pub(crate) use window::open_trade_window;
 
@@ -73,9 +74,27 @@ pub(crate) enum TradeWindowState {
     /// five-minute bucket — a wrong label over real-money data, which is worse than an honest gap.
     /// A typed number rather than a formatted string, because this value is produced beside
     /// `moon-core` data and only the UI can localize the sentence around it.
+    ///
+    /// The next four fields exist for the same reason: the caption cannot ask the network again
+    /// for a fact only the fetch answer holds, so each is read off the series once, in `apply`,
+    /// before it is moved into the panel.
     Ready {
         source: TradeReplaySource,
         tf_min: u16,
+        /// How the tick attempt for this window ended — what a `Klines1m` caption NAMES as its
+        /// reason. `Served` only ever rides a `Ticks` source.
+        tick_status: TickStatus,
+        /// Bucket the `Ticks` points were thinned to, in ms; `0` means raw. Meaningless (and
+        /// always `0`) on `Klines1m`.
+        bucket_ms: i64,
+        /// Whether the `Ticks` points cover only part of the window. Always `false` on
+        /// `Klines1m`.
+        partial: bool,
+        /// Brand of the venue the rows came from, so a `NoRoute` caption can name it. Read off
+        /// `series.venue` rather than kept as a `TradeWindowView` field: `window.rs`'s
+        /// construction of that struct is outside this branch's file bounds, so nothing here may
+        /// add a field it would have to initialize.
+        brand: Brand,
     },
     /// Nothing to draw, for a reason the window names.
     Empty(TradeReplayEmpty),
@@ -227,6 +246,73 @@ pub(super) fn trade_labels(
     )
 }
 
+/// What one worker answer does to an already-drawn (or still-loading) window.
+///
+/// One function rather than three predicates, so the whole state transition is pinnable by a
+/// test without a GPUI harness — nothing in this repo renders GPUI in tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Fold {
+    /// Whether `outcome` replaces `state` at all. A drawn window never regresses to an error or
+    /// empty message; once it is [`TradeWindowState::Ready`], only a tick upgrade or a terminal
+    /// answer that resolves its provisional `Pending` caption is let through.
+    pub accept: bool,
+    /// Whether the user's own candle mode should be restored before this outcome is drawn.
+    pub restore_candle_mode: bool,
+    /// Whether the trade's arrows and viewport should be (re)framed for this outcome.
+    pub frame: bool,
+}
+
+/// Decide what one worker answer does to the window's state.
+///
+/// Args:
+///     state: What the window currently shows, i.e. what the LAST accepted outcome produced.
+///     published_this_sequence: Whether a picture has already been framed for the fetch
+///         `outcome` belongs to — `false` for a request's first outcome, `true` for its second.
+///     outcome: The answer being folded in.
+///
+/// Returns:
+///     The decision. `accept == false` means `outcome` is dropped and `state` is left exactly as
+///     it is.
+pub(super) fn fold_outcome(
+    state: &TradeWindowState,
+    published_this_sequence: bool,
+    outcome: &TradeReplayOutcome,
+) -> Fold {
+    let accept = match state {
+        // The rule is stated for what it means rather than for what the worker happens to send
+        // (the existing comment's own standard): a chart already showing something never
+        // regresses, but a caption that is still PROVISIONAL may be resolved. So a `Ready` state
+        // whose tick status has not answered yet accepts a second `Ready` outcome once that
+        // outcome's own status has moved past `Pending` and actually carries rows — the only
+        // thing that turns "пробуем тики…" into a stated reason. A state whose status is already
+        // terminal (a settled `Ticks` series, or a `Klines1m` reason already printed) accepts
+        // nothing.
+        TradeWindowState::Ready { tick_status, .. } => {
+            *tick_status == TickStatus::Pending
+                && matches!(
+                    outcome,
+                    TradeReplayOutcome::Ready(series)
+                        if series.tick_status != TickStatus::Pending && !series.is_empty()
+                )
+        }
+        // Loading, Empty or Failed has nothing on screen to protect.
+        TradeWindowState::Loading | TradeWindowState::Empty(_) | TradeWindowState::Failed(_) => {
+            true
+        }
+    };
+    Fold {
+        accept,
+        // Keyed on the outcome's SOURCE, never on its position in the sequence: protocol item 2's
+        // reopen case delivers a settled `Ticks` series as the FIRST outcome, and a position-keyed
+        // rule would leave a reopened window stuck in the candle stage's forced mode.
+        restore_candle_mode: accept
+            && matches!(outcome, TradeReplayOutcome::Ready(series) if series.source == TradeReplaySource::Ticks),
+        // The upgrade re-uses the picture already framed rather than re-framing it, so a user who
+        // panned while the ticks loaded is not yanked back to the trade.
+        frame: accept && !published_this_sequence,
+    }
+}
+
 /// Name one strategy through the session's own store.
 ///
 /// `as u64` because the store keys strategies by the same bits the wire carries, which is the
@@ -260,6 +346,15 @@ pub(crate) struct TradeWindowView {
     /// user clicked.
     stamps: (String, String),
     state: TradeWindowState,
+    /// Whether the current sequence's picture has already been framed (arrows + viewport), so a
+    /// tick upgrade landing on top of it does not yank back a user who panned while it loaded.
+    /// Reset to `false` every [`Self::fetch`], set once `fold_outcome`'s `frame` fires.
+    framed_this_sequence: bool,
+    /// The mode the user's own chart is actually on, captured in `window.rs` before the candle
+    /// stage's `CANDLE_MODE_OFF` force is applied. A tick outcome restores it — see
+    /// [`Self::restore_candle_mode`] — because a tick series has no reason to hide behind that
+    /// force: it draws points, not candles.
+    user_candle_mode: u8,
     /// Monotonic dispatch counter, so a Retry supersedes an in-flight fetch instead of racing it.
     sequence: u64,
     /// What the replica said this trade carried, kept so the strategy can be named LATER.
@@ -473,6 +568,7 @@ impl TradeWindowView {
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
         self.state = TradeWindowState::Loading;
+        self.framed_this_sequence = false;
         cx.notify();
 
         let (tx, rx) = mpsc::channel();
@@ -486,21 +582,46 @@ impl TradeWindowView {
         });
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            // The blocking receive sits on the background executor; the worker's own job deadline
-            // is what bounds it, so this task cannot outlive a stalled fetch indefinitely.
-            let Ok(outcome) = executor.spawn(async move { rx.recv() }).await else {
-                return;
-            };
-            cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.apply(sequence, outcome, buy_utc, close_utc, cx)
+            // One `TradeReplayRequest` now answers with ONE or TWO outcomes before the worker
+            // drops `reply` — the candle stage, then an optional tick upgrade — so this task
+            // receives in a loop rather than once, and the drop (a `RecvError`) is its exit
+            // signal, exactly like the view going away is (`this.update` failing below). The
+            // receiver travels into the background task and back out each iteration instead of
+            // living behind a lock across the await, so the blocking `recv` never holds anything
+            // this foreground task still needs between messages.
+            let mut rx = rx;
+            loop {
+                let (returned_rx, received) = executor
+                    .spawn(async move {
+                        let received = rx.recv();
+                        (rx, received)
+                    })
+                    .await;
+                rx = returned_rx;
+                let Ok(outcome) = received else {
+                    return;
+                };
+                let applied = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        this.apply(sequence, outcome, buy_utc, close_utc, cx)
+                    })
                 });
-            });
+                // The window closed while this outcome was in flight; nothing left to fold it
+                // into, and no later outcome for this sequence has anywhere to land either.
+                if applied.is_err() {
+                    return;
+                }
+            }
         })
         .detach();
     }
 
     /// Fold one fetch answer into the window.
+    ///
+    /// A `fetch` may now deliver up to two answers on the same `sequence` — the candle stage,
+    /// then an optional tick upgrade — so this runs once per outcome rather than once per fetch.
+    /// [`fold_outcome`] carries every decision that depends on what is already on screen; this
+    /// method only carries it out.
     ///
     /// Args:
     ///     sequence: Dispatch counter the answer belongs to.
@@ -522,6 +643,10 @@ impl TradeWindowView {
         if sequence != self.sequence {
             return;
         }
+        let fold = fold_outcome(&self.state, self.framed_this_sequence, &outcome);
+        if !fold.accept {
+            return;
+        }
         self.state = match outcome {
             TradeReplayOutcome::Ready(series) if series.is_empty() => {
                 TradeWindowState::Empty(TradeReplayEmpty::NoDataInWindow)
@@ -536,8 +661,27 @@ impl TradeWindowView {
                 // range: a floor of one minute for anything finer, and no `as` wrap for anything
                 // absurdly coarse.
                 let tf_min = (series.tf_ms / 60_000).clamp(1, i64::from(u16::MAX)) as u16;
-                self.publish(series, buy_utc, close_utc, cx);
-                TradeWindowState::Ready { source, tf_min }
+                // Same reasoning, same moment: the caption's four remaining facts are the series'
+                // alone to give.
+                let tick_status = series.tick_status;
+                let bucket_ms = series.bucket_ms;
+                let partial = series.partial;
+                let brand = series.venue.brand;
+                if fold.restore_candle_mode {
+                    self.restore_candle_mode(cx);
+                }
+                self.publish(series, buy_utc, close_utc, fold.frame, cx);
+                if fold.frame {
+                    self.framed_this_sequence = true;
+                }
+                TradeWindowState::Ready {
+                    source,
+                    tf_min,
+                    tick_status,
+                    bucket_ms,
+                    partial,
+                    brand,
+                }
             }
             TradeReplayOutcome::Empty(empty) => TradeWindowState::Empty(empty),
             TradeReplayOutcome::Failed(failure) => {
@@ -550,6 +694,23 @@ impl TradeWindowView {
             }
         };
         cx.notify();
+    }
+
+    /// Restore the user's own candle mode once a tick series is about to be drawn.
+    ///
+    /// `window.rs` forces candles on while no tick series has arrived because a candle replay has
+    /// no ticks; a tick series does, so that force's reason is gone and the user's real choice —
+    /// including Off, a pure tick chart — comes back.
+    ///
+    /// Args:
+    ///     cx: View context.
+    fn restore_candle_mode(&mut self, cx: &mut Context<Self>) {
+        let mode = self.user_candle_mode;
+        self.panel.update(cx, |panel, pcx| {
+            let mut view = panel.effective_candle_view(pcx);
+            view.mode = mode;
+            panel.set_candle_view(Some(view), pcx);
+        });
     }
 
     /// The price scale this window's chart is set to, for its own control to state.
@@ -589,7 +750,8 @@ impl TradeWindowView {
         cx.notify();
     }
 
-    /// Hand a fetched series to this window's chart and focus it on the trade.
+    /// Hand a fetched series to this window's chart, and focus it on the trade on the FIRST
+    /// publish of a sequence.
     ///
     /// Args:
     ///     series: The frozen rows.
@@ -599,27 +761,40 @@ impl TradeWindowView {
     ///         necessarily frames the exact pair `fetch` used to build the REST request whose
     ///         `series` this now is.
     ///     close_utc: True-UTC exit stamp, same provenance as `buy_utc`.
+    ///     first_publish: Whether this is the first publish of the fetch's sequence. `false` is a
+    ///         tick upgrade landing on a picture the candle stage already framed — re-running the
+    ///         arrows and the viewport would yank back a user who panned while it loaded, so both
+    ///         are skipped and only the chart's own rows are replaced.
     ///     cx: View context.
     fn publish(
         &mut self,
         series: TradeReplaySeries,
         buy_utc: i64,
         close_utc: i64,
+        first_publish: bool,
         cx: &mut Context<Self>,
     ) {
         // Read off the series BEFORE it is moved into the panel, exactly as `source` and `tf_min`
-        // are in `apply`.
-        let frame = frame::trade_frame(
-            buy_utc.saturating_mul(1_000),
-            close_utc.saturating_mul(1_000),
-            series.tf_ms,
-        );
+        // are in `apply`. Skipped entirely on an upgrade: the frame this trade opened on is not
+        // recomputed, only reused.
+        let frame = first_publish
+            .then(|| {
+                frame::trade_frame(
+                    buy_utc.saturating_mul(1_000),
+                    close_utc.saturating_mul(1_000),
+                    series.tf_ms,
+                )
+            })
+            .flatten();
         // The RAW record, deliberately: correcting it here would double-correct, since B.1
         // (`chartdx/trade_history_sync.rs`) already applies the axis inside
         // `append_trade_history_geometry`.
         let record = self.record.clone();
         self.panel.update(cx, |panel, pcx| {
             panel.attach_trade_replay(Some(std::rc::Rc::new(series)), pcx);
+            if !first_publish {
+                return;
+            }
             // THE ENTRY AND EXIT ARROWS. Owning a `ChartPanel` is not enough on its own: the
             // marker geometry is built during the userdata pass, and that pass only ever sees the
             // trades handed to this layer. The live Report path fills it from the open-request

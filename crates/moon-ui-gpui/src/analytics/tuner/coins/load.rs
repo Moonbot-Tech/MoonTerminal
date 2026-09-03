@@ -10,7 +10,7 @@ use gpui::*;
 
 use super::super::super::AnalyticsView;
 use super::state::{CoinLists, CoinPlan};
-use crate::analytics::refresh::report_result_is_stale;
+use crate::analytics::refresh::{CatchUpOutcome, report_result_is_stale};
 use moon_core::db::analytics::GroupStat;
 
 /// How long a burst of ticks is allowed to keep coalescing before the KPI is rescanned.
@@ -28,7 +28,7 @@ impl AnalyticsView {
         self.reload_coins_inner(false, true, cx);
     }
 
-    /// Recompute report-stale coin data and retry transient database contention.
+    /// Recompute report-stale coin data through the writer-driven catch-up path.
     ///
     /// Args:
     ///     show_overlay: Whether queued user work requires blocking progress feedback.
@@ -44,7 +44,7 @@ impl AnalyticsView {
     /// Start one coin-axis snapshot with behavior selected by its reload cause.
     ///
     /// Args:
-    ///     after_report: Whether transient database contention should re-arm automatic refresh.
+    ///     after_report: Whether this is a writer-driven catch-up that may arm a follow-up refresh.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to run and publish the combined background query.
     fn reload_coins_inner(
@@ -130,7 +130,8 @@ impl AnalyticsView {
                 )
             },
             move |this, (stats, kpi, lists, bl_n, wl_n, entries, picked_strategies), cx| {
-                let entries_error = entries.as_ref().err().cloned();
+                let entries_outcome = CatchUpOutcome::of_read(&entries);
+                let picked_outcome = CatchUpOutcome::of_read(&picked_strategies);
                 let picked_error = picked_strategies.as_ref().err().cloned();
                 // Guarded separately from the table below: the panels have their own
                 // generation, so a scope change that retired only them still lands here
@@ -165,34 +166,12 @@ impl AnalyticsView {
                 // what says "the user has touched the working lists since this request
                 // started" — so it must not be overwritten by a baseline read before it.
                 let edited = this.coins.kpi_seq != kpi_req;
-                let retry = stats
-                    .as_ref()
-                    .err()
-                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    .or_else(|| {
-                        if edited {
-                            None
-                        } else {
-                            kpi.as_ref()
-                                .err()
-                                .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                        }
-                    })
-                    .or_else(|| {
-                        entries_error
-                            .as_ref()
-                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    })
-                    .or_else(|| {
-                        if picked_current {
-                            picked_error
-                                .as_ref()
-                                .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                        } else {
-                            None
-                        }
-                    })
-                    .cloned();
+                let stats_outcome = CatchUpOutcome::of_read(&stats);
+                let kpi_outcome = CatchUpOutcome::of_read(&kpi);
+                let transient = stats_outcome.is_transient()
+                    || (!edited && kpi_outcome.is_transient())
+                    || entries_outcome.is_transient()
+                    || (picked_current && picked_outcome.is_transient());
                 // Clear "recompute me" only when everything this pass owed came back. The
                 // KPI counts only when it is actually applied — a discarded request's
                 // error says nothing about the table. An empty universe means the plan
@@ -207,7 +186,8 @@ impl AnalyticsView {
                     this.current_report_generation(),
                     read_failed,
                 );
-                this.coins.stats.apply(stats);
+                let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.coins.stats.apply_or_keep(stats, keep_stats);
                 // Only a confirmed strategies snapshot may replace the baseline. On a failed
                 // read, preserving both sets is safer than replaying the draft against a
                 // fabricated empty list and silently changing the next Save.
@@ -216,7 +196,8 @@ impl AnalyticsView {
                 // left to show; fall back before the table renders "no matches".
                 this.coins.settle_filter();
                 if !edited {
-                    this.coins.kpi.apply(kpi);
+                    let keep_kpi = this.keep_on_catch_up(after_report, kpi_outcome, report_req);
+                    this.coins.kpi.apply_or_keep(kpi, keep_kpi);
                     this.coins.kpi_bl = bl_n;
                     this.coins.kpi_wl = wl_n;
                 } else {
@@ -225,7 +206,7 @@ impl AnalyticsView {
                     this.arm_coin_kpi(cx);
                 }
                 if after_report {
-                    this.settle_report_refresh_retry(retry.as_ref(), cx);
+                    this.settle_report_refresh_retry(transient, cx);
                 }
                 cx.notify();
             },

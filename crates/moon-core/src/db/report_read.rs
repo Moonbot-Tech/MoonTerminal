@@ -1933,7 +1933,47 @@ fn run_row_pass(
         let rec_id_select = rec_id_expr(src);
         // Sort in SQL only if this source can express the column; otherwise source order is
         // irrelevant, because the merge below reorders everything anyway.
+        //
+        // The DESC arm drops the leading `({expression}) IS NULL` term: SQLite orders NULL
+        // lowest, so a plain `{expression} DESC` already places NULLs last, exactly what the
+        // `IS NULL` term bought. Without it that leading term forces a temp b-tree sort instead
+        // of using the source's index on `{expression}`. The ASC arm keeps the term — without it
+        // NULLs would sort FIRST there, a real result change — so do not drop it from that arm.
+        //
+        // The DESC arm then MUST carry the primary key as a tie-break, and that is not a
+        // refinement — it is what keeps the rewrite honest. `LIMIT` is applied per source
+        // BEFORE the merge below, and SQL guarantees nothing about the relative order of rows
+        // equal on every ORDER BY term. Dropping the leading term changes the plan from a temp
+        // sort to a backwards index walk, so a tie straddling the limit boundary would surface
+        // a DIFFERENT SET of rows, not merely a different order: measured on SQLite 3.50.4 with
+        // 20 rows sharing one `closedate`, 19 of 25 limits returned a different set. The key
+        // `(core_uid, newrecid)` is `rep.rs`'s own PRIMARY KEY, so it is total on the typed
+        // replica and the whole result becomes DEFINED rather than planner-chosen. It costs the
+        // sort only WITHIN each group of equal values — measured 2.4 ms -> 2.8 ms against
+        // 4804 ms before the rewrite, so the gain survives it intact.
+        //
+        // The key is taken PER SOURCE, because the two sources do not share one. The typed
+        // replica is keyed `(core_uid, newrecid)` (`rep.rs`'s own PRIMARY KEY) and the legacy
+        // `closed_sell_reports` is keyed `(core_uid, db_id)` (`db/mod.rs:10`) — and reaching for
+        // `rec_id_expr` here instead would be a trap twice over: it yields the LITERAL `0` on a
+        // source without `newrecid`, and SQLite reads a bare integer in ORDER BY as a COLUMN
+        // ORDINAL even parenthesised, so it would fail the whole query rather than order it.
+        // The same source-shape test `source_sort_expression` already uses for `id` is what
+        // picks the right column. A source offering neither keeps today's undefined tie order,
+        // which is no worse than before this rewrite.
         let order = match source_sort_expression(src, sort_col, valuation.as_ref()) {
+            Some(expression) if desc => {
+                let mut order = format!("{expression} {dir}");
+                if src.cols.contains("core_uid") {
+                    order.push_str(&format!(", r.core_uid {dir}"));
+                }
+                if src.cols.contains("newrecid") {
+                    order.push_str(&format!(", r.newrecid {dir}"));
+                } else if src.legacy && src.cols.contains("db_id") {
+                    order.push_str(&format!(", r.\"db_id\" {dir}"));
+                }
+                order
+            }
             Some(expression) => format!("({expression}) IS NULL, {expression} {dir}"),
             None => "1".to_string(),
         };
@@ -2429,6 +2469,13 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
 /// strategy predicates are deliberately removed so an active checkbox or name mask does not hide
 /// alternative strategies that match every other Report filter.
 ///
+/// Split into a normal-strategy arm and a liquidation arm when the two differ. What the split
+/// buys is NOT an index-only scan — `deleted` sits in no index, so both arms still read table
+/// rows to apply the deletion predicate. It buys keeping the liquidation-attribution CASE and
+/// its two correlated subqueries off the rows that can never satisfy it, which on the 600k-row
+/// measurement fixture is 599 696 of 600 000. Measured there: 2057 ms as one statement,
+/// 1236 ms as two arms.
+///
 /// Args:
 ///     conn: Open report reader or snapshot with optional strategy attachment.
 ///     filter: Active Report filter; every non-strategy predicate scopes discovery.
@@ -2475,12 +2522,47 @@ pub fn distinct_strategies(
         }
         let strategy_id = super::analytics::effective_sid_expr("r", &src.cols, has_strategy_names);
         let (where_sql, params) = build_where(&scope, &src.cols, has_strategy_names);
-        let sql = format!(
-            "SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {} r{where_sql}",
-            src.table,
-        );
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
+        // `COALESCE(r."strategyid",0)` never yields NULL, so `<> 0` / `= 0` partition every row
+        // with no third case, and identity is set equality (this function sorts its whole output
+        // in Rust below, so SQL row order never matters). When `strategy_id` is already the plain
+        // column, both arms would be identical and the split would buy nothing — keep the single
+        // statement in that case.
+        //
+        // `UNION`, not `UNION ALL`, and this is MEASURED rather than reasoned. The arms are
+        // disjoint by construction and the caller below dedups every pair through `seen`, so
+        // `UNION ALL` looks like the free choice — it is the opposite. `UNION` lets SQLite
+        // dedup the compound ONCE, and its left arm then needs no `DISTINCT` of its own;
+        // `UNION ALL` makes each arm materialise its own `USE TEMP B-TREE FOR DISTINCT`.
+        // On the 600k-row measurement fixture: 2057 ms before this split, 1236 ms with `UNION`,
+        // 6599 ms with `UNION ALL` — three times WORSE than doing nothing at all.
+        //
+        // ONE `build_where`, its parameters bound TWICE. Calling it a second time would re-read
+        // the wall clock — `append_row_scope` resolves "does this window still reach the
+        // present" against `now`, and its own doc says that must be ONE reading for the whole
+        // predicate — so two calls can straddle a second boundary and scope the two arms to
+        // genuinely different row states. Binding the same vector twice also keeps the bound
+        // parameter count where it was instead of doubling it.
+        let two_arms = strategy_id != "r.\"strategyid\"";
+        let sql = if two_arms {
+            format!(
+                "SELECT DISTINCT r.core_uid, COALESCE(r.\"strategyid\",0) FROM {table} r{where_sql} AND COALESCE(r.\"strategyid\",0) <> 0 \
+                 UNION \
+                 SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {table} r{where_sql} AND COALESCE(r.\"strategyid\",0) = 0",
+                table = src.table,
+            )
+        } else {
+            format!(
+                "SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {} r{where_sql}",
+                src.table,
+            )
+        };
+        let mut refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|value| value.as_ref()).collect();
+        if two_arms {
+            let second: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|value| value.as_ref()).collect();
+            refs.extend(second);
+        }
         let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
         let rows = stmt
             .query_map(refs.as_slice(), |row| {

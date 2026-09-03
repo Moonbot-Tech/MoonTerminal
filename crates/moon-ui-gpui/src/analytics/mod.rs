@@ -9,6 +9,10 @@
 //! SQLite query never runs on the UI thread). Direct scope edits reload immediately; stale
 //! tab/mode entry and committed report generations use the shared quiet-period and maximum-wait
 //! gate. Hidden surfaces remain marked stale until entry, and automatic scans never overlap.
+//!
+//! A writer-driven catch-up preserves a settled snapshot only for a transient outcome that a
+//! scheduled correction — a bounded retry or a newer generation — will resolve. Any durable
+//! outcome still publishes, so stale data never looks current with no correction path left.
 
 /// The shared spawn+overlay envelope of every background DB read.
 mod bg;
@@ -54,11 +58,12 @@ use crate::controls::date_range::{self, Bound};
 use moon_core::db::ReportAxis;
 use moon_core::db::analytics::{DayCell, PreviousPeriodBasis, Query, StrategyBase, Summary};
 use moon_core::db::valuation::{ValuationMode, ValuationStatus};
-use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
+use moon_core::db::{ProfitMetric, ProfitUnit, ReadFail, SideFilter};
 
 use crate::load_state::{LoadState, note_el};
 use refresh::{
-    BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh, visible_refresh,
+    BusyRetryBudget, CatchUpOutcome, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh,
+    visible_refresh,
 };
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
@@ -398,7 +403,7 @@ pub struct AnalyticsView {
     last_valuation_status_rev: u64,
     /// Debounce/max-wait state for automatic report-driven refreshes.
     report_refresh: RefreshGate,
-    /// Bounded automatic Busy retries for the active contention episode.
+    /// Bounded automatic retries for the active transient-outcome episode.
     report_busy_retries: BusyRetryBudget,
     tab: Tab,
     /// Period of the Summary tab (presets or the from/to range).
@@ -409,6 +414,9 @@ pub struct AnalyticsView {
     /// Period currently represented by `data` (summary/strategy list). Entering a tab
     /// with a different time window triggers a reload.
     data_period: Period,
+    /// Resolved `[from, to)` bounds `data` was computed for. Presets survive civil rollovers, so
+    /// the enum alone cannot tell when their re-resolved bounds make retained hovers stale.
+    data_range: (i64, i64),
     /// Whether `data` predates the latest committed report generation.
     data_dirty: bool,
     /// Cores from the replica (for the combo box) plus multi-selection (empty = all), using
@@ -552,8 +560,8 @@ pub struct AnalyticsView {
     /// Content-measured preferred width of the strategy list's core column as
     /// `(font_scale_it_was_measured_under, width_in_base_px)` (`tuner::list::table::core_col_w`).
     /// Filled lazily on render; measuring lays out a glyph per character for every distinct core
-    /// name, too much to repay on an idle repaint. Invalidated two ways: cleared to `None` where
-    /// `strategy_data` is replaced (the names may have changed), and
+    /// name, too much to repay on an idle repaint. It is cleared only when a published base
+    /// changes the single-core names (`tuner::core_names_changed`), and
     /// recomputed when the stored font scale no longer matches the current one, so a Font-slider
     /// move OR a theme whose mode carries a different base mono size re-measures instead of
     /// scaling a width that assumed the old base.
@@ -967,6 +975,7 @@ impl AnalyticsView {
             period: saved_period.unwrap_or(Period::CurMonth),
             strat_period: saved_strat_period.unwrap_or(Period::CurMonth),
             data_period: saved_period.unwrap_or(Period::CurMonth),
+            data_range: saved_period.unwrap_or(Period::CurMonth).range(bound_zone),
             data_dirty: false,
             cores: Vec::new(),
             last_cores_at: None,
@@ -1107,26 +1116,44 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Adopt a newly measured core offset, reloading every surface that was computed on the old
-    /// one.
+    /// Adopt a newly measured core offset, catching up every surface that was computed on the
+    /// old one.
     ///
     /// Polled beside the valuation health rather than pushed, following this window's own idiom.
     /// Unlike health, an adoption DOES change rows — every date bucket, every calendar cell and
-    /// every period bound moves — so it reloads rather than merely repainting.
+    /// every period bound moves. But the SCOPE (period, filters) does not, so this is a
+    /// writer-driven catch-up, not a user reload: the visible snapshot stays on screen, with no
+    /// blocking overlay, until the replacement lands. The observer retires EVERY in-flight read
+    /// identity for the old axis — `seq`, `cal_seq`, `cancel_latest_reads`, plus `tuner`,
+    /// `time_tuner`, `coins` and `coin_lists` `invalidate()` for the axes that keep their own
+    /// request generations — because a cancelled read is not silently dropped: the DB layer
+    /// raises a real SQLite interrupt that gets classified as a durable `Settled` failure, so a
+    /// read whose identity was not retired would pass its own `seq != req` guard and publish that
+    /// failure as if it were a real result. Retiring the tuner's identity here also clears any
+    /// unsaved filter draft, matching this observer's behavior before it stopped calling
+    /// `reload()` for axis changes.
     ///
     /// Args:
-    ///     cx: Analytics window context, reloaded only when the axis actually moved.
+    ///     cx: Analytics window context used to schedule a catch-up only when the axis moved.
     ///
     /// Returns:
-    ///     Nothing; an axis change marks calendar state dirty and reloads Analytics.
+    ///     Nothing; an axis change retires every in-flight read identity and schedules a
+    ///     writer-driven catch-up.
     fn observe_report_axis(&mut self, cx: &mut Context<Self>) {
         let axis = self.backend.read(cx).report_axis(self.display_zone);
         if axis == self.axis {
             return;
         }
         self.axis = axis;
-        self.cal_dirty = true;
-        self.reload(cx);
+        self.seq = self.seq.wrapping_add(1);
+        self.cal_seq = self.cal_seq.wrapping_add(1);
+        self.cancel_latest_reads();
+        self.tuner.invalidate();
+        self.time_tuner.invalidate();
+        self.coins.invalidate();
+        self.coin_lists.invalidate();
+        self.mark_report_data_stale();
+        self.request_report_refresh(RefreshUrgency::Writer, false, cx);
         cx.notify();
     }
 
@@ -1191,16 +1218,16 @@ impl AnalyticsView {
             .refresh_started(generation, std::time::Instant::now());
     }
 
-    /// Settle the Busy retry episode and optionally schedule its next bounded attempt.
+    /// Settle the transient retry episode and optionally schedule its next bounded attempt.
     ///
     /// Permanent corruption and unclassified I/O failures remain visible instead of creating an
     /// endless full-history retry loop.
     ///
     /// Args:
-    ///     error: Transient read failure, or `None` when the read escaped SQLite contention.
+    ///     transient: Whether any part of the completed read classified as a transient outcome.
     ///     cx: GPUI context used to arm the quiet-period retry.
-    fn settle_report_refresh_retry(&mut self, error: Option<&ReadFail>, cx: &mut Context<Self>) {
-        if error.and_then(ReadFail::kind) != Some(FailKind::Busy) {
+    fn settle_report_refresh_retry(&mut self, transient: bool, cx: &mut Context<Self>) {
+        if !transient {
             self.report_busy_retries.resolve();
             return;
         }
@@ -1208,14 +1235,43 @@ impl AnalyticsView {
             log::warn!("analytics: automatic database retry budget exhausted");
             return;
         }
-        // WRITER urgency on purpose: a bounded Busy retry that fired immediately would hammer a
-        // database already under contention, which is the one thing the quiet period is for.
+        // WRITER urgency lets this follow-up share the quiet period with a fresh report
+        // generation instead of immediately starting another full-period read.
         self.report_refresh.request_refresh(
             std::time::Instant::now(),
             false,
             RefreshUrgency::Writer,
         );
         self.schedule_report_refresh(cx);
+    }
+
+    /// Decide whether a writer-driven catch-up outcome may keep a visible snapshot instead of
+    /// publishing it.
+    ///
+    /// Centralizing the predicate keeps every load surface aligned as their call sites evolve. A
+    /// preserved snapshot is always covered by a scheduled correction: a transient outcome with a
+    /// scheduled correction (retry allowance or a newer generation) left, never a bare exhausted
+    /// budget.
+    ///
+    /// Args:
+    ///     after_report: Whether this is a writer-driven catch-up rather than a manual reload.
+    ///     outcome: The classified outcome this read completed with.
+    ///     started_generation: Report generation captured immediately before the read started.
+    ///
+    /// Returns:
+    ///     `true` only when the outcome is transient AND a correction is already scheduled.
+    fn keep_on_catch_up(
+        &self,
+        after_report: bool,
+        outcome: CatchUpOutcome,
+        started_generation: u64,
+    ) -> bool {
+        refresh::preserve_on_catch_up(
+            after_report,
+            outcome,
+            self.report_busy_retries.has_allowance(),
+            started_generation != self.current_report_generation(),
+        )
     }
 
     /// Queue a visible catch-up behind any Analytics database work already in flight.
@@ -1621,8 +1677,8 @@ impl AnalyticsView {
     /// Reload the full Summary without resetting tuner drafts.
     ///
     /// Args:
-    ///     after_report: Whether report-style catch-up may preserve the previous undated value
-    ///         while exposing a classified read error.
+    ///     after_report: Whether this writer-driven catch-up may keep a settled snapshot while a
+    ///         transient outcome with a scheduled correction remains.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to run and publish the shared background query.
     fn reload_summary(&mut self, after_report: bool, show_overlay: bool, cx: &mut Context<Self>) {
@@ -1639,18 +1695,25 @@ impl AnalyticsView {
         if !after_report {
             self.data = ProfitLoadState::default();
         }
-        // Drop every chart hover: the bars/columns under the cursor are about to be
-        // replaced (and on a single-day period the right card swaps its whole element
-        // tree), so they never fire `hovered = false` and a stale index would re-open a
-        // popup with no cursor on it — pointing at another period's bucket.
-        self.hover_daily_bucket = None;
-        self.hover_cum_bucket = None;
+        // Presets keep their enum across civil rollovers while their resolved bounds slide, so
+        // only the range can tell whether retained bucket hovers still name the same data.
+        let active_range = self.active_period().range(self.bound_zone());
+        let range_moved = active_range != self.data_range;
+        if !after_report || range_moved {
+            // Bucket indices are time-ordered and survive a same-scope catch-up, but a moved
+            // range shifts their meaning without changing the preset enum.
+            self.hover_daily_bucket = None;
+            self.hover_cum_bucket = None;
+        }
+        // Kinds are profit-sorted on every read, so an existing index can name another kind even
+        // during a same-scope catch-up; a closed popup is safer than a silently wrong one.
         self.hover_kind = None;
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         let report_req = self.current_report_generation();
         // Record the ACTIVE tab's time window that `data` is being computed for.
         self.data_period = self.active_period();
+        self.data_range = active_range;
         let q = self.query();
         let read_cores = self.core_metadata_due(cx);
         self.spawn_latest_db(
@@ -1665,40 +1728,39 @@ impl AnalyticsView {
                 let data = result.data;
                 let undated = result.undated;
                 let cores = result.cores;
-                let data_error = data.as_ref().err().cloned();
+                // Computed before `data` moves into `apply` below.
+                let data_outcome = CatchUpOutcome::of_scope(&data);
                 let undated_error = undated.as_ref().err().cloned();
                 let cores_error = cores
                     .as_ref()
                     .and_then(|cores| cores.as_ref().err())
                     .cloned();
-                let retry_error = data_error
-                    .as_ref()
-                    .filter(|error| error.kind() == Some(FailKind::Busy))
-                    .or_else(|| {
-                        undated
-                            .as_ref()
-                            .err()
-                            .filter(|error| error.kind() == Some(FailKind::Busy))
-                    })
-                    .or_else(|| {
-                        cores_error
-                            .as_ref()
-                            .filter(|error| error.kind() == Some(FailKind::Busy))
-                    })
-                    .cloned();
+                let transient = data_outcome.is_transient()
+                    || CatchUpOutcome::of_read(&undated).is_transient()
+                    || cores
+                        .as_ref()
+                        .is_some_and(|cores| CatchUpOutcome::of_read(cores).is_transient());
                 if let Some(Ok(cores)) = cores {
                     this.cores = cores;
                     this.last_cores_at = Some(std::time::Instant::now());
                     this.core_refresh_needed = false;
                 }
-                this.data.apply(data);
+                // A snapshot survives only while a scheduled correction can replace it; otherwise
+                // stale values would look current with no remaining correction path.
+                let preserve_snapshot = !matches!(this.data, ProfitLoadState::Loading)
+                    && this.keep_on_catch_up(after_report, data_outcome, report_req);
+                if !preserve_snapshot {
+                    this.data.apply(data);
+                }
                 this.data_dirty = refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
-                    data_error.is_some() || undated_error.is_some() || cores_error.is_some(),
+                    !matches!(data_outcome, CatchUpOutcome::Replacement)
+                        || undated_error.is_some()
+                        || cores_error.is_some(),
                 );
-                this.apply_undated_result(undated, after_report);
-                this.settle_report_refresh_retry(retry_error.as_ref(), cx);
+                this.apply_undated_result(undated, after_report, report_req);
+                this.settle_report_refresh_retry(transient, cx);
                 cx.notify();
             },
         );
@@ -1707,8 +1769,8 @@ impl AnalyticsView {
     /// Reload the compact Strategies base and optionally continue with its visible axis.
     ///
     /// Args:
-    ///     after_report: Whether to preserve the visible snapshot while loading and on read
-    ///         failure, and to use report-style catch-up and retry semantics.
+    ///     after_report: Whether a transient outcome with a scheduled correction may preserve the
+    ///         visible snapshot under report-style catch-up semantics.
     ///     chain_visible_axis: Whether a successful base read should continue into the active axis.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to run and publish the shared background query.
@@ -1743,50 +1805,43 @@ impl AnalyticsView {
                 let data = result.data;
                 let undated = result.undated;
                 let cores = result.cores;
+                // Computed before `data` moves into `apply` below.
+                let data_outcome = CatchUpOutcome::of_scope(&data);
                 let data_error = data.as_ref().err().cloned();
                 let undated_error = undated.as_ref().err().cloned();
                 let cores_error = cores
                     .as_ref()
                     .and_then(|cores| cores.as_ref().err())
                     .cloned();
-                let retry_error = data_error
-                    .as_ref()
-                    .filter(|error| error.kind() == Some(FailKind::Busy))
-                    .or_else(|| {
-                        undated_error
-                            .as_ref()
-                            .filter(|error| error.kind() == Some(FailKind::Busy))
-                    })
-                    .or_else(|| {
-                        cores_error
-                            .as_ref()
-                            .filter(|error| error.kind() == Some(FailKind::Busy))
-                    })
-                    .cloned();
+                let transient = data_outcome.is_transient()
+                    || CatchUpOutcome::of_read(&undated).is_transient()
+                    || cores
+                        .as_ref()
+                        .is_some_and(|cores| CatchUpOutcome::of_read(cores).is_transient());
                 if let Some(Ok(cores)) = cores {
                     this.cores = cores;
                     this.last_cores_at = Some(std::time::Instant::now());
                     this.core_refresh_needed = false;
                 }
-                // A same-scope automatic failure must leave the last ready snapshot visible while
-                // the retry gate settles. Manual scope changes have already retired the old data,
-                // so they publish the classified failure instead of showing stale values.
-                //
-                // "Keep what is visible" needs something visible to keep. An automatic catch-up
-                // can reach here over a NEVER-SETTLED state, and there the rule would leave the
-                // tuner reading "Loading" forever with nothing in flight — a pending state that
-                // was really a classified failure, which is the one thing this window must never
-                // show.
-                //
-                // The test is `Loading`, deliberately NOT "has scalar data": `Split` carries a
-                // real per-quote breakdown the toolbar renders, and `NotReady` / `Failed` are
-                // settled answers too. All three stay preserved exactly as before, so no path
-                // that existed before this change behaves differently.
-                let preserve_snapshot =
-                    after_report && !matches!(this.strategy_data, ProfitLoadState::Loading);
-                if !preserve_snapshot || data_error.is_none() {
+                // Read `data` before `apply` moves it: the comparison needs both the currently
+                // shown group set and the one about to be published.
+                let core_names_changed = tuner::core_names_changed(
+                    this.strategy_data.data().map(|d| d.strategies.as_slice()),
+                    tuner::published_groups(&data),
+                );
+                // Keep a settled same-scope snapshot only until a scheduled correction replaces
+                // it. An initial `Loading` state must publish its failure rather than remain
+                // pending forever; `Split`, `NotReady`, and `Failed` are already settled
+                // snapshots unless still transient (see `CatchUpOutcome`).
+                let preserve_snapshot = !matches!(this.strategy_data, ProfitLoadState::Loading)
+                    && this.keep_on_catch_up(after_report, data_outcome, report_req);
+                if !preserve_snapshot {
                     this.strategy_data.apply(data);
-                    this.strat_core_w = None;
+                    // Measuring every core name is expensive, so invalidate only when its input
+                    // text changed.
+                    if core_names_changed {
+                        this.strat_core_w = None;
+                    }
                     // Both caches describe the group set that was just replaced. The memo's key
                     // also carries that set's address, but an address is only unique among LIVE
                     // allocations: a failed load drops the old buffer and a later successful one
@@ -1797,9 +1852,11 @@ impl AnalyticsView {
                 this.strategy_dirty = refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
-                    data_error.is_some() || undated_error.is_some() || cores_error.is_some(),
+                    !matches!(data_outcome, CatchUpOutcome::Replacement)
+                        || undated_error.is_some()
+                        || cores_error.is_some(),
                 );
-                this.apply_undated_result(undated, after_report);
+                this.apply_undated_result(undated, after_report, report_req);
                 let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
                 if refresh::strategy_base_allows_axis(
                     data_error.is_some(),
@@ -1812,27 +1869,39 @@ impl AnalyticsView {
                 {
                     this.reload_axis_after_report(this.strat_mode, show_overlay, cx);
                 }
-                this.settle_report_refresh_retry(retry_error.as_ref(), cx);
+                this.settle_report_refresh_retry(transient, cx);
                 cx.notify();
             },
         );
     }
 
-    /// Apply an undated-close result without erasing a same-scope value on automatic failure.
+    /// Apply an undated-close result without replacing a settled strip with a transient alert
+    /// that a scheduled correction will immediately remove.
+    ///
+    /// Every other failure still publishes: otherwise stale counts would look current without a
+    /// correction path.
+    ///
+    /// Args:
+    ///     result: Current undated-close read outcome.
+    ///     after_report: Whether this is a writer-driven catch-up rather than a manual reload.
+    ///     started_generation: Report generation captured immediately before the read started.
     fn apply_undated_result(
         &mut self,
         result: moon_core::db::ReadResult<moon_core::db::analytics::UndatedCloses>,
-        preserve_previous: bool,
+        after_report: bool,
+        started_generation: u64,
     ) {
+        let outcome = CatchUpOutcome::of_read(&result);
         match result {
             Ok(undated) => {
                 self.undated = Some(undated);
                 self.undated_error = None;
             }
             Err(error) => {
-                if !preserve_previous {
-                    self.undated = None;
+                if self.keep_on_catch_up(after_report, outcome, started_generation) {
+                    return;
                 }
+                self.undated = None;
                 self.undated_error = Some(error);
             }
         }

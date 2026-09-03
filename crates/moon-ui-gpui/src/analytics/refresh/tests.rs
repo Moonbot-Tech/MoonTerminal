@@ -3,10 +3,138 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh, core_metadata_wait,
-    report_result_is_stale, strategy_base_allows_axis, visible_refresh,
+    BusyRetryBudget, CatchUpOutcome, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh,
+    core_metadata_wait, preserve_on_catch_up, report_result_is_stale, strategy_base_allows_axis,
+    visible_refresh,
 };
 use crate::analytics::Tab;
+use moon_core::db::{
+    FailKind, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, ValuationCoverage,
+};
+use std::sync::Arc;
+
+/// Construct a classified database failure without depending on display text.
+fn failure(kind: FailKind) -> ReadFail {
+    ReadFail::Failed {
+        kind,
+        msg: Arc::from("test failure"),
+    }
+}
+
+/// `analytics/refresh.rs:preserve_on_catch_up` must preserve only a transient result covered by a
+/// retry allowance or a newer generation. Dropping that correction guard, or letting a settled
+/// result through, leaves stale figures under a current period label with nothing scheduled to
+/// correct them.
+#[test]
+fn catch_up_preservation_requires_a_transient_outcome_and_scheduled_correction() {
+    for (label, outcome, is_transient) in [
+        ("Replacement", CatchUpOutcome::Replacement, false),
+        ("Transient", CatchUpOutcome::Transient, true),
+        ("Settled", CatchUpOutcome::Settled, false),
+    ] {
+        for after_report in [false, true] {
+            for retry_allowance in [false, true] {
+                for superseded in [false, true] {
+                    assert_eq!(
+                        preserve_on_catch_up(after_report, outcome, retry_allowance, superseded,),
+                        after_report && is_transient && (retry_allowance || superseded),
+                        "{label}: after_report={after_report}, retry_allowance={retry_allowance}, \
+                         superseded={superseded}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `analytics/refresh.rs:CatchUpOutcome::{of_scope,of_read}` must distinguish a valuation gap
+/// from unknown-quote or settled results. Removing the unknown-quote guard hides money behind a
+/// stale comparable scalar in the wrong unit, while moving Empty or Corrupt to transient hides a
+/// legitimate purge result or permanent database failure.
+#[test]
+fn catch_up_outcome_classifies_scope_and_read_results() {
+    let incomplete_split = Ok::<ProfitScope<()>, ReadFail>(ProfitScope::Split(QuoteBreakdown {
+        unknown_orders: 0,
+        valuation: Some(ValuationCoverage {
+            eligible_orders: 5,
+            valued_orders: 3,
+            unavailable_orders: 1,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    let unknown_quote_split = Ok::<ProfitScope<()>, ReadFail>(ProfitScope::Split(QuoteBreakdown {
+        unknown_orders: 1,
+        valuation: Some(ValuationCoverage {
+            eligible_orders: 5,
+            valued_orders: 3,
+            unavailable_orders: 1,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    let settled_split = Ok::<ProfitScope<()>, ReadFail>(ProfitScope::Split(Default::default()));
+    let comparable = Ok(ProfitScope::Comparable {
+        unit: ProfitUnit::Percent,
+        data: (),
+    });
+    let empty = Ok(ProfitScope::Empty(()));
+
+    assert!(matches!(
+        CatchUpOutcome::of_scope(&incomplete_split),
+        CatchUpOutcome::Transient
+    ));
+    assert!(matches!(
+        CatchUpOutcome::of_scope(&unknown_quote_split),
+        CatchUpOutcome::Settled
+    ));
+    assert!(matches!(
+        CatchUpOutcome::of_scope(&settled_split),
+        CatchUpOutcome::Settled
+    ));
+    assert!(matches!(
+        CatchUpOutcome::of_scope(&comparable),
+        CatchUpOutcome::Replacement
+    ));
+    assert!(matches!(
+        CatchUpOutcome::of_scope(&empty),
+        CatchUpOutcome::Replacement
+    ));
+
+    let cases: [(&str, Result<(), ReadFail>, bool); 6] = [
+        ("Busy", Err(failure(FailKind::Busy)), true),
+        ("NotReady", Err(ReadFail::NotReady), false),
+        ("Corrupt", Err(failure(FailKind::Corrupt)), false),
+        ("Other", Err(failure(FailKind::Other)), false),
+        ("IncomparableQuote", Err(ReadFail::IncomparableQuote), false),
+        ("PeriodOutOfRange", Err(ReadFail::PeriodOutOfRange), false),
+    ];
+    for (label, result, expected_transient) in cases {
+        assert_eq!(
+            matches!(CatchUpOutcome::of_read(&result), CatchUpOutcome::Transient),
+            expected_transient,
+            "{label} must be transient exactly when a scheduled correction can resolve it"
+        );
+    }
+}
+
+/// `analytics/refresh.rs:BusyRetryBudget::has_allowance` must read without spending a retry.
+/// Letting this publication query increment attempts exhausts a transient Busy recovery budget
+/// before `claim` schedules the retry, leaving stale data or a false error.
+#[test]
+fn checking_the_busy_retry_allowance_does_not_consume_an_attempt() {
+    let mut budget = BusyRetryBudget::default();
+
+    assert!(budget.has_allowance());
+    assert!(budget.has_allowance());
+    assert!(budget.claim());
+    assert!(budget.has_allowance());
+    assert!(budget.claim());
+    assert!(budget.has_allowance());
+    assert!(budget.claim());
+    assert!(!budget.has_allowance());
+    assert!(!budget.claim());
+}
 
 /// `analytics/refresh.rs:report_result_is_stale` must compare the start and completion
 /// generations; removing that comparison lets a scan started before a new trade clear the

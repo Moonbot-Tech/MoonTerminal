@@ -967,6 +967,7 @@ fn existing_store_is_healthy(path: &Path) -> Result<bool, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
     let conn = Connection::open_with_flags(uri, flags)
         .map_err(|error| format!("read-only open failed: {error}"))?;
+    super::trace::install_on(&conn);
     let check = conn.query_row("PRAGMA main.quick_check(1)", [], |row| {
         row.get::<_, String>(0)
     });
@@ -1353,6 +1354,7 @@ pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_trade_values_inputs
              ON trade_values (algorithm_version, quote_ordinal, rate_minute_utc);",
     )?;
+    super::trace::install_on(&conn);
     Ok(conn)
 }
 

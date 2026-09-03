@@ -7,7 +7,9 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_core::market::trade_replay::{TradeReplayEmpty, TradeReplayFailure, TradeReplaySource};
+use moon_core::market::trade_replay::{
+    TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
+};
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex,
     v_flex,
@@ -183,11 +185,70 @@ impl TradeWindowView {
             let caption = match &self.state {
                 TradeWindowState::Ready {
                     source: TradeReplaySource::Ticks,
+                    tf_min,
+                    bucket_ms,
+                    partial,
                     ..
-                } => t!("trade_window.source.ticks").to_string(),
-                TradeWindowState::Ready { tf_min, .. } => {
-                    t!("trade_window.source.candles_tf", min = tf_min).to_string()
+                } => {
+                    let base = if *bucket_ms == 0 {
+                        t!("trade_window.source.ticks").to_string()
+                    } else {
+                        t!(
+                            "trade_window.source.ticks_bucketed",
+                            secs = bucket_ms / 1_000
+                        )
+                        .to_string()
+                    };
+                    if *partial {
+                        // The join happens IN CODE, so no locale value carries a separator glyph.
+                        // Every sibling Russian caption in `trade_window.yml` joins its two halves
+                        // with an em dash, never the ASCII hyphen the other locales use — so the
+                        // glyph itself must follow the active locale, not just the words either
+                        // side of it.
+                        let edges = t!("trade_window.source.ticks_edges", min = tf_min).to_string();
+                        let sep = match rust_i18n::locale().as_ref() {
+                            "ru" => "—",
+                            _ => "-",
+                        };
+                        format!("{base} {sep} {edges}")
+                    } else {
+                        base
+                    }
                 }
+                TradeWindowState::Ready {
+                    source: TradeReplaySource::Klines1m,
+                    tf_min,
+                    tick_status,
+                    brand,
+                    ..
+                } => match tick_status {
+                    TickStatus::Pending => {
+                        t!("trade_window.source.candles_ticks_pending", min = tf_min).to_string()
+                    }
+                    TickStatus::NoRoute => t!(
+                        "trade_window.source.candles_no_route",
+                        min = tf_min,
+                        brand = brand.display()
+                    )
+                    .to_string(),
+                    TickStatus::OutOfRetention { retention_ms } => t!(
+                        "trade_window.source.candles_retention",
+                        min = tf_min,
+                        hours = retention_ms / 3_600_000
+                    )
+                    .to_string(),
+                    TickStatus::NoTrades => {
+                        t!("trade_window.source.candles_no_trades", min = tf_min).to_string()
+                    }
+                    TickStatus::Failed => {
+                        t!("trade_window.source.candles_failed", min = tf_min).to_string()
+                    }
+                    // Unreachable: `Served` only ever rides a `Ticks` source (see `TickStatus`'s
+                    // own doc comment), never a `Klines1m` one. Answered rather than panicked, the
+                    // way the `Loading | Empty | Failed` arm below answers its own unreachable
+                    // case.
+                    TickStatus::Served => String::new(),
+                },
                 // Unreachable: the caller checked `overlays_chart` first. Answered rather than
                 // panicked, for the same reason `overlay_message` answers its own unreachable arm.
                 TradeWindowState::Loading

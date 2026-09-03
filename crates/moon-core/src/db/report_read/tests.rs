@@ -1,7 +1,7 @@
 //! Regression tests for exact Report strategy filtering.
 
-use rusqlite::Connection;
 use rusqlite::types::Value;
+use rusqlite::{Connection, params};
 
 use super::{
     QuoteCurrency, ReportFilter, ReportStrategyKey, RowScope, SideFilter, distinct_strategies,
@@ -2589,5 +2589,131 @@ fn open_block_stays_newest_first_across_both_sources_under_an_ascending_sort() {
         "the open block, interleaved across both physical sources newest-opening-first, must \
          lead, followed by the closed rows still in the caller's own ascending buydate order — \
          proving the closed rows were never reversed, only the open block"
+    );
+}
+
+/// `db/report_read.rs:run_row_pass` must retain an ASC `NULLS LAST` equivalent while optimizing
+/// its SQL order. Dropping the leading NULL discriminator without adding `NULLS LAST` promotes an
+/// unset Profit % above completed trades in an ascending Report and CSV export, silently changing
+/// the user's visible top rows.
+#[test]
+fn profit_percent_nulls_stay_last_in_both_report_directions() {
+    let conn = Connection::open_in_memory().expect("open null-order fixture");
+    super::super::init_db(&conn).expect("initialize report metadata");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL, spentbtc REAL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'CORE', 10, 100, 10.0, 100.0),
+             (1, 'CORE', 11, 200, 5.0, 100.0),
+             (1, 'CORE', 20, 300, 5.0, 0.0);",
+    )
+    .expect("seed finite and undefined Profit percent rows");
+    super::super::test_support::rep_init(&conn);
+
+    for descending in [false, true] {
+        let table = query_reports(
+            &conn,
+            &ReportFilter {
+                rows: RowScope::Closed,
+                ..ReportFilter::default()
+            },
+            super::PROFIT_PERCENT_COLUMN,
+            descending,
+            2,
+        )
+        .expect("read Profit percent report");
+
+        assert_eq!(
+            table.rec_ids,
+            if descending {
+                vec![10, 11]
+            } else {
+                vec![11, 10]
+            },
+            "the limited Report must retain both finite percentages when descending={descending}"
+        );
+    }
+}
+
+/// `report_read.rs:run_row_pass` must retain `r.newrecid DESC` after the default closed-date
+/// sort. Removing that tie-break lets SQLite choose which equal-date trades survive the
+/// source-local LIMIT, so the Report grid and CSV export can silently show a different set after
+/// an unrelated planner or schema change.
+#[test]
+fn closedate_desc_source_limit_uses_the_total_replica_key() {
+    let conn = Connection::open_in_memory().expect("open closed-date tie fixture");
+    super::super::init_db(&conn).expect("initialize report metadata");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, PRIMARY KEY (core_uid, newrecid)
+         );",
+    )
+    .expect("create replica fixture");
+    let seeded = vec![
+        (3_i64, 32_i64, 1_000_i64),
+        (1, 20, 1_000),
+        (4, 53, 1_000),
+        (2, 11, 1_000),
+        (1, 50, 1_000),
+        (3, 12, 1_000),
+        (2, 51, 1_000),
+        (4, 23, 1_000),
+        (1, 30, 1_000),
+        (3, 52, 1_000),
+        (2, 21, 1_000),
+        (4, 43, 1_000),
+        (1, 10, 1_000),
+        (3, 42, 1_000),
+        (2, 41, 1_000),
+        (4, 13, 1_000),
+        (1, 40, 1_000),
+        (3, 22, 1_000),
+        (2, 31, 1_000),
+        (4, 33, 1_000),
+    ];
+    let mut insert = conn
+        .prepare("INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate) VALUES (?1, ?2, ?3, ?4)")
+        .expect("prepare tied replica rows");
+    for &(core_uid, newrecid, closedate) in &seeded {
+        insert
+            .execute(params![
+                core_uid,
+                format!("CORE-{core_uid}"),
+                newrecid,
+                closedate
+            ])
+            .expect("insert tied replica row");
+    }
+    drop(insert);
+    super::super::test_support::rep_init(&conn);
+
+    let limit = 9;
+    let mut expected = seeded;
+    expected.sort_unstable_by(|left, right| right.cmp(left));
+    let expected_rec_ids: Vec<i64> = expected
+        .into_iter()
+        .take(limit)
+        .map(|(_, newrecid, _)| newrecid)
+        .collect();
+    let table = query_reports(
+        &conn,
+        &ReportFilter {
+            rows: RowScope::Closed,
+            ..ReportFilter::default()
+        },
+        "closedate",
+        true,
+        limit,
+    )
+    .expect("read default closed-date report");
+
+    assert_eq!(
+        table.rec_ids, expected_rec_ids,
+        "the source-local LIMIT must retain the rows selected by closedate, core uid, and record id"
     );
 }

@@ -38,14 +38,20 @@ use moon_core::db::{ProfitScope, ProfitUnit, ReadResult};
 ///     previous: Previous-month aggregate UI load state.
 ///     period_result: Current cells and optional comparison from one SQLite snapshot.
 ///     has_previous: Whether the active mode requested a comparison period.
+///     preserve_transient: Whether a same-scope catch-up should keep the visible days and
+///         previous-period cells instead of publishing the classified result — decided by the
+///         caller via `refresh::preserve_on_catch_up` (a transient outcome with a scheduled
+///         correction left; every other outcome is still published).
 ///
 /// Returns:
-///     `true` when the shared period read failed.
+///     `true` when the shared period read did not settle into a real replacement (a failure or a
+///     split totals result, published or preserved alike), so `cal_dirty` stays set.
 fn apply_calendar_results(
     days: &mut ProfitLoadState<Vec<DayCell>>,
     previous: &mut LoadState<Option<CellTotals>>,
     period_result: ReadResult<ProfitScope<CalendarPeriod>>,
     has_previous: bool,
+    preserve_transient: bool,
 ) -> bool {
     match period_result {
         Ok(ProfitScope::Comparable { unit, data: period }) => {
@@ -62,13 +68,19 @@ fn apply_calendar_results(
             false
         }
         Ok(ProfitScope::Split(totals)) => {
-            days.apply(Ok(ProfitScope::Split(totals)));
-            previous.apply(Ok(None));
-            false
+            // Mirrors the `Err` arm: a Split result is never a real replacement, so `cal_dirty`
+            // stays set regardless of whether this pass published it or kept the prior snapshot.
+            if !preserve_transient {
+                days.apply(Ok(ProfitScope::Split(totals)));
+                previous.apply(Ok(None));
+            }
+            true
         }
         Err(error) => {
-            days.apply(Err(error.clone()));
-            previous.apply(if has_previous { Err(error) } else { Ok(None) });
+            if !preserve_transient {
+                days.apply(Err(error.clone()));
+                previous.apply(if has_previous { Err(error) } else { Ok(None) });
+            }
             true
         }
     }
@@ -669,7 +681,7 @@ impl AnalyticsView {
         let (from, to) = match self.cal_mode {
             CalMode::Month => month_range(self.cal_ym, self.bound_zone()),
             CalMode::Year => all_history_range(self.bound_zone()),
-            // "Day" loads a 7-day window (selected day centered/at the bottom).
+            // "Day" loads the 30-day window, with the selected day centered or at the bottom.
             CalMode::Day => {
                 let (top, bottom) = day_window(self.cal_day, self.bound_zone());
                 let to =
@@ -741,7 +753,10 @@ impl AnalyticsView {
     /// Start the Calendar query with optional post-commit metadata chaining.
     ///
     /// Args:
-    ///     after_report: Whether to preserve report-style catch-up and retry semantics.
+    ///     after_report: Whether to preserve report-style catch-up and retry semantics, including
+    ///         keeping the visible cells over a same-scope outcome that is transient with a
+    ///         scheduled correction left (retry allowance or a newer generation,
+    ///         `refresh::preserve_on_catch_up`) — every other outcome still publishes.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to execute and publish the reads.
     fn reload_calendar_inner(
@@ -783,44 +798,41 @@ impl AnalyticsView {
                 if this.cal_seq != req {
                     return; // mode/filters already changed
                 }
-                let retry = data
-                    .period
+                // Computed before `data.period` moves into the call below.
+                let period_outcome = super::refresh::CatchUpOutcome::of_scope(&data.period);
+                let cores_outcome = data
+                    .cores
                     .as_ref()
-                    .err()
-                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    .or_else(|| {
-                        data.cores
-                            .as_ref()
-                            .and_then(|cores| cores.as_ref().err())
-                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    })
-                    .or_else(|| {
-                        data.undated
-                            .as_ref()
-                            .err()
-                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
-                    })
-                    .cloned();
+                    .map(super::refresh::CatchUpOutcome::of_read);
+                let undated_outcome = super::refresh::CatchUpOutcome::of_read(&data.undated);
+                let transient = period_outcome.is_transient()
+                    || cores_outcome.is_some_and(super::refresh::CatchUpOutcome::is_transient)
+                    || undated_outcome.is_transient();
                 let metadata_failed = data.cores.as_ref().is_some_and(|cores| cores.is_err())
                     || data.undated.is_err();
+                // Peek at `data.period`'s outcome before it moves into the call below: only a
+                // transient outcome with a scheduled correction left may keep the visible cells.
+                let preserve_transient = !matches!(this.cal_days, ProfitLoadState::Loading)
+                    && this.keep_on_catch_up(after_report, period_outcome, report_req);
                 let read_failed = apply_calendar_results(
                     &mut this.cal_days,
                     &mut this.cal_prev,
                     data.period,
                     has_previous,
+                    preserve_transient,
                 );
                 if let Some(Ok(cores)) = data.cores {
                     this.cores = cores;
                     this.last_cores_at = Some(std::time::Instant::now());
                     this.core_refresh_needed = false;
                 }
-                this.apply_undated_result(data.undated, true);
+                this.apply_undated_result(data.undated, after_report, report_req);
                 this.cal_dirty = super::refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
                     read_failed || metadata_failed,
                 );
-                this.settle_report_refresh_retry(retry.as_ref(), cx);
+                this.settle_report_refresh_retry(transient, cx);
                 cx.notify();
             },
         );

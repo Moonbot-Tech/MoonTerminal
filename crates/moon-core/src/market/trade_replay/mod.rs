@@ -83,6 +83,54 @@ const MAX_SPAN_MS: i64 = 7 * 24 * 60 * MINUTE_MS;
 /// exit — so a window clipped exactly to the position would answer the wrong question.
 const CONTEXT_FRACTION: f64 = 0.5;
 
+/// Margin added around the trade's own span when computing [`ReplayWindow::focus`].
+///
+/// Wide enough that the entry and exit sit comfortably inside the focus tiles [`tick_plan`]
+/// fetches first, rather than landing on the very edge of one; not wider, because every extra
+/// millisecond here is lead/trail context pulled ahead of a slice that is actually IN the trade.
+const FOCUS_MARGIN_MS: i64 = 5 * MINUTE_MS;
+
+/// Width of one tick-fetch tile in [`tick_plan`], before a route's own cap narrows it further.
+///
+/// An 80-minute scalp window under Binance USD-M's one-hour query cap would otherwise tile into
+/// two requests that both straddle the focus, making trade-priority ordering inert — chopping
+/// finer than the route cap is what gives [`tick_plan`] something to actually prioritise.
+const TICK_SLICE_MS: i64 = 10 * MINUTE_MS;
+
+/// Bucket widths [`fit_ticks`] tries in order, coarsest last.
+///
+/// Each rung roughly doubles to triples the previous one, so a run that barely overflows the
+/// budget loses little precision while a run that overflows it by orders of magnitude still
+/// terminates in a handful of steps instead of walking one millisecond at a time.
+const THIN_LADDER_MS: [i64; 9] = [
+    1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000,
+];
+
+/// How the tick stage for one window ended — the thing the window's caption NAMES.
+///
+/// Each variant is a DIFFERENT sentence to show the user, and two of them (`NoRoute`,
+/// `OutOfRetention`) are known before a single request is spent, so they cost nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TickStatus {
+    /// A tick stage is queued and has not answered yet. The first outcome of every window that
+    /// earns one carries this.
+    Pending,
+    /// This build knows no public trades route for the venue (Bybit, Hyperliquid). Retrying
+    /// cannot help.
+    NoRoute,
+    /// The window is older than the route's documented trade retention.
+    OutOfRetention {
+        /// How far back the venue's own tick retention actually reaches, in milliseconds.
+        retention_ms: i64,
+    },
+    /// The venue answered and held no trade inside the window, while klines exist.
+    NoTrades,
+    /// The tick fetch itself did not produce an answer.
+    Failed,
+    /// Ticks were served. Only a [`TradeReplaySource::Ticks`] series carries this.
+    Served,
+}
+
 /// Which data a replay actually carries, so the window can say which it is showing.
 ///
 /// This is user-visible and load-bearing: a one-minute picture of a forty-second scalp is an
@@ -169,6 +217,10 @@ pub struct ReplayWindow {
     pub from_ms: i64,
     /// Last millisecond the replay covers.
     pub to_ms: i64,
+    /// The trade's own open, in milliseconds — the position's real entry stamp, not [`Self::from_ms`].
+    pub open_ms: i64,
+    /// The trade's own close, in milliseconds — the position's real exit stamp, not [`Self::to_ms`].
+    pub close_ms: i64,
     /// Whether this window is WIDER than [`MAX_SPAN_MS`] because its floors demanded it.
     ///
     /// Renamed from `clipped`, and the rename is the point: the field used to mean "half the
@@ -192,6 +244,28 @@ impl ReplayWindow {
             n if n < 1 => 1,
             n => n,
         }
+    }
+
+    /// The sub-window closest to the trade itself, for ordering a tick fetch around it.
+    ///
+    /// [`tick_plan`] fetches this region FIRST and orders every other tile by distance to it, so
+    /// a fetch cut short by budget or deadline still lands the trade's own span rather than an
+    /// hour of lead context nobody asked to see before it.
+    ///
+    /// Returns:
+    ///     `(left, right)` inclusive, clamped into `[Self::from_ms, Self::to_ms]` on both ends —
+    ///     independently. Every constructor of this type preserves `open_ms <= close_ms`; a
+    ///     hand-built window that violates it is out of this function's contract and can yield an
+    ///     inverted `(left, right)` rather than a usable focus (no guard here — that state is
+    ///     unreachable today, per house style).
+    pub(crate) fn focus(self) -> (i64, i64) {
+        let left = (self.open_ms - FOCUS_MARGIN_MS)
+            .max(self.from_ms)
+            .min(self.to_ms);
+        let right = (self.close_ms + FOCUS_MARGIN_MS)
+            .min(self.to_ms)
+            .max(self.from_ms);
+        (left, right)
     }
 }
 
@@ -246,7 +320,10 @@ pub fn replay_window(buy_date_s: i64, close_date_s: i64) -> Option<ReplayWindow>
     // fetch it, retry", never a chart quietly missing its own entry and exit.
     let over_budget = to_ms - from_ms > MAX_SPAN_MS;
     // A pre-epoch left edge is meaningless to every venue and would be sent as a negative
-    // `startTime`; pull it forward instead of asking for it.
+    // `startTime`; pull it forward instead of asking for it. `open_ms`/`close_ms` are left alone
+    // by this shift: they are the trade's own REAL stamps, not a fetch bound, and a pre-epoch
+    // trade is already rejected above by the `close_date_s < buy_date_s` / non-positive guard
+    // long before this shift ever runs, so nothing here has reason to move them.
     if from_ms < 0 {
         to_ms = to_ms.saturating_add(-from_ms);
         from_ms = 0;
@@ -254,6 +331,8 @@ pub fn replay_window(buy_date_s: i64, close_date_s: i64) -> Option<ReplayWindow>
     Some(ReplayWindow {
         from_ms,
         to_ms,
+        open_ms,
+        close_ms,
         over_budget,
     })
 }
@@ -289,6 +368,230 @@ pub fn pages(window: ReplayWindow, bar_ms: i64, max_rows: usize) -> Vec<(i64, i6
         cursor = end + 1;
     }
     out
+}
+
+/// Split one window into requests no larger than a trade route's documented query span.
+///
+/// The frozen shape [`super::worker`] and every `rest::<venue>::fetch_trades` build against:
+/// `None` answers one slice covering the whole window; `Some(span)` tiles the window into
+/// requests of at most `span` ms with no gap and no overlap, the same tiling discipline [`pages`]
+/// uses for the kline pager, just keyed on a request's time SPAN rather than its row count —
+/// several trade routes ([`super::venue_caps::TradeRoute::max_query_ms`]) cap a request's window
+/// rather than its row count.
+///
+/// A non-positive span returns no slices: unlike [`pages`], which derives its step from a
+/// `bar_ms * max_rows` product that route constants keep positive, a caller here supplies the
+/// span directly. [`super::venue_caps::TradeRoute::max_query_ms`] represents an unbounded route
+/// as `None`, so every `Some` value remains a finite vendor-imposed request window.
+///
+/// Args:
+///     window: The window to cover.
+///     max_span_ms: Widest span one request may cover, or `None` when the route documents no
+///         cap.
+///
+/// Returns:
+///     Inclusive `(from_ms, to_ms)` pairs in ascending order; empty when `max_span_ms` is
+///     `Some(n)` with `n <= 0`, which no route reports.
+pub fn time_slices(window: ReplayWindow, max_span_ms: Option<i64>) -> Vec<(i64, i64)> {
+    let Some(span) = max_span_ms else {
+        return vec![(window.from_ms, window.to_ms)];
+    };
+    if span <= 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut cursor = window.from_ms;
+    while cursor <= window.to_ms {
+        let end = cursor.saturating_add(span - 1).min(window.to_ms);
+        out.push((cursor, end));
+        if end == window.to_ms {
+            break;
+        }
+        cursor = end + 1;
+    }
+    out
+}
+
+/// One ordered decomposition of a [`ReplayWindow`] into tick-fetch tiles.
+///
+/// [`Self::slices`] is ordered so that ANY PREFIX is a CONTIGUOUS span with no gap between the
+/// sorted first-k slices, for every k — [`worker::paginate_ticks`] leans on exactly this to
+/// report a fetch truncated by budget or a deadline as ONE covered interval rather than a comb of
+/// holes. A later "tidy" that resorts these tiles purely by `from_ms` would keep them contiguous
+/// too, but back in CLOCK order — which throws away the whole reason this type exists, so preserve
+/// the ORDER here, not merely the contiguity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TickPlan {
+    /// Every tile to fetch, in fetch-priority order: the trade's own focus first, then outward.
+    pub slices: Vec<(i64, i64)>,
+    /// How many leading entries of [`Self::slices`] cover [`ReplayWindow::focus`].
+    pub focus_len: usize,
+}
+
+/// Tile a window into tick-fetch requests ordered around the TRADE instead of around the clock.
+///
+/// The window is chopped into three independent regions — before the focus, the focus itself,
+/// after the focus — each tiled by [`time_slices`] at `min(TICK_SLICE_MS, max_query_ms)`. The
+/// focus tiles are placed first, ascending; every remaining tile then follows by distance to the
+/// focus, nearest first, tied-break by `from_ms` (so the tile just before the focus outranks the
+/// tile just after it, since it sits at a smaller time). This is what lets a walk that runs out of
+/// budget or time abandon the FARTHEST tiles rather than the nearest ones — the defect this module
+/// exists to fix in the first place.
+///
+/// A route's documented retention makes the LEFT edge of every region a moving floor: rows older
+/// than `now_ms - retention_ms` cannot be fetched regardless of what the window asks for. Judging
+/// retention against the padded window (as the naive check does) refuses a trade whose own span
+/// is well inside retention the moment its OPTIONAL lead context crosses the boundary — the ticks
+/// the user actually wants are available and get skipped anyway. So this clips instead of
+/// refusing outright: every region drops the part of itself older than `earliest_ms`, and if the
+/// FOCUS itself — the trade, not its context — falls entirely before it, the whole plan is empty
+/// rather than a lead-less scrap of trail. The caller reads an empty plan as "nothing worth
+/// fetching" and reports `OutOfRetention`.
+///
+/// Args:
+///     window: The window to cover.
+///     max_query_ms: The route's own cap on one request's span, or `None`/non-positive when it
+///         documents none, in which case [`TICK_SLICE_MS`] alone tiles the window.
+///     earliest_ms: The oldest millisecond the route's retention can still answer for, or `None`
+///         when the route documents no retention limit.
+///
+/// Returns:
+///     A [`TickPlan`] whose prefix-contiguity invariant (see [`TickPlan`]) holds for every k, even
+///     after retention clipping — clipping only ever shrinks the LEAD region from the near edge
+///     inward, and whenever it shrinks the focus's own start too, the entire lead region (being
+///     strictly older) is guaranteed to fall before `earliest_ms` as well and is dropped whole, so
+///     no clipped region can end up separated from its neighbour by a gap. A region that ends up
+///     empty or inverted contributes no tiles — [`time_slices`] already returns none for an
+///     inverted span, so no extra per-region check is needed here.
+pub(crate) fn tick_plan(
+    window: ReplayWindow,
+    max_query_ms: Option<i64>,
+    earliest_ms: Option<i64>,
+) -> TickPlan {
+    let span = match max_query_ms {
+        Some(cap) if cap > 0 => TICK_SLICE_MS.min(cap),
+        _ => TICK_SLICE_MS,
+    };
+    let (focus_from, focus_to) = window.focus();
+
+    // The trade itself is the one thing worth fetching; a route whose retention does not even
+    // reach the trade has nothing this plan can usefully prioritise.
+    if let Some(earliest) = earliest_ms {
+        if focus_to < earliest {
+            return TickPlan {
+                slices: Vec::new(),
+                focus_len: 0,
+            };
+        }
+    }
+    let clip_from = |from: i64| match earliest_ms {
+        Some(earliest) => from.max(earliest),
+        None => from,
+    };
+
+    let focus_slices = time_slices(
+        ReplayWindow {
+            from_ms: clip_from(focus_from),
+            to_ms: focus_to,
+            ..window
+        },
+        Some(span),
+    );
+    let lead_slices = time_slices(
+        ReplayWindow {
+            from_ms: clip_from(window.from_ms),
+            to_ms: focus_from - 1,
+            ..window
+        },
+        Some(span),
+    );
+    let trail_slices = time_slices(
+        ReplayWindow {
+            from_ms: clip_from(focus_to + 1),
+            to_ms: window.to_ms,
+            ..window
+        },
+        Some(span),
+    );
+
+    let focus_len = focus_slices.len();
+    let mut rest: Vec<(i64, i64)> = lead_slices.into_iter().chain(trail_slices).collect();
+    // Ascending distance first; `from_ms` breaks the tie between the one lead tile and the one
+    // trail tile that can sit exactly as close on either side of the focus.
+    rest.sort_by_key(|&(from, to)| {
+        let distance = if to < focus_from {
+            focus_from - to
+        } else {
+            from - focus_to
+        };
+        (distance, from)
+    });
+
+    let mut slices = focus_slices;
+    slices.extend(rest);
+    TickPlan { slices, focus_len }
+}
+
+/// Thin a tick run down to a render/remember budget, coarsening only as far as needed.
+///
+/// Walks [`THIN_LADDER_MS`] in order and takes the FIRST bucket width whose thinned output fits
+/// `budget` via [`super::candles::thin_ticks`], so a run that already fits pays no thinning at
+/// all. A position held long enough makes even the coarsest rung's 300-second buckets outnumber
+/// the budget — `THIN_LADDER_MS`'s terminal rung is a RATE, not a ceiling — so past it a final
+/// uniform stride picks `budget` points evenly spaced across the coarsest rung's output,
+/// including its first and last tick. Either path keeps every point a REAL tick, never a
+/// synthesised one.
+///
+/// **Contract:** `result.len() <= budget`, unconditionally — this is the one property every
+/// caller relies on ([`worker::TICK_BUDGET`] bounds both the composed series and the GPU point
+/// ring), not a best effort.
+///
+/// Args:
+///     ticks: Ascending by time (the caller sorts).
+///     budget: Largest tick count the caller will draw or remember; `0` always returns nothing.
+///
+/// Returns:
+///     `(ticks, 0)` unchanged when `ticks.len() <= budget`; otherwise `(thinned, bucket_ms)`,
+///     `bucket_ms` being the ladder rung that produced it — the coarsest rung when the final
+///     stride also had to run.
+pub(crate) fn fit_ticks(ticks: Vec<Tick>, budget: usize) -> (Vec<Tick>, i64) {
+    if ticks.len() <= budget {
+        return (ticks, 0);
+    }
+    if budget == 0 {
+        return (
+            Vec::new(),
+            *THIN_LADDER_MS.last().expect("non-empty ladder"),
+        );
+    }
+    let mut out = Vec::new();
+    let mut bucket_ms = 0;
+    for &rung in THIN_LADDER_MS.iter() {
+        bucket_ms = rung;
+        crate::market::candles::thin_ticks(&ticks, rung, &mut out);
+        if out.len() <= budget {
+            return (out, bucket_ms);
+        }
+    }
+    // The coarsest rung still overflows. A stride of `ceil(last_idx / (budget - 1))`, walked from
+    // index 0 and always closed off by the true last index, is what keeps the bound UNCONDITIONAL:
+    // re-walking forward in fixed `ceil(len / budget)` steps and appending the last tick
+    // afterwards — the naive reading — can land `budget + 1` points whenever the true last index
+    // is not itself a multiple of that step (e.g. 10 points into a budget of 3: steps of 4 land
+    // 0/4/8, none of which is index 9, so appending it makes four).
+    let last_idx = out.len() - 1;
+    if budget == 1 {
+        return (vec![out[last_idx]], bucket_ms);
+    }
+    let stride = (last_idx as f64 / (budget - 1) as f64).ceil() as usize;
+    let mut strided = Vec::with_capacity(budget);
+    let mut i = 0usize;
+    while i < last_idx {
+        strided.push(out[i]);
+        i += stride;
+    }
+    strided.push(out[last_idx]);
+    (strided, bucket_ms)
 }
 
 /// Whether cached rows already cover a window densely enough to skip the network.
@@ -370,6 +673,30 @@ pub fn replay_revision(identity: u64, tf_ms: i64, from_bucket: i64, to_bucket: i
     hash.max(1)
 }
 
+/// Per-source salt for [`replay_revision`], so a tick series and its sibling candle series of the
+/// same identity, timeframe and window never share a revision.
+///
+/// The bug this exists to prevent: [`TradeReplaySeries::read_into`] derives `revision` from
+/// `(identity, tf_ms, from_bucket, to_bucket)`, and a tick upgrade shares every one of those four
+/// with the kline series it replaces — same `identity` ([`super::worker`] never changes it
+/// between the two outcomes), same window, same `tf_ms == 60_000`. Unsalted, the upgrade's
+/// revision would equal the one the pane already shipped, `read_into`'s `candles_changed` would
+/// stay `false`, and the pane would keep drawing exchange klines forever under the new tick
+/// points.
+///
+/// Args:
+///     source: Which kind of series is being read.
+///
+/// Returns:
+///     `0` for [`TradeReplaySource::Klines1m`], so every existing revision stays bit-identical to
+///     today's; a fixed non-zero constant for [`TradeReplaySource::Ticks`].
+pub fn tick_identity_salt(source: TradeReplaySource) -> u64 {
+    match source {
+        TradeReplaySource::Klines1m => 0,
+        TradeReplaySource::Ticks => 0x9E37_79B9_7F4A_7C15,
+    }
+}
+
 /// One trade's frozen market history, ready to be drawn.
 #[derive(Clone, Debug)]
 pub struct TradeReplaySeries {
@@ -381,12 +708,28 @@ pub struct TradeReplaySeries {
     pub window: ReplayWindow,
     /// Timeframe of [`Self::candles`] in milliseconds; one minute for every current route.
     pub tf_ms: i64,
-    /// Bars in ascending open time; empty when [`Self::source`] is [`TradeReplaySource::Ticks`].
+    /// Bars in ascending open time. A [`TradeReplaySource::Klines1m`] series carries these alone;
+    /// a [`TradeReplaySource::Ticks`] series carries these TOO — the EXCHANGE's own one-minute
+    /// klines, not bars aggregated from [`Self::ticks`], so the bar layer covers the WHOLE window
+    /// even where the points, per [`Self::partial`], do not.
     pub candles: Vec<ChartCandle>,
-    /// Trade points in ascending time; empty when the source is bars.
+    /// Trade points in ascending time. Empty when [`Self::source`] is
+    /// [`TradeReplaySource::Klines1m`]; carried alongside [`Self::candles`] for
+    /// [`TradeReplaySource::Ticks`] — never in place of them, and per [`Self::partial`] possibly
+    /// covering only part of [`Self::window`] while the bars cover all of it.
     pub ticks: Vec<Tick>,
     /// Stable discriminator feeding [`replay_revision`], so two open windows never collide.
     pub identity: u64,
+    /// How the tick attempt for this window ended. `Served` on a [`TradeReplaySource::Ticks`]
+    /// series; every other variant is a reason the bar layer is all the window has, and the
+    /// window PRINTS it.
+    pub tick_status: TickStatus,
+    /// Bucket the points were thinned to, in ms; `0` means raw, untouched ticks. Meaningless (and
+    /// always `0`) on a [`TradeReplaySource::Klines1m`] series.
+    pub bucket_ms: i64,
+    /// Whether [`Self::ticks`] covers only PART of [`Self::window`] — the bars always cover all
+    /// of it. Always `false` on a [`TradeReplaySource::Klines1m`] series.
+    pub partial: bool,
 }
 
 impl TradeReplaySeries {
@@ -459,8 +802,13 @@ impl TradeReplaySeries {
         let to_ms = ((epoch_ms + f64::from(to_rel_ms.max(from_rel_ms))).round() as i64)
             .max(from_ms.saturating_add(1));
         let tf_ms = candle_params.map_or(self.tf_ms, |p| p.tf_ms).max(1);
+        // Salted by source: a tick series and its sibling candle series otherwise share
+        // `(identity, tf_ms, from_bucket, to_bucket)` bit-for-bit (§4 of the tick-replay plan),
+        // so the tick upgrade's revision would equal the one the pane already shipped and
+        // `candles_changed` below would stay false forever. See `tick_identity_salt`.
+        let salted_identity = self.identity ^ tick_identity_salt(self.source);
         let revision = replay_revision(
-            self.identity,
+            salted_identity,
             tf_ms,
             from_ms.div_euclid(tf_ms),
             to_ms.div_euclid(tf_ms),
@@ -469,7 +817,8 @@ impl TradeReplaySeries {
         read.candles_revision = revision;
 
         // Points first: they are re-emitted whole on every read, because a frozen series has no
-        // live edge to drain incrementally and the whole window is a few hundred rows at most.
+        // live edge to drain incrementally and the whole window is bounded — a few hundred rows
+        // for a candle-only series, or up to `worker::TICK_BUDGET` for a tick one.
         out.ticks.extend(
             self.ticks
                 .iter()

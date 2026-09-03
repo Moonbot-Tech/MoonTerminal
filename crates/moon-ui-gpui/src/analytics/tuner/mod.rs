@@ -47,7 +47,9 @@ mod time;
 pub(super) use coins::picker::CoinListsState;
 pub(super) use coins::state::CoinsState;
 pub(super) use filter::state::TunerState;
-pub(super) use list::{StratListFilter, VisibleRows, restore_strat_sort};
+pub(super) use list::{
+    StratListFilter, VisibleRows, core_names_changed, published_groups, restore_strat_sort,
+};
 pub(super) use time::state::TimeTunerState;
 
 // Column descriptors of the comparison tables — re-exported so the submodules (`list`) take

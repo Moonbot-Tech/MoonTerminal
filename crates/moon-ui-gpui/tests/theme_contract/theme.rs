@@ -383,3 +383,21 @@ fn popover_contents_do_not_paint_a_second_surface() {
         );
     }
 }
+
+/// `settings/connections/table.rs:SettingsView::cell` must apply a column's resolved cap through
+/// `max_w`. Deleting that match lets Group consume wide-window space past its 140px cap and
+/// truncates the uncapped Name field.
+#[test]
+fn connections_cells_apply_their_resolved_growth_cap() {
+    let table = read_src("settings/connections/table.rs");
+    let cell = code_only(braced_body(
+        &table,
+        "fn cell(col: ConnColId, micro: MicroTriggerMetrics) -> Div",
+    ));
+
+    assert!(
+        cell.contains("let d = match col.max_width(micro) {")
+            && cell.contains("Some(max) => d.max_w(px(max)),"),
+        "SettingsView::cell must resolve ConnColId::max_width and apply it with Div::max_w"
+    );
+}
