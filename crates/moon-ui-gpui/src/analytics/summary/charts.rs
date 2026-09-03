@@ -16,6 +16,102 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{CoreSeries, DayPoint, KindStat};
 
 pub(super) const CHART_H: f32 = 170.0;
+/// Weight the chart value labels are drawn at — they set none, so it is GPUI's normal.
+/// `mono_caption_text_width` needs it as a number.
+pub(super) const LABEL_WEIGHT: f32 = 400.0;
+
+/// Width of the WIDEST of a set of already-formatted value labels, in pixels.
+///
+/// MEASURED, never a constant. A guessed width is wrong in both directions and both are
+/// expensive: too narrow and the collision passes believe two labels are clear when the digits
+/// overlap — the exact defect they exist to prevent — too wide and they drop labels that would
+/// have fitted. The old constants were guessed against example strings (`"-1268 USDT"`), and
+/// that example was not even a string these charts produce: `pnl_suffix` is `"%"` or nothing,
+/// never a ticker.
+///
+/// The Analytics view draws in the MONO family (`analytics/render.rs`), so a glyph advance is
+/// the same for every character and the widest label is simply the longest one — picking it by
+/// `chars().count()` and measuring that one string is exact, not an approximation, and costs a
+/// single measurement per frame rather than one per label.
+///
+/// Args:
+///     texts: The formatted labels this chart is about to consider drawing.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Width of the longest label in pixels, or 0.0 when there are none.
+pub(super) fn widest_label_w<'a>(
+    texts: impl Iterator<Item = &'a str>,
+    cx: &Context<AnalyticsView>,
+) -> f32 {
+    texts
+        .max_by_key(|s| s.chars().count())
+        .map(|s| design::mono_caption_text_width(cx, s, LABEL_WEIGHT))
+        .unwrap_or(0.0)
+}
+/// Plot width both summary charts assume, in RAW pixels — deliberately neither font- nor
+/// UI-scaled.
+///
+/// The card's real width is a layout result these functions never learn: it is only known
+/// inside the paint closure, while the labels are absolutely-positioned divs outside it, and
+/// threading a measured width in would widen both chart signatures through the summary card.
+/// So the pass measures against the narrowest the card realistically gets — the Analytics
+/// window's own minimum (860 wide, `analytics/mod.rs`) less the page padding (2x10), the
+/// inter-card gap (8) and the card's own padding (2x12), over two equal cards:
+/// `(860 - 20 - 8) / 2 - 24`. At the default 1240-wide window the real plot is ~584, so
+/// assuming the minimum only ever drops a label that would in fact have fitted — the safe
+/// direction; assuming wide puts overlap back.
+///
+/// **Raw, not scaled.** 860 is a fixed physical size and every padding it is reduced by goes
+/// through `ui()`, which tracks the UI scale but NOT the Font slider — so a larger font never
+/// widens this plot, and a larger UI scale only eats further INTO it. Passing this through
+/// `font_w_px` would have grown the room the collision pass believes it has at exactly the
+/// setting that makes the labels physically wider, which is the application's default (+3).
+///
+/// ONE constant for BOTH charts on purpose: they are the two `flex_1` siblings of the same
+/// row, with the same page padding, the same gap and the same card chrome. Two copies could
+/// drift apart from a layout that cannot.
+pub(super) const PLOT_W_NOMINAL: f32 = 392.0;
+
+/// Which buckets keep a value label once the bars are denser than the labels are wide.
+///
+/// Greedy by descending |value|: the biggest day is always labelled, and every later candidate
+/// is kept only if its column sits at least one label-width from every column already kept.
+/// That is what replaced the old all-or-nothing `days.len() <= 45` cutoff, which drew a slab of
+/// colliding digits just under the limit and NOTHING at all just over it — so on «Все» the
+/// chart said nothing about its own extremes.
+///
+/// Selecting by magnitude rather than by every N-th bucket is deliberate: the days worth naming
+/// on a profit chart are the big ones, and an every-N-th rule names whichever days the stride
+/// happens to land on.
+///
+/// Args:
+///     vals: Per-bucket profit, ordered, one entry per bar.
+///     plot_w: Width the bars are laid out across, in pixels.
+///     label_w: Width of one label, in pixels.
+///
+/// Returns:
+///     Indices into `vals` to label, ascending.
+fn thinned_labels(vals: &[f64], plot_w: f32, label_w: f32) -> Vec<usize> {
+    let n = vals.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // Bars are equal flex cells, so bucket `i` is centred at (i+0.5)/n of the width — the same
+    // mapping the hover popup uses.
+    let x = |i: usize| (i as f32 + 0.5) / n as f32 * plot_w;
+    let mut order: Vec<usize> = (0..n).collect();
+    // Index as the tie-break, so two equal days never swap between frames.
+    order.sort_by(|&a, &b| vals[b].abs().total_cmp(&vals[a].abs()).then(a.cmp(&b)));
+    let mut kept: Vec<usize> = Vec::new();
+    for i in order {
+        if kept.iter().all(|&j| (x(i) - x(j)).abs() >= label_w) {
+            kept.push(i);
+        }
+    }
+    kept.sort_unstable();
+    kept
+}
 
 /// FALLBACK color for a core's series (cycled from the palette) — used when
 /// the server has no color in its settings (e.g. the core is already gone from
@@ -130,15 +226,46 @@ pub(super) fn daily_bars(
         .min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32; // share of the height above the zero line
-    // Value labels stay readable only while the bars are few.
-    let labels_on = days.len() <= 45;
+    // Which bars keep a label: as many as fit side by side at the caption size, biggest
+    // days first. Never a font shrink — the label is at `t_caption` or it is not drawn.
+    // Format every candidate ONCE: the widest of them sizes the thinning pass, and the drawn
+    // ones are taken straight from here rather than formatted a second time below.
+    let texts: Vec<String> = days
+        .iter()
+        .map(|d| {
+            format!(
+                "{}{}",
+                moon_core::util::fmt::compact(d.profit, 0),
+                crate::analytics::pnl_suffix()
+            )
+        })
+        .collect();
+    // The label WIDTH is text and is measured at the caption size, so it already follows the
+    // Font slider; the plot width is layout and must not (see `PLOT_W_NOMINAL`). Scaling both
+    // together would let the room grow with the very setting that makes the labels wider.
+    let label_w = widest_label_w(texts.iter().map(String::as_str), cx);
+    let profits: Vec<f64> = days.iter().map(|d| d.profit).collect();
+    let labelled: std::collections::BTreeSet<usize> =
+        thinned_labels(&profits, PLOT_W_NOMINAL, label_w)
+            .into_iter()
+            .collect();
+    // A bar is labelled only if it also TRADED, so the reserved band must ask the same
+    // question: an all-quiet period has candidates but draws nothing, and reserving room for
+    // labels that never appear just shortens every bar.
+    let labels_on = labelled.iter().any(|&bi| days[bi].trades > 0);
     // Space reserved for the labels: always on top (above the tallest green
     // bar), on the bottom only when there is a negative value (the label goes
     // BELOW a red bar). Bars scale into the remaining height, so the numbers
-    // are never covered by a column.
-    let pad_top = if labels_on { 13.0f32 } else { 0.0 };
+    // are never covered by a column. Derived from the caption size rather than a
+    // fixed 13px, which was sized for the 8px text this chart used to draw and
+    // stopped clearing the line box the moment the Font slider moved.
+    // Text-derived height plus a small fixed clearance, and the two take DIFFERENT scales on
+    // purpose: `t_caption` follows the Font slider, the clearance goes through `ui_px` like
+    // every other piece of chrome (`cumulative.rs` sizes its own band the same way).
+    let label_band = f32::from(design::t_caption(cx)) * 1.4 + f32::from(design::ui_px(cx, 2.0));
+    let pad_top = if labels_on { label_band } else { 0.0 };
     let pad_bottom = if labels_on && vmin < 0.0 {
-        13.0f32
+        label_band
     } else {
         0.0
     };
@@ -158,7 +285,7 @@ pub(super) fn daily_bars(
         let bottom = if d.profit >= 0.0 {
             zero_from_bottom
         } else {
-            (zero_from_bottom - bar_h).max(pad_bottom - 13.0)
+            (zero_from_bottom - bar_h).max(pad_bottom - label_band)
         };
         let mut col = div()
             .id(SharedString::from(format!("an-db-{bi}")))
@@ -189,31 +316,35 @@ pub(super) fn daily_bars(
         if hover == Some(bi) {
             col = col.bg(moon_alpha(p.text_muted, 0.07));
         }
-        if labels_on && d.trades > 0 {
+        if labelled.contains(&bi) && d.trades > 0 {
             // Label: above a green bar / below a red one (the space is
             // reserved by pad_top/pad_bottom, so no bar covers the number).
             let label_bottom = if d.profit >= 0.0 {
                 bottom + bar_h + 2.0
             } else {
-                (bottom - 12.0).max(0.0)
+                (bottom - label_band).max(0.0)
             };
-            // The label is wider than its column (±24px on each side) and does
-            // not wrap — otherwise "333" got clipped to "33". Neighbouring
-            // labels may touch slightly, but every number stays fully readable.
+            // The label is wider than its column and does not wrap — otherwise
+            // "333" got clipped to "33". The overhang is half a label on each
+            // side, so it matches the width the thinning pass kept the columns
+            // apart by; neighbours can no longer touch.
+            let over = px(label_w / 2.0);
             col = col.child(
                 div()
                     .absolute()
-                    .left(px(-24.0))
-                    .right(px(-24.0))
+                    .left(-over)
+                    .right(-over)
                     .bottom(px(label_bottom))
-                    .text_size(px(8.0))
+                    .text_size(design::t_caption(cx))
                     .whitespace_nowrap()
                     .text_color(moon(super::sign_color(p, d.profit)))
-                    .child(div().w_full().flex().justify_center().child(format!(
-                        "{}{}",
-                        moon_core::util::fmt::compact(d.profit, 0),
-                        crate::analytics::pnl_suffix()
-                    ))),
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_center()
+                            .child(texts[bi].clone()),
+                    ),
             );
         }
         row = row.child(col);

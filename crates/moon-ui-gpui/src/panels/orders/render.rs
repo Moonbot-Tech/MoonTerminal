@@ -186,6 +186,18 @@ impl Render for OrdersPanel {
             emu = self.count_emu
         )
         .to_string();
+        // The same three numbers, spelled out with what each one counts. Built from the counts the
+        // row is about to render rather than from the rendered string, so the two cannot drift —
+        // the idiom `panels/report/totals.rs` uses for its own footer. It is unconditional: the
+        // head states the figures on every render, so there is never a state in which it has
+        // nothing to explain.
+        let head_tip = t!(
+            "orders.footer_total_tip",
+            total = total,
+            real = self.count_real,
+            emu = self.count_emu
+        )
+        .to_string();
         let footer_split = scope_marker::scope_footer(head, Some(&marker));
         let footer_tip = scope_marker::scope_footer_tooltip(&footer_split, Some(&marker));
         let footer = h_flex()
@@ -197,12 +209,18 @@ impl Render for OrdersPanel {
             .py_1()
             .child(
                 div()
+                    // The id is what lets the head carry a tooltip at all — GPUI hangs one off an
+                    // interactive element only. It changes nothing about the layout.
+                    .id("orders-footer-head")
                     // `flex_none` only while a tail exists to yield in its place. With nothing
                     // hidden there is no tail, and pinning the head then would change how this row
                     // behaves at a narrow width for a marker that is not on screen.
                     .when(!footer_split.tail.is_empty(), |el| el.flex_none())
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_soft))
+                    .tooltip(crate::panels::common::text_tooltip(SharedString::from(
+                        head_tip,
+                    )))
                     .child(footer_split.head),
             )
             .children(scope_marker::scope_footer_tail(

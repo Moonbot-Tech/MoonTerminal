@@ -597,6 +597,153 @@ pub struct UsdtTotal {
     pub spent: Option<f64>,
 }
 
+/// One known-currency spend/profit subtotal over the CLOSED, non-Funding, positively-spent rows
+/// that [`QuoteBreakdown::average_order_return`] counts.
+///
+/// A separate carrier from [`QuoteTotal`] rather than a widened field on it: `QuoteTotal` is
+/// shared by [`QuoteBreakdown::from_groups`] and [`OpenPositions::from_groups`] through
+/// `group_quotes`, so adding a spend leg there would drag a permanently-empty field through the
+/// open pass and Analytics, which never accounts a spend this way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuoteSpend {
+    /// Currency shared by every contributing row.
+    pub currency: QuoteCurrency,
+    /// Sum of settled `spentbtc` over the counted rows of this currency.
+    pub spent: f64,
+    /// Sum of settled `profitbtc` over the SAME counted rows.
+    pub profit: f64,
+    /// Counted rows contributing to both sums.
+    pub orders: i64,
+}
+
+/// Per-quote spend/profit subtotals feeding [`QuoteBreakdown::average_order_return`], carrying its
+/// OWN unified USDT leg rather than reading [`UsdtTotal::spent`].
+///
+/// [`UsdtTotal::spent`] rests on [`super::valuation::SourcePredicates::spent_value`], which tests
+/// only that `spentbtc` is numeric — no positive-spend guard, no Funding exclusion. Averaging over
+/// it would count a WIDER row set than the native arm while still reporting a complete `counted`,
+/// a dishonest denominator. [`TradedVolume`] already carries its own `usdt` leg for the identical
+/// reason; this follows that precedent instead of borrowing the valuation cache's.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EntrySpend {
+    /// Per known quote, over COUNTED rows only, sorted by persisted currency ordinal.
+    pub totals: Vec<QuoteSpend>,
+    /// Every counted row in the scope, including rows whose quote identity is unknown.
+    pub counted_orders: i64,
+    /// Counted rows carrying an active-mode USDT rate.
+    pub valued_orders: i64,
+    /// Sigma spent converted at the active-mode rate, over valued counted rows.
+    pub usdt_spent: f64,
+    /// Sigma profit converted at the same rate, over the same rows.
+    pub usdt_profit: f64,
+}
+
+impl EntrySpend {
+    /// Build per-quote spend/profit subtotals, and the unified USDT leg, from physical-source
+    /// quote groups.
+    ///
+    /// Args:
+    ///     groups: `(ordinal, counted, Sigma spent, Sigma profit, valued, Sigma USDT spent, Sigma
+    ///         USDT profit)` aggregates, one row per physical source and quote group.
+    ///
+    /// Returns:
+    ///     Ordinal-sorted known buckets plus the scope-wide counted/valued/USDT tallies. A KNOWN
+    ///     ordinal folds into a [`QuoteSpend`] bucket; an UNKNOWN one still contributes to
+    ///     [`Self::counted_orders`] but to no bucket. Such a row can carry no per-quote rate, so it
+    ///     can never be valued either, and [`Self::unified`] fails closed on it by construction.
+    pub(crate) fn from_groups(
+        groups: impl IntoIterator<Item = (Option<i64>, i64, f64, f64, i64, f64, f64)>,
+    ) -> Self {
+        let mut known: BTreeMap<QuoteCurrency, (i64, f64, f64)> = BTreeMap::new();
+        let mut out = Self::default();
+        for (ordinal, counted, spent, profit, valued, usdt_spent, usdt_profit) in groups {
+            if counted == 0 {
+                continue;
+            }
+            out.counted_orders += counted;
+            out.valued_orders += valued;
+            out.usdt_spent += usdt_spent;
+            out.usdt_profit += usdt_profit;
+            if let Some(currency) = ordinal.and_then(QuoteCurrency::from_report_ordinal) {
+                let bucket = known.entry(currency).or_default();
+                bucket.0 += counted;
+                bucket.1 += spent;
+                bucket.2 += profit;
+            }
+        }
+        out.totals = known
+            .into_iter()
+            .map(|(currency, (orders, spent, profit))| QuoteSpend {
+                currency,
+                spent,
+                profit,
+                orders,
+            })
+            .collect();
+        out
+    }
+
+    /// The unified USDT pair, available ONLY over a completely valued counted scope.
+    ///
+    /// Mirrors [`TradedVolume::from_groups`]'s completeness rule: a partial unified figure is
+    /// never published, because a mixed scope has no second bucket to fall back on and a partial
+    /// sum would read exactly like a complete one.
+    ///
+    /// Returns:
+    ///     `(Sigma spent, Sigma profit)` in USDT, or `None` for an empty or incompletely-valued
+    ///     scope.
+    pub fn unified(&self) -> Option<(f64, f64)> {
+        (self.counted_orders > 0 && self.valued_orders == self.counted_orders)
+            .then_some((self.usdt_spent, self.usdt_profit))
+    }
+}
+
+/// Realized profit stated as a percentage of the average order over a single-core Report scope.
+///
+/// Denominated the same way the head footer figure is: a native currency where [`QuoteBreakdown`]
+/// carries exactly one, or a unified USDT total where the scope is mixed, the head figure is
+/// itself complete ([`QuoteBreakdown::unified_usdt`] is `Some`), and [`EntrySpend::unified`] is
+/// complete over the COUNTED rows. The unified arm can still be PARTIAL — [`Self::excluded`] can
+/// be positive even there, because Funding, non-positive-spend, and unknown-quote rows shrink the
+/// counted scope below [`QuoteBreakdown::orders`] independently of whether every counted row was
+/// valued.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AverageOrderReturn {
+    /// `100 * Sigma profit / avg_order`, over the counted rows.
+    pub pct: f64,
+    /// `Sigma spent / counted`, denominated in [`Self::currency`].
+    pub avg_order: f64,
+    /// Currency both sums are denominated in.
+    pub currency: QuoteCurrency,
+    /// Rows contributing to both sums.
+    pub counted: i64,
+    /// Rows this scope's total row count could not account for, derived as `orders - counted`,
+    /// never carried as a second field that could disagree with the first.
+    pub excluded: i64,
+    /// Whether [`Self::pct`] and [`Self::avg_order`] are the unified USDT conversion rather than a
+    /// native currency.
+    pub unified: bool,
+}
+
+/// Whether an average order size is a figure worth dividing a profit by.
+///
+/// A positive test alone is NOT enough, and the gap is not theoretical: replica ingestion stores
+/// an unvalidated float straight into SQLite as `REAL`, and a `SUM` over a large scope can
+/// overflow, so `spent` can arrive as positive infinity. Infinity passes any `> 0.0` check, and
+/// the percentage taken from it is `100 * profit / inf` — a FINITE zero. The footer would then
+/// state a confident `+0.0%` beside an average rendered `inf`, and the trailing `is_finite` check
+/// on the ratio cannot see it, because by then the ratio looks perfectly ordinary. Rejecting the
+/// AVERAGE is the only place that catches it.
+///
+/// Args:
+///     avg_order: Candidate average order size.
+///
+/// Returns:
+///     Whether the value is finite and strictly positive. NaN fails both halves.
+fn usable_average(avg_order: f64) -> bool {
+    avg_order.is_finite() && avg_order > 0.0
+}
+
 /// One known-currency traded-volume bucket over an exact Report scope.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QuoteVolume {
@@ -817,6 +964,9 @@ pub struct QuoteBreakdown {
     /// Two-sided volume computed over this same filter and snapshot; [`TradedVolume`] states its
     /// own completeness rather than withholding a native amount.
     pub traded_volume: TradedVolume,
+    /// Per-quote spend/profit subtotals over the counted rows of this same filter and snapshot,
+    /// feeding [`Self::average_order_return`].
+    pub entry_spend: EntrySpend,
 }
 
 impl QuoteBreakdown {
@@ -861,6 +1011,18 @@ impl QuoteBreakdown {
         self
     }
 
+    /// Attach entry-spend subtotals computed over the same filter and read snapshot.
+    ///
+    /// Args:
+    ///     spend: Per-quote counted spend/profit subtotals feeding [`Self::average_order_return`].
+    ///
+    /// Returns:
+    ///     This profit breakdown carrying the supplied entry spend.
+    pub(crate) fn with_entry_spend(mut self, spend: EntrySpend) -> Self {
+        self.entry_spend = spend;
+        self
+    }
+
     /// Return a complete unified USDT total only when no row has unknown quote identity.
     ///
     /// Returns:
@@ -885,6 +1047,115 @@ impl QuoteBreakdown {
         } else {
             QuoteScope::Mixed
         }
+    }
+
+    /// State realized profit as a percentage of the average order over the counted rows, in
+    /// exactly the currency [`Self::scope`] would promote as the head figure.
+    ///
+    /// Driven by [`Self::scope`], [`Self::unified_usdt`] and [`EntrySpend::unified`] so the ratio
+    /// can never be denominated differently from the figure it qualifies. `u` below is
+    /// `self.unified_usdt()`, and `e` is `self.entry_spend`:
+    ///
+    /// ```text
+    /// scope()      condition                                     pct arm
+    /// Empty        —                                              absent
+    /// Single(c)    e.totals has bucket c with orders > 0          native
+    /// Single(c)    otherwise                                      absent
+    /// Mixed        u.is_some() AND e.unified() == Some((s, p))    unified, over USDT
+    /// Mixed        otherwise                                      absent
+    /// Unknown      exactly one bucket in SELF.totals with orders>0 native (excluded incl. unknowns)
+    /// Unknown      otherwise                                      absent
+    /// ```
+    ///
+    /// The `Unknown` row keys on `self.totals` — the PROFIT buckets — and not on `e.totals`, and
+    /// the difference is load-bearing rather than incidental: `self.totals` is what
+    /// `footer_facts` promotes into the never-clipped head, so keying on it is what guarantees
+    /// the percentage is denominated in the currency the row's own money is stated in. Reading
+    /// `e.totals` here instead would let the two disagree the moment a bucket has profit rows but
+    /// no COUNTED ones, or the reverse.
+    ///
+    /// The unified arm never reads [`UsdtTotal::spent`] — see [`EntrySpend`]'s own doc for why —
+    /// and it CAN still be partial: [`AverageOrderReturn::excluded`] can be positive there too,
+    /// because Funding, non-positive-spend, and unknown-quote rows shrink the counted scope below
+    /// [`Self::orders`] independently of whether every counted row was valued.
+    ///
+    /// The house average-order definition (`analytics::groups`, `analytics::profit_monitor`) is
+    /// over rows with a POSITIVE numeric settled spend; the SQL leg that fills
+    /// [`Self::entry_spend`] already applies that filter, together with the Funding exclusion the
+    /// traded-volume leg uses. `excluded` is always `Self::orders - counted`, so it aggregates
+    /// unknown-quote rows, non-numeric/non-positive spend, non-numeric profit, and Funding rows
+    /// without a second field that could disagree with the first.
+    ///
+    /// Worked example: profit 3496.52 over 5 rows with spend
+    /// 28742+34160+29884+28717+28717 = 150220 -> `avg_order == 30044.0`,
+    /// `pct == 100.0 * 3496.52 / 30044.0` (rounds to `+11.6%`), `counted == 5`, `excluded == 0`.
+    ///
+    /// Returns:
+    ///     `None` for an empty, mixed-incomplete, mixed-unknown, or multi/zero-known unknown
+    ///     scope, for zero counted rows, or for a non-finite ratio.
+    pub fn average_order_return(&self) -> Option<AverageOrderReturn> {
+        match self.scope() {
+            QuoteScope::Empty => None,
+            QuoteScope::Single(currency) => self.native_average_order_return(currency),
+            QuoteScope::Mixed => {
+                self.unified_usdt()?;
+                let (spent, profit) = self.entry_spend.unified()?;
+                // `unified()` returns `Some` only over a positive counted scope, so the division
+                // below cannot divide by zero and needs no guard of its own here.
+                let counted = self.entry_spend.counted_orders;
+                let avg_order = spent / counted as f64;
+                if !usable_average(avg_order) {
+                    return None;
+                }
+                let pct = 100.0 * profit / avg_order;
+                pct.is_finite().then_some(AverageOrderReturn {
+                    pct,
+                    avg_order,
+                    currency: QuoteCurrency::usdt(),
+                    counted,
+                    excluded: self.orders - counted,
+                    unified: true,
+                })
+            }
+            QuoteScope::Unknown => {
+                if self.totals.len() != 1 {
+                    return None;
+                }
+                self.native_average_order_return(self.totals[0].currency)
+            }
+        }
+    }
+
+    /// Build the native-currency arm of [`Self::average_order_return`] for one exact currency.
+    ///
+    /// Args:
+    ///     currency: Currency [`Self::scope`] promoted as the head figure.
+    ///
+    /// Returns:
+    ///     `None` when no counted bucket exists for `currency`, when its spend sums to zero or
+    ///     less, or when the resulting ratio is non-finite.
+    fn native_average_order_return(&self, currency: QuoteCurrency) -> Option<AverageOrderReturn> {
+        let bucket = self
+            .entry_spend
+            .totals
+            .iter()
+            .find(|bucket| bucket.currency == currency)?;
+        if bucket.orders <= 0 {
+            return None;
+        }
+        let avg_order = bucket.spent / bucket.orders as f64;
+        if !usable_average(avg_order) {
+            return None;
+        }
+        let pct = 100.0 * bucket.profit / avg_order;
+        pct.is_finite().then_some(AverageOrderReturn {
+            pct,
+            avg_order,
+            currency,
+            counted: bucket.orders,
+            excluded: self.orders - bucket.orders,
+            unified: false,
+        })
     }
 }
 

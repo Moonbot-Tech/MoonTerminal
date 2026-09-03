@@ -100,6 +100,22 @@ const BADGE_TINY_MIN_W: f32 = 16.0;
 /// heading spends.
 const HEADING_GAP: f32 = 5.0;
 
+/// Width a heading row reserves for its `active/total` counter, in design units.
+///
+/// A MINIMUM rather than a fixed box: at the shipped text step this fits seven mono glyphs, which
+/// covers every count a real account produces, so the column lines up across every row at every
+/// tree depth. A count wide enough to exceed it grows its own slot and truncates nothing — a
+/// counter that lies is worse than a column that bulges on one row.
+const COUNTS_SLOT_W: f32 = 50.0;
+/// Width a heading row reserves for the open-orders `(N)`, in design units.
+///
+/// ALWAYS reserved, including on a row that currently has no open orders, so a core gaining or
+/// losing them never shifts the `active/total` column left of it.
+const ORDERS_SLOT_W: f32 = 34.0;
+/// Gap between the two counter slots, in design units. Tighter than [`HEADING_GAP`] so the two
+/// numbers read as one cluster rather than as two unrelated columns.
+const COUNTS_GAP: f32 = 4.0;
+
 /// Row height at the tree's local text step, in `Pixels`.
 ///
 /// The only caller of [`design::fit_h_px`] for a tree row — see [`ROW_H_BASE`] for why every row
@@ -373,7 +389,12 @@ fn build_core_root(
     let cd = store.core(core)?;
     // Nothing below a collapsed core can render, so it needs only the totals in its own caption.
     // Search and reveal paths force their required core/folder chain open before this build runs.
-    let core_open = searching || view.expanded_cores.contains(&core);
+    // Direct field reads, not `state::core_is_open(...)`: the contract scanner
+    // (`the_tree_cache_signature_covers_every_input_the_build_reads`, in
+    // `tests/theme_contract/strategies.rs`) walks this function for `view.<field>` reads and
+    // requires each one hashed in the tree signature, and an accessor would hide the second field.
+    let core_open =
+        searching || view.expanded_cores.contains(&core) || view.rail_expanded_core == Some(core);
 
     // One pass feeds both the visible set and every folder count.
     let mut counts = if core_open {
@@ -902,11 +923,6 @@ fn render_row(
             checked,
         } => {
             let core = *core;
-            let txt = if *open_orders > 0 {
-                format!("{label}  {active}/{total}  ({open_orders})")
-            } else {
-                format!("{label}  {active}/{total}")
-            };
             core_folder_row(
                 view,
                 node_id,
@@ -914,7 +930,8 @@ fn render_row(
                 *selected,
                 *checked,
                 indent,
-                txt,
+                label.clone(),
+                RowCounts::subtree(*active, *total, *open_orders),
                 p.blue,
                 600.0,
                 ToggleTarget::Core(core),
@@ -933,7 +950,6 @@ fn render_row(
         } => {
             let core = *core;
             let path = path.clone();
-            let txt = format!("{label}  {active}/{total}");
             core_folder_row(
                 view,
                 node_id,
@@ -941,7 +957,9 @@ fn render_row(
                 *selected,
                 *checked,
                 indent,
-                txt,
+                label.clone(),
+                // A folder carries no order count of its own; the core root above it owns that.
+                RowCounts::subtree(*active, *total, 0),
                 p.text_soft,
                 400.0,
                 ToggleTarget::Folder(core, path),
@@ -985,7 +1003,8 @@ fn render_row(
                 // Deleted addresses no folder, so `core_folder_row` draws it no checkbox at all.
                 false,
                 indent,
-                format!("{}  {count}", rust_i18n::t!("strat.deleted_folder")),
+                rust_i18n::t!("strat.deleted_folder").to_string(),
+                RowCounts::deleted(*count),
                 p.text_muted,
                 400.0,
                 ToggleTarget::Deleted(core),
@@ -1068,6 +1087,89 @@ fn exchange_row(
         .into_any_element()
 }
 
+/// The trailing counter column of one heading row, already rendered to strings.
+///
+/// The counters used to be concatenated onto the end of the caption, which put them at a different
+/// x on every row and made a column of fifty cores read as noise. They are their own element now,
+/// so the caption keeps the flexible truncating slot and the numbers keep a fixed one.
+struct RowCounts {
+    /// Left slot: `active/total` for a core or folder, the bare count for the Deleted heading.
+    primary: String,
+    /// Right slot: the open-orders `(N)`, empty when the row has none. The slot is reserved either
+    /// way — see [`ORDERS_SLOT_W`].
+    orders: String,
+    /// Localized tooltip naming exactly the numbers this row actually shows.
+    tip: SharedString,
+}
+
+impl RowCounts {
+    /// Counters for a core or folder heading, whose numbers cover its whole subtree.
+    ///
+    /// Args:
+    ///     active: Checked strategies under this heading, after the kind and side filters.
+    ///     total: All strategies under it, after the same filters.
+    ///     open_orders: Open orders of the whole core; always zero for a folder, which does not
+    ///         carry an order count of its own.
+    ///
+    /// Returns:
+    ///     The two slot strings plus the tooltip that names whichever of them is populated.
+    fn subtree(active: usize, total: usize, open_orders: usize) -> Self {
+        let counts_tip = rust_i18n::t!("strat.tree_counts_tip").to_string();
+        Self {
+            primary: format!("{active}/{total}"),
+            orders: if open_orders > 0 {
+                format!("({open_orders})")
+            } else {
+                String::new()
+            },
+            tip: SharedString::from(if open_orders > 0 {
+                format!(
+                    "{counts_tip} · {}",
+                    rust_i18n::t!("strat.tree_open_orders_tip")
+                )
+            } else {
+                counts_tip
+            }),
+        }
+    }
+
+    /// Counters for a core's Deleted heading, which carries one number and no orders.
+    fn deleted(count: usize) -> Self {
+        Self {
+            primary: count.to_string(),
+            orders: String::new(),
+            tip: SharedString::from(rust_i18n::t!("strat.tree_deleted_count_tip").to_string()),
+        }
+    }
+}
+
+/// Render one right-aligned counter slot of a heading row's trailing column.
+///
+/// Args:
+///     text: The slot's number, or empty to reserve the width without drawing anything.
+///     width: Minimum slot width in design units — [`COUNTS_SLOT_W`] or [`ORDERS_SLOT_W`].
+///     step: Local unscaled text-size step, so the number rides the row's own text size.
+///     app: Application context used for palette and scaled geometry.
+///
+/// Returns:
+///     A `flex_none` slot whose content sits on its right edge.
+fn counts_slot(text: String, width: f32, step: f32, app: &App) -> impl IntoElement {
+    let p = MoonPalette::active(app);
+    h_flex()
+        .flex_none()
+        .min_w(design::ui_px(app, width))
+        .justify_end()
+        .child(
+            MoonText::new(text)
+                .mono(true)
+                .uppercase(false)
+                .color(p.text_muted)
+                .font_size(design::moon_text_base(app, step))
+                .line_height(ROW_LINE_BASE + step)
+                .render(),
+        )
+}
+
 enum ToggleTarget {
     Core(CoreId),
     Folder(CoreId, Vec<String>),
@@ -1102,7 +1204,8 @@ impl ToggleTarget {
 ///     selected: Whether to draw the selected-folder highlight.
 ///     checked: Summary of covered strategies; ignored by a row that addresses no folder.
 ///     indent: Leading indentation for the tree depth.
-///     text: Heading label and count summary.
+///     label: Heading caption, counters excluded — they render in their own trailing column.
+///     counts: The row's trailing counter column and its tooltip.
 ///     color: Heading text color.
 ///     weight: Heading font weight.
 ///     target: Core, folder, or Deleted collection toggled by the row.
@@ -1118,7 +1221,8 @@ fn core_folder_row(
     selected: bool,
     checked: bool,
     indent: Pixels,
-    text: String,
+    label: String,
+    counts: RowCounts,
     color: u32,
     weight: f32,
     target: ToggleTarget,
@@ -1140,6 +1244,9 @@ fn core_folder_row(
     // Taken before the row consumes `row_id`: the checkbox derives its own element id from this
     // node's id for the same reason the row does — see the note on `.id(row_id)` below.
     let check_row_id = row_id.clone();
+    // Same rule for the counter column, which needs an id of its own to carry a tooltip. Derived
+    // from the NODE id, never from the numbers it draws.
+    let counts_row_id = SharedString::from(format!("cnt:{row_id}"));
     let view_click = view.clone();
     let view_menu = view.clone();
     h_flex()
@@ -1181,7 +1288,7 @@ fn core_folder_row(
         })
         .child(
             div().flex_1().min_w_0().truncate().child(
-                MoonText::new(text)
+                MoonText::new(label)
                     .mono(true)
                     .uppercase(false)
                     .color(color)
@@ -1191,12 +1298,29 @@ fn core_folder_row(
                     .render(),
             ),
         )
+        // The counters, muted and right-aligned in fixed slots after the flexible caption, so they
+        // land on one column across every row instead of wherever each name happened to end.
+        //
+        // A tooltip gives this element a hitbox (fork `elements/div.rs`, `should_insert_hitbox`),
+        // but it keeps the default `HitboxBehavior::Normal`, which by contract "doesn't affect
+        // mouse handling for other hitboxes" — so unlike an interactive `MoonDisclosure::button`
+        // it cannot swallow the click that expands this row.
+        .child(
+            h_flex()
+                .id(counts_row_id)
+                .flex_none()
+                .items_center()
+                .gap(design::ui_px(app, COUNTS_GAP))
+                .child(counts_slot(counts.primary, COUNTS_SLOT_W, step, app))
+                .child(counts_slot(counts.orders, ORDERS_SLOT_W, step, app))
+                .tooltip(crate::panels::common::text_tooltip(counts.tip)),
+        )
         .on_click(move |_e, window, app| {
             view_click.update(app, |this, cx| {
                 window.focus(&this.focus, cx);
                 match &target {
                     ToggleTarget::Core(c) => {
-                        toggle(&mut this.expanded_cores, *c);
+                        this.toggle_core_expanded(*c);
                         this.selected_folder = Some((*c, String::new()));
                     }
                     ToggleTarget::Folder(c, path) => {

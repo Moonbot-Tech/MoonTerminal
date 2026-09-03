@@ -142,8 +142,10 @@ impl OrdersPanel {
         let view = cx.entity();
         let cur = self.view;
         let mut menu = MoonDropdown::new("orders-columns")
-            // Use a glyph button instead of a text field, matching the other column selectors.
-            .segment(moon_ui::MoonButtonSegment::new("▦"))
+            // An icon button instead of a text field, matching the other column selectors; the
+            // asset and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract. It is
+            // deliberately NOT `sort_menu`'s gear below: the two sit side by side in this bar.
+            .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))

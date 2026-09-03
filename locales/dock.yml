@@ -138,6 +138,21 @@ detects.cfg.vpos_below:
   ru: "Под графиком (клик — над)"
   en: "Below the chart (click — above)"
   es: "Debajo del gráfico (clic — encima)"
+# What the feed states instead of a blank pane. Four different facts, four strings: only
+# `empty_no_cores` asks the user to go and connect something, and the shared hidden-by-preset
+# sentence (`workspace.scope.all_hidden`) outranks all three from `scope_empty_text`.
+detects.empty:
+  ru: "Детектов пока нет — карточка появится, когда сработает ядро"
+  en: "No detects yet — a card appears as soon as a core fires one"
+  es: "Aún no hay detecciones: aparecerá una tarjeta cuando un núcleo active una"
+detects.empty_filtered:
+  ru: "Детекты есть, но их скрывает текущая область просмотра"
+  en: "There are detects, but the current scope hides them"
+  es: "Hay detecciones, pero el ámbito actual las oculta"
+detects.empty_no_cores:
+  ru: "В этой группе нет доступных ядер — детектам неоткуда прийти"
+  en: "No cores are available in this group — nothing can detect yet"
+  es: "No hay núcleos disponibles en este grupo: nada puede detectar aún"
 detects.field.none:
   ru: "—"
   en: "—"

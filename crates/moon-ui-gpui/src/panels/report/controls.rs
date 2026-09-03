@@ -976,8 +976,9 @@ impl ReportPanel {
                     })
             }),
         );
-        // Use a glyph button instead of a list field, matching other column selectors. The
-        // tooltip is localized; glyphs remain outside the locale dictionary per locales/README.
+        // An icon button instead of a list field, matching every other column selector; the asset
+        // and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract. The tooltip is
+        // localized; the icon stays outside the locale dictionary per locales/README.
         div()
             .id("rep-cols-tip")
             .tooltip(crate::panels::common::text_tooltip(
@@ -985,7 +986,7 @@ impl ReportPanel {
             ))
             .child(
                 MoonDropdown::new("rep-cols")
-                    .segment(moon_ui::MoonButtonSegment::new("▦"))
+                    .trigger_icon(design::COLUMN_SELECTOR_ICON)
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
                     .trigger_width(design::glyph_btn_w(cx))

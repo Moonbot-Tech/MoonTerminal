@@ -9,9 +9,10 @@ use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonScrollbarVisibility,
-    MoonSelect, MoonTooltipView, MoonVirtualList, StyledExt, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    MoonCheckboxSize, MoonDropdown, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonScrollbarVisibility, MoonSelect, MoonTooltipView, MoonVirtualList, StyledExt, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -115,7 +116,9 @@ fn subsection_header_row(
         .gap_2()
         .items_center()
         .pl(px(CONN_TABLE_INSET))
-        .pr_1()
+        // A row of the same virtual list as the core rows, so it clears the overlay scrollbar the
+        // same way; `pr_1` alone left the member count under the track once the list overflowed.
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
         .py_0p5()
         .child(
             div()
@@ -316,6 +319,11 @@ fn group_header_row(
         .gap_1()
         .items_center()
         .px_1()
+        // Overrides the `px_1` right inset only: this row ends in live controls -- the proto
+        // dropdown, the icon popover and the "+ core" button -- and it is a row of the same
+        // virtual list, whose overlay scrollbar would otherwise paint over and swallow clicks on
+        // the right edge of that button.
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
         .py_0p5()
         .rounded(design::r_button(cx))
         .bg(rgb(p.panel_high))
@@ -343,9 +351,12 @@ fn group_header_row(
                 }),
         )
         .child(ico_el)
+        // The name SHRINKS but never GROWS: `flex_1` here handed it every spare pixel of a
+        // 1791px row, which pushed the count away from the name it counts and left the controls
+        // scattered across the gap instead of reading as one cluster. `min_w_0` keeps the
+        // truncation, so a long name still ellipsises rather than pushing the cluster off-row.
         .child(
             div()
-                .flex_1()
                 .min_w_0()
                 .truncate()
                 .font_bold()
@@ -353,23 +364,34 @@ fn group_header_row(
         )
         .child(
             div()
+                .flex_shrink_0()
                 .text_size(design::t_body(cx))
                 .text_color(rgb(p.text_soft))
                 .child(t!("conn.member_count", n = member_count).to_string()),
         )
         .child(
-            div()
-                .id(SharedString::from(format!("eye-tip-{name}")))
-                .tooltip(|_window, cx| {
-                    cx.new(|_| MoonTooltipView::new(t!("conn.show_group").to_string()))
-                        .into()
-                })
+            // One right-aligned cluster: `ml_auto` absorbs the free space the name gave up, so
+            // the four controls sit together at the row's end instead of spread along it.
+            h_flex()
+                .ml_auto()
+                .flex_shrink_0()
+                .gap_1()
+                .items_center()
                 .child(
                     MoonButton::new(SharedString::from(format!("eye-{name}")))
                         .ghost()
                         .size(MoonButtonSize::Micro)
                         .width(34.0)
-                        .label("win")
+                        // The label read "win" -- an untranslated abbreviation of an action this
+                        // button does NOT perform: it opens the group's window
+                        // (`show_group_request`), while `win` is the per-core headless toggle in
+                        // `table.rs`. The glyph names the action and the tooltip carries the
+                        // sentence. Same icon, size and variant as the chart strip's
+                        // gather-windows button (`chart_tabs/strip.rs`), tooltip included --
+                        // `MoonButton` takes one natively, so an icon-only button needs no
+                        // wrapping `div` to host it.
+                        .leading_icon(MoonButtonIconSlot::new("icons/window-restore.svg"))
+                        .tooltip(t!("conn.show_group").to_string())
                         .on_click({
                             let weak = weak.clone();
                             move |_, _, cx| {
@@ -383,24 +405,25 @@ fn group_header_row(
                             }
                         })
                         .render(),
+                )
+                .child(bulk_proto_dropdown(weak, name))
+                .child(popover)
+                .child(
+                    MoonButton::new(SharedString::from(format!("addgrp-{name}")))
+                        .outline()
+                        .size(MoonButtonSize::Micro)
+                        .width(56.0)
+                        .label(format!("+ {}", t!("conn.add_core_short")))
+                        .on_click({
+                            let weak = weak.clone();
+                            move |_, window, cx| {
+                                let n = nm_add.clone();
+                                let _ =
+                                    weak.update(cx, |this, ctx| this.add_server(n, window, ctx));
+                            }
+                        })
+                        .render(),
                 ),
-        )
-        .child(bulk_proto_dropdown(weak, name))
-        .child(popover)
-        .child(
-            MoonButton::new(SharedString::from(format!("addgrp-{name}")))
-                .outline()
-                .size(MoonButtonSize::Micro)
-                .width(56.0)
-                .label(format!("+ {}", t!("conn.add_core_short")))
-                .on_click({
-                    let weak = weak.clone();
-                    move |_, window, cx| {
-                        let n = nm_add.clone();
-                        let _ = weak.update(cx, |this, ctx| this.add_server(n, window, ctx));
-                    }
-                })
-                .render(),
         )
 }
 

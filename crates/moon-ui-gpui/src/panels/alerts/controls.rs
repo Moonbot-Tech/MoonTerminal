@@ -198,7 +198,7 @@ impl AlertsPanel {
             .items(items)
     }
 
-    /// Builds the persisted visible-column menu, matching the other tables' glyph selector.
+    /// Builds the persisted visible-column menu, matching the other tables' icon selector.
     ///
     /// `close_on_select(false)` keeps the menu open for several edits. The action column is not
     /// offered at all — it holds the only delete and settings buttons — and the last remaining
@@ -207,7 +207,9 @@ impl AlertsPanel {
         let view = cx.entity();
         let cur = self.view;
         let mut menu = MoonDropdown::new("alerts-columns")
-            .segment(moon_ui::MoonButtonSegment::new("▦"))
+            // The shared column-selector asset; the choice and the childless trigger are
+            // `design::COLUMN_SELECTOR_ICON`'s contract.
+            .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))

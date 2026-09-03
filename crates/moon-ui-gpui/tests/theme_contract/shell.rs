@@ -497,6 +497,11 @@ fn the_assets_wallets_header_caret_stays_passive() {
 /// The Assets wallet roster groups core rows by venue identity and resolves logos only after an
 /// off-thread prewarm, while every core keeps the trust-aware balance figure and click behavior.
 ///
+/// Mutation: remove the cached automatic width from `bottom`, its render refill, its cache
+/// invalidation, the name tooltip, or the non-shrinking figure wrapper. The pure width helper
+/// would remain green while live Wallets either used a stale/default width or clipped a balance
+/// into a misleading number beside a name the user could no longer recover on hover.
+///
 /// The roster has two shapes — grouped under exchange headings and flat, chosen by the section's
 /// persisted preference — and both must reach the SAME row builder: a second copy of the row would
 /// be the one that forgets the transfer-asset refresh a click owes the core it selects. So the
@@ -546,9 +551,14 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
         "crate::media::exchange_logos::exchange_logo",
         "img(logo)",
         "super::balances::figure(Some(agg), p, cx)",
+        ".id(SharedString::from(format!(\"asset-core-name-{cid}\")))",
+        ".tooltip(crate::panels::common::text_tooltip(core_name.clone()))",
+        ".flex_none()",
         ".on_click(cx.listener(move |this",
         "this.overview_wallet_pick = Some(cid)",
         "this.selected_core = Some(cid)",
+        ".cached_roster_auto_w",
+        "roster_width::resolved(&self.roster_widths.read(cx).column_widths, auto_w)",
         ".min_w(design::font_w_px(cx, roster_width::MIN_BASE_W))",
         ".flex_shrink_1()",
     ] {
@@ -557,9 +567,31 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
             "grouped Assets roster must retain {needle:?}"
         );
     }
+    let figure_child = row
+        .find(".child(super::balances::figure(Some(agg), p, cx))")
+        .expect("wallet core rows must render a balance figure");
+    let figure_cell = row[..figure_child]
+        .rsplit_once(".child(")
+        .expect("the balance figure must remain inside its own wrapper")
+        .1;
+    assert!(
+        figure_cell.contains(".flex_none()"),
+        "the wallet balance figure must stay in a non-shrinking wrapper"
+    );
     assert!(
         bottom.contains("asset-exchange-unknown") && !bottom.contains("status_dot"),
         "unknown exchange headings stay explicit without a fake logo or status dot"
+    );
+
+    let render = code_only(&read_src("panels/assets/render.rs"));
+    assert!(
+        render.contains("self.ensure_roster_auto_w(cx);"),
+        "Assets render must refill the automatic roster width before building Wallets"
+    );
+    let cache = code_only(&read_src("panels/assets/cache.rs"));
+    assert!(
+        cache.contains("self.cached_roster_auto_w = None;"),
+        "Assets cache rebuild must invalidate the automatic roster width with its aggregates"
     );
 }
 
@@ -1483,6 +1515,9 @@ fn the_main_tab_row_is_gated_and_addresses_charts_by_identity() {
 ///
 /// The contract is: both call sites opt into the overflow menu, the strip yields with
 /// `flex_1`/`min_w_0`, and neighbouring chrome is a flex sibling rather than an overlay.
+/// The shared row also paints `shell_high` across that sibling and carries the strip's full-width
+/// one-pixel bottom rule: deleting either builder during a layout refactor restores the dark
+/// toolbar band or the visibly broken hairline at the strip/chrome seam.
 #[test]
 fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
     let strip = code_only(braced_body(
@@ -1512,6 +1547,28 @@ fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
     assert!(
         strip.contains(".children(coin_dismiss)") && strip.contains(".children(fig_dismiss)"),
         "dismiss layers must stay on the chart body so they cannot cover the in-row cluster"
+    );
+    let tab_row = chain_between(
+        &strip,
+        "h_flex()\n                    .h(px(strip_h))",
+        ".child(right_cluster),",
+        "the shared chart tab row",
+    );
+    assert!(
+        tab_row.contains(".bg(rgb(p_strip.shell_high))"),
+        "the shared tab row must paint shell_high behind the in-flow chrome cluster"
+    );
+    let continued_rule = chain_between(
+        tab_row,
+        ".bg(rgb(p_strip.shell_high))",
+        ".child(div().flex_1().min_w_0().h_full().child(strip))",
+        "the chart tab row surface and strip slot",
+    );
+    assert!(
+        continued_rule.contains(
+            ".child(\n                        div()\n                            .absolute()\n                            .left(px(0.0))\n                            .bottom(px(0.0))\n                            .w_full()\n                            .h(px(1.0))\n                            .bg(rgba_from(p_strip.border, 0.78)),"
+        ),
+        "the row must continue the strip's full-width one-pixel bottom rule behind the chrome"
     );
 
     let row = code_only(braced_body(

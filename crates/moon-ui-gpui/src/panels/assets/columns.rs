@@ -429,8 +429,9 @@ impl AssetsView {
         let all_on = self.hidden_cols.is_empty();
         let all_view = view.clone();
         let mut menu = MoonDropdown::new("assets-columns")
-            // The shared glyph trigger used by every column selector (Orders, Report, Screener).
-            .segment(moon_ui::MoonButtonSegment::new("▦"))
+            // The shared icon trigger used by every column selector (Orders, Report, Screener);
+            // the choice and the childless trigger are `design::COLUMN_SELECTOR_ICON`'s contract.
+            .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))

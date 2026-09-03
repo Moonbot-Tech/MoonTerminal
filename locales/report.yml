@@ -152,7 +152,7 @@ report.selection.restore_queued:
   ru: "Поставлено на восстановление: %{n}. Выбор снимется после ответа ядра."
   en: "Queued for restore: %{n}. Selection clears after the core response."
   es: "En cola para restaurar: %{n}. La selección se borra tras la respuesta del núcleo."
-# The ▦ glyph is added separately in code; the dictionary contains text only.
+# The trigger draws a MoonUI icon asset, added in code; the dictionary contains text only.
 report.columns_menu:
   ru: "Колонки"
   en: "Columns"
@@ -268,6 +268,36 @@ report.traded_volume_unknown_quote:
   ru: "валюта неизвестна"
   en: "unknown quote"
   es: "moneda desconocida"
+# Realized profit as a percentage of the average order, single-core scope only. %{pct} arrives
+# pre-signed from signed_pct, e.g. "+11.6%".
+report.avg_order_pct:
+  ru: "%{pct} от ср. ордера"
+  en: "%{pct} of avg order"
+  es: "%{pct} de la orden media"
+# Some counted rows were excluded from both sums (unknown quote, Funding, non-positive spend).
+report.avg_order_pct_partial:
+  ru: "%{pct} от ср. ордера (частично)"
+  en: "%{pct} of avg order (partial)"
+  es: "%{pct} de la orden media (parcial)"
+# The count is stated as a LABEL ("orders counted: N"), never as a noun the number must agree
+# with, so it reads correctly at n=1 in every locale without a plural form - the same shape
+# report.traded_volume_partial_tip already uses for its shortfall.
+report.avg_order_pct_tip:
+  ru: "Прибыль к среднему ордеру: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}"
+  en: "Profit to average order: %{pct}. Average order: %{avg}, orders counted: %{n}"
+  es: "Beneficio sobre la orden media: %{pct}. Orden media: %{avg}, órdenes contadas: %{n}"
+report.avg_order_pct_partial_tip:
+  ru: "Прибыль к среднему ордеру: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}; не учтено: %{excluded}"
+  en: "Profit to average order: %{pct}. Average order: %{avg}, orders counted: %{n}; not accounted for: %{excluded}"
+  es: "Beneficio sobre la orden media: %{pct}. Orden media: %{avg}, órdenes contadas: %{n}; no contabilizadas: %{excluded}"
+# The unified arm under ValuationMode::Current only. A unified scope CAN still be partial - Funding,
+# non-positive-spend and unknown-quote rows shrink the counted scope independently of valuation - and
+# in that case the partial wording above wins and this key is not reached, because the shortfall is
+# the more important signal.
+report.avg_order_pct_current_tip:
+  ru: "Прибыль к среднему ордеру по текущему курсу: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}"
+  en: "Profit to average order at the current rate: %{pct}. Average order: %{avg}, orders counted: %{n}"
+  es: "Beneficio sobre la orden media a la tasa actual: %{pct}. Orden media: %{avg}, órdenes contadas: %{n}"
 report.unknown_quote_orders:
   ru: "валюта неизвестна: %{n}"
   en: "unknown quote: %{n}"

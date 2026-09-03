@@ -82,16 +82,17 @@ fn widths_follow_the_frozen_per_column_policy() {
     }
 }
 
-/// Only Name and Key may absorb spare width, and every visible header label needs help text;
-/// widening another column or dropping a tooltip would misplace controls or leave a heading
-/// unexplained to the user.
+/// `columns.rs:CONN_COLS` must let only Name and Group absorb spare width: Key is excluded because
+/// its masked content has no readable length to reward with width. Turning `h-key.grow` back on
+/// wastes space on dots, while removing growth from Name or Group truncates user-entered text;
+/// every visible header label also needs help text.
 #[test]
 fn growth_and_tooltips_match_the_text_column_contract() {
     let growing: Vec<_> = ConnColId::ALL
         .into_iter()
         .filter(|column| column.spec().grow)
         .collect();
-    assert_eq!(growing, [ConnColId::Name, ConnColId::Key]);
+    assert_eq!(growing, [ConnColId::Name, ConnColId::Group]);
 
     for column in ConnColId::ALL {
         let spec = column.spec();

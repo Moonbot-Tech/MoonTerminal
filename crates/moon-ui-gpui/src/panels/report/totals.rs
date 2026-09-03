@@ -121,6 +121,26 @@ struct VolumeGap {
     currencies: String,
 }
 
+/// Format an unsigned amount at full quote precision, followed by its ticker.
+///
+/// Shared by every footer fact that states an exact native amount in its tooltip — currently the
+/// traded-volume amount here and the average order size in [`average_order_fact`] — so the two
+/// can never round or ticker-format differently.
+///
+/// Args:
+///     amount: Unsigned amount in `currency`.
+///     currency: Exact persisted quote identity.
+///
+/// Returns:
+///     Full quote-precision text followed by the ticker.
+fn exact_native(amount: f64, currency: db::QuoteCurrency) -> String {
+    format!(
+        "{} {}",
+        fmt::compact(amount, currency.display_decimals()),
+        currency.ticker()
+    )
+}
+
 /// Format an unsigned volume amount in compact and exact native quote forms.
 ///
 /// Args:
@@ -133,11 +153,7 @@ struct VolumeGap {
 fn native_volume(amount: f64, currency: db::QuoteCurrency) -> (String, String) {
     (
         format!("{} {}", fmt::compact_si(amount), currency.ticker()),
-        format!(
-            "{} {}",
-            fmt::compact(amount, currency.display_decimals()),
-            currency.ticker()
-        ),
+        exact_native(amount, currency),
     )
 }
 
@@ -323,6 +339,82 @@ fn open_positions_fact(open: &db::OpenPositions) -> Option<FooterFact> {
     Some(open_fact)
 }
 
+/// Whether the loaded snapshot's own filter names exactly one real core.
+///
+/// The predicate is CARDINALITY over `data.filter.core_uids`, deliberately not selector
+/// provenance. An All or Overview selector that happens to resolve to one core in the connected
+/// universe is exactly as honest a scope to average over as an explicit single-core pick: either
+/// way there is one core's order sizes in the sums and no second core to mix them with, so the
+/// figure is correct regardless of how the selector arrived at that one core.
+///
+/// Args:
+///     data: Current report snapshot.
+///
+/// Returns:
+///     Whether the snapshot's own filter names exactly one core, excluding the
+///     [`moon_core::config::NO_MATCH_CORE_UID`] sentinel a preset that hides every core emits.
+fn single_core_scope(data: &ReportData) -> bool {
+    data.filter.core_uids.len() == 1
+        && data.filter.core_uids[0] != moon_core::config::NO_MATCH_CORE_UID
+}
+
+/// State realized profit as a percentage of the average order over a single-core scope, or
+/// nothing when the scope names more than one core or no ratio exists.
+///
+/// Denominated exactly as [`db::QuoteBreakdown::average_order_return`] chose, so this fact can
+/// never disagree with the currency the row's own promoted money is stated in. Wording mirrors
+/// [`traded_volume_amount`]'s partial-vs-complete split: an incomplete counted scope takes the
+/// warn tone and the partial wording ahead of the current-rate wording, whatever the valuation
+/// mode, because the shortfall is the more important signal.
+///
+/// Args:
+///     data: Current report snapshot.
+///     mode: Valuation mode the snapshot's figures were computed under.
+///
+/// Returns:
+///     The assembled fact, or `None` outside a single-core scope or without a computable ratio.
+fn average_order_fact(data: &ReportData, mode: db::valuation::ValuationMode) -> Option<FooterFact> {
+    if !single_core_scope(data) {
+        return None;
+    }
+    let ret = data.totals.average_order_return()?;
+    let (pct, sign) = fmt::signed_pct(ret.pct, 1)?;
+    let avg = exact_native(ret.avg_order, ret.currency);
+    if ret.excluded > 0 {
+        let mut partial = fact(
+            t!("report.avg_order_pct_partial", pct = pct.clone()).to_string(),
+            FactTone::Warn,
+            false,
+        );
+        partial.spelled = Some(
+            t!(
+                "report.avg_order_pct_partial_tip",
+                pct = pct,
+                avg = avg,
+                n = ret.counted,
+                excluded = ret.excluded
+            )
+            .to_string(),
+        );
+        return Some(partial);
+    }
+    // A current-rate figure is not historical P&L, so it never borrows that sentence — the same
+    // gate the traded-volume fact uses for the identical wording pair.
+    let current = ret.unified && mode == db::valuation::ValuationMode::Current;
+    let tip_key = if current {
+        "report.avg_order_pct_current_tip"
+    } else {
+        "report.avg_order_pct_tip"
+    };
+    let mut complete = fact(
+        t!("report.avg_order_pct", pct = pct.clone()).to_string(),
+        money_tone(sign),
+        false,
+    );
+    complete.spelled = Some(t!(tip_key, pct = pct, avg = avg, n = ret.counted).to_string());
+    Some(complete)
+}
+
 /// Assemble every fact the totals row states, split by whether it may be clipped.
 ///
 /// The tail order is the priority order and is deliberate. A valuation stall leads it because it
@@ -330,9 +422,12 @@ fn open_positions_fact(open: &db::OpenPositions) -> Option<FooterFact> {
 /// quote totals come next because a missing currency total silently changes what the row appears to
 /// sum, whereas a missing row count only withholds a tally the table itself shows. Everything ahead
 /// of the traded volume QUALIFIES the realized figure in the never-clipped head, so losing one of
-/// them changes what that head appears to mean. The open-positions fact closes the tail because it
-/// is the one entry that names itself completely — it can never be misread as part of the head, and
-/// the grid above already shows those rows — so it is the cheapest thing to lose to a narrow dock.
+/// them changes what that head appears to mean. The average-order-return fact sits right after the
+/// traded volume it shares a section with — it too qualifies the head's money, over the narrower
+/// single-core scope the volume figure does not itself require. The open-positions fact closes the
+/// tail because it is the one entry that names itself completely — it can never be misread as part
+/// of the head, and the grid above already shows those rows — so it is the cheapest thing to lose
+/// to a narrow dock.
 /// The shown-rows count is not in the tail at all; it is pinned right, and the ORDER count rides in
 /// the never-clipped caption.
 ///
@@ -547,6 +642,10 @@ pub(super) fn footer_facts(
         };
         volume.section_start = true;
         tail.push(volume);
+    }
+    if let Some(average) = average_order_fact(data, mode) {
+        // Qualifies the volume section it immediately follows rather than opening its own.
+        tail.push(average);
     }
     if let Some(mut open) = open_positions_fact(&data.open) {
         open.section_start = true;

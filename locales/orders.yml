@@ -92,11 +92,29 @@ orders.only_current:
   ru: "Только ордера текущего маркета"
   en: "Only current market orders"
   es: "Solo órdenes del mercado actual"
-# Bottom footer: total open orders, split into real and emulated.
+# Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
+# than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
+# repeats the same three numbers with what each one counts.
+#
+# LABEL: VALUE, never an inflected noun phrase. «реальных %{real}» reads wrong at a count of one
+# («реальных 1»), and Russian and Spanish would each need their own plural rule to fix it; a
+# colon-separated label is grammatical at every count in all three languages and needs none. The
+# labels are the order-kind filter's own words (`orders.kind.real` / `.emu`) so the footer and the
+# dropdown above it name the same two things identically.
 orders.footer_total:
-  ru: "Всего %{total} (%{real}/%{emu})"
-  en: "Total %{total} (%{real}/%{emu})"
-  es: "Total %{total} (%{real}/%{emu})"
+  ru: "Всего: %{total} · реальные: %{real} · эмуляторные: %{emu}"
+  en: "Total: %{total} · real: %{real} · emulated: %{emu}"
+  es: "Total: %{total} · reales: %{real} · emuladas: %{emu}"
+# Tooltip of that footer. States the scope the counts are taken over, and that the order-kind
+# filter above the table does not narrow them (the split is computed before that filter runs).
+#
+# The real line says «real account, not the emulator» and deliberately NOT «placed on the
+# exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
+# `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
+orders.footer_total_tip:
+  ru: "Всего: %{total} — открытые ордера выбранных ядер (и только текущего маркета, если этот фильтр включён).\nРеальные: %{real} — ордера реального счёта, не эмулятор.\nЭмуляторные: %{emu} — ордера эмулятора Moonbot.\nФильтр «Все / Реальные / Эмуляторные» на эти счётчики не влияет."
+  en: "Total: %{total} — open orders of the selected cores (and of the current market only, when that filter is on).\nReal: %{real} — orders on the real account, not the emulator.\nEmulated: %{emu} — Moonbot emulator orders.\nThe All / Real / Emulator filter does not change these counts."
+  es: "Total: %{total} — órdenes abiertas de los núcleos seleccionados (y solo del mercado actual, si ese filtro está activo).\nReales: %{real} — órdenes de la cuenta real, no del emulador.\nEmuladas: %{emu} — órdenes del emulador de Moonbot.\nEl filtro Todas / Reales / Emulador no cambia estos recuentos."
 orders.show_all:
   ru: "Показать все"
   en: "Show all"

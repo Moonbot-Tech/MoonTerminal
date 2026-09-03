@@ -76,6 +76,9 @@ conn.pending_cores:
   ru: "Новые ядра — настройте перед сохранением"
   en: "New cores — configure before saving"
   es: "Núcleos nuevos — configúralos antes de guardar"
+# Shared by BOTH the group header and the pending/exchange subsection headings, where a count of
+# 1..4 is ordinary -- so the abbreviated form stays: Russian has no single plural form that is
+# right at 1, 2 and 56, and this file has no plural-selection convention to reach for.
 conn.member_count:
   ru: "%{n} ядр."
   en: "%{n} cores"
@@ -244,6 +247,12 @@ conn.key_ph:
   ru: "вставьте ключ ядра"
   en: "paste the core key"
   es: "pega la clave del núcleo"
+# Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
+# `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
+conn.bundle_ph:
+  ru: "имя связки"
+  en: "bundle name"
+  es: "nombre del conjunto"
 conn.paste_key:
   ru: "Вставить"
   en: "Paste"

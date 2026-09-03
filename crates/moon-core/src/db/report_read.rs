@@ -159,7 +159,8 @@ pub struct ReportTable {
 /// its own surfaces and would carry an eternally empty open tally.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReportTotals {
-    /// Realized profit per known currency over CLOSED rows only, plus traded volume and coverage.
+    /// Realized profit per known currency over CLOSED rows only, plus traded volume, entry-spend
+    /// subtotals, and coverage.
     pub quotes: QuoteBreakdown,
     /// Unrealized money on the positions still running, counted apart from every figure above.
     pub open: super::OpenPositions,
@@ -1337,7 +1338,8 @@ pub fn strategy_purge_rows(
 ///
 /// Returns:
 ///     Exact known-currency profit buckets over CLOSED rows, unknown and complete row counts,
-///     closed non-Funding traded volume with its per-quote reconstruction counts, optional complete
+///     closed non-Funding traded volume with its per-quote reconstruction counts, counted
+///     entry-spend subtotals for [`QuoteBreakdown::average_order_return`], optional complete
 ///     active-mode USDT coverage, and the still-running positions counted separately beside them.
 ///
 /// Errors:
@@ -1517,6 +1519,106 @@ fn traded_volume_sql(src: &ReadSource, rate: Option<&str>) -> TradedVolumeSql {
     }
 }
 
+/// Per-source SQL for the counted spend/profit subtotal, plus its own unified USDT leg, behind
+/// [`QuoteBreakdown::average_order_return`], independent of the Report's row/profit filter —
+/// exactly like [`TradedVolumeSql`] beside it, and for the same reason: `rate` is taken so the
+/// unified leg is this feature's OWN, never [`super::UsdtTotal::spent`], which carries no
+/// positive-spend guard and no Funding exclusion.
+struct EntrySpendSql {
+    /// Counted-row predicate: positive numeric settled spend, numeric settled profit, and
+    /// non-Funding.
+    counted: String,
+    /// The row's settled spend, or SQL NULL when the source cannot evidence it.
+    spent: String,
+    /// The row's settled profit, or `0.0` when the source cannot evidence it.
+    profit: String,
+    /// Active-mode USDT rate, or SQL NULL when no valuation projection exists.
+    rate: String,
+}
+
+impl EntrySpendSql {
+    /// Build the six grouped columns consumed by [`super::EntrySpend::from_groups`].
+    ///
+    /// Returns:
+    ///     Counted-row count, summed settled spend, summed settled profit, valued-row count, and
+    ///     the summed USDT spend and profit over counted rows carrying a rate, in that order.
+    fn aggregate_columns(&self) -> String {
+        format!(
+            "COALESCE(SUM(CASE WHEN {counted} THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN {counted} THEN {spent} ELSE 0.0 END),0.0),
+             COALESCE(SUM(CASE WHEN {counted} THEN {profit} ELSE 0.0 END),0.0),
+             COALESCE(SUM(CASE WHEN {counted} AND ({rate}) IS NOT NULL
+                               THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN {counted} AND ({rate}) IS NOT NULL
+                               THEN ({spent}) * ({rate}) ELSE 0.0 END),0.0),
+             COALESCE(SUM(CASE WHEN {counted} AND ({rate}) IS NOT NULL
+                               THEN ({profit}) * ({rate}) ELSE 0.0 END),0.0)",
+            counted = self.counted,
+            spent = self.spent,
+            profit = self.profit,
+            rate = self.rate,
+        )
+    }
+}
+
+/// Build the entry-spend SQL for one source.
+///
+/// A counted row is CLOSED (the caller already restricts the scope), non-Funding, with a positive
+/// numeric settled spend and a numeric settled profit. It takes the POSITIVE-SPEND half from the
+/// house average-order definition (`analytics::groups::avg_order`,
+/// `analytics::profit_monitor::average_order`) and ADDS the Funding exclusion on top — the two are
+/// deliberately NOT identical, because neither Analytics query filters `sellreason`, so a
+/// positive-spend Funding row moves their averages and not this one. Do not "restore parity" in
+/// either direction without deciding which surface is wrong. The numeric-profit and settled-spend
+/// legs reuse [`super::valuation::source_predicates`] so this cannot silently disagree with the
+/// valuation cache about which rows are eligible.
+///
+/// On a source that cannot express `closedate` the realized pass widens to `ClosedAndOpen`, and
+/// this leg inherits that exactly as the PROFIT total does rather than failing closed the way the
+/// neighbouring volume leg does. That asymmetry is deliberate twice over: the percentage is a
+/// ratio to the profit figure in the row's head, so a denominator that excluded rows the
+/// numerator kept would state a ratio between two different scopes — the exact defect plan review
+/// caught in the unified arm — and such a source is in practice a legacy ARCHIVE table of
+/// already-closed trades, not a live one carrying open positions.
+///
+/// Args:
+///     src: Physical Report source and its discovered columns.
+///     rate: Active-mode quote-to-USDT expression when a projection is available, taken the same
+///         way [`traded_volume_sql`] takes it.
+///
+/// Returns:
+///     Fail-closed counted predicate, settled spend/profit expressions naming only columns the
+///     source actually has, and the valuation rate expression.
+fn entry_spend_sql(src: &ReadSource, rate: Option<&str>) -> EntrySpendSql {
+    let has = |column: &str| src.cols.contains(column);
+    let predicates = super::valuation::source_predicates("r", &src.cols);
+    // Without `sellreason` a closed row cannot be proven NOT Funding, so it counts nothing — the
+    // same fail-closed direction `traded_volume_sql` takes rather than risking a Funding row
+    // inflating the average.
+    let funding = if has("sellreason") {
+        "COALESCE(r.\"sellreason\", '') <> 'Funding'".to_string()
+    } else {
+        "0".to_string()
+    };
+    // `> 0` on a NULL spend is NULL in SQLite, so a non-numeric or absent spend excludes itself
+    // without a second `typeof` test.
+    let counted = format!(
+        "(({spent}) > 0 AND {numeric_profit} AND {funding})",
+        spent = predicates.spent_value,
+        numeric_profit = predicates.numeric_profit,
+    );
+    EntrySpendSql {
+        counted,
+        spent: predicates.spent_value,
+        profit: if has("profitbtc") {
+            super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
+        } else {
+            "0.0".to_string()
+        },
+        rate: rate.unwrap_or("NULL").to_string(),
+    }
+}
+
 /// Execute one complete Report totals pass with fresh accumulators.
 ///
 /// Args:
@@ -1527,9 +1629,10 @@ fn traded_volume_sql(src: &ReadSource, rate: Option<&str>) -> TradedVolumeSql {
 ///         current-rate mode does not depend on it.
 ///
 /// Returns:
-///     Exact quote profit totals over closed rows and two-sided traded volume over the
-///     reconstructed rows of each quote, optionally carrying active-mode USDT coverage for each
-///     metric, plus the unrealized tally of the rows still open.
+///     Exact quote profit totals over closed rows, two-sided traded volume over the reconstructed
+///     rows of each quote, and counted entry-spend subtotals over the same closed rows,
+///     optionally carrying active-mode USDT coverage for each metric, plus the unrealized tally of
+///     the rows still open.
 ///
 /// Errors:
 ///     Returns the underlying SQLite error from any physical-source aggregate.
@@ -1542,6 +1645,7 @@ fn query_totals_attempt(
     let mut groups = Vec::new();
     let mut open_groups = Vec::new();
     let mut volume_groups = Vec::new();
+    let mut spend_groups = Vec::new();
     let mut coverage = super::valuation::CoverageAggregate::default();
     let has_strategy_names =
         strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
@@ -1597,8 +1701,15 @@ fn query_totals_attempt(
                 .map(|parts| parts.per_row.quote_rate.as_str()),
         );
         let volume_columns = volume_sql.aggregate_columns();
+        let spend_sql = entry_spend_sql(
+            src,
+            valuation
+                .as_ref()
+                .map(|parts| parts.per_row.quote_rate.as_str()),
+        );
+        let spend_columns = spend_sql.aggregate_columns();
         let sql = format!(
-            "SELECT {quote}, {profit}, COUNT(*){coverage_columns}, {volume_columns}
+            "SELECT {quote}, {profit}, COUNT(*){coverage_columns}, {volume_columns}, {spend_columns}
              FROM {} r{joins}{where_sql}{group_by}",
             src.table,
         );
@@ -1606,6 +1717,7 @@ fn query_totals_attempt(
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(refs.as_slice())?;
         let volume_offset = 3 + usize::from(valuation.is_some()) * 6;
+        let spend_offset = volume_offset + 5;
         while let Some(row) = rows.next()? {
             let raw = row.get::<_, Value>(0)?;
             let ordinal = super::quote::report_ordinal_from_value(&raw);
@@ -1622,6 +1734,15 @@ fn query_totals_attempt(
                 row.get::<_, f64>(volume_offset + 2)?,
                 row.get::<_, i64>(volume_offset + 3)?,
                 row.get::<_, f64>(volume_offset + 4)?,
+            ));
+            spend_groups.push((
+                ordinal,
+                row.get::<_, i64>(spend_offset)?,
+                row.get::<_, f64>(spend_offset + 1)?,
+                row.get::<_, f64>(spend_offset + 2)?,
+                row.get::<_, i64>(spend_offset + 3)?,
+                row.get::<_, f64>(spend_offset + 4)?,
+                row.get::<_, f64>(spend_offset + 5)?,
             ));
         }
     }
@@ -1653,7 +1774,8 @@ fn query_totals_attempt(
         }
     }
     let quotes = QuoteBreakdown::from_groups(groups)
-        .with_traded_volume(super::TradedVolume::from_groups(volume_groups));
+        .with_traded_volume(super::TradedVolume::from_groups(volume_groups))
+        .with_entry_spend(super::EntrySpend::from_groups(spend_groups));
     // Publish coverage whenever the selected mode can build a projection: always for current rates,
     // and only with an attached cache for historical rates.
     Ok(ReportTotals {

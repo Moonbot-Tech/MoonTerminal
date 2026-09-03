@@ -125,6 +125,19 @@ pub struct AssetsView {
     pub(super) sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     /// Per-core balance figures and their trust classifications for the current scope.
     cached_aggs: Rc<Vec<CoreAgg>>,
+    /// Content-measured BASE width of the wallets roster column ([`roster_width::auto_base`]),
+    /// paired with the presentation it was measured under, or `None` while it needs re-measuring.
+    ///
+    /// Retained rather than measured per frame: the widest row is found by measuring every core
+    /// name and figure, and `design::ui_text_width` resolves a font and walks every character on
+    /// each call — a 200-core roster would pay that at repaint rate.
+    ///
+    /// TWO things invalidate it, and both are needed. `rebuild_cache` clears the slot when
+    /// `cached_aggs`, the aggregates it is derived from, are replaced. The stored
+    /// [`table::RosterWidthEnv`] covers the other half — a live language or scale change moves
+    /// the correct width while touching no data revision at all, and on a quiet account the next
+    /// data change may never come.
+    cached_roster_auto_w: Option<(f32, table::RosterWidthEnv)>,
     /// Every in-scope core (after the filter) is a futures core. An empty table then means "no
     /// open positions" rather than "no assets": futures balances are quote-denominated and never
     /// reach the table. Computed in `rebuild_cache` to keep the store out of `render`.
@@ -347,6 +360,7 @@ impl AssetsView {
             cached_entries: Rc::new(Vec::new()),
             sell_marked: Rc::new(std::collections::HashSet::new()),
             cached_aggs: Rc::new(Vec::new()),
+            cached_roster_auto_w: None,
             cached_all_futures: false,
             cached_wallet_key: None,
             cached_wallets: Rc::new(Vec::new()),

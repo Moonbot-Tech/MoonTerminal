@@ -299,6 +299,9 @@ impl StrategiesView {
         if !collapsed {
             self.expanded_cores.clear();
             self.expanded_folders.clear();
+            // Otherwise the rail-seeded core is the one row that survives "collapse everything" —
+            // it lives in the overlay, not in `expanded_cores`.
+            self.rail_expanded_core = None;
             return;
         }
         for (c, _) in cores {

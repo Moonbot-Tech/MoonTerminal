@@ -16,9 +16,8 @@ mod tests;
 
 use gpui::*;
 use moon_ui::{
-    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonPalette, h_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown, MoonInput,
+    MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
@@ -498,14 +497,23 @@ impl AnalyticsView {
         menu
     }
 
-    /// Visible-column selector (glyph "▦"); each item toggles a column bit, "All" toggles all.
+    /// Visible-column selector ([`design::COLUMN_SELECTOR_ICON`]); each item toggles a column bit,
+    /// "All" toggles all.
     /// The menu stays open across clicks; the name column is always shown, so hiding every
     /// toggleable column is allowed (unlike Orders, which locks the last one).
+    ///
+    /// The trigger carries no label, so it takes a tooltip like the four other pickers do — it
+    /// reuses `report.columns_menu`, the same borrowing this menu already does for
+    /// `report.filter.all`, rather than adding a fifth dictionary key that says "Columns".
     fn strat_column_menu(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         let cur = self.strat_cols();
         let mut menu = MoonDropdown::new("an-strat-cols")
-            .segment(MoonButtonSegment::new("▦"))
+            // The shared column-selector asset; the choice and the childless trigger are
+            // `design::COLUMN_SELECTOR_ICON`'s contract. This one alone stays MICRO and keeps its
+            // own pill width: it sits in the tuner's compact strip, not in a chrome toolbar, so
+            // `glyph_btn_w` (the Action preset's 26px height) would not fit the row.
+            .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
             .trigger_width_scaled(30.0)
@@ -550,6 +558,12 @@ impl AnalyticsView {
             COL_BIT_LASTEDIT,
             t!("analytics.col.lastedit").to_string(),
         );
-        menu
+        div()
+            .id("an-strat-cols-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.columns_menu").to_string()))
+                    .into()
+            })
+            .child(menu)
     }
 }

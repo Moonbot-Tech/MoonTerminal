@@ -149,6 +149,32 @@ pub(super) fn figure(a: Option<&CoreAgg>, p: MoonPalette, cx: &App) -> impl Into
         })
 }
 
+/// Rendered width of the figure [`figure`] draws for `a`, in font-scaled pixels.
+///
+/// Lives here rather than at the caller so the MEASURED string stays the string this module
+/// actually renders: `agg_text` and `state_marker` are private, and a hand-copied format in the
+/// roster's width arithmetic would drift silently the day either of them changes — the same
+/// argument `analytics::tuner::list::table::core_col_w` makes for measuring `core_label(g)`
+/// rather than the raw name.
+///
+/// Mirrors [`figure`]'s own composition exactly: the amount at body size, plus — only when a
+/// trust marker is drawn — the row's gap and that marker at caption size.
+///
+/// Args:
+///     a: Core aggregate the figure is drawn for, or `None` for the dash.
+///     cx: Application context used to measure text.
+///
+/// Returns:
+///     The figure's width in rendered pixels, already font-scaled.
+pub(super) fn figure_width(a: Option<&CoreAgg>, cx: &App) -> f32 {
+    let mut width = design::mono_body_text_width(cx, &agg_text(a), FontWeight::NORMAL.0);
+    if let Some(marker) = state_marker(a) {
+        width += f32::from(design::ui_px(cx, 4.0))
+            + design::mono_caption_text_width(cx, &marker, FontWeight::NORMAL.0);
+    }
+    width
+}
+
 /// Scope total with trust metadata.
 ///
 /// Cores without a usable figure are NOT summed: their balance is unknown, and a silent zero

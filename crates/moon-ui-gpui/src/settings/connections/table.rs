@@ -967,9 +967,13 @@ pub(super) fn server_row(
             .state(&row.group)
             .small()
             .into_any_element(),
+        // An empty bundle field is the DEFAULT, not an omission, so the placeholder names what
+        // the field would hold rather than nudging: it is a bundle NAME (`ChartBucket::Bundle`
+        // in `moon-core/src/config/servers.rs`), which an empty white cell said nothing about.
         MoonInput::new(ids.bundle.clone())
             .state(&row.bundle)
             .small()
+            .placeholder(t!("conn.bundle_ph").to_string())
             .into_any_element(),
         feed_popover(view, weak, i, row_key, ids, cx).into_any_element(),
         MoonColorPicker::new(&row.color).into_any_element(),
@@ -994,6 +998,10 @@ pub(super) fn server_row(
         .gap_1()
         .items_center()
         .py_0p5()
+        // The list's scrollbar is an overlay that reserves no width of its own, so the status dot,
+        // the reconnect glyph and the delete button rendered beneath it. The header subtracts the
+        // same gutter, or the two stop lining up.
+        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
         .children(
             ConnColId::ALL
                 .into_iter()
@@ -1012,7 +1020,7 @@ impl SettingsView {
     /// `min_w_0()` is the load-bearing part: gpui's default `min_size: auto` is the CONTENT-based
     /// automatic minimum, which clamps a flex item UP to its child's min-content width. A control
     /// that renders wider than its column would then eat free space in the rows that the header
-    /// still had -- and since only the header can hand that space to its two growing columns,
+    /// still had -- and since only the header can hand that space to its growing columns,
     /// every column after them drifted, further with each one. Pinned to the basis, an oversized
     /// child overlaps instead of shifting the grid.
     ///
@@ -1130,6 +1138,9 @@ impl SettingsView {
             .gap_1()
             .items_center()
             .pl(px(CONN_TABLE_INSET))
+            // The same gutter every row of the list below reserves for its overlay scrollbar, so
+            // the headings stay over their own columns.
+            .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
             .pb(px(3.0))
             .border_b_1()
             .border_color(rgb(p.border))

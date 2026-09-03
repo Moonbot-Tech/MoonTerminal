@@ -2560,3 +2560,34 @@ fn the_run_column_stays_wired_and_marks_what_the_core_has_not_confirmed() {
         "an unconfirmed state must be drawn faded rather than hidden or recoloured"
     );
 }
+
+/// Changing the maximum-drawdown policy to `Up` makes a deeper drawdown look green, while giving
+/// duration either directional policy falsely presents a longer or shorter hold as good or bad.
+#[test]
+fn kpi_row_keeps_its_non_up_metric_policies() {
+    let summary = read_src("analytics/summary/mod.rs");
+    let row = code_only(braced_body(
+        &summary,
+        "fn kpi_row(&self, d: &Summary, p: MoonPalette, cx: &Context<Self>)",
+    ));
+
+    for (label, policy, consequence) in [
+        (
+            "t!(\"analytics.kpi.maxdd\")",
+            "DeltaGood::Down,",
+            "a deeper maximum drawdown would render as an improvement",
+        ),
+        (
+            "t!(\"analytics.kpi.duration\")",
+            "DeltaGood::Neither,",
+            "a neutral duration change would claim a good or bad direction",
+        ),
+    ] {
+        chain_between(&row, label, policy, "KPI policy");
+        assert!(
+            row.split_once(label)
+                .is_some_and(|(_, after_label)| after_label.contains(policy)),
+            "{label} must be followed by {policy} so {consequence}"
+        );
+    }
+}

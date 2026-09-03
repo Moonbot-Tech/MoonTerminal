@@ -118,11 +118,94 @@ fn group_assets_shortcuts_cannot_bypass_the_auto_rail() {
 /// the roster would render near 496 px instead of 420 px, silently taking width from all wallets.
 #[test]
 fn roster_default_renders_at_the_shipped_width_scale() {
-    let rendered = roster_width::resolved(&HashMap::new()) * (13.0 / 11.0);
+    let rendered =
+        roster_width::resolved(&HashMap::new(), roster_width::DEFAULT_BASE_W) * (13.0 / 11.0);
 
     assert!(
         (rendered - 420.0).abs() < 0.05,
         "the unconfigured roster must render at the old 420 px default, got {rendered}"
+    );
+}
+
+/// `roster_width.rs::auto_base` must convert rendered row pixels back to base-width units.
+///
+/// Mutation: drop `/ scale` before `ceil`. At a raised Font slider the roster would be scaled
+/// twice, consuming the wallet columns even though the measured row already fits exactly once.
+#[test]
+fn roster_auto_width_round_trips_rendered_pixels_through_font_scale() {
+    let base = roster_width::auto_base(600.0, 20.0, 1.25);
+
+    assert_eq!(base, 496.0);
+    assert_eq!(base * 1.25, 620.0);
+}
+
+/// `roster_width.rs::auto_base` must retain the shipped rendered floor for short core names.
+///
+/// Mutation: clamp the automatic result to `MIN_BASE_W` instead of `DEFAULT_BASE_W`. A fresh
+/// install with short names would narrow the roster below the historical 420-pixel width.
+#[test]
+fn roster_auto_width_keeps_the_shipped_floor_for_short_rows() {
+    let rendered = roster_width::auto_base(20.0, 20.0, 13.0 / 11.0) * (13.0 / 11.0);
+
+    assert!(
+        (rendered - 420.0).abs() < 0.05,
+        "short rows must retain the shipped 420 px roster width, got {rendered}"
+    );
+}
+
+/// `roster_width.rs::auto_base` must cap one pathological name before it starves wallet columns.
+///
+/// Mutation: drop the upper clamp. A single very long core name would take nearly all horizontal
+/// space and make the Spot, Futures, and Quarterly figures unreadable.
+#[test]
+fn roster_auto_width_caps_pathological_rows_before_the_wallet_columns_starve() {
+    let rendered = roster_width::auto_base(2_000.0, 20.0, 13.0 / 11.0) * (13.0 / 11.0);
+
+    assert!(
+        rendered <= 852.0,
+        "the roster cap must leave room for the three wallet columns, got {rendered} px"
+    );
+}
+
+/// `roster_width.rs::auto_base` must reject unusable scale and measurement inputs.
+///
+/// Mutation: remove the non-finite guards. A hand-edited Font scale or invalid text measurement
+/// would reach `f32::clamp`, panic on NaN, or replace the normal roster width with a bogus value.
+#[test]
+fn roster_auto_width_rejects_non_finite_scale_and_measurements() {
+    for (case, widest_row_px, chrome_px, scale) in [
+        ("zero scale", 600.0, 20.0, 0.0),
+        ("NaN scale", 600.0, 20.0, f32::NAN),
+        ("infinite measurement", f32::INFINITY, 20.0, 1.25),
+    ] {
+        assert_eq!(
+            roster_width::auto_base(widest_row_px, chrome_px, scale),
+            roster_width::DEFAULT_BASE_W,
+            "{case} must fall back to the shipped base width"
+        );
+    }
+}
+
+/// `roster_width.rs::resolved` must prefer a finite user drag and skip a NaN one.
+///
+/// Mutation: let `auto` win before the stored width, or clamp a NaN value. A user's resized roster
+/// would be overridden on every rebuild, or a hand-edited layout would panic instead of using auto.
+#[test]
+fn roster_resolved_preserves_finite_user_widths_and_skips_nan() {
+    let auto = 460.0;
+    let mut widths = HashMap::from([(roster_width::WIDTH_KEY.to_string(), 1_000.0)]);
+
+    assert_eq!(
+        roster_width::resolved(&widths, auto),
+        roster_width::MAX_BASE_W,
+        "a finite stored drag must win and still honour the upper drag boundary"
+    );
+
+    widths.insert(roster_width::WIDTH_KEY.to_string(), f32::NAN);
+    assert_eq!(
+        roster_width::resolved(&widths, auto),
+        auto,
+        "a NaN layout value must be ignored in favour of the measured roster width"
     );
 }
 

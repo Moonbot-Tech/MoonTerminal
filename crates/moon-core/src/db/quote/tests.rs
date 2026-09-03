@@ -77,6 +77,64 @@ fn breakdown_merges_only_identical_known_quotes() {
     assert_eq!(totals.traded_volume, TradedVolume::default());
 }
 
+/// `quote.rs::QuoteBreakdown::average_order_return` must gate an unknown scope on the PROFIT
+/// buckets, not on the counted-spend buckets. Replacing `self.totals` with
+/// `self.entry_spend.totals` would publish a USDT percentage while the Report head also contains
+/// USDC profit, silently putting incomparable currencies on one footer line.
+#[test]
+fn unknown_scope_refuses_a_ratio_when_profit_and_counted_buckets_differ() {
+    let totals =
+        QuoteBreakdown::from_groups([(Some(1), 100.0, 1), (Some(8), 50.0, 1), (None, 0.0, 1)])
+            .with_entry_spend(EntrySpend::from_groups([(
+                Some(1),
+                1,
+                1_000.0,
+                100.0,
+                0,
+                0.0,
+                0.0,
+            )]));
+
+    assert_eq!(totals.scope(), QuoteScope::Unknown);
+    assert_eq!(totals.entry_spend.totals.len(), 1);
+    assert!(
+        totals.average_order_return().is_none(),
+        "two head-profit currencies cannot truthfully wear the one counted USDT denominator"
+    );
+}
+
+/// `quote.rs::usable_average` must retain its `is_finite()` leg. Reducing it to `avg_order >
+/// 0.0` would turn an infinite replica spend into a confident finite +0.0% footer percentage.
+#[test]
+fn average_order_return_rejects_an_infinite_average() {
+    let totals = QuoteBreakdown::from_groups([(Some(1), 100.0, 1)]).with_entry_spend(
+        EntrySpend::from_groups([(Some(1), 1, f64::INFINITY, 100.0, 0, 0.0, 0.0)]),
+    );
+
+    assert!(
+        totals.average_order_return().is_none(),
+        "an infinite average is not a meaningful denominator even when its resulting percentage is finite"
+    );
+}
+
+/// `quote.rs::EntrySpend::unified` must require every counted row to have a valuation. Dropping
+/// `valued_orders == counted_orders` would publish a partial USDT average as a complete one.
+#[test]
+fn unified_entry_spend_refuses_a_partially_valued_scope() {
+    let spend = EntrySpend::from_groups([
+        (Some(1), 1, 100.0, 10.0, 1, 100.0, 10.0),
+        (Some(8), 1, 200.0, 20.0, 0, 0.0, 0.0),
+    ]);
+
+    assert_eq!(spend.counted_orders, 2);
+    assert_eq!(spend.valued_orders, 1);
+    assert_eq!(
+        spend.unified(),
+        None,
+        "the independently seeded USDC row has no rate, so no complete unified denominator exists"
+    );
+}
+
 /// Merging physical sources must keep each quote's reconstruction count beside its own subtotal.
 /// Collapsing that pair back into an optional amount blanks the USDT bucket over one unprovable
 /// row; reusing profit coverage instead would suppress the complete USDC bucket in this fixture.

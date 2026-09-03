@@ -8,7 +8,11 @@ use super::*;
 /// Restorable Strategies browsing state for the current process only.
 #[derive(Clone, Default)]
 pub(crate) struct StrategiesSessionState {
-    /// Cores the user left expanded in the tree.
+    /// Cores the user left expanded in the tree, by hand.
+    ///
+    /// `StrategiesView::rail_expanded_core` — the Auto rail's live seed — is deliberately absent
+    /// from this snapshot: capturing it would let a rail seed outlive the window that received it
+    /// and reappear as if the user had expanded that core themselves, in another scope or window.
     pub(crate) expanded_cores: HashSet<CoreId>,
     /// Folders the user left expanded, keyed by core and slash-separated path.
     pub(crate) expanded_folders: HashSet<(CoreId, String)>,

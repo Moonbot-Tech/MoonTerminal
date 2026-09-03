@@ -7,7 +7,7 @@
 //! min-content width, and the row's children are live controls that render WIDER than the basis
 //! (`MoonDropdown::trigger_width_scaled` multiplies by the Font-slider ratio; `MoonColorPicker`
 //! draws a hard 128px trigger). The header's plain text labels never inflate, so only the header
-//! had slack left for its two growing columns to absorb -- and every column after them drifted.
+//! had slack left for its growing columns to absorb -- and every column after them drifted.
 //!
 //! The fix is structural rather than a nudged constant: one list; `min_w_0()` on every cell so the
 //! declared basis is the whole truth (Taffy resolves an AUTO minimum from min-content, an explicit
@@ -74,7 +74,9 @@ pub(super) struct ConnCol {
     /// Flex basis in rendered pixels. Authoritative: every cell also carries `min_w_0()`, so a
     /// wider child paints over its neighbour instead of pushing it.
     pub(super) basis: f32,
-    /// Whether the column absorbs free space. Exactly the two text columns do.
+    /// Whether the column absorbs free space. Only columns holding user-typed text that
+    /// TRUNCATES do -- `h-name` and `h-group`. `h-key` deliberately does not: its content is
+    /// masked, so extra width buys more dots and nothing readable.
     pub(super) grow: bool,
     /// How [`ConnCol::basis`] becomes a rendered width.
     pub(super) width: ConnColWidth,
@@ -122,12 +124,19 @@ const CONN_COLS: [ConnCol; 13] = [
         align: ConnColAlign::Left,
         head_pad: 8.0,
     },
+    // FIXED, not growing, at the basis it always had. The key field is MASKED and MoonUI draws
+    // one bullet per character of a variable-length key, so there is no "width of the masked
+    // value" to size to -- growth simply handed the column every spare pixel, ~480px of a 1791px
+    // window spent on identical dots while `Имя` and `Группа` truncated real text beside them.
+    // 200 keeps a usable text viewport next to the input's mask-toggle and clear affixes and the
+    // sibling Paste glyph (`table.rs::paste_key_affix`); a longer key scrolls inside the field,
+    // which is what it did before and what a masked field can afford.
     ConnCol {
         id: "h-key",
         label: Some("conn.col.key"),
         tip: Some("conn.tip.key"),
         basis: 200.0,
-        grow: true,
+        grow: false,
         width: ConnColWidth::Raw,
         align: ConnColAlign::Left,
         head_pad: 8.0,
@@ -155,12 +164,14 @@ const CONN_COLS: [ConnCol; 13] = [
         align: ConnColAlign::Center,
         head_pad: 0.0,
     },
+    // Grows with `h-name`: both hold user-typed text that truncates, and the width the masked
+    // key gave up is exactly what they were missing.
     ConnCol {
         id: "h-group",
         label: Some("conn.col.group"),
         tip: Some("conn.tip.group"),
         basis: 110.0,
-        grow: false,
+        grow: true,
         width: ConnColWidth::Raw,
         align: ConnColAlign::Left,
         head_pad: 8.0,

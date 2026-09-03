@@ -403,6 +403,22 @@ unified USDT conversion remains complete-only, and a scope where not one trade r
 publishes no volume at all. A source without `sellreason` likewise cannot prove that a closed row is
 not Funding, so it contributes to completeness but cannot publish volume.
 
+The footer states realized profit as a percentage of the average order only when the loaded
+snapshot's own filter names exactly one core — averaging order sizes across cores would mix
+universes with different typical sizes, so the fact is absent for an All or multi-core selection.
+Its currency follows the head figure exactly: the one native bucket the scope carries, or a
+unified USDT total, denominated and gated the same two ways the head promotes one — never a
+figure in a currency the row does not otherwise show. The unified arm carries its OWN USDT leg
+computed alongside the native one rather than reading the valuation cache's `UsdtTotal::spent`,
+which admits any numeric spend with no positive-spend guard and no Funding exclusion; borrowing it
+would average over a wider row set than the native arm while still claiming a complete count. The
+average itself is over rows with a positive numeric settled spend, excluding Funding rows exactly
+as the traded-volume leg does — the same definition Analytics' own average-order figure uses. Rows
+the scope cannot account for (unknown quote, Funding, non-positive or non-numeric settled spend)
+are excluded from both sums and stated as a count in the fact's tooltip, in either arm: even the
+unified figure can be partial, because its own completeness is judged against the counted rows,
+not the scope's full row count.
+
 For a group-owned `AutoCore` Report only, `core_name` is contextually unavailable because every row
 already belongs to the selected core. This is a display lens, not a persistence mutation: the raw
 visible set, `app_meta`/`layout.toml`, sort state, and widths remain untouched. The grid, Columns

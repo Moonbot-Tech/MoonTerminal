@@ -1,7 +1,10 @@
 //! Regression tests for detection presentation scoping.
 
 use super::cards::{self, strategy_chip_text};
-use super::{detect_expired, detection_core_visible, detection_route_visible};
+use super::{detect_expired, detection_core_visible, detection_route_visible, empty_feed_text};
+use crate::workspace::scope_marker::ScopeMarker;
+use moon_core::config::WorkspaceMode;
+use rust_i18n::t;
 
 /// Body of `DetectsPanel::ingest`, the subject of the source-shape assertions below. Its closing
 /// brace is the first at method indentation.
@@ -234,4 +237,43 @@ fn name_budget_follows_the_space_a_card_actually_has() {
     assert_eq!(cards::side_name_w(100.0, true), 50.0);
     // Never below the floor, however narrow the card is configured.
     assert!(cards::side_name_w(1.0, true) >= 24.0);
+}
+
+/// `detects/mod.rs:empty_feed_text` must check `available == 0` before `retained > 0`.
+///
+/// Mutation: swap the first two branches. A card retained across a disconnected core would claim a
+/// preset hid it instead of explaining that no core in the group can currently detect.
+#[test]
+fn empty_feed_no_available_cores_outrank_retained_cards() {
+    let hidden_marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 0, 3);
+
+    assert_eq!(
+        empty_feed_text(&hidden_marker, 1, 0),
+        t!("detects.empty_no_cores")
+    );
+}
+
+/// `detects/mod.rs:empty_feed_text` must apply `scope_empty_text` only when cards are retained.
+///
+/// Mutation: wrap all branches in `scope_empty_text`. An empty feed that never received a detect
+/// would incorrectly say that the preset hid every core instead of saying no detects have fired.
+#[test]
+fn empty_feed_all_hidden_preset_does_not_rewrite_an_unretained_feed() {
+    let hidden_marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 0, 3);
+
+    assert_eq!(empty_feed_text(&hidden_marker, 0, 3), t!("detects.empty"));
+}
+
+/// `detects/mod.rs:empty_feed_text` must preserve the filtered sentence for a partial preset.
+///
+/// Mutation: replace the retained branch with `detects.empty`. A retained detect hidden by only
+/// part of the preset would lose the explanation that the active scope is withholding it.
+#[test]
+fn empty_feed_partial_preset_with_retained_cards_reports_filtered_state() {
+    let partial_marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 1, 3);
+
+    assert_eq!(
+        empty_feed_text(&partial_marker, 1, 3),
+        t!("detects.empty_filtered")
+    );
 }

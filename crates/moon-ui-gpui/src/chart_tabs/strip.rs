@@ -8,7 +8,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
-    MoonTabItem, MoonTabStrip, h_flex, v_flex,
+    MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -422,11 +422,37 @@ impl Render for ChartTabs {
             .child(
                 // Tabs yield (`flex_1 min_w_0`); the right chrome cluster is a real flex sibling,
                 // not an overlay. This row does not clip: hanging coin/figstyle layers are lifted.
+                //
+                // The ROW paints the surface, not the strip alone. `MoonTabStrip`'s root fills
+                // `shell_high` across its OWN width, and since it became an in-flow `w_full`
+                // sibling of the cluster that width is only the `flex_1` slot — so behind the
+                // toolbar the unpainted ancestors showed through, which in the dark theme reads as
+                // a black band around the figure combo and the gear. The same token here, once, on
+                // the container both of them sit in, so the seam is invisible in every theme.
                 h_flex()
                     .h(px(strip_h))
                     .w_full()
                     .min_w_0()
+                    .relative()
                     .items_center()
+                    .bg(rgb(p_strip.shell_high))
+                    // ...and the same for the hairline that closes the row against the chart:
+                    // `MoonTabStrip` draws its own, `w_full` of ITS width, so it stopped at the
+                    // seam too. Continued here in the strip's own idiom and values. It is the
+                    // FIRST child on purpose — a `Div` paints its background, then its children in
+                    // order, so the strip's opaque fill covers this one on the left and redraws it
+                    // identically, while the cluster (no background of its own, and every widget in
+                    // it centred well above the last pixel) simply lets it through on the right.
+                    // Nothing stacks, and no alpha is drawn twice.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(0.0))
+                            .bottom(px(0.0))
+                            .w_full()
+                            .h(px(1.0))
+                            .bg(rgba_from(p_strip.border, 0.78)),
+                    )
                     .child(div().flex_1().min_w_0().h_full().child(strip))
                     .child(right_cluster),
             )
