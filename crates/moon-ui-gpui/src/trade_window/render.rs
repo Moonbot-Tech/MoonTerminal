@@ -261,12 +261,19 @@ impl TradeWindowView {
                 .child(self.panel.clone())
                 // The caption is a requirement, not decoration: a one-minute picture of a
                 // forty-second scalp is an honest answer only while it says which it is.
+                //
+                // `t_body`, NOT `t_caption`: this is the one line saying WHAT is on screen —
+                // ticks, bucketed ticks, or candles and the reason for them — so it must not be
+                // the smallest text in the window. It now matches the figures rail's VALUES
+                // (`figures.rs`, `t_body`) rather than its field labels, which is the right
+                // company for it. A design step, never a hard-coded size, so the Font slider and
+                // the UI scale keep carrying it.
                 .child(
                     div()
                         .absolute()
                         .left(design::ui_px(cx, 8.0))
                         .bottom(design::ui_px(cx, 6.0))
-                        .text_size(design::t_caption(cx))
+                        .text_size(design::t_body(cx))
                         .text_color(moon(p.text_muted))
                         .child(caption),
                 )

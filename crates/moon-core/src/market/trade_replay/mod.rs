@@ -712,6 +712,10 @@ pub struct TradeReplaySeries {
     /// a [`TradeReplaySource::Ticks`] series carries these TOO — the EXCHANGE's own one-minute
     /// klines, not bars aggregated from [`Self::ticks`], so the bar layer covers the WHOLE window
     /// even where the points, per [`Self::partial`], do not.
+    ///
+    /// Stored whole; DRAWN only where the points are not. [`Self::read_into`] withholds every bar
+    /// lying wholly inside the span [`Self::ticks`] covers, so the two layers never overlay each
+    /// other and the bars are left holding exactly the edges the points never reached.
     pub candles: Vec<ChartCandle>,
     /// Trade points in ascending time. Empty when [`Self::source`] is
     /// [`TradeReplaySource::Klines1m`]; carried alongside [`Self::candles`] for
@@ -730,6 +734,19 @@ pub struct TradeReplaySeries {
     /// Whether [`Self::ticks`] covers only PART of [`Self::window`] — the bars always cover all
     /// of it. Always `false` on a [`TradeReplaySource::Klines1m`] series.
     pub partial: bool,
+    /// The inclusive span [`Self::ticks`] is guaranteed EXHAUSTIVE over, or `None` when there was
+    /// no tick walk at all ([`TradeReplaySource::Klines1m`]).
+    ///
+    /// Carried straight from `worker::TickHarvest::covered`, the walk's own answer, and NOT
+    /// re-derived from the rows: clipping proves every row is inside the span, never that the
+    /// first and last rows ARE its edges. A completed boundary slice whose opening minute simply
+    /// saw no trade is exhaustively covered while carrying no point there, and only this field
+    /// knows it — which is what lets [`Self::read_into`] withhold that minute's bar instead of
+    /// leaving one stray candle floating inside the tick trace.
+    ///
+    /// [`Self::partial`] is the BOOLEAN read of this same span against [`Self::window`]; this is
+    /// the span itself.
+    pub covered: Option<(i64, i64)>,
 }
 
 impl TradeReplaySeries {
@@ -859,6 +876,26 @@ impl TradeReplaySeries {
                     true => crate::market::candles::resample(&clipped, tf_ms, &mut out.candles),
                     false => out.candles.extend(clipped),
                 }
+                // WHERE THE POINTS ARE, THE BARS STEP ASIDE. A tick series carries the exchange's
+                // own one-minute klines for the WHOLE window (see `Self::candles`), which is what
+                // keeps the edges the points never reached drawn — but inside the covered span
+                // the two layers are the same trades told twice, drawn on top of each other.
+                //
+                // Decided from the WALK's own interval, never from pixels and never from the rows:
+                // `Self::covered` is what the tick stage proved exhaustive, while the extrema of
+                // the points are merely a subset of it — a covered minute the venue happened to
+                // publish no trade in would keep its bar under a row-derived rule and read as a
+                // stray candle floating inside the trace. `None` there is a `Klines1m` series,
+                // which is what keeps a still-loading window whole: the bar-only stage walked no
+                // ticks, so nothing is hidden until the upgrade lands.
+                //
+                // Applied AFTER the aggregation above so one rule covers both paths, and to the
+                // OUTPUT timeframe, which is the width the caller actually draws. `candle_tf_ms`
+                // is never filled on this path, so there is no parallel array to desync.
+                if let Some(covered) = self.covered {
+                    out.candles
+                        .retain(|c| !bar_inside(c.t_open_ms, tf_ms, covered));
+                }
                 read.candles_changed = true;
             }
         }
@@ -878,6 +915,28 @@ impl TradeReplaySeries {
         }
         read
     }
+}
+
+/// Whether one bar lies WHOLLY inside a covered span.
+///
+/// A bar that STRADDLES an edge stays drawn: half of it is over ground the points never reached,
+/// so it is context rather than an overlay, and dropping it would leave a gap the user reads as
+/// missing data. That is also what makes the window's own caption honest — the edges really are
+/// the part still closed by candles.
+///
+/// Args:
+///     t_open_ms: The bar's opening stamp; a non-finite one is never inside anything.
+///     tf_ms: The bar's width, at the timeframe it is DRAWN at.
+///     covered: Inclusive span from [`TradeReplaySeries::covered`].
+///
+/// Returns:
+///     `true` when the whole bar sits inside the span.
+fn bar_inside(t_open_ms: f64, tf_ms: i64, covered: (i64, i64)) -> bool {
+    if !t_open_ms.is_finite() {
+        return false;
+    }
+    let open = t_open_ms as i64;
+    open >= covered.0 && open.saturating_add(tf_ms.max(1)) - 1 <= covered.1
 }
 
 /// Lowest and highest finite positive price across a run of trade points.

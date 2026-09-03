@@ -36,6 +36,7 @@ fn bars_only_series() -> TradeReplaySeries {
         tick_status: TickStatus::Pending,
         bucket_ms: 0,
         partial: false,
+        covered: None,
     }
 }
 
@@ -153,6 +154,58 @@ fn replay_repeat_keeps_candle_range_after_bars_are_already_shipped() {
         repeat.tick_price_range,
         Some((90.0, 110.0)),
         "the original bar envelope remains available when no candle rows are re-emitted"
+    );
+}
+
+/// `market/trade_replay/mod.rs:bar_inside` must reject only wholly contained bars; relaxing it
+/// to an overlap drops the right edge candle and leaves a blank gutter beside the tick trace.
+#[test]
+fn replay_ticks_keep_both_straddling_edge_candles() {
+    let mut series = bars_only_series();
+    series.source = TradeReplaySource::Ticks;
+    series.covered = Some((MINUTE_MS / 2, 5 * MINUTE_MS / 2));
+    let mut out = ChartHistoryBuffers::default();
+
+    series.read_into(
+        0.0,
+        0.0,
+        (2 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut out,
+    );
+
+    assert_eq!(
+        out.candles
+            .iter()
+            .map(|candle| candle.t_open_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![0, 2 * MINUTE_MS],
+        "only the wholly covered middle candle may step aside; both straddling edge candles close the tick trace"
+    );
+}
+
+/// `market/trade_replay/mod.rs:TradeReplaySeries::read_into` must leave a `covered: None`
+/// Klines1m series whole; applying the hide with its window span blanks the fallback chart while ticks load.
+#[test]
+fn replay_bars_only_series_keeps_every_candle_without_tick_coverage() {
+    let series = bars_only_series();
+    let mut out = ChartHistoryBuffers::default();
+
+    series.read_into(
+        0.0,
+        0.0,
+        (2 * MINUTE_MS) as f32,
+        Some(&candle_params(0)),
+        &mut out,
+    );
+
+    assert_eq!(
+        out.candles
+            .iter()
+            .map(|candle| candle.t_open_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![0, MINUTE_MS, 2 * MINUTE_MS],
+        "a bars-only fallback must keep every one-minute candle instead of rendering an empty chart"
     );
 }
 
