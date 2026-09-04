@@ -145,6 +145,10 @@ detects.empty:
   ru: "Детектов пока нет — карточка появится, когда сработает ядро"
   en: "No detects yet — a card appears as soon as a core fires one"
   es: "Aún no hay detecciones: aparecerá una tarjeta cuando un núcleo active una"
+detects.empty_settings_hint:
+  ru: "Вид карточек — шестерёнка слева вверху"
+  en: "Card view — use the gear at the top left"
+  es: "Vista de tarjetas: usa el engranaje de arriba a la izquierda"
 detects.empty_filtered:
   ru: "Детекты есть, но их скрывает текущая область просмотра"
   en: "There are detects, but the current scope hides them"

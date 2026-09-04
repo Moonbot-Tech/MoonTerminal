@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::Backend;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_chart::paint::now_unix_ms;
 use moon_core::config::{DETECT_RAIL_MAX, DetectViewCfg};
@@ -724,15 +725,32 @@ impl Render for DetectsPanel {
                 .text_size(crate::design::t_body(cx))
                 .text_color(rgb(p.text_soft))
                 .child(
-                    div()
+                    v_flex()
                         .w_full()
                         .max_w(crate::design::font_w_px(cx, 560.0))
-                        .text_center()
-                        .child(empty_feed_text(
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .text_size(crate::design::t_title(cx))
+                                .text_color(rgb(p.text_muted))
+                                .child("⚙"),
+                        )
+                        .child(div().w_full().text_center().child(empty_feed_text(
                             &marker,
                             retained_reachable,
                             available_cores,
-                        )),
+                        )))
+                        .when(available_cores > 0 && retained_reachable == 0, |block| {
+                            block.child(
+                                div()
+                                    .w_full()
+                                    .text_center()
+                                    .text_size(crate::design::t_caption(cx))
+                                    .text_color(rgb(p.text_muted))
+                                    .child(t!("detects.empty_settings_hint").to_string()),
+                            )
+                        }),
                 )
                 .into_any_element()
         } else {
