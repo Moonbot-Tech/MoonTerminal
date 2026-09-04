@@ -207,7 +207,7 @@ impl AssetsView {
                 div()
                     .text_size(design::t_caption(cx))
                     .text_color(rgb(p.text_muted))
-                    .child(format!("≥ {}$", self.min_value_usd.round() as i64)),
+                    .child(format!("≥ {}$", fmt::usd(self.min_value_usd))),
             )
             // The field selector sits at the RIGHT edge, apart from the filters — the same split
             // Orders, Report and the Screener use.
@@ -375,16 +375,14 @@ impl AssetsView {
             ))
     }
 
-    /// Unscaled horizontal padding on each side of a roster row. SHARED by the row that draws it
-    /// and by [`AssetsView::ensure_roster_auto_w`], which sizes the column around it — the two
-    /// numbers must be the same number, not two copies free to drift.
+    /// Design-space horizontal padding on each side of a roster row. SHARED by the row that draws
+    /// it and by [`AssetsView::ensure_roster_auto_w`], which applies the same UI scaling while
+    /// sizing the column around it — the two numbers must not drift apart.
     const ROSTER_ROW_PAD: f32 = 8.0;
 
-    /// Rendered gap between a roster row's name cell and its figure — the `gap_2` that
-    /// [`AssetsView::wallet_core_row`] applies, restated so the width arithmetic can account for
-    /// it. Chrome, not text: `gap_2` is a fixed rem step and is deliberately NOT run through the
-    /// Font slider.
-    const ROSTER_ROW_GAP_PX: f32 = 8.0;
+    /// Design-space gap between a roster row's name cell and its figure, shared by
+    /// [`AssetsView::wallet_core_row`] and the width arithmetic after the same UI scaling.
+    const ROSTER_ROW_GAP: f32 = 16.0;
 
     /// Build one selectable core row of the wallet section's left list.
     ///
@@ -417,7 +415,7 @@ impl AssetsView {
             .px(design::ui_px(cx, Self::ROSTER_ROW_PAD))
             .items_center()
             .justify_between()
-            .gap_2()
+            .gap(design::ui_px(cx, Self::ROSTER_ROW_GAP))
             .cursor_pointer()
             .text_color(rgb(p.text))
             // The name yields FIRST and the figure never does: the roster is sized to show both
@@ -596,11 +594,11 @@ impl AssetsView {
             return;
         }
         // Everything on the row that is neither the name nor the figure: its horizontal padding,
-        // twice, and the `gap_2` between the two cells. The resize strip is deliberately NOT
+        // twice, and the scaled shared gap between the two cells. The resize strip is deliberately NOT
         // added — it is absolutely positioned over the column's right edge, so it consumes no
         // flex space and already sits inside that right padding.
-        let chrome =
-            2.0 * f32::from(design::ui_px(cx, Self::ROSTER_ROW_PAD)) + Self::ROSTER_ROW_GAP_PX;
+        let chrome = 2.0 * f32::from(design::ui_px(cx, Self::ROSTER_ROW_PAD))
+            + f32::from(design::ui_px(cx, Self::ROSTER_ROW_GAP));
         let widest_row = self
             .cached_aggs
             .iter()
@@ -1031,7 +1029,7 @@ fn assets_row(
             // an astronomically valuable row, and the same non-finite check keeps that row out of Σ
             // with the footer saying so.
             AssetCol::Value => MoonDataCell::text(super::balances::money_or_dash(e.display_value)),
-            AssetCol::Pnl => pnl_cell(e),
+            AssetCol::Pnl => pnl_cell(e, p),
             AssetCol::Actions => actions_cell(e, view, p, is_position),
         })
         .collect();
@@ -1050,8 +1048,9 @@ fn assets_row(
 ///
 /// [`super::columns::pnl_display`] decides whether there is anything to show at all: a spot balance
 /// has no unrealized PnL, and neither a missing entry price nor an unknown quote rate may print as
-/// a confident `0.00`. Those all get a muted dash, and the PnL sort orders them the same way.
-fn pnl_cell(e: &AssetEntry) -> MoonDataCell {
+/// a confident `0.00`. Those all get a muted dash, but only the spot-balance dash claims that
+/// specific cause; the PnL sort orders every unavailable value the same way.
+fn pnl_cell(e: &AssetEntry, p: MoonPalette) -> MoonDataCell {
     // Fixed decimals without `$`, through the same helper as the Orders PnL column so the two
     // columns cannot drift — this is a currency amount, not an adaptive price. The helper also
     // owns the `-0.0` case this cell used to special-case by hand: it classifies the sign from the
@@ -1062,6 +1061,23 @@ fn pnl_cell(e: &AssetEntry) -> MoonDataCell {
         Some((text, sign)) => MoonDataCell::text(text)
             .tone(design::delta_tone(sign))
             .weight(500.0),
+        None if e.row.pos_size == 0.0 && e.row.listed == 1 => MoonDataCell::element(
+            div()
+                .id(SharedString::from(format!(
+                    "asset-pnl-tip-{}-{}-{}",
+                    e.core, e.row.market, e.row.coin
+                )))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_end()
+                .text_color(rgb(MoonTone::Muted.color(p)))
+                .child("–")
+                .tooltip(crate::panels::common::text_tooltip(
+                    t!("assets.pnl.spot_unavailable").to_string(),
+                )),
+        ),
         None => MoonDataCell::text("–").tone(MoonTone::Muted),
     }
 }
@@ -1184,11 +1200,12 @@ fn coin_cell(
 /// Render Market Sell and the placeholder Order action for a sellable asset row.
 ///
 /// The cell is populated for an open position or positive spot balance only when its resolved
-/// market exists on the core. The Order button remains a stub for a future order-settings window.
+/// market exists on the core. Every unavailable case remains a muted dash with a cause-specific
+/// tooltip, while the Order button remains a stub for a future order-settings window.
 fn actions_cell(
     e: &AssetEntry,
     view: &Entity<AssetsView>,
-    _p: MoonPalette,
+    p: MoonPalette,
     is_position: bool,
 ) -> MoonDataCell {
     // An open position or positive spot balance is sellable only when its `<coin><quote>` market
@@ -1200,7 +1217,36 @@ fn actions_cell(
     };
     let sellable = is_position || qty > 0.0;
     if !sellable || e.row.market.is_empty() || !e.market_exists {
-        return MoonDataCell::text(String::new());
+        let tooltip = if !sellable {
+            t!("assets.actions.unavailable_qty", coin = e.row.coin.as_str()).to_string()
+        } else if e.row.market.is_empty() {
+            t!(
+                "assets.actions.unavailable_market_identity",
+                coin = e.row.coin.as_str()
+            )
+            .to_string()
+        } else {
+            t!(
+                "assets.actions.unavailable_market_catalog",
+                market = e.row.market.trim(),
+            )
+            .to_string()
+        };
+        return MoonDataCell::element(
+            div()
+                .id(SharedString::from(format!(
+                    "asset-actions-tip-{}-{}-{}",
+                    e.core, e.row.market, e.row.coin
+                )))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_end()
+                .text_color(rgb(MoonTone::Muted.color(p)))
+                .child("–")
+                .tooltip(crate::panels::common::text_tooltip(tooltip)),
+        );
     }
     let core = e.core;
     let market = e.row.market.clone();

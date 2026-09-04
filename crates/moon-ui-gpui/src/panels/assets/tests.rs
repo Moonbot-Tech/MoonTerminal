@@ -1,8 +1,11 @@
-//! Regression tests for retained Assets state across temporary Auto workspace scopes.
+//! Regression tests for Assets state and presentation contracts.
 
 use std::collections::{HashMap, HashSet};
 
-use super::{reconcile_retained_assets_state, resolve_workspace_wallet_core, roster_width};
+use super::{
+    reconcile_retained_assets_state, resolve_workspace_wallet_core, roster_width,
+    wallets::wallet_count_label,
+};
 
 /// `cache.rs:AssetsView::rebuild_cache` must validate retained filters and wallet detail against
 /// every live group core, not the effective one-core Auto query. Replacing the full validity set
@@ -231,4 +234,185 @@ fn roster_drag_converts_rendered_pointer_delta_to_base_width() {
         (actual - (300.0 + 118.0 * 13.0 / 11.0)).abs() > 0.01,
         "multiplying by scale would make the roster outpace the pointer"
     );
+}
+
+/// Extract one Rust function so source assertions cover its complete implementation branch.
+///
+/// Args:
+///     source: Rust source containing the uniquely named function.
+///     marker: Prefix identifying the function signature.
+///
+/// Returns:
+///     The signature and balanced-brace body of the named function.
+fn function_source<'a>(source: &'a str, marker: &str) -> &'a str {
+    let start = source
+        .find(marker)
+        .expect("expected function marker in table source");
+    let body_start = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .expect("expected function body in table source");
+    let mut depth = 0usize;
+
+    for (offset, character) in source[body_start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[start..=body_start + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    panic!("expected balanced function body in table source");
+}
+
+/// Remove line and nested block comments before source-contract assertions inspect a function.
+///
+/// Args:
+///     source: Rust source text whose double-quoted literals must remain available to the
+///         assertions.
+///
+/// Returns:
+///     The source without comments, while retaining line breaks and double-quoted literals.
+fn strip_rust_comments(source: &str) -> String {
+    let mut stripped = String::with_capacity(source.len());
+    let mut characters = source.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if character == '"' {
+            stripped.push(character);
+            let mut escaped = false;
+            for string_character in characters.by_ref() {
+                stripped.push(string_character);
+                if escaped {
+                    escaped = false;
+                } else if string_character == '\\' {
+                    escaped = true;
+                } else if string_character == '"' {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if character == '/' && characters.next_if_eq(&'/').is_some() {
+            for comment_character in characters.by_ref() {
+                if comment_character == '\n' {
+                    stripped.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if character == '/' && characters.next_if_eq(&'*').is_some() {
+            let mut depth = 1usize;
+            while let Some(comment_character) = characters.next() {
+                if comment_character == '/' && characters.next_if_eq(&'*').is_some() {
+                    depth += 1;
+                } else if comment_character == '*' && characters.next_if_eq(&'/').is_some() {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                } else if comment_character == '\n' {
+                    stripped.push('\n');
+                }
+            }
+            continue;
+        }
+
+        stripped.push(character);
+    }
+
+    stripped
+}
+
+/// Source assertions must not let a comment impersonate an unavailable-asset branch contract.
+///
+/// Mutation: skip comment stripping before compaction. User consequence: a stale comment could
+/// keep a source contract green after the explanatory translation call was removed from Assets.
+#[test]
+fn source_contract_ignores_commented_translation_tokens() {
+    let source = r#"
+        fn actions_cell() {
+            // t!("assets.actions.unavailable_qty")
+            /* t!("assets.pnl.spot_unavailable") */
+            MoonDataCell::empty()
+        }
+    "#;
+    let compact: String = strip_rust_comments(source)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+
+    assert!(!compact.contains("assets.actions.unavailable_qty"));
+    assert!(!compact.contains("assets.pnl.spot_unavailable"));
+    assert!(compact.contains("MoonDataCell::empty()"));
+}
+
+/// `wallets.rs:wallet_count_label` must expose dust-filtered rows as `shown / total`.
+///
+/// Mutation: return only `total_count.to_string()`. User consequence: an empty filtered Spot
+/// wallet reads `Spot (833)` again instead of exposing that all 833 rows were filtered away.
+#[test]
+fn wallet_count_label_distinguishes_filtered_from_complete_wallets() {
+    assert_eq!(wallet_count_label(0, 833), "0 / 833");
+    assert_eq!(wallet_count_label(11, 833), "11 / 833");
+    assert_eq!(wallet_count_label(11, 11), "11");
+    assert_eq!(wallet_count_label(0, 0), "0");
+}
+
+/// `table.rs:actions_cell` and `table.rs:pnl_cell` must retain their explanatory dash branches.
+///
+/// Mutation A: reassign an unavailable-asset `t!` call to a different `actions_cell` branch.
+/// Mutation B: remove `&& e.row.listed == 1` from `pnl_cell`'s Spot-only match guard. User
+/// consequence: an intentionally unsellable holding can name the wrong cause, or a non-Spot PnL
+/// dash can misleadingly claim the Spot-only explanation.
+#[test]
+fn unsellable_assets_explain_the_action_and_spot_pnl_dashes() {
+    let table_source = include_str!("table.rs");
+    let table_without_comments = strip_rust_comments(table_source);
+    let actions: String = function_source(&table_without_comments, "fn actions_cell(")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    let pnl: String = function_source(&table_without_comments, "fn pnl_cell(")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+
+    assert!(actions.contains("if!sellable||e.row.market.is_empty()||!e.market_exists{"));
+    assert!(actions.contains("MoonDataCell::element("));
+    assert!(actions.contains("justify_end()"));
+    assert!(actions.contains("crate::panels::common::text_tooltip("));
+    assert!(actions.contains(
+        "if!sellable{t!(\"assets.actions.unavailable_qty\",coin=e.row.coin.as_str()).to_string()}elseif"
+    ));
+    assert!(actions.contains(
+        "e.row.market.is_empty(){t!(\"assets.actions.unavailable_market_identity\",coin=e.row.coin.as_str()).to_string()}else"
+    ));
+    assert!(actions.contains(
+        "{t!(\"assets.actions.unavailable_market_catalog\",market=e.row.market.trim(),).to_string()}"
+    ));
+
+    let spot_guard = "Noneife.row.pos_size==0.0&&e.row.listed==1=>";
+    let spot_start = pnl
+        .find(spot_guard)
+        .expect("expected the Spot-only PnL unavailable guard");
+    let fallback = "None=>MoonDataCell::text(\"\u{2013}\").tone(MoonTone::Muted)";
+    let spot_end = pnl[spot_start..]
+        .find(fallback)
+        .map(|offset| spot_start + offset)
+        .expect("expected the undecorated PnL fallback after the Spot-only arm");
+    let spot_arm = &pnl[spot_start..spot_end];
+
+    assert!(spot_arm.contains("MoonDataCell::element("));
+    assert!(spot_arm.contains("crate::panels::common::text_tooltip("));
+    assert!(spot_arm.contains("t!(\"assets.pnl.spot_unavailable\").to_string()"));
+    assert!(pnl.contains("None=>MoonDataCell::text(\"–\").tone(MoonTone::Muted)"));
 }
