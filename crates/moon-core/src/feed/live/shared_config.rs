@@ -23,8 +23,8 @@ use crate::feed::{
     AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
-    InterfaceSettings, LeverageSettings, ManualSettings, SignalsSettings, TelegramSettings,
-    day_fraction_to_minutes, minutes_to_day_fraction,
+    InterfaceSettings, LeverageSettings, ManualSettings, SignalsSettings, SpecialSettings,
+    TelegramSettings, day_fraction_to_minutes, minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -66,6 +66,8 @@ pub struct FieldMask {
     /// outside `trading`/`visual`; the send carries every section either way, so this narrows only
     /// when those six fields are overwritten, exactly as the four above do for theirs.
     signals: bool,
+    /// Moonbot's "Специальные" page: the engine switches, logging and the screenshot block.
+    special: bool,
     /// Moonbot's Telegram page: the signal channels, their rules, and the cloud blacklist flag.
     telegram: bool,
     /// `trading.ignore_strat_sell_price`, the one manual-block field the terminal still WRITES.
@@ -86,6 +88,7 @@ impl FieldMask {
         interface: false,
         leverage: false,
         signals: false,
+        special: false,
         telegram: false,
         ignore_strat_sell_price: false,
     };
@@ -109,6 +112,8 @@ impl FieldMask {
         interface: false,
         leverage: true,
         signals: true,
+        // NOT the Special page: the compact popup does not draw it.
+        special: false,
         // NOT the Telegram page: the compact popup does not draw it.
         telegram: false,
         ignore_strat_sell_price: false,
@@ -147,6 +152,12 @@ impl FieldMask {
         self
     }
 
+    /// Name Moonbot's "Специальные" page — the engine switches, logging and screenshots.
+    pub const fn with_special(mut self) -> Self {
+        self.special = true;
+        self
+    }
+
     /// Name Moonbot's Telegram page — its signal channels and the rules over them.
     pub const fn with_telegram(mut self) -> Self {
         self.telegram = true;
@@ -180,6 +191,7 @@ impl FieldMask {
             interface: self.interface || other.interface,
             leverage: self.leverage || other.leverage,
             signals: self.signals || other.signals,
+            special: self.special || other.special,
             telegram: self.telegram || other.telegram,
             ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
         }
@@ -570,6 +582,9 @@ fn rejection_within_mask(
     if touched.signals && expected.signals != actual.signals {
         areas.push(CoreConfigArea::Signals);
     }
+    if touched.special && expected.special != actual.special {
+        areas.push(CoreConfigArea::Special);
+    }
     if touched.telegram && expected.telegram != actual.telegram {
         areas.push(CoreConfigArea::Telegram);
     }
@@ -594,7 +609,38 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let v = &cfg.visual;
     let u = &cfg.ui;
     let sc = &cfg.signals.signal_config;
+    let shots = &cfg.trading.send_shots_config;
     CoreConfig {
+        special: SpecialSettings {
+            log_level: t.log_level,
+            auto_delete_logs: t.auto_delete_logs,
+            chart_clean_up_time: t.chart_clean_up_time,
+            max_orders: t.max_orders,
+            unlimited_orders: t.unlimited_orders,
+            random_price: t.random_price,
+            correct_order_price: t.correct_order_price,
+            use_book_ticker: t.use_book_ticker,
+            m_avg_use_vol_weight: t.m_avg_use_vol_weight,
+            auto_buy_bnb: t.auto_buy_bnb,
+            auto_buy_bnb_level: t.auto_buy_bnb_level,
+            auto_buy_bnb_volume: t.auto_buy_bnb_volume,
+            auto_reduce_order: t.auto_reduce_order,
+            auto_close_zero_pos: t.auto_close_zero_pos,
+            auto_lower_lev: t.auto_lower_lev,
+            use_websocket_api: t.use_websocket_api,
+            iceberg_step: t.iceberg_step,
+            sell_x2_level: t.sell_x2_level,
+            no_trades_markets_text: t.no_trades_markets_text.clone(),
+            multi_commands: t.multi_commands,
+            send_shots: shots.may_send,
+            profit_abs: shots.profit_abs,
+            profit_pers: shots.profit_pers,
+            profit_session: shots.profit_session,
+            send_negative: shots.send_negative,
+            send_public: shots.send_public,
+            time_scale: shots.time_scale,
+            price_scale: shots.price_scale,
+        },
         telegram: TelegramSettings {
             pump_channel: sig.pump_channel.clone(),
             pump_channels: sig.pump_channels.clone(),
@@ -830,6 +876,9 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
     if touched.signals {
         apply_signals(cfg, &wanted.signals);
     }
+    if touched.special {
+        apply_special(cfg, &wanted.special);
+    }
     if touched.telegram {
         apply_telegram(cfg, &wanted.telegram);
     }
@@ -868,6 +917,43 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.use_coins_black_list = g.blacklist_on;
     t.coins_black_list_text = g.blacklist_text.clone();
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
+}
+
+/// Apply Moonbot's "Специальные" page to `trading` and its `send_shots_config` sub-record.
+///
+/// Twenty-eight fields: everything else in that section — including its `unknown_tail`, the exits
+/// [`apply_general`] owns and the leverage block [`apply_leverage`] owns — travels back untouched.
+fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
+    let t = &mut cfg.trading;
+    t.log_level = s.log_level;
+    t.auto_delete_logs = s.auto_delete_logs;
+    t.chart_clean_up_time = s.chart_clean_up_time;
+    t.max_orders = s.max_orders;
+    t.unlimited_orders = s.unlimited_orders;
+    t.random_price = s.random_price;
+    t.correct_order_price = s.correct_order_price;
+    t.use_book_ticker = s.use_book_ticker;
+    t.m_avg_use_vol_weight = s.m_avg_use_vol_weight;
+    t.auto_buy_bnb = s.auto_buy_bnb;
+    t.auto_buy_bnb_level = s.auto_buy_bnb_level;
+    t.auto_buy_bnb_volume = s.auto_buy_bnb_volume;
+    t.auto_reduce_order = s.auto_reduce_order;
+    t.auto_close_zero_pos = s.auto_close_zero_pos;
+    t.auto_lower_lev = s.auto_lower_lev;
+    t.use_websocket_api = s.use_websocket_api;
+    t.iceberg_step = s.iceberg_step;
+    t.sell_x2_level = s.sell_x2_level;
+    t.no_trades_markets_text = s.no_trades_markets_text.clone();
+    t.multi_commands = s.multi_commands;
+    let shots = &mut t.send_shots_config;
+    shots.may_send = s.send_shots;
+    shots.profit_abs = s.profit_abs;
+    shots.profit_pers = s.profit_pers;
+    shots.profit_session = s.profit_session;
+    shots.send_negative = s.send_negative;
+    shots.send_public = s.send_public;
+    shots.time_scale = s.time_scale;
+    shots.price_scale = s.price_scale;
 }
 
 /// Apply Moonbot's Telegram page to `signals` and the one `trading` flag beside it.

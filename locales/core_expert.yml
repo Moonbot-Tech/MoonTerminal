@@ -913,7 +913,7 @@ core_expert.hk_touch_5:
   en: "Circular gesture in the book — panic sell"
   es: "Gesto circular en el libro — venta de pánico"
 
-# --- "Специальные" page: four collapsible sections, none of them projected. ---
+# --- "Специальные" page: four collapsible sections, live but for Remote's identity and the watchdog. ---
 core_expert.sp_engine:
   ru: "Настройки движка"
   en: "Engine settings"

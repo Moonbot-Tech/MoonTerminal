@@ -2,7 +2,7 @@ use moonproto::shared_config::SharedConfig;
 
 use super::{
     FieldMask, MAX_ATTEMPTS, SequenceAction, SharedConfigSequence, apply_core_config,
-    core_config_from_proto,
+    core_config_from_proto, edit_satisfied,
 };
 use crate::feed::{AutoStartSettings, CoreConfig, CoreConfigEditEvent, CoreConfigEditResult};
 
@@ -559,4 +559,117 @@ fn an_unnamed_telegram_is_not_written() {
 
     assert_eq!(written.signals.pump_channel, "primary");
     assert_eq!(written.signals.pump_channels.len(), 2);
+}
+
+/// A snapshot whose Special fields all differ from the wire's own defaults, the discipline the other
+/// page bases follow.
+fn special_base() -> SharedConfig {
+    let mut cfg = SharedConfig::default();
+    let t = &mut cfg.trading;
+    t.log_level = 4;
+    t.auto_delete_logs = 21;
+    t.chart_clean_up_time = 37;
+    t.max_orders = 11;
+    t.unlimited_orders = !t.unlimited_orders;
+    t.random_price = !t.random_price;
+    t.correct_order_price = !t.correct_order_price;
+    t.use_book_ticker = !t.use_book_ticker;
+    t.m_avg_use_vol_weight = !t.m_avg_use_vol_weight;
+    t.auto_buy_bnb = !t.auto_buy_bnb;
+    t.auto_buy_bnb_level = 0.125;
+    t.auto_buy_bnb_volume = 0.75;
+    t.auto_reduce_order = !t.auto_reduce_order;
+    t.auto_close_zero_pos = !t.auto_close_zero_pos;
+    t.auto_lower_lev = !t.auto_lower_lev;
+    t.use_websocket_api = !t.use_websocket_api;
+    t.iceberg_step = 0.0625;
+    t.sell_x2_level = 73;
+    t.no_trades_markets_text = "BTC\nETH".to_string();
+    t.multi_commands = !t.multi_commands;
+    let shots = &mut t.send_shots_config;
+    shots.may_send = !shots.may_send;
+    shots.profit_abs = 12;
+    shots.profit_pers = 13;
+    shots.profit_session = 14;
+    shots.send_negative = !shots.send_negative;
+    shots.send_public = !shots.send_public;
+    shots.time_scale = 15;
+    shots.price_scale = 16;
+    cfg
+}
+
+/// Every Special field must survive read -> write unchanged: the write rebuilds the whole snapshot,
+/// so a field the projection forgets is a field the next OK reverts.
+#[test]
+fn the_special_page_round_trips_through_the_projection() {
+    let base = special_base();
+    let projected = core_config_from_proto(&base);
+    assert_ne!(
+        projected.special,
+        core_config_from_proto(&SharedConfig::default()).special,
+        "the base must differ from the wire default, or this test proves nothing"
+    );
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &projected, FieldMask::EMPTY.with_special());
+
+    assert_eq!(core_config_from_proto(&written).special, projected.special);
+}
+
+/// A core holding a non-finite amount must still compare equal to itself, or `edit_satisfied` is
+/// false for it forever and every OK on that core burns its attempts. The hand-written `PartialEq`
+/// on `SpecialSettings` exists for exactly this.
+#[test]
+fn a_non_finite_special_amount_still_equals_itself() {
+    let mut base = special_base();
+    base.trading.auto_buy_bnb_level = f64::NAN;
+    let projected = core_config_from_proto(&base);
+
+    assert_eq!(projected.special, projected.special.clone());
+    assert!(edit_satisfied(&base, &projected));
+}
+
+/// The Special page shares `trading` with General, AutoStart and the Interface page but not a mask
+/// bit: its write must leave their fields exactly as the core sent them.
+#[test]
+fn a_special_edit_leaves_the_other_trading_pages_alone() {
+    let mut base = special_base();
+    base.trading.g_take_profit = 4.25;
+    base.trading.buy_iceberg = true;
+    base.trading.auto_start.auto_stop_loss = 99.0;
+    base.trading.buy_on_enter = true;
+    base.trading.unknown_tail = vec![3, 3];
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.special.max_orders = 42;
+    // What another surface would have staged, and what this write must NOT carry.
+    wanted.general.take_profit_pct = 0.0;
+    wanted.general.buy_iceberg = false;
+    wanted.interface.buy_on_enter = false;
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(wanted, FieldMask::EMPTY.with_special());
+    let sent = next_config(&mut sequence, &base);
+
+    assert_eq!(sent.trading.max_orders, 42);
+    assert_eq!(sent.trading.g_take_profit, 4.25);
+    assert!(sent.trading.buy_iceberg);
+    assert_eq!(sent.trading.auto_start.auto_stop_loss, 99.0);
+    assert!(sent.trading.buy_on_enter);
+    assert_eq!(sent.trading.unknown_tail, vec![3, 3]);
+}
+
+/// The mask decides, not the projection: the compact popup's mask must not carry this page.
+#[test]
+fn an_unnamed_special_is_not_written() {
+    let base = special_base();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.special.max_orders = 1;
+    wanted.special.log_level = 0;
+
+    let mut written = special_base();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+
+    assert_eq!(written.trading.max_orders, 11);
+    assert_eq!(written.trading.log_level, 4);
 }

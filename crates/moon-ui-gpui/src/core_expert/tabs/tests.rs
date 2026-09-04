@@ -78,7 +78,14 @@ fn projected_pages_are_only_the_ones_the_terminal_reads_and_writes() {
         .collect();
     assert_eq!(
         projected,
-        vec!["general", "telegram", "autobuy", "interface", "autostart"]
+        vec![
+            "general",
+            "telegram",
+            "autobuy",
+            "special",
+            "interface",
+            "autostart"
+        ]
     );
 }
 

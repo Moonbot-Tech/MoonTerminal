@@ -301,6 +301,10 @@ toolbar.core_config_area_general:
   ru: "Основные"
   en: "General"
   es: "General"
+toolbar.core_config_area_special:
+  ru: "Специальные"
+  en: "Special"
+  es: "Especiales"
 toolbar.core_config_area_telegram:
   ru: "Телеграм"
   en: "Telegram"

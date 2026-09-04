@@ -9,7 +9,7 @@ pub use core_settings::{
     CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult,
     CoreConfigEditRow, CoreConfigRejection, CoreConfigState, CoreHotkeyAction, CoreHotkeyLayout,
     CoreStratButtons, GeneralSettings, InterfaceSettings, LeverageSettings, ManualSettings,
-    ProfitState, SignalsSettings, TelegramSettings, day_fraction_to_minutes,
+    ProfitState, SignalsSettings, SpecialSettings, TelegramSettings, day_fraction_to_minutes,
     minutes_to_day_fraction,
 };
 pub use core_status::{

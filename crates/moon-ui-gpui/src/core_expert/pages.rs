@@ -159,6 +159,13 @@ pub(super) fn page(
         )),
         ExpertTab::Interface => Some(interface::body(view, store, draft, p, cx)),
         ExpertTab::Hotkeys => Some(hotkeys::body(view, ctx.hotkeys_sub, draft, p, cx)),
-        ExpertTab::Special => Some(special::body(view, store, ctx.special_section, p, cx)),
+        ExpertTab::Special => Some(special::body(
+            view,
+            store,
+            draft,
+            ctx.special_section,
+            p,
+            cx,
+        )),
     }
 }

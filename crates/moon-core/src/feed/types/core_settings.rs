@@ -40,6 +40,8 @@ pub struct CoreConfig {
     pub auto_buy: AutoBuySettings,
     /// Moonbot's Telegram page: the signal channels and the rules over them.
     pub telegram: TelegramSettings,
+    /// Moonbot's "Специальные" page: the engine switches, logging and screenshot rules.
+    pub special: SpecialSettings,
     /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
     /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
     pub manual: ManualSettings,
@@ -249,6 +251,127 @@ pub struct GeneralSettings {
     /// The terminal ALSO keeps a client-side filter of the same name (moonproto applies it to the
     /// retained market analytics without asking the core), so committing this field drives both.
     pub exclude_blacklisted_from_deltas: bool,
+}
+
+/// Moonbot's "Специальные" page: the engine's own switches, its logging and its screenshot rules.
+///
+/// An area is a PAGE — see [`InterfaceSettings`]. This one is `trading` and its `send_shots_config`
+/// sub-record.
+///
+/// Moonbot's page has about three times this many controls, and the expert window draws all of them
+/// disabled where they are not here. The reasons are stated on the page itself; the ones that
+/// concern this block are: the Remote
+/// block and the hang watchdog carry a bot token, a UDP password and a control VDS address, which
+/// safe-share excludes outright; a few rows have no wire field at all; and the iceberg pair belongs
+/// to [`GeneralSettings`], which the compact popup edits — one wire field belongs to one area.
+#[derive(Debug, Clone)]
+pub struct SpecialSettings {
+    /// `trading.log_level` and `trading.auto_delete_logs`: how much is written, and for how long.
+    pub log_level: i32,
+    pub auto_delete_logs: i32,
+    /// `trading.chart_clean_up_time`: minutes of inactivity after which a chart is dropped.
+    pub chart_clean_up_time: i32,
+    /// `trading.max_orders` and `trading.unlimited_orders`: the cap on open buys, and its removal.
+    pub max_orders: i32,
+    pub unlimited_orders: bool,
+    /// `trading.random_price`: add a small random offset to an order's price.
+    pub random_price: bool,
+    /// `trading.correct_order_price`: snap an order price to the venue's tick.
+    pub correct_order_price: bool,
+    /// `trading.use_book_ticker`: take best bid/ask from the stream rather than by polling.
+    pub use_book_ticker: bool,
+    /// `trading.m_avg_use_vol_weight`: weight the moving average by volume.
+    pub m_avg_use_vol_weight: bool,
+    /// `trading.auto_buy_bnb`, `trading.auto_buy_bnb_level` and `trading.auto_buy_bnb_volume`: buy
+    /// BNB for commissions when the balance falls below the level, and how much.
+    pub auto_buy_bnb: bool,
+    pub auto_buy_bnb_level: f64,
+    pub auto_buy_bnb_volume: f64,
+    /// `trading.auto_reduce_order`: shrink an order that exceeds the free balance.
+    pub auto_reduce_order: bool,
+    /// `trading.auto_close_zero_pos`: close a zero-quantity ghost position.
+    pub auto_close_zero_pos: bool,
+    /// `trading.auto_lower_lev`: drop the leverage when the venue refuses the level asked for.
+    ///
+    /// Moonbot calls the row "Auto Leverage"; this is the only unclaimed leverage flag in the
+    /// section, the rest of them being the `auto_manage_lev` block [`LeverageSettings`] owns.
+    pub auto_lower_lev: bool,
+    /// `trading.use_websocket_api`: place orders over the socket rather than REST.
+    pub use_websocket_api: bool,
+    /// `trading.iceberg_step`: the slice an iceberg order is cut into, as a FRACTION of the order —
+    /// the wire's own default is 0.1.
+    ///
+    /// Moonbot draws it as a price step ("Ставить Iceberg если шаг цены < …"), which is the third
+    /// caption on this page the wire words differently. The fraction is what the range of the track
+    /// is built on, so the two readings are not interchangeable here.
+    pub iceberg_step: f64,
+    /// `trading.sell_x2_level`: the volume percentile above which the sell quantity doubles.
+    pub sell_x2_level: i32,
+    /// `trading.no_trades_markets_text`: tickers that generate no signals, one per line.
+    pub no_trades_markets_text: String,
+    /// `trading.multi_commands`: accept batched commands.
+    ///
+    /// Moonbot's caption is "Мультистроковые команды"; the wire's own doc calls it batch order
+    /// operations from a thin client. The names match exactly and it is the only such flag in the
+    /// section, so the binding stands on that — but the two descriptions are not one sentence.
+    pub multi_commands: bool,
+    /// `trading.send_shots_config.may_send` and the thresholds under it: when a trade's chart is
+    /// posted to Telegram, and how that chart is scaled.
+    ///
+    /// Two of these carry a caption the wire words differently, and both bindings rest on there
+    /// being no other candidate in the sub-record: `profit_session` is drawn as "или профит за час"
+    /// while the wire calls it a session profit — the two coincide only when the session resets
+    /// hourly — and `time_scale` is drawn as a per cent while the wire calls it seconds of history.
+    /// The number travels either way; what may differ is the unit Moonbot's own dialog prints.
+    pub send_shots: bool,
+    pub profit_abs: i32,
+    pub profit_pers: i32,
+    pub profit_session: i32,
+    pub send_negative: bool,
+    pub send_public: bool,
+    pub time_scale: i32,
+    pub price_scale: i32,
+}
+
+/// Hand-written for the reason [`ManualSettings`]'s is: three of these come off the wire as `f64`,
+/// and a core holding a non-finite one must still compare equal to itself, or
+/// `feed::live::shared_config::edit_satisfied` is false for it forever.
+impl PartialEq for SpecialSettings {
+    fn eq(&self, other: &Self) -> bool {
+        self.auto_buy_bnb_level
+            .total_cmp(&other.auto_buy_bnb_level)
+            .is_eq()
+            && self
+                .auto_buy_bnb_volume
+                .total_cmp(&other.auto_buy_bnb_volume)
+                .is_eq()
+            && self.iceberg_step.total_cmp(&other.iceberg_step).is_eq()
+            && self.no_trades_markets_text == other.no_trades_markets_text
+            && self.unlimited_orders == other.unlimited_orders
+            && self.random_price == other.random_price
+            && self.correct_order_price == other.correct_order_price
+            && self.use_book_ticker == other.use_book_ticker
+            && self.m_avg_use_vol_weight == other.m_avg_use_vol_weight
+            && self.auto_buy_bnb == other.auto_buy_bnb
+            && self.auto_reduce_order == other.auto_reduce_order
+            && self.auto_close_zero_pos == other.auto_close_zero_pos
+            && self.auto_lower_lev == other.auto_lower_lev
+            && self.use_websocket_api == other.use_websocket_api
+            && self.multi_commands == other.multi_commands
+            && self.send_shots == other.send_shots
+            && self.send_negative == other.send_negative
+            && self.send_public == other.send_public
+            && self.log_level == other.log_level
+            && self.auto_delete_logs == other.auto_delete_logs
+            && self.chart_clean_up_time == other.chart_clean_up_time
+            && self.max_orders == other.max_orders
+            && self.sell_x2_level == other.sell_x2_level
+            && self.profit_abs == other.profit_abs
+            && self.profit_pers == other.profit_pers
+            && self.profit_session == other.profit_session
+            && self.time_scale == other.time_scale
+            && self.price_scale == other.price_scale
+    }
 }
 
 /// Moonbot's "Телеграм" page: which channels a signal may come from, and the rules over them.
@@ -679,6 +802,7 @@ impl CoreConfigState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreConfigArea {
     AutoBuy,
+    Special,
     Telegram,
     AutoStart,
     BtcBlink,
