@@ -58,21 +58,21 @@ lines.global:
   en: "Global"
   es: "Global"
 lines.active_alpha:
-  ru: "прозрачность активных"
-  en: "active alpha"
-  es: "opacidad activa"
+  ru: "Прозрачность активных"
+  en: "Active alpha"
+  es: "Opacidad activa"
 lines.closed_visibility:
-  ru: "видимость отменённых/закрытых"
-  en: "cancelled/closed visibility"
-  es: "visibilidad cancel./cerradas"
+  ru: "Видимость отменённых/закрытых"
+  en: "Cancelled/closed visibility"
+  es: "Visibilidad cancel./cerradas"
 lines.pending_dashed:
-  ru: "отлож. ордер: пунктир входа"
-  en: "pending order: dashed entry"
-  es: "orden pendiente: entrada discontinua"
+  ru: "Отлож. ордер: пунктир входа"
+  en: "Pending order: dashed entry"
+  es: "Orden pendiente: entrada discontinua"
 lines.max_closed:
-  ru: "макс. закрытых ордеров на графике"
-  en: "max closed orders drawn"
-  es: "máx. órdenes cerradas dibujadas"
+  ru: "Макс. закрытых ордеров на графике"
+  en: "Max closed orders drawn"
+  es: "Máx. órdenes cerradas dibujadas"
 lines.hint:
   ru: "Линии Stop/Trailing/Liq появляются только после исполнения входа."
   en: "Stop/Trailing/Liq lines appear only after the entry is filled."

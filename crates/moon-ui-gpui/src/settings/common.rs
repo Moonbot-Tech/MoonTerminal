@@ -3,7 +3,7 @@
 //!
 //! Interface, Lines, and Connections reuse these helpers through re-exports in `settings/mod.rs`.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::RangeInclusive};
 
 use gpui::*;
 use moon_ui::{
@@ -57,14 +57,34 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
     ]
 }
 
-/// Build an egui-style labeled slider row with the label above the slider and current value.
+/// Build a labeled slider row with a scale below the track and a fixed-width current value.
 ///
-/// The full-width label avoids clipping at large font sizes. Normalize IEEE `-0.0`, which slider
-/// quantization over a negative subrange can otherwise display as `-0.00`.
-pub(super) fn slider_row(label: &str, st: &Entity<MoonSliderState>, cx: &App) -> impl IntoElement {
+/// The full-width label avoids clipping at large font sizes. The caller supplies the slider range
+/// because pinned MoonUI keeps it private, plus one formatter so both endpoints and the current
+/// value use the field's unit and rounding contract.
+///
+/// Args:
+///     label: Localized caption displayed above the slider.
+///     st: Slider state whose current value is displayed.
+///     range: Inclusive endpoints displayed below the slider track.
+///     format: Field-specific formatter shared by both endpoints and the current value.
+///     cx: Application context used for palette and scaled geometry.
+///
+/// Returns:
+///     The assembled label, slider, scale, and current-value row.
+pub(super) fn slider_row(
+    label: &str,
+    st: &Entity<MoonSliderState>,
+    range: RangeInclusive<f32>,
+    format: impl Fn(f32) -> String,
+    cx: &App,
+) -> impl IntoElement {
     let p = MoonPalette::active(cx);
     let val = st.read(cx).value().end();
     let val = if val == 0.0 { 0.0 } else { val };
+    let min = format(*range.start());
+    let max = format(*range.end());
+    let val = format(val);
     v_flex()
         .w_full()
         .child(
@@ -79,15 +99,27 @@ pub(super) fn slider_row(label: &str, st: &Entity<MoonSliderState>, cx: &App) ->
                 .gap(design::ui_px(cx, 10.0))
                 .items_center()
                 .child(
-                    div()
-                        .w(px(180.0))
-                        .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0))),
+                    v_flex()
+                        .w(design::ui_px(cx, 360.0))
+                        .flex_none()
+                        .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0)))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .text_size(design::t_caption(cx))
+                                .text_color(rgba_from(p.text_muted, 1.0))
+                                .child(min)
+                                .child(max),
+                        ),
                 )
                 .child(
                     div()
-                        .w(design::font_w_px(cx, 58.0))
+                        .w(design::font_w_px(cx, 76.0))
+                        .flex_none()
+                        .text_align(TextAlign::Right)
                         .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(format!("{val:.2}")),
+                        .child(val),
                 ),
         )
 }

@@ -47,9 +47,9 @@ general.main_idle_close:
   en: "Auto-close Main charts when idle"
   es: "Cierre automático de gráficos Main al estar inactivo"
 general.main_idle_close_secs:
-  ru: "Закрывать через, сек"
-  en: "Close after, sec"
-  es: "Cerrar tras, seg"
+  ru: "Закрывать через"
+  en: "Close after"
+  es: "Cerrar tras"
 general.main_idle_close_hint:
   ru: "Неактивность = окно Main не в фокусе ЛИБО в фокусе, но мышь не двигается. Каждый график закрывается через N сек своей неактивности (недавно открытый — последним); фулскрин тоже закроется и режим выключится. Подписки на стакан снимаются сразу."
   en: "Idle = the Main window is not focused OR focused but the mouse is not moving. Each chart closes after N seconds of its own inactivity (the most recently opened closes last); a fullscreen chart closes too and exits fullscreen. Order-book subscriptions are dropped immediately."
@@ -87,9 +87,9 @@ general.log_to_file_hint:
   en: "App and core logs are written to logs/<date>_<source>.log (one file per source per day)."
   es: "Los registros de app y núcleos se escriben en logs/<fecha>_<fuente>.log (un archivo por fuente al día)."
 general.log_retention:
-  ru: "Хранить лог, дней"
-  en: "Keep log, days"
-  es: "Conservar registro, días"
+  ru: "Хранить лог"
+  en: "Keep log"
+  es: "Conservar registro"
 general.log_retention_hint:
   ru: "Файлы старше указанного срока удаляются при запуске и раз в сутки. 0 — хранить всё."
   en: "Files older than this are deleted on startup and once a day. 0 — keep everything."

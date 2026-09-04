@@ -31,9 +31,9 @@ iface.font_delta_hint:
   en: "Font scale of the whole MoonUI interface. Applies instantly."
   es: "Escala de fuente de toda la interfaz MoonUI. Se aplica al instante."
 iface.label_font_delta:
-  ru: "Размер подписей линий и курсора (чарт)"
-  en: "Order-line & cursor label size (chart)"
-  es: "Tamaño de etiquetas de líneas y cursor (gráfico)"
+  ru: "Коррекция размера подписей линий и курсора (px)"
+  en: "Order-line & cursor label size adjustment (px)"
+  es: "Ajuste de tamaño de etiquetas de líneas y cursor (px)"
 iface.sec_chart:
   ru: "График: фон и сетка"
   en: "Chart: background & grid"
