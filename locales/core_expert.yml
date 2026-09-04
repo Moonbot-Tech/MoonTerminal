@@ -318,7 +318,7 @@ core_expert.tlg_log_out:
   en: "Log out"
   es: "Cerrar sesión"
 
-# --- "АвтоПокупка" page. Same wire section, same gap: on the wire, not projected. ---
+# --- "АвтоПокупка" page: projected and live, but for the rows named in its module doc. ---
 core_expert.buy_clipboard_frame:
   ru: "Искать монеты в буфере обмена"
   en: "Look for coins in the clipboard"

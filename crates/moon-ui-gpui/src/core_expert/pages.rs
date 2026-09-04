@@ -126,7 +126,7 @@ pub(super) fn page(
         ExpertTab::General => Some(general::body(view, store, draft, p, cx)),
         ExpertTab::Login => Some(login::body(view, store, p, cx)),
         ExpertTab::Telegram => Some(telegram::body(view, store, p, cx)),
-        ExpertTab::AutoBuy => Some(autobuy::body(view, store, p, cx)),
+        ExpertTab::AutoBuy => Some(autobuy::body(view, store, draft, p, cx)),
         ExpertTab::AutoStart => Some(autostart::body(
             view,
             store,

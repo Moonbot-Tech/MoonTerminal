@@ -131,34 +131,33 @@ impl ExpertTab {
             // Moonbot puts its three alert sounds on the Interface page, so that page owns the
             // `signals` section the compact popup draws them from.
             Self::Interface => mask.with_interface().with_signals(),
-            Self::Login | Self::Telegram | Self::AutoBuy | Self::Special | Self::Hotkeys => mask,
+            Self::AutoBuy => mask.with_auto_buy(),
+            Self::Login | Self::Telegram | Self::Special | Self::Hotkeys => mask,
         }
     }
 
     /// How far this page's values reach — see [`TabSource`].
     ///
     /// `Projected` is what `moon_core::feed::CoreConfig` carries AND this window draws: the General
-    /// page's exits and risk limits, the AutoStart page with its watchdogs and BTC blink, and the
-    /// Interface page's appearance block together with the alert sounds Moonbot puts on it.
-    /// Everything else is on the wire but unprojected, and Login is not on the wire at all.
+    /// page's exits and risk limits, the AutoStart page with its watchdogs and BTC blink, the
+    /// Interface page's appearance block together with the alert sounds Moonbot puts on it, and the
+    /// AutoBuy page's signal sources and message filter. Everything else is on the wire but
+    /// unprojected, and Login is not on the wire at all.
     ///
-    /// A `Projected` page is not necessarily projected in FULL — all three draw rows the snapshot
-    /// does not carry. The rating answers "can this page be filled and sent at all", which is what
-    /// decides whether the window prints a note OVER it; a row that cannot be filled answers for
-    /// itself, by being disabled.
-    ///
-    /// AutoBuy is `Wire`, not `Projected`: of that page the terminal projects only the
-    /// price-approach alert sounds, which Moonbot draws on the Interface page instead — see
-    /// [`super::pages::autobuy`]. Calling the page ready would promise the other nine tenths, none
-    /// of which can be seeded.
+    /// A `Projected` page is not necessarily projected in FULL — every one of the four draws rows
+    /// the snapshot does not carry. The rating answers "can this page be filled and sent at all",
+    /// which is what decides whether the window prints a note OVER it; a row that cannot be filled
+    /// answers for itself, by being disabled.
     pub(crate) fn source(self) -> TabSource {
         match self {
             // Login carries the API key and secret, the local password and the support identity —
             // none of which safe-share transports. Two of its lesser controls (the connection
             // variant, the log switches) DO travel, but not one field the page exists for.
             Self::Login => TabSource::Absent,
-            Self::General | Self::AutoStart | Self::Interface => TabSource::Projected,
-            Self::Telegram | Self::AutoBuy | Self::Special | Self::Hotkeys => TabSource::Wire,
+            Self::General | Self::AutoStart | Self::Interface | Self::AutoBuy => {
+                TabSource::Projected
+            }
+            Self::Telegram | Self::Special | Self::Hotkeys => TabSource::Wire,
         }
     }
 

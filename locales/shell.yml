@@ -301,6 +301,10 @@ toolbar.core_config_area_general:
   ru: "Основные"
   en: "General"
   es: "General"
+toolbar.core_config_area_auto_buy:
+  ru: "АвтоПокупка"
+  en: "AutoBuy"
+  es: "Compra automática"
 toolbar.core_config_area_interface:
   ru: "Интерфейс"
   en: "Interface"

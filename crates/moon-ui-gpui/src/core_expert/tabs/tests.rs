@@ -76,7 +76,10 @@ fn projected_pages_are_only_the_ones_the_terminal_reads_and_writes() {
         .filter(|t| t.source() == TabSource::Projected)
         .map(|t| t.id())
         .collect();
-    assert_eq!(projected, vec!["general", "interface", "autostart"]);
+    assert_eq!(
+        projected,
+        vec!["general", "autobuy", "interface", "autostart"]
+    );
 }
 
 /// Every page the strip calls `Projected` must actually name a section, and every page it does not

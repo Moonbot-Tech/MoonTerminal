@@ -4,10 +4,12 @@
 //! groups drawn as titled frames. These helpers reproduce that shape once so a page reads as a list
 //! of Moonbot rows rather than as layout.
 //!
-//! Every helper takes an `enabled` flag, because a page draws EVERY row Moonbot has — including the
-//! ones whose values this terminal does not carry. A row it cannot fill is drawn in full and
-//! disabled, never hidden: a trader compares this window against Moonbot's, and a missing row reads
-//! as a bug where a dead one reads as a limit.
+//! A page draws EVERY row Moonbot has — including the ones whose values this terminal does not
+//! carry. A row it cannot fill is drawn in full and disabled, never hidden: a trader compares this
+//! window against Moonbot's, and a missing row reads as a bug where a dead one reads as a limit. So
+//! most helpers take an `enabled` flag. The `_live` ones do not: they exist for the rows this
+//! terminal CAN fill. Where a page needs the same control dead it reaches for the plain helper
+//! beside it — and where no plain helper is left, that is because no page needs one.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -247,8 +249,9 @@ pub(super) fn dropdown(id: &'static str, current: String, enabled: bool) -> impl
 
 /// One option of a Moonbot radio group.
 ///
-/// The group's exclusivity belongs to the value behind it, so a page passes `selected` per option
-/// and the write — when there is one — sets the whole group's field at once.
+/// The group's exclusivity belongs to the value behind it, so a page passes `selected` per option.
+/// Read-only everywhere it is used today: what looks like a group in the one page that draws these
+/// is a set of independent wire flags — see the module doc of [`super::pages::autobuy`].
 pub(super) fn radio(
     id: &'static str,
     label: String,
@@ -262,23 +265,15 @@ pub(super) fn radio(
         .size(MoonRadioSize::Compact)
 }
 
-/// Moonbot's `< n >` spinner, for the counts it does not give a slider. Read-only: a page that
-/// cannot stage the value shows it and refuses the arrows.
-pub(super) fn stepper(id: &'static str, value: f32, enabled: bool) -> impl IntoElement {
-    MoonStepper::new(id)
-        .value(value)
-        .disabled(!enabled)
-        .size(MoonStepperSize::Compact)
-}
-
-/// The same spinner, staging into the page.
+/// Moonbot's `< n >` spinner, for the counts it does not give a slider, staging into the page.
 ///
 /// Deliberately given NO range: the component clamps the value it DISPLAYS into the range, while
 /// the draft keeps the core's own number, so a range here would show one number and send another —
 /// and the arrows would then step from the displayed one, so a single click on a core value outside
 /// it would discard that value. The wire states no bound for either of these widths, and inventing
-/// one is what produced the mismatch. `floor` is the one thing that is not a guess: a width is a
-/// pixel count.
+/// one is what produced the mismatch. `floor` is the one thing that is not a guess: every count
+/// drawn this way — a pixel width, a number of words, an alert level — is meaningless below zero,
+/// and the wire states no upper bound for any of them.
 pub(super) fn stepper_live(
     id: &'static str,
     value: i32,

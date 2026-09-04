@@ -36,6 +36,8 @@ pub struct CoreConfig {
     pub leverage: LeverageSettings,
     /// Moonbot's own window and chart appearance, spread across `trading`, `visual` and `ui`.
     pub interface: InterfaceSettings,
+    /// Moonbot's autobuy page: the signal sources and the message filter.
+    pub auto_buy: AutoBuySettings,
     /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
     /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
     pub manual: ManualSettings,
@@ -245,6 +247,88 @@ pub struct GeneralSettings {
     /// The terminal ALSO keeps a client-side filter of the same name (moonproto applies it to the
     /// retained market analytics without asking the core), so committing this field drives both.
     pub exclude_blacklisted_from_deltas: bool,
+}
+
+/// Moonbot's "АвтоПокупка" page: where a buy signal may come from, and which messages count.
+///
+/// An area is a PAGE, not a wire section — see [`InterfaceSettings`] for why. This one reads from
+/// `signals`, from its `signal_config` sub-record, and from one field of `trading`, which is exactly
+/// how Moonbot's own page is put together.
+///
+/// It deliberately does NOT overlap [`SignalsSettings`]: that block is the two price-approach alert
+/// sounds, which the compact popup draws and this page does not. One wire field belongs to one
+/// area, or a write from either surface would put the other's frozen copy back.
+///
+/// What Moonbot draws as a three-button "search mode" is NOT a mode on the wire. `look_full_link_*`
+/// is an additive parse option ("parse full hyperlinks for token names") and `advanced_filter*` is
+/// a separate feature ("advanced per-strategy signal filtering"), and the wire's own default sets
+/// both at once. So the page shows each flag as itself and edits none of them; they travel back
+/// exactly as read, which is what every value a dialog DISPLAYS does when its OK is pressed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoBuySettings {
+    /// `signals.clipboard_auto_buy`: buy when the clipboard yields a token.
+    pub clipboard_auto_buy: bool,
+    /// `signals.lower_case_token_cbd` / `signals.look_full_link_cbd` /
+    /// `signals.advanced_filter_clipboard`: the clipboard source's search mode.
+    ///
+    /// The last two are READ-ONLY on the page: the wire's own default sets both, so no exclusive
+    /// control can stand over them. They are carried so the page can show them, and written back
+    /// exactly as read.
+    pub lower_case_token_cbd: bool,
+    pub look_full_link_cbd: bool,
+    pub advanced_filter_clipboard: bool,
+    /// `signals.telegram_auto_buy`: buy when a Telegram signal matches.
+    pub telegram_auto_buy: bool,
+    /// `signals.lower_case_token_tlg` / `signals.look_full_link_tlg` / `signals.advanced_filter`:
+    /// the Telegram source's search mode, in the same shape.
+    pub lower_case_token_tlg: bool,
+    pub look_full_link_tlg: bool,
+    pub advanced_filter: bool,
+    /// `signals.dont_buy_reply`: ignore a signal that is a reply to another message.
+    pub dont_buy_reply: bool,
+    /// `signals.msg_keywords_long` and `signals.msg_keywords_short`: comma-separated words that
+    /// mark a message as a long or a short signal.
+    pub msg_keywords_long: String,
+    pub msg_keywords_short: String,
+    /// `signals.msg_black_words`: words whose presence cancels the signal.
+    pub msg_black_words: String,
+    /// `signals.msg_token_tags`: the tag prefixes a ticker is looked for behind, e.g. `#,$`.
+    pub msg_token_tags: String,
+    /// `signals.lower_price_words`: words that mean "wait for a lower price" rather than "buy now".
+    pub lower_price_words: String,
+    /// `signal_config.use_keywords` and `signal_config.buy_key_dist`: require a keyword, and how
+    /// many words may stand between it and the token.
+    pub use_keywords: bool,
+    pub buy_key_dist: i32,
+    /// `signal_config.use_black_words`.
+    pub use_black_words: bool,
+    /// `signal_config.use_words_count` and `signal_config.words_count`: cap the message length.
+    pub use_words_count: bool,
+    pub words_count: i32,
+    /// `signal_config.use_lower_price_words` and `signal_config.x_lower_price`: the "wait for a
+    /// dip" filter and the offset it buys at.
+    pub use_lower_price_words: bool,
+    pub x_lower_price: i32,
+    /// `signal_config.x_found_price`: the offset applied to a price read out of the message.
+    pub x_found_price: i32,
+    /// `signal_config.buy_if_price_found`: buy only when the message carries a price.
+    pub buy_if_price_found: bool,
+    /// `signal_config.use_price` and `signal_config.use_stops`: take the buy price, and the stops
+    /// and take-profit, from the message.
+    pub use_price: bool,
+    pub use_stops: bool,
+    /// `signal_config.only_1_token`: buy only when the message names exactly one token.
+    pub only_1_token: bool,
+    /// `signal_config.use_token_tags`, `signal_config.tokens_no_tags`, `signal_config.token_links`
+    /// and `signal_config.special_formats`: how a ticker may be recognised.
+    pub use_token_tags: bool,
+    pub tokens_no_tags: bool,
+    pub token_links: bool,
+    pub special_formats: bool,
+    /// `trading.auto_cancel_lower_buy`: minutes after which a buy left below the market is
+    /// cancelled. On Moonbot's page it sits under the dip filter, which is why it is here rather
+    /// than with the other `trading` fields.
+    pub auto_cancel_lower_buy: i32,
 }
 
 /// Moonbot's "Интерфейс" page: what that program's OWN windows and charts show, plus the handful of
@@ -561,6 +645,7 @@ impl CoreConfigState {
 /// the manual money fields below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreConfigArea {
+    AutoBuy,
     AutoStart,
     BtcBlink,
     General,

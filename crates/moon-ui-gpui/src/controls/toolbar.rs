@@ -530,6 +530,7 @@ fn own_trade_toggle(
 /// the mapping lives here like every other caption of a `moon-core` enum in this module.
 fn area_caption(area: CoreConfigArea) -> String {
     let key = match area {
+        CoreConfigArea::AutoBuy => "toolbar.core_config_area_auto_buy",
         CoreConfigArea::AutoStart => "toolbar.core_config_area_auto_start",
         CoreConfigArea::BtcBlink => "toolbar.core_config_area_btc_blink",
         CoreConfigArea::General => "toolbar.core_config_area_general",

@@ -20,10 +20,10 @@ use moonproto::MoonClient;
 use moonproto::shared_config::SharedConfig;
 
 use crate::feed::{
-    AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
-    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
-    CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings, InterfaceSettings,
-    LeverageSettings, ManualSettings, SignalsSettings, day_fraction_to_minutes,
+    AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea,
+    CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
+    CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
+    InterfaceSettings, LeverageSettings, ManualSettings, SignalsSettings, day_fraction_to_minutes,
     minutes_to_day_fraction,
 };
 
@@ -52,6 +52,9 @@ const ECHO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// rendered sections — cannot reach the manual block at all, checkbox on or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldMask {
+    /// Moonbot's autobuy page, which reaches into `signals`, its `signal_config` sub-record and one
+    /// field of `trading`. One area because it is one PAGE.
+    auto_buy: bool,
     auto_start: bool,
     btc_blink: bool,
     general: bool,
@@ -74,6 +77,7 @@ pub struct FieldMask {
 impl FieldMask {
     /// No fields touched. Base value for building a narrow mask with the `with_*` methods below.
     pub const EMPTY: Self = Self {
+        auto_buy: false,
         auto_start: false,
         btc_blink: false,
         general: false,
@@ -92,6 +96,8 @@ impl FieldMask {
     /// The manual block is deliberately absent from BOTH: an OK may never change a manual-trading
     /// field, checkbox on or off — see `send_core_config`, the one applier they share.
     pub const RENDERED_SECTIONS: Self = Self {
+        // NOT the autobuy page: the compact popup does not draw it.
+        auto_buy: false,
         auto_start: true,
         btc_blink: true,
         general: true,
@@ -136,6 +142,12 @@ impl FieldMask {
         self
     }
 
+    /// Name Moonbot's autobuy page — its signal sources and its message filter.
+    pub const fn with_auto_buy(mut self) -> Self {
+        self.auto_buy = true;
+        self
+    }
+
     /// Name Moonbot's interface page — its own windows, charts and order-book zones.
     pub const fn with_interface(mut self) -> Self {
         self.interface = true;
@@ -150,6 +162,7 @@ impl FieldMask {
 
     fn union(self, other: Self) -> Self {
         Self {
+            auto_buy: self.auto_buy || other.auto_buy,
             auto_start: self.auto_start || other.auto_start,
             btc_blink: self.btc_blink || other.btc_blink,
             general: self.general || other.general,
@@ -524,6 +537,9 @@ fn rejection_within_mask(
     touched: FieldMask,
 ) -> Option<CoreConfigRejection> {
     let mut areas = Vec::new();
+    if touched.auto_buy && expected.auto_buy != actual.auto_buy {
+        areas.push(CoreConfigArea::AutoBuy);
+    }
     if touched.auto_start && expected.auto_start != actual.auto_start {
         areas.push(CoreConfigArea::AutoStart);
     }
@@ -562,7 +578,41 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let strat_buttons = &cfg.trading.manual_strats_config;
     let v = &cfg.visual;
     let u = &cfg.ui;
+    let sc = &cfg.signals.signal_config;
     CoreConfig {
+        auto_buy: AutoBuySettings {
+            clipboard_auto_buy: sig.clipboard_auto_buy,
+            lower_case_token_cbd: sig.lower_case_token_cbd,
+            look_full_link_cbd: sig.look_full_link_cbd,
+            advanced_filter_clipboard: sig.advanced_filter_clipboard,
+            telegram_auto_buy: sig.telegram_auto_buy,
+            lower_case_token_tlg: sig.lower_case_token_tlg,
+            look_full_link_tlg: sig.look_full_link_tlg,
+            advanced_filter: sig.advanced_filter,
+            dont_buy_reply: sig.dont_buy_reply,
+            msg_keywords_long: sig.msg_keywords_long.clone(),
+            msg_keywords_short: sig.msg_keywords_short.clone(),
+            msg_black_words: sig.msg_black_words.clone(),
+            msg_token_tags: sig.msg_token_tags.clone(),
+            lower_price_words: sig.lower_price_words.clone(),
+            use_keywords: sc.use_keywords,
+            buy_key_dist: sc.buy_key_dist,
+            use_black_words: sc.use_black_words,
+            use_words_count: sc.use_words_count,
+            words_count: sc.words_count,
+            use_lower_price_words: sc.use_lower_price_words,
+            x_lower_price: sc.x_lower_price,
+            x_found_price: sc.x_found_price,
+            buy_if_price_found: sc.buy_if_price_found,
+            use_price: sc.use_price,
+            use_stops: sc.use_stops,
+            only_1_token: sc.only_1_token,
+            use_token_tags: sc.use_token_tags,
+            tokens_no_tags: sc.tokens_no_tags,
+            token_links: sc.token_links,
+            special_formats: sc.special_formats,
+            auto_cancel_lower_buy: t.auto_cancel_lower_buy,
+        },
         interface: InterfaceSettings {
             buy_on_enter: t.buy_on_enter,
             dbl_click_panic_sell: t.dbl_click_panic_sell,
@@ -735,6 +785,9 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
 /// never send a value the projection cannot show, nor show one it cannot send — the mask narrows
 /// WHEN a named field is written, never WHETHER an unnamed one could be.
 pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, touched: FieldMask) {
+    if touched.auto_buy {
+        apply_auto_buy(cfg, &wanted.auto_buy);
+    }
     if touched.auto_start {
         apply_auto_start(cfg, &wanted.auto_start);
     }
@@ -788,6 +841,47 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.use_coins_black_list = g.blacklist_on;
     t.coins_black_list_text = g.blacklist_text.clone();
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
+}
+
+/// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and one `trading`
+/// field.
+///
+/// Thirty-one fields: everything else in each section — including their `unknown_tail`s and the two
+/// price-approach alerts [`apply_signals`] owns — travels back untouched.
+fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
+    let sig = &mut cfg.signals;
+    sig.clipboard_auto_buy = b.clipboard_auto_buy;
+    sig.lower_case_token_cbd = b.lower_case_token_cbd;
+    sig.look_full_link_cbd = b.look_full_link_cbd;
+    sig.advanced_filter_clipboard = b.advanced_filter_clipboard;
+    sig.telegram_auto_buy = b.telegram_auto_buy;
+    sig.lower_case_token_tlg = b.lower_case_token_tlg;
+    sig.look_full_link_tlg = b.look_full_link_tlg;
+    sig.advanced_filter = b.advanced_filter;
+    sig.dont_buy_reply = b.dont_buy_reply;
+    sig.msg_keywords_long = b.msg_keywords_long.clone();
+    sig.msg_keywords_short = b.msg_keywords_short.clone();
+    sig.msg_black_words = b.msg_black_words.clone();
+    sig.msg_token_tags = b.msg_token_tags.clone();
+    sig.lower_price_words = b.lower_price_words.clone();
+    let c = &mut sig.signal_config;
+    c.use_keywords = b.use_keywords;
+    c.buy_key_dist = b.buy_key_dist;
+    c.use_black_words = b.use_black_words;
+    c.use_words_count = b.use_words_count;
+    c.words_count = b.words_count;
+    c.use_lower_price_words = b.use_lower_price_words;
+    c.x_lower_price = b.x_lower_price;
+    c.x_found_price = b.x_found_price;
+    c.buy_if_price_found = b.buy_if_price_found;
+    c.use_price = b.use_price;
+    c.use_stops = b.use_stops;
+    c.only_1_token = b.only_1_token;
+    c.use_token_tags = b.use_token_tags;
+    c.tokens_no_tags = b.tokens_no_tags;
+    c.token_links = b.token_links;
+    c.special_formats = b.special_formats;
+    cfg.trading.auto_cancel_lower_buy = b.auto_cancel_lower_buy;
 }
 
 /// Apply Moonbot's interface page across the four sections it lives in.

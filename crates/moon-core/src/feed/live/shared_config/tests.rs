@@ -364,3 +364,113 @@ fn an_unnamed_interface_is_not_written() {
     assert_eq!(written.visual.book_orders_width, 7);
     assert!(written.visual.hide_pnl);
 }
+
+/// A snapshot whose autobuy fields all DIFFER from the wire's own defaults, for the same reason
+/// [`interface_base`] negates its flags: several of these default to `true`, and writing `true` over
+/// them would leave the round-trip test blind to exactly those.
+fn auto_buy_base() -> SharedConfig {
+    let mut cfg = SharedConfig::default();
+    let sig = &mut cfg.signals;
+    sig.clipboard_auto_buy = !sig.clipboard_auto_buy;
+    sig.lower_case_token_cbd = !sig.lower_case_token_cbd;
+    sig.look_full_link_cbd = !sig.look_full_link_cbd;
+    sig.advanced_filter_clipboard = !sig.advanced_filter_clipboard;
+    sig.telegram_auto_buy = !sig.telegram_auto_buy;
+    sig.lower_case_token_tlg = !sig.lower_case_token_tlg;
+    sig.look_full_link_tlg = !sig.look_full_link_tlg;
+    sig.advanced_filter = !sig.advanced_filter;
+    sig.dont_buy_reply = !sig.dont_buy_reply;
+    sig.msg_keywords_long = "pump,long".to_string();
+    sig.msg_keywords_short = "dump,short".to_string();
+    sig.msg_black_words = "called,dont".to_string();
+    sig.msg_token_tags = "@,%".to_string();
+    sig.lower_price_words = "wait dip".to_string();
+    let c = &mut sig.signal_config;
+    c.use_keywords = !c.use_keywords;
+    c.buy_key_dist = 7;
+    c.use_black_words = !c.use_black_words;
+    c.use_words_count = !c.use_words_count;
+    c.words_count = 42;
+    c.use_lower_price_words = !c.use_lower_price_words;
+    c.x_lower_price = -3;
+    c.x_found_price = 5;
+    c.buy_if_price_found = !c.buy_if_price_found;
+    c.use_price = !c.use_price;
+    c.use_stops = !c.use_stops;
+    c.only_1_token = !c.only_1_token;
+    c.use_token_tags = !c.use_token_tags;
+    c.tokens_no_tags = !c.tokens_no_tags;
+    c.token_links = !c.token_links;
+    c.special_formats = !c.special_formats;
+    cfg.trading.auto_cancel_lower_buy = 15;
+    cfg
+}
+
+/// Every autobuy field must survive read -> write unchanged: a projection that forgets one silently
+/// REVERTS it on the next OK, because the write rebuilds the whole snapshot.
+#[test]
+fn the_auto_buy_page_round_trips_through_the_projection() {
+    let base = auto_buy_base();
+    let projected = core_config_from_proto(&base);
+    assert_ne!(
+        projected.auto_buy,
+        core_config_from_proto(&SharedConfig::default()).auto_buy,
+        "the base must differ from the wire default, or this test proves nothing"
+    );
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &projected, FieldMask::EMPTY.with_auto_buy());
+
+    assert_eq!(
+        core_config_from_proto(&written).auto_buy,
+        projected.auto_buy
+    );
+}
+
+/// The autobuy page and the alert sounds share the `signals` wire section but NOT a mask bit: an
+/// autobuy write must leave the two price-approach alerts exactly as the core sent them, or the two
+/// surfaces would revert each other.
+#[test]
+fn an_auto_buy_edit_leaves_the_alert_sounds_and_its_neighbours_alone() {
+    let mut base = auto_buy_base();
+    base.signals.play_sell_alert = true;
+    base.signals.sell_alert_level = 3;
+    base.signals.signal_sound_2 = 9;
+    base.signals.play_signal_sound = true;
+    base.signals.unknown_tail = vec![7, 7];
+    base.trading.g_take_profit = 2.5;
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.auto_buy.words_count = 11;
+    // What another surface would have staged, and what this write must NOT carry.
+    wanted.signals.play_sell_alert = false;
+    wanted.signals.sell_alert_level = 0;
+    wanted.interface.play_signal_sound = false;
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(wanted, FieldMask::EMPTY.with_auto_buy());
+    let sent = next_config(&mut sequence, &base);
+
+    assert_eq!(sent.signals.signal_config.words_count, 11);
+    assert!(sent.signals.play_sell_alert);
+    assert_eq!(sent.signals.sell_alert_level, 3);
+    assert_eq!(sent.signals.signal_sound_2, 9);
+    assert!(sent.signals.play_signal_sound);
+    assert_eq!(sent.signals.unknown_tail, vec![7, 7]);
+    assert_eq!(sent.trading.g_take_profit, 2.5);
+}
+
+/// The mask decides, not the projection: the compact popup's mask must not carry the autobuy page.
+#[test]
+fn an_unnamed_auto_buy_is_not_written() {
+    let base = auto_buy_base();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.auto_buy.words_count = 11;
+    wanted.auto_buy.msg_token_tags = "!".to_string();
+
+    let mut written = auto_buy_base();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+
+    assert_eq!(written.signals.signal_config.words_count, 42);
+    assert_eq!(written.signals.msg_token_tags, "@,%");
+}
