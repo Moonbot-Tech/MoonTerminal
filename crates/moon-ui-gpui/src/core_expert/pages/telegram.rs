@@ -3,7 +3,7 @@
 //! Nothing here is live yet. The values behind it — the signal channels, the multi-channel rules,
 //! the Moon Premium and network-blacklist switches — DO cross the wire in the safe-share `signals`
 //! section, but `moon_core::feed::CoreConfig` does not project them and
-//! `FieldMask::RENDERED_SECTIONS` would not carry them back. Drawing them live would promise an OK
+//! `ExpertTab::add_sections` would not carry them back. Drawing them live would promise an OK
 //! that cannot deliver, so the page is drawn whole and disabled until both are widened.
 //!
 //! The channel box is therefore EMPTY rather than filled with a guess, and says why in place of the

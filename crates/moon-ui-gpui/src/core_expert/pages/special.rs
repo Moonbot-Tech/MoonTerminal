@@ -3,7 +3,7 @@
 //!
 //! Nothing here is live. Most of it IS on the wire (`trading.orders_control`, the engine flags,
 //! `trading.moonbot_config`), but `moon_core::feed::CoreConfig` projects none of it and
-//! `FieldMask::RENDERED_SECTIONS` would not carry it back. The Remote block and the hang watchdog
+//! `ExpertTab::add_sections` would not carry it back. The Remote block and the hang watchdog
 //! go further: safe-share excludes them outright, since they carry the bot token, the UDP password
 //! and the control VDS address.
 //!

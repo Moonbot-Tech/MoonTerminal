@@ -6,7 +6,7 @@
 //!
 //! None of it is live. The values live in the safe-share `signals` section and its `signal_config`
 //! sub-record, which `moon_core::feed::CoreConfig` does not project and
-//! `FieldMask::RENDERED_SECTIONS` does not carry; the one part of this page the terminal DOES own —
+//! `ExpertTab::add_sections` does not carry; the one part of this page the terminal DOES own —
 //! the price-approach alert sounds — sits on the compact popup's General tab rather than here,
 //! because Moonbot keeps it elsewhere too.
 //!

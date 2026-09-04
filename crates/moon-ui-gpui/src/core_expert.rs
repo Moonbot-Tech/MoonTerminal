@@ -54,17 +54,6 @@ const DEFAULT_SIZE: (f32, f32) = (980.0, 700.0);
 /// footer buttons start to crowd.
 const MIN_SIZE: (f32, f32) = (720.0, 460.0);
 
-/// The sections this window's OK may write.
-///
-/// Narrower than the compact popup's on purpose: a surface may write only what it DRAWS, and the
-/// expert window draws General, AutoStart and the BTC blink but not Leverage and not the Signals
-/// alerts. With the wider mask its OK wrote a draft seeded when the window opened back over those
-/// two sections, silently undoing anything that had changed in them meanwhile.
-const EXPERT_SECTIONS: FieldMask = FieldMask::EMPTY
-    .with_general()
-    .with_auto_start()
-    .with_btc_blink();
-
 /// What the window can do with the core right now — the one input to whether OK is live.
 ///
 /// Every variant but [`PageState::Ready`] is a state the compact popup handles by closing itself.
@@ -121,6 +110,15 @@ pub struct CoreExpertView {
     pub(super) special_section: pages::SpecialSection,
     /// Staged page, present only in [`PageState::Ready`].
     pub(super) draft: Option<CoreConfig>,
+    /// The pages a control has written from, in the order they were first touched.
+    ///
+    /// What OK's mask is built from — see [`ExpertTab::add_sections`]. A page the user never
+    /// touched is not named, so its share of the draft, frozen when the window opened, is never
+    /// written back over a change made on that page somewhere else meanwhile.
+    ///
+    /// A `Vec` rather than a set: it holds at most one entry per tab, and a linear scan of eight is
+    /// cheaper than the hashing that would replace it.
+    pub(super) edited: Vec<ExpertTab>,
     /// Whether any control has written to [`Self::draft`] since it was seeded.
     ///
     /// A flag rather than `draft != seed`: that comparison walks a hundred fields and a dozen heap
@@ -247,6 +245,7 @@ impl CoreExpertView {
             editors: EditorStore::default(),
             window: window.window_handle(),
             had_page: false,
+            edited: Vec::new(),
             seen_rev: 0,
             seen_profit: None,
             focus: cx.focus_handle(),
@@ -404,6 +403,7 @@ impl CoreExpertView {
             }
             self.draft = None;
             self.dirty = false;
+            self.edited.clear();
             // The controls go with the page: one retained past it would seed the next core's row
             // with the previous core's text on its first frame. Focus may be sitting in one of
             // them — but only if one existed, so a store that never built anything does not cost
@@ -485,14 +485,21 @@ impl CoreExpertView {
             // waiting for instead.
             return;
         };
-        if !send_core_config(
-            &self.backend,
-            &self.group,
-            self.seeded,
-            draft,
-            EXPERT_SECTIONS,
-            cx,
-        ) {
+        // Exactly the pages that were edited, and nothing else: see `ExpertTab::add_sections`.
+        let sections = self
+            .edited
+            .iter()
+            .fold(FieldMask::EMPTY, |mask, tab| tab.add_sections(mask));
+        if sections == FieldMask::EMPTY {
+            // Nothing this window can send was touched — a page of dead rows, or no edit at all.
+            // Moonbot's OK closes either way, and a write naming no section would still cost the
+            // core a full snapshot round trip to change nothing. The client-side half of the
+            // blacklist-delta filter goes with it, which is right: its checkbox lives on the
+            // General page, so an OK reaching this line never saw it touched.
+            window.remove_window();
+            return;
+        }
+        if !send_core_config(&self.backend, &self.group, self.seeded, draft, sections, cx) {
             // The core moved, or the session refused the page, between the render that drew OK and
             // this click. Say so and stay open.
             self.write_refused = true;
@@ -550,6 +557,7 @@ impl CoreExpertView {
         self.core_name = None;
         self.draft = None;
         self.dirty = false;
+        self.edited.clear();
         self.seen_rev = 0;
         self.had_page = false;
         self.write_refused = false;
@@ -578,6 +586,9 @@ impl CoreExpertView {
         // changed it costs more than the repaint it would save, and every caller here IS a user
         // action.
         self.dirty = true;
+        if !self.edited.contains(&self.tab) {
+            self.edited.push(self.tab);
+        }
         cx.notify();
     }
 

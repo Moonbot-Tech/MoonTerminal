@@ -281,13 +281,19 @@ pub(crate) fn send_core_config(
     };
     // The mask comes from the CALLER, because what a surface may write is what it DRAWS, and a
     // draft seeded when that surface opened is stale everywhere the user could not see it. The
-    // compact popup draws all five rendered sections and names all five; the expert window draws
-    // three and names three, so its OK cannot write its own copy of Leverage or the Signals alerts
-    // back over a change made elsewhere while it stood open. Neither can name the manual block at
-    // all: no mask reachable from here carries it, checkbox on or off.
+    // compact popup draws all five rendered sections and names all five; the expert window names
+    // only the sections of the PAGES its user actually edited, so its OK cannot write its own
+    // frozen copy of a page nobody opened back over a change made elsewhere while it stood open.
+    // Neither can name the manual block at all: no mask reachable from here carries it, checkbox on
+    // or off.
     // Read before the page is handed over, so the send below can consume it without a clone of the
-    // whole projection.
-    let exclude = draft.general.exclude_blacklisted_from_deltas;
+    // whole projection. Only meaningful when this write names `general`: the value is the surface's
+    // own copy of that section, frozen when it was seeded, and applying it from a mask that does not
+    // carry the section would set the CLIENT half from a stale number while the core kept the newer
+    // one — the two halves of one filter, disagreeing.
+    let exclude = sections
+        .writes_general()
+        .then_some(draft.general.exclude_blacklisted_from_deltas);
     if let Err(error) = b.session.edit_core_config(core, draft, sections) {
         // The page never reached the session. Reporting success here is what would let a caller
         // close on it.
@@ -299,6 +305,9 @@ pub(crate) fn send_core_config(
     // restart. Issued only after the page went out, so the two halves cannot diverge the other way
     // — this terminal filtering deltas the core was never told about. Nothing is cached for it here:
     // the checkbox reads the core's own value out of the draft.
+    let Some(exclude) = exclude else {
+        return true;
+    };
     if let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude) {
         log::warn!("exclude delta failed: {error:#}");
     }

@@ -3,8 +3,8 @@
 //! Each page reproduces its Moonbot original ROW FOR ROW, including the rows this terminal cannot
 //! fill: those are drawn and disabled rather than hidden, so the window can be read side by side
 //! with Moonbot's own dialog. What decides a row's fate is the projection
-//! (`moon_core::feed::CoreConfig`) and the mask that may write it back
-//! (`FieldMask::RENDERED_SECTIONS`) — a control outside either is dead until both are widened,
+//! (`moon_core::feed::CoreConfig`) and whether this page's tab names that section in
+//! [`super::ExpertTab::add_sections`] — a control outside either is dead until both are widened,
 //! and drawing it as live would promise a value OK cannot carry.
 //!
 //! Controls that need a retained state (sliders, text fields) are declared as SPECS here and built
@@ -138,7 +138,7 @@ pub(super) fn page(
             p,
             cx,
         )),
-        ExpertTab::Interface => Some(interface::body(view, store, p, cx)),
+        ExpertTab::Interface => Some(interface::body(view, store, draft, p, cx)),
         ExpertTab::Hotkeys => Some(hotkeys::body(view, ctx.hotkeys_sub, draft, p, cx)),
         ExpertTab::Special => Some(special::body(view, store, ctx.special_section, p, cx)),
     }

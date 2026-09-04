@@ -262,12 +262,49 @@ pub(super) fn radio(
         .size(MoonRadioSize::Compact)
 }
 
-/// Moonbot's `< n >` spinner, for the counts it does not give a slider.
+/// Moonbot's `< n >` spinner, for the counts it does not give a slider. Read-only: a page that
+/// cannot stage the value shows it and refuses the arrows.
 pub(super) fn stepper(id: &'static str, value: f32, enabled: bool) -> impl IntoElement {
     MoonStepper::new(id)
         .value(value)
         .disabled(!enabled)
         .size(MoonStepperSize::Compact)
+}
+
+/// The same spinner, staging into the page.
+///
+/// Deliberately given NO range: the component clamps the value it DISPLAYS into the range, while
+/// the draft keeps the core's own number, so a range here would show one number and send another —
+/// and the arrows would then step from the displayed one, so a single click on a core value outside
+/// it would discard that value. The wire states no bound for either of these widths, and inventing
+/// one is what produced the mismatch. `floor` is the one thing that is not a guess: a width is a
+/// pixel count.
+pub(super) fn stepper_live(
+    id: &'static str,
+    value: i32,
+    floor: i32,
+    view: &Entity<CoreExpertView>,
+    set: fn(&mut CoreConfig, i32),
+) -> impl IntoElement {
+    let view = view.clone();
+    MoonStepper::new(id)
+        .value(value as f32)
+        .step(1.0)
+        .precision(0)
+        .size(MoonStepperSize::Compact)
+        .on_change(move |v, _w, app| {
+            // `as i32` saturates rather than wrapping.
+            let next = (v.round() as i32).max(floor);
+            // Without a range the component never dims its "−", so pressing it at the floor arrives
+            // here as a change to the value already held. Staging that would mark the page edited
+            // and stop the window following the core, for a press that moved nothing.
+            if next == value {
+                return;
+            }
+            view.update(app, |this, cx| {
+                this.edit_draft(|draft| set(draft, next), cx);
+            });
+        })
 }
 
 /// A bordered list of plain lines — Moonbot's channel box and the other places it shows a set it

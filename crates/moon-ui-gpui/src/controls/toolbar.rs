@@ -533,6 +533,7 @@ fn area_caption(area: CoreConfigArea) -> String {
         CoreConfigArea::AutoStart => "toolbar.core_config_area_auto_start",
         CoreConfigArea::BtcBlink => "toolbar.core_config_area_btc_blink",
         CoreConfigArea::General => "toolbar.core_config_area_general",
+        CoreConfigArea::Interface => "toolbar.core_config_area_interface",
         CoreConfigArea::Leverage => "toolbar.core_config_area_leverage",
         CoreConfigArea::Manual => "toolbar.core_config_area_manual",
         CoreConfigArea::Signals => "toolbar.core_config_area_signals",

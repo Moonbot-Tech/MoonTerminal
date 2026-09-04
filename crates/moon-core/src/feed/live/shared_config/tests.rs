@@ -263,3 +263,104 @@ fn popup_commit_mask_preserves_manual_order_size_changed_after_seed() {
     assert!(latest.trading.use_g_take_profit);
     assert_eq!(latest.ui.hotkeys_config.o_size[4], 640.0);
 }
+
+/// A snapshot whose interface fields all DIFFER from the wire's own defaults, so a projection that
+/// dropped one, or crossed two, shows up as a mismatch rather than as a passing coincidence.
+///
+/// Every flag is negated rather than set to `true`: several of these default to `true` on the wire,
+/// and writing `true` over them would have made the round-trip test blind to exactly those.
+fn interface_base() -> SharedConfig {
+    let mut cfg = SharedConfig::default();
+    cfg.trading.buy_on_enter = !cfg.trading.buy_on_enter;
+    cfg.trading.dbl_click_panic_sell = !cfg.trading.dbl_click_panic_sell;
+    cfg.trading.chart_split_zones = !cfg.trading.chart_split_zones;
+    cfg.trading.draw_stop = !cfg.trading.draw_stop;
+    cfg.trading.pending_orders_spread = 0.125;
+    cfg.trading.pending_orders_spread_h_delta = 0.0625;
+    cfg.visual.hide_forum_label = !cfg.visual.hide_forum_label;
+    cfg.visual.scrolling_charts = !cfg.visual.scrolling_charts;
+    cfg.visual.startup_load_charts = !cfg.visual.startup_load_charts;
+    cfg.visual.hide_right_chart_panel = !cfg.visual.hide_right_chart_panel;
+    cfg.visual.left_chart_info = !cfg.visual.left_chart_info;
+    cfg.visual.show_iceberg = !cfg.visual.show_iceberg;
+    cfg.visual.show_orders_captions = !cfg.visual.show_orders_captions;
+    cfg.visual.orders_captions_lower = !cfg.visual.orders_captions_lower;
+    cfg.visual.hide_pnl = !cfg.visual.hide_pnl;
+    cfg.visual.hide_buy_button = !cfg.visual.hide_buy_button;
+    cfg.visual.hide_cashback_button = !cfg.visual.hide_cashback_button;
+    cfg.visual.remember_chart_buttons = !cfg.visual.remember_chart_buttons;
+    cfg.visual.show_filters.scale_tool = !cfg.visual.show_filters.scale_tool;
+    cfg.visual.icon_selection = 3;
+    cfg.visual.colors.price_line_width = 4;
+    cfg.visual.panic_sell_opacity = 55;
+    cfg.visual.book_cumulative_opacity = 60;
+    cfg.visual.book_orders_opacity = 65;
+    cfg.visual.book_orders_width = 7;
+    cfg.signals.play_signal_sound = !cfg.signals.play_signal_sound;
+    cfg.ui.confirm_close = !cfg.ui.confirm_close;
+    cfg.ui.hide_demo_button = !cfg.ui.hide_demo_button;
+    cfg
+}
+
+/// Every interface field must survive read -> write unchanged. A projection that forgets a field
+/// silently REVERTS it on the next OK, because the write rebuilds the whole snapshot.
+#[test]
+fn the_interface_page_round_trips_through_the_projection() {
+    let base = interface_base();
+    let projected = core_config_from_proto(&base);
+    // Without this the test could pass on a projection that read nothing: every field would then be
+    // the default on both sides.
+    assert_ne!(
+        projected.interface,
+        core_config_from_proto(&SharedConfig::default()).interface,
+        "the base must differ from the wire default, or this test proves nothing"
+    );
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &projected, FieldMask::EMPTY.with_interface());
+
+    assert_eq!(
+        core_config_from_proto(&written).interface,
+        projected.interface
+    );
+}
+
+/// Changing one interface field must reach the wire, and must not disturb the section's neighbours.
+#[test]
+fn an_interface_edit_writes_its_own_field_and_leaves_the_section_alone() {
+    let mut base = interface_base();
+    base.trading.g_take_profit = 3.5;
+    base.visual.glass_opacity = 42;
+    base.ui.coins_sort_order = 2;
+    base.visual.unknown_tail = vec![9, 9, 9];
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.interface.book_orders_width = 11;
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(wanted, FieldMask::EMPTY.with_interface());
+    let sent = next_config(&mut sequence, &base);
+
+    assert_eq!(sent.visual.book_orders_width, 11);
+    assert_eq!(sent.trading.g_take_profit, 3.5);
+    assert_eq!(sent.visual.glass_opacity, 42);
+    assert_eq!(sent.ui.coins_sort_order, 2);
+    assert_eq!(sent.visual.unknown_tail, vec![9, 9, 9]);
+}
+
+/// The mask decides, not the projection: an edit that does not name the interface must not carry the
+/// interface fields it happens to hold — the guard that stops the expert window's stale copy of a
+/// page it never drew from being written back.
+#[test]
+fn an_unnamed_interface_is_not_written() {
+    let base = interface_base();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.interface.book_orders_width = 11;
+    wanted.interface.hide_pnl = false;
+
+    let mut written = interface_base();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+
+    assert_eq!(written.visual.book_orders_width, 7);
+    assert!(written.visual.hide_pnl);
+}

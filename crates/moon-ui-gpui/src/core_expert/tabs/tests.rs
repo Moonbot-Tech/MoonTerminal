@@ -2,7 +2,9 @@
 // the built-in attribute and makes `#[test]` expand recursively (CONTRIBUTING.md).
 use super::{ExpertTab, TabSource};
 
-/// The strip must carry Moonbot's ten pages in Moonbot's order: a trader reaches for a tab by
+use moon_core::feed::FieldMask;
+
+/// The strip must carry Moonbot's pages in Moonbot's order: a trader reaches for a tab by
 /// POSITION, and a reordered or shortened strip silently sends them to the wrong page.
 #[test]
 fn strip_reproduces_moonbots_order() {
@@ -61,9 +63,12 @@ fn only_the_wireless_page_is_absent() {
 }
 
 /// `Projected` claims a page can be seeded AND sent today, which is true only of what
-/// `moon_core::feed::CoreConfig` carries and `FieldMask::RENDERED_SECTIONS` writes. Widening this
-/// set without widening the projection is how a page would come to draw controls that silently
-/// cannot be sent.
+/// `moon_core::feed::CoreConfig` carries and the window's own mask writes. Widening this set
+/// without widening the projection is how a page would come to draw controls that silently cannot
+/// be sent — so this list moves only together with `CoreConfig` and `ExpertTab::add_sections`.
+///
+/// The order is the strip's, not alphabetical: `ExpertTab::ALL` is what Moonbot's tabs read left to
+/// right, and reading the assertion against the dialog is the point of it.
 #[test]
 fn projected_pages_are_only_the_ones_the_terminal_reads_and_writes() {
     let projected: Vec<&str> = ExpertTab::ALL
@@ -71,7 +76,28 @@ fn projected_pages_are_only_the_ones_the_terminal_reads_and_writes() {
         .filter(|t| t.source() == TabSource::Projected)
         .map(|t| t.id())
         .collect();
-    assert_eq!(projected, vec!["general", "autostart"]);
+    assert_eq!(projected, vec!["general", "interface", "autostart"]);
+}
+
+/// Every page the strip calls `Projected` must actually name a section, and every page it does not
+/// must name none.
+///
+/// `add_sections` is the single point that decides whether an OK reaches the wire at all: a tab
+/// that silently added nothing would drop every edit made on it while `source()` still promised the
+/// page was ready, and no other test would notice.
+#[test]
+fn a_page_names_sections_exactly_when_it_claims_to_be_projected() {
+    for tab in ExpertTab::ALL {
+        let named = tab.add_sections(FieldMask::EMPTY) != FieldMask::EMPTY;
+        assert_eq!(
+            named,
+            tab.source() == TabSource::Projected,
+            "{} claims {:?} but {} a section",
+            tab.id(),
+            tab.source(),
+            if named { "names" } else { "names no" }
+        );
+    }
 }
 
 /// The window opens on a page it can actually fill, not on Moonbot's own first tab — which is the

@@ -2,7 +2,7 @@
 //! fully LIVE.
 //!
 //! Every switch, box and slider here edits `moon_core::feed::AutoStartSettings` or
-//! `BtcBlinkSettings`, both of which the terminal projects and `FieldMask::RENDERED_SECTIONS`
+//! `BtcBlinkSettings`, both of which the terminal projects and `ExpertTab::add_sections`
 //! carries back, so OK sends what the page shows. The compact popup draws the same fields in its
 //! own compact order; this page follows Moonbot's layout instead, row for row.
 //!

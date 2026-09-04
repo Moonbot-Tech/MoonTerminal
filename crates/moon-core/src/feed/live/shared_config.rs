@@ -22,8 +22,9 @@ use moonproto::shared_config::SharedConfig;
 use crate::feed::{
     AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
     CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
-    CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings, LeverageSettings,
-    ManualSettings, SignalsSettings, day_fraction_to_minutes, minutes_to_day_fraction,
+    CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings, InterfaceSettings,
+    LeverageSettings, ManualSettings, SignalsSettings, day_fraction_to_minutes,
+    minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -54,6 +55,9 @@ pub struct FieldMask {
     auto_start: bool,
     btc_blink: bool,
     general: bool,
+    /// Moonbot's own interface page, which reaches into `trading`, `visual`, `signals` AND `ui`.
+    /// One area rather than four because it is one PAGE: what a surface draws is what it may write.
+    interface: bool,
     leverage: bool,
     /// The `signals` section's two price-approach alerts. The FIRST field the terminal writes
     /// outside `trading`/`visual`; the send carries every section either way, so this narrows only
@@ -73,25 +77,40 @@ impl FieldMask {
         auto_start: false,
         btc_blink: false,
         general: false,
+        interface: false,
         leverage: false,
         signals: false,
         ignore_strat_sell_price: false,
     };
 
-    /// The five sections the terminal's core-settings surfaces render, and nothing else. The manual
-    /// block is deliberately absent: an OK may never change a manual-trading field, checkbox on or
-    /// off — see `send_core_config` in `moon-ui-gpui`, the one applier both the compact gear popup
-    /// and the expert window send through. A surface that grows a page outside these five sections
-    /// needs the mask widened with it; drawing such a page against this mask would show controls
-    /// whose values OK silently cannot carry.
+    /// The five sections the COMPACT gear popup renders, and nothing else.
+    ///
+    /// Not "everything the terminal renders" any more: the expert window builds its own mask out of
+    /// the pages its user actually edited (`ExpertTab::add_sections` in `moon-ui-gpui`), and one of
+    /// them reaches a sixth section this popup does not draw. Each surface names what it drew.
+    ///
+    /// The manual block is deliberately absent from BOTH: an OK may never change a manual-trading
+    /// field, checkbox on or off — see `send_core_config`, the one applier they share.
     pub const RENDERED_SECTIONS: Self = Self {
         auto_start: true,
         btc_blink: true,
         general: true,
+        // NOT the interface page: the compact popup does not draw it. The expert window names it
+        // itself, through `with_interface`.
+        interface: false,
         leverage: true,
         signals: true,
         ignore_strat_sell_price: false,
     };
+
+    /// Whether this mask names the `general` section.
+    ///
+    /// For a caller that keeps a second, CLIENT-side copy of one of that section's fields: it must
+    /// move only when the section itself does, or the two halves drift apart the first time a
+    /// surface sends a mask without `general` in it.
+    pub const fn writes_general(self) -> bool {
+        self.general
+    }
 
     /// Name the `general` section: the exits, the risk limits and the blacklist.
     pub const fn with_general(mut self) -> Self {
@@ -105,9 +124,21 @@ impl FieldMask {
         self
     }
 
+    /// Name the `signals` section's alert sounds.
+    pub const fn with_signals(mut self) -> Self {
+        self.signals = true;
+        self
+    }
+
     /// Name the `btc_blink` section: the BTC-rate highlight and its alarm.
     pub const fn with_btc_blink(mut self) -> Self {
         self.btc_blink = true;
+        self
+    }
+
+    /// Name Moonbot's interface page — its own windows, charts and order-book zones.
+    pub const fn with_interface(mut self) -> Self {
+        self.interface = true;
         self
     }
 
@@ -122,6 +153,7 @@ impl FieldMask {
             auto_start: self.auto_start || other.auto_start,
             btc_blink: self.btc_blink || other.btc_blink,
             general: self.general || other.general,
+            interface: self.interface || other.interface,
             leverage: self.leverage || other.leverage,
             signals: self.signals || other.signals,
             ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
@@ -501,6 +533,9 @@ fn rejection_within_mask(
     if touched.general && expected.general != actual.general {
         areas.push(CoreConfigArea::General);
     }
+    if touched.interface && expected.interface != actual.interface {
+        areas.push(CoreConfigArea::Interface);
+    }
     if touched.leverage && expected.leverage != actual.leverage {
         areas.push(CoreConfigArea::Leverage);
     }
@@ -525,7 +560,39 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let sig = &cfg.signals;
     let hotkeys = &cfg.ui.hotkeys_config;
     let strat_buttons = &cfg.trading.manual_strats_config;
+    let v = &cfg.visual;
+    let u = &cfg.ui;
     CoreConfig {
+        interface: InterfaceSettings {
+            buy_on_enter: t.buy_on_enter,
+            dbl_click_panic_sell: t.dbl_click_panic_sell,
+            chart_split_zones: t.chart_split_zones,
+            draw_stop: t.draw_stop,
+            pending_orders_spread: t.pending_orders_spread,
+            pending_orders_spread_h_delta: t.pending_orders_spread_h_delta,
+            hide_forum_label: v.hide_forum_label,
+            scrolling_charts: v.scrolling_charts,
+            startup_load_charts: v.startup_load_charts,
+            hide_right_chart_panel: v.hide_right_chart_panel,
+            left_chart_info: v.left_chart_info,
+            show_iceberg: v.show_iceberg,
+            show_orders_captions: v.show_orders_captions,
+            orders_captions_lower: v.orders_captions_lower,
+            hide_pnl: v.hide_pnl,
+            hide_buy_button: v.hide_buy_button,
+            hide_cashback_button: v.hide_cashback_button,
+            remember_chart_buttons: v.remember_chart_buttons,
+            scale_tool: v.show_filters.scale_tool,
+            icon_selection: v.icon_selection,
+            price_line_width: v.colors.price_line_width,
+            panic_sell_opacity: v.panic_sell_opacity,
+            book_cumulative_opacity: v.book_cumulative_opacity,
+            book_orders_opacity: v.book_orders_opacity,
+            book_orders_width: v.book_orders_width,
+            play_signal_sound: cfg.signals.play_signal_sound,
+            confirm_close: u.confirm_close,
+            hide_demo_button: u.hide_demo_button,
+        },
         signals: SignalsSettings {
             play_sell_alert: sig.play_sell_alert,
             sell_alert_level: sig.sell_alert_level,
@@ -677,6 +744,9 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
     if touched.general {
         apply_general(cfg, &wanted.general);
     }
+    if touched.interface {
+        apply_interface(cfg, &wanted.interface);
+    }
     if touched.leverage {
         apply_leverage(cfg, &wanted.leverage);
     }
@@ -692,7 +762,8 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
 ///
 /// Six fields of a section with about a hundred: everything else in it — including its
 /// `unknown_tail` — travels back untouched, exactly as `apply_general` leaves the rest of
-/// `trading` alone.
+/// `trading` alone. The connectivity alert that neighbours them on the wire is NOT here: it belongs
+/// to [`apply_interface`], the page that draws it.
 fn apply_signals(cfg: &mut SharedConfig, s: &SignalsSettings) {
     let sig = &mut cfg.signals;
     sig.play_sell_alert = s.play_sell_alert;
@@ -717,6 +788,55 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.use_coins_black_list = g.blacklist_on;
     t.coins_black_list_text = g.blacklist_text.clone();
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
+}
+
+/// Apply Moonbot's interface page across the four sections it lives in.
+///
+/// Twenty-eight fields of the several hundred those sections hold: everything else in each of them
+/// — including all four `unknown_tail`s — travels back untouched, exactly as `apply_general` leaves
+/// the rest of `trading` alone.
+///
+/// Three of Moonbot's rows on that page are deliberately NOT here, and the page draws them
+/// disabled. `trading.pending_buy_price` is not the drawing flag its caption suggests: the wire
+/// documents it as using the pending-buy price instead of the current ask for SELL calculations,
+/// which is trading maths, not appearance. `trading.use_lev_for_take` already belongs to
+/// [`crate::feed::ManualSettings`], and projecting one wire field into two areas would leave the
+/// second stale after a write and make `edit_satisfied` false forever. `visual`'s
+/// `manual_charts_full_screen` sits behind that section's tail gate, so a core older than the field
+/// reads it back as `false` however it was written — an edit that could never echo, and would burn
+/// all three attempts.
+fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
+    let t = &mut cfg.trading;
+    t.buy_on_enter = i.buy_on_enter;
+    t.dbl_click_panic_sell = i.dbl_click_panic_sell;
+    t.chart_split_zones = i.chart_split_zones;
+    t.draw_stop = i.draw_stop;
+    t.pending_orders_spread = i.pending_orders_spread;
+    t.pending_orders_spread_h_delta = i.pending_orders_spread_h_delta;
+    let v = &mut cfg.visual;
+    v.hide_forum_label = i.hide_forum_label;
+    v.scrolling_charts = i.scrolling_charts;
+    v.startup_load_charts = i.startup_load_charts;
+    v.hide_right_chart_panel = i.hide_right_chart_panel;
+    v.left_chart_info = i.left_chart_info;
+    v.show_iceberg = i.show_iceberg;
+    v.show_orders_captions = i.show_orders_captions;
+    v.orders_captions_lower = i.orders_captions_lower;
+    v.hide_pnl = i.hide_pnl;
+    v.hide_buy_button = i.hide_buy_button;
+    v.hide_cashback_button = i.hide_cashback_button;
+    v.remember_chart_buttons = i.remember_chart_buttons;
+    v.show_filters.scale_tool = i.scale_tool;
+    v.icon_selection = i.icon_selection;
+    v.colors.price_line_width = i.price_line_width;
+    v.panic_sell_opacity = i.panic_sell_opacity;
+    v.book_cumulative_opacity = i.book_cumulative_opacity;
+    v.book_orders_opacity = i.book_orders_opacity;
+    v.book_orders_width = i.book_orders_width;
+    cfg.signals.play_signal_sound = i.play_signal_sound;
+    let u = &mut cfg.ui;
+    u.confirm_close = i.confirm_close;
+    u.hide_demo_button = i.hide_demo_button;
 }
 
 /// Apply the leverage-management block.

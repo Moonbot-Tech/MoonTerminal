@@ -34,6 +34,8 @@ pub struct CoreConfig {
     pub general: GeneralSettings,
     /// `trading.auto_manage_lev` and `trading.auto_lev_control`.
     pub leverage: LeverageSettings,
+    /// Moonbot's own window and chart appearance, spread across `trading`, `visual` and `ui`.
+    pub interface: InterfaceSettings,
     /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
     /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
     pub manual: ManualSettings,
@@ -245,6 +247,140 @@ pub struct GeneralSettings {
     pub exclude_blacklisted_from_deltas: bool,
 }
 
+/// Moonbot's "Интерфейс" page: what that program's OWN windows and charts show, plus the handful of
+/// input rules Moonbot files under the same tab.
+///
+/// Nothing here changes this terminal — it has its own chart, its own panels and its own theme.
+/// These are carried so the expert window can read and set what the other program does, which is
+/// the point of mirroring that dialog rather than approximating it. Most of it is appearance, but
+/// not all: `buy_on_enter` and `dbl_click_panic_sell` change how a keypress and a click are
+/// answered on a LIVE trading bot, and they are here because that is the page Moonbot puts them on.
+///
+/// Spread across four wire sections, as the page itself is: `trading` for the rules about what is
+/// drawn on an order, `visual` for chart and order-book appearance, `ui` for the two main-window
+/// switches, and one flag of `signals` for the connectivity alert. Field names follow the WIRE, not Moonbot's caption, like every other block here — so
+/// the button Moonbot calls "MoonBonus" is [`Self::hide_cashback_button`], which is what the
+/// section calls it.
+///
+/// Moonbot's page has about twice this many controls. The rest are drawn disabled by the expert
+/// window because the safe-share snapshot does not carry them at all — its own sound pickers, its
+/// window style, the report form — or because which wire field backs them could not be established
+/// from the section's own documentation, and a mirrored control wired to the wrong field is worse
+/// than one that plainly does nothing.
+#[derive(Debug, Clone)]
+pub struct InterfaceSettings {
+    /// `trading.buy_on_enter`: the Enter key buys.
+    pub buy_on_enter: bool,
+    /// `trading.dbl_click_panic_sell`: the panic-sell button needs a double click.
+    pub dbl_click_panic_sell: bool,
+    /// `trading.chart_split_zones`: draw the split-zone lines on the chart.
+    pub chart_split_zones: bool,
+    /// `trading.draw_stop`: draw the stop-loss line on the chart.
+    pub draw_stop: bool,
+    /// `trading.pending_orders_spread` and `trading.pending_orders_spread_h_delta`: the spread a
+    /// pending order is placed at, and the hDelta term added to it.
+    pub pending_orders_spread: f64,
+    pub pending_orders_spread_h_delta: f64,
+    /// `visual.hide_forum_label`.
+    pub hide_forum_label: bool,
+    /// `visual.scrolling_charts`.
+    pub scrolling_charts: bool,
+    /// `visual.startup_load_charts`: open the saved charts when the core starts.
+    pub startup_load_charts: bool,
+    /// `visual.hide_right_chart_panel`.
+    pub hide_right_chart_panel: bool,
+    /// `visual.left_chart_info`: the chart's info panel sits on the LEFT.
+    ///
+    /// Moonbot's checkbox says the opposite ("Информация на графике справа"), so the expert window
+    /// negates it. Kept in the wire's polarity here, where the wire's name is the contract.
+    pub left_chart_info: bool,
+    /// `visual.show_iceberg`.
+    pub show_iceberg: bool,
+    /// `visual.show_orders_captions` and `visual.orders_captions_lower`.
+    pub show_orders_captions: bool,
+    pub orders_captions_lower: bool,
+    /// `visual.hide_pnl`.
+    pub hide_pnl: bool,
+    /// `visual.hide_buy_button`.
+    pub hide_buy_button: bool,
+    /// `visual.hide_cashback_button` — the button Moonbot's dialog calls "MoonBonus".
+    pub hide_cashback_button: bool,
+    /// `visual.remember_chart_buttons`.
+    pub remember_chart_buttons: bool,
+    /// `visual.show_filters.scale_tool`.
+    pub scale_tool: bool,
+    /// `visual.icon_selection`: index of the tray-icon variant. Shown, not chosen — the protocol
+    /// carries no table to name the variants with.
+    pub icon_selection: i32,
+    /// `visual.colors.price_line_width`.
+    pub price_line_width: i32,
+    /// `visual.panic_sell_opacity`, in whole per cent.
+    pub panic_sell_opacity: i32,
+    /// `visual.book_cumulative_opacity` and `visual.book_orders_opacity`, in whole per cent, and
+    /// `visual.book_orders_width` in pixels: the order-book zone fill, its order levels, and how
+    /// wide a level is drawn.
+    pub book_cumulative_opacity: i32,
+    pub book_orders_opacity: i32,
+    pub book_orders_width: i32,
+    /// `signals.play_signal_sound`: play a sound on NETWORK problems — a disconnect or high
+    /// latency, throttled by the core to once every five seconds.
+    ///
+    /// Named after the wire like everything else here, and the wire's own doc warns that the name
+    /// is historical: it is a connectivity alert, not a signal sound. It sits in THIS block rather
+    /// than in [`SignalsSettings`] beside the wire fields it neighbours, because an area is a PAGE:
+    /// Moonbot draws this switch on the Interface page and the compact popup draws it nowhere, so
+    /// leaving it in the signals block would have let that popup's OK write its own frozen copy of
+    /// a control it never showed.
+    pub play_signal_sound: bool,
+    /// `ui.confirm_close`: ask before closing Moonbot.
+    pub confirm_close: bool,
+    /// `ui.hide_demo_button`.
+    pub hide_demo_button: bool,
+}
+
+/// Hand-written for the same reason [`ManualSettings`]'s is: the two spreads are `f64` read off the
+/// wire, and a core holding a non-finite one must still compare equal to ITSELF. Under a derived
+/// `PartialEq` it would not — IEEE says `NaN != NaN` — and
+/// `feed::live::shared_config::edit_satisfied` would then be permanently false for that core, so
+/// every OK on it would burn all three attempts and give up.
+impl PartialEq for InterfaceSettings {
+    fn eq(&self, other: &Self) -> bool {
+        self.pending_orders_spread
+            .total_cmp(&other.pending_orders_spread)
+            .is_eq()
+            && self
+                .pending_orders_spread_h_delta
+                .total_cmp(&other.pending_orders_spread_h_delta)
+                .is_eq()
+            && self.buy_on_enter == other.buy_on_enter
+            && self.dbl_click_panic_sell == other.dbl_click_panic_sell
+            && self.chart_split_zones == other.chart_split_zones
+            && self.draw_stop == other.draw_stop
+            && self.hide_forum_label == other.hide_forum_label
+            && self.scrolling_charts == other.scrolling_charts
+            && self.startup_load_charts == other.startup_load_charts
+            && self.hide_right_chart_panel == other.hide_right_chart_panel
+            && self.left_chart_info == other.left_chart_info
+            && self.show_iceberg == other.show_iceberg
+            && self.show_orders_captions == other.show_orders_captions
+            && self.orders_captions_lower == other.orders_captions_lower
+            && self.hide_pnl == other.hide_pnl
+            && self.hide_buy_button == other.hide_buy_button
+            && self.hide_cashback_button == other.hide_cashback_button
+            && self.remember_chart_buttons == other.remember_chart_buttons
+            && self.scale_tool == other.scale_tool
+            && self.play_signal_sound == other.play_signal_sound
+            && self.confirm_close == other.confirm_close
+            && self.hide_demo_button == other.hide_demo_button
+            && self.icon_selection == other.icon_selection
+            && self.price_line_width == other.price_line_width
+            && self.panic_sell_opacity == other.panic_sell_opacity
+            && self.book_cumulative_opacity == other.book_cumulative_opacity
+            && self.book_orders_opacity == other.book_orders_opacity
+            && self.book_orders_width == other.book_orders_width
+    }
+}
+
 /// Automatic leverage and margin management from `trading.auto_manage_lev`.
 ///
 /// Written through the safe-share channel rather than the `LevManage` command: the core never sends
@@ -428,6 +564,7 @@ pub enum CoreConfigArea {
     AutoStart,
     BtcBlink,
     General,
+    Interface,
     Leverage,
     Manual,
     Signals,
