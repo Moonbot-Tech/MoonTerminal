@@ -580,7 +580,7 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
 ///     zone: Selected IANA display zone for timestamp columns.
 ///
 /// Returns:
-///     Clipped table cell ready for MoonDataTable.
+///     Table cell with ellipsis and full-text hover affordances for free-text values.
 fn report_data_cell(
     row: usize,
     col: &str,
@@ -597,13 +597,16 @@ fn report_data_cell(
     // font styling comes from the cell style through MoonUI cascading.
     let right = is_numeric_report_column(col);
     let color = color.unwrap_or_else(|| MoonTone::Default.color(p));
-    let tooltip = cell_tooltip(col, &text);
+    let free_text = is_free_text_report_value(col, val);
+    let tooltip =
+        cell_tooltip(col, &text).or_else(|| (free_text && !text.is_empty()).then(|| text.clone()));
     let inner = div()
         .id(SharedString::from(format!("report-cell-{row}-{col}")))
         .flex()
         .w_full()
         .min_w_0()
         .overflow_hidden()
+        .when(free_text, |d| d.truncate())
         .when(right, |d| d.justify_end())
         .text_color(rgb(color))
         .font_weight(cell_weight(col))
@@ -614,16 +617,72 @@ fn report_data_cell(
     MoonDataCell::element(inner)
 }
 
-/// Preserve complete historical-rate provenance when the compact source column clips it.
+/// Preserve complete free text when its compact Report column clips it.
 ///
 /// Args:
 ///     col: Runtime report column name.
 ///     text: Fully formatted cell text.
 ///
 /// Returns:
-///     Full source text only for a non-empty valuation provenance cell.
+///     Full text for a non-empty free-text cell, otherwise `None`.
 fn cell_tooltip(col: &str, text: &str) -> Option<String> {
-    (col == db::VALUATION_SOURCE_COLUMN && !text.is_empty()).then(|| text.to_string())
+    (is_free_text_report_column(col) && !text.is_empty()).then(|| text.to_string())
+}
+
+/// Return whether a generic Report cell carries free text rather than a number, date, or enum.
+///
+/// Args:
+///     col: Runtime report column name.
+///
+/// Returns:
+///     `true` for columns whose complete text must remain reachable when clipped.
+fn is_free_text_report_column(col: &str) -> bool {
+    matches!(
+        col,
+        db::VALUATION_SOURCE_COLUMN
+            | "exorderid"
+            | "source"
+            | "channel"
+            | "channelname"
+            | "signaltype"
+            | "fname"
+            | "status"
+            | "sellreason"
+            | "comment"
+    )
+}
+
+/// Return whether this runtime value must keep its complete text reachable when clipped.
+///
+/// The core can append columns that are not part of the terminal's known schema. Their SQLite
+/// value is the only type signal available at this boundary, while known numeric and date column
+/// names remain authoritative when an old or repaired database stores one as text.
+///
+/// Args:
+///     col: Runtime report column name.
+///     value: SQLite value supplied for this row and column.
+///
+/// Returns:
+///     `true` for known free-text columns and runtime text outside numeric/date columns.
+fn is_free_text_report_value(col: &str, value: &Value) -> bool {
+    is_free_text_report_column(col)
+        || (matches!(value, Value::Text(_))
+            && !is_numeric_report_column(col)
+            && !is_date_report_column(col))
+}
+
+/// Return whether a Report column carries a timestamp rather than prose.
+///
+/// Args:
+///     col: Runtime report column name.
+///
+/// Returns:
+///     `true` for the replicated and terminal-authored timestamp columns.
+fn is_date_report_column(col: &str) -> bool {
+    matches!(
+        col,
+        "buydate" | "closedate" | "sellsetdate" | "last_update_at"
+    )
 }
 
 /// Return the font weight a GENERIC Report data cell's text is drawn — and MEASURED — with.
