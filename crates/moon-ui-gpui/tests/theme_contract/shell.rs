@@ -1654,11 +1654,13 @@ fn the_multi_select_hint_clips_instead_of_wrapping() {
     );
 }
 
-/// Protects one-server Auto search from repeating the same server on every result row.
+/// Protects one-server Auto search from repeating the server or covering a result row.
 ///
 /// The plausible edit is changing `when(show_server_per_row, ..)` to `when(true, ..)` while
 /// restyling the row. The popup would still show the correct Auto context above the list, but every
 /// row would regain the redundant `@server` suffix and recreate the clutter this context removes.
+/// Restoring a tooltip to the result row would cover that row, so the server remains visible only in
+/// the popup context.
 #[test]
 fn single_server_auto_search_names_the_server_once() {
     let coin_search = read_src("controls/coin_search.rs");
@@ -1680,14 +1682,25 @@ fn single_server_auto_search_names_the_server_once() {
             && popup.contains("chart.coin.server_context"),
         "a popup-level server context must be the sole decision that suppresses row attribution"
     );
+    let popup_server_context = code_only(chain_between(
+        &popup,
+        "if let Some(server) = server_context {",
+        "if multi_select {",
+        "the single-server popup context",
+    ));
+    assert!(
+        popup_server_context.contains("t!(\"chart.coin.server_context\", server = server)")
+            && popup_server_context.contains(".child(context)"),
+        "the single-server popup must visibly name its server above the result rows"
+    );
     let rows = code_only(braced_body(&coin_search, "fn push_section<F, G>("));
     assert!(
         rows.contains(".when(show_server_per_row, |row|"),
         "single-server Auto rows must omit the repeated visible @server suffix"
     );
     assert!(
-        rows.contains("format!(\"{pair} @ {server}\")"),
-        "the full instrument/server identity must remain available in the row tooltip"
+        !rows.contains(".tooltip(") && !rows.contains("text_tooltip("),
+        "result rows must not attach a tooltip that can cover the row"
     );
 
     let strip = code_only(braced_body(

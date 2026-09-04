@@ -1,9 +1,8 @@
 //! Shared market picker for typed search and cached empty-field suggestions.
 //!
 //! Rows group identical full instrument labels across cores. They show the core as secondary
-//! `@server` context unless one popup-level server context covers the whole list; the full pairing
-//! remains in each row's tooltip. The widget does not define selection behavior; its owner supplies
-//! `on_pick`.
+//! `@server` context unless one popup-level server context covers the whole list. The widget does
+//! not define selection behavior; its owner supplies `on_pick`.
 //! Chart tabs open a market and may show Recent and Top 24h volatility sections, while the header
 //! rate ticker and Report token filter remain query-only consumers.
 //!
@@ -44,6 +43,12 @@ pub(crate) const COIN_SEARCH_LIMIT: usize = 8;
 /// beside the perpetual, and at eight rows the perpetual can fall outside the answer entirely —
 /// the comparison would then open a dated contract while claiming to show the coin.
 pub(crate) const COIN_MATCH_LIMIT: usize = 32;
+
+/// Maximum logical height before the coin list starts scrolling.
+const COIN_LIST_RAW_CAP: f32 = 340.0;
+
+/// Logical height of the continuation fade over an overflowing coin list.
+const COIN_LIST_FADE_H: f32 = 12.0;
 
 /// Returns the cores whose market universes feed this token field. None searches the full group,
 /// the same as a shared bucket.
@@ -185,7 +190,7 @@ pub(crate) struct CoinHit {
     pub(crate) core: CoreId,
     /// Market key, used to open and to match the selection. Never displayed.
     pub(crate) market: String,
-    /// Core name shown beside the coin or in the popup-level context and row tooltip.
+    /// Core name shown beside the coin or in the popup-level context.
     pub(crate) server: String,
     /// Coin token and quote as the CORE names them; see `MarketDataSource::market_label`.
     pub(crate) label: MarketLabel,
@@ -580,6 +585,66 @@ pub(crate) enum CoinResults {
     },
 }
 
+/// Returns the fixed height shared by every direct child of the scrolling result list.
+///
+/// Args:
+///     cx: Application context used to resolve the font-scaled design height.
+///
+/// Returns:
+///     The row height in logical pixels.
+fn coin_row_h(cx: &App) -> f32 {
+    design::fit_h_value(cx, 20.0, 12.0, 4.0)
+}
+
+/// Returns the visible whole-row count for a raw viewport cap.
+///
+/// Args:
+///     raw_cap: Maximum viewport height in logical pixels.
+///     row_h: Fixed direct-child row height in logical pixels.
+///
+/// Returns:
+///     The floored integral count when a row fits, or one slot to keep a scaled list visible; the
+///     latter minimum can exceed `raw_cap`.
+fn whole_row_slots(raw_cap: f32, row_h: f32) -> usize {
+    (raw_cap / row_h).floor().max(1.0) as usize
+}
+
+/// Returns a viewport cap composed of complete result rows.
+///
+/// Args:
+///     raw_cap: Maximum viewport height in logical pixels.
+///     row_h: Fixed direct-child row height in logical pixels.
+///
+/// Returns:
+///     The largest integral cap at or below `raw_cap` when one row fits, or one full row so the
+///     list cannot collapse; that minimum can exceed `raw_cap`.
+fn whole_row_cap(raw_cap: f32, row_h: f32) -> f32 {
+    whole_row_slots(raw_cap, row_h) as f32 * row_h
+}
+
+/// Counts the fixed-height direct children that a result set adds to the scrolling list.
+///
+/// Args:
+///     results: Query matches or suggestion sections to render.
+///
+/// Returns:
+///     Result, empty-state, and non-empty section-heading rows, excluding popup context rows.
+fn result_row_count(results: &CoinResults) -> usize {
+    match results {
+        CoinResults::Query(hits) => hits.len().max(1),
+        CoinResults::Suggest { recent, volatile } => {
+            if recent.is_empty() && volatile.is_empty() {
+                1
+            } else {
+                recent.len()
+                    + usize::from(!recent.is_empty())
+                    + volatile.len()
+                    + usize::from(!volatile.is_empty())
+            }
+        }
+    }
+}
+
 /// Renders one section of rows into `list`, preceded by `heading` when there is something to show.
 ///
 /// Args:
@@ -620,14 +685,17 @@ where
     if hits.is_empty() {
         return list;
     }
+    let row_h = coin_row_h(cx);
     let hover_bg = rgb(p.shell_high);
     if let Some(heading) = heading {
         list = list.child(
             div()
                 .w_full()
+                .h(px(row_h))
+                .flex_none()
+                .flex()
+                .items_center()
                 .px(design::ui_px(cx, 8.0))
-                .pt(design::ui_px(cx, 6.0))
-                .pb(design::ui_px(cx, 2.0))
                 .text_size(design::t_caption(cx))
                 .text_color(rgb(p.text_muted))
                 .child(heading),
@@ -653,7 +721,6 @@ where
         } else {
             rgb(p.text_soft)
         };
-        let tip = SharedString::from(format!("{pair} @ {server}"));
         let on_pick = on_pick.clone();
         let market_pick = market.clone();
         let checked = selected.contains(&(core, market.clone()));
@@ -663,13 +730,13 @@ where
             div()
                 .id(SharedString::from(format!("{id}-{section}-row-{i}")))
                 .w_full()
+                .h(px(row_h))
+                .flex_none()
+                .flex()
+                .items_center()
                 .px(design::ui_px(cx, 8.0))
-                .py(design::ui_px(cx, 4.0))
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
-                // Visible row attribution may truncate or move to the popup header, so the full
-                // pairing is always available on hover.
-                .tooltip(crate::panels::common::text_tooltip(tip))
                 .child(
                     h_flex()
                         .w_full()
@@ -793,19 +860,22 @@ where
 {
     let selected_count = selected.len();
     let show_server_per_row = server_context.is_none();
+    let row_h = coin_row_h(cx);
+    let visible_slots = whole_row_slots(COIN_LIST_RAW_CAP, row_h);
+    let list_cap = whole_row_cap(COIN_LIST_RAW_CAP, row_h);
+    let direct_child_count = result_row_count(&results)
+        + usize::from(server_context.is_some())
+        + usize::from(multi_select);
+    let list_overflows = direct_child_count > visible_slots;
     // `.id(..)` makes the container stateful so `overflow_y_scroll` can let GPUI track wheel
-    // scrolling by ID. Without it, max_h would simply clip a long list.
+    // scrolling by ID. The integral cap keeps its final visible row whole at every font scale.
     let mut list = div()
         .id(SharedString::from(format!("{id}-list")))
         .flex()
         .flex_col()
         .w_full()
-        // Roughly a dozen rows before it starts scrolling. Raw pixels, unlike the width beside it:
-        // the rows inside are font-scaled, so at a larger Font setting this shows fewer of them —
-        // it is a scroll threshold, not a layout the content has to fit.
-        .max_h(px(340.0))
-        .overflow_y_scroll()
-        .py(design::ui_px(cx, 4.0));
+        .max_h(px(list_cap))
+        .overflow_y_scroll();
 
     if let Some(server) = server_context {
         let context = t!("chart.coin.server_context", server = server).to_string();
@@ -814,8 +884,11 @@ where
             div()
                 .id(SharedString::from(format!("{id}-server-context")))
                 .w_full()
+                .h(px(row_h))
+                .flex_none()
+                .flex()
+                .items_center()
                 .px(design::ui_px(cx, 8.0))
-                .pb(design::ui_px(cx, 4.0))
                 .whitespace_nowrap()
                 .overflow_hidden()
                 .truncate()
@@ -835,8 +908,11 @@ where
         list = list.child(
             div()
                 .w_full()
+                .h(px(row_h))
+                .flex_none()
+                .flex()
+                .items_center()
                 .px(design::ui_px(cx, 8.0))
-                .pb(design::ui_px(cx, 4.0))
                 .whitespace_nowrap()
                 .overflow_hidden()
                 .text_size(design::t_caption(cx))
@@ -848,8 +924,12 @@ where
     let empty_note = |list: Stateful<Div>, text: String| {
         list.child(
             div()
+                .w_full()
+                .h(px(row_h))
+                .flex_none()
+                .flex()
+                .items_center()
                 .px(design::ui_px(cx, 8.0))
-                .py(design::ui_px(cx, 4.0))
                 .text_size(design::t_caption(cx))
                 .text_color(rgb(p.text_muted))
                 .child(text),
@@ -912,6 +992,29 @@ where
             }
         }
     }
+
+    // The fade is anchored outside the scroll content and has no input handlers, so it signals
+    // continuation without becoming another row or taking wheel/click interaction from the list.
+    let list = div()
+        .relative()
+        .flex_none()
+        .w_full()
+        .child(list)
+        .when(list_overflows, |wrapper| {
+            wrapper.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(design::ui_px(cx, COIN_LIST_FADE_H))
+                    .bg(linear_gradient(
+                        180.0,
+                        linear_color_stop(design::moon_alpha(p.panel_high, 0.0), 0.0),
+                        linear_color_stop(design::moon_alpha(p.panel_high, 1.0), 1.0),
+                    )),
+            )
+        });
 
     // Show the Open in New Tab footer only in multi-select mode and enable it for a nonempty
     // selection. Keep it outside the scroller so it remains visible, with the selected count in

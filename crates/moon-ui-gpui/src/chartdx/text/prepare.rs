@@ -802,13 +802,16 @@ impl RenderState {
             }
 
             // Place time labels at ROUND local-time boundaries (`nice_time_step`, from 1 s to 6 h
-            // for roughly six labels). Fixed window fractions previously produced non-round times
-            // with uneven steps, such as 19:46, 19:56, 20:05 (+10, then +9).
+            // with a target derived from plot width). Fixed window fractions previously produced
+            // non-round times with uneven steps, such as 19:46, 19:56, 20:05 (+10, then +9).
             if !time_axis_visible {
                 continue;
             }
-            let step_ms =
-                (moon_chart::axes::nice_time_step(window_ms / 1000.0, 6.0) * 1000.0).max(1000.0);
+            let step_ms = (moon_chart::axes::nice_time_step(
+                window_ms / 1000.0,
+                moon_chart::axes::time_label_target(plot_w),
+            ) * 1000.0)
+                .max(1000.0);
             let with_sec = step_ms < 60_000.0;
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
