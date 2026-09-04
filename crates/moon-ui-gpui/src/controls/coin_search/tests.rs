@@ -5,7 +5,7 @@
 
 use super::{
     CoinHit, MOVER_VOL_REF, Mover, group_hits, merge_ranked_heads, mover_score,
-    neutralize_blind_provider, turnover_usd,
+    neutralize_blind_provider, turnover_usd, whole_row_cap,
 };
 use moon_core::market::MarketLabel;
 
@@ -262,4 +262,59 @@ fn a_market_that_traded_nothing_is_not_a_market_of_unknown_turnover() {
     let unknown = mover_score(40.0, turnover_usd(5.0, None).unwrap_or(MOVER_VOL_REF));
     assert_eq!(dead, 0.0, "a dead market scores zero");
     assert!(unknown > 0.0, "an unknown one still competes: {unknown}");
+}
+
+/// The list cap must not exceed its raw viewport budget after it rounds down to complete rows.
+///
+/// Breakage this pins: rounding the slot quotient upward would let the dropdown exceed its
+/// intended maximum height.
+#[test]
+fn whole_row_cap_never_exceeds_its_raw_limit() {
+    let raw_cap = 340.0;
+    let cap = whole_row_cap(raw_cap, 27.0);
+
+    assert!(
+        cap <= raw_cap,
+        "the complete-row cap must stay within raw limit {raw_cap}: got {cap}"
+    );
+}
+
+/// The list cap must finish on a complete direct-child row at a font-scaled row height.
+///
+/// Breakage this pins: returning the raw cap would clip the final visible coin result when the
+/// row height does not divide 340 logical pixels.
+#[test]
+fn whole_row_cap_is_an_integral_multiple_of_the_row_height() {
+    let row_h = 27.0;
+    let cap = whole_row_cap(340.0, row_h);
+
+    assert_eq!(cap / row_h, (cap / row_h).floor());
+}
+
+/// The dropdown must preserve one visible row even when its configured cap is smaller than a row.
+///
+/// Breakage this pins: dropping the one-row minimum would collapse a scaled coin list to an empty
+/// viewport.
+#[test]
+fn whole_row_cap_retains_one_row_below_the_raw_floor() {
+    assert_eq!(whole_row_cap(5.0, 27.0), 27.0);
+}
+
+/// `render_popup` must cap the scroll list through the complete-row helper instead of raw 340 px.
+///
+/// Breakage this pins: restoring `max_h(px(340.0))` would clip the final visible result again at
+/// larger font scales even while the pure helper's direct tests remain green.
+#[test]
+fn render_popup_wires_whole_row_cap_instead_of_raw_height() {
+    let source = include_str!("../coin_search.rs");
+    let popup_source = source
+        .split_once("pub(crate) fn render_popup")
+        .expect("coin search module must retain render_popup")
+        .1;
+
+    assert!(popup_source.contains("whole_row_cap(COIN_LIST_RAW_CAP, row_h)"));
+    assert!(
+        !popup_source.contains(".max_h(px(340.0))"),
+        "render_popup must not restore the raw 340 px cap"
+    );
 }

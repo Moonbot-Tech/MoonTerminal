@@ -401,12 +401,22 @@ impl RenderState {
                     continue;
                 }
                 let (align, elastic) = (bands[n].align, bands[n].elastic);
-                let max_w = match (cap, elastic) {
+                let (x, fraction) = zone_anchor(zone, align, &geom, &corner);
+                let base_left = zone_bounds(zone, &geom, &corner).0;
+                // A special left anchor spends part of the zone before its text begins, so remove
+                // that inset from the text budget instead of letting a long caption cross the far
+                // edge by the same amount.
+                let anchor_inset = if align == LabelAlign::Left {
+                    (x - base_left).max(0.0)
+                } else {
+                    0.0
+                };
+                let max_w = (match (cap, elastic) {
                     (None, _) => total,
                     (Some(cap), false) => cap,
                     (Some(_), true) => widths::free_width(total, align, taken),
-                };
-                let (x, fraction) = zone_anchor(zone, align, &geom, &corner);
+                } - anchor_inset)
+                    .max(0.0);
                 let column = Column {
                     x,
                     align: fraction,
@@ -1464,6 +1474,10 @@ fn zone_width(zone: LabelZone, geom: &CaptionGeomInput, corner: &CaptionGeom) ->
 
 /// Where one band anchors, and at which fraction of its own width.
 ///
+/// A left-aligned plot band clears a left price-axis gutter by sixteen logical pixels, which the
+/// caption pass scales with the rest of its geometry. Every other zone and alignment keeps the
+/// ordinary zone inset.
+///
 /// Only the anchor: what a band may SPEND is what its neighbours in the same zone left it, which
 /// only `draw_all_zones` knows.
 fn zone_anchor(
@@ -1474,7 +1488,11 @@ fn zone_anchor(
 ) -> (f32, f32) {
     // Each band knows its own edges; the alignment picks which of them the row anchors to.
     let (left, right) = zone_bounds(zone, geom, corner);
+    let has_left_axis_gutter = geom.plot_left - geom.pane_left > 0.5 / geom.scale_factor.max(0.1);
     let x = match align {
+        LabelAlign::Left if !zone.is_control_zone() && has_left_axis_gutter => {
+            geom.plot_left + 16.0
+        }
         LabelAlign::Left => left,
         LabelAlign::Center => (left + right) * 0.5,
         LabelAlign::Right => right,

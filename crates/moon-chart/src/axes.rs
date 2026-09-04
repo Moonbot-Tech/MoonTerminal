@@ -67,3 +67,18 @@ pub fn nice_time_step(window_sec: f64, target: f64) -> f64 {
     }
     STEPS[STEPS.len() - 1]
 }
+
+/// Returns the count of round time-axis labels appropriate for a plot width.
+///
+/// Args:
+///     plot_width_px: Available plot width in logical pixels.
+///
+/// Returns:
+///     The nearest target at one label per 190 logical pixels, floored at three so narrow charts
+///     retain a readable time axis.
+pub fn time_label_target(plot_width_px: f32) -> f64 {
+    (plot_width_px / 190.0).round().max(3.0) as f64
+}
+
+#[cfg(test)]
+mod tests;

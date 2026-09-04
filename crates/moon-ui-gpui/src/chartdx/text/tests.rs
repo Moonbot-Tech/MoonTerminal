@@ -63,3 +63,25 @@ fn prepare_wires_compact_order_size_label() {
     assert!(source.contains("let text = fmt_prospective_order_size(usd);"));
     assert!(!source.contains("format!(\"{usd:.2}\")"));
 }
+
+/// The chart time-step preparation must use the width-derived target rather than a fixed count.
+///
+/// Breakage this pins: restoring the former literal `6.0` target would under-label wide plots and
+/// crowd narrow plots even though the pure axis helper's direct tests remain green.
+#[test]
+fn prepare_wires_width_derived_time_label_target() {
+    let source = include_str!("prepare.rs");
+    let compact: String = source.split_whitespace().collect();
+    let call = "moon_chart::axes::nice_time_step(window_ms/1000.0,";
+
+    assert!(
+        compact.contains(&format!(
+            "{call}moon_chart::axes::time_label_target(plot_w),)"
+        )),
+        "prepared time steps must receive the plot-width target"
+    );
+    assert!(
+        !compact.contains(&format!("{call}6.0)")),
+        "prepared time steps must not restore the fixed six-label target"
+    );
+}
