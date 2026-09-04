@@ -1,5 +1,5 @@
-//! Calendar "Year" mode: EVERY year at once — each year is a grid of 12 month
-//! squares (current year on top, future months greyed out). Click a month →
+//! Calendar "Year" mode: every year at once, with active years as 12-month grids and historical
+//! no-trade years as compact rows (current year on top, future months greyed out). Click a month →
 //! "Month" mode. Prev/Next navigation does nothing in this mode.
 
 use std::collections::HashMap;
@@ -17,6 +17,15 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::DayCell;
 
 impl AnalyticsView {
+    /// Render the complete Calendar history as expanded or compact year rows.
+    ///
+    /// Args:
+    ///     days: Loaded daily Calendar cells across the historical range.
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Scrollable Year-mode content.
     pub(super) fn calendar_year(
         &self,
         days: &[DayCell],
@@ -41,7 +50,11 @@ impl AnalyticsView {
         // Years top to bottom: the current one first, then back into the past.
         let mut list = v_flex().w_full().gap(design::ui_px(cx, 18.0));
         for y in (min_year..=cy).rev() {
-            list = list.child(self.year_block(y, cy, cm, &agg, p, cx));
+            if should_collapse_year(y, cy, &agg) {
+                list = list.child(collapsed_year_row(y, p, cx));
+            } else {
+                list = list.child(self.year_block(y, cy, cm, &agg, p, cx));
+            }
         }
         div()
             .flex_1()
@@ -187,4 +200,64 @@ impl AnalyticsView {
         }
         cell
     }
+}
+
+/// Return whether a historical year has no trades in any of its twelve months.
+///
+/// The current year always retains its month grid, while any year with at least one trade also
+/// remains expanded regardless of its position at the edge of the fetched history.
+///
+/// Args:
+///     year: Candidate year.
+///     current_year: Current selected-zone year.
+///     aggregates: Month aggregates keyed by year and month.
+///
+/// Returns:
+///     `true` only for a non-current year whose twelve trade counts are all zero.
+fn should_collapse_year(
+    year: i32,
+    current_year: i32,
+    aggregates: &HashMap<(i32, u32), (f64, i64)>,
+) -> bool {
+    year != current_year
+        && (1..=12).all(|month| {
+            aggregates
+                .get(&(year, month))
+                .is_none_or(|(_, trades)| *trades == 0)
+        })
+}
+
+/// Render one compact historical year row whose months contain no trades.
+///
+/// Args:
+///     year: Historical year represented by the row.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     A single presentation row with the year and localized no-trades wording.
+fn collapsed_year_row(year: i32, p: MoonPalette, cx: &App) -> impl IntoElement {
+    h_flex()
+        .flex_none()
+        .w_full()
+        .min_h(design::ui_px(cx, 44.0))
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, 10.0))
+        .rounded(design::ui_px(cx, 8.0))
+        .bg(moon(p.panel))
+        .border_1()
+        .border_color(moon_alpha(p.border, 0.35))
+        .child(
+            div()
+                .text_size(design::t_title(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(year.to_string()),
+        )
+        .child(
+            div()
+                .text_size(design::t_body(cx))
+                .text_color(moon(p.text_muted))
+                .child(t!("strat.version_no_trades").to_string()),
+        )
 }
