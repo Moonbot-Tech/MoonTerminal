@@ -94,17 +94,19 @@ impl ReportPanel {
             Some(text) => (text, p.text),
             None => (t!("report.comment.empty").to_string(), p.text_muted),
         };
-        // `items_start` is explicit — `h_flex` centres its children, which would push the first
-        // lines of a capped comment above scroll offset 0, out of reach.
+        // Two lines: the caption on its own row above the text, so the comment starts at the
+        // pane's left edge and wraps across its whole width. `items_start` is explicit — a
+        // centred column would push the first lines of a capped comment above scroll offset 0,
+        // out of reach.
         let row_h = design::table_row_h(cx);
-        h_flex()
+        v_flex()
             .id("rep-comment")
             .w_full()
             .flex_none()
             .items_start()
             .px_2()
             .py_0p5()
-            .gap_2()
+            .gap_0p5()
             // Its own surface, not the table's: without a lift the comment reads as one more
             // (unaligned) table row, and the table's unused tail below the last row reads as part
             // of the comment. The top rule closes the table above it.
@@ -122,18 +124,20 @@ impl ReportPanel {
             // letting it paint outside the panel.
             .overflow_x_hidden()
             .child(
+                // The caption reuses the scope-field row's label; the colon marks it as a heading
+                // for the text below rather than a value of its own.
                 div()
                     .flex_none()
                     .text_size(design::t_caption(cx))
                     .text_color(rgb(p.text_muted))
-                    .child(t!("report.comment.show").to_string()),
+                    .child(format!("{}:", t!("report.comment.show"))),
             )
             .child(
                 // `min_w_0` lets the text shrink below its own measured width: GPUI measures text
                 // unwrapped for the automatic minimum size, so without this ANY comment longer
                 // than the pane widens the row instead of wrapping inside it.
                 div()
-                    .flex_1()
+                    .w_full()
                     .min_w_0()
                     // Caption step with the font's own compact line box: the comment is a dense
                     // block under the table, not a continuation of its rows.
