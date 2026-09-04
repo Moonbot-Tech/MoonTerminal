@@ -1,12 +1,18 @@
 //! Moonbot's "Основные" page, row for row.
 //!
-//! Six of its controls are live, because the terminal both projects and may write them: take
+//! Nine of its controls are live, because the terminal both projects and may write them: take
 //! profit and its level, the trailing stop and its level, V-Stop's level and enable flag, the coin
-//! blacklist with its text and its delta filter. Everything else on the page
-//! is drawn and disabled — the stop-loss pair travels on the compact `ClientSettings` channel
-//! rather than in the safe-share page this window sends, and the rest of the rows are in the
-//! safe-share section but outside `moon_core::feed::CoreConfig`, so there is nothing to seed them
-//! from and nothing OK could carry.
+//! blacklist with its text and its delta filter.
+//!
+//! Everything else on the page is drawn and disabled for ONE reason: the field is in the safe-share
+//! section but outside `moon_core::feed::GeneralSettings`, so there is nothing to seed the row from
+//! and nothing OK could carry. That includes the stop-loss pair
+//! (`trading.panic_if_price_drop` / `trading.price_drop_level`).
+//!
+//! Those two carry the wire's "Mirrors `ClientSettingsCommand::…`" note, and that note is NOT what
+//! holds them back: five of the fields this page already writes carry it too — `trailing_stop`,
+//! `g_take_profit`, `vol_drop_level`, `coins_black_list_text`, `use_coins_black_list`. The note
+//! says the compact channel carries the same field, not that this one may not.
 //!
 //! The disabled rows still print their captions in Moonbot's wording, with an em dash where the
 //! value would be: a row that showed `0.00%` would state a setting this terminal has not read.
@@ -22,9 +28,7 @@ use crate::shell::editors::EditorStore;
 use crate::shell::{TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS};
 
 use super::super::CoreExpertView;
-use super::super::widgets::{
-    action, caption, columns, field, flag, group, hint, rows, slider, text_line,
-};
+use super::super::widgets::{action, caption, columns, field, flag, group, hint, rows, slider};
 
 /// Bounds of the dead sliders that count UP, and of the ones that count down from zero.
 ///
@@ -205,8 +209,10 @@ pub(super) fn body(
             |_, _| {},
         ));
 
-    // Moonbot's clipboard transfer of its own settings. It is an ACTION of that process, not a
-    // value: nothing about it crosses the wire, so both buttons are drawn dead.
+    // Moonbot's clipboard transfer of its own settings, drawn dead because nothing here implements
+    // it yet — NOT because it cannot be. The window holds the whole snapshot, and moonproto exports
+    // the very format those buttons use (`shared_config::to_mbsc_string` / `from_mbsc_string` and
+    // the `.mbshare` byte form), so both are a piece of work rather than a limit of the wire.
     let transfer = group(
         "exp-gen-transfer",
         t!("core_expert.gen_transfer_frame").to_string(),
@@ -292,12 +298,6 @@ pub(super) fn body(
                     false,
                     view,
                     |_, _| {},
-                ))
-                .child(text_line(
-                    t!("core_expert.gen_need_help").to_string(),
-                    design::positive_color(p),
-                    false,
-                    cx,
                 )),
         )
         .child(columns(

@@ -27,7 +27,7 @@ use crate::shell::{
 };
 
 use super::super::CoreExpertView;
-use super::super::widgets::{caption, flag, hint, num, rows, slider, sound_cell, text_line};
+use super::super::widgets::{caption, flag, hint, num, rows, slider, sound_cell};
 use super::ProfitCounter;
 
 /// See [`super::field_specs`].
@@ -817,21 +817,14 @@ pub(super) fn body(
     v_flex()
         .w_full()
         .gap(design::ui_px(cx, 8.0))
-        // Moonbot's head: what starts with the core on the left, its working hours in the middle,
-        // and the help link pinned to the right edge.
+        // Moonbot's head: what starts with the core on the left, its working hours beside it.
         .child(
             h_flex()
                 .w_full()
                 .items_start()
                 .gap(design::ui_px(cx, 16.0))
                 .child(div().flex_1().min_w_0().child(startup))
-                .child(div().flex_1().min_w_0().child(work_time))
-                .child(div().flex_none().child(text_line(
-                    t!("core_expert.gen_need_help").to_string(),
-                    design::positive_color(p),
-                    false,
-                    cx,
-                ))),
+                .child(div().flex_1().min_w_0().child(work_time)),
         )
         // The two loss caps side by side, with the emulator switch in Moonbot's narrower third
         // column.

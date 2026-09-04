@@ -527,13 +527,7 @@ pub(super) fn body(
             view,
             |d, on| d.auto_buy.use_stops = on,
         ))
-        .child(hint(t!("core_expert.buy_example").to_string(), p, cx))
-        .child(h_flex().w_full().justify_end().child(text_line(
-            t!("core_expert.gen_need_help").to_string(),
-            design::positive_color(p),
-            false,
-            cx,
-        )));
+        .child(hint(t!("core_expert.buy_example").to_string(), p, cx));
 
     let filter = group(
         "exp-buy-filter",

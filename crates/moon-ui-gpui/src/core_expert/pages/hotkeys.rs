@@ -28,6 +28,25 @@ use super::super::widgets::{caption, dropdown, flag, group, hint, rows, text_blo
 /// Value shown where Moonbot prints something this terminal has not read.
 const NO_VALUE: &str = "—";
 
+/// One id per manual-strategy slot.
+///
+/// Ten rows drawn from one loop, and a GPUI `ElementId` addresses interaction state: sharing a
+/// single id across them makes ten checkboxes into one control. Harmless while all ten are disabled
+/// and stage nothing, which is why it went unseen — and a real collision the day the manual block
+/// becomes writable.
+const MANUAL_SLOT_IDS: [&str; 10] = [
+    "exp-hk-manual-slot-1",
+    "exp-hk-manual-slot-2",
+    "exp-hk-manual-slot-3",
+    "exp-hk-manual-slot-4",
+    "exp-hk-manual-slot-5",
+    "exp-hk-manual-slot-6",
+    "exp-hk-manual-slot-7",
+    "exp-hk-manual-slot-8",
+    "exp-hk-manual-slot-9",
+    "exp-hk-manual-slot-10",
+];
+
 /// Moonbot's built-in shortcut lines, in its own order.
 const BUILT_IN_LINES: [&str; 6] = [
     "core_expert.hk_builtin_1",
@@ -439,7 +458,7 @@ pub(super) fn body(
                     .min_w_0()
                     .gap(design::ui_px(cx, 2.0))
                     .child(flag(
-                        "exp-hk-manual-slot",
+                        MANUAL_SLOT_IDS[index],
                         t!("core_expert.hk_button", n = (index + 1).to_string()).to_string(),
                         shown,
                         false,

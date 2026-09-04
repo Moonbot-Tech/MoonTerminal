@@ -81,10 +81,6 @@ core_expert.gen_analyze_on_start:
   ru: "Анализ монет при запуске"
   en: "Analyse coins on startup"
   es: "Analizar monedas al iniciar"
-core_expert.gen_need_help:
-  ru: "Нужна помощь!"
-  en: "Need help!"
-  es: "¡Necesita ayuda!"
 core_expert.gen_stop_loss:
   ru: "Стоп-лосс: продать если цена < [покупка] %{v}%"
   en: "Stop loss: sell when price < [entry] %{v}%"

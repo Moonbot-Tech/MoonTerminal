@@ -22,7 +22,7 @@ use crate::shell::editors::{CoreDraftHost, EditorStore};
 use super::super::CoreExpertView;
 use super::super::widgets::{
     action, action_live, caption, columns, field, flag, group, hint, list_box_select, rows,
-    text_block, text_line,
+    text_block,
 };
 
 /// See [`super::scratch_specs`].
@@ -347,13 +347,6 @@ pub(super) fn body(
                     .to_string(),
                     false,
                     p,
-                    cx,
-                ))
-                .child(div().flex_1())
-                .child(text_line(
-                    t!("core_expert.gen_need_help").to_string(),
-                    design::positive_color(p),
-                    false,
                     cx,
                 )),
         )

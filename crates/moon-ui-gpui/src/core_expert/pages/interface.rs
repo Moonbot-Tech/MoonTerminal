@@ -9,11 +9,19 @@
 //! What is live is `moon_core::feed::InterfaceSettings` — spread across the wire's `trading`,
 //! `visual`, `signals` and `ui` sections — plus the two price-approach alerts of
 //! `moon_core::feed::SignalsSettings`, which Moonbot draws on this page and the compact popup draws
-//! on its own. This tab names both areas; see `super::super::ExpertTab::add_sections`. The rest
-//! of the page is drawn and disabled for the usual reason: either the snapshot does not carry it
-//! (Moonbot's sound pickers, its window style, the report form), or which wire field backs it could
-//! not be established from the section's documentation — and a mirrored control wired to the wrong
-//! field is worse than one that plainly does nothing.
+//! on its own. This tab names both areas; see `super::super::ExpertTab::add_sections`.
+//!
+//! The rest of the page is drawn and disabled for one of three reasons. Either the snapshot does not
+//! carry it at all (Moonbot's window style, its Pixel Size, the report form), or which wire field
+//! backs it could not be established from the section's own documentation — a mirrored control
+//! wired to the wrong field is worse than one that plainly does nothing.
+//!
+//! Three rows are held back for a third reason, and it is named in `moon_core`'s `apply_interface`
+//! rather than here: "Use Leverage for TP" and "Не учитывать SellPrice ручной стратегии" are
+//! `trading.use_lev_for_take` and `trading.ignore_strat_sell_price`, which already belong to
+//! `ManualSettings` — one wire field belongs to one area — and "Открывать выбранные вручную монеты
+//! в FullScreen" is `visual.manual_charts_full_screen`, which sits behind that section's tail gate
+//! and so could never echo on a core older than the field.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
