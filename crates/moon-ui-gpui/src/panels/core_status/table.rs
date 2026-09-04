@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use super::model::ServerKey;
+use super::model::{ApiKeyState, ServerKey};
 use super::ordering::{FlatLine, FlatSection};
 use super::presentation::{
     api_expiry_level, api_expiry_text, api_quota_level, api_quota_text, connection_presentation,
@@ -24,70 +24,139 @@ use moon_core::feed::{Diagnosis, diagnose};
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
-/// Build the fixed set of sortable server, core, connection, and telemetry columns.
+/// Canonical Flat column order before data-only API columns are filtered.
+const COLUMN_KEYS: [&str; 15] = [
+    "server",
+    "core",
+    "status",
+    "version",
+    "cpu_proc",
+    "cpu_sys",
+    "mem_used",
+    "free_phys",
+    "ping",
+    "ping_exch",
+    "cpus",
+    "api_key",
+    "api_quota",
+    "startup",
+    "tz_off",
+];
+
+/// Decide whether one Flat column has information to display in the visible rows.
+///
+/// Args:
+///     key: Canonical Flat column key.
+///     rows: Current visible-core snapshots.
+///
+/// Returns:
+///     Whether the column belongs in the rendered table.
+fn column_visible(key: &str, rows: &[CoreStatusRow]) -> bool {
+    match key {
+        "api_key" => rows
+            .iter()
+            .any(|row| matches!(row.api_key, ApiKeyState::Days(_))),
+        "api_quota" => rows.iter().any(|row| row.api_quota.is_some()),
+        _ => true,
+    }
+}
+
+/// Return the canonical Flat column keys whose cells contain useful information.
+///
+/// Args:
+///     rows: Current visible-core snapshots.
+///
+/// Returns:
+///     Ordered keys shared by column descriptors and every rendered row.
+pub(super) fn visible_column_keys(rows: &[CoreStatusRow]) -> Vec<&'static str> {
+    COLUMN_KEYS
+        .into_iter()
+        .filter(|key| column_visible(key, rows))
+        .collect()
+}
+
+/// Build the selected sortable server, core, connection, and telemetry columns.
+///
+/// Args:
+///     keys: Canonically ordered visible-column keys.
 ///
 /// Returns:
 ///     Left-aligned identity columns followed by the right-aligned build and numeric telemetry
 ///     columns.
-fn columns() -> Vec<MoonDataTableColumn> {
+fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
     let numeric = |key: &'static str, title: String, w: f32| {
         MoonDataTableColumn::new(key, title, w)
             .right()
             .sortable(true)
     };
-    vec![
-        MoonDataTableColumn::new("server", t!("core_status.col.server").to_string(), 110.0)
+    keys.iter()
+        .map(|key| match *key {
+            "server" => {
+                MoonDataTableColumn::new("server", t!("core_status.col.server").to_string(), 110.0)
+                    .sortable(true)
+            }
+            "core" => {
+                MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0)
+                    .sortable(true)
+            }
+            "status" => {
+                MoonDataTableColumn::new("status", t!("core_status.col.status").to_string(), 110.0)
+                    .sortable(true)
+            }
+            // Right-aligned like the metrics: a column of 3-5 digit build numbers has to align on the
+            // digit, and the one word form ("-") is short enough to sit right. It follows `status`
+            // because it completes the identity block — what this core IS — rather than reporting how
+            // it is doing. Mid-list insertion costs nothing: persisted widths are keyed by column key,
+            // never by index.
+            "version" => numeric("version", t!("core_status.col.version").to_string(), 96.0),
+            "cpu_proc" => numeric("cpu_proc", t!("core_status.col.cpu_proc").to_string(), 90.0),
+            "cpu_sys" => numeric("cpu_sys", t!("core_status.col.cpu_sys").to_string(), 90.0),
+            "mem_used" => numeric(
+                "mem_used",
+                t!("core_status.col.mem_used").to_string(),
+                100.0,
+            ),
+            "free_phys" => numeric(
+                "free_phys",
+                t!("core_status.col.free_phys").to_string(),
+                110.0,
+            ),
+            "ping" => numeric("ping", t!("core_status.col.ping").to_string(), 84.0),
+            "ping_exch" => numeric(
+                "ping_exch",
+                t!("core_status.col.ping_exch").to_string(),
+                96.0,
+            ),
+            "cpus" => numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
+            // Right-aligned like every other metric: the cells are now bare day counts, and a column of
+            // numbers has to align on the digit. The three word forms ("-", "∞", "истёк") are short
+            // enough to sit right without reading oddly.
+            "api_key" => numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0),
+            // Beside the key it belongs with: both answer "can this core still trade", one by date and
+            // one by budget. Right-aligned like every other count, and wide enough for the seven digits
+            // a HyperLiquid address reports.
+            "api_quota" => numeric(
+                "api_quota",
+                t!("core_status.col.api_quota").to_string(),
+                110.0,
+            ),
+            // Left-aligned, unlike the metrics around it: the cell is a phrase ("за 8.4 с", "3/8 · 12.4 с"),
+            // not a figure to align on the digit.
+            "startup" => MoonDataTableColumn::new(
+                "startup",
+                t!("core_status.col.startup").to_string(),
+                110.0,
+            )
             .sortable(true),
-        MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0)
-            .sortable(true),
-        MoonDataTableColumn::new("status", t!("core_status.col.status").to_string(), 110.0)
-            .sortable(true),
-        // Right-aligned like the metrics: a column of 3-5 digit build numbers has to align on the
-        // digit, and the one word form ("-") is short enough to sit right. It follows `status`
-        // because it completes the identity block — what this core IS — rather than reporting how
-        // it is doing. Mid-list insertion costs nothing: persisted widths are keyed by column key,
-        // never by index.
-        numeric("version", t!("core_status.col.version").to_string(), 96.0),
-        numeric("cpu_proc", t!("core_status.col.cpu_proc").to_string(), 90.0),
-        numeric("cpu_sys", t!("core_status.col.cpu_sys").to_string(), 90.0),
-        numeric(
-            "mem_used",
-            t!("core_status.col.mem_used").to_string(),
-            100.0,
-        ),
-        numeric(
-            "free_phys",
-            t!("core_status.col.free_phys").to_string(),
-            110.0,
-        ),
-        numeric("ping", t!("core_status.col.ping").to_string(), 84.0),
-        numeric(
-            "ping_exch",
-            t!("core_status.col.ping_exch").to_string(),
-            96.0,
-        ),
-        numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
-        // Right-aligned like every other metric: the cells are now bare day counts, and a column of
-        // numbers has to align on the digit. The three word forms ("-", "∞", "истёк") are short
-        // enough to sit right without reading oddly.
-        numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0),
-        // Beside the key it belongs with: both answer "can this core still trade", one by date and
-        // one by budget. Right-aligned like every other count, and wide enough for the seven digits
-        // a HyperLiquid address reports.
-        numeric(
-            "api_quota",
-            t!("core_status.col.api_quota").to_string(),
-            110.0,
-        ),
-        // Left-aligned, unlike the metrics around it: the cell is a phrase ("за 8.4 с", "3/8 · 12.4 с"),
-        // not a figure to align on the digit.
-        MoonDataTableColumn::new("startup", t!("core_status.col.startup").to_string(), 110.0)
-            .sortable(true),
-        // Left-aligned like `startup`, right after it: the cell is a short phrase (`UTC+02:00`) or
-        // the localized never-measured marker, not a figure to align on the digit.
-        MoonDataTableColumn::new("tz_off", t!("core_status.col.tz_off").to_string(), 110.0)
-            .sortable(true),
-    ]
+            // Left-aligned like `startup`, right after it: the cell is a short phrase (`UTC+02:00`) or
+            // the localized never-measured marker, not a figure to align on the digit.
+            "tz_off" => {
+                MoonDataTableColumn::new("tz_off", t!("core_status.col.tz_off").to_string(), 110.0)
+                    .sortable(true)
+            }
+            _ => unreachable!("canonical Flat column key"),
+        })
+        .collect()
 }
 
 /// Render the telemetry table: one row per core, under a heading per exchange.
@@ -102,6 +171,7 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///     id: Stable table element identity.
 ///     rows: Immutable, already-sorted visible-core snapshot.
 ///     lines: Headings and member rows in render order, addressing `rows` by index.
+///     column_keys: Exact ordered keys used for both descriptors and row cells.
 ///     server_names: Server display name per server key, for the "server" column.
 ///     logos_ready: Whether the off-thread logo prewarm has landed.
 ///     sorted: Whether a column sort is active, which the headings explain.
@@ -118,6 +188,7 @@ pub(super) fn core_status_table(
     id: &'static str,
     rows: Rc<Vec<CoreStatusRow>>,
     lines: Rc<Vec<FlatLine>>,
+    column_keys: Rc<Vec<&'static str>>,
     server_names: Rc<HashMap<ServerKey, String>>,
     logos_ready: bool,
     sorted: bool,
@@ -143,7 +214,9 @@ pub(super) fn core_status_table(
     // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
     // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
     // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
-    let section_columns = columns();
+    let table_columns = columns(&column_keys);
+    let section_column_count = column_keys.len();
+    let row_column_keys = column_keys.clone();
     // Cloned BEFORE `lines`/`rows`/`view` are moved into the row-builder and sort closures below:
     // `MoonDataTable` addresses every line it draws by INDEX, headings included, so the right-click
     // handler resolves that index back to a core itself instead of assuming it already is one.
@@ -162,13 +235,18 @@ pub(super) fn core_status_table(
                 // The column COUNT is all a heading needs now. It used to need the column
                 // ORDER too, to pick which cell hosted the caption; the banner spans the row,
                 // so which column sits leftmost stopped mattering.
-                section_row(section, logos_ready, sorted, section_columns.len(), p, app)
+                section_row(section, logos_ready, sorted, section_column_count, p, app)
             }
-            FlatLine::Core(row) => {
-                core_status_row(&table_rows[*row], &server_names, &backend, p, app)
-            }
+            FlatLine::Core(row) => core_status_row(
+                &table_rows[*row],
+                &row_column_keys,
+                &server_names,
+                &backend,
+                p,
+                app,
+            ),
         })
-        .columns(columns())
+        .columns(table_columns)
         .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
@@ -208,6 +286,7 @@ pub(super) fn core_status_table(
 ///
 /// Args:
 ///     r: Cached core snapshot.
+///     column_keys: Exact ordered keys used to build the table descriptors.
 ///     server_names: Server display name per server key.
 ///     backend: Shared terminal state the hover-revealed update button commands.
 ///     p: Active Moon palette, for the API and MoonBot cells' colour.
@@ -217,6 +296,7 @@ pub(super) fn core_status_table(
 ///     One row in column order, with server, core, connection, build, and telemetry cells.
 fn core_status_row(
     r: &CoreStatusRow,
+    column_keys: &[&str],
     server_names: &HashMap<ServerKey, String>,
     backend: &Entity<Backend>,
     p: MoonPalette,
@@ -230,29 +310,30 @@ fn core_status_row(
     // One verdict per row, derived once and shared by the status cell and its hover, so the two can
     // never state different things about the same core.
     let diag = diagnose(&r.status, r.fault.as_ref(), &r.startup);
-    MoonDataRow::new([
-        MoonDataCell::text(server),
-        MoonDataCell::text(r.name.clone()),
-        MoonDataCell::element(status_cell(r, diag.as_ref())),
-        MoonDataCell::element(version_hover_cell(r, backend, p, app)),
-        MoonDataCell::text(percent(sys.process_cpu_percent)),
-        MoonDataCell::text(percent(sys.system_cpu_percent)),
-        MoonDataCell::text(memory_u16(sys.used_memory_mb)),
-        MoonDataCell::text(memory_u16(sys.free_physical_memory_mb)),
-        MoonDataCell::text(ping(sys.round_trip_ms)),
-        MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
-        MoonDataCell::text(count(sys.logical_cpu_count)),
-        MoonDataCell::text(api_expiry_text(r.api_key)).text_color(level_color(
+    MoonDataRow::new(column_keys.iter().map(|key| match *key {
+        "server" => MoonDataCell::text(server.clone()),
+        "core" => MoonDataCell::text(r.name.clone()),
+        "status" => MoonDataCell::element(status_cell(r, diag.as_ref())),
+        "version" => MoonDataCell::element(version_hover_cell(r, backend, p, app)),
+        "cpu_proc" => MoonDataCell::text(percent(sys.process_cpu_percent)),
+        "cpu_sys" => MoonDataCell::text(percent(sys.system_cpu_percent)),
+        "mem_used" => MoonDataCell::text(memory_u16(sys.used_memory_mb)),
+        "free_phys" => MoonDataCell::text(memory_u16(sys.free_physical_memory_mb)),
+        "ping" => MoonDataCell::text(ping(sys.round_trip_ms)),
+        "ping_exch" => MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
+        "cpus" => MoonDataCell::text(count(sys.logical_cpu_count)),
+        "api_key" => MoonDataCell::text(api_expiry_text(r.api_key)).text_color(level_color(
             api_expiry_level(r.api_key, r.api_warn, r.api_notice),
             p,
         )),
-        MoonDataCell::text(api_quota_text(r.api_quota)).text_color(level_color(
+        "api_quota" => MoonDataCell::text(api_quota_text(r.api_quota)).text_color(level_color(
             api_quota_level(r.api_quota, r.api_quota_warn),
             p,
         )),
-        MoonDataCell::element(startup_hover_cell(r)),
-        MoonDataCell::element(tz_offset_hover_cell(r)),
-    ])
+        "startup" => MoonDataCell::element(startup_hover_cell(r)),
+        "tz_off" => MoonDataCell::element(tz_offset_hover_cell(r)),
+        _ => unreachable!("canonical Flat column key"),
+    }))
 }
 
 /// Left padding `MoonDataTable` puts inside every cell, mirrored from MoonUI's own
@@ -348,18 +429,16 @@ fn section_row(
     // "BitGet Futu..." by a ~110 px column while the rest of the row sat empty -- a caption is the
     // one thing on this line that has to be readable. `MoonDataRow::banner` is MoonUI's escape from
     // the per-cell clipping that caused it, so the caption is bounded by the ROW now, and the count
-    // rides the same flex line at the far end rather than needing a cell of its own.
+    // follows the caption on the same flex line rather than needing a cell of its own.
     .banner(
         h_flex()
             .id(SharedString::from(format!("cs-exchange-{key}")))
             .size_full()
             .items_center()
-            .justify_between()
             .pl(px(CELL_PAD_LEFT))
             .pr(px(CELL_PAD_RIGHT))
             .gap(design::ui_px(cx, 6.0))
             .text_size(design::t_caption(cx))
-            .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(p.text_muted))
             .child(
                 h_flex()
@@ -375,9 +454,25 @@ fn section_row(
                                 .rounded(design::ui_px(cx, 2.0)),
                         )
                     })
-                    .child(div().min_w_0().truncate().child(section.label.clone())),
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .items_center()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(section.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .font_weight(FontWeight::NORMAL)
+                                    .child(format!(" · {count}")),
+                            ),
+                    ),
             )
-            .child(div().flex_none().child(count))
             .tooltip(crate::panels::common::text_tooltip(hover)),
     )
 }

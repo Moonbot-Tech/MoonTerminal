@@ -714,14 +714,29 @@ impl Render for CoreStatusView {
                     .iter()
                     .map(|group| (group.key, group.display_name.clone()))
                     .collect();
-                let (flat_rows, flat_lines) = self.flat_view(cx);
+                let column_keys = table::visible_column_keys(&rows);
+                let saved_sort_visible = self
+                    .flat_sort
+                    .as_ref()
+                    .is_none_or(|(key, _)| column_keys.contains(&key.as_str()));
+                let (flat_rows, flat_lines) = if saved_sort_visible {
+                    self.flat_view(cx)
+                } else {
+                    // A temporarily absent API column must not erase its persisted sort. Render the
+                    // historical attention order until that column has real data and returns.
+                    let flat_rows = model::ordered_flat_rows(&rows);
+                    let venues = self.backend.read(cx).session.core_venues();
+                    let flat_lines = ordering::flat_lines(&flat_rows, venues);
+                    (Rc::new(flat_rows), Rc::new(flat_lines))
+                };
                 table::core_status_table(
                     "core-status-table",
                     flat_rows,
                     flat_lines,
+                    Rc::new(column_keys),
                     Rc::new(server_names),
                     self.exchange_logos_ready,
-                    self.flat_sort.is_some(),
+                    self.flat_sort.is_some() && saved_sort_visible,
                     &self.table_state,
                     // Same reason as the By-IP arm above: the callee must not read this view.
                     &self.backend,

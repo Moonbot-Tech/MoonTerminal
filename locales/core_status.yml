@@ -51,9 +51,9 @@ core_status.col.time:
   en: "Time"
   es: "Hora"
 core_status.col.dur:
-  ru: "Длит."
-  en: "Dur."
-  es: "Dur."
+  ru: "Длительность"
+  en: "Duration"
+  es: "Duración"
 core_status.col.type:
   ru: "Тип"
   en: "Type"
