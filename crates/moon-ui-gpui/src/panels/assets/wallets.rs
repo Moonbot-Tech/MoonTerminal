@@ -46,6 +46,37 @@ fn pending_transfer_matches_wallet_core(
     effective_wallet_core == Some(pending.core)
 }
 
+/// Format a wallet heading count, exposing a dust-filtered subset without obscuring its total.
+///
+/// Args:
+///     shown_count: Wallet rows currently displayed after filtering.
+///     total_count: Wallet rows before filtering.
+///
+/// Returns:
+///     The total when every row is shown, otherwise `shown / total`.
+pub(super) fn wallet_count_label(shown_count: usize, total_count: usize) -> String {
+    if shown_count == total_count {
+        total_count.to_string()
+    } else {
+        format!("{shown_count} / {total_count}")
+    }
+}
+
+/// Return the localized wallet-kind label shared by wallet headings and transfer dialogs.
+///
+/// Args:
+///     kind: Wallet kind to label.
+///
+/// Returns:
+///     The corresponding localized wallet-kind label.
+fn wallet_kind_label(kind: WalletKind) -> String {
+    match kind {
+        WalletKind::Spot => t!("assets.wallet.kind.spot").to_string(),
+        WalletKind::Futures => t!("assets.wallet.kind.futures").to_string(),
+        WalletKind::Quarterly => t!("assets.wallet.kind.quarterly").to_string(),
+    }
+}
+
 /// Coin-transfer preview displayed under the drag cursor.
 struct AssetDragPreview {
     label: SharedString,
@@ -102,13 +133,23 @@ impl AssetsView {
 
         let mut list = v_flex().w_full().gap_0().p(px(4.0));
         if snapshot.rows.is_empty() {
+            let empty = if snapshot.total_count == 0 {
+                "—".to_string()
+            } else {
+                t!(
+                    "assets.wallet.filtered_empty",
+                    n = snapshot.total_count,
+                    thr = moon_core::util::fmt::usd(self.min_value_usd),
+                )
+                .to_string()
+            };
             list = list.child(
                 div()
                     .px(design::ui_px(cx, 6.0))
                     .py(px(2.0))
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_muted))
-                    .child("—"),
+                    .child(empty),
             );
         }
         for a in &snapshot.rows {
@@ -215,7 +256,11 @@ impl AssetsView {
                     .text_color(rgb(p.text_soft))
                     // Center the heading like Moonbot's Spot/Futures/Quarterly groups.
                     .text_center()
-                    .child(format!("{} ({})", kind.label(), snapshot.total_count)),
+                    .child(format!(
+                        "{} ({})",
+                        wallet_kind_label(kind),
+                        wallet_count_label(snapshot.rows.len(), snapshot.total_count)
+                    )),
             )
             .child(
                 div()
@@ -278,8 +323,8 @@ impl AssetsView {
             let title = t!(
                 "assets.transfer_title",
                 coin = pending.asset,
-                from = pending.from.label(),
-                to = pending.to.label()
+                from = wallet_kind_label(pending.from),
+                to = wallet_kind_label(pending.to)
             )
             .to_string();
             let content_view = view.clone();

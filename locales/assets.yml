@@ -158,6 +158,24 @@ assets.columns:
   en: "Fields"
   es: "Campos"
 
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable:
+  ru: "Спотовый баланс не имеет нереализованного PnL"
+  en: "Spot balances have no unrealized PnL"
+  es: "Los saldos Spot no tienen PnL no realizado"
+assets.actions.unavailable_qty:
+  ru: "Нет доступного для продажи количества %{coin}"
+  en: "No sellable %{coin} quantity"
+  es: "No hay cantidad vendible de %{coin}"
+assets.actions.unavailable_market_identity:
+  ru: "Нет идентификатора рынка для %{coin}"
+  en: "No market identity for %{coin}"
+  es: "No hay identidad de mercado para %{coin}"
+assets.actions.unavailable_market_catalog:
+  ru: "Рынок %{market} отсутствует в каталоге ядра"
+  en: "Market %{market} is absent from the core catalog"
+  es: "El mercado %{market} no está en el catálogo del núcleo"
+
 # --- Position action buttons ---
 assets.open_global_hint:
   ru: "Открыть Активы отдельным окном (все ядра)"
@@ -189,6 +207,22 @@ assets.order:
   es: "Orden"
 
 # --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot:
+  ru: "Spot"
+  en: "Spot"
+  es: "Spot"
+assets.wallet.kind.futures:
+  ru: "Futures"
+  en: "Futures"
+  es: "Futures"
+assets.wallet.kind.quarterly:
+  ru: "Quarterly"
+  en: "Quarterly"
+  es: "Quarterly"
+assets.wallet.filtered_empty:
+  ru: "Все %{n} активов скрыты фильтром по стоимости %{thr}$"
+  en: "All %{n} assets are hidden by the %{thr}$ value filter"
+  es: "Los %{n} activos están ocultos por el filtro de valor de %{thr}$"
 assets.wallets_hint:
   ru: "Кошельки · перетащи монету между контейнерами"
   en: "Wallets · drag a coin between containers"

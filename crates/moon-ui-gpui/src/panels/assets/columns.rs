@@ -94,16 +94,20 @@ impl AssetCol {
 
     /// Build the MoonUI column.
     ///
-    /// Every data column sorts through the panel's header-click handler. The action column does
-    /// not: it holds two fixed-width buttons and no value to order by, so it also keeps its title
-    /// blank and stays out of the auto-width pool (`no_grow`) — a share of a wide viewport buys it
-    /// nothing and only pushes coin/qty/value apart.
+    /// Every data column sorts through the panel's header-click handler. The Core column takes the
+    /// remaining viewport width; Coin, figures, and actions retain their configured widths so the
+    /// numeric cluster stays beside the fixed action buttons without fighting saved user sizing.
     pub(super) fn column(self) -> MoonDataTableColumn {
         if self == AssetCol::Actions {
             return MoonDataTableColumn::new(self.key(), String::new(), self.width()).no_grow();
         }
         let col = MoonDataTableColumn::new(self.key(), self.title(), self.width()).sortable(true);
-        if self.numeric() { col.right() } else { col }
+        let col = if self.numeric() { col.right() } else { col };
+        if self == AssetCol::Core {
+            col
+        } else {
+            col.no_grow()
+        }
     }
 
     /// Whether this column's cell shows a dash for the row instead of a number to order by.
