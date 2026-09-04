@@ -79,6 +79,15 @@ impl TradeMetric {
         }
     }
 
+    /// Element id of the hover explanation wrapped around this metric's popover trigger.
+    fn tooltip_id(self) -> &'static str {
+        match self {
+            TradeMetric::Tp => "toolbar-tp-tooltip",
+            TradeMetric::Sl => "toolbar-sl-tooltip",
+            TradeMetric::Lev => "toolbar-lev-tooltip",
+        }
+    }
+
     /// Whether the button draws this metric's own label beside its value. SL's label lives on the
     /// toggle standing next to it, so the button would repeat it.
     fn shows_label(self) -> bool {
@@ -173,6 +182,31 @@ impl TradeMetric {
         match self {
             TradeMetric::Lev => (value > 0.0).then_some(value),
             _ => Some(value),
+        }
+    }
+
+    /// Return the localized explanation key for an unavailable leverage value.
+    ///
+    /// The checks follow [`Self::seed_value`] from broadest missing address to narrowest missing
+    /// value, so the disabled chip and its tooltip explain the same state the popup open guard
+    /// rejects.
+    ///
+    /// Args:
+    ///     b: Backend providing the visible core, Main-chart market, and leverage snapshot.
+    ///     group: Window group whose leverage metric is being described.
+    ///
+    /// Returns:
+    ///     A locale key for the unavailable state, or `None` when this metric has a seed value.
+    pub(super) fn unset_tooltip_key(self, b: &Backend, group: &str) -> Option<&'static str> {
+        if !matches!(self, TradeMetric::Lev) || self.seed_value(b, group).is_some() {
+            return None;
+        }
+        if scoped_lev_core(b, group).is_none() {
+            Some("toolbar.lev_unset_no_core")
+        } else if b.main_chart_target(group).is_none() {
+            Some("toolbar.lev_unset_no_market")
+        } else {
+            Some("toolbar.lev_unset_unreported")
         }
     }
 
@@ -389,6 +423,7 @@ pub(super) fn metric_button(
     open: bool,
     engaged: bool,
     enabled: bool,
+    tooltip: Option<SharedString>,
     popup: Option<AnyElement>,
     shell: Entity<Shell>,
     p: MoonPalette,
@@ -416,7 +451,7 @@ pub(super) fn metric_button(
         );
     }
     let trigger = btn.text_segment(value_str, color, 500.0).render();
-    MoonPopover::new(SharedString::from(metric.popover_id()))
+    let popover = MoonPopover::new(SharedString::from(metric.popover_id()))
         .placement(MoonPopoverPlacement::BottomStart)
         .content_width_font(POPUP_CONTENT_W)
         // A disabled metric (SL with its toggle off) does not open: there is nothing to edit.
@@ -436,7 +471,12 @@ pub(super) fn metric_button(
             });
         })
         .trigger(trigger)
-        .content(popup.unwrap_or_else(|| div().into_any_element()))
+        .content(popup.unwrap_or_else(|| div().into_any_element()));
+    let mut element = div().id(metric.tooltip_id()).child(popover);
+    if let Some(tooltip) = tooltip {
+        element = element.tooltip(crate::panels::common::text_tooltip(tooltip));
+    }
+    element
 }
 
 /// Build the `panic_if_price_drop` toggle to the left of the SL button.

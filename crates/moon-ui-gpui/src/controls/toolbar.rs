@@ -28,6 +28,8 @@ mod tests;
 /// Caption size for a preset group — one step below the strip's own cells, which render their
 /// labels at 11, so 10 reads as a label NAMING the group rather than as another value in it.
 const CAPTION_SIZE: f32 = 10.0;
+/// Base gap between the Sell caption and its first percentage cell.
+const SELL_CAPTION_GAP: f32 = 8.0;
 
 /// Caption for a preset group, muted and one step below the strip's own cells.
 ///
@@ -82,12 +84,13 @@ fn captioned_strip(
     p: MoonPalette,
     strip: impl IntoElement,
     tip: Option<SharedString>,
+    caption_gap: f32,
     cx: &App,
 ) -> impl IntoElement {
     h_flex()
         .id(id)
         .flex_none()
-        .gap(design::ui_px(cx, design::CHROME_GAP))
+        .gap(design::ui_px(cx, caption_gap))
         .children(caption.map(|text| strip_caption(text, p)))
         .child(strip)
         .when_some(tip, |el, tip| el.tooltip(text_tooltip(tip)))
@@ -667,6 +670,7 @@ pub fn toolbar(
         sell_slot,
         manual_on,
         sl_locked,
+        lev_unset_tip,
     ) = {
         let b = backend.read(cx);
         // Whether the header scope names one account at all. Read ONCE here so the leverage
@@ -776,6 +780,9 @@ pub fn toolbar(
         let lev_value = TradeMetric::Lev
             .seed_value(b, group)
             .map(|l| format!("×{}", l as i32));
+        let lev_unset_tip = TradeMetric::Lev
+            .unset_tooltip_key(b, group)
+            .map(|key| t!(key).to_string());
         // The target chart wins over the header selection while it is hovered: mouse and market
         // hotkeys address that chart's independent core, whose manual strategy can override the
         // visible group exit values.
@@ -797,6 +804,7 @@ pub fn toolbar(
             sell_slot,
             manual_on,
             sl_locked,
+            lev_unset_tip,
         )
     };
     let p = MoonPalette::active(cx);
@@ -818,6 +826,17 @@ pub fn toolbar(
     let tp_available = TradeMetric::Tp.available_with(has_core, sl_on, manual_on, sl_locked);
     let sl_available = TradeMetric::Sl.available_with(has_core, sl_on, manual_on, sl_locked);
     let lev_str = lev_value.unwrap_or_else(|| "—".to_string());
+    let tp_tip = (!manual_on).then(|| {
+        if tp_engaged {
+            t!("toolbar.tp_main_active_hint").to_string()
+        } else {
+            t!(
+                "toolbar.tp_fixed_active_hint",
+                n = sell_slot.unwrap_or_default()
+            )
+            .to_string()
+        }
+    });
 
     // Cells are fitted BEFORE rendering: both the strip itself and the row budget that decides the
     // labels' fate read them. One computation, one source.
@@ -927,6 +946,7 @@ pub fn toolbar(
                     SIZE_UNIT,
                 ),
                 manual_block_tip.clone(),
+                design::CHROME_GAP,
                 cx,
             )),
         )
@@ -945,6 +965,7 @@ pub fn toolbar(
                     lev_popup.is_some(),
                     false,
                     lev_available,
+                    lev_unset_tip.map(SharedString::from),
                     lev_popup,
                     shell.clone(),
                     p,
@@ -989,6 +1010,7 @@ pub fn toolbar(
                     sl_popup.is_some(),
                     false,
                     sl_available,
+                    None,
                     sl_popup,
                     shell.clone(),
                     p,
@@ -1019,6 +1041,7 @@ pub fn toolbar(
                 p,
                 strip,
                 manual_block_tip.clone(),
+                SELL_CAPTION_GAP,
                 cx,
             );
             section()
@@ -1030,6 +1053,7 @@ pub fn toolbar(
                     tp_popup.is_some(),
                     tp_engaged && !manual_on,
                     tp_available,
+                    tp_tip.map(SharedString::from),
                     tp_popup,
                     shell.clone(),
                     p,

@@ -115,6 +115,26 @@ toolbar.sell_hint:
   ru: "Фиксированная продажа S%{n} · клик — задействовать · двойной клик — правка · Ctrl+колесо — изменить"
   en: "Fixed sell S%{n} · click to engage · double-click to edit · Ctrl+wheel to change"
   es: "Venta fija S%{n} · clic para activar · doble clic para editar · Ctrl+rueda para cambiar"
+toolbar.lev_unset_no_core:
+  ru: "Выберите сервер, чтобы увидеть плечо."
+  en: "Select a server to show leverage."
+  es: "Selecciona un servidor para ver el apalancamiento."
+toolbar.lev_unset_no_market:
+  ru: "Выберите монету на основном графике."
+  en: "Select a coin on the Main chart."
+  es: "Selecciona una moneda en el gráfico principal."
+toolbar.lev_unset_unreported:
+  ru: "Биржа не сообщает плечо для этого рынка."
+  en: "The exchange does not report leverage for this market."
+  es: "La bolsa no informa del apalancamiento para este mercado."
+toolbar.tp_main_active_hint:
+  ru: "Основной TP активен. Выбор ячейки S перенесёт синюю подсветку на неё."
+  en: "Main TP is active. Selecting an S slot moves the blue highlight to that slot."
+  es: "El TP principal está activo. Al seleccionar una casilla S, el resaltado azul pasa a ella."
+toolbar.tp_fixed_active_hint:
+  ru: "Активна ячейка S%{n}. Нажмите TP, чтобы вернуть основной тейк-профит."
+  en: "S%{n} is active. Click TP to restore the main take profit."
+  es: "S%{n} está activa. Pulsa TP para volver al take profit principal."
 toolbar.scale:
   ru: "Масштаб"
   en: "Scale"
