@@ -183,7 +183,8 @@ pub(super) fn col_title(col: OrdCol) -> String {
 ///
 /// [`OrdCol::ALL`] defines canonical order. MoonDataTable treats the declared width as the base
 /// width and auto-layout weight. A narrow viewport may shrink it proportionally toward the shared
-/// 40px column floor, so the declared value is not a strict minimum.
+/// 40px column floor, so the declared value is not a strict minimum. `StratName` is the fill column
+/// so free-form names absorb remaining width even after the user resized every column.
 fn column_def(col: OrdCol) -> MoonDataTableColumn {
     let title = col_title(col);
     let column = match col {
@@ -204,7 +205,7 @@ fn column_def(col: OrdCol) -> MoonDataTableColumn {
         OrdCol::Strat => numeric_column("strat", title, 90.0),
         // A name is variable-length text, so left-align it like the Core column rather than the
         // right-aligned Strat kind column.
-        OrdCol::StratName => MoonDataTableColumn::new("strat_name", title, 120.0),
+        OrdCol::StratName => MoonDataTableColumn::new("strat_name", title, 120.0).fill(),
     };
     column.sortable(true)
 }
@@ -620,7 +621,8 @@ fn open_strat_goto(
 /// Shows the strategy's user-assigned `StrategyName` for a strategy order (`strat_id != 0`),
 /// clickable to open the Strategies window on that core and strategy. A manual order, or a strategy
 /// with no name set, renders as a muted dash. This is distinct from [`strat_cell`], which shows the
-/// strategy TYPE (kind).
+/// strategy TYPE (kind). Long names truncate inside the cell and expose the complete value in a
+/// tooltip.
 fn strat_name_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> MoonDataCell {
     let r = &e.row;
     if r.strat_id == 0 || r.strat_name.is_empty() {
@@ -630,17 +632,21 @@ fn strat_name_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -
     let uid = r.uid;
     let strat_id = r.strat_id;
     let view = view.clone();
+    let name = r.strat_name.clone();
     let el = div()
         .id(SharedString::from(format!("ord-stratname-{core}-{uid}")))
         // Make the full cell clickable, as in `strat_cell`. Left-aligned, matching its column.
         .w_full()
+        .min_w_0()
         .h_full()
         .flex()
         .items_center()
+        .truncate()
         .cursor_pointer()
         .text_color(rgb(MoonTone::Muted.color(p)))
         .font_weight(FontWeight::MEDIUM)
-        .child(r.strat_name.clone())
+        .tooltip(crate::panels::common::text_tooltip(name.clone()))
+        .child(name)
         .on_click(move |_, window, app| open_strat_goto(&view, core, strat_id, window, app));
     MoonDataCell::element(el)
 }
