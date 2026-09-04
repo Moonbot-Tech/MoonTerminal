@@ -59,13 +59,13 @@ report.filter.to:
   es: "Hasta:"
 # Doubles as the field's caption: there is no label beside it, so the placeholder names it.
 report.filter.coin_ph:
-  ru: "монета"
-  en: "coin"
-  es: "moneda"
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
 report.filter.date_ph:
-  ru: "дата и время"
-  en: "date and time"
-  es: "fecha y hora"
+  ru: "Дата и время"
+  en: "Date and time"
+  es: "Fecha y hora"
 # Deleted row of the merged scope field. Off (default) hides trades soft-deleted in the core's
 # report; on shows ONLY them. Export follows the same filter.
 report.filter.deleted:
@@ -83,8 +83,7 @@ report.filter.open_rows:
   en: "Open positions"
   es: "Posiciones abiertas"
 # Full-width comment pane between the table and the totals: `show` is its row in the scope field.
-# The pane carries no caption and no placeholder — the comment uses the panel's whole width, and
-# with no row selected the strip is simply empty.
+# The pane reuses `show` as its caption; with no row selected the strip is simply empty.
 report.comment.show:
   ru: "Комментарий сделки"
   en: "Trade comment"

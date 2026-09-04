@@ -1,9 +1,9 @@
 //! Full-width comment pane under the Report table.
 //!
 //! Report comments are the one free-text field in the schema: they routinely outgrow their table
-//! cell, which caps at 360 px and truncates the rest. The pane shows the comment of the row the
-//! user last clicked across the panel's whole width, wrapping instead of truncating, so a long
-//! comment is readable without widening the column or exporting the row.
+//! cell, which caps at 360 px and truncates the rest. The pane labels the comment of the row the
+//! user last clicked, then wraps it across the remaining width so it stays readable without
+//! widening the column or exporting the row.
 
 use super::*;
 
@@ -62,10 +62,9 @@ pub(super) fn current_comment(
 impl ReportPanel {
     /// Build the full-width comment pane placed between the table and the totals line.
     ///
-    /// The pane has no fixed height: the text is one element, GPUI splits it on hard line breaks
-    /// and wraps each of those at the pane's width, so the block is exactly as tall as the comment
-    /// needs at the current width. It is `flex_none`, so that height comes out of the table above
-    /// rather than the pane being squeezed to nothing.
+    /// The pane has no fixed height: a compact caption identifies the selected row's comment, and
+    /// the body wraps across the remaining width. It is `flex_none`, so that height comes out of
+    /// the table above rather than the pane being squeezed to nothing.
     ///
     /// The text is set tight — the caption step with its own line box — so the block stays as small
     /// as the comment allows. It does NOT align to the table's row grid: matching that grid means a
@@ -95,7 +94,6 @@ impl ReportPanel {
             Some(text) => (text, p.text),
             None => (t!("report.comment.empty").to_string(), p.text_muted),
         };
-        // No caption: the text gets the panel's whole width, which is the point of the pane.
         // `items_start` is explicit — `h_flex` centres its children, which would push the first
         // lines of a capped comment above scroll offset 0, out of reach.
         let row_h = design::table_row_h(cx);
@@ -106,10 +104,11 @@ impl ReportPanel {
             .items_start()
             .px_2()
             .py_0p5()
+            .gap_2()
             // Its own surface, not the table's: without a lift the comment reads as one more
             // (unaligned) table row, and the table's unused tail below the last row reads as part
             // of the comment. The top rule closes the table above it.
-            .bg(rgba_from(p.panel_high, 0.35))
+            .bg(rgb(p.panel))
             .border_t_1()
             .border_color(rgb(p.border))
             .max_h(px(row_h * COMMENT_PANE_MAX_ROWS))
@@ -122,6 +121,13 @@ impl ReportPanel {
             // An unbroken token longer than the pane has no wrap opportunity; clip it instead of
             // letting it paint outside the panel.
             .overflow_x_hidden()
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(t!("report.comment.show").to_string()),
+            )
             .child(
                 // `min_w_0` lets the text shrink below its own measured width: GPUI measures text
                 // unwrapped for the automatic minimum size, so without this ANY comment longer
