@@ -29,6 +29,24 @@ const PANEL_SPLIT_W: f32 = 5.0;
 /// Width of the collapsed Versions strip.
 const VERSIONS_COLLAPSED_W: f32 = 22.0;
 
+/// Compute responsive first-run widths for the tree and schema-sections panels.
+///
+/// Args:
+///     viewport_width: Current logical viewport width.
+///     longest_section_label_width: Measured width of the longest selected section title.
+///
+/// Returns:
+///     The clamped tree and schema-sections widths, respectively.
+pub(super) fn default_panel_widths(
+    viewport_width: f32,
+    longest_section_label_width: f32,
+) -> (f32, f32) {
+    (
+        (viewport_width * 0.30).clamp(240.0, 900.0),
+        (longest_section_label_width + 32.0).clamp(150.0, 320.0),
+    )
+}
+
 impl StrategiesView {
     /// Persist panel widths and Versions collapse state in layout.
     /// The debounced save loop drains `layout_dirty`, as it does for window geometry.
@@ -42,9 +60,15 @@ impl StrategiesView {
                 cur.tree_w,
                 cur.versions_w,
                 cur.sections_w,
+                cur.widths_user_set,
                 cur.versions_collapsed,
-            ) != (p.tree_w, p.versions_w, p.sections_w, p.versions_collapsed)
-            {
+            ) != (
+                p.tree_w,
+                p.versions_w,
+                p.sections_w,
+                p.widths_user_set,
+                p.versions_collapsed,
+            ) {
                 b.layout.strategies_panels = p;
                 b.layout_dirty = true;
             }
@@ -75,6 +99,7 @@ impl StrategiesView {
         which: PanelSplit,
         cx: &mut Context<Self>,
     ) {
+        self.panels.widths_user_set = Some(true);
         match which {
             PanelSplit::Tree => {
                 self.panels.tree_w = (x - PANEL_SPLIT_W / 2.0).clamp(240.0, 900.0);

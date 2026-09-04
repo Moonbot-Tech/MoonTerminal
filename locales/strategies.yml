@@ -489,6 +489,872 @@ strat.section_changed_tip:
   ru: "Изменённых полей в этом разделе: %{n}"
   en: "Changed fields in this section: %{n}"
   es: "Campos modificados en esta sección: %{n}"
+
+# --- Repository-known raw strategy field help ---
+strat.field.AddToChart:
+  ru: "Номер вкладки графика; ноль означает не добавлять детект."
+  en: "Chart tab number; zero means do not add the detection."
+  es: "Número de pestaña del gráfico; cero significa no añadir la detección."
+strat.field.AllowedDrop:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.AllowedDrop3:
+  ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
+  en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.field.AutoBuy:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.AutoCancelBuy:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.AutoCancelLowerBuy:
+  ru: "Доступно, когда TlgUseBuyDipWords равно YES."
+  en: "Available when TlgUseBuyDipWords is YES."
+  es: "Disponible cuando TlgUseBuyDipWords es YES."
+strat.field.AutoSell:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.BinancePriceBug:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePing is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.field.BinancePriceBugMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePing is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.field.BinanceTokenTags:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.BuyDelay:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.BuyOrderColor:
+  ru: "Доступно, когда UseCustomColors равно YES."
+  en: "Available when UseCustomColors is YES."
+  es: "Disponible cuando UseCustomColors es YES."
+strat.field.buyPrice:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.buyPriceAbsolute:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.BuyPriceStep:
+  ru: "Доступно, когда OrdersCount не равно 1."
+  en: "Available when OrdersCount is not 1."
+  es: "Disponible cuando OrdersCount no es 1."
+strat.field.BuyStepKind:
+  ru: "Доступно, когда OrdersCount больше 1."
+  en: "Available when OrdersCount is greater than 1."
+  es: "Disponible cuando OrdersCount es mayor que 1."
+strat.field.BuyType:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.BV_SV_FilterRatio:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO и UseBV_SV_Filter равно YES."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO and UseBV_SV_Filter is YES."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO y UseBV_SV_Filter es YES."
+strat.field.BV_SV_FilterRatioMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO и UseBV_SV_Filter равно YES."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO and UseBV_SV_Filter is YES."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO y UseBV_SV_Filter es YES."
+strat.field.BV_SV_Kind:
+  ru: "Доступно, когда UseBV_SV_Stop равно YES."
+  en: "Available when UseBV_SV_Stop is YES."
+  es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.field.BV_SV_Ratio:
+  ru: "Доступно, когда UseBV_SV_Stop равно YES."
+  en: "Available when UseBV_SV_Stop is YES."
+  es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.field.BV_SV_Reverse:
+  ru: "Доступно, когда UseBV_SV_Stop равно YES."
+  en: "Available when UseBV_SV_Stop is YES."
+  es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.field.BV_SV_TakeProfit:
+  ru: "Доступно, когда UseBV_SV_Stop равно YES."
+  en: "Available when UseBV_SV_Stop is YES."
+  es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.field.BV_SV_TradesN:
+  ru: "Доступно, когда UseBV_SV_Stop равно YES."
+  en: "Available when UseBV_SV_Stop is YES."
+  es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.field.CancelBuyAfterSell:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.CancelBuyStep:
+  ru: "Доступно, когда AutoCancelBuy не равно 0."
+  en: "Available when AutoCancelBuy is not 0."
+  es: "Disponible cuando AutoCancelBuy no es 0."
+strat.field.CheckFreeBalance:
+  ru: "Доступно, когда OrdersCount больше 1."
+  en: "Available when OrdersCount is greater than 1."
+  es: "Disponible cuando OrdersCount es mayor que 1."
+strat.field.Comment:
+  ru: "Не влияющая на работу заметка, сохранённая со стратегией."
+  en: "A cosmetic note stored with the strategy."
+  es: "Nota informativa guardada con la estrategia, sin efecto operativo."
+strat.field.CustomEMA:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.Delta_24h_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_24h_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_3h_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_3h_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_1m_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_1m_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_24_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_24_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_5m_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_5m_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_BTC_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_Market_24_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_Market_24_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_Market_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta_Market_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta2_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta2_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta2_Type:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta3_Max:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta3_Min:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.Delta3_Type:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.DeltaSwitch:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.DontKeepOrdersOnChart:
+  ru: "Доступно, когда EmulatorMode равно YES."
+  en: "Available when EmulatorMode is YES."
+  es: "Disponible cuando EmulatorMode es YES."
+strat.field.DontSellBelowLiq:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.DontWriteLog:
+  ru: "Доступно, когда EmulatorMode равно YES."
+  en: "Available when EmulatorMode is YES."
+  es: "Disponible cuando EmulatorMode es YES."
+strat.field.EmulatorMode:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.FastStopLoss:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.FilterBy:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.FilterMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.FilterMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.FundingAfter:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.field.FundingBefore:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.field.GlobalDetectPenalty:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.field.GlobalFilterPenalty:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.field.HFT:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.HODLmode:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnoreBase:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnoreCancelBuy:
+  ru: "Доступно, когда AutoCancelBuy не равно 0 и OrdersCount больше 1."
+  en: "Available when AutoCancelBuy is not 0 and OrdersCount is greater than 1."
+  es: "Disponible cuando AutoCancelBuy no es 0 y OrdersCount es mayor que 1."
+strat.field.IgnoreDelta:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnoreFilters:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnorePing:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnorePrice:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnoreSellShot:
+  ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
+  en: "Available when HODLmode is NO and AutoSell is YES."
+  es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.field.IgnoreSellSpread:
+  ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
+  en: "Available when HODLmode is NO and AutoSell is YES."
+  es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.field.IgnoreSession:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnoreTime:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.IgnoreVolume:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.JoinPriceFixed:
+  ru: "Доступно, когда OrdersCount больше 1."
+  en: "Available when OrdersCount is greater than 1."
+  es: "Disponible cuando OrdersCount es mayor que 1."
+strat.field.JoinSellKey:
+  ru: "Доступно, когда OrdersCount больше 1."
+  en: "Available when OrdersCount is greater than 1."
+  es: "Disponible cuando OrdersCount es mayor que 1."
+strat.field.KeepAlert:
+  ru: "Сколько секунд уведомление о детекте остаётся видимым."
+  en: "Number of seconds the detection alert remains visible."
+  es: "Segundos durante los que la alerta de detección permanece visible."
+strat.field.KeepInChart:
+  ru: "Сколько секунд элемент остаётся на графике; ноль означает бессрочно."
+  en: "Seconds the item remains on the chart; zero means indefinitely."
+  es: "Segundos que el elemento permanece en el gráfico; cero significa indefinidamente."
+strat.field.LastEditDate:
+  ru: "Дата последнего изменения стратегии."
+  en: "Date of the strategy's most recent edit."
+  es: "Fecha de la modificación más reciente de la estrategia."
+strat.field.MarketStopLevel:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.MarkPriceMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.MarkPriceMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.MaxActiveOrders:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.MaxBalance:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.MaxHourlyVolFast:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MaxHourlyVolume:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MaxLatency:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePing is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.field.MaxLeverage:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.MaxMarkets:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.MaxOrdersPerMarket:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.MaxPing:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePing is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.field.MaxPosition:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.MaxVolume:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MinFreeBalance:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.MinHourlyVolFast:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MinHourlyVolume:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MinLeverage:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.MinPing:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePing is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.field.MinuteVolDeltaMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MinuteVolDeltaMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MinVolume:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.MoonIntRiskLevel:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.MoonIntStopLevel:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.field.OrderLineKind:
+  ru: "Доступно, когда UseCustomColors равно YES."
+  en: "Available when UseCustomColors is YES."
+  es: "Disponible cuando UseCustomColors es YES."
+strat.field.OrdersCount:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.OrderSize:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.OrderSizeKind:
+  ru: "Доступно, когда OrdersCount больше 1."
+  en: "Available when OrdersCount is greater than 1."
+  es: "Disponible cuando OrdersCount es mayor que 1."
+strat.field.OrderSizeStep:
+  ru: "Доступно, когда OrdersCount больше 1."
+  en: "Available when OrdersCount is greater than 1."
+  es: "Disponible cuando OrdersCount es mayor que 1."
+strat.field.PenaltyTime:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.field.PriceDownAllowedDrop:
+  ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
+  en: "Available when AutoSell is YES and PriceDownTimer is not 0."
+  es: "Disponible cuando AutoSell es YES y PriceDownTimer no es 0."
+strat.field.PriceDownDelay:
+  ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
+  en: "Available when AutoSell is YES and PriceDownTimer is not 0."
+  es: "Disponible cuando AutoSell es YES y PriceDownTimer no es 0."
+strat.field.PriceDownPercent:
+  ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
+  en: "Available when AutoSell is YES and PriceDownTimer is not 0."
+  es: "Disponible cuando AutoSell es YES y PriceDownTimer no es 0."
+strat.field.PriceDownRelative:
+  ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
+  en: "Available when AutoSell is YES and PriceDownTimer is not 0."
+  es: "Disponible cuando AutoSell es YES y PriceDownTimer no es 0."
+strat.field.PriceDownTimer:
+  ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
+  en: "Available when HODLmode is NO and AutoSell is YES."
+  es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.field.PriceStepMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.PriceStepMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.PriceToSwitch2Stop:
+  ru: "Доступно, когда UseStopLoss равно YES и UseSecondStop равно YES."
+  en: "Available when UseStopLoss is YES and UseSecondStop is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseSecondStop es YES."
+strat.field.PriceToSwitchStop3:
+  ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
+  en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.field.SamePosition:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.SecondStopLoss:
+  ru: "Доступно, когда UseStopLoss равно YES и UseSecondStop равно YES."
+  en: "Available when UseStopLoss is YES and UseSecondStop is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseSecondStop es YES."
+strat.field.SellByCustomEMA:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellByFilters:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellDelay:
+  ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
+  en: "Available when HODLmode is NO and AutoSell is YES."
+  es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.field.SellEMACheckEnter:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellEMADelay:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellFromAssets:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellLevelAdjust:
+  ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
+  en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
+  es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.field.SellLevelAllowedDrop:
+  ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
+  en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
+  es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.field.SellLevelCount:
+  ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
+  en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
+  es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.field.SellLevelDelay:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellLevelDelayNext:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellLevelRelative:
+  ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
+  en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
+  es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.field.SellLevelTime:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellLevelWorkTime:
+  ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
+  en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
+  es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.field.SellOrderColor:
+  ru: "Доступно, когда UseCustomColors равно YES."
+  en: "Available when UseCustomColors is YES."
+  es: "Disponible cuando UseCustomColors es YES."
+strat.field.SellPrice:
+  ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
+  en: "Available when HODLmode is NO and AutoSell is YES."
+  es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.field.SellPriceAbsolute:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellQuantity:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.SellShotAllowedDown:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotAllowedUp:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotCalcInterval:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotCorridor:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotDelay:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotDistance:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotPriceDown:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotPriceDownDelay:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotRaiseWait:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellShotReplaceDelay:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellShot is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.field.SellSpreadAllowedDrop:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.field.SellSpreadCalcInterval:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.field.SellSpreadDelay:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.field.SellSpreadDistance:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.field.SellSpreadMinSpread:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.field.SellSpreadReplaceCount:
+  ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
+  en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
+  es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.field.SessionIncreaseOrder:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionIncreaseOrderMax:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionLevelsUSDT:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionMinusCount:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionPenaltyTime:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionPlusCount:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionProfitMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.SessionProfitMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.SessionReduceOrder:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionReduceOrderMin:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionResetOnMinus:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionResetTime:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionStratIncreaseMax:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionStratMax:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionStratMin:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.SessionStratReduceMin:
+  ru: "Доступно, когда IgnoreSession равно NO."
+  en: "Available when IgnoreSession is NO."
+  es: "Disponible cuando IgnoreSession es NO."
+strat.field.Short:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.SignalType:
+  ru: "Выбирает тип стратегии и схему её параметров."
+  en: "Selects the strategy type and its parameter schema."
+  es: "Selecciona el tipo de estrategia y su esquema de parámetros."
+strat.field.SoundAlert:
+  ru: "Включает сохраняемое уведомление о детекте."
+  en: "Enables the retained detection alert."
+  es: "Activa la alerta de detección retenida."
+strat.field.SoundKind:
+  ru: "Выбирает звук уведомления; NONE означает тишину."
+  en: "Selects the alert sound; NONE means silence."
+  es: "Selecciona el sonido de alerta; NONE significa silencio."
+strat.field.SplitPiece:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.StopAboveLiq:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopLoss:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopLoss3:
+  ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
+  en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.field.StopLossDelay:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopLossEMA:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopLossFixed:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopLossModifier:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopLossSpread:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StopSpreadAdd1mDelta:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.StrategyName:
+  ru: "Пользовательское имя стратегии."
+  en: "The strategy's user-assigned name."
+  es: "Nombre asignado por el usuario a la estrategia."
+strat.field.TakeProfit:
+  ru: "Доступно, когда UseTrailing равно YES и UseTakeProfit равно YES."
+  en: "Available when UseTrailing is YES and UseTakeProfit is YES."
+  es: "Disponible cuando UseTrailing es YES y UseTakeProfit es YES."
+strat.field.TimeToSwitch2Stop:
+  ru: "Доступно, когда UseStopLoss равно YES и UseSecondStop равно YES."
+  en: "Available when UseStopLoss is YES and UseSecondStop is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseSecondStop es YES."
+strat.field.TimeToSwitchStop3:
+  ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
+  en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
+  es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.field.TlgBuyDipPrice:
+  ru: "Доступно, когда TlgUseBuyDipWords равно YES."
+  en: "Available when TlgUseBuyDipWords is YES."
+  es: "Disponible cuando TlgUseBuyDipWords es YES."
+strat.field.TlgUseBuyDipWords:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.TotalLoss:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.TradePenaltyTime:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.field.TrailingEMA:
+  ru: "Доступно, когда UseTrailing равно YES."
+  en: "Available when UseTrailing is YES."
+  es: "Disponible cuando UseTrailing es YES."
+strat.field.TrailingPercent:
+  ru: "Доступно, когда UseTrailing равно YES."
+  en: "Available when UseTrailing is YES."
+  es: "Disponible cuando UseTrailing es YES."
+strat.field.TrailingSpread:
+  ru: "Доступно, когда UseTrailing равно YES."
+  en: "Available when UseTrailing is YES."
+  es: "Disponible cuando UseTrailing es YES."
+strat.field.Use30SecOldASK:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.UseBTCPriceStep:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.UseBV_SV_Filter:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.field.UseBV_SV_Stop:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.UseCustomColors:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.UseMarketStop:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.UseOldPrice:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.UsePostOnly:
+  ru: "Доступно, когда AutoBuy равно YES."
+  en: "Available when AutoBuy is YES."
+  es: "Disponible cuando AutoBuy es YES."
+strat.field.UseScalpingMode:
+  ru: "Доступно, когда AutoSell равно YES."
+  en: "Available when AutoSell is YES."
+  es: "Disponible cuando AutoSell es YES."
+strat.field.UseSecondStop:
+  ru: "Определяет доступность зависимых полей стратегии."
+  en: "Controls whether dependent strategy fields are available."
+  es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.field.UseStopLoss:
+  ru: "Доступно, когда HODLmode равно NO."
+  en: "Available when HODLmode is NO."
+  es: "Disponible cuando HODLmode es NO."
+strat.field.UseStopLoss3:
+  ru: "Доступно, когда UseStopLoss равно YES."
+  en: "Available when UseStopLoss is YES."
+  es: "Disponible cuando UseStopLoss es YES."
+strat.field.UseTakeProfit:
+  ru: "Доступно, когда UseTrailing равно YES."
+  en: "Available when UseTrailing is YES."
+  es: "Disponible cuando UseTrailing es YES."
+strat.field.UseTrailing:
+  ru: "Доступно, когда HODLmode равно NO."
+  en: "Available when HODLmode is NO."
+  es: "Disponible cuando HODLmode es NO."
+strat.field.WorkingPriceMax:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.WorkingPriceMin:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
+  en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.field.WorkingTime:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.field.WorkingWeekTime:
+  ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
+  en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
+  es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
 strat.sections_all_tip:
   ru: "Всего изменённых полей в этой версии: %{n}. Часть из них может отсутствовать в схеме текущего ядра, поэтому счётчики разделов не обязаны давать в сумме это число."
   en: "Total fields changed in this version: %{n}. Some may be absent from the current core's schema, so the section counters need not add up to it."

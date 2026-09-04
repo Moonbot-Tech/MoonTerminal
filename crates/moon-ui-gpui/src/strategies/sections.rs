@@ -3,6 +3,30 @@
 use super::*;
 
 impl StrategiesView {
+    /// Measure the longest selected runtime section title for responsive first-run layout.
+    ///
+    /// The localized panel heading is the fallback when no selected runtime schema is available.
+    /// Measurement matches the monospaced body text inherited by section rows.
+    ///
+    /// Args:
+    ///     store: Live core store containing the selected strategy schema.
+    ///     cx: Application context providing active text metrics and translations.
+    ///
+    /// Returns:
+    ///     The longest measured section-title width, or the localized heading width as fallback.
+    pub(super) fn longest_visible_section_label_width(&self, store: &CoreStore, cx: &App) -> f32 {
+        selected_sections(self, store)
+            .and_then(|sections| {
+                sections
+                    .iter()
+                    .map(|section| design::mono_body_text_width(cx, &section.title, 400.0))
+                    .reduce(f32::max)
+            })
+            .unwrap_or_else(|| {
+                design::mono_body_text_width(cx, &t!("strat.sections").to_string(), 600.0)
+            })
+    }
+
     /// Render schema sections using dependency values shared with the parameters panel.
     ///
     /// The caller computes `values` once per frame because building them normalizes every selected

@@ -1373,7 +1373,7 @@ fn deleted_strategy_row(
     id: u64,
     name: &str,
     kind: &str,
-    is_short: bool,
+    _is_short: bool,
     highlighted: bool,
     indent: Pixels,
     step: f32,
@@ -1409,11 +1409,7 @@ fn deleted_strategy_row(
         )
         .child(
             MoonBadge::new(kind.to_string())
-                .tone(if is_short {
-                    MoonTone::Negative
-                } else {
-                    MoonTone::Muted
-                })
+                .tone(MoonTone::Info)
                 .variant(MoonBadgeVariant::Soft)
                 .size(row_badge_size(step))
                 .render_with_theme(p, MoonTheme::active_tokens(app)),
@@ -1502,7 +1498,7 @@ fn strategy_row(
     server_checked: bool,
     staged: Option<bool>,
     highlighted: bool,
-    is_short: bool,
+    _is_short: bool,
     indent: Pixels,
     step: f32,
     app: &App,
@@ -1549,14 +1545,9 @@ fn strategy_row(
             ),
         )
         .child(
-            // Distinguish direction through the kind badge: SHORT is orange (`Negative`) and LONG
-            // is greenish (`Positive`).
+            // Keep the strategy kind informational regardless of trade direction.
             MoonBadge::new(kind_txt)
-                .tone(if is_short {
-                    MoonTone::Negative
-                } else {
-                    MoonTone::Positive
-                })
+                .tone(MoonTone::Info)
                 .variant(MoonBadgeVariant::Soft)
                 .size(row_badge_size(step))
                 .render_with_theme(p, MoonTheme::active_tokens(app)),

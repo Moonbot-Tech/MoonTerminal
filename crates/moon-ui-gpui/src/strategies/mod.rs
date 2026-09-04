@@ -238,7 +238,7 @@ pub struct StrategiesView {
 }
 
 impl Render for StrategiesView {
-    /// Renders the window and uses a structural signature to avoid redundant MoonTree pushes.
+    /// Render the window with responsive first-run panels and cached structural tree state.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::STRAT_RENDER);
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
@@ -338,6 +338,18 @@ impl Render for StrategiesView {
             });
         }
 
+        let chrome_width = crate::window::windowing::responsive_width(window);
+        if self.panels.widths_user_set == Some(false) {
+            let longest_section_label_width = {
+                let store = self.backend.read(cx).session.store();
+                self.longest_visible_section_label_width(store, cx)
+            };
+            let (tree_w, sections_w) =
+                split::default_panel_widths(chrome_width, longest_section_label_width);
+            self.panels.tree_w = tree_w;
+            self.panels.sections_w = sections_w;
+        }
+
         // Prepare the Versions panel and deleted-strategy cache before borrowing the store because
         // they can spawn background loads.
         //
@@ -375,7 +387,6 @@ impl Render for StrategiesView {
         let split_sections = self.panel_splitter(PanelSplit::Sections, cx);
 
         let p = MoonPalette::active(cx);
-        let chrome_width = crate::window::windowing::responsive_width(window);
         let mut root = v_flex()
             .size_full()
             .relative()

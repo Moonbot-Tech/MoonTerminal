@@ -230,23 +230,36 @@ impl<'de> Deserialize<'de> for WorkspaceMode {
     }
 }
 
-/// "Strategies" window panels: widths (tree/versions/sections) + versions collapsed state.
-/// Values are clamped by the window when applied.
+/// Return the conservative ownership marker for panel layouts serialized before responsive widths.
+fn legacy_strategies_widths_user_set() -> Option<bool> {
+    None
+}
+
+/// "Strategies" window panels: widths, their ownership, and the Versions collapsed state.
+/// Width values are clamped by the window when applied.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StrategiesPanels {
     pub tree_w: f32,
     pub versions_w: f32,
     pub sections_w: f32,
+    /// Whether a splitter drag made the stored widths user-owned.
+    ///
+    /// `None` identifies a legacy serialized panel object and is conservatively user-owned;
+    /// `Some(false)` identifies responsive first-run defaults.
+    #[serde(default = "legacy_strategies_widths_user_set")]
+    pub widths_user_set: Option<bool>,
     pub versions_collapsed: bool,
 }
 
 impl Default for StrategiesPanels {
+    /// Return a first-run panel layout whose tree and section widths remain responsive until drag.
     fn default() -> Self {
         Self {
             tree_w: 418.0,
             versions_w: 166.0,
             sections_w: 264.0,
+            widths_user_set: Some(false),
             // By default, the versions column is collapsed into a strip with a counter.
             versions_collapsed: true,
         }
