@@ -11,7 +11,10 @@ use moon_ui::{
 
 use super::{SettingsView, separator, slider_row};
 use crate::Backend;
-use moon_core::config::{OrdersStyle, UiThemeMode};
+use moon_core::{
+    config::{OrdersStyle, UiThemeMode},
+    util::fmt,
+};
 use rust_i18n::t;
 
 /// Order-style checkbox descriptor: id, localized label, getter, and setter.
@@ -285,6 +288,16 @@ impl SettingsView {
     /// Build an order-line section body with color, thickness, and dashed controls.
     /// When `markers` is enabled, also adds endpoint markers, cross dimensions, and knot controls.
     /// `checks` is either `[dashed]` or `[dashed, start, end, knots]`.
+    ///
+    /// Args:
+    ///     cx: Settings context used for the active palette and scaled controls.
+    ///     ed: Retained color and slider controls for the selected line type.
+    ///     markers: Whether endpoint-marker and knot controls are available.
+    ///     pending: Whether unfilled-order color and opacity controls are available.
+    ///     checks: Checkbox descriptors in the line type's expected order.
+    ///
+    /// Returns:
+    ///     The assembled, indented line-editor body.
     fn line_body(
         &self,
         cx: &Context<Self>,
@@ -311,7 +324,13 @@ impl SettingsView {
                     .gap(px(10.0))
                     .items_center()
                     .child(MoonColorPicker::new(&ed.color))
-                    .child(slider_row(&t!("lines.thickness"), &ed.thickness, cx)),
+                    .child(slider_row(
+                        &t!("lines.thickness"),
+                        &ed.thickness,
+                        0.5..=6.0,
+                        |v| format!("{} px", fmt::compact(v as f64, 1)),
+                        cx,
+                    )),
             )
             .child(chk(0));
         // Only entry lines expose a separate color and opacity for unfilled orders (`fill == 0`).
@@ -332,6 +351,11 @@ impl SettingsView {
                         .child(slider_row(
                             &t!("lines.pending_alpha"),
                             &ed.pending_alpha,
+                            0.0..=1.0,
+                            |v| {
+                                fmt::pct((v * 100.0) as f64, 0)
+                                    .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                            },
                             cx,
                         )),
                 );
@@ -341,14 +365,28 @@ impl SettingsView {
                 .child(separator(p, cx))
                 .child(chk(1))
                 .child(chk(2))
-                .child(slider_row(&t!("lines.cross_size"), &ed.marker_size, cx))
+                .child(slider_row(
+                    &t!("lines.cross_size"),
+                    &ed.marker_size,
+                    2.0..=24.0,
+                    |v| format!("{} px", fmt::compact(v as f64, 1)),
+                    cx,
+                ))
                 .child(slider_row(
                     &t!("lines.cross_thickness"),
                     &ed.marker_thickness,
+                    0.5..=5.0,
+                    |v| format!("{} px", fmt::compact(v as f64, 1)),
                     cx,
                 ))
                 .child(chk(3))
-                .child(slider_row(&t!("lines.knot_size"), &ed.knot_size, cx));
+                .child(slider_row(
+                    &t!("lines.knot_size"),
+                    &ed.knot_size,
+                    1.0..=10.0,
+                    |v| format!("{} px", fmt::compact(v as f64, 1)),
+                    cx,
+                ));
         }
         col.into_any_element()
     }
@@ -370,6 +408,12 @@ impl SettingsView {
 
     /// Build the Lines tab with one section per English trading line name, then Path and Global.
     /// Attribute labels come from `locales/lines.yml`.
+    ///
+    /// Args:
+    ///     cx: Settings context used for the active palette and scaled controls.
+    ///
+    /// Returns:
+    ///     The assembled Lines-tab content.
     pub(super) fn lines_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let l = &self.lines;
         v_flex()
@@ -715,7 +759,13 @@ impl SettingsView {
                             .gap(px(10.0))
                             .items_center()
                             .child(MoonColorPicker::new(&l.path_color))
-                            .child(slider_row(&t!("lines.thickness"), &l.path_thickness, cx)),
+                            .child(slider_row(
+                                &t!("lines.thickness"),
+                                &l.path_thickness,
+                                0.5..=6.0,
+                                |v| format!("{} px", fmt::compact(v as f64, 1)),
+                                cx,
+                            )),
                     )
                     .child(self.ord_check(
                         cx,
@@ -734,10 +784,24 @@ impl SettingsView {
                     .font_bold()
                     .child(t!("lines.global").to_string()),
             )
-            .child(slider_row(&t!("lines.active_alpha"), &l.active_alpha, cx))
+            .child(slider_row(
+                &t!("lines.active_alpha"),
+                &l.active_alpha,
+                0.05..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
+                cx,
+            ))
             .child(slider_row(
                 &t!("lines.closed_visibility"),
                 &l.closed_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
                 cx,
             ))
             .child(self.ord_check(
@@ -747,7 +811,13 @@ impl SettingsView {
                 |o| o.pending_dashed,
                 |o, v| o.pending_dashed = v,
             ))
-            .child(slider_row(&t!("lines.max_closed"), &l.max_closed, cx))
+            .child(slider_row(
+                &t!("lines.max_closed"),
+                &l.max_closed,
+                0.0..=5000.0,
+                |v| fmt::compact(v as f64, 0),
+                cx,
+            ))
             .child(
                 div()
                     .mt_2()

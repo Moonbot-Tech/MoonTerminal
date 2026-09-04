@@ -7,7 +7,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
     MoonMenuSize, MoonPalette, MoonSelect, MoonSlider, MoonSliderEvent, MoonSliderState,
-    MoonToggle, StyledExt, h_flex, rgba_from, v_flex,
+    MoonToggle, MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -51,6 +51,43 @@ fn labeled_select<T: Clone + PartialEq + 'static>(
                     .menu_size(MoonMenuSize::Compact),
             ),
         )
+}
+
+/// Render a muted settings hint, shortening multi-sentence text to its first sentence.
+///
+/// A shortened hint retains its sentence-ending punctuation, adds an ellipsis, and exposes the
+/// complete localized text in the standard wide settings tooltip. Text without a sentence
+/// boundary is rendered unchanged and does not gain a tooltip.
+///
+/// Args:
+///     key: Stable localization key used as the tooltip host ID.
+///     text: Complete localized hint text.
+///     muted: Muted text colour from the active MoonUI palette.
+///
+/// Returns:
+///     The hint row, with a tooltip only when the visible text was shortened.
+fn settings_hint(key: &'static str, text: &str, muted: Hsla) -> AnyElement {
+    let sentence_end = [". ", "! ", "? "]
+        .into_iter()
+        .filter_map(|boundary| text.find(boundary).map(|index| index + 1))
+        .min();
+    let Some(sentence_end) = sentence_end else {
+        return div()
+            .text_color(muted)
+            .child(text.to_string())
+            .into_any_element();
+    };
+
+    let full = text.to_string();
+    div()
+        .id(key)
+        .text_color(muted)
+        .child(format!("{} …", &text[..sentence_end]))
+        .tooltip(move |_window, cx| {
+            cx.new(|_| MoonTooltipView::new(full.clone()).max_width(420.0))
+                .into()
+        })
+        .into_any_element()
 }
 
 impl SettingsView {
@@ -197,6 +234,12 @@ impl SettingsView {
 
     /// Build the General tab for UI mode/font, locale, chart grouping, control zones,
     /// Main-window idle closing, and file-log retention settings.
+    ///
+    /// Args:
+    ///     cx: Settings context that supplies the active draft and palette.
+    ///
+    /// Returns:
+    ///     The assembled General-tab content.
     pub(super) fn general_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
@@ -212,8 +255,6 @@ impl SettingsView {
                 d.log_retention_days,
             )
         };
-        let hint = |s: &str| div().text_color(muted).child(s.to_string());
-
         // Remember the last valid enabled timeout and restore it when the checkbox is re-enabled.
         // The adjustment clamp keeps it at least 5; fall back to the default defensively.
         if idle_secs >= 5 {
@@ -277,13 +318,25 @@ impl SettingsView {
                         }
                     })),
             )
-            .child(hint(&t!("iface.light_theme_hint")))
+            .child(settings_hint(
+                "iface.light_theme_hint",
+                &t!("iface.light_theme_hint"),
+                muted,
+            ))
             .child(self.font_delta_control(cx))
-            .child(hint(&t!("iface.font_delta_hint")))
+            .child(settings_hint(
+                "iface.font_delta_hint",
+                &t!("iface.font_delta_hint"),
+                muted,
+            ))
             .child(super::separator(p, cx))
             // Interface locale selector.
             .child(labeled_select("general.language", &self.lang, 220.0, cx))
-            .child(hint(&t!("general.language_hint")))
+            .child(settings_hint(
+                "general.language_hint",
+                &t!("general.language_hint"),
+                muted,
+            ))
             .child(super::separator(p, cx))
             // Which rate converts quote money to USDT. The hint explains the two limitations of
             // the current-rate conversion at the point where the application-wide choice is made.
@@ -293,7 +346,11 @@ impl SettingsView {
                 260.0,
                 cx,
             ))
-            .child(hint(&t!("general.valuation_mode_hint")))
+            .child(settings_hint(
+                "general.valuation_mode_hint",
+                &t!("general.valuation_mode_hint"),
+                muted,
+            ))
             .child(super::separator(p, cx))
             // Place each core in a separate chart tab.
             .child(
@@ -308,7 +365,11 @@ impl SettingsView {
                 .label(t!("general.charts_split_by_core").to_string())
                 .size(MoonCheckboxSize::Normal),
             )
-            .child(hint(&t!("general.charts_split_by_core_hint")))
+            .child(settings_hint(
+                "general.charts_split_by_core_hint",
+                &t!("general.charts_split_by_core_hint"),
+                muted,
+            ))
             .child(super::separator(p, cx))
             // Restrict order and line controls to the order-book control zone.
             .child(
@@ -323,7 +384,11 @@ impl SettingsView {
                 .label(t!("general.separate_control_zones").to_string())
                 .size(MoonCheckboxSize::Normal),
             )
-            .child(hint(&t!("general.separate_control_zones_hint")))
+            .child(settings_hint(
+                "general.separate_control_zones_hint",
+                &t!("general.separate_control_zones_hint"),
+                muted,
+            ))
             .child(super::separator(p, cx))
             // Close Main charts after window inactivity; zero disables the timeout.
             .child(
@@ -369,7 +434,11 @@ impl SettingsView {
                         Self::adjust_idle,
                     )),
             )
-            .child(hint(&t!("general.main_idle_close_hint")))
+            .child(settings_hint(
+                "general.main_idle_close_hint",
+                &t!("general.main_idle_close_hint"),
+                muted,
+            ))
             .child(super::separator(p, cx))
             // Stack layout is now configured per tab from the chart-tabs layout popup.
             // File logging and retention period.
@@ -385,7 +454,11 @@ impl SettingsView {
                 .label(t!("general.log_to_file").to_string())
                 .size(MoonCheckboxSize::Normal),
             )
-            .child(hint(&t!("general.log_to_file_hint")))
+            .child(settings_hint(
+                "general.log_to_file_hint",
+                &t!("general.log_to_file_hint"),
+                muted,
+            ))
             // Retention controls are enabled only while file logging is enabled; otherwise the
             // buttons are disabled and the value and labels are muted.
             .child(
@@ -407,7 +480,11 @@ impl SettingsView {
                         Self::adjust_ret,
                     )),
             )
-            .child(hint(&t!("general.log_retention_hint")))
+            .child(settings_hint(
+                "general.log_retention_hint",
+                &t!("general.log_retention_hint"),
+                muted,
+            ))
             // Launch and servers.enc passwords. Last on the tab: it is the only block that can lock
             // the user out of their own cores, so it should not be the first thing a hand lands on.
             .child(super::separator(p, cx))

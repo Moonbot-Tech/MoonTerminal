@@ -13,7 +13,10 @@ use rust_i18n::t;
 
 use super::{SettingsView, color_row, section, separator, slider_row};
 use crate::Backend;
-use moon_core::config::{ChartTheme, UiThemeMode};
+use moon_core::{
+    config::{ChartTheme, UiThemeMode},
+    util::fmt,
+};
 
 /// Theme editor state with one retained control entity per field.
 pub(super) struct Iface {
@@ -239,6 +242,12 @@ impl SettingsView {
     ///
     /// Sections cover chart-label font, chart background/grid, crosshair, candles, order book, and
     /// panels. Personal light/dark mode and UI font settings belong to General in `settings.toml`.
+    ///
+    /// Args:
+    ///     cx: Settings context that supplies the active palette and display scale.
+    ///
+    /// Returns:
+    ///     The assembled Interface-tab content with formatted slider endpoints and values.
     pub(super) fn interface_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let i = &self.iface;
         let p = MoonPalette::active(cx);
@@ -250,6 +259,13 @@ impl SettingsView {
             .child(slider_row(
                 &t!("iface.label_font_delta"),
                 &i.label_font_delta,
+                -4.0..=12.0,
+                |v| {
+                    fmt::round_to(v as f64, 1).map_or_else(
+                        || "+0.0 px".to_string(),
+                        |rounded| format!("{rounded:+.1} px"),
+                    )
+                },
                 cx,
             ))
             .child(separator(p, cx))
@@ -257,15 +273,35 @@ impl SettingsView {
             .child(section(&t!("iface.sec_chart"), p, cx))
             .child(color_row(&t!("iface.bg"), &i.bg, p, cx))
             .child(color_row(&t!("iface.grid"), &i.grid, p, cx))
-            .child(slider_row(&t!("iface.grid_alpha"), &i.grid_alpha, cx))
+            .child(slider_row(
+                &t!("iface.grid_alpha"),
+                &i.grid_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
+                cx,
+            ))
             .child(separator(p, cx))
             // Chart crosshair.
             .child(section(&t!("iface.sec_cross"), p, cx))
             .child(color_row(&t!("iface.cross"), &i.cross, p, cx))
-            .child(slider_row(&t!("iface.cross_alpha"), &i.cross_alpha, cx))
+            .child(slider_row(
+                &t!("iface.cross_alpha"),
+                &i.cross_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
+                cx,
+            ))
             .child(slider_row(
                 &t!("iface.cross_thickness"),
                 &i.cross_thickness,
+                0.5..=4.0,
+                |v| format!("{} px", fmt::compact(v as f64, 1)),
                 cx,
             ))
             .child(separator(p, cx))
@@ -282,6 +318,11 @@ impl SettingsView {
             .child(slider_row(
                 &t!("iface.candle_fill_alpha"),
                 &i.candle_fill_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
                 cx,
             ))
             .child(separator(p, cx))
@@ -291,15 +332,31 @@ impl SettingsView {
             .child(slider_row(
                 &t!("iface.price_line_alpha"),
                 &i.price_line_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
                 cx,
             ))
             .child(color_row(&t!("iface.mark_line"), &i.mark_line, p, cx))
             .child(slider_row(
                 &t!("iface.mark_line_alpha"),
                 &i.mark_line_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
                 cx,
             ))
-            .child(slider_row(&t!("iface.price_line_px"), &i.price_line_px, cx))
+            .child(slider_row(
+                &t!("iface.price_line_px"),
+                &i.price_line_px,
+                0.5..=6.0,
+                |v| format!("{} px", fmt::compact(v as f64, 1)),
+                cx,
+            ))
             .child(separator(p, cx))
             // The trade-mark and bottom-volume groups that used to sit here are now per chart TAB,
             // in the chart's palette popup (`chart_tabs::graphics_popup`).
@@ -313,6 +370,11 @@ impl SettingsView {
             .child(slider_row(
                 &t!("iface.book_level_alpha"),
                 &i.book_level_alpha,
+                0.0..=1.0,
+                |v| {
+                    fmt::pct((v * 100.0) as f64, 0)
+                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
+                },
                 cx,
             ))
             .child(separator(p, cx))

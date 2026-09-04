@@ -27,6 +27,12 @@ use super::{
 use crate::design;
 use crate::settings::SettingsView;
 
+/// Logical width reserved for every hotkey row title.
+const ROW_TITLE_WIDTH: f32 = 160.0;
+
+/// Maximum readable width of a hotkey row description before its editor column begins.
+const ROW_DESCRIPTION_MAX_WIDTH: f32 = 640.0;
+
 impl SettingsView {
     pub(in crate::settings) fn hotkeys_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let hotkeys = {
@@ -476,6 +482,17 @@ impl SettingsView {
             .into_any_element()
     }
 
+    /// Build one keyboard shortcut row with the editor in the tab's shared control column.
+    ///
+    /// Args:
+    ///     title: Shortcut label shown in the fixed title column.
+    ///     desc: Localized explanation that wraps within its description column.
+    ///     slot: Hotkey configuration slot edited by the input.
+    ///     hotkeys: Draft configuration used to show the current binding and conflicts.
+    ///     cx: Settings context used for palette, scaling, and input events.
+    ///
+    /// Returns:
+    ///     The rendered shortcut row.
     fn hotkey_row(
         &self,
         title: impl Into<String>,
@@ -505,26 +522,36 @@ impl SettingsView {
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                MoonText::new(title.into())
-                    .uppercase(false)
-                    .mono(true)
-                    .font_size(11.0)
-                    .line_height(14.0)
-                    .color(p.text)
-                    .render(),
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, ROW_TITLE_WIDTH))
+                    .child(
+                        MoonText::new(title.into())
+                            .uppercase(false)
+                            .mono(true)
+                            .wrap()
+                            .font_size(11.0)
+                            .line_height(14.0)
+                            .color(p.text)
+                            .render(),
+                    ),
             )
             .child(
                 // Match title sizing, use muted text, and wrap within the window.
-                div().flex_1().min_w_0().child(
-                    MoonText::new(desc.into())
-                        .uppercase(false)
-                        .mono(true)
-                        .wrap()
-                        .font_size(11.0)
-                        .line_height(14.0)
-                        .color(p.text_muted)
-                        .render(),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .max_w(design::ui_px(cx, ROW_DESCRIPTION_MAX_WIDTH))
+                    .child(
+                        MoonText::new(desc.into())
+                            .uppercase(false)
+                            .mono(true)
+                            .wrap()
+                            .font_size(11.0)
+                            .line_height(14.0)
+                            .color(p.text_muted)
+                            .render(),
+                    ),
             )
             .child(
                 MoonHotkeyInput::new(id)
@@ -549,7 +576,8 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// One mouse-gesture row: the binding, and for a move row the "Move kind" beside it.
+    /// Build one mouse-gesture row with a binding and, for move rows, a "Move kind" selector.
+    /// The trailing controls wrap at narrow widths rather than clipping.
     ///
     /// Args:
     ///     title: Row label.
@@ -598,21 +626,22 @@ impl SettingsView {
             })
         });
 
-        let mut row = self.row_head(title.into(), desc.into(), disabled, cx);
+        let mut row = self
+            .row_head(title.into(), desc.into(), disabled, cx)
+            .child(
+                Self::row_dropdown(id, current.label())
+                    .trigger_variant(if current == MouseGestureBinding::None {
+                        MoonButtonVariant::Neutral
+                    } else {
+                        MoonButtonVariant::Blue
+                    })
+                    .menu_width_scaled(228.0)
+                    .disabled(disabled)
+                    .items(items),
+            );
         if wip {
             row = row.child(self.wip_tag(&p, cx));
         }
-        row = row.child(
-            Self::row_dropdown(id, current.label())
-                .trigger_variant(if current == MouseGestureBinding::None {
-                    MoonButtonVariant::Neutral
-                } else {
-                    MoonButtonVariant::Blue
-                })
-                .menu_width_scaled(228.0)
-                .disabled(disabled)
-                .items(items),
-        );
         if let Some(kind_slot) = kind_slot {
             row = row.child(self.move_kind_dropdown(kind_slot, hotkeys, disabled));
         }
@@ -677,8 +706,18 @@ impl SettingsView {
 
     /// Builds the shared leading half of an editor row: title, then the wrapping description.
     ///
-    /// Every row on this tab is that pair plus one control, and the sizes are deliberately equal —
-    /// a description one step smaller was tried and read as a different font.
+    /// Every row on this tab is that pair plus one or two controls. The row wraps trailing controls
+    /// at narrow widths instead of clipping them, and the text sizes are deliberately equal — a
+    /// description one step smaller was tried and read as a different font.
+    ///
+    /// Args:
+    ///     title: Label displayed in the shared fixed-width title column.
+    ///     desc: Muted description that may wrap within its capped column.
+    ///     disabled: Whether the title uses muted styling.
+    ///     cx: Settings context used for palette and scaled layout.
+    ///
+    /// Returns:
+    ///     The row prefix to which callers append one or two controls.
     fn row_head(
         &self,
         title: String,
@@ -689,30 +728,41 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         h_flex()
             .w_full()
+            .flex_wrap()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                MoonText::new(title)
-                    .uppercase(false)
-                    .mono(true)
-                    .font_size(11.0)
-                    .line_height(14.0)
-                    .color(if disabled { p.text_muted } else { p.text })
-                    .render(),
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, ROW_TITLE_WIDTH))
+                    .child(
+                        MoonText::new(title)
+                            .uppercase(false)
+                            .mono(true)
+                            .wrap()
+                            .font_size(11.0)
+                            .line_height(14.0)
+                            .color(if disabled { p.text_muted } else { p.text })
+                            .render(),
+                    ),
             )
             .child(
                 // Match title sizing, use muted text, and wrap within the window.
-                div().flex_1().min_w_0().child(
-                    MoonText::new(desc)
-                        .uppercase(false)
-                        .mono(true)
-                        .wrap()
-                        .font_size(11.0)
-                        .line_height(14.0)
-                        .color(p.text_muted)
-                        .render(),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .max_w(design::ui_px(cx, ROW_DESCRIPTION_MAX_WIDTH))
+                    .child(
+                        MoonText::new(desc)
+                            .uppercase(false)
+                            .mono(true)
+                            .wrap()
+                            .font_size(11.0)
+                            .line_height(14.0)
+                            .color(p.text_muted)
+                            .render(),
+                    ),
             )
     }
 
@@ -763,13 +813,29 @@ impl SettingsView {
         .into_any_element()
     }
 
+    /// Builds the move-mirroring checkbox in the same control column as the gesture editors.
+    ///
+    /// Args:
+    ///     hotkeys: Draft configuration that supplies the checkbox state.
+    ///     cx: Settings context used for scaled layout and change events.
+    ///
+    /// Returns:
+    ///     The aligned move-mirroring checkbox row.
     fn same_move_checkbox(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> AnyElement {
         let backend = self.backend.clone();
 
         h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 30.0, 12.0, 6.0))
+            .gap(design::ui_px(cx, 10.0))
             .items_center()
+            .child(div().flex_none().w(design::ui_px(cx, ROW_TITLE_WIDTH)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .max_w(design::ui_px(cx, ROW_DESCRIPTION_MAX_WIDTH)),
+            )
             .child(
                 MoonCheckbox::new("same-hotkeys-for-move")
                     .checked(hotkeys.same_hotkeys_for_move)

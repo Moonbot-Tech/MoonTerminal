@@ -2239,7 +2239,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
     for needle in [
         "\"general.valuation_mode\"",
         "&self.valuation",
-        "hint(&t!(\"general.valuation_mode_hint\"))",
+        "settings_hint(\n                \"general.valuation_mode_hint\",\n                &t!(\"general.valuation_mode_hint\"),",
     ] {
         assert!(
             tab.contains(needle),
