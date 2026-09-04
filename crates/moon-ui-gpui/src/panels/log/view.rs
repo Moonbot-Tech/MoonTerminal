@@ -101,12 +101,6 @@ impl Render for LogPanel {
                         }
                         cx.notify();
                     })),
-            )
-            .child(
-                div()
-                    .text_size(crate::design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(t!("log.count", shown = self.buf.visible(), total = total).to_string()),
             );
         // A removable chip for the coin filter, in the blue its clickable token wears in the rows.
         // The source name needs none: clicking one selects that core in the source list above,
@@ -127,6 +121,14 @@ impl Render for LogPanel {
                     .on_click(cx.listener(|t, _, _, cx| t.set_coin_filter(None, cx))),
             );
         }
+        controls = controls.child(
+            div()
+                .ml_auto()
+                .flex_none()
+                .text_size(crate::design::t_body(cx))
+                .text_color(rgb(p.text_muted))
+                .child(t!("log.count", shown = self.buf.visible(), total = total).to_string()),
+        );
 
         // Build the tail-oriented virtualized list or its empty-state message.
         let weak = cx.entity().downgrade();
