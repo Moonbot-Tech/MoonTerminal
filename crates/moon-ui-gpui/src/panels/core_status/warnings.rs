@@ -14,15 +14,27 @@ use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 use super::*;
 use crate::backend::core_warn::{WarnAxis, WarnEpisode};
 
-/// The fixed set of Warnings columns (no sorting: the backend already orders the rows).
+/// Build the unsortable Warnings columns with fixed measurement fields and a flexible Core tail.
+///
+/// Returns:
+///     Ordered column descriptors whose non-resizable Core column absorbs spare table width.
 fn columns() -> Vec<MoonDataTableColumn> {
+    let mut core =
+        MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0).fill();
+    core.resizable = false;
+
     vec![
-        MoonDataTableColumn::new("time", t!("core_status.col.time").to_string(), 150.0),
-        MoonDataTableColumn::new("dur", t!("core_status.col.dur").to_string(), 72.0).right(),
-        MoonDataTableColumn::new("server", t!("core_status.col.server").to_string(), 110.0),
-        MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0),
-        MoonDataTableColumn::new("type", t!("core_status.col.type").to_string(), 80.0),
-        MoonDataTableColumn::new("peak", t!("core_status.col.peak").to_string(), 90.0).right(),
+        MoonDataTableColumn::new("time", t!("core_status.col.time").to_string(), 150.0).no_grow(),
+        MoonDataTableColumn::new("dur", t!("core_status.col.dur").to_string(), 120.0)
+            .right()
+            .no_grow(),
+        MoonDataTableColumn::new("peak", t!("core_status.col.peak").to_string(), 90.0)
+            .right()
+            .no_grow(),
+        MoonDataTableColumn::new("type", t!("core_status.col.type").to_string(), 80.0).no_grow(),
+        MoonDataTableColumn::new("server", t!("core_status.col.server").to_string(), 110.0)
+            .no_grow(),
+        core,
     ]
 }
 
@@ -101,10 +113,10 @@ fn warn_row(
             episode.start_ms,
             episode.end_ms,
         )),
+        MoonDataCell::text(peak(episode)),
+        MoonDataCell::text(axis_label(episode.axis)),
         MoonDataCell::text(server),
         MoonDataCell::text(core),
-        MoonDataCell::text(axis_label(episode.axis)),
-        MoonDataCell::text(peak(episode)),
     ])
 }
 

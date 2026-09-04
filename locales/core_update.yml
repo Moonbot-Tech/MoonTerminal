@@ -98,9 +98,9 @@ core_update.col.server:
   en: "Server"
   es: "Servidor"
 core_update.col.from_to:
-  ru: "С -> на"
-  en: "From -> to"
-  es: "De -> a"
+  ru: "С → на"
+  en: "From → to"
+  es: "De → a"
 core_update.col.target:
   ru: "Цель"
   en: "Target"
