@@ -252,15 +252,15 @@ core_expert.log_stats_note:
   en: "The bot sends trades without personal data — prices and volumes only; they feed the rating table."
   es: "El bot envía operaciones sin datos personales — sólo precios y volúmenes; con ellos se construye la tabla de clasificación."
 
-# --- "Телеграм" page. Values travel in the safe-share `signals` section but are not projected. ---
+# --- "Телеграм" page: projected and live, but for the built-in client and the stats switch. ---
 core_expert.tlg_signal_channels:
   ru: "Каналы с сигналами: %{v}"
   en: "Signal channels: %{v}"
   es: "Canales de señales: %{v}"
 core_expert.tlg_channels_empty:
-  ru: "Список каналов пока не читается терминалом."
-  en: "The terminal does not read the channel list yet."
-  es: "El terminal aún no lee la lista de canales."
+  ru: "Каналов нет. Добавьте первый в поле справа."
+  en: "No channels. Add the first one in the box on the right."
+  es: "No hay canales. Añada el primero en el campo de la derecha."
 core_expert.tlg_remove_channel:
   ru: "Убрать канал"
   en: "Remove channel"

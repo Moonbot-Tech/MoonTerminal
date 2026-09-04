@@ -132,7 +132,8 @@ impl ExpertTab {
             // `signals` section the compact popup draws them from.
             Self::Interface => mask.with_interface().with_signals(),
             Self::AutoBuy => mask.with_auto_buy(),
-            Self::Login | Self::Telegram | Self::Special | Self::Hotkeys => mask,
+            Self::Telegram => mask.with_telegram(),
+            Self::Login | Self::Special | Self::Hotkeys => mask,
         }
     }
 
@@ -140,11 +141,11 @@ impl ExpertTab {
     ///
     /// `Projected` is what `moon_core::feed::CoreConfig` carries AND this window draws: the General
     /// page's exits and risk limits, the AutoStart page with its watchdogs and BTC blink, the
-    /// Interface page's appearance block together with the alert sounds Moonbot puts on it, and the
-    /// AutoBuy page's signal sources and message filter. Everything else is on the wire but
-    /// unprojected, and Login is not on the wire at all.
+    /// Interface page's appearance block together with the alert sounds Moonbot puts on it, the
+    /// AutoBuy page's signal sources and message filter, and the Telegram page's channels. Whatever
+    /// is left is on the wire but unprojected, and Login is not on the wire at all.
     ///
-    /// A `Projected` page is not necessarily projected in FULL — every one of the four draws rows
+    /// A `Projected` page is not necessarily projected in FULL — every one of the five draws rows
     /// the snapshot does not carry. The rating answers "can this page be filled and sent at all",
     /// which is what decides whether the window prints a note OVER it; a row that cannot be filled
     /// answers for itself, by being disabled.
@@ -154,10 +155,10 @@ impl ExpertTab {
             // none of which safe-share transports. Two of its lesser controls (the connection
             // variant, the log switches) DO travel, but not one field the page exists for.
             Self::Login => TabSource::Absent,
-            Self::General | Self::AutoStart | Self::Interface | Self::AutoBuy => {
+            Self::General | Self::AutoStart | Self::Interface | Self::AutoBuy | Self::Telegram => {
                 TabSource::Projected
             }
-            Self::Telegram | Self::Special | Self::Hotkeys => TabSource::Wire,
+            Self::Special | Self::Hotkeys => TabSource::Wire,
         }
     }
 

@@ -86,6 +86,40 @@ pub(crate) trait CoreDraftHost: Sized + 'static {
     fn editor_window(&self) -> AnyWindowHandle;
 }
 
+/// A text box that belongs to the page rather than to the draft.
+///
+/// Moonbot has a few: the "add a channel" box is a name on its way INTO a list, not a setting. Such
+/// a box must not subscribe — [`input_state`]'s subscription stages on every keystroke, and staging
+/// marks the surface edited, which would freeze it against the core and put its whole section on
+/// the wire for a name the user was still typing. Nothing re-syncs it either: its content is the
+/// user's, not the core's, so a re-seed leaves it alone.
+///
+/// Args:
+///     view: Surface that owns the store.
+///     id: Stable row id the control is remembered under.
+///     window: Window used to build the editor.
+///     cx: View context.
+///
+/// Returns:
+///     The editor for that box.
+pub(crate) fn scratch_input_state<V: CoreDraftHost>(
+    view: &mut V,
+    id: &'static str,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> Entity<MoonInputState> {
+    let generation = view.editors().generation;
+    if let Some((seen, state)) = view.editors().inputs.get_mut(id) {
+        *seen = generation;
+        return state.clone();
+    }
+    let state = cx.new(|c| MoonInputState::new(window, c));
+    view.editors()
+        .inputs
+        .insert(id, (generation, state.clone()));
+    state
+}
+
 /// Retained editor for one numeric or text field, created on first render of that field.
 ///
 /// An existing editor is written to ONLY when the draft has been re-seeded since it last saw one —

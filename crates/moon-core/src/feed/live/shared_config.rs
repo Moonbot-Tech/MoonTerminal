@@ -23,8 +23,8 @@ use crate::feed::{
     AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
-    InterfaceSettings, LeverageSettings, ManualSettings, SignalsSettings, day_fraction_to_minutes,
-    minutes_to_day_fraction,
+    InterfaceSettings, LeverageSettings, ManualSettings, SignalsSettings, TelegramSettings,
+    day_fraction_to_minutes, minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -66,6 +66,8 @@ pub struct FieldMask {
     /// outside `trading`/`visual`; the send carries every section either way, so this narrows only
     /// when those six fields are overwritten, exactly as the four above do for theirs.
     signals: bool,
+    /// Moonbot's Telegram page: the signal channels, their rules, and the cloud blacklist flag.
+    telegram: bool,
     /// `trading.ignore_strat_sell_price`, the one manual-block field the terminal still WRITES.
     ///
     /// It is core behaviour, not a value the terminal can hold locally: it decides whether the core
@@ -84,6 +86,7 @@ impl FieldMask {
         interface: false,
         leverage: false,
         signals: false,
+        telegram: false,
         ignore_strat_sell_price: false,
     };
 
@@ -106,6 +109,8 @@ impl FieldMask {
         interface: false,
         leverage: true,
         signals: true,
+        // NOT the Telegram page: the compact popup does not draw it.
+        telegram: false,
         ignore_strat_sell_price: false,
     };
 
@@ -142,6 +147,12 @@ impl FieldMask {
         self
     }
 
+    /// Name Moonbot's Telegram page — its signal channels and the rules over them.
+    pub const fn with_telegram(mut self) -> Self {
+        self.telegram = true;
+        self
+    }
+
     /// Name Moonbot's autobuy page — its signal sources and its message filter.
     pub const fn with_auto_buy(mut self) -> Self {
         self.auto_buy = true;
@@ -169,6 +180,7 @@ impl FieldMask {
             interface: self.interface || other.interface,
             leverage: self.leverage || other.leverage,
             signals: self.signals || other.signals,
+            telegram: self.telegram || other.telegram,
             ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
         }
     }
@@ -558,6 +570,9 @@ fn rejection_within_mask(
     if touched.signals && expected.signals != actual.signals {
         areas.push(CoreConfigArea::Signals);
     }
+    if touched.telegram && expected.telegram != actual.telegram {
+        areas.push(CoreConfigArea::Telegram);
+    }
     if touched.ignore_strat_sell_price
         && expected.manual.ignore_strat_sell_price != actual.manual.ignore_strat_sell_price
     {
@@ -580,6 +595,14 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let u = &cfg.ui;
     let sc = &cfg.signals.signal_config;
     CoreConfig {
+        telegram: TelegramSettings {
+            pump_channel: sig.pump_channel.clone(),
+            pump_channels: sig.pump_channels.clone(),
+            multi_channels: sig.multi_channels,
+            more_then_1_channel: sig.more_then_1_channel,
+            listen_moon_channel: sig.listen_moon_channel,
+            use_moon_bl: t.use_moon_bl,
+        },
         auto_buy: AutoBuySettings {
             monitor_clipboard: sig.monitor_clipboard,
             clipboard_auto_buy: sig.clipboard_auto_buy,
@@ -807,6 +830,9 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
     if touched.signals {
         apply_signals(cfg, &wanted.signals);
     }
+    if touched.telegram {
+        apply_telegram(cfg, &wanted.telegram);
+    }
     if touched.ignore_strat_sell_price {
         cfg.trading.ignore_strat_sell_price = wanted.manual.ignore_strat_sell_price;
     }
@@ -842,6 +868,20 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.use_coins_black_list = g.blacklist_on;
     t.coins_black_list_text = g.blacklist_text.clone();
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
+}
+
+/// Apply Moonbot's Telegram page to `signals` and the one `trading` flag beside it.
+///
+/// Six fields: everything else in both sections — including their `unknown_tail`s, the alert sounds
+/// [`apply_signals`] owns and the message filter [`apply_auto_buy`] owns — travels back untouched.
+fn apply_telegram(cfg: &mut SharedConfig, t: &TelegramSettings) {
+    let sig = &mut cfg.signals;
+    sig.pump_channel = t.pump_channel.clone();
+    sig.pump_channels = t.pump_channels.clone();
+    sig.multi_channels = t.multi_channels;
+    sig.more_then_1_channel = t.more_then_1_channel;
+    sig.listen_moon_channel = t.listen_moon_channel;
+    cfg.trading.use_moon_bl = t.use_moon_bl;
 }
 
 /// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and one `trading`

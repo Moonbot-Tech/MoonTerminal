@@ -38,6 +38,8 @@ pub struct CoreConfig {
     pub interface: InterfaceSettings,
     /// Moonbot's autobuy page: the signal sources and the message filter.
     pub auto_buy: AutoBuySettings,
+    /// Moonbot's Telegram page: the signal channels and the rules over them.
+    pub telegram: TelegramSettings,
     /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
     /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
     pub manual: ManualSettings,
@@ -247,6 +249,33 @@ pub struct GeneralSettings {
     /// The terminal ALSO keeps a client-side filter of the same name (moonproto applies it to the
     /// retained market analytics without asking the core), so committing this field drives both.
     pub exclude_blacklisted_from_deltas: bool,
+}
+
+/// Moonbot's "Телеграм" page: which channels a signal may come from, and the rules over them.
+///
+/// An area is a PAGE — see [`InterfaceSettings`]. This one is `signals` plus the one `trading` flag
+/// Moonbot files under the same tab, and it does not overlap [`AutoBuySettings`]: that page owns
+/// how a message is PARSED, this one owns where messages come from.
+///
+/// Moonbot's own dialog shows one channel box. The wire keeps a primary channel and a list of
+/// additional ones, so this block keeps them apart and the page shows the primary first. Adding a
+/// channel appends to [`Self::pump_channels`] and removing takes from it; the primary is shown but
+/// not removable here, because which of the additional channels would take its place is a rule the
+/// protocol does not state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramSettings {
+    /// `signals.pump_channel`: the primary signal channel.
+    pub pump_channel: String,
+    /// `signals.pump_channels`: the additional channels used in multi-channel mode.
+    pub pump_channels: Vec<String>,
+    /// `signals.multi_channels`: accept signals from more than one channel at once.
+    pub multi_channels: bool,
+    /// `signals.more_then_1_channel`: buy only a token seen in two channels.
+    pub more_then_1_channel: bool,
+    /// `signals.listen_moon_channel`: listen to Moonbot's own signal channel.
+    pub listen_moon_channel: bool,
+    /// `trading.use_moon_bl`: use the Moonbot-curated cloud blacklist.
+    pub use_moon_bl: bool,
 }
 
 /// Moonbot's "АвтоПокупка" page: where a buy signal may come from, and which messages count.
@@ -650,6 +679,7 @@ impl CoreConfigState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreConfigArea {
     AutoBuy,
+    Telegram,
     AutoStart,
     BtcBlink,
     General,

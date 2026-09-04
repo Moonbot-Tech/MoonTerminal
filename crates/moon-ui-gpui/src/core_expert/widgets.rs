@@ -345,6 +345,77 @@ pub(super) fn list_box(
         .children(lines.into_iter().map(|line| caption(line, false, p, cx)))
 }
 
+/// The same framed list, with one row pickable.
+///
+/// Still not `MoonList`, for the reason [`list_box`] gives: this is a handful of lines, not a
+/// virtualized list with a delegate. The pick lives in the WINDOW — a page is rebuilt every render
+/// — so the row hands the index straight to it.
+pub(super) fn list_box_select(
+    id: &'static str,
+    lines: Vec<String>,
+    selected: Option<usize>,
+    empty_note: String,
+    view: &Entity<CoreExpertView>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let empty = lines.is_empty();
+    v_flex()
+        .id(id)
+        .w_full()
+        .flex_1()
+        .min_h(design::ui_px(cx, 120.0))
+        .gap(design::ui_px(cx, 2.0))
+        .p(design::ui_px(cx, 6.0))
+        .rounded(design::r_button(cx))
+        .border_1()
+        .border_color(rgb(p.border))
+        .overflow_y_scroll()
+        .when(empty, |this| this.child(hint(empty_note, p, cx)))
+        .children(lines.into_iter().enumerate().map(|(row, line)| {
+            let view = view.clone();
+            let picked = selected == Some(row);
+            // Keyed by BOTH the row and the line: the line alone collides when the core carries
+            // the same channel twice, and the row alone would let GPUI carry one id's interaction
+            // state onto a different channel after a removal.
+            div()
+                .id(SharedString::from(format!("{id}-{row}-{line}")))
+                .w_full()
+                .px(design::ui_px(cx, 4.0))
+                .rounded(design::r_button(cx))
+                .overflow_hidden()
+                .cursor_pointer()
+                // The theme's own selected-row fill: `row_alt` is the zebra stripe, a shade off the
+                // panel, and would leave the pick invisible in the light theme.
+                .when(picked, |this| this.bg(rgb(p.table_selected)))
+                .child(caption(line.clone(), true, p, cx))
+                .on_click(move |_, _w, app| {
+                    view.update(app, |this, cx| {
+                        // Clicking the picked row clears the pick, which is how a list with no
+                        // other way to deselect gives one back.
+                        this.set_selected_channel((!picked).then_some(row), cx);
+                    });
+                })
+        }))
+}
+
+/// One of Moonbot's action buttons, with something behind it.
+pub(super) fn action_live(
+    id: &'static str,
+    label: String,
+    enabled: bool,
+    on_click: impl Fn(&mut App) + 'static,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .label(label)
+        .size(MoonButtonSize::Action)
+        .variant(MoonButtonVariant::Soft)
+        .disabled(!enabled)
+        .padding_x(14.0)
+        .on_click(move |_, _w, app| on_click(app))
+        .render()
+}
+
 /// Side of the sound-preview square, in font-scaled units: the height of the dropdown beside it, so
 /// the pair reads as one control. The same value the compact popup uses.
 const SOUND_PLAY_SIDE: f32 = 22.0;

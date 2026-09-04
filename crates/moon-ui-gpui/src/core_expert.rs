@@ -108,6 +108,12 @@ pub struct CoreExpertView {
     pub(super) hotkeys_sub: pages::HotkeysSub,
     /// Open section of the Special page, which Moonbot splits into four collapsible blocks.
     pub(super) special_section: pages::SpecialSection,
+    /// Row picked in the Telegram page's channel box, as an index into the list that page draws.
+    ///
+    /// Belongs to the WINDOW for the same reason the open Special section does: a page is rebuilt
+    /// on every render and could not remember it. Held as an index rather than a name because the
+    /// list is what the page draws, and the page bounds-checks it against the draft it has.
+    pub(super) selected_channel: Option<usize>,
     /// Staged page, present only in [`PageState::Ready`].
     pub(super) draft: Option<CoreConfig>,
     /// The pages a control has written from, in the order they were first touched.
@@ -236,6 +242,7 @@ impl CoreExpertView {
             tab: ExpertTab::default(),
             hotkeys_sub: pages::HotkeysSub::default(),
             special_section: pages::SpecialSection::default(),
+            selected_channel: None,
             draft: None,
             state: PageState::NoCore,
             dirty: false,
@@ -365,6 +372,9 @@ impl CoreExpertView {
         // walking the projection.
         if self.seen_rev != rev && !self.dirty {
             self.draft = Some(latest.clone());
+            // The pick into the Telegram channel box is POSITIONAL, and this is a different list:
+            // keeping it would highlight one channel and remove another.
+            self.selected_channel = None;
             self.seen_rev = rev;
             self.had_page = true;
             self.editors.reseeded();
@@ -404,6 +414,7 @@ impl CoreExpertView {
             self.draft = None;
             self.dirty = false;
             self.edited.clear();
+            self.selected_channel = None;
             // The controls go with the page: one retained past it would seed the next core's row
             // with the previous core's text on its first frame. Focus may be sitting in one of
             // them — but only if one existed, so a store that never built anything does not cost
@@ -448,6 +459,15 @@ impl CoreExpertView {
         cx.notify();
     }
 
+    /// Pick a row in the Telegram page's channel box, or clear the pick.
+    pub(super) fn set_selected_channel(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
+        if self.selected_channel == row {
+            return;
+        }
+        self.selected_channel = row;
+        cx.notify();
+    }
+
     /// Select one of Moonbot's inner Hotkeys tabs.
     fn set_hotkeys_sub(&mut self, sub: pages::HotkeysSub, cx: &mut Context<Self>) {
         if self.hotkeys_sub == sub {
@@ -475,6 +495,7 @@ impl CoreExpertView {
         // click, so this matters most on the pages where nothing is live.
         self.needs_blur |= !self.editors.is_empty();
         self.editors.clear();
+        self.selected_channel = None;
         cx.notify();
     }
 
@@ -558,6 +579,7 @@ impl CoreExpertView {
         self.draft = None;
         self.dirty = false;
         self.edited.clear();
+        self.selected_channel = None;
         self.seen_rev = 0;
         self.had_page = false;
         self.write_refused = false;
@@ -611,6 +633,9 @@ impl CoreExpertView {
         };
         for (id, value, stage) in fields {
             editors::input_state(self, id, value, stage, window, cx);
+        }
+        for id in pages::scratch_specs(tab) {
+            editors::scratch_input_state(self, id, window, cx);
         }
         for (id, bounds, value, stage, mirror) in sliders {
             editors::slider_state(self, id, bounds, value, stage, mirror, window, cx);

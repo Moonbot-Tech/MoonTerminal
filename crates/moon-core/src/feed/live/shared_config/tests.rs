@@ -475,3 +475,88 @@ fn an_unnamed_auto_buy_is_not_written() {
     assert_eq!(written.signals.signal_config.words_count, 42);
     assert_eq!(written.signals.msg_token_tags, "@,%");
 }
+
+/// A snapshot whose Telegram fields all differ from the wire's own defaults, the same discipline
+/// [`interface_base`] and [`auto_buy_base`] follow.
+fn telegram_base() -> SharedConfig {
+    let mut cfg = SharedConfig::default();
+    cfg.signals.pump_channel = "primary".to_string();
+    cfg.signals.pump_channels = vec!["extra_one".to_string(), "extra_two".to_string()];
+    cfg.signals.multi_channels = !cfg.signals.multi_channels;
+    cfg.signals.more_then_1_channel = !cfg.signals.more_then_1_channel;
+    cfg.signals.listen_moon_channel = !cfg.signals.listen_moon_channel;
+    cfg.trading.use_moon_bl = !cfg.trading.use_moon_bl;
+    cfg
+}
+
+/// Every Telegram field must survive read -> write unchanged, the channel list included: the write
+/// rebuilds the whole snapshot, so a field the projection forgets is a field the next OK reverts.
+#[test]
+fn the_telegram_page_round_trips_through_the_projection() {
+    let base = telegram_base();
+    let projected = core_config_from_proto(&base);
+    assert_ne!(
+        projected.telegram,
+        core_config_from_proto(&SharedConfig::default()).telegram,
+        "the base must differ from the wire default, or this test proves nothing"
+    );
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &projected, FieldMask::EMPTY.with_telegram());
+
+    assert_eq!(
+        core_config_from_proto(&written).telegram,
+        projected.telegram
+    );
+}
+
+/// The Telegram page and the autobuy page share the `signals` section but not a mask bit: editing
+/// the channel list must leave the message filter exactly as the core sent it.
+#[test]
+fn a_telegram_edit_leaves_the_message_filter_alone() {
+    let mut base = telegram_base();
+    base.signals.signal_config.words_count = 33;
+    base.signals.msg_keywords_long = "pump".to_string();
+    base.signals.play_sell_alert = true;
+    base.signals.unknown_tail = vec![5];
+    base.trading.g_take_profit = 1.5;
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.telegram.pump_channels.push("added".to_string());
+    // What another surface would have staged, and what this write must NOT carry.
+    wanted.auto_buy.words_count = 0;
+    wanted.auto_buy.msg_keywords_long = String::new();
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(wanted, FieldMask::EMPTY.with_telegram());
+    let sent = next_config(&mut sequence, &base);
+
+    assert_eq!(
+        sent.signals.pump_channels,
+        vec![
+            "extra_one".to_string(),
+            "extra_two".to_string(),
+            "added".to_string()
+        ]
+    );
+    assert_eq!(sent.signals.signal_config.words_count, 33);
+    assert_eq!(sent.signals.msg_keywords_long, "pump");
+    assert!(sent.signals.play_sell_alert);
+    assert_eq!(sent.signals.unknown_tail, vec![5]);
+    assert_eq!(sent.trading.g_take_profit, 1.5);
+}
+
+/// The mask decides, not the projection: the compact popup's mask must not carry the channel list.
+#[test]
+fn an_unnamed_telegram_is_not_written() {
+    let base = telegram_base();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.telegram.pump_channel = "hijacked".to_string();
+    wanted.telegram.pump_channels.clear();
+
+    let mut written = telegram_base();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+
+    assert_eq!(written.signals.pump_channel, "primary");
+    assert_eq!(written.signals.pump_channels.len(), 2);
+}

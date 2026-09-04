@@ -55,6 +55,19 @@ pub(super) struct PageCtx<'a> {
     pub(super) hotkeys_sub: HotkeysSub,
     /// Which of the Special page's four collapsible sections is open, for the same reason.
     pub(super) special_section: SpecialSection,
+    /// Which row of the Telegram page's channel box is picked, for the same reason.
+    pub(super) selected_channel: Option<usize>,
+}
+
+/// Ids of the page's text boxes that hold a value on its way somewhere else rather than a setting.
+///
+/// Built through `editors::scratch_input_state`, which does not subscribe: see its doc for why a
+/// box like this must not stage.
+pub(super) fn scratch_specs(tab: ExpertTab) -> &'static [&'static str] {
+    match tab {
+        ExpertTab::Telegram => telegram::SCRATCH_FIELDS,
+        _ => &[],
+    }
 }
 
 /// Text fields the page on screen needs, as `(id, current value, staging function)`.
@@ -69,7 +82,6 @@ pub(super) fn field_specs(
     match tab {
         ExpertTab::General => general::field_specs(draft),
         ExpertTab::Login => login::field_specs(draft),
-        ExpertTab::Telegram => telegram::field_specs(draft),
         ExpertTab::AutoBuy => autobuy::field_specs(draft),
         ExpertTab::AutoStart => autostart::field_specs(draft),
         ExpertTab::Interface => interface::field_specs(draft),
@@ -125,7 +137,14 @@ pub(super) fn page(
     match tab {
         ExpertTab::General => Some(general::body(view, store, draft, p, cx)),
         ExpertTab::Login => Some(login::body(view, store, p, cx)),
-        ExpertTab::Telegram => Some(telegram::body(view, store, p, cx)),
+        ExpertTab::Telegram => Some(telegram::body(
+            view,
+            store,
+            draft,
+            ctx.selected_channel,
+            p,
+            cx,
+        )),
         ExpertTab::AutoBuy => Some(autobuy::body(view, store, draft, p, cx)),
         ExpertTab::AutoStart => Some(autostart::body(
             view,

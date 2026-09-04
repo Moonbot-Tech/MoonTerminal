@@ -191,6 +191,7 @@ impl CoreExpertView {
             profit,
             hotkeys_sub: self.hotkeys_sub,
             special_section: self.special_section,
+            selected_channel: self.selected_channel,
         };
         let page = self
             .draft
