@@ -671,9 +671,13 @@ fn core_col_w(groups: &[GroupStat], scale: f32, cx: &App) -> f32 {
     (w / scale).ceil().clamp(CORE_W, CORE_W_MAX)
 }
 
+/// Font-scaled gutter added to every numeric column so neighbouring figures never touch.
+const METRIC_COL_GUTTER: f32 = 12.0;
+
 /// Fixed pixel widths of the strategy table's numeric columns.
 ///
-/// Each width is the widest exact string the corresponding body cell currently renders. The
+/// Each width is the wider of the widest exact string the corresponding body cell currently
+/// renders and the column's own heading with a sort arrow, plus [`METRIC_COL_GUTTER`]. The
 /// measurement covers the complete loaded result rather than the filtered slice, so searching or
 /// changing the row cap cannot make the numeric cluster jump.
 fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
@@ -687,8 +691,16 @@ fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
             }
         }
     }
+    let gutter = f32::from(design::font_w_px(cx, METRIC_COL_GUTTER));
     widest
         .into_iter()
-        .map(|(_, text)| design::mono_body_text_width(cx, &text, FontWeight::NORMAL.0).ceil())
+        .zip(METRIC_COLS.iter())
+        .map(|((_, text), column)| {
+            let value_w = design::mono_body_text_width(cx, &text, FontWeight::NORMAL.0);
+            // The heading is sortable, so it may carry the active-column arrow.
+            let heading = format!("{} \u{25BC}", t!(column.key));
+            let heading_w = design::mono_body_text_width(cx, &heading, FontWeight::NORMAL.0);
+            (value_w.max(heading_w) + gutter).ceil()
+        })
         .collect()
 }
