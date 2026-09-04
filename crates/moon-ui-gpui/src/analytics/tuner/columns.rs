@@ -273,6 +273,35 @@ pub(super) fn metric_cell(
     num_cell(scale, col, (col.text)(g), color)
 }
 
+/// Body cell of a strategy metric at a content-measured fixed width.
+///
+/// The strategy table measures its current formatted values once per render and passes the same
+/// widths to its rows and header. The coin table keeps using [`metric_cell`] because its separate
+/// layout contract still permits proportional shrinking from descriptor widths.
+///
+/// Args:
+///     col: Metric descriptor supplying text and sign colour.
+///     group: Aggregate rendered in this row.
+///     palette: Active palette used for sign-aware text colour.
+///     width: Width of the longest currently rendered value in this metric column, in pixels.
+pub(super) fn fixed_metric_cell(
+    col: &MetricCol,
+    group: &GroupStat,
+    palette: MoonPalette,
+    width: f32,
+) -> impl IntoElement {
+    let color = match col.signed {
+        Some(value) => sign_color(palette, value(group)),
+        None => palette.text_soft,
+    };
+    div()
+        .w(px(width))
+        .flex_none()
+        .text_right()
+        .text_color(moon(color))
+        .child((col.text)(group))
+}
+
 /// Render one right-aligned numeric cell using a caller-hoisted font `scale`.
 ///
 /// Shrinkable down to the column's own floor: when the row runs out of width every column

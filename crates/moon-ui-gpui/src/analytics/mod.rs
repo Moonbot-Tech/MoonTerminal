@@ -566,6 +566,13 @@ pub struct AnalyticsView {
     /// move OR a theme whose mode carries a different base mono size re-measures instead of
     /// scaling a width that assumed the old base.
     strat_core_w: Option<(f32, f32)>,
+    /// Content-measured pixel widths of the strategy list's numeric columns as
+    /// `(font_scale_it_was_measured_under, widths)` (`tuner::list::table::metric_col_widths`).
+    /// Filled lazily on render like `strat_core_w`; the measurement formats every loaded group
+    /// once per column, which is thousands of strings at 53 cores and far too much to repay on
+    /// an idle repaint of a window that has no repaint throttle. Cleared whenever a published
+    /// base replaces the group set, and recomputed when the font scale moved.
+    strat_metric_w: Option<(f32, std::sync::Arc<[f32]>)>,
     /// Memoized strategy-list row order, with the filter inputs it was built for.
     ///
     /// The filter-and-sort pass runs over every group the replica holds — thousands at 53 cores.
@@ -1025,6 +1032,7 @@ impl AnalyticsView {
             strat_sort: saved_strat_sort,
             strat_cols: saved_strat_cols,
             strat_core_w: None,
+            strat_metric_w: None,
             strat_visible: None,
             strat_scroll: MoonVirtualListScrollHandle::new(),
             cal_days: ProfitLoadState::default(),
@@ -1842,6 +1850,9 @@ impl AnalyticsView {
                     if core_names_changed {
                         this.strat_core_w = None;
                     }
+                    // The numeric widths are measured from the figures themselves, which any
+                    // replacement can move, so they are dropped with every published base.
+                    this.strat_metric_w = None;
                     // Both caches describe the group set that was just replaced. The memo's key
                     // also carries that set's address, but an address is only unique among LIVE
                     // allocations: a failed load drops the old buffer and a later successful one

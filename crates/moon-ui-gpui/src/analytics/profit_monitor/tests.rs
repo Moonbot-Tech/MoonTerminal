@@ -693,7 +693,7 @@ fn clock_refresh_uses_local_midnight_or_no_timer_by_period() {
 
 /// `profit_monitor/mod.rs:format_profit` must preserve the exact unit suffix and return the sign
 /// from the same unit-aware rounding that produced the visible amount. Reclassifying the raw value
-/// makes the first assertion a red `+0 USDT` loss, while dropping either suffix makes the operator
+/// makes the first assertion a red `0.00 USDT` loss, while dropping either suffix makes the operator
 /// compare amounts without knowing whether they are money or percent.
 #[test]
 fn formatted_profit_keeps_unit_and_rounded_sign_coupled() {
@@ -704,11 +704,11 @@ fn formatted_profit_keeps_unit_and_rounded_sign_coupled() {
             Some(ProfitUnit::Quote(QuoteCurrency::usdt())),
             FULL
         ),
-        ("+0 USDT".to_string(), DeltaSign::Zero)
+        ("0.00 USDT".to_string(), DeltaSign::Zero)
     );
     assert_eq!(
         format_profit(12.5, None, Some(ProfitUnit::Percent), FULL),
-        ("+12.5%".to_string(), DeltaSign::Positive)
+        ("+12.50%".to_string(), DeltaSign::Positive)
     );
 }
 
@@ -723,11 +723,11 @@ fn last_trade_suffix_shares_the_total_unit_and_rounding() {
     let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
     assert_eq!(
         format_profit(-57.114, Some(-0.6), usdt, FULL),
-        ("-57.11(-0.6) USDT".to_string(), DeltaSign::Negative)
+        ("-57.11(-0.60) USDT".to_string(), DeltaSign::Negative)
     );
     assert_eq!(
         format_profit(12.0, Some(-0.004), usdt, FULL),
-        ("+12(+0) USDT".to_string(), DeltaSign::Positive),
+        ("+12.00(0.00) USDT".to_string(), DeltaSign::Positive),
         "a suffix that rounds away must not print a minus the number no longer shows"
     );
     assert_eq!(
@@ -737,7 +737,7 @@ fn last_trade_suffix_shares_the_total_unit_and_rounding() {
     );
     assert_eq!(
         format_profit(3.5, Some(1.25), Some(ProfitUnit::Percent), FULL),
-        ("+3.5(+1.25)%".to_string(), DeltaSign::Positive)
+        ("+3.50(+1.25)%".to_string(), DeltaSign::Positive)
     );
     assert_eq!(
         format_profit(-57.114, None, usdt, FULL).0,
@@ -754,12 +754,12 @@ fn last_trade_suffix_shares_the_total_unit_and_rounding() {
 #[test]
 fn the_profit_column_is_sized_from_the_values_it_shows() {
     let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
-    // "+167.21" and "(+3.4)": eighteen characters once " USDT" is added.
+    // "+167.21" and "(+3.40)": nineteen characters once " USDT" is added.
     let row = ProfitLen::measure(167.21, Some(3.4), usdt);
     let column = plan_profit_column(row, row, true, &metrics(200.0, 4), ProfitFloor::default());
     assert_eq!(column.form, FULL, "a wide window prints every part");
     assert_eq!(
-        column.width, 18.0,
+        column.width, 19.0,
         "the column must claim its content, not the room it was offered"
     );
 
@@ -812,8 +812,8 @@ fn a_narrow_profit_column_drops_the_ticker_before_the_suffix() {
         )
     };
 
-    assert_eq!(plan(18.0).form, FULL, "everything fits at its exact width");
-    let no_ticker = plan(17.0);
+    assert_eq!(plan(19.0).form, FULL, "everything fits at its exact width");
+    let no_ticker = plan(18.0);
     assert!(
         no_ticker.form.suffix && !no_ticker.form.ticker && !no_ticker.form.si,
         "the ticker goes first, and the heading takes over naming the unit: {:?}",
@@ -893,7 +893,7 @@ fn a_long_heading_never_costs_a_money_value_its_digits() {
     let row = ProfitLen::measure(167.21, Some(3.4), usdt);
     let wordy = ColumnMetrics {
         heading_with_unit: 100.0,
-        ..metrics(13.0, 4)
+        ..metrics(14.0, 4)
     };
     let column = plan_profit_column(row, row, true, &wordy, ProfitFloor::default());
     assert!(
@@ -902,7 +902,7 @@ fn a_long_heading_never_costs_a_money_value_its_digits() {
         column.form
     );
     assert_eq!(
-        column.width, 13.0,
+        column.width, 14.0,
         "an unfittable heading is clamped, never paid for out of the digits"
     );
 }
@@ -1026,10 +1026,10 @@ fn the_column_is_measured_across_every_line_and_type_size() {
 }
 
 /// `profit_monitor/format.rs:abbreviated` must round to the unit BEFORE abbreviating, and must
-/// refuse to touch anything below the SI floor.
+/// refuse to touch anything below the 100,000 SI floor.
 ///
 /// Breakage: abbreviating the raw value makes a `-0.004` that the column prints as zero still
-/// arrive coloured as a loss; abbreviating below a thousand routes through `fmt::adaptive`, which
+/// arrive coloured as a loss; abbreviating below 100,000 routes through `fmt::adaptive`, which
 /// re-rounds to five significant digits and prints NO marker — on an eight-decimal quote that
 /// silently replaces the row's number with a different one that looks exact.
 #[test]
@@ -1043,7 +1043,7 @@ fn an_abbreviated_amount_keeps_its_rounded_sign_and_its_small_digits() {
     };
     assert_eq!(
         format_profit(-0.004, None, usdt, si),
-        ("+0 USDT".to_string(), DeltaSign::Zero)
+        ("0.00 USDT".to_string(), DeltaSign::Zero)
     );
     assert_eq!(
         format_profit(-2_300_000.0, None, usdt, si),
@@ -1055,34 +1055,30 @@ fn an_abbreviated_amount_keeps_its_rounded_sign_and_its_small_digits() {
         "below the SI floor the abbreviated form prints the exact amount"
     );
     assert_eq!(
-        format_profit(999.99, None, usdt, si).0,
-        "+999.99 USDT",
-        "the floor is a thousand, where the marker starts stating the scale"
+        format_profit(99_999.99, None, usdt, si).0,
+        "+99999.99 USDT",
+        "below one hundred thousand the configured fixed decimals remain exact"
     );
 
-    // The measurement agrees with the text: both spellings are the same below the floor.
-    let small = ProfitLen::measure(999.99, None, usdt);
+    // The column planner agrees with the text: a wide column keeps the ticker and fixed spelling
+    // below the SI floor instead of entering an abbreviation rung.
+    let small = ProfitLen::measure(99_999.99, None, usdt);
+    let planned = plan_profit_column(
+        small,
+        small,
+        false,
+        &metrics(200.0, 4),
+        ProfitFloor::default(),
+    );
+    assert!(!planned.form.si, "a sub-floor column must not select SI");
+    assert!(
+        planned.form.ticker,
+        "a wide column keeps the unit beside its fixed digits"
+    );
     assert_eq!(
-        plan_profit_column(
-            small,
-            small,
-            false,
-            &metrics(200.0, 4),
-            ProfitFloor::default()
-        )
-        .width,
-        plan_profit_column(
-            small,
-            small,
-            false,
-            &metrics(200.0, 4),
-            ProfitFloor {
-                width: 0.0,
-                rung: 2
-            }
-        )
-        .width,
-        "the abbreviated rung abbreviates nothing here, so it must claim the same width"
+        format_profit(99_999.99, None, usdt, planned.form),
+        ("+99999.99 USDT".to_string(), DeltaSign::Positive),
+        "the planner and formatter must preserve the same sign, digits, and unit"
     );
 }
 

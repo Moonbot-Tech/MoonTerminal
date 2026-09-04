@@ -10,14 +10,12 @@ use moon_core::util::fmt::{self, DeltaSign};
 const SUFFIX_BRACKETS: usize = 2;
 /// Space between an amount and the ticker naming its unit.
 const TICKER_GAP: usize = 1;
-/// Smallest magnitude the abbreviated form is allowed to touch.
+/// Smallest rounded magnitude that lets a whole column use the abbreviated form.
 ///
-/// `fmt::compact_si` only prints a K/M/B/T marker from a thousand up; below that it falls through
-/// to `fmt::adaptive`, which re-rounds to five significant digits and prints NO marker at all. On an
-/// eight-decimal quote that turns `+12.34567891` into `+12.346` — a DIFFERENT number wearing the
-/// clothes of an exact one. Above the floor the marker states the scale, so the reader can see that
-/// the figure was abbreviated.
-const SI_FLOOR: f64 = 1000.0;
+/// Smaller columns keep their configured fixed decimals even when the exact spelling would not fit;
+/// compact SI is reserved for genuinely large figures and, once selected, remains one form for the
+/// whole column.
+const SI_FLOOR: f64 = 100_000.0;
 
 /// The form a whole profit column prints its values in.
 ///
@@ -51,6 +49,8 @@ pub(super) struct ProfitLen {
     plain_suffix: usize,
     /// Longest abbreviated suffix, brackets included; zero when no row carries one.
     si_suffix: usize,
+    /// Whether this measurement contains a magnitude large enough to permit compact SI.
+    has_si_magnitude: bool,
 }
 
 impl ProfitLen {
@@ -69,17 +69,19 @@ impl ProfitLen {
         // The percent sign is not a separable ticker — it prints in every form — so it is counted
         // into the amount itself rather than into the ticker the column may drop.
         let tail = usize::from(matches!(unit, Some(ProfitUnit::Percent)));
-        let (plain, si) = spelling_lengths(value, decimals);
+        let (plain, si, has_si_magnitude) = spelling_lengths(value, decimals);
         let mut len = Self {
             plain: plain + tail,
             si: si + tail,
             plain_suffix: 0,
             si_suffix: 0,
+            has_si_magnitude,
         };
         if let Some(last) = last {
-            let (plain, si) = spelling_lengths(last, decimals);
+            let (plain, si, has_si_magnitude) = spelling_lengths(last, decimals);
             len.plain_suffix = plain + SUFFIX_BRACKETS;
             len.si_suffix = si + SUFFIX_BRACKETS;
+            len.has_si_magnitude |= has_si_magnitude;
         }
         len
     }
@@ -93,6 +95,7 @@ impl ProfitLen {
         self.si = self.si.max(other.si);
         self.plain_suffix = self.plain_suffix.max(other.plain_suffix);
         self.si_suffix = self.si_suffix.max(other.si_suffix);
+        self.has_si_magnitude |= other.has_si_magnitude;
     }
 
     /// Return how many characters the widest measured value needs in one form.
@@ -241,12 +244,14 @@ pub(super) struct ProfitColumn {
 /// Args:
 ///     want_suffix: Whether the user asked for the `total(last)` suffix at all.
 ///     has_ticker: Whether the unit carries a ticker that can be dropped separately.
+///     allow_si: Whether at least one displayed magnitude reaches [`SI_FLOOR`].
 ///
 /// Returns:
 ///     The applicable candidate forms, in preference order.
 fn candidate_forms(
     want_suffix: bool,
     has_ticker: bool,
+    allow_si: bool,
 ) -> impl Iterator<Item = ProfitForm> + Clone {
     const LADDER: [ProfitForm; 6] = [
         ProfitForm {
@@ -280,9 +285,9 @@ fn candidate_forms(
             si: true,
         },
     ];
-    LADDER
-        .into_iter()
-        .filter(move |form| (!form.suffix || want_suffix) && (!form.ticker || has_ticker))
+    LADDER.into_iter().filter(move |form| {
+        (!form.suffix || want_suffix) && (!form.ticker || has_ticker) && (!form.si || allow_si)
+    })
 }
 
 /// Return the width one form needs for its VALUES alone.
@@ -353,7 +358,8 @@ pub(super) fn plan_profit_column(
     metrics: &ColumnMetrics,
     floor: ProfitFloor,
 ) -> ProfitColumn {
-    let ladder = candidate_forms(want_suffix, metrics.ticker > 0);
+    let allow_si = rows.has_si_magnitude || total.has_si_magnitude;
+    let ladder = candidate_forms(want_suffix, metrics.ticker > 0, allow_si);
     // Held to the LAST rung rather than past it: the ladder shortens when a unit carries no
     // ticker, and a floor recorded on the longer one must still name a form that exists.
     let start = floor.rung.min(ladder.clone().count().saturating_sub(1));
@@ -408,7 +414,7 @@ fn decimals(unit: Option<ProfitUnit>) -> usize {
     }
 }
 
-/// Return the character counts of one amount's two spellings.
+/// Return one amount's spelling lengths and whether it permits compact SI.
 ///
 /// Costs ONE format below [`SI_FLOOR`], where the abbreviated spelling is the plain one.
 ///
@@ -417,21 +423,27 @@ fn decimals(unit: Option<ProfitUnit>) -> usize {
 ///     decimals: Places the unit rounds to.
 ///
 /// Returns:
-///     Characters in the full spelling, and in the abbreviated spelling.
-fn spelling_lengths(value: f64, decimals: usize) -> (usize, usize) {
+///     Characters in the full and abbreviated spellings, then whether the rounded magnitude
+///     reaches [`SI_FLOOR`].
+fn spelling_lengths(value: f64, decimals: usize) -> (usize, usize, bool) {
     // ASCII throughout — sign, digits, separator and the K/M/B/T marker — so the byte length is
     // the character count without walking the string a second time.
-    let plain = fmt::signed_amount(value, decimals).0.len();
-    let si = abbreviated(value, decimals).map_or(plain, |si| si.len());
-    (plain, si)
+    let plain = fmt::signed_fixed(value, decimals)
+        .or_else(|| fmt::signed_fixed(0.0, decimals))
+        .expect("zero is always a finite fixed amount")
+        .0
+        .len();
+    let abbreviated = abbreviated(value, decimals);
+    let si = abbreviated.as_ref().map_or(plain, String::len);
+    (plain, si, abbreviated.is_some())
 }
 
 /// Return the abbreviated spelling of an amount, when abbreviating it means anything.
 ///
 /// Rounds to the unit's own precision FIRST, so the digits can never disagree with the sign the
 /// cell is coloured by, and refuses to touch anything below [`SI_FLOOR`], where abbreviating would
-/// silently restate the number instead of shortening it. The `+` prefix matches
-/// [`fmt::signed_amount`], so switching forms never changes how a row's sign reads.
+/// silently restate the number instead of shortening it. The sign comes from
+/// [`fmt::signed_fixed`], so switching forms never changes how the row is classified or coloured.
 ///
 /// Args:
 ///     value: Raw signed amount.
@@ -440,11 +452,12 @@ fn spelling_lengths(value: f64, decimals: usize) -> (usize, usize) {
 /// Returns:
 ///     Abbreviated text, or `None` when the full spelling is what this form prints.
 fn abbreviated(value: f64, decimals: usize) -> Option<String> {
-    let rounded = fmt::round_to(value, decimals).unwrap_or(0.0);
+    let rounded = fmt::round_to(value, decimals)?;
     if rounded.abs() < SI_FLOOR {
         return None;
     }
-    let prefix = if rounded < 0.0 { "-" } else { "+" };
+    let sign = fmt::signed_fixed(value, decimals)?.1;
+    let prefix = sign.pick("+", "-", "");
     Some(format!("{prefix}{}", fmt::compact_si(rounded.abs())))
 }
 
@@ -474,7 +487,9 @@ pub(super) fn format_profit(
 ) -> (String, DeltaSign) {
     let decimals = decimals(unit);
     let spell = |value: f64| {
-        let (plain, sign) = fmt::signed_amount(value, decimals);
+        let (plain, sign) = fmt::signed_fixed(value, decimals)
+            .or_else(|| fmt::signed_fixed(0.0, decimals))
+            .expect("zero is always a finite fixed amount");
         let text = form
             .si
             .then(|| abbreviated(value, decimals))

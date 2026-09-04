@@ -4,18 +4,19 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonPalette,
-    MoonScrollbarVisibility, MoonVirtualList, h_flex, v_flex,
+    MOON_SCROLLBAR_TRACK, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
+    MoonPalette, MoonScrollbarVisibility, MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
+use super::super::columns::fixed_metric_cell;
 use super::super::{
     COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
     KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
-    SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit, metric_cell,
+    SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit,
 };
 use super::MAX_ROWS;
 use crate::design;
@@ -51,6 +52,21 @@ impl AnalyticsView {
         // Resolved once for the whole list and captured by value into the row factory: a
         // per-cell lookup would clone the theme tokens twice for every drawn row × column.
         let scale = design::font_scale(cx);
+        // The numeric columns' content-measured widths, cached exactly like `core_w` below:
+        // `strat_metric_w` documents the cache and its invalidation; this match is only its read.
+        let metric_widths: Arc<[f32]> = match &self.strat_metric_w {
+            Some((s, w)) if *s == scale => w.clone(),
+            _ => {
+                let w: Arc<[f32]> = self
+                    .strategy_data
+                    .data()
+                    .map(|data| metric_col_widths(&data.strategies, cx))
+                    .unwrap_or_else(|| vec![0.0; METRIC_COLS.len()])
+                    .into();
+                self.strat_metric_w = Some((scale, w.clone()));
+                w
+            }
+        };
         // The core column's content-measured width, computed once here and handed to both the
         // header and every row so they cannot disagree within a frame. `strat_core_w` documents
         // the cache and how it is invalidated; this match is only its read.
@@ -94,6 +110,7 @@ impl AnalyticsView {
                     // The factory runs only for rows on screen, bounding the work triggered by
                     // `.hover()` notifications even though rows have no entity of their own.
                     let weak = cx.entity().downgrade();
+                    let row_metric_widths = Arc::clone(&metric_widths);
                     (
                         MoonVirtualList::new(
                             "an-strat-rows",
@@ -111,7 +128,15 @@ impl AnalyticsView {
                                             .visible_indices()
                                             .get(ix)
                                             .and_then(|i| all.get(*i))?;
-                                        Some(strategy_row(view, &weak, g, p, scale, core_w, app))
+                                        Some(strategy_row(
+                                            view,
+                                            &weak,
+                                            g,
+                                            p,
+                                            core_w,
+                                            &row_metric_widths,
+                                            app,
+                                        ))
                                     })
                                     .unwrap_or_else(|| div().into_any_element())
                             },
@@ -200,33 +225,35 @@ impl AnalyticsView {
                         t!("analytics.strat.mode_coin").to_string(),
                     ))
                     .child(div().flex_1())
-                    .child({
+                    .children({
                         // In multi-select show the count (amber) so the user knows a bulk save
-                        // is armed; otherwise the shown/total or the click hint.
-                        let (txt, col) = if self.is_multi() {
-                            (
+                        // is armed; otherwise retain only the capped shown/total count.
+                        let counter = if self.is_multi() {
+                            Some((
                                 t!("analytics.strat.selected_n", n = self.sel_extra.len() + 1)
                                     .to_string(),
                                 p.amber,
-                            )
+                            ))
                         } else if total > shown {
-                            (
+                            Some((
                                 t!("analytics.strat.shown", shown = shown, total = total)
                                     .to_string(),
                                 p.text_muted,
-                            )
+                            ))
                         } else {
-                            (t!("analytics.strat.hint").to_string(), p.text_muted)
+                            None
                         };
-                        div()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(col))
-                            .child(txt)
+                        counter.map(|(text, color)| {
+                            div()
+                                .text_size(design::t_caption(cx))
+                                .text_color(moon(color))
+                                .child(text)
+                        })
                     }),
             )
             .child(filter_bar)
             // The header row stays OUTSIDE the virtual list so it cannot scroll away.
-            .child(self.header_row(p, core_w, cx))
+            .child(self.header_row(p, core_w, &metric_widths, cx))
             .child(div().w_full().flex_1().min_h_0().child(list))
             .into_any_element()
     }
@@ -239,16 +266,16 @@ impl AnalyticsView {
 /// `AnalyticsView -> element -> closure -> AnalyticsView` and leak the window — the same cycle
 /// `theme_contract::moon_tree_closures_hold_weak_view_handles` guards for `MoonTree`.
 ///
-/// `core_w` is the content-measured core-column width (see [`core_col_w`]) — passed in
-/// because the header must lay the same value out, or it drifts off the column.
+/// `core_w` and `metric_widths` are content measurements shared with the header so the two
+/// geometries cannot drift.
 ///
 /// Args:
 ///     view: Current Analytics state.
 ///     weak: Weak callback owner that avoids a retained-element cycle.
 ///     g: Strategy aggregate represented by the row.
 ///     p: Active palette.
-///     scale: Current font scale.
 ///     core_w: Shared measured core-column width.
+///     metric_widths: Shared fixed widths of the formatted numeric values.
 ///     cx: Application context used for live gating and sizing.
 ///
 /// Returns:
@@ -258,8 +285,8 @@ fn strategy_row(
     weak: &WeakEntity<AnalyticsView>,
     g: &GroupStat,
     p: MoonPalette,
-    scale: f32,
     core_w: f32,
+    metric_widths: &[f32],
     cx: &App,
 ) -> AnyElement {
     // Anchor = amber; Ctrl- or Shift-selected extras = a lighter amber. The anchor drives the
@@ -317,7 +344,8 @@ fn strategy_row(
         .id(SharedString::from(format!("an-strat-{}", g.key)))
         .w_full()
         .h(px(strat_row_h(cx)))
-        .px(design::ui_px(cx, 8.0))
+        .pl(design::ui_px(cx, 8.0))
+        .pr(design::ui_px(cx, MOON_SCROLLBAR_TRACK) + design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
         .items_center()
         .justify_between()
@@ -328,17 +356,23 @@ fn strategy_row(
         .child(
             h_flex()
                 .flex_1()
-                // The floor belongs on the flex item because a floor on the text cannot stop the
-                // cluster from shrinking to zero and painting the name over the type column. The
-                // header uses the same floor to stay aligned.
-                .min_w(design::font_w_px(cx, STRAT_NAME_MIN_W))
+                .flex_basis(design::font_w_px(cx, STRAT_NAME_MIN_W))
+                .min_w_0()
                 .gap(design::ui_px(cx, 6.0))
                 .items_center()
                 .children(strategy_button)
                 .children(alive_dot)
-                // A flex basis prevents the truncated div from collapsing to an ellipsis, while
-                // `min_w_0` lets it truncate inside the floor held by its parent.
-                .child(div().flex_1().min_w_0().truncate().child(name.clone())),
+                // The basis gives the name a useful preference while both `min_w_0` calls let it
+                // yield every remaining pixel to the fixed columns on a narrow host.
+                .child(
+                    div()
+                        .id(SharedString::from(format!("an-strat-name-{}", g.key)))
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .tooltip(crate::panels::common::text_tooltip(name.clone()))
+                        .child(name.clone()),
+                ),
         )
         .child(
             h_flex()
@@ -375,7 +409,7 @@ fn strategy_row(
                         .iter()
                         .enumerate()
                         .filter(|(i, _)| view.col_shown(metric_bit(*i)))
-                        .map(|(_, c)| metric_cell(c, g, p, scale)),
+                        .map(|(i, c)| fixed_metric_cell(c, g, p, metric_widths[i])),
                 )
                 .children(view.col_shown(COL_BIT_LASTEDIT).then(|| {
                     div()
@@ -465,12 +499,13 @@ fn strategy_row(
 impl AnalyticsView {
     /// Comparison-table header: clicking a title sorts (descending; a repeat click —
     /// ascending); a ▼/▲ arrow marks the active column. Columns respect the visibility
-    /// selector; the strategy name is always shown. `core_w` mirrors the rows' measured
-    /// core-column width — the header shrinks and grows exactly like the cells under it.
+    /// selector; the strategy name is always shown. Content-derived widths are shared with the
+    /// rows so the header stays on the exact same geometry.
     fn header_row(
         &self,
         p: MoonPalette,
         core_w: f32,
+        metric_widths: &[f32],
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let scale = design::font_scale(cx);
@@ -479,7 +514,8 @@ impl AnalyticsView {
                         title: String,
                         key: &'static str,
                         w: Option<(f32, f32)>,
-                        right: bool| {
+                        right: bool,
+                        tooltip: Option<String>| {
             let arrow = self.sort_arrow(key);
             let mut d = div()
                 .id(id)
@@ -496,18 +532,25 @@ impl AnalyticsView {
             if right {
                 d = d.text_right();
             }
+            if let Some(tooltip) = tooltip {
+                d = d.tooltip(crate::panels::common::text_tooltip(tooltip));
+            }
             match w {
                 // Shrinks exactly like the body cell under it, floor included, or the
                 // heading drifts off the column it labels the moment space runs short.
                 Some((w, min)) => d.w(px(w * scale)).min_w(px(min * scale)).flex_shrink_1(),
-                None => d.flex_1().min_w(px(STRAT_NAME_MIN_W * scale)),
+                None => d
+                    .flex_1()
+                    .flex_basis(px(STRAT_NAME_MIN_W * scale))
+                    .min_w_0(),
             }
         };
         h_flex()
             .w_full()
             .flex_none()
             .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .px(design::ui_px(cx, 8.0))
+            .pl(design::ui_px(cx, 8.0))
+            .pr(design::ui_px(cx, MOON_SCROLLBAR_TRACK) + design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 8.0))
             .items_center()
             .justify_between()
@@ -520,6 +563,7 @@ impl AnalyticsView {
                 SORT_NAME,
                 None,
                 false,
+                Some(t!("analytics.strat.hint").to_string()),
             ))
             // Cluster of fixed columns — mirrors the rows (justify_between).
             .child(
@@ -535,6 +579,7 @@ impl AnalyticsView {
                             SORT_KIND,
                             Some((KIND_W, KIND_MIN_W)),
                             false,
+                            None,
                         )
                     }))
                     .children(self.col_shown(COL_BIT_CORE).then(|| {
@@ -544,6 +589,7 @@ impl AnalyticsView {
                             SORT_CORE,
                             Some((core_w, CORE_MIN_W)),
                             false,
+                            None,
                         )
                     }))
                     .children(
@@ -551,13 +597,14 @@ impl AnalyticsView {
                             .iter()
                             .enumerate()
                             .filter(|(i, _)| self.col_shown(metric_bit(*i)))
-                            .map(|(_, c)| {
+                            .map(|(i, c)| {
                                 sortable(
                                     c.key.into(),
                                     t!(c.key).to_string(),
                                     c.key,
-                                    Some((c.w, c.min_w)),
+                                    Some((metric_widths[i] / scale, metric_widths[i] / scale)),
                                     true,
+                                    None,
                                 )
                             }),
                     )
@@ -568,6 +615,7 @@ impl AnalyticsView {
                             SORT_LASTEDIT,
                             Some((LASTEDIT_W, LASTEDIT_MIN_W)),
                             false,
+                            None,
                         )
                     })),
             )
@@ -621,4 +669,26 @@ fn core_col_w(groups: &[GroupStat], scale: f32, cx: &App) -> f32 {
     // across Font-slider moves). Ceil so a fractional shortfall cannot ellipsize the widest
     // name the column was sized for.
     (w / scale).ceil().clamp(CORE_W, CORE_W_MAX)
+}
+
+/// Fixed pixel widths of the strategy table's numeric columns.
+///
+/// Each width is the widest exact string the corresponding body cell currently renders. The
+/// measurement covers the complete loaded result rather than the filtered slice, so searching or
+/// changing the row cap cannot make the numeric cluster jump.
+fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
+    let mut widest = vec![(0usize, String::new()); METRIC_COLS.len()];
+    for group in groups {
+        for (index, column) in METRIC_COLS.iter().enumerate() {
+            let text = (column.text)(group);
+            let chars = text.chars().count();
+            if chars > widest[index].0 {
+                widest[index] = (chars, text);
+            }
+        }
+    }
+    widest
+        .into_iter()
+        .map(|(_, text)| design::mono_body_text_width(cx, &text, FontWeight::NORMAL.0).ceil())
+        .collect()
 }

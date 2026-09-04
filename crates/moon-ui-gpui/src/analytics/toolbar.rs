@@ -85,6 +85,9 @@ const PRESET_CELL_MIN_W: f32 = 44.0;
 /// label, and the item's tooltip still carries the whole of it.
 const PRESET_CELL_MAX_W: f32 = 104.0;
 
+/// Width difference below which fitting is treated as measurement noise rather than elision.
+const SEGMENT_ELISION_TOLERANCE: f32 = 0.5;
+
 /// Reserved width for the trade counter that closes the period bar on its right edge.
 ///
 /// The counter's exact text varies with the trade count and the active locale, so this is a
@@ -1043,17 +1046,25 @@ impl AnalyticsView {
     ///     cx: Application context supplying theme-aware scale and text measurements.
     ///
     /// Returns:
-    ///     One fitted, tooltipped item per [`Period::ALL`] entry, in that order.
+    ///     One fitted item per [`Period::ALL`] entry, tooltipped only when its label is elided.
     fn fitted_preset_items(&self, cx: &App) -> Vec<MoonSegmentItem> {
         Period::ALL
             .into_iter()
             .map(|per| {
-                // The tooltip carries the untruncated title, since `fit_width` elides the label
-                // and an elided preset is otherwise unreadable with no way to recover it.
                 let title = per.title(self.display_zone);
-                MoonSegmentItem::new("", title.clone())
-                    .fit_width(cx, PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
-                    .tooltip(title)
+                let natural_width = MoonSegmentItem::new("", title.clone())
+                    .fit_width(cx, 0.0, f32::MAX)
+                    .resolved_width();
+                let item = MoonSegmentItem::new("", title.clone()).fit_width(
+                    cx,
+                    PRESET_CELL_MIN_W,
+                    PRESET_CELL_MAX_W,
+                );
+                if natural_width > item.resolved_width() + SEGMENT_ELISION_TOLERANCE {
+                    item.tooltip(title)
+                } else {
+                    item
+                }
             })
             .collect()
     }

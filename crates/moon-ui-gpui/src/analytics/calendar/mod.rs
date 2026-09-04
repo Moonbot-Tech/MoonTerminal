@@ -1,8 +1,8 @@
 //! "Profit calendar" tab of the "Analytics" window.
 //! Three modes (one segmented control, like the Summary period presets):
-//! - "Year" — every year at once, each one a grid of 12 month squares (current
-//!   year on top, future months greyed out). Clicking a month switches to
-//!   "Month" mode. See `year`;
+//! - "Year" — every year at once, with active years as grids of 12 month squares and
+//!   historical no-trade years as compact rows (current year on top, future months greyed out).
+//!   Clicking a month switches to "Month" mode. See `year`;
 //! - "Month" — large day cards (date on the left; on the right the PnL, the win
 //!   rate with its counts, turnover and execution cost, and the average holding
 //!   time), grey background + red/green overlay whose alpha tracks |PnL|; a KPI
@@ -94,6 +94,9 @@ const CAL_MODE_CELL_MIN_W: f32 = 44.0;
 /// A long localized label cannot stretch the strip across the window; MoonUI truncates the visible
 /// label, and the item's tooltip still carries the whole of it.
 const CAL_MODE_CELL_MAX_W: f32 = 104.0;
+
+/// Width difference below which fitting is treated as measurement noise rather than elision.
+const SEGMENT_ELISION_TOLERANCE: f32 = 0.5;
 
 /// Calendar mode (the tab's zoom level).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -584,12 +587,19 @@ impl AnalyticsView {
         let view = cx.entity();
         let modes = MoonSegmentedControl::new("cal-mode-presets")
             .items(CalMode::ALL.map(|mode| {
-                // The tooltip carries the untruncated title, since `fit_width` elides the label.
                 let title = mode.title();
-                MoonSegmentItem::new("", title.clone())
-                    .fit_width(cx, CAL_MODE_CELL_MIN_W, CAL_MODE_CELL_MAX_W)
-                    .tooltip(title)
-                    .selected(self.cal_mode == mode)
+                let natural_width = MoonSegmentItem::new("", title.clone())
+                    .fit_width(cx, 0.0, f32::MAX)
+                    .resolved_width();
+                let mut item = MoonSegmentItem::new("", title.clone()).fit_width(
+                    cx,
+                    CAL_MODE_CELL_MIN_W,
+                    CAL_MODE_CELL_MAX_W,
+                );
+                if natural_width > item.resolved_width() + SEGMENT_ELISION_TOLERANCE {
+                    item = item.tooltip(title);
+                }
+                item.selected(self.cal_mode == mode)
             }))
             .on_click(move |ix, _, _window, app| {
                 let Some(mode) = CalMode::ALL.get(ix).copied() else {
