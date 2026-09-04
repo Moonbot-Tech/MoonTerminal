@@ -230,11 +230,6 @@ impl<'de> Deserialize<'de> for WorkspaceMode {
     }
 }
 
-/// Return the conservative ownership marker for panel layouts serialized before responsive widths.
-fn legacy_strategies_widths_user_set() -> Option<bool> {
-    None
-}
-
 /// "Strategies" window panels: widths, their ownership, and the Versions collapsed state.
 /// Width values are clamped by the window when applied.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -245,10 +240,10 @@ pub struct StrategiesPanels {
     pub sections_w: f32,
     /// Whether a splitter drag made the stored widths user-owned.
     ///
-    /// `None` identifies a legacy serialized panel object and is conservatively user-owned;
-    /// `Some(false)` identifies responsive first-run defaults.
-    #[serde(default = "legacy_strategies_widths_user_set")]
-    pub widths_user_set: Option<bool>,
+    /// `false` (also what a layout serialized before this field deserializes to) means the
+    /// widths are responsive defaults recomputed from the window each frame; the first drag
+    /// sets it and the stored widths are never recomputed again.
+    pub widths_user_set: bool,
     pub versions_collapsed: bool,
 }
 
@@ -259,7 +254,7 @@ impl Default for StrategiesPanels {
             tree_w: 418.0,
             versions_w: 166.0,
             sections_w: 264.0,
-            widths_user_set: Some(false),
+            widths_user_set: false,
             // By default, the versions column is collapsed into a strip with a counter.
             versions_collapsed: true,
         }

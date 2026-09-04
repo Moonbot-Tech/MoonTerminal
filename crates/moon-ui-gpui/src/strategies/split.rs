@@ -99,7 +99,7 @@ impl StrategiesView {
         which: PanelSplit,
         cx: &mut Context<Self>,
     ) {
-        self.panels.widths_user_set = Some(true);
+        self.panels.widths_user_set = true;
         match which {
             PanelSplit::Tree => {
                 self.panels.tree_w = (x - PANEL_SPLIT_W / 2.0).clamp(240.0, 900.0);

@@ -339,7 +339,7 @@ impl Render for StrategiesView {
         }
 
         let chrome_width = crate::window::windowing::responsive_width(window);
-        if self.panels.widths_user_set == Some(false) {
+        if !self.panels.widths_user_set {
             let longest_section_label_width = {
                 let store = self.backend.read(cx).session.store();
                 self.longest_visible_section_label_width(store, cx)
