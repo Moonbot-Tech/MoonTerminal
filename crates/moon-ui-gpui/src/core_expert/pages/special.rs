@@ -16,9 +16,19 @@
 //! compact `ClientSettings` route besides. And one row is held back by this window rather than by
 //! the wire: see "No trades on markets" below.
 //!
-//! The `trading.orders_control` block behind several more rows of this page — the liquidation
-//! control, the replacing-bug switch, the follower-bot settings — is on the wire and NOT projected
-//! yet; those rows are drawn disabled for that reason rather than any of the three above.
+//! Four fields of the `trading.orders_control` block behind these rows stay out.
+//!
+//! `sign_orders` is marked on the wire as a mirror of `ClientSettingsCommand::sign_orders`, so it
+//! travels on the compact channel too and writing it here would set two routes fighting over one
+//! field. `min_price` and `max_time` are this core's OWN watchdog thresholds — the snapshot carries
+//! no follower list, so the "Price, %" and "Time, s" columns Moonbot shows in its table are a
+//! watcher's view of other bots, not these — and no row of the worker-bot block sets them here.
+//!
+//! And `h_pos_control` ("hanging-position detection"), which has no caption of its own: the single
+//! switch in the worker-bot block says "следить за ОРДЕРАМИ", which is `orders_control.active`, and
+//! binding one checkbox to two flags would turn a feature on and off that nobody named. The cost is
+//! stated rather than hidden: "Report to Telegram" and "AutoSell" below it act only while hanging-
+//! position detection is on in the core, and this page cannot set it.
 //!
 //! The follower table at the bottom is drawn as an empty frame with its columns: the terminal has
 //! no rows to put in it, and inventing any would state a fleet this window has not read.
@@ -191,7 +201,16 @@ pub(super) fn field_specs(
         }),
         ("exp-sp-listen-port", String::new(), DEAD_TEXT),
         ("exp-sp-vds-ip", String::new(), DEAD_TEXT),
-        ("exp-sp-skip-balances", String::new(), DEAD_TEXT),
+        (
+            "exp-sp-skip-balances",
+            sp.h_pos_black_list_text.clone(),
+            |d, t| {
+                // Stripped, not refused: this box holds a one-line list, and moonui's single-line
+                // paste drops a newline but keeps a lone carriage return — which would reach the
+                // core inside a ticker name.
+                d.special.h_pos_black_list_text = t.replace(['\r', '\n'], String::new().as_str());
+            },
+        ),
     ]
 }
 
@@ -335,10 +354,12 @@ pub(super) fn body(
                                 h_flex()
                                     .items_center()
                                     .gap(design::ui_px(cx, 8.0))
-                                    .child(row(
+                                    .child(live(
                                         "exp-sp-replacing",
                                         "core_expert.sp_ignore_replacing",
+                                        sp.ignore_replacing_bug,
                                         view,
+                                        |d, on| d.special.ignore_replacing_bug = on,
                                     ))
                                     .child(link(
                                         "exp-sp-help-1",
@@ -436,10 +457,12 @@ pub(super) fn body(
                                 view,
                                 |d, on| d.special.correct_order_price = on,
                             ))
-                            .child(row(
+                            .child(live(
                                 "exp-sp-liq-control",
                                 "core_expert.sp_liquidation_control",
+                                sp.liq_control,
                                 view,
+                                |d, on| d.special.liq_control = on,
                             ))
                             .child(live(
                                 "exp-sp-bnb",
@@ -852,10 +875,22 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 16.0))
-                    .child(row(
+                    .child(live(
                         "exp-sp-no-protection",
                         "core_expert.sp_turn_off_protection",
+                        sp.ignore_protection > 0,
                         view,
+                        // A LEVEL under a checkbox: turning it off is unambiguous, turning it on
+                        // must not overwrite a level the core already holds — only supply one when
+                        // there is none. A negative reads as protection ON, because the wire states
+                        // a meaning for zero and for a bypass level, not for less than zero.
+                        |d, on| {
+                            d.special.ignore_protection = match (on, d.special.ignore_protection) {
+                                (false, _) => 0,
+                                (true, held) if held > 0 => held,
+                                (true, _) => 1,
+                            };
+                        },
                     ))
                     .child(row("exp-sp-beta", "core_expert.sp_accept_beta", view)),
             )
@@ -877,10 +912,12 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 10.0))
-                    .child(row(
+                    .child(live(
                         "exp-sp-watch-orders",
                         "core_expert.sp_watch_orders",
+                        sp.orders_control_active,
                         view,
+                        |d, on| d.special.orders_control_active = on,
                     ))
                     .child(caption("Control VDS IP".to_string(), false, p, cx))
                     .children(num(store, "exp-sp-vds-ip", 128.0, false, cx))
@@ -902,22 +939,35 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 10.0))
-                    .child(row(
+                    .child(live(
                         "exp-sp-report-tg",
                         "core_expert.sp_report_to_telegram",
+                        sp.h_pos_report,
                         view,
+                        |d, on| d.special.h_pos_report = on,
                     ))
-                    .child(row("exp-sp-autosell", "core_expert.sp_autosell", view))
+                    .child(live(
+                        "exp-sp-autosell",
+                        "core_expert.sp_autosell",
+                        sp.h_pos_auto_sell,
+                        view,
+                        |d, on| d.special.h_pos_auto_sell = on,
+                    ))
                     .child(caption(
                         t!("core_expert.sp_skip_balances").to_string(),
-                        false,
+                        true,
                         p,
                         cx,
                     ))
+                    // Editable only while the value really is ONE line. Moonbot's own dialog
+                    // holds this list comma-separated on a single line and its documentation says
+                    // so, which is why this box may edit it at all — but a core that somehow holds
+                    // a newline here would have the rest of its list eaten by a control that cannot
+                    // render it, so such a value is shown and not touched.
                     .child(div().flex_1().min_w_0().children(field(
                         store,
                         "exp-sp-skip-balances",
-                        false,
+                        !sp.h_pos_black_list_text.contains(['\r', '\n']),
                     ))),
             )
             .child(text_block(

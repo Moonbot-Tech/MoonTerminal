@@ -595,6 +595,21 @@ fn special_base() -> SharedConfig {
     shots.send_public = !shots.send_public;
     shots.time_scale = 15;
     shots.price_scale = 16;
+    let t = &mut cfg.trading;
+    t.h_pos_black_list_text = "BNB, USDC".to_string();
+    let oc = &mut t.orders_control;
+    oc.liq_control = !oc.liq_control;
+    oc.ignore_replacing_bug = !oc.ignore_replacing_bug;
+    oc.ignore_protection = 1;
+    oc.active = !oc.active;
+    oc.h_pos_report = !oc.h_pos_report;
+    oc.h_pos_auto_sell = !oc.h_pos_auto_sell;
+    // Off the default too, so the assertion that this page never writes it can actually fail.
+    oc.sign_orders = !oc.sign_orders;
+    // The three more this page must never write, off their defaults for the same reason.
+    oc.h_pos_control = !oc.h_pos_control;
+    oc.min_price = 0.25;
+    oc.max_time = 900;
     cfg
 }
 
@@ -657,6 +672,15 @@ fn a_special_edit_leaves_the_other_trading_pages_alone() {
     assert_eq!(sent.trading.auto_start.auto_stop_loss, 99.0);
     assert!(sent.trading.buy_on_enter);
     assert_eq!(sent.trading.unknown_tail, vec![3, 3]);
+    // The four fields of that sub-record this page must never write: `sign_orders` mirrors the
+    // compact channel and two routes writing one field would fight; the other three have no row on
+    // the page at all.
+    let sent_oc = &sent.trading.orders_control;
+    let base_oc = &base.trading.orders_control;
+    assert_eq!(sent_oc.sign_orders, base_oc.sign_orders);
+    assert_eq!(sent_oc.h_pos_control, base_oc.h_pos_control);
+    assert_eq!(sent_oc.min_price, base_oc.min_price);
+    assert_eq!(sent_oc.max_time, base_oc.max_time);
 }
 
 /// The mask decides, not the projection: the compact popup's mask must not carry this page.

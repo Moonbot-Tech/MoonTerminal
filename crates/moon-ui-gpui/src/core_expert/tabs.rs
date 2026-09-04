@@ -144,7 +144,8 @@ impl ExpertTab {
     /// page's exits and risk limits, the AutoStart page with its watchdogs and BTC blink, the
     /// Interface page's appearance block together with the alert sounds Moonbot puts on it, the
     /// AutoBuy page's signal sources and message filter, the Telegram page's channels, and the
-    /// Special page's engine switches. Whatever is left is on the wire but unprojected, and Login is
+    /// Special page's engine switches, its logging and its order
+    /// watchdog. Whatever is left is on the wire but unprojected, and Login is
     /// not on the wire at all.
     ///
     /// A `Projected` page is not necessarily projected in FULL — every one of the six draws rows the

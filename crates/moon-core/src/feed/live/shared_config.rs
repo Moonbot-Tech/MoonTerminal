@@ -610,6 +610,7 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let u = &cfg.ui;
     let sc = &cfg.signals.signal_config;
     let shots = &cfg.trading.send_shots_config;
+    let oc = &cfg.trading.orders_control;
     CoreConfig {
         special: SpecialSettings {
             log_level: t.log_level,
@@ -632,6 +633,13 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             sell_x2_level: t.sell_x2_level,
             no_trades_markets_text: t.no_trades_markets_text.clone(),
             multi_commands: t.multi_commands,
+            h_pos_black_list_text: t.h_pos_black_list_text.clone(),
+            liq_control: oc.liq_control,
+            ignore_replacing_bug: oc.ignore_replacing_bug,
+            ignore_protection: oc.ignore_protection,
+            orders_control_active: oc.active,
+            h_pos_report: oc.h_pos_report,
+            h_pos_auto_sell: oc.h_pos_auto_sell,
             send_shots: shots.may_send,
             profit_abs: shots.profit_abs,
             profit_pers: shots.profit_pers,
@@ -919,10 +927,18 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
 }
 
-/// Apply Moonbot's "Специальные" page to `trading` and its `send_shots_config` sub-record.
+/// Apply Moonbot's "Специальные" page to `trading` and its `send_shots_config` and
+/// `orders_control` sub-records.
 ///
-/// Twenty-eight fields: everything else in that section — including its `unknown_tail`, the exits
-/// [`apply_general`] owns and the leverage block [`apply_leverage`] owns — travels back untouched.
+/// Thirty-five fields across `trading`, its `send_shots_config` and its `orders_control`:
+/// everything else in that section — including its `unknown_tail`, the exits [`apply_general`] owns
+/// and the leverage block [`apply_leverage`] owns — travels back untouched.
+///
+/// `orders_control.sign_orders` is NOT among them on purpose: the wire's own doc marks it a mirror
+/// of `ClientSettingsCommand::sign_orders`, so it travels on the compact channel too, and writing it
+/// from here would set two routes fighting over one field. Its neighbours `min_price`, `max_time`
+/// and `h_pos_control` are absent for the plainer reason that no row of this page draws them — see
+/// `core_expert::pages::special`, which states what that costs.
 fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     let t = &mut cfg.trading;
     t.log_level = s.log_level;
@@ -945,6 +961,14 @@ fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     t.sell_x2_level = s.sell_x2_level;
     t.no_trades_markets_text = s.no_trades_markets_text.clone();
     t.multi_commands = s.multi_commands;
+    t.h_pos_black_list_text = s.h_pos_black_list_text.clone();
+    let oc = &mut t.orders_control;
+    oc.liq_control = s.liq_control;
+    oc.ignore_replacing_bug = s.ignore_replacing_bug;
+    oc.ignore_protection = s.ignore_protection;
+    oc.active = s.orders_control_active;
+    oc.h_pos_report = s.h_pos_report;
+    oc.h_pos_auto_sell = s.h_pos_auto_sell;
     let shots = &mut t.send_shots_config;
     shots.may_send = s.send_shots;
     shots.profit_abs = s.profit_abs;

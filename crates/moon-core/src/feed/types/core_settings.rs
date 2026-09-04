@@ -255,12 +255,12 @@ pub struct GeneralSettings {
 
 /// Moonbot's "Специальные" page: the engine's own switches, its logging and its screenshot rules.
 ///
-/// An area is a PAGE — see [`InterfaceSettings`]. This one is `trading` and its `send_shots_config`
-/// sub-record.
+/// An area is a PAGE — see [`InterfaceSettings`]. This one is `trading` with its
+/// `send_shots_config` and `orders_control` sub-records.
 ///
-/// Moonbot's page has about three times this many controls, and the expert window draws all of them
-/// disabled where they are not here. The reasons are stated on the page itself; the ones that
-/// concern this block are: the Remote
+/// Moonbot's page has about twice this many controls, and the expert window draws all of them
+/// disabled where they are not here. The reasons are stated on the page itself, row by row; the
+/// ones that concern this block are: the Remote
 /// block and the hang watchdog carry a bot token, a UDP password and a control VDS address, which
 /// safe-share excludes outright; a few rows have no wire field at all; and the iceberg pair belongs
 /// to [`GeneralSettings`], which the compact popup edits — one wire field belongs to one area.
@@ -309,6 +309,37 @@ pub struct SpecialSettings {
     pub sell_x2_level: i32,
     /// `trading.no_trades_markets_text`: tickers that generate no signals, one per line.
     pub no_trades_markets_text: String,
+    /// `trading.orders_control.liq_control`: watch how near a position is to liquidation.
+    pub liq_control: bool,
+    /// `trading.orders_control.ignore_replacing_bug`: ignore the engine's "replacing" order state.
+    pub ignore_replacing_bug: bool,
+    /// `trading.orders_control.ignore_protection`: how far the order protection is bypassed.
+    ///
+    /// A LEVEL on the wire, where zero means the protection is on, but Moonbot draws one checkbox
+    /// over it ("Turn Off Protection"). So this page reads a positive value as on and, when the box
+    /// is ticked, supplies a level only if the core holds none — a level it already holds survives.
+    /// Turning the box off does set zero, so the level is lost that way; Moonbot's own dialog can
+    /// express no more than that either.
+    pub ignore_protection: i32,
+    /// `trading.orders_control.active`: watch this bot's ORDERS — Moonbot's "Следить за ордерами
+    /// этого бота", the one switch in its worker-bot block.
+    ///
+    /// Its neighbour `orders_control.h_pos_control` ("hanging-position detection") is deliberately
+    /// NOT here: no row on that page carries its caption, and binding one checkbox to two flags
+    /// would turn a feature on and off that the trader never named.
+    pub orders_control_active: bool,
+    /// `trading.orders_control.h_pos_report` and `trading.orders_control.h_pos_auto_sell`: what the
+    /// WATCHING bot does about a hanging position — report it, and sell it.
+    pub h_pos_report: bool,
+    pub h_pos_auto_sell: bool,
+    /// `trading.h_pos_black_list_text`: coins the watcher leaves alone.
+    ///
+    /// One line, comma-separated. The wire names no separator for this field, unlike its siblings
+    /// that say "one per line"; the evidence is Moonbot's own dialog, which draws it as a one-line
+    /// box holding "BTC, ETH, BNB, …", and its documentation, which calls it a comma-separated
+    /// blacklist. `trading.h_pos_black_list_add` beside it is a SECOND such list with no row on the
+    /// page, so an empty box here does not mean the watcher skips nothing.
+    pub h_pos_black_list_text: String,
     /// `trading.multi_commands`: accept batched commands.
     ///
     /// Moonbot's caption is "Мультистроковые команды"; the wire's own doc calls it batch order
@@ -347,6 +378,13 @@ impl PartialEq for SpecialSettings {
                 .is_eq()
             && self.iceberg_step.total_cmp(&other.iceberg_step).is_eq()
             && self.no_trades_markets_text == other.no_trades_markets_text
+            && self.h_pos_black_list_text == other.h_pos_black_list_text
+            && self.liq_control == other.liq_control
+            && self.ignore_replacing_bug == other.ignore_replacing_bug
+            && self.ignore_protection == other.ignore_protection
+            && self.orders_control_active == other.orders_control_active
+            && self.h_pos_report == other.h_pos_report
+            && self.h_pos_auto_sell == other.h_pos_auto_sell
             && self.unlimited_orders == other.unlimited_orders
             && self.random_price == other.random_price
             && self.correct_order_price == other.correct_order_price
