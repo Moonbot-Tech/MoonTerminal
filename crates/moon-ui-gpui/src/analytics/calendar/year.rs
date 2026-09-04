@@ -202,10 +202,12 @@ impl AnalyticsView {
     }
 }
 
-/// Return whether a historical year has no trades in any of its twelve months.
+/// Return whether a historical year has no activity in any of its twelve months.
 ///
-/// The current year always retains its month grid, while any year with at least one trade also
-/// remains expanded regardless of its position at the edge of the fetched history.
+/// The current year always retains its month grid, while any year with at least one trade OR a
+/// non-zero profit also remains expanded regardless of its position at the edge of the fetched
+/// history. Emptiness follows the same rule as `year_month_cell` and `DayCell::has_activity`: a
+/// funding-only year moved real money with zero trades and must keep showing its total.
 ///
 /// Args:
 ///     year: Candidate year.
@@ -213,7 +215,7 @@ impl AnalyticsView {
 ///     aggregates: Month aggregates keyed by year and month.
 ///
 /// Returns:
-///     `true` only for a non-current year whose twelve trade counts are all zero.
+///     `true` only for a non-current year whose twelve months carry neither trades nor profit.
 fn should_collapse_year(
     year: i32,
     current_year: i32,
@@ -223,7 +225,7 @@ fn should_collapse_year(
         && (1..=12).all(|month| {
             aggregates
                 .get(&(year, month))
-                .is_none_or(|(_, trades)| *trades == 0)
+                .is_none_or(|(profit, trades)| *trades == 0 && *profit == 0.0)
         })
 }
 

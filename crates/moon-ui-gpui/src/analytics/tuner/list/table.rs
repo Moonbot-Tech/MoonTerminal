@@ -52,12 +52,21 @@ impl AnalyticsView {
         // Resolved once for the whole list and captured by value into the row factory: a
         // per-cell lookup would clone the theme tokens twice for every drawn row × column.
         let scale = design::font_scale(cx);
-        let metric_widths: Arc<[f32]> = self
-            .strategy_data
-            .data()
-            .map(|data| metric_col_widths(&data.strategies, cx))
-            .unwrap_or_else(|| vec![0.0; METRIC_COLS.len()])
-            .into();
+        // The numeric columns' content-measured widths, cached exactly like `core_w` below:
+        // `strat_metric_w` documents the cache and its invalidation; this match is only its read.
+        let metric_widths: Arc<[f32]> = match &self.strat_metric_w {
+            Some((s, w)) if *s == scale => w.clone(),
+            _ => {
+                let w: Arc<[f32]> = self
+                    .strategy_data
+                    .data()
+                    .map(|data| metric_col_widths(&data.strategies, cx))
+                    .unwrap_or_else(|| vec![0.0; METRIC_COLS.len()])
+                    .into();
+                self.strat_metric_w = Some((scale, w.clone()));
+                w
+            }
+        };
         // The core column's content-measured width, computed once here and handed to both the
         // header and every row so they cannot disagree within a frame. `strat_core_w` documents
         // the cache and how it is invalidated; this match is only its read.
