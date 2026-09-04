@@ -18,9 +18,16 @@
 
 mod actions;
 mod core_settings;
-// The two items the expert window shares with the gear popup, re-exported so the rest of the crate
-// reaches THEM rather than every `pub(crate)` member of the popup's module tree.
-pub(crate) use core_settings::draft::send_core_config;
+// What the expert window shares with the gear popup: the send both faces go through, the guard
+// that addresses it, the slider bounds their shared rows are drawn with, and the control store.
+// Named items rather than the popup's whole module tree — `editors` comes across as a module
+// because a second host implements its trait and calls its free functions, which is the one part
+// of the popup's internals that is deliberately shared.
+pub(crate) use core_settings::draft::{
+    ERRORS_LEVEL_BOUNDS, PING_LEVEL_BOUNDS, TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS,
+    fmt_hhmm, parse_hhmm, parse_num, send_core_config,
+};
+pub(crate) use core_settings::editors;
 pub(crate) use core_settings::resolve_core_settings_write;
 pub(crate) mod core_settings_popup;
 mod docks;
@@ -210,16 +217,11 @@ pub(crate) struct Shell {
     /// The draft as it was seeded, so an UNTOUCHED popup can follow the core instead of writing a
     /// stale page back over a change made elsewhere while it was open.
     core_settings_seed: Option<moon_core::feed::CoreConfig>,
-    /// Popup numeric editors, created on first render of each field and dropped with the draft.
+    /// The popup's controls, built on first render of each row and dropped with the draft.
     ///
-    /// Each entry remembers the [`Self::core_settings_seed_gen`] it last took a value from, so a
-    /// re-seed reaches it exactly once instead of on every repaint.
-    core_settings_inputs: std::collections::HashMap<&'static str, (u64, Entity<MoonInputState>)>,
-    /// Popup sliders, created on first render of each row and dropped with the draft. Unlike the
-    /// editors they follow the draft on every render, so they need no generation of their own.
-    core_settings_sliders: std::collections::HashMap<&'static str, Entity<MoonSliderState>>,
-    /// Advances whenever the popup's draft is seeded from a core.
-    core_settings_seed_gen: u64,
+    /// The store and its re-seed rule are shared with the expert window; see
+    /// [`core_settings::editors`].
+    core_settings_editors: core_settings::editors::EditorStore,
     /// Whether the header quiet-mode ("sleep") settings popover is open.
     quiet_settings_open: bool,
     /// `HH:MM` editor for the quiet-mode schedule start; seeded on open, committed on edit.

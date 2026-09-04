@@ -24,31 +24,46 @@
 //!
 //! What this window does NOT reproduce is Moonbot's ability to edit everything on those pages: the
 //! wire carries a SAFE subset, and this terminal projects a subset of THAT. [`tabs::TabSource`]
-//! records which of the two limits a page sits behind. Every page is still drawn, in Moonbot's own
-//! slot, because hiding one would renumber every tab after it for a trader who reaches for a page
-//! by position.
+//! records which of the two limits a page sits behind. Every page it DOES carry is drawn, in
+//! Moonbot's own slot, because hiding one would renumber the rest for a trader who reaches for a
+//! page by position — the two Moonbot tabs that are pure actions of that process (its setup wizard
+//! and its PRO purchase) are left out entirely instead, having no setting to mirror.
 
+mod pages;
 mod render;
 mod tabs;
+mod widgets;
 
 use gpui::*;
 use moon_ui::{MoonBackgroundPolicy, Root};
 use rust_i18n::t;
 
-use moon_core::feed::{CoreConfig, CoreConfigState};
+use moon_core::feed::{CoreConfig, CoreConfigState, FieldMask};
 use moon_core::session::CoreId;
 
 use crate::Backend;
+use crate::shell::editors::{self, CoreDraftHost, EditorStore};
 use crate::shell::{resolve_core_settings_write, send_core_config};
 
 pub(crate) use tabs::{ExpertTab, TabSource};
 
-/// Default window size: wide enough for Moonbot's ten-tab strip and tall enough for the pages that
+/// Default window size: wide enough for Moonbot's tab strip and tall enough for the pages that
 /// will follow.
 const DEFAULT_SIZE: (f32, f32) = (980.0, 700.0);
 /// Smallest usable size. Below it the strip hands most of its tabs to the overflow menu and the
 /// footer buttons start to crowd.
 const MIN_SIZE: (f32, f32) = (720.0, 460.0);
+
+/// The sections this window's OK may write.
+///
+/// Narrower than the compact popup's on purpose: a surface may write only what it DRAWS, and the
+/// expert window draws General, AutoStart and the BTC blink but not Leverage and not the Signals
+/// alerts. With the wider mask its OK wrote a draft seeded when the window opened back over those
+/// two sections, silently undoing anything that had changed in them meanwhile.
+const EXPERT_SECTIONS: FieldMask = FieldMask::EMPTY
+    .with_general()
+    .with_auto_start()
+    .with_btc_blink();
 
 /// What the window can do with the core right now — the one input to whether OK is live.
 ///
@@ -99,19 +114,39 @@ pub struct CoreExpertView {
     pub(super) seeded: Option<CoreId>,
     /// Selected page.
     pub(super) tab: ExpertTab,
+    /// Selected inner tab of the Hotkeys page. Moonbot's own page is split six ways, and the choice
+    /// has to outlive a render.
+    pub(super) hotkeys_sub: pages::HotkeysSub,
+    /// Open section of the Special page, which Moonbot splits into four collapsible blocks.
+    pub(super) special_section: pages::SpecialSection,
     /// Staged page, present only in [`PageState::Ready`].
     pub(super) draft: Option<CoreConfig>,
-    /// The projection the draft was seeded with, which is what tells an untouched window from an
-    /// edited one — exactly as the popup does.
-    pub(super) seed: Option<CoreConfig>,
+    /// Whether any control has written to [`Self::draft`] since it was seeded.
+    ///
+    /// A flag rather than `draft != seed`: that comparison walks a hundred fields and a dozen heap
+    /// strings, it runs on every backend notification, and — once the user has typed one character
+    /// — it is true forever, so it would answer the same question at the same cost for the life of
+    /// the window.
+    pub(super) dirty: bool,
     /// What the window can do with the core right now.
     pub(super) state: PageState,
+    /// Controls the drawn pages have built, through the store the compact popup also uses.
+    pub(super) editors: EditorStore,
+    /// This view's own window, needed to write a field from a slider drag.
+    window: AnyWindowHandle,
     /// Whether a page for [`Self::seeded`] has ever arrived.
     ///
     /// [`PageState::Replaced`] is "the page I had is gone", and the page itself cannot answer that
     /// — entering a blocked state discards it, so the very next sync would read the same core as
     /// one that had simply never answered. Cleared with the binding, in [`Self::rebind`].
     had_page: bool,
+    /// Whether the controls were dropped while one of them may have held focus.
+    ///
+    /// Dropping a focused editor leaves focus on a handle nothing draws, and the window's dispatch
+    /// path goes empty with it — every hotkey dead until the next click, the failure
+    /// `Shell::render` documents for the same situation. The drop happens on a `&App` path with no
+    /// window, so the blur is deferred to the next render, which has one.
+    pub(super) needs_blur: bool,
     /// Whether the last OK was refused by the shared send.
     ///
     /// [`Self::state`] already keeps OK dark in every case this window can see coming; this covers
@@ -128,6 +163,8 @@ pub struct CoreExpertView {
     /// walking a hundred fields and a dozen heap strings, several times a second, to almost always
     /// conclude nothing moved.
     seen_rev: u64,
+    /// The report counters last drawn, as raw bits; see the gate in [`Self::sync_from_core`].
+    seen_profit: Option<(u64, i32, u64, i32)>,
     focus: FocusHandle,
 }
 
@@ -199,13 +236,19 @@ impl CoreExpertView {
             group,
             seeded: None,
             tab: ExpertTab::default(),
+            hotkeys_sub: pages::HotkeysSub::default(),
+            special_section: pages::SpecialSection::default(),
             draft: None,
-            seed: None,
             state: PageState::NoCore,
+            dirty: false,
+            needs_blur: false,
             write_refused: false,
             core_name: None,
+            editors: EditorStore::default(),
+            window: window.window_handle(),
             had_page: false,
             seen_rev: 0,
+            seen_profit: None,
             focus: cx.focus_handle(),
         };
         this.sync_from_core(cx);
@@ -218,13 +261,16 @@ impl CoreExpertView {
     /// and `refresh_untouched_core_draft`, in one pass, because a window answers all of it the same
     /// way: by changing what the page SAYS rather than by disappearing.
     ///
-    /// Re-seeding happens only while the draft still equals what it was seeded with. Past that the
-    /// user's edits outrank the core's newer values, and overwriting them mid-edit is the worse
-    /// failure — the rule the popup states for the same reason.
+    /// Re-seeding happens only while NO control has written to the page. Past that the user's edits
+    /// outrank the core's newer values, and overwriting them mid-edit is the worse failure — the
+    /// rule the popup states for the same reason, though the popup asks it by comparing the draft
+    /// against its seed. This window asks a flag instead: the comparison walks the whole projection
+    /// on every notification to answer, after the first keystroke, the same "yes" forever. The one
+    /// difference that follows is that typing a change and typing it back does not resume following
+    /// the core here.
     ///
-    /// Runs on EVERY backend notification, so the cheap disqualifications come first and a
-    /// `CoreConfig` comparison is reached only for a core that is still the one this window
-    /// addresses.
+    /// Runs on EVERY backend notification, so the cheap disqualifications come first and the core's
+    /// page is taken only for a core that is still the one this window addresses.
     ///
     /// Args:
     ///     cx: Application context used to read the backend.
@@ -242,20 +288,17 @@ impl CoreExpertView {
         let Some(active) = b.active_trade_core(&self.group) else {
             return self.enter_state(PageState::NoCore);
         };
-        // A window opened before the group had a core binds to the first one that appears; one
-        // already bound never follows a move, because its page describes the core it was seeded
-        // from.
+        // A window with no page yet follows the group's active core, wherever it moves: it describes
+        // none of them, so there is nothing to be wrong about. One that HAS a page never follows,
+        // because that page describes the core it was seeded from — a move is `CoreMoved` from
+        // there, and the binding is taken in the `Live` branch below for exactly that reason.
         let core = match self.seeded {
-            None => {
-                self.seeded = Some(active);
-                self.core_name = b
-                    .config
-                    .servers
-                    .iter()
-                    .find(|server| server.id == active)
-                    .map(|server| server.name.clone());
-                active
-            }
+            // Resolved, NOT yet bound. Binding here is what `enter_state` then undid in every state
+            // without a page, and the pair of writes made this function report a change on every
+            // backend notification — a repaint per tick in exactly the states that last longest,
+            // plus a linear scan of the configured servers to name a core the window has not got.
+            // The binding is made below, once the core has actually answered with a page.
+            None => active,
             // Through the shared guard rather than a second `seeded == active` written here: the
             // gate that lights OK and the guard that lets the page onto the wire must be the same
             // predicate, or the window offers a send its own send refuses.
@@ -289,29 +332,51 @@ impl CoreExpertView {
             // unwrapping into a panic on the frame path if that ever stops holding.
             return self.enter_state(PageState::Waiting);
         };
+        // The core answered, so this is the core the window describes: bind, and pay for the name
+        // once per binding rather than once per notification.
+        let mut rebound = false;
+        if self.seeded != Some(core) {
+            self.seeded = Some(core);
+            self.core_name = b
+                .config
+                .servers
+                .iter()
+                .find(|server| server.id == core)
+                .map(|server| server.name.clone());
+            rebound = true;
+        }
+        // The AutoStart page prints the core's REPORT counters, which move without the
+        // configuration moving. Without them in this gate a Reset the trader just pressed keeps
+        // showing the old number until something unrelated repaints the window. Compared as bits so
+        // a counter that ever went non-finite cannot repaint the window forever, and only on the
+        // page that draws them.
+        let profit = entry.and_then(|d| d.profit_state.as_ref()).map(|s| {
+            (
+                s.total_profit.to_bits(),
+                s.total_trades,
+                s.hourly_profit.to_bits(),
+                s.hourly_trades,
+            )
+        });
+        let profit_moved = self.seen_profit != profit && self.tab == ExpertTab::AutoStart;
+        self.seen_profit = profit;
         let mut reseeded = false;
-        // The revision gate first: it is one integer, and it is false on almost every wake. Only a
-        // page that really moved is worth asking the far more expensive question below — whether
-        // the user has edits that outrank it.
-        if self.seen_rev != rev {
-            let untouched = match (&self.draft, &self.seed) {
-                (Some(draft), Some(seed)) => draft == seed,
-                _ => true,
-            };
-            if untouched {
-                self.seed = Some(latest.clone());
-                self.draft = self.seed.clone();
-                self.seen_rev = rev;
-                self.had_page = true;
-                reseeded = true;
-            }
+        // Both halves are one comparison each now: the store's revision moves only when the core's
+        // page really changed, and `dirty` answers whether the user's edits outrank it without
+        // walking the projection.
+        if self.seen_rev != rev && !self.dirty {
+            self.draft = Some(latest.clone());
+            self.seen_rev = rev;
+            self.had_page = true;
+            self.editors.reseeded();
+            reseeded = true;
         }
         if reseeded {
             // The page under the banner is not the page the refusal was about any more.
             self.write_refused = false;
         }
         let state_changed = self.enter_state(PageState::Ready);
-        reseeded || state_changed
+        reseeded || rebound || profit_moved || state_changed
     }
 
     /// Move to a state, dropping a page — and, where it would only get in the way, the binding —
@@ -331,14 +396,20 @@ impl CoreExpertView {
     ///     Whether anything the window draws changed.
     fn enter_state(&mut self, state: PageState) -> bool {
         let before = (self.state, self.seeded, self.core_name.clone());
-        if !state.can_send() && (self.draft.is_some() || self.seed.is_some()) {
-            if self.draft != self.seed {
+        if !state.can_send() && self.draft.is_some() {
+            if self.dirty {
                 log::info!(
                     "expert core settings dropped unsaved edits: the page can no longer be sent ({state:?})"
                 );
             }
             self.draft = None;
-            self.seed = None;
+            self.dirty = false;
+            // The controls go with the page: one retained past it would seed the next core's row
+            // with the previous core's text on its first frame. Focus may be sitting in one of
+            // them — but only if one existed, so a store that never built anything does not cost
+            // the window its focus.
+            self.needs_blur |= !self.editors.is_empty();
+            self.editors.clear();
         }
         if !state.can_send() && state != PageState::CoreMoved {
             self.seeded = None;
@@ -356,6 +427,36 @@ impl CoreExpertView {
         (self.state, self.seeded, self.core_name.clone()) != before
     }
 
+    /// Open one of the Special page's sections, closing the one that was open.
+    ///
+    /// Moonbot shows one at a time; clicking the open one leaves it open rather than collapsing to
+    /// nothing, because a page with every section shut says less than a page with one.
+    pub(super) fn set_special_section(
+        &mut self,
+        section: pages::SpecialSection,
+        cx: &mut Context<Self>,
+    ) {
+        if self.special_section == section {
+            return;
+        }
+        self.special_section = section;
+        // The controls of the section being closed stay DECLARED — the specs are per tab — but they
+        // stop being drawn, and a disabled field takes focus on a click just as a live one does. So
+        // this needs the same blur `set_tab` performs: focus left on a control nothing draws takes
+        // the window's dispatch path with it, the one failure `restore_root_focus` cannot repair.
+        self.needs_blur |= !self.editors.is_empty();
+        cx.notify();
+    }
+
+    /// Select one of Moonbot's inner Hotkeys tabs.
+    fn set_hotkeys_sub(&mut self, sub: pages::HotkeysSub, cx: &mut Context<Self>) {
+        if self.hotkeys_sub == sub {
+            return;
+        }
+        self.hotkeys_sub = sub;
+        cx.notify();
+    }
+
     /// Select a page.
     ///
     /// Every tab opens, including the ones with no wire values behind them: the window reproduces
@@ -365,6 +466,15 @@ impl CoreExpertView {
             return;
         }
         self.tab = tab;
+        // The controls belong to the page that declared them, and the page is about to stop being
+        // drawn. Dropping them here rather than leaving them in the store is what keeps a window
+        // that has visited every tab from holding every tab's controls — and the blur is not
+        // optional: a focused editor that stops rendering leaves the window reading as focused
+        // over a collapsed dispatch path, which `hotkeys::blur_field` documents as the one focus
+        // failure `restore_root_focus` cannot repair. A DISABLED field still takes focus on a
+        // click, so this matters most on the pages where nothing is live.
+        self.needs_blur |= !self.editors.is_empty();
+        self.editors.clear();
         cx.notify();
     }
 
@@ -375,7 +485,14 @@ impl CoreExpertView {
             // waiting for instead.
             return;
         };
-        if !send_core_config(&self.backend, &self.group, self.seeded, draft, cx) {
+        if !send_core_config(
+            &self.backend,
+            &self.group,
+            self.seeded,
+            draft,
+            EXPERT_SECTIONS,
+            cx,
+        ) {
             // The core moved, or the session refused the page, between the render that drew OK and
             // this click. Say so and stay open.
             self.write_refused = true;
@@ -415,7 +532,15 @@ impl CoreExpertView {
     /// is unconditional, so a second press of the gear is also how a window stranded on a departed
     /// MoonBot instance is recovered.
     fn rebind(&mut self, group: String, cx: &mut Context<Self>) {
-        if self.draft.is_some() && self.draft != self.seed {
+        if self.group == group && self.dirty {
+            // Same group, same core, a page half filled in: this press was the "bring the window
+            // forward" gesture, not a request for another core. Rebinding would answer it by
+            // throwing away the edits — while the recovery the unconditional rebind exists for is
+            // still one Cancel away.
+            cx.notify();
+            return;
+        }
+        if self.dirty {
             log::info!(
                 "expert core settings rebound with unsaved edits: the gear of another group opened it"
             );
@@ -424,12 +549,75 @@ impl CoreExpertView {
         self.seeded = None;
         self.core_name = None;
         self.draft = None;
-        self.seed = None;
+        self.dirty = false;
         self.seen_rev = 0;
         self.had_page = false;
         self.write_refused = false;
+        self.needs_blur |= !self.editors.is_empty();
+        self.editors.clear();
         self.sync_from_core(cx);
         cx.notify();
+    }
+}
+
+impl CoreExpertView {
+    /// Apply one staged change to the page, if a page is staged.
+    ///
+    /// A change arriving without one is dropped rather than creating it: a page built from a
+    /// control's own value would describe no core.
+    pub(super) fn edit_draft(
+        &mut self,
+        apply: impl FnOnce(&mut CoreConfig),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        apply(draft);
+        // Marked rather than compared: cloning the whole projection to find out whether a keystroke
+        // changed it costs more than the repaint it would save, and every caller here IS a user
+        // action.
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Create or synchronize every control the drawn pages declare.
+    ///
+    /// Called at the top of the render, as the popup builds its own: a control exists only once the
+    /// row that declares it has been on screen, so a session that never opens this window pays for
+    /// none of them.
+    pub(super) fn build_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Only the page on screen, and without cloning the projection to read it: the specs own
+        // their values, so the borrow ends before the store is touched.
+        let tab = self.tab;
+        let Some((fields, sliders)) = self.draft.as_ref().map(|draft| {
+            (
+                pages::field_specs(tab, draft),
+                pages::slider_specs(tab, draft),
+            )
+        }) else {
+            return;
+        };
+        for (id, value, stage) in fields {
+            editors::input_state(self, id, value, stage, window, cx);
+        }
+        for (id, bounds, value, stage, mirror) in sliders {
+            editors::slider_state(self, id, bounds, value, stage, mirror, window, cx);
+        }
+    }
+}
+
+impl CoreDraftHost for CoreExpertView {
+    fn editors(&mut self) -> &mut EditorStore {
+        &mut self.editors
+    }
+
+    fn stage_draft(&mut self, apply: impl FnOnce(&mut CoreConfig), cx: &mut Context<Self>) {
+        self.edit_draft(apply, cx);
+    }
+
+    fn editor_window(&self) -> AnyWindowHandle {
+        self.window
     }
 }
 
@@ -534,6 +722,9 @@ pub(crate) fn open(
             log::warn!("expert core settings window could not be opened: {error:#}");
             backend.update(cx, |bk, bcx| {
                 bk.core_expert_view = None;
+                // The handle we fell through can only be a dead one; leaving it set would make a
+                // later reader believe this window is live.
+                bk.core_expert_window = None;
                 bk.set_core_settings_expert(false, bcx);
             });
         }

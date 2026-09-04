@@ -7,6 +7,7 @@
 //! reviewed before committing.
 
 pub(crate) mod draft;
+pub(crate) mod editors;
 
 use gpui::*;
 
@@ -149,11 +150,7 @@ impl Shell {
         self.core_settings_cancel_confirm = false;
         self.core_settings_draft = None;
         self.core_settings_seed = None;
-        // The editors go with the draft on purpose: one retained past its draft would seed the NEXT
-        // core's tab with the previous core's text on its first frame, before the generation check
-        // in `core_settings_input` had a value to correct it with.
-        self.core_settings_inputs.clear();
-        self.core_settings_sliders.clear();
+        self.core_settings_editors.clear();
     }
 
     /// Close the compact popup because the gear now opens the expert window instead.

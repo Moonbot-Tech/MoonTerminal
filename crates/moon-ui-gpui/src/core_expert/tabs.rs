@@ -1,9 +1,13 @@
 //! Pages of the expert core-settings window, one per tab of Moonbot's own Settings dialog.
 //!
 //! The strip reproduces Moonbot's order deliberately, including the pages this terminal cannot fill
-//! yet and the ones it can never fill: a trader who knows that dialog reaches for a page by
-//! POSITION, and hiding one would silently renumber every tab after it. Every tab opens; what is
+//! yet: a trader who knows that dialog reaches for a page by POSITION. Every tab opens; what is
 //! blocked is the control with no value behind it — see [`TabSource`].
+//!
+//! Two of Moonbot's tabs are deliberately NOT here. "Помощь с настройкой" is that program's setup
+//! wizard and PRO is its licence purchase — both are actions inside Moonbot's own process, with no
+//! setting behind them for a terminal to mirror, so reproducing them would only offer buttons that
+//! can never do anything.
 
 use gpui::ElementId;
 use rust_i18n::t;
@@ -54,14 +58,10 @@ pub(crate) enum ExpertTab {
     Hotkeys,
     /// Autostart, watchdogs and session resets.
     AutoStart,
-    /// Moonbot's setup wizard.
-    Help,
-    /// Licence and PRO activation.
-    Pro,
 }
 
 impl ExpertTab {
-    pub(crate) const ALL: [ExpertTab; 10] = [
+    pub(crate) const ALL: [ExpertTab; 8] = [
         Self::Login,
         Self::General,
         Self::Telegram,
@@ -70,8 +70,6 @@ impl ExpertTab {
         Self::Interface,
         Self::Hotkeys,
         Self::AutoStart,
-        Self::Help,
-        Self::Pro,
     ];
 
     /// Stable untranslated identifier, used for element ids so switching the locale cannot rebuild
@@ -86,8 +84,6 @@ impl ExpertTab {
             Self::Interface => "interface",
             Self::Hotkeys => "hotkeys",
             Self::AutoStart => "autostart",
-            Self::Help => "help",
-            Self::Pro => "pro",
         }
     }
 
@@ -110,29 +106,26 @@ impl ExpertTab {
             Self::Interface => t!("core_expert.tab_interface"),
             Self::Hotkeys => t!("core_expert.tab_hotkeys"),
             Self::AutoStart => t!("core_settings.tab_autostart"),
-            Self::Help => t!("core_expert.tab_help"),
-            Self::Pro => t!("core_expert.tab_pro"),
         }
         .to_string()
     }
 
     /// How far this page's values reach — see [`TabSource`].
     ///
-    /// `Projected` is exactly the five sections `moon_core::feed::CoreConfig` carries and
-    /// `FieldMask::RENDERED_SECTIONS` may write: the General page's exits and risk limits, the
-    /// AutoStart page with its watchdogs and BTC blink, and the alert sounds that live on Moonbot's
-    /// AutoBuy page. Everything else is on the wire but unprojected, and Login/Help/PRO are not on
-    /// the wire at all.
+    /// `Projected` is what `moon_core::feed::CoreConfig` carries AND this window draws: the General
+    /// page's exits and risk limits, and the AutoStart page with its watchdogs and BTC blink.
+    /// Everything else is on the wire but unprojected, and Login is not on the wire at all.
     ///
-    /// AutoBuy is deliberately NOT `Projected`: the terminal projects only that page's alert-sound
-    /// block, and calling the whole page ready would promise nine tenths of it that cannot be
-    /// seeded.
+    /// AutoBuy is `Wire`, not `Projected`: of that page the terminal projects only the
+    /// price-approach alert sounds, which Moonbot itself keeps elsewhere and this window therefore
+    /// does not draw — see [`super::pages::autobuy`]. Calling the page ready would promise the
+    /// other nine tenths, none of which can be seeded.
     pub(crate) fn source(self) -> TabSource {
         match self {
             // Login carries the API key and secret, the local password and the support identity —
             // none of which safe-share transports. Two of its lesser controls (the connection
             // variant, the log switches) DO travel, but not one field the page exists for.
-            Self::Login | Self::Help | Self::Pro => TabSource::Absent,
+            Self::Login => TabSource::Absent,
             Self::General | Self::AutoStart => TabSource::Projected,
             Self::Telegram | Self::AutoBuy | Self::Special | Self::Interface | Self::Hotkeys => {
                 TabSource::Wire

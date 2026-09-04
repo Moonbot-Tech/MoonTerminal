@@ -18,9 +18,23 @@ fn strip_reproduces_moonbots_order() {
             "interface",
             "hotkeys",
             "autostart",
-            "help",
-            "pro",
         ]
+    );
+}
+
+/// Moonbot's setup wizard and its PRO purchase are actions inside that process, not settings, so
+/// this window does not carry them at all. Re-adding either means adding a page that can only draw
+/// dead buttons.
+#[test]
+fn moonbots_action_only_tabs_are_absent_from_the_strip() {
+    let ids: Vec<&str> = ExpertTab::ALL.iter().map(|t| t.id()).collect();
+    assert!(
+        !ids.contains(&"help"),
+        "the setup wizard is not a settings page"
+    );
+    assert!(
+        !ids.contains(&"pro"),
+        "the PRO purchase is not a settings page"
     );
 }
 
@@ -34,16 +48,16 @@ fn at_indexes_the_same_strip() {
     assert_eq!(ExpertTab::at(ExpertTab::ALL.len()), None);
 }
 
-/// Exactly the three pages safe-share carries nothing for are marked absent. Marking one of the
-/// others absent would claim a page is unreachable when its values do cross the wire.
+/// Exactly the one page safe-share carries nothing for is marked absent. Marking another absent
+/// would claim a page is unreachable when its values do cross the wire.
 #[test]
-fn only_the_three_wireless_pages_are_absent() {
+fn only_the_wireless_page_is_absent() {
     let absent: Vec<&str> = ExpertTab::ALL
         .iter()
         .filter(|t| t.source() == TabSource::Absent)
         .map(|t| t.id())
         .collect();
-    assert_eq!(absent, vec!["login", "help", "pro"]);
+    assert_eq!(absent, vec!["login"]);
 }
 
 /// `Projected` claims a page can be seeded AND sent today, which is true only of what

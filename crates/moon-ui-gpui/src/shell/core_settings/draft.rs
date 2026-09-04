@@ -9,10 +9,8 @@
 //! configuration first arrives, if the popup opened before it), and is dropped on Cancel, on OK, and
 //! whenever the popup stops belonging to its core.
 
-use std::collections::hash_map::Entry;
-
 use gpui::*;
-use moon_ui::{MoonInputEvent, MoonInputState, MoonSliderEvent, MoonSliderState};
+use moon_ui::{MoonInputState, MoonSliderState};
 
 use moon_core::feed::{CoreConfig, FieldMask};
 
@@ -20,7 +18,7 @@ use moon_core::session::CoreId;
 
 use crate::Backend;
 use crate::shell::Shell;
-use crate::shell::core_settings::resolve_core_settings_write;
+use crate::shell::core_settings::{editors, resolve_core_settings_write};
 
 /// Slider bounds `(minimum, maximum, step)` used by the popup's rows.
 ///
@@ -40,8 +38,17 @@ const MAX_FIX_LEVERAGE: i32 = 125;
 
 /// Parse a number the way every other numeric field in this terminal does, accepting the decimal
 /// comma a Russian keyboard produces.
+///
+/// A non-finite value is REFUSED, not passed on: Rust parses "nan" and "inf" happily, and these
+/// fields are thresholds the core compares against — a NaN one compares false to everything, which
+/// turns a panic-sell or a watchdog off while the checkbox beside it still reads as on. There is no
+/// second finiteness check between here and the wire.
 pub(crate) fn parse_num(s: &str) -> Option<f64> {
-    s.trim().replace(',', ".").parse::<f64>().ok()
+    s.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
 }
 
 /// Parse an `HH:MM` work-time boundary into minutes since midnight.
@@ -82,9 +89,7 @@ impl Shell {
         };
         self.core_settings_seed = Some(config.clone());
         self.core_settings_draft = Some(config);
-        // A new generation is what tells the retained editors to take the core's values back; see
-        // [`Self::core_settings_input`].
-        self.core_settings_seed_gen = self.core_settings_seed_gen.wrapping_add(1);
+        self.core_settings_editors.reseeded();
         true
     }
 
@@ -125,6 +130,7 @@ impl Shell {
             &self.group,
             self.core_settings_target,
             draft,
+            FieldMask::RENDERED_SECTIONS,
             cx,
         ) {
             // The page reached nothing. Closing anyway is what makes a refused write look like a
@@ -174,7 +180,7 @@ impl Shell {
         }
         self.core_settings_seed = Some(latest.clone());
         self.core_settings_draft = Some(latest);
-        self.core_settings_seed_gen = self.core_settings_seed_gen.wrapping_add(1);
+        self.core_settings_editors.reseeded();
         true
     }
 
@@ -184,16 +190,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// Retained editor for one numeric or text field, created on first render of that field.
-    ///
-    /// An existing editor is written to ONLY when the draft has been re-seeded since it last saw it
-    /// — Cancel, a core switch, or the core's first configuration arriving. It deliberately does not
-    /// follow the draft the way `strategies::StrategiesView::field_input_state` follows its staged
-    /// value: there the staged text IS what the user typed, so the round trip is an identity, while
-    /// here the draft holds a PARSED value that formats back differently. Re-synchronizing from it
-    /// on every repaint would rewrite "5.5" as "5.50" mid-word, refill a field the user just
-    /// cleared, and — since `sync_value` collapses the selection to the end — move the caret while
-    /// they type.
+    /// Retained editor for one row, through the store both faces of the gear share.
     pub(crate) fn core_settings_input(
         &mut self,
         id: &'static str,
@@ -202,36 +199,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonInputState> {
-        let seed_gen = self.core_settings_seed_gen;
-        if let Some((seen, state)) = self.core_settings_inputs.get_mut(id) {
-            let state = state.clone();
-            let stale = *seen != seed_gen;
-            *seen = seed_gen;
-            if stale && state.read(cx).value() != value {
-                state.update(cx, |s, c| s.sync_value(value, c));
-            }
-            return state;
-        }
-        let state = cx.new(|c| MoonInputState::new(window, c).default_value(value));
-        cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                let text = state.read(cx).value().to_string();
-                this.edit_core_draft(|draft| stage(draft, &text), cx);
-            }
-        })
-        .detach();
-        self.core_settings_inputs
-            .insert(id, (seed_gen, state.clone()));
-        state
+        editors::input_state(self, id, value, stage, window, cx)
     }
 
-    /// Retained slider for one numeric field, created on first render of that row.
-    ///
-    /// Unlike the text editors, sliders DO follow the draft on every render (the caller skips it
-    /// mid-drag), because a slider has no partially typed state to protect and its thumb would
-    /// otherwise ignore a value changed elsewhere — by Cancel, by a re-seed, or by the field beside
-    /// it. `MoonSliderState::set_value` emits no Change, so this cannot loop back through the
-    /// staging subscription below.
+    /// Retained slider for one row, through the store both faces of the gear share.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn core_settings_slider(
         &mut self,
@@ -243,46 +214,21 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonSliderState> {
-        let (min, max, step) = bounds;
-        let value = value.clamp(min, max);
-        match self.core_settings_sliders.entry(id) {
-            Entry::Occupied(slot) => {
-                let state = slot.get().clone();
-                if !cx.has_active_drag() && state.read(cx).value().end() != value {
-                    state.update(cx, |s, c| s.set_value(value, window, c));
-                }
-                state
-            }
-            Entry::Vacant(slot) => {
-                let state = cx.new(|_| {
-                    MoonSliderState::new()
-                        .min(min)
-                        .max(max)
-                        .step(step)
-                        .default_value(value)
-                });
-                cx.subscribe(&state, move |this, _state, ev: &MoonSliderEvent, cx| {
-                    if let MoonSliderEvent::Change(v) = ev {
-                        let v = v.end();
-                        this.edit_core_draft(|draft| stage(draft, v), cx);
-                        // A row that also shows the value in an editor writes it there directly:
-                        // the editor only re-reads the draft on a re-seed (so typing survives), and
-                        // without this the number would contradict the thumb the user is dragging.
-                        // Every such pair in this popup is a whole count — an error level, a ping in
-                        // milliseconds — so a rounded integer is the whole formatting rule.
-                        if let Some(field) = mirror
-                            .and_then(|m| this.core_settings_inputs.get(m))
-                            .map(|(_, state)| state.clone())
-                        {
-                            this.live_set_field(field, format!("{}", v.round() as i64), cx);
-                        }
-                    }
-                })
-                .detach();
-                slot.insert(state.clone());
-                state
-            }
-        }
+        editors::slider_state(self, id, bounds, value, stage, mirror, window, cx)
+    }
+}
+
+impl editors::CoreDraftHost for Shell {
+    fn editors(&mut self) -> &mut editors::EditorStore {
+        &mut self.core_settings_editors
+    }
+
+    fn stage_draft(&mut self, apply: impl FnOnce(&mut CoreConfig), cx: &mut Context<Self>) {
+        self.edit_core_draft(apply, cx);
+    }
+
+    fn editor_window(&self) -> AnyWindowHandle {
+        self.window_handle
     }
 }
 
@@ -309,6 +255,7 @@ pub(crate) fn send_core_config(
     group: &str,
     seeded: Option<CoreId>,
     mut draft: CoreConfig,
+    sections: FieldMask,
     cx: &App,
 ) -> bool {
     // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
@@ -332,18 +279,16 @@ pub(crate) fn send_core_config(
         log::warn!("core settings OK ignored: the active core moved since the page was seeded");
         return false;
     };
-    // The rendered surfaces cover exactly five sections — AutoStart, BtcBlink, General, Leverage
-    // and the Signals alerts — and may write only those: the manual block belongs to the toolbar,
-    // never to a page they do not draw. Naming the mask here, rather than deriving it from what
-    // changed, is what makes an OK unable to reach the manual block AT ALL, checkbox on or off —
-    // not merely unlikely to in the common case.
+    // The mask comes from the CALLER, because what a surface may write is what it DRAWS, and a
+    // draft seeded when that surface opened is stale everywhere the user could not see it. The
+    // compact popup draws all five rendered sections and names all five; the expert window draws
+    // three and names three, so its OK cannot write its own copy of Leverage or the Signals alerts
+    // back over a change made elsewhere while it stood open. Neither can name the manual block at
+    // all: no mask reachable from here carries it, checkbox on or off.
     // Read before the page is handed over, so the send below can consume it without a clone of the
     // whole projection.
     let exclude = draft.general.exclude_blacklisted_from_deltas;
-    if let Err(error) = b
-        .session
-        .edit_core_config(core, draft, FieldMask::RENDERED_SECTIONS)
-    {
+    if let Err(error) = b.session.edit_core_config(core, draft, sections) {
         // The page never reached the session. Reporting success here is what would let a caller
         // close on it.
         log::warn!("core config edit failed: {error:#}");

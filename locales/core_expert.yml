@@ -35,14 +35,6 @@ core_expert.tab_hotkeys:
   ru: "Hotkeys"
   en: "Hotkeys"
   es: "Hotkeys"
-core_expert.tab_help:
-  ru: "Помощь с настройкой"
-  en: "Setup help"
-  es: "Ayuda de configuración"
-core_expert.tab_pro:
-  ru: "PRO"
-  en: "PRO"
-  es: "PRO"
 core_expert.no_core:
   ru: "Нет активного ядра: выберите ядро в шапке окна группы."
   en: "No active core: pick one in the group window's header."
@@ -80,6 +72,1097 @@ core_expert.page_unprojected:
   en: "These settings do cross the wire, but the terminal does not read them yet: filling and sending this page needs the core-settings projection and the sent-section mask widened first."
   es: "Estos ajustes sí viajan por el cable, pero el terminal aún no los interpreta: para rellenar y enviar esta página hay que ampliar antes la proyección de ajustes del núcleo y la máscara de secciones enviadas."
 core_expert.page_absent:
-  ru: "Эти настройки не приходят по проводу: ключи API, пароль и лицензия в безопасное подмножество не входят, а мастер настройки — действие Moonbot, а не значение. Страница остаётся заблокированной."
-  en: "These settings never cross the wire: API keys, the password and the licence are outside the safe subset, and the setup wizard is a Moonbot action rather than a value. The page stays blocked."
-  es: "Estos ajustes no viajan por el cable: las claves API, la contraseña y la licencia quedan fuera del subconjunto seguro, y el asistente es una acción de Moonbot, no un valor. La página permanece bloqueada."
+  ru: "Эти настройки не приходят по проводу: ключи API, пароль и лицензия в безопасное подмножество не входят. Контролы страницы заблокированы; OK отправляет остальную страницу настроек ядра, как и раньше."
+  en: "These settings never cross the wire: API keys, the password and the licence are outside the safe subset. This page's controls are blocked; OK still sends the rest of the core's settings page."
+  es: "Estos ajustes no viajan por el cable: las claves API, la contraseña y la licencia quedan fuera del subconjunto seguro. Los controles de esta página están bloqueados; OK sigue enviando el resto de la página de ajustes del núcleo."
+
+# --- "Основные" page: rows Moonbot draws that the compact popup has no counterpart for. ---
+core_expert.gen_analyze_on_start:
+  ru: "Анализ монет при запуске"
+  en: "Analyse coins on startup"
+  es: "Analizar monedas al iniciar"
+core_expert.gen_need_help:
+  ru: "Нужна помощь!"
+  en: "Need help!"
+  es: "¡Necesita ayuda!"
+core_expert.gen_stop_loss:
+  ru: "Стоп-лосс: продать если цена < [покупка] %{v}%"
+  en: "Stop loss: sell when price < [entry] %{v}%"
+  es: "Stop loss: vender si precio < [entrada] %{v}%"
+core_expert.gen_trailing_add:
+  ru: "Добавить к трейлингу +%{v}% за каждый % цены"
+  en: "Add +%{v}% to the trailing for every % of price"
+  es: "Añadir +%{v}% al trailing por cada % de precio"
+core_expert.gen_partial_sell:
+  ru: "Продавать, если куплена часть ордера > %{v}%"
+  en: "Sell when the filled part of the order > %{v}%"
+  es: "Vender si la parte ejecutada de la orden > %{v}%"
+core_expert.gen_auto_cancel:
+  ru: "Авто отмена покупки: %{v}"
+  en: "Auto-cancel a buy: %{v}"
+  es: "Cancelación automática de compra: %{v}"
+core_expert.gen_cancel_buy_after_sell:
+  ru: "Отменять buy после исполнения Sell"
+  en: "Cancel the buy once the Sell fills"
+  es: "Cancelar la compra tras ejecutarse la venta"
+core_expert.gen_sell_under_wall:
+  ru: "Ставить sell ордер под стенку"
+  en: "Place the sell order under the wall"
+  es: "Colocar la orden de venta bajo el muro"
+core_expert.gen_transfer_frame:
+  ru: "Перенос настроек"
+  en: "Settings transfer"
+  es: "Transferencia de ajustes"
+core_expert.gen_transfer_hint:
+  ru: "Без API-ключей, токенов и приватных данных"
+  en: "Without API keys, tokens or private data"
+  es: "Sin claves API, tokens ni datos privados"
+core_expert.gen_copy_clipboard:
+  ru: "Copy to ClipBoard"
+  en: "Copy to ClipBoard"
+  es: "Copy to ClipBoard"
+core_expert.gen_paste:
+  ru: "Paste"
+  en: "Paste"
+  es: "Paste"
+core_expert.gen_bl_fresh:
+  ru: "НЕ покупать только что добавленные %{v} минут"
+  en: "Do NOT buy coins listed less than %{v} minutes ago"
+  es: "NO comprar monedas añadidas hace menos de %{v} minutos"
+core_expert.gen_deltas_use_trades:
+  ru: "Дельты учитывают трейды"
+  en: "Deltas take trades into account"
+  es: "Las deltas tienen en cuenta las operaciones"
+
+# --- "Логин" page. Every control on it is drawn dead: safe-share carries none of these values. ---
+core_expert.log_exchange:
+  ru: "Биржа: %{v}"
+  en: "Exchange: %{v}"
+  es: "Bolsa: %{v}"
+core_expert.log_exchange_none:
+  ru: "Не передаётся"
+  en: "Not transmitted"
+  es: "No se transmite"
+core_expert.log_apply:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"
+core_expert.log_api_key:
+  ru: "API Key (HMAC) *"
+  en: "API Key (HMAC) *"
+  es: "API Key (HMAC) *"
+core_expert.log_api_secret:
+  ru: "API Secret *"
+  en: "API Secret *"
+  es: "API Secret *"
+core_expert.log_your_name:
+  ru: "Ваше Имя"
+  en: "Your name"
+  es: "Su nombre"
+core_expert.log_telegram:
+  ru: "@Логин в Телеграме"
+  en: "@Telegram login"
+  es: "@Usuario de Telegram"
+core_expert.log_required:
+  ru: "* Обязательные поля"
+  en: "* Required fields"
+  es: "* Campos obligatorios"
+core_expert.log_register_api:
+  ru: "Зарегистрировать API ключи"
+  en: "Register API keys"
+  es: "Registrar claves API"
+core_expert.log_register_other:
+  ru: "Зарегистрировать другие ключи"
+  en: "Register other keys"
+  es: "Registrar otras claves"
+core_expert.log_password:
+  ru: "Пароль"
+  en: "Password"
+  es: "Contraseña"
+core_expert.log_password_again:
+  ru: "Пароль ещё раз"
+  en: "Password again"
+  es: "Contraseña otra vez"
+core_expert.log_change_password:
+  ru: "Изменить пароль"
+  en: "Change password"
+  es: "Cambiar contraseña"
+core_expert.log_debug_data:
+  ru: "Я разрешаю боту отправлять отладочные данные"
+  en: "Allow the bot to send debug data"
+  es: "Permitir al bot enviar datos de depuración"
+core_expert.log_debug_hint:
+  ru: "Персональные данные не отправляются: только регистрационный ID, записи об активности и ошибках ПО."
+  en: "No personal data is sent: only the registration ID and records of activity and software errors."
+  es: "No se envían datos personales: sólo el ID de registro y registros de actividad y errores del software."
+core_expert.log_registration_id:
+  ru: "Registration ID: %{v}"
+  en: "Registration ID: %{v}"
+  es: "Registration ID: %{v}"
+core_expert.log_licence:
+  ru: "Версия и лицензия: %{v}"
+  en: "Version and licence: %{v}"
+  es: "Versión y licencia: %{v}"
+core_expert.log_activate_pro:
+  ru: "Активировать PRO версию"
+  en: "Activate the PRO version"
+  es: "Activar la versión PRO"
+core_expert.log_support_frame:
+  ru: "Поддержка"
+  en: "Support"
+  es: "Soporte"
+core_expert.log_support_ask:
+  ru: "Если у Вас есть вопросы, загляните в раздел «Вопросы»"
+  en: "If you have questions, look at the “Questions” section first"
+  es: "Si tiene preguntas, consulte primero la sección «Preguntas»"
+core_expert.log_support_mail:
+  ru: "Если вопросы остались — пишите на info@moon-bot.com"
+  en: "If any remain, write to info@moon-bot.com"
+  es: "Si quedan dudas, escriba a info@moon-bot.com"
+core_expert.log_support_pro:
+  ru: "Для PRO-версии: заполните имя и логин в Телеграме, на который придёт приглашение в группу техподдержки."
+  en: "For the PRO version: fill in the name and Telegram login the support-group invitation will be sent to."
+  es: "Para la versión PRO: indique el nombre y el usuario de Telegram al que se enviará la invitación al grupo de soporte."
+core_expert.log_support_en:
+  ru: "Telegram tech. support chat (EN)"
+  en: "Telegram tech. support chat (EN)"
+  es: "Telegram tech. support chat (EN)"
+core_expert.log_support_ru:
+  ru: "Тех. поддержка в Телеграм-чате (RU)"
+  en: "Telegram support chat (RU)"
+  es: "Chat de soporte en Telegram (RU)"
+core_expert.log_send_trades:
+  ru: "Я согласен отправлять результаты сделок на сервер"
+  en: "I agree to send trade results to the server"
+  es: "Acepto enviar los resultados de las operaciones al servidor"
+core_expert.log_anonymous:
+  ru: "Анонимно"
+  en: "Anonymously"
+  es: "De forma anónima"
+core_expert.log_no_strat_kind:
+  ru: "Не слать тип стратегии"
+  en: "Do not send the strategy kind"
+  es: "No enviar el tipo de estrategia"
+core_expert.log_online_monitor:
+  ru: "Мониторинг онлайна"
+  en: "Online monitoring"
+  es: "Monitorización en línea"
+core_expert.log_stats_note:
+  ru: "Бот отправляет сделки без личных данных — только цены и объёмы; по ним строится рейтинговая таблица."
+  en: "The bot sends trades without personal data — prices and volumes only; they feed the rating table."
+  es: "El bot envía operaciones sin datos personales — sólo precios y volúmenes; con ellos se construye la tabla de clasificación."
+
+# --- "Телеграм" page. Values travel in the safe-share `signals` section but are not projected. ---
+core_expert.tlg_signal_channels:
+  ru: "Каналы с сигналами: %{v}"
+  en: "Signal channels: %{v}"
+  es: "Canales de señales: %{v}"
+core_expert.tlg_channels_empty:
+  ru: "Список каналов пока не читается терминалом."
+  en: "The terminal does not read the channel list yet."
+  es: "El terminal aún no lee la lista de canales."
+core_expert.tlg_remove_channel:
+  ru: "Убрать канал"
+  en: "Remove channel"
+  es: "Quitar canal"
+core_expert.tlg_add_channel:
+  ru: "Добавить канал"
+  en: "Add channel"
+  es: "Añadir canal"
+core_expert.tlg_multi_channels:
+  ru: "Мониторить несколько каналов"
+  en: "Monitor several channels"
+  es: "Monitorizar varios canales"
+core_expert.tlg_two_channels:
+  ru: "Покупать только если монета сразу в 2х каналах"
+  en: "Buy only when the coin appears in two channels at once"
+  es: "Comprar sólo si la moneda aparece en dos canales a la vez"
+core_expert.tlg_premium:
+  ru: "Принимать сигналы из канала Moon Premium"
+  en: "Accept signals from the Moon Premium channel"
+  es: "Aceptar señales del canal Moon Premium"
+core_expert.tlg_premium_paid:
+  ru: "Подписка платная!"
+  en: "Paid subscription!"
+  es: "¡Suscripción de pago!"
+core_expert.tlg_send_stats:
+  ru: "Отправлять статистику на сервер"
+  en: "Send statistics to the server"
+  es: "Enviar estadísticas al servidor"
+core_expert.tlg_network_blacklist:
+  ru: "Использовать сетевой ЧС в канале @MoonInt"
+  en: "Use the network blacklist from the @MoonInt channel"
+  es: "Usar la lista negra de red del canal @MoonInt"
+core_expert.tlg_stats_consent:
+  ru: "Для сигналов @MoonInt нужно согласие на отправку статистики: вкладка «Логин» — включить отчёты о сделках и выключить «не слать тип стратегии»."
+  en: "@MoonInt signals need consent to send statistics: on the Login page, enable trade reports and disable \"do not send the strategy kind\"."
+  es: "Las señales de @MoonInt requieren consentimiento para enviar estadísticas: en la página «Acceso», active los informes de operaciones y desactive «no enviar el tipo de estrategia»."
+core_expert.tlg_client_frame:
+  ru: "Встроенный клиент"
+  en: "Built-in client"
+  es: "Cliente integrado"
+core_expert.tlg_client_enable:
+  ru: "Включить встроенный клиент"
+  en: "Enable the built-in client"
+  es: "Activar el cliente integrado"
+core_expert.tlg_proxy:
+  ru: "Proxy"
+  en: "Proxy"
+  es: "Proxy"
+core_expert.tlg_client_status:
+  ru: "Статус: %{v}"
+  en: "Status: %{v}"
+  es: "Estado: %{v}"
+core_expert.tlg_log_out:
+  ru: "Выйти"
+  en: "Log out"
+  es: "Cerrar sesión"
+
+# --- "АвтоПокупка" page. Same wire section, same gap: on the wire, not projected. ---
+core_expert.buy_clipboard_frame:
+  ru: "Искать монеты в буфере обмена"
+  en: "Look for coins in the clipboard"
+  es: "Buscar monedas en el portapapeles"
+core_expert.buy_clipboard_auto:
+  ru: "Авто-покупка по буферу обмена"
+  en: "Auto-buy from the clipboard"
+  es: "Compra automática desde el portapapeles"
+core_expert.buy_telegram_frame:
+  ru: "Искать монеты в Телеграме"
+  en: "Look for coins in Telegram"
+  es: "Buscar monedas en Telegram"
+core_expert.buy_telegram_auto:
+  ru: "Авто-покупка по Телеграму"
+  en: "Auto-buy from Telegram"
+  es: "Compra automática desde Telegram"
+core_expert.buy_by_token:
+  ru: "Искать по токену"
+  en: "Search by token"
+  es: "Buscar por token"
+core_expert.buy_lowercase:
+  ru: "Строчными буквами"
+  en: "Lower case"
+  es: "En minúsculas"
+core_expert.buy_by_link:
+  ru: "Искать по полной ссылке"
+  en: "Search by full link"
+  es: "Buscar por enlace completo"
+core_expert.buy_special_filter:
+  ru: "Спец. фильтр"
+  en: "Special filter"
+  es: "Filtro especial"
+core_expert.buy_capture_clipboard:
+  ru: "Захватывать буфер"
+  en: "Capture the clipboard"
+  es: "Capturar el portapapeles"
+core_expert.buy_no_forwarded:
+  ru: "Не покупать пересланное"
+  en: "Do not buy forwarded messages"
+  es: "No comprar mensajes reenviados"
+core_expert.buy_no_reply:
+  ru: "Не покупать ответное"
+  en: "Do not buy replies"
+  es: "No comprar respuestas"
+core_expert.buy_tv_webhook:
+  ru: "Detect by TV WebHook"
+  en: "Detect by TV WebHook"
+  es: "Detect by TV WebHook"
+core_expert.buy_tv_url:
+  ru: "URL для TradingView: %{v}"
+  en: "TradingView URL: %{v}"
+  es: "URL de TradingView: %{v}"
+core_expert.buy_tv_show:
+  ru: "показать"
+  en: "show"
+  es: "mostrar"
+core_expert.buy_filter_frame:
+  ru: "Фильтрация сообщений с сигналами"
+  en: "Filtering of signal messages"
+  es: "Filtrado de mensajes con señales"
+core_expert.buy_long_words:
+  ru: "Ключевые слова (через запятую) в Long сигнале"
+  en: "Keywords (comma separated) in a Long signal"
+  es: "Palabras clave (separadas por comas) en una señal Long"
+core_expert.buy_short_words:
+  ru: "Ключевые слова (через запятую) в Short сигнале"
+  en: "Keywords (comma separated) in a Short signal"
+  es: "Palabras clave (separadas por comas) en una señal Short"
+core_expert.buy_word_gap:
+  ru: "Между ключ. словом сколько угодно слов: %{v}"
+  en: "Words allowed between keywords: %{v}"
+  es: "Palabras permitidas entre palabras clave: %{v}"
+core_expert.buy_black_words:
+  ru: "Слова в сообщ., при которых НЕ покупать"
+  en: "Words in a message that cancel the buy"
+  es: "Palabras del mensaje que cancelan la compra"
+core_expert.buy_word_count:
+  ru: "Слов в сообщ. не больше, чем"
+  en: "No more words in a message than"
+  es: "No más palabras en el mensaje que"
+core_expert.buy_dip_words:
+  ru: "Слова, при которых покупать по меньшей цене"
+  en: "Words that switch the buy to a lower price"
+  es: "Palabras que cambian la compra a un precio menor"
+core_expert.buy_market_price:
+  ru: "Покупать по рыночной цене %{v}%"
+  en: "Buy at the market price %{v}%"
+  es: "Comprar al precio de mercado %{v}%"
+core_expert.buy_cancel_cheap:
+  ru: "Авто отмена дешёвой покупки через %{v} минут"
+  en: "Auto-cancel a cheap buy after %{v} minutes"
+  es: "Cancelar automáticamente una compra barata tras %{v} minutos"
+core_expert.buy_tags:
+  ru: "Покупать монеты с тэгами"
+  en: "Buy coins carrying tags"
+  es: "Comprar monedas con etiquetas"
+core_expert.buy_tokens_without_tags:
+  ru: "Токены без тэгов"
+  en: "Tokens without tags"
+  es: "Tokens sin etiquetas"
+core_expert.buy_links:
+  ru: "Ссылки"
+  en: "Links"
+  es: "Enlaces"
+core_expert.buy_special:
+  ru: "Special"
+  en: "Special"
+  es: "Special"
+core_expert.buy_single_token:
+  ru: "Покупать, если в сообщ. только 1 токен"
+  en: "Buy only when the message holds a single token"
+  es: "Comprar sólo si el mensaje contiene un único token"
+core_expert.buy_price_required:
+  ru: "Покупать только если в сообщ. есть цена"
+  en: "Buy only when the message carries a price"
+  es: "Comprar sólo si el mensaje incluye un precio"
+core_expert.buy_price_from_message:
+  ru: "Использовать цену покупки из сообщ."
+  en: "Use the buy price from the message"
+  es: "Usar el precio de compra del mensaje"
+core_expert.buy_msg_price:
+  ru: "Покупать по цене из сообщ. %{v}%"
+  en: "Buy at the message price %{v}%"
+  es: "Comprar al precio del mensaje %{v}%"
+core_expert.buy_stops_from_message:
+  ru: "Брать Стопы и ТейкПрофит из сообщ."
+  en: "Take stops and take-profit from the message"
+  es: "Tomar stops y take-profit del mensaje"
+core_expert.buy_example:
+  ru: "пример: Yesterday we called #NEO; don’t buy now"
+  en: "example: Yesterday we called #NEO; don’t buy now"
+  es: "ejemplo: Yesterday we called #NEO; don’t buy now"
+
+# --- "Автостарт" page. Live: every row edits AutoStartSettings or BtcBlinkSettings. The rest of ---
+# --- its wording is reused from `core_settings.as_*`, which the compact popup already carries. ---
+core_expert.as_enable_on_start:
+  ru: "Включать при запуске:"
+  en: "Turn on at startup:"
+  es: "Activar al iniciar:"
+core_expert.as_btc_delta_over:
+  ru: "BTC delta >"
+  en: "BTC delta >"
+  es: "BTC delta >"
+core_expert.as_btc_delta_under:
+  ru: "AND BTC delta <"
+  en: "AND BTC delta <"
+  es: "AND BTC delta <"
+core_expert.as_not_recommended:
+  ru: "Не рекомендуется!"
+  en: "Not recommended!"
+  es: "¡No recomendado!"
+core_expert.as_blink_btc:
+  ru: "Подсвечивать курс BTC при изменении"
+  en: "Highlight the BTC rate when it moves"
+  es: "Resaltar el precio de BTC cuando cambia"
+core_expert.as_alarm_btc:
+  ru: "Звук при изменении курса BTC"
+  en: "Sound when the BTC rate moves"
+  es: "Sonido cuando cambia el precio de BTC"
+
+# --- "Интерфейс" and "Hotkeys" pages. ---
+core_expert.int_main_frame:
+  ru: "Главное окно"
+  en: "Main window"
+  es: "Ventana principal"
+core_expert.int_buy_on_enter:
+  ru: "Покупка по Enter"
+  en: "Buy on Enter"
+  es: "Comprar con Enter"
+core_expert.int_log_window:
+  ru: "Показать окно с логами"
+  en: "Show the log window"
+  es: "Mostrar la ventana de registro"
+core_expert.int_orders_window:
+  ru: "Показать окно с ордерами"
+  en: "Show the orders window"
+  es: "Mostrar la ventana de órdenes"
+core_expert.int_to_tray:
+  ru: "Закрывать в панель задач"
+  en: "Close to the taskbar"
+  es: "Cerrar a la barra de tareas"
+core_expert.int_restore_on_signal:
+  ru: "Развернуть при сигнале"
+  en: "Restore on a signal"
+  es: "Restaurar con una señal"
+core_expert.int_hide_forum:
+  ru: "Скрыть ссылку на форум в главном окне"
+  en: "Hide the forum link in the main window"
+  es: "Ocultar el enlace al foro en la ventana principal"
+core_expert.int_scroll_charts:
+  ru: "Прокрутка графиков"
+  en: "Scroll the charts"
+  es: "Desplazar los gráficos"
+core_expert.int_open_all_charts:
+  ru: "При запуске открывать все графики"
+  en: "Open every chart at startup"
+  es: "Abrir todos los gráficos al iniciar"
+core_expert.int_lev_for_tp:
+  ru: "Use Leverage for TP"
+  en: "Use Leverage for TP"
+  es: "Use Leverage for TP"
+core_expert.int_ask_on_exit:
+  ru: "Спрашивать при выходе"
+  en: "Ask on exit"
+  es: "Preguntar al salir"
+core_expert.int_ignore_ms_sell:
+  ru: "Не учитывать SellPrice ручной стратегии"
+  en: "Ignore a manual strategy's SellPrice"
+  es: "Ignorar el SellPrice de la estrategia manual"
+core_expert.int_encrypt_reports:
+  ru: "Шифровать отчёты"
+  en: "Encrypt the reports"
+  es: "Cifrar los informes"
+core_expert.int_detect_buttons:
+  ru: "Окно кнопок детектов"
+  en: "Detect-buttons window"
+  es: "Ventana de botones de detección"
+core_expert.int_hide_buy:
+  ru: "Скрыть кнопку Buy"
+  en: "Hide the Buy button"
+  es: "Ocultar el botón Buy"
+core_expert.int_hide_demo:
+  ru: "Скрыть кнопку «ДЕМО»"
+  en: "Hide the DEMO button"
+  es: "Ocultar el botón DEMO"
+core_expert.int_hide_bonus:
+  ru: "Скрыть кнопку «MoonBonus»"
+  en: "Hide the MoonBonus button"
+  es: "Ocultar el botón MoonBonus"
+core_expert.int_hide_candy:
+  ru: "Скрыть табличку Candy"
+  en: "Hide the Candy plate"
+  es: "Ocultar el cartel Candy"
+core_expert.int_network_sound:
+  ru: "Звук при проблемах с сетью"
+  en: "Sound on network problems"
+  es: "Sonido ante problemas de red"
+core_expert.int_sell_sound:
+  ru: "Звук если до цены продажи меньше"
+  en: "Sound when the sell price is close"
+  es: "Sonido cuando el precio de venta está cerca"
+core_expert.int_buy_sound:
+  ru: "Звук если до цены покупки меньше"
+  en: "Sound when the buy price is close"
+  es: "Sonido cuando el precio de compra está cerca"
+core_expert.int_style:
+  ru: "Стиль"
+  en: "Style"
+  es: "Estilo"
+core_expert.int_icons:
+  ru: "Иконки"
+  en: "Icons"
+  es: "Iconos"
+core_expert.int_reset_reports:
+  ru: "Сбросить форму отчётов"
+  en: "Reset the reports form"
+  es: "Restablecer el formulario de informes"
+core_expert.int_charts_frame:
+  ru: "Рыночные графики"
+  en: "Market charts"
+  es: "Gráficos de mercado"
+core_expert.int_colors_setup:
+  ru: "Colors Setup"
+  en: "Colors Setup"
+  es: "Colors Setup"
+core_expert.int_price_width:
+  ru: "Толщина линии цены"
+  en: "Price-line width"
+  es: "Grosor de la línea de precio"
+core_expert.int_pixel_size:
+  ru: "Pixel Size"
+  en: "Pixel Size"
+  es: "Pixel Size"
+core_expert.int_chart_hints:
+  ru: "Подсказки на графике"
+  en: "Hints on the chart"
+  es: "Sugerencias en el gráfico"
+core_expert.int_profit_in_usd:
+  ru: "Показывать профит в $"
+  en: "Show profit in $"
+  es: "Mostrar el beneficio en $"
+core_expert.int_label_iceberg:
+  ru: "Подписывать Iceberg"
+  en: "Label Iceberg orders"
+  es: "Etiquetar órdenes Iceberg"
+core_expert.int_label_orders:
+  ru: "Подписывать ордера"
+  en: "Label the orders"
+  es: "Etiquetar las órdenes"
+core_expert.int_under_line:
+  ru: "под линией"
+  en: "under the line"
+  es: "bajo la línea"
+core_expert.int_zone_transparency:
+  ru: "Прозрачность зон стакана"
+  en: "Order-book zone transparency"
+  es: "Transparencia de las zonas del libro"
+core_expert.int_zone_border:
+  ru: "Границы: %{v}"
+  en: "Borders: %{v}"
+  es: "Bordes: %{v}"
+core_expert.int_zone_fill:
+  ru: "Заливка: %{v}"
+  en: "Fill: %{v}"
+  es: "Relleno: %{v}"
+core_expert.int_zone_orders:
+  ru: "Ордера: %{v}"
+  en: "Orders: %{v}"
+  es: "Órdenes: %{v}"
+core_expert.int_line_width:
+  ru: "Толщина линий"
+  en: "Line width"
+  es: "Grosor de línea"
+core_expert.int_panic_zone:
+  ru: "Рисовать зону Паник Селл с прозрачностью %{v}"
+  en: "Draw the panic-sell zone at %{v} transparency"
+  es: "Dibujar la zona de panic sell con transparencia %{v}"
+core_expert.int_background:
+  ru: "Фон: по умолчанию, прозрачность %{v}"
+  en: "Background: default, transparency %{v}"
+  es: "Fondo: por defecto, transparencia %{v}"
+core_expert.int_double_click_panic:
+  ru: "Двойной клик на кнопку Паник селл"
+  en: "Double-click the panic-sell button"
+  es: "Doble clic en el botón de panic sell"
+core_expert.int_control_zones:
+  ru: "Раздельные зоны управления"
+  en: "Separate control zones"
+  es: "Zonas de control separadas"
+core_expert.int_new_charts_on_top:
+  ru: "Новые графики сверху"
+  en: "New charts on top"
+  es: "Gráficos nuevos arriba"
+core_expert.int_update_title:
+  ru: "Обновлять заголовок графика"
+  en: "Update the chart title"
+  es: "Actualizar el título del gráfico"
+core_expert.int_hide_right_panel:
+  ru: "Скрыть панель справа от графика"
+  en: "Hide the panel right of the chart"
+  es: "Ocultar el panel a la derecha del gráfico"
+core_expert.int_server_charts:
+  ru: "Подгрузка графиков с сервера"
+  en: "Load charts from the server"
+  es: "Cargar gráficos desde el servidor"
+core_expert.int_pending_price:
+  ru: "Рисовать цену покупки отложек"
+  en: "Draw the pending buy price"
+  es: "Dibujar el precio de compra pendiente"
+core_expert.int_manual_fullscreen:
+  ru: "Открывать выбранные вручную монеты в FullScreen"
+  en: "Open manually picked coins in full screen"
+  es: "Abrir en pantalla completa las monedas elegidas a mano"
+core_expert.int_one_fullscreen:
+  ru: "Только 1 график в Full Screen"
+  en: "Only one chart in full screen"
+  es: "Sólo un gráfico en pantalla completa"
+core_expert.int_stop_line:
+  ru: "Рисовать линию стопа"
+  en: "Draw the stop line"
+  es: "Dibujar la línea de stop"
+core_expert.int_compact:
+  ru: "В сжатом виде"
+  en: "Compact"
+  es: "Compacto"
+core_expert.int_info_right:
+  ru: "Информация на графике справа"
+  en: "Chart info on the right"
+  es: "Información del gráfico a la derecha"
+core_expert.int_hide_pnl:
+  ru: "Hide PnL"
+  en: "Hide PnL"
+  es: "Hide PnL"
+core_expert.int_scale_tool:
+  ru: "Scale Tool"
+  en: "Scale Tool"
+  es: "Scale Tool"
+core_expert.int_buttons_memory:
+  ru: "Buttons Memory"
+  en: "Buttons Memory"
+  es: "Buttons Memory"
+core_expert.int_spread_frame:
+  ru: "Спред в отлож. ордерах"
+  en: "Spread on pending orders"
+  es: "Spread en órdenes pendientes"
+core_expert.int_spread_hdelta:
+  ru: "+ hDelta*"
+  en: "+ hDelta*"
+  es: "+ hDelta*"
+core_expert.hk_built_in:
+  ru: "Встроенные хоткеи"
+  en: "Built-in hotkeys"
+  es: "Atajos integrados"
+core_expert.hk_touch:
+  ru: "Тач-жесты"
+  en: "Touch gestures"
+  es: "Gestos táctiles"
+core_expert.hk_key:
+  ru: "клавиша"
+  en: "key"
+  es: "tecla"
+core_expert.hk_controls_frame:
+  ru: "Управление"
+  en: "Controls"
+  es: "Control"
+core_expert.hk_place_long:
+  ru: "Place Long"
+  en: "Place Long"
+  es: "Place Long"
+core_expert.hk_place_short:
+  ru: "Place Short"
+  en: "Place Short"
+  es: "Place Short"
+core_expert.hk_same_long_short:
+  ru: "Одни хоткеи для Long и Short"
+  en: "Same hotkeys for Long and Short"
+  es: "Mismos atajos para Long y Short"
+core_expert.hk_move_order:
+  ru: "Move Order"
+  en: "Move Order"
+  es: "Move Order"
+core_expert.hk_move_tp:
+  ru: "Move TP"
+  en: "Move TP"
+  es: "Move TP"
+core_expert.hk_additional:
+  ru: "Дополнительные команды:"
+  en: "Additional commands:"
+  es: "Comandos adicionales:"
+core_expert.hk_pending_long:
+  ru: "Place pending Long"
+  en: "Place pending Long"
+  es: "Place pending Long"
+core_expert.hk_pending_short:
+  ru: "Place pending Short"
+  en: "Place pending Short"
+  es: "Place pending Short"
+core_expert.hk_sell_slot:
+  ru: "(%{n}) Sell %{v}"
+  en: "(%{n}) Sell %{v}"
+  es: "(%{n}) Sell %{v}"
+core_expert.hk_button:
+  ru: "Button %{n}"
+  en: "Button %{n}"
+  es: "Button %{n}"
+core_expert.hk_cancel_buy:
+  ru: "Отменить Buy"
+  en: "Cancel Buy"
+  es: "Cancelar Buy"
+core_expert.hk_panic_sell:
+  ru: "Panic Sell"
+  en: "Panic Sell"
+  es: "Panic Sell"
+core_expert.hk_join_sells:
+  ru: "Объединить Sell"
+  en: "Join Sells"
+  es: "Unir ventas"
+core_expert.hk_switch_charts:
+  ru: "Переключить графики"
+  en: "Switch charts"
+  es: "Cambiar de gráficos"
+core_expert.hk_switch_figure:
+  ru: "Switch Chart Figure"
+  en: "Switch Chart Figure"
+  es: "Switch Chart Figure"
+core_expert.hk_reload_book:
+  ru: "Reload Book"
+  en: "Reload Book"
+  es: "Reload Book"
+core_expert.hk_new_long:
+  ru: "New Long"
+  en: "New Long"
+  es: "New Long"
+core_expert.hk_new_short:
+  ru: "New Short"
+  en: "New Short"
+  es: "New Short"
+core_expert.hk_split_order:
+  ru: "Split Order"
+  en: "Split Order"
+  es: "Split Order"
+core_expert.hk_fit_sells:
+  ru: "Sells to rectangle"
+  en: "Sells to rectangle"
+  es: "Sells to rectangle"
+core_expert.hk_shift_buy_up:
+  ru: "Shift buys +1%"
+  en: "Shift buys +1%"
+  es: "Shift buys +1%"
+core_expert.hk_shift_buy_down:
+  ru: "Shift buys -1%"
+  en: "Shift buys -1%"
+  es: "Shift buys -1%"
+core_expert.hk_shift_sell_up:
+  ru: "Shift sells +1%"
+  en: "Shift sells +1%"
+  es: "Shift sells +1%"
+core_expert.hk_shift_sell_down:
+  ru: "Shift sells -1%"
+  en: "Shift sells -1%"
+  es: "Shift sells -1%"
+core_expert.hk_panic_sell_one:
+  ru: "Panic Sell 1 order"
+  en: "Panic Sell 1 order"
+  es: "Panic Sell 1 order"
+core_expert.hk_chart_shot:
+  ru: "Chart ScreenShot"
+  en: "Chart ScreenShot"
+  es: "Chart ScreenShot"
+core_expert.hk_bot_shot:
+  ru: "Bot ScreenShot"
+  en: "Bot ScreenShot"
+  es: "Bot ScreenShot"
+core_expert.hk_center_chart:
+  ru: "Center Chart"
+  en: "Center Chart"
+  es: "Center Chart"
+core_expert.hk_reload_chart:
+  ru: "Reload Chart"
+  en: "Reload Chart"
+  es: "Reload Chart"
+core_expert.hk_cancel_all_buys:
+  ru: "Cancel ALL buys"
+  en: "Cancel ALL buys"
+  es: "Cancel ALL buys"
+core_expert.hk_scale_plus:
+  ru: "Scale +"
+  en: "Scale +"
+  es: "Scale +"
+core_expert.hk_scale_minus:
+  ru: "Scale -"
+  en: "Scale -"
+  es: "Scale -"
+core_expert.hk_sell_plus:
+  ru: "Sell +"
+  en: "Sell +"
+  es: "Sell +"
+core_expert.hk_sell_minus:
+  ru: "Sell -"
+  en: "Sell -"
+  es: "Sell -"
+core_expert.hk_open_coin_all:
+  ru: "Open coin in all bots"
+  en: "Open coin in all bots"
+  es: "Open coin in all bots"
+core_expert.hk_builtin_1:
+  ru: "[Tab или Del + навести мышью на ордер] — отменить ордер"
+  en: "[Tab or Del + hover an order] cancels it"
+  es: "[Tab o Del + pasar sobre una orden] la cancela"
+core_expert.hk_builtin_2:
+  ru: "[Esc] закрыть график; [Shift+Esc] закрыть все графики на всех ботах"
+  en: "[Esc] closes a chart; [Shift+Esc] closes every chart on every bot"
+  es: "[Esc] cierra un gráfico; [Shift+Esc] cierra todos en todos los bots"
+core_expert.hk_builtin_3:
+  ru: "[Shift+средняя кнопка мыши] на графике — синхронизация временного масштаба всех графиков"
+  en: "[Shift+middle click] on a chart synchronises every chart's time scale"
+  es: "[Shift+clic central] en un gráfico sincroniza la escala temporal de todos"
+core_expert.hk_builtin_4:
+  ru: "[Ctrl+колёсико] раздвигает график по времени; [Ctrl+Shift+колёсико] — ещё больше"
+  en: "[Ctrl+wheel] stretches the chart in time; [Ctrl+Shift+wheel] stretches it further"
+  es: "[Ctrl+rueda] estira el gráfico en el tiempo; [Ctrl+Shift+rueda] aún más"
+core_expert.hk_builtin_5:
+  ru: "[Alt или Shift+колёсико] двигает график влево и вправо"
+  en: "[Alt or Shift+wheel] moves the chart left and right"
+  es: "[Alt o Shift+rueda] mueve el gráfico a izquierda y derecha"
+core_expert.hk_builtin_6:
+  ru: "[Ctrl+Shift+F10] сброс позиций всех окон"
+  en: "[Ctrl+Shift+F10] resets every window position"
+  es: "[Ctrl+Shift+F10] restablece la posición de todas las ventanas"
+core_expert.hk_touch_intro:
+  ru: "Для работы жестов включите «Интерфейс → Раздельные зоны управления»."
+  en: "Gestures need “Interface → Separate control zones” switched on."
+  es: "Los gestos requieren activar «Interfaz → Zonas de control separadas»."
+core_expert.hk_touch_1:
+  ru: "Сжать или развести пальцы на графике — масштаб времени"
+  en: "Pinch or spread on the chart — time scale"
+  es: "Pellizcar o separar en el gráfico — escala temporal"
+core_expert.hk_touch_2:
+  ru: "Двойной тап на графике — полноэкранный режим"
+  en: "Double tap on the chart — full screen"
+  es: "Doble toque en el gráfico — pantalla completa"
+core_expert.hk_touch_3:
+  ru: "Вертикальный свайп в стакане — поместить тейки в область от начала до конца свайпа"
+  en: "Vertical swipe in the book — place take-profits across the swipe"
+  es: "Deslizamiento vertical en el libro — colocar los take-profit a lo largo del gesto"
+core_expert.hk_touch_4:
+  ru: "Зажать палец на графике — режим SHORT (тап по стакану = шорт)"
+  en: "Hold a finger on the chart — SHORT mode (a tap on the book sells short)"
+  es: "Mantener el dedo en el gráfico — modo SHORT (un toque en el libro abre corto)"
+core_expert.hk_touch_5:
+  ru: "Круговой жест в стакане — паник-продажа"
+  en: "Circular gesture in the book — panic sell"
+  es: "Gesto circular en el libro — venta de pánico"
+
+# --- "Специальные" page: four collapsible sections, none of them projected. ---
+core_expert.sp_engine:
+  ru: "Настройки движка"
+  en: "Engine settings"
+  es: "Ajustes del motor"
+core_expert.sp_watchdog:
+  ru: "Защита от зависаний"
+  en: "Hang protection"
+  es: "Protección contra bloqueos"
+core_expert.sp_help:
+  ru: "Справка"
+  en: "Help"
+  es: "Ayuda"
+core_expert.sp_help_caps:
+  ru: "ПОМОЩЬ"
+  en: "HELP"
+  es: "AYUDA"
+core_expert.sp_iceberg_buys:
+  ru: "Iceberg Buys"
+  en: "Iceberg Buys"
+  es: "Iceberg Buys"
+core_expert.sp_iceberg_sells:
+  ru: "Iceberg Sells"
+  en: "Iceberg Sells"
+  es: "Iceberg Sells"
+core_expert.sp_book_ticker:
+  ru: "Исп. BookTicker"
+  en: "Use BookTicker"
+  es: "Usar BookTicker"
+core_expert.sp_correct_price:
+  ru: "Коррекция цены ордеров"
+  en: "Correct the order price"
+  es: "Corregir el precio de las órdenes"
+core_expert.sp_no_position_limit:
+  ru: "Не проверять лимиты позиции"
+  en: "Do not check position limits"
+  es: "No comprobar los límites de posición"
+core_expert.sp_random_percent:
+  ru: "Добавлять маленький случайный процент"
+  en: "Add a small random percentage"
+  es: "Añadir un pequeño porcentaje aleatorio"
+core_expert.sp_liquidation_control:
+  ru: "Liquidation Control"
+  en: "Liquidation Control"
+  es: "Liquidation Control"
+core_expert.sp_ignore_replacing:
+  ru: "Ignore Replacing Bug"
+  en: "Ignore Replacing Bug"
+  es: "Ignore Replacing Bug"
+core_expert.sp_weighted_mavg:
+  ru: "Weighted mAvg"
+  en: "Weighted mAvg"
+  es: "Weighted mAvg"
+core_expert.sp_auto_buy_bnb:
+  ru: "Автопокупка BNB"
+  en: "Auto-buy BNB"
+  es: "Compra automática de BNB"
+core_expert.sp_quantitative:
+  ru: "Quantitative Rules"
+  en: "Quantitative Rules"
+  es: "Quantitative Rules"
+core_expert.sp_auto_reduce:
+  ru: "Auto Reduce Orders"
+  en: "Auto Reduce Orders"
+  es: "Auto Reduce Orders"
+core_expert.sp_bnb_min:
+  ru: "Min. BNB level"
+  en: "Min. BNB level"
+  es: "Min. BNB level"
+core_expert.sp_bnb_buy:
+  ru: "Buy BNB"
+  en: "Buy BNB"
+  es: "Buy BNB"
+core_expert.sp_auto_leverage:
+  ru: "Auto Leverage"
+  en: "Auto Leverage"
+  es: "Auto Leverage"
+core_expert.sp_auto_close_zero:
+  ru: "AutoClose Zero pos"
+  en: "AutoClose Zero pos"
+  es: "AutoClose Zero pos"
+core_expert.sp_old_as_new:
+  ru: "Old coins as New Listing"
+  en: "Old coins as New Listing"
+  es: "Old coins as New Listing"
+core_expert.sp_websocket_api:
+  ru: "WebSocket API"
+  en: "WebSocket API"
+  es: "WebSocket API"
+core_expert.sp_iceberg_step:
+  ru: "Ставить Iceberg если шаг цены < %{v}"
+  en: "Use Iceberg when the price step < %{v}"
+  es: "Usar Iceberg si el paso de precio < %{v}"
+core_expert.sp_sell_x2:
+  ru: "Уровень Sell x2 для анализа монет: %{v}"
+  en: "Sell x2 level for coin analysis: %{v}"
+  es: "Nivel Sell x2 para el análisis de monedas: %{v}"
+core_expert.sp_connection:
+  ru: "Binance connection method:"
+  en: "Binance connection method:"
+  es: "Binance connection method:"
+core_expert.sp_custom_ip:
+  ru: "Custom IP"
+  en: "Custom IP"
+  es: "Custom IP"
+core_expert.sp_auto_dns:
+  ru: "Auto DNS"
+  en: "Auto DNS"
+  es: "Auto DNS"
+core_expert.sp_connection_state:
+  ru: "Соединение: %{v}"
+  en: "Connection: %{v}"
+  es: "Conexión: %{v}"
+core_expert.sp_no_trades:
+  ru: "No trades on markets:"
+  en: "No trades on markets:"
+  es: "No trades on markets:"
+core_expert.sp_my_channel:
+  ru: "My Channel"
+  en: "My Channel"
+  es: "My Channel"
+core_expert.sp_own_bot_id:
+  ru: "I have my own bot ID"
+  en: "I have my own bot ID"
+  es: "I have my own bot ID"
+core_expert.sp_type_pin:
+  ru: "Type this PIN code in your channel"
+  en: "Type this PIN code in your channel"
+  es: "Type this PIN code in your channel"
+core_expert.sp_this_bot_name:
+  ru: "This bot name"
+  en: "This bot name"
+  es: "This bot name"
+core_expert.sp_send_trade_reports:
+  ru: "Слать отчёты о сделках"
+  en: "Send trade reports"
+  es: "Enviar informes de operaciones"
+core_expert.sp_multiline_commands:
+  ru: "Мультистроковые команды"
+  en: "Multiline commands"
+  es: "Comandos multilínea"
+core_expert.sp_send_shots:
+  ru: "Слать скриншоты"
+  en: "Send screenshots"
+  es: "Enviar capturas"
+core_expert.sp_send_public:
+  ru: "Слать в общий чат"
+  en: "Send to the public chat"
+  es: "Enviar al chat público"
+core_expert.sp_send_negative:
+  ru: "Слать скрины минусов"
+  en: "Send screenshots of losses"
+  es: "Enviar capturas de pérdidas"
+core_expert.sp_if_profit_usd:
+  ru: "Если профит $ >"
+  en: "If profit $ >"
+  es: "Si el beneficio $ >"
+core_expert.sp_or_profit_pct:
+  ru: "или профит % >"
+  en: "or profit % >"
+  es: "o beneficio % >"
+core_expert.sp_or_profit_hour:
+  ru: "или профит за час $ >"
+  en: "or hourly profit $ >"
+  es: "o beneficio por hora $ >"
+core_expert.sp_time_axis:
+  ru: "Ось времени, %"
+  en: "Time axis, %"
+  es: "Eje de tiempo, %"
+core_expert.sp_price_axis:
+  ru: "Ось цены, %"
+  en: "Price axis, %"
+  es: "Eje de precio, %"
+core_expert.sp_log_level:
+  ru: "Уровень логирования (0 — мало, 5 — все): %{v}"
+  en: "Log level (0 = little, 5 = everything): %{v}"
+  es: "Nivel de registro (0 = poco, 5 = todo): %{v}"
+core_expert.sp_log_days:
+  ru: "Удалять старые логи через %{v} дней"
+  en: "Delete old logs after %{v} days"
+  es: "Borrar los registros antiguos tras %{v} días"
+core_expert.sp_chart_idle:
+  ru: "Закрывать графики после %{v} минут неактивности"
+  en: "Close charts after %{v} minutes of inactivity"
+  es: "Cerrar los gráficos tras %{v} minutos de inactividad"
+core_expert.sp_chart_report:
+  ru: "Графики в отчёте %{v} мин. после закрытия"
+  en: "Charts in the report %{v} min. after closing"
+  es: "Gráficos en el informe %{v} min. tras el cierre"
+core_expert.sp_extended_debug:
+  ru: "Extended Debug Mode"
+  en: "Extended Debug Mode"
+  es: "Extended Debug Mode"
+core_expert.sp_market_export:
+  ru: "Market Data Export"
+  en: "Market Data Export"
+  es: "Market Data Export"
+core_expert.sp_udp_export:
+  ru: "UDP Export"
+  en: "UDP Export"
+  es: "UDP Export"
+core_expert.sp_unlimited_orders:
+  ru: "Ордеров без огранич."
+  en: "Unlimited orders"
+  es: "Órdenes sin límite"
+core_expert.sp_turn_off_protection:
+  ru: "Turn Off Protection"
+  en: "Turn Off Protection"
+  es: "Turn Off Protection"
+core_expert.sp_accept_beta:
+  ru: "Accept beta versions"
+  en: "Accept beta versions"
+  es: "Accept beta versions"
+core_expert.sp_worker_bot:
+  ru: "Настройки рабочего бота"
+  en: "Worker-bot settings"
+  es: "Ajustes del bot de trabajo"
+core_expert.sp_watch_orders:
+  ru: "Следить за ордерами этого бота"
+  en: "Watch this bot's orders"
+  es: "Vigilar las órdenes de este bot"
+core_expert.sp_follower_bot:
+  ru: "Настройки следящего бота"
+  en: "Follower-bot settings"
+  es: "Ajustes del bot vigilante"
+core_expert.sp_report_to_telegram:
+  ru: "Report to Telegram"
+  en: "Report to Telegram"
+  es: "Report to Telegram"
+core_expert.sp_autosell:
+  ru: "AutoSell"
+  en: "AutoSell"
+  es: "AutoSell"
+core_expert.sp_skip_balances:
+  ru: "Не контролировать балансы:"
+  en: "Do not control these balances:"
+  es: "No controlar estos balances:"
+core_expert.sp_open_udp_port:
+  ru: "Откройте UDP порт 2704 на VDS со следящим ботом."
+  en: "Open UDP port 2704 on the VDS running the follower bot."
+  es: "Abra el puerto UDP 2704 en el VDS con el bot vigilante."
+core_expert.sp_followers_empty:
+  ru: "Список следящих ботов терминалом не читается."
+  en: "The terminal does not read the follower list."
+  es: "El terminal no lee la lista de bots vigilantes."
+core_expert.sp_udp_server:
+  ru: "UDP сервер: %{v}"
+  en: "UDP server: %{v}"
+  es: "Servidor UDP: %{v}"
+core_expert.as_restart_after_min:
+  ru: "Рестарт через %{v} минут"
+  en: "Restart after %{v} minutes"
+  es: "Reiniciar tras %{v} minutos"

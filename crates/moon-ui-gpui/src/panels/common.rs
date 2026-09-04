@@ -278,11 +278,15 @@ pub(crate) fn toggle_variant(on: bool) -> MoonButtonVariant {
 
 /// Builds the shared captioned group box used inside **settings popups**.
 ///
-/// Scope is settings popups only. `panels/order_edit` builds its own `MoonGroupBox` with a heavier
-/// padding and an opaque fill, which is right for a dialog body sitting on a panel and wrong here.
+/// Scope is the settings surfaces — the gear popup and the expert settings window
+/// (`crate::core_expert`), which draw the same Moonbot groups and must not frame them differently.
+/// `panels/order_edit` builds its own `MoonGroupBox` with a heavier padding and an opaque fill,
+/// which is right for a dialog body sitting on a panel and wrong here.
 ///
-/// `NoFill` keeps the frame transparent: every caller already sits on a popup surface that paints
-/// the background, and a second opaque fill on top of it only muddies that surface.
+/// `NoFill` keeps the frame transparent: every caller already sits on a surface that paints its own
+/// background — a popover's, or the expert window's shell — and a second opaque fill on top of one
+/// only muddies it. It is also what Moonbot's own pages look like: a titled border, nothing behind
+/// it.
 ///
 /// Args:
 ///     id: Stable element identity, unique within the hosting popup.

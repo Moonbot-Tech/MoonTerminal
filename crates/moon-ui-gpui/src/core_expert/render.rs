@@ -1,9 +1,9 @@
 //! Rendering of the expert core-settings window: title bar, the expert-mode switch, Moonbot's tab
 //! strip, the page body and the OK/Cancel footer.
 //!
-//! The pages themselves are not drawn yet — this is the frame they will hang in, and it already
-//! carries the two contracts they must respect: nothing editable is drawn unless the window is in
-//! [`PageState::Ready`], and OK is the only path to the wire.
+//! The frame the pages hang in, and the two contracts it holds them to: nothing editable is drawn
+//! unless the window is in [`PageState::Ready`], and OK is the only path to the wire. The pages
+//! themselves live in [`super::pages`].
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -15,13 +15,24 @@ use rust_i18n::t;
 
 use crate::design::{self, moon, moon_alpha};
 
-use super::{CoreExpertView, ExpertTab, PageState, TabSource};
+use super::{CoreExpertView, ExpertTab, PageState, TabSource, pages};
 
 /// Title-bar height, matching the Screener window this one is built after.
 const HEADER_H: f32 = 32.0;
 
 impl Render for CoreExpertView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A control that held focus was dropped since the last frame; take the keyboard off it before
+        // drawing, exactly as `Shell::render` does when the gear's popover goes away.
+        if std::mem::take(&mut self.needs_blur) {
+            window.blur();
+        }
+        // And put it back on the window itself, as every other window root here does: a window
+        // holding no focus at all answers no hotkey.
+        crate::hotkeys::restore_root_focus(&self.focus, window, cx);
+        // Before anything reads them: a row draws the control its page declared, and the pages are
+        // built below in this same frame.
+        self.build_editors(window, cx);
         let p = MoonPalette::active(cx);
         let chrome_width = crate::window::windowing::responsive_width(window);
         v_flex()
@@ -29,7 +40,11 @@ impl Render for CoreExpertView {
             .relative()
             .bg(moon(p.shell))
             .text_color(moon(p.text))
-            .font_family(design::mono())
+            // The UI face, not the monospaced one. Moonbot's dialog is drawn in a proportional
+            // font, and every `MoonText` on these pages already renders in it — leaving the root on
+            // `mono` made the two disagree line by line, which is exactly what a mirrored dialog
+            // must not do.
+            .font_family(design::ui_font())
             .text_size(design::t_body(cx))
             .line_height(design::line_px(cx, 14.0))
             .track_focus(&self.focus)
@@ -121,7 +136,7 @@ impl CoreExpertView {
             }))
     }
 
-    /// Moonbot's ten-tab strip, in Moonbot's order.
+    /// Moonbot's tab strip, in Moonbot's order.
     fn tab_strip(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let selected = self.tab;
@@ -150,14 +165,46 @@ impl CoreExpertView {
 
     /// Body of the selected page.
     ///
-    /// While the window is not [`PageState::Ready`] the body says which hazard it is in, because
-    /// this window answers those by explaining rather than by closing. Once a page IS staged, the
-    /// note describes what that page will hold — the ported controls go here.
+    /// Three things can be here, in this order of precedence. While the window is not
+    /// [`PageState::Ready`] it says which hazard it is in — this window answers those by explaining
+    /// rather than by closing. With a page staged, a PORTED tab draws its rows. A tab that is not
+    /// ported yet says so, and says separately when the reason is that nothing can ever arrive for
+    /// it.
     fn body(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
-        // One note, not two: a window that cannot reach its core has nothing to say about which
-        // page is ported. The state answers first and the page's own limit only once there IS a
-        // page.
-        let note = match self.state {
+        let view = cx.entity();
+        // Read here, from the window's own `&self`: a page is built inside this render, where
+        // reading the view back would panic.
+        let profit = self
+            .seeded
+            .and_then(|core| self.backend.read(cx).session.store().core(core))
+            .and_then(|d| d.profit_state.as_ref())
+            .map_or((None, None), |s| {
+                (
+                    Some((s.total_profit, s.total_trades)),
+                    Some((s.hourly_profit, s.hourly_trades)),
+                )
+            });
+        let ctx = pages::PageCtx {
+            backend: &self.backend,
+            group: &self.group,
+            seeded: self.seeded,
+            profit,
+            hotkeys_sub: self.hotkeys_sub,
+            special_section: self.special_section,
+        };
+        let page = self
+            .draft
+            .as_ref()
+            .filter(|_| self.state.can_send())
+            .and_then(|draft| pages::page(self.tab, &view, &self.editors, draft, &ctx, p, cx));
+        // A page whose rows are all dead still says WHY above itself: the note explains the page a
+        // trader is looking at, rather than standing in for one that is missing. Both dead kinds
+        // qualify — nothing will ever arrive for an Absent page, and a Wire page waits on the
+        // projection and the field mask.
+        let source_note_over_page = page.is_some() && self.tab.source() != TabSource::Projected;
+        // Only when there is no page to draw: a note about a page the trader is already looking at
+        // would be describing what is on screen beside it.
+        let note = (page.is_none() || source_note_over_page).then(|| match self.state {
             PageState::NoCore => t!("core_expert.no_core"),
             PageState::Overview => t!("core_expert.overview"),
             PageState::CoreMoved => t!("core_expert.core_moved"),
@@ -169,7 +216,7 @@ impl CoreExpertView {
                 TabSource::Wire => t!("core_expert.page_unprojected"),
                 TabSource::Absent => t!("core_expert.page_absent"),
             },
-        };
+        });
         // A warning, through the shared component: a page whose values cannot arrive at all is not
         // the same news as one merely awaiting its port.
         let warn = self.state.can_send() && self.tab.source() != TabSource::Projected;
@@ -188,20 +235,46 @@ impl CoreExpertView {
                     t!("core_expert.write_refused").to_string(),
                 )
             }))
-            .when(warn, |this| {
-                this.child(MoonAlert::warning(
-                    "core-expert-page-note",
-                    note.to_string(),
-                ))
-            })
-            .when(!warn, |this| {
-                this.child(
-                    div()
-                        .w_full()
-                        .text_color(rgb(p.text_muted))
-                        .child(note.to_string()),
-                )
-            })
+            .children(note.map(|note| {
+                if warn {
+                    MoonAlert::warning("core-expert-page-note", note.to_string()).into_any_element()
+                } else {
+                    crate::core_expert::widgets::text_block(
+                        note.to_string(),
+                        p.text_muted,
+                        false,
+                        cx,
+                    )
+                    .into_any_element()
+                }
+            }))
+            // Moonbot's Hotkeys page carries a strip of its own, above its body.
+            .children((self.tab == ExpertTab::Hotkeys && page.is_some()).then(|| {
+                let view = cx.entity();
+                let selected = self.hotkeys_sub;
+                let items: Vec<MoonTabItem> = pages::HotkeysSub::ALL
+                    .iter()
+                    .map(|sub| MoonTabItem::new(sub.title()).selected(*sub == selected))
+                    .collect();
+                div()
+                    .w_full()
+                    .flex_none()
+                    .h(design::fit_h_px(cx, 26.0, 13.0, 7.5))
+                    .child(
+                        MoonTabStrip::new("core-expert-hotkeys-tabs")
+                            .gap(4.0)
+                            .overflow_menu(true)
+                            .items(items)
+                            .on_click(move |ix, _event, _window, app| {
+                                let Some(next) = pages::HotkeysSub::at(ix) else {
+                                    return;
+                                };
+                                view.update(app, |this, cx| this.set_hotkeys_sub(next, cx));
+                            })
+                            .render(),
+                    )
+            }))
+            .children(page)
     }
 
     /// OK and Cancel, with Moonbot's meaning: OK sends the whole page, Cancel discards it.

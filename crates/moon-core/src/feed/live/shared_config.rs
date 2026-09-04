@@ -93,6 +93,24 @@ impl FieldMask {
         ignore_strat_sell_price: false,
     };
 
+    /// Name the `general` section: the exits, the risk limits and the blacklist.
+    pub const fn with_general(mut self) -> Self {
+        self.general = true;
+        self
+    }
+
+    /// Name the `auto_start` section: what the core turns on, its loss caps and its watchdogs.
+    pub const fn with_auto_start(mut self) -> Self {
+        self.auto_start = true;
+        self
+    }
+
+    /// Name the `btc_blink` section: the BTC-rate highlight and its alarm.
+    pub const fn with_btc_blink(mut self) -> Self {
+        self.btc_blink = true;
+        self
+    }
+
     /// Name the core's "ignore a manual strategy's own sell price" flag.
     pub fn with_ignore_strat_sell_price(mut self) -> Self {
         self.ignore_strat_sell_price = true;
