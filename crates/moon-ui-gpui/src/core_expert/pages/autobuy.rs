@@ -9,26 +9,25 @@
 //! alert sounds of that same wire section are NOT here — they belong to the Interface page, which
 //! is where Moonbot draws them, and one wire field belongs to one area.
 //!
-//! Four kinds of row stay disabled, and none of them is an oversight.
+//! Two rows stay disabled, and neither is an oversight: the TradingView webhook with its URL and
+//! "показать" link, and "не покупать пересланное", whose only plausible neighbour
+//! (`trading.dont_buy_forward`) is documented as skipping forward CONTRACTS rather than forwarded
+//! messages.
 //!
-//! No wire field backs them at all: the TradingView webhook with its URL and "показать" link, and
-//! "не покупать пересланное", whose only plausible neighbour (`trading.dont_buy_forward`) is
-//! documented as skipping forward CONTRACTS rather than forwarded messages.
+//! Two things about this page were settled against Moonbot's own dialog rather than against the
+//! protocol, because the protocol alone points the wrong way on both.
 //!
-//! The "search mode" is three buttons over two flags that are not a mode. `look_full_link_*` is an
-//! ADDITIVE parse option ("parse full hyperlinks for token names") and `advanced_filter*` a
-//! separate feature ("advanced per-strategy signal filtering"); `SignalsSection::default()` sets
-//! both. So "по полной ссылке" and "спец. фильтр" each show their own flag — on a default core both
-//! read as set, which is the truth of the snapshot — and "по токену" is drawn unchecked and dead,
-//! because no wire field says what it means. None of the three accepts a click: an exclusive write
-//! would clear a flag the trader never touched.
+//! The search mode: `SignalsSection::default()` sets `look_full_link_*` and `advanced_filter*`
+//! together, which no one-of-three control can express — but that dialog draws them as radio
+//! buttons with exactly one selected, so the factory default is a value its own OK normalises. This
+//! page mirrors that, and stages nothing on a click that changes no mode; see [`SearchMode`].
 //!
-//! And the two group titles. `signals.monitor_clipboard` ("enable clipboard monitoring") and
-//! `signals.do_monitoring` ("master toggle: enable the signal monitoring pipeline") are the two
-//! switches nothing here claims — the captions this page draws as frame titles. They are NOT the
-//! "захватывать буфер" checkbox, which is why that row is dead too. If Moonbot puts a checkbox in
-//! those frame captions, these two flags belong there, and `clipboard_auto_buy` below one of them
-//! cannot do anything until it is set.
+//! "Захватывать буфер": `signals.monitor_clipboard` is documented as enabling clipboard monitoring
+//! at all, which reads like a title for the group rather than a row inside it — but that dialog
+//! puts no checkbox in either frame caption, and this is the only clipboard control left once
+//! auto-buy, lowercase and the mode pair have their fields. `signals.do_monitoring`, the master
+//! toggle for the whole signal pipeline, has no control on THIS page for the same reason; it most
+//! likely belongs to the Telegram tab.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -41,7 +40,8 @@ use crate::shell::editors::EditorStore;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    caption, columns, field, flag, group, hint, link, radio, rows, slider, stepper_live, text_line,
+    caption, columns, field, flag, group, hint, link, radio_live, rows, slider, stepper_live,
+    text_line,
 };
 
 /// Bounds of the live sliders, all four of which carry a WHOLE number on the wire.
@@ -60,6 +60,45 @@ const WORDS_FLOOR: i32 = 0;
 /// Value shown where Moonbot prints something this terminal has not read — on this page, the
 /// TradingView webhook URL.
 const NO_VALUE: &str = "—";
+
+/// Moonbot's search mode: one of three, stored as TWO wire flags per source.
+///
+/// The wire looks like it disagrees — `SignalsSection::default()` sets `look_full_link_*` and
+/// `advanced_filter*` together, a pair no three-way choice can express — but Moonbot's own dialog
+/// draws these as radio buttons and shows exactly one of them selected, so that default is an
+/// unnormalised factory value its dialog collapses, not a state its user can reach. This page
+/// mirrors that: it reads the pair with the same precedence, and its OK writes the whole choice.
+///
+/// Which is why a click on the option already selected must stage NOTHING — see
+/// [`super::super::widgets::radio_live`]. Otherwise opening this window on a factory-default core
+/// and clicking the mode it already shows would clear the other flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchMode {
+    Token,
+    Link,
+    Special,
+}
+
+impl SearchMode {
+    /// Read the mode out of the pair of flags, `special` first: that is the order Moonbot's own
+    /// dialog resolves them in when a config carries both.
+    fn of(full_link: bool, special: bool) -> Self {
+        match (special, full_link) {
+            (true, _) => Self::Special,
+            (false, true) => Self::Link,
+            (false, false) => Self::Token,
+        }
+    }
+
+    /// The pair this mode writes: `(full_link, special)`.
+    fn flags(self) -> (bool, bool) {
+        match self {
+            Self::Token => (false, false),
+            Self::Link => (true, false),
+            Self::Special => (false, true),
+        }
+    }
+}
 
 /// See [`super::field_specs`].
 #[allow(clippy::type_complexity)]
@@ -144,6 +183,8 @@ pub(super) fn body(
 ) -> AnyElement {
     let gap = design::ui_px(cx, 6.0);
     let b = &draft.auto_buy;
+    let cbd_mode = SearchMode::of(b.look_full_link_cbd, b.advanced_filter_clipboard);
+    let tlg_mode = SearchMode::of(b.look_full_link_tlg, b.advanced_filter);
 
     // --- The two sources, each with Moonbot's identical search mode ------------------------------
     let clipboard = group(
@@ -161,11 +202,16 @@ pub(super) fn body(
                 view,
                 |d, on| d.auto_buy.clipboard_auto_buy = on,
             ))
-            .child(radio(
+            .child(radio_live(
                 "exp-buy-cbd-token",
                 t!("core_expert.buy_by_token").to_string(),
-                false,
-                false,
+                cbd_mode == SearchMode::Token,
+                view,
+                |d| {
+                    let (link, special) = SearchMode::Token.flags();
+                    d.auto_buy.look_full_link_cbd = link;
+                    d.auto_buy.advanced_filter_clipboard = special;
+                },
             ))
             .child(div().pl(design::ui_px(cx, 18.0)).child(flag(
                 "exp-buy-cbd-lower",
@@ -175,25 +221,35 @@ pub(super) fn body(
                 view,
                 |d, on| d.auto_buy.lower_case_token_cbd = on,
             )))
-            .child(radio(
+            .child(radio_live(
                 "exp-buy-cbd-link",
                 t!("core_expert.buy_by_link").to_string(),
-                b.look_full_link_cbd,
-                false,
+                cbd_mode == SearchMode::Link,
+                view,
+                |d| {
+                    let (link, special) = SearchMode::Link.flags();
+                    d.auto_buy.look_full_link_cbd = link;
+                    d.auto_buy.advanced_filter_clipboard = special;
+                },
             ))
-            .child(radio(
+            .child(radio_live(
                 "exp-buy-cbd-special",
                 t!("core_expert.buy_special_filter").to_string(),
-                b.advanced_filter_clipboard,
-                false,
+                cbd_mode == SearchMode::Special,
+                view,
+                |d| {
+                    let (link, special) = SearchMode::Special.flags();
+                    d.auto_buy.look_full_link_cbd = link;
+                    d.auto_buy.advanced_filter_clipboard = special;
+                },
             ))
             .child(flag(
                 "exp-buy-cbd-capture",
                 t!("core_expert.buy_capture_clipboard").to_string(),
-                false,
-                false,
+                b.monitor_clipboard,
+                true,
                 view,
-                |_, _| {},
+                |d, on| d.auto_buy.monitor_clipboard = on,
             )),
     );
 
@@ -212,11 +268,16 @@ pub(super) fn body(
                 view,
                 |d, on| d.auto_buy.telegram_auto_buy = on,
             ))
-            .child(radio(
+            .child(radio_live(
                 "exp-buy-tlg-token",
                 t!("core_expert.buy_by_token").to_string(),
-                false,
-                false,
+                tlg_mode == SearchMode::Token,
+                view,
+                |d| {
+                    let (link, special) = SearchMode::Token.flags();
+                    d.auto_buy.look_full_link_tlg = link;
+                    d.auto_buy.advanced_filter = special;
+                },
             ))
             .child(div().pl(design::ui_px(cx, 18.0)).child(flag(
                 "exp-buy-tlg-lower",
@@ -226,17 +287,27 @@ pub(super) fn body(
                 view,
                 |d, on| d.auto_buy.lower_case_token_tlg = on,
             )))
-            .child(radio(
+            .child(radio_live(
                 "exp-buy-tlg-link",
                 t!("core_expert.buy_by_link").to_string(),
-                b.look_full_link_tlg,
-                false,
+                tlg_mode == SearchMode::Link,
+                view,
+                |d| {
+                    let (link, special) = SearchMode::Link.flags();
+                    d.auto_buy.look_full_link_tlg = link;
+                    d.auto_buy.advanced_filter = special;
+                },
             ))
-            .child(radio(
+            .child(radio_live(
                 "exp-buy-tlg-special",
                 t!("core_expert.buy_special_filter").to_string(),
-                b.advanced_filter,
-                false,
+                tlg_mode == SearchMode::Special,
+                view,
+                |d| {
+                    let (link, special) = SearchMode::Special.flags();
+                    d.auto_buy.look_full_link_tlg = link;
+                    d.auto_buy.advanced_filter = special;
+                },
             ))
             .child(
                 h_flex()

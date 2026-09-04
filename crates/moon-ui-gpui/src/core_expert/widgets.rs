@@ -247,22 +247,36 @@ pub(super) fn dropdown(id: &'static str, current: String, enabled: bool) -> impl
         .disabled(!enabled)
 }
 
-/// One option of a Moonbot radio group.
+/// One option of a Moonbot radio group that stages into the page.
 ///
-/// The group's exclusivity belongs to the value behind it, so a page passes `selected` per option.
-/// Read-only everywhere it is used today: what looks like a group in the one page that draws these
-/// is a set of independent wire flags — see the module doc of [`super::pages::autobuy`].
-pub(super) fn radio(
+/// The write takes the whole GROUP, not this option's own flag: Moonbot's control is exclusive
+/// while the wire stores the choice as several independent bools, so picking one has to set the
+/// others in the same packet — the shape `apply_leverage` uses for isolated-versus-cross.
+///
+/// A click on the option ALREADY selected stages nothing. `MoonRadio` fires on every click, and
+/// without this the packet would rewrite flags the trader never touched: the wire's factory default
+/// holds a combination the exclusive control cannot express, and re-picking the option on screen
+/// would silently normalise it.
+pub(super) fn radio_live(
     id: &'static str,
     label: String,
     selected: bool,
-    enabled: bool,
+    view: &Entity<CoreExpertView>,
+    set: fn(&mut CoreConfig),
 ) -> impl IntoElement {
+    let view = view.clone();
     MoonRadio::new(id)
         .label(label)
         .checked(selected)
-        .disabled(!enabled)
         .size(MoonRadioSize::Compact)
+        .on_change(move |_, _w, app| {
+            if selected {
+                return;
+            }
+            view.update(app, |this, cx| {
+                this.edit_draft(set, cx);
+            });
+        })
 }
 
 /// Moonbot's `< n >` spinner, for the counts it does not give a slider, staging into the page.

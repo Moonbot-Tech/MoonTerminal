@@ -371,6 +371,7 @@ fn an_unnamed_interface_is_not_written() {
 fn auto_buy_base() -> SharedConfig {
     let mut cfg = SharedConfig::default();
     let sig = &mut cfg.signals;
+    sig.monitor_clipboard = !sig.monitor_clipboard;
     sig.clipboard_auto_buy = !sig.clipboard_auto_buy;
     sig.lower_case_token_cbd = !sig.lower_case_token_cbd;
     sig.look_full_link_cbd = !sig.look_full_link_cbd;

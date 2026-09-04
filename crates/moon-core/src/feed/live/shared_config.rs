@@ -581,6 +581,7 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let sc = &cfg.signals.signal_config;
     CoreConfig {
         auto_buy: AutoBuySettings {
+            monitor_clipboard: sig.monitor_clipboard,
             clipboard_auto_buy: sig.clipboard_auto_buy,
             lower_case_token_cbd: sig.lower_case_token_cbd,
             look_full_link_cbd: sig.look_full_link_cbd,
@@ -846,10 +847,11 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
 /// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and one `trading`
 /// field.
 ///
-/// Thirty-one fields: everything else in each section — including their `unknown_tail`s and the two
+/// Thirty-two fields: everything else in each section — including their `unknown_tail`s and the two
 /// price-approach alerts [`apply_signals`] owns — travels back untouched.
 fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
     let sig = &mut cfg.signals;
+    sig.monitor_clipboard = b.monitor_clipboard;
     sig.clipboard_auto_buy = b.clipboard_auto_buy;
     sig.lower_case_token_cbd = b.lower_case_token_cbd;
     sig.look_full_link_cbd = b.look_full_link_cbd;

@@ -259,21 +259,25 @@ pub struct GeneralSettings {
 /// sounds, which the compact popup draws and this page does not. One wire field belongs to one
 /// area, or a write from either surface would put the other's frozen copy back.
 ///
-/// What Moonbot draws as a three-button "search mode" is NOT a mode on the wire. `look_full_link_*`
-/// is an additive parse option ("parse full hyperlinks for token names") and `advanced_filter*` is
-/// a separate feature ("advanced per-strategy signal filtering"), and the wire's own default sets
-/// both at once. So the page shows each flag as itself and edits none of them; they travel back
-/// exactly as read, which is what every value a dialog DISPLAYS does when its OK is pressed.
+/// The three-button "search mode" is two wire flags per source, and the UI writes both together —
+/// the shape [`LeverageSettings`] uses for isolated-versus-cross, and for the same reason: Moonbot's
+/// own control is exclusive, so a packet carrying half the choice would leave the core in a state
+/// that dialog cannot show. The wire's factory default sets both flags at once, which is a value
+/// that dialog normalises rather than one its user can reach; the page therefore stages nothing on
+/// a click that changes no mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutoBuySettings {
+    /// `signals.monitor_clipboard`: watch the clipboard for token names at all.
+    ///
+    /// Moonbot's "захватывать буфер", by elimination: its own dialog puts no switch in the group's
+    /// caption, and this is the only clipboard control left once the others have their fields.
+    pub monitor_clipboard: bool,
     /// `signals.clipboard_auto_buy`: buy when the clipboard yields a token.
     pub clipboard_auto_buy: bool,
     /// `signals.lower_case_token_cbd` / `signals.look_full_link_cbd` /
     /// `signals.advanced_filter_clipboard`: the clipboard source's search mode.
     ///
-    /// The last two are READ-ONLY on the page: the wire's own default sets both, so no exclusive
-    /// control can stand over them. They are carried so the page can show them, and written back
-    /// exactly as read.
+    /// The last two are the mode pair described above: written together, never singly.
     pub lower_case_token_cbd: bool,
     pub look_full_link_cbd: bool,
     pub advanced_filter_clipboard: bool,
