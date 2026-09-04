@@ -196,12 +196,6 @@ impl Render for ChartPanel {
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
         // runs on every backend notification: it appears on the keypress rather than on the next
         // repaint, and it costs no userdata rebuild — so nothing about it belongs here.
-        let volume_fraction =
-            if chart_graphics.candle_volume_style == moon_core::market::candles::VOLUME_STYLE_OFF {
-                0.0
-            } else {
-                moon_chart::volume_bars::clamp_band_fraction(chart_graphics.candle_volume_height)
-            };
         // Scale is PER TAB: use self.scale, updated through set_scale by the active-tab toolbar or
         // detached-window header, rather than the global backend.price_scale.
         let mut settings_changed = self.chart.set_theme(theme)
@@ -338,8 +332,8 @@ impl Render for ChartPanel {
         } else {
             Vec::new()
         };
-        // Render Cancel Buy / Panic Sell as a GPUI overlay above the candle-volume band and the
-        // time-axis row. OverScene axis text renders above GPUI, so avoid its area. Each tab's
+        // Render Cancel Buy / Panic Sell as a GPUI overlay at the bottom of the graph body, ABOVE
+        // the time-axis row. OverScene axis text renders above GPUI, so avoid its area. Each tab's
         // setting chooses Hide/Left/Center/Right. Keep buttons strictly inside the chart zone:
         // exclude the price-axis gutter on its configured side and the book/control zone on the
         // right even when the book is disabled. Shrink buttons when needed; overflow_hidden clips
@@ -407,11 +401,7 @@ impl Render for ChartPanel {
                 } else {
                     0.0
                 };
-                let pane_h = rect.h / ppp;
-                let plot_h = (pane_h - time_axis_reserve).max(0.0);
-                let volume_reserve = plot_h * volume_fraction;
-                let top =
-                    (rect.y + rect.h) / ppp - time_axis_reserve - volume_reserve - act_btn_h - 10.0;
+                let top = (rect.y + rect.h) / ppp - time_axis_reserve - act_btn_h - 10.0;
                 let armed = self.backend.read(cx).is_panic_armed(core, &market);
                 // Visible buttons as (kind, anchor), in stable order.
                 let mut vis: Vec<(ActKind, ChartBtnPos)> = Vec::new();
@@ -483,8 +473,8 @@ impl Render for ChartPanel {
         // The SINGLE-pane action overlay uses pure GPUI layout (insets + flex), without own-pass
         // geometry, keeping positions synchronized with the slot and preventing fullscreen jumps.
         // The chart zone is the slot minus the configured-side price-axis gutter, right
-        // book/control zone, bottom time axis, and candle-volume band. Its regions correspond to
-        // Left/Center/Right anchors.
+        // book/control zone, and bottom time axis. Its regions correspond to Left/Center/Right
+        // anchors.
         let action_overlay = if market_actions && single_pane {
             self.chart.pane_target(0).and_then(|(core, market)| {
                 let backend = self.backend.read(cx);
@@ -558,31 +548,24 @@ impl Render for ChartPanel {
                         .pl(px(left_pad))
                         .pr(px(right_pad))
                         .pb(px(if self.time_axis_visible {
-                            moon_chart::TIME_AXIS_H
+                            moon_chart::TIME_AXIS_H + 10.0
                         } else {
-                            0.0
+                            10.0
                         }))
+                        .flex()
+                        .flex_col()
+                        .justify_end()
                         .child(
                             div()
                                 .w_full()
-                                .h_full()
+                                .h(px(act_btn_h))
                                 .flex()
-                                .flex_col()
-                                .justify_end()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(act_btn_h))
-                                        .flex()
-                                        .items_center()
-                                        .child(region(left))
-                                        .child(div().flex_1())
-                                        .child(region(center))
-                                        .child(div().flex_1())
-                                        .child(region(right)),
-                                )
-                                .child(div().h(px(10.0)).flex_none())
-                                .child(div().h(relative(volume_fraction)).flex_none()),
+                                .items_center()
+                                .child(region(left))
+                                .child(div().flex_1())
+                                .child(region(center))
+                                .child(div().flex_1())
+                                .child(region(right)),
                         )
                         .into_any_element(),
                 )
