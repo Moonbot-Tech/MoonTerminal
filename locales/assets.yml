@@ -208,17 +208,17 @@ assets.order:
 
 # --- Wallets for transferring coins between containers ---
 assets.wallet.kind.spot:
-  ru: "Spot"
+  ru: "Спот"
   en: "Spot"
   es: "Spot"
 assets.wallet.kind.futures:
-  ru: "Futures"
+  ru: "Фьючерсы"
   en: "Futures"
-  es: "Futures"
+  es: "Futuros"
 assets.wallet.kind.quarterly:
-  ru: "Quarterly"
+  ru: "Квартальные"
   en: "Quarterly"
-  es: "Quarterly"
+  es: "Trimestrales"
 assets.wallet.filtered_empty:
   ru: "Все %{n} активов скрыты фильтром по стоимости %{thr}$"
   en: "All %{n} assets are hidden by the %{thr}$ value filter"
