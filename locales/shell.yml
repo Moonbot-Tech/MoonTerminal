@@ -557,6 +557,14 @@ core_settings.tab_autostart:
   ru: "Автостарт"
   en: "AutoStart"
   es: "Inicio automático"
+core_settings.expert:
+  ru: "Экспертный режим"
+  en: "Expert mode"
+  es: "Modo experto"
+core_settings.expert_hint:
+  ru: "шестерёнка откроет полное окно настроек Moonbot"
+  en: "the gear opens the full Moonbot settings window"
+  es: "el engranaje abre la ventana completa de ajustes de Moonbot"
 core_settings.ok:
   ru: "OK"
   en: "OK"

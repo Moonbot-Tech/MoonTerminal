@@ -74,6 +74,22 @@ impl Shell {
         cx.notify();
     }
 
+    /// Whether the header still draws the gear as a `MoonPopover` at all.
+    ///
+    /// Two conditions take the popover away, and everything that has to react to one has to react
+    /// to the other: expert mode replaces it with a plain button that opens
+    /// [`crate::core_expert`]'s window, and Auto Overview drops the whole per-core cluster. An open
+    /// popup then has nothing rendering it and no `on_open_change` to dismiss it, `Shell::render`
+    /// keeps rebuilding two dozen editors for it every repaint, and focus is left on a handle
+    /// nothing draws.
+    ///
+    /// Named once here so a third face of the gear — or a third reason to hide it — is one edit
+    /// rather than four.
+    pub(crate) fn gear_popup_unavailable(&self, cx: &App) -> bool {
+        let b = self.backend.read(cx);
+        b.core_settings_expert() || b.is_auto_overview_scope(&self.group)
+    }
+
     /// Drop the gear popup once it no longer belongs to the core it was seeded from — or once the
     /// group has no single core for it to belong to at all.
     ///
@@ -87,21 +103,21 @@ impl Shell {
         if !self.core_settings_open {
             return;
         }
-        let b = self.backend.read(cx);
-        // Auto Overview hides the gear itself (`chrome::terminal_chrome::header`), so an open
-        // popup would be stranded: nothing draws it, nothing can dismiss it, and it would spring
-        // back the moment a core is selected again. The check has to be its own, ahead of the
-        // active-core resolution below — `active_trade_core` falls through to the group's first
-        // core in Overview and would happily keep the popup alive over an arbitrary server.
-        if b.is_auto_overview_scope(&self.group) {
+        // Ahead of the active-core resolution below, and deliberately: `active_trade_core` falls
+        // through to the group's FIRST core in Overview and would happily keep the popup alive over
+        // an arbitrary server. Expert mode is the other half of the same predicate — and the half
+        // that reaches the OTHER group's window, which its own gear never can, because the
+        // preference is application-wide.
+        if self.gear_popup_unavailable(cx) {
             if self.core_settings_draft.is_some() {
                 log::info!(
-                    "core settings popup closed with unsaved edits: the group left a single-core scope"
+                    "core settings popup closed with unsaved edits: the gear stopped drawing a popover"
                 );
             }
             self.close_core_settings_popup();
             return;
         }
+        let b = self.backend.read(cx);
         let active = b.active_trade_core(&self.group);
         let Some(core) = resolve_core_settings_write(self.core_settings_target, active) else {
             if self.core_settings_draft.is_some() {
@@ -138,6 +154,25 @@ impl Shell {
         // in `core_settings_input` had a value to correct it with.
         self.core_settings_inputs.clear();
         self.core_settings_sliders.clear();
+    }
+
+    /// Close the compact popup because the gear now opens the expert window instead.
+    ///
+    /// The staged draft is DISCARDED, exactly as dismissing the popover discards it: ticking
+    /// "expert mode" is not a confirmation of the values on screen, and the expert window seeds its
+    /// own page from the core.
+    ///
+    /// The blur is not optional, for the reason `Shell::render` states about entering Overview: the
+    /// gear stops being a `MoonPopover` in the SAME frame this flag clears, so the popover never
+    /// renders again and never runs its own open-to-closed focus hand-back. Focus would sit on a
+    /// handle nothing draws and every hotkey in the window would be dead until the next click.
+    pub(crate) fn leave_popup_for_expert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self.core_settings_open;
+        self.close_core_settings_popup();
+        if had_focus {
+            window.blur();
+        }
+        cx.notify();
     }
 
     /// Switch the visible tab, taking the blacklist text with it.

@@ -42,7 +42,8 @@ pub(super) fn field_specs(
             l.fix_lev.to_string(),
             // Deliberately NOT clamped here: the editor only re-reads the draft on a re-seed, so
             // clamping mid-typing would leave 150 on screen and 125 in the packet. The single clamp
-            // is on the way out, in `Shell::commit_core_draft`.
+            // is on the way out, in `core_settings::draft::send_core_config`, which bounds every
+            // value but an untouched 0 — the wire's "no fixed multiplier chosen".
             (|d, t| {
                 if let Some(v) = parse_num(t) {
                     d.leverage.fix_lev = v.round() as i32;

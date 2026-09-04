@@ -20,8 +20,8 @@ mod widgets;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputState, MoonPalette, MoonSliderState,
-    MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInputState,
+    MoonPalette, MoonSliderState, MoonTabItem, MoonTabStrip, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -199,7 +199,10 @@ pub(crate) fn core_settings_content(
                 .gap(design::ui_px(cx, 8.0))
                 .child(popup_title(t!("core_settings.title"), p, cx))
                 .child(widgets::runtime_status(run, p, cx)),
-        );
+        )
+        // Above the "no core" branch below: expert mode is a preference about the GEAR, not about
+        // any one core, and a trader who has not connected yet must still be able to switch faces.
+        .child(expert_switch(ctx, view, cx));
 
     // Show a placeholder when the core or its settings snapshot is unavailable.
     let Some(cs) = cs else {
@@ -267,6 +270,62 @@ pub(crate) fn core_settings_content(
         .child(body)
         .when(draft.is_some(), |r| r.child(footer(view, cx)))
         .into_any_element()
+}
+
+/// The expert-mode switch, directly under this popup's title.
+///
+/// Ticking it is a THREE-part action and all three belong together: the preference is persisted so
+/// the gear keeps opening the expert window, this popup closes (its draft discarded, as dismissing
+/// it always discards), and the expert window opens over the same core straight away — the click
+/// that ticked the box is the same click the user would otherwise have to repeat on the gear.
+///
+/// Args:
+///     ctx: Popup-wide addressing and palette.
+///     view: Shell entity used to close this popup.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The switch row.
+fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoElement {
+    let TabCtx {
+        backend, group, p, ..
+    } = *ctx;
+    // Read rather than assumed: this popup is only drawn while the preference is off, but a
+    // hardcoded tick is how the two faces would come to disagree if that ever stopped holding.
+    let checked = backend.read(cx).core_settings_expert();
+    let backend = backend.clone();
+    let group = group.to_string();
+    let view = view.clone();
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .child(
+            MoonCheckbox::new("core-settings-expert")
+                .label(t!("core_settings.expert").to_string())
+                .checked(checked)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |value, window, app| {
+                    if !*value {
+                        return;
+                    }
+                    backend.update(app, |b, bcx| b.set_core_settings_expert(true, bcx));
+                    view.update(app, |shell, cx| shell.leave_popup_for_expert(window, cx));
+                    let owner_display = crate::window::windowing::window_display_id(window, app);
+                    crate::core_expert::open(
+                        backend.clone(),
+                        Some(window.window_handle()),
+                        owner_display,
+                        group.clone(),
+                        app,
+                    );
+                }),
+        )
+        .child(widgets::caption(
+            t!("core_settings.expert_hint").to_string(),
+            p,
+            cx,
+        ))
 }
 
 /// Immediate actions above the tab strip: restart, emulator, cancel all orders.

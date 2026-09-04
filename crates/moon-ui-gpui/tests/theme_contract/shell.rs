@@ -1778,13 +1778,43 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
     }
 
     // The OK press is the one write that carries the whole staged draft, so it is the one that must
-    // never fall back to whatever core is active when the button is clicked.
+    // never fall back to whatever core is active when the button is clicked. Two surfaces stage
+    // such a draft now — the compact popup and the expert window — and BOTH reach the wire through
+    // one function, which is where the guard lives: a second copy of the send is how the two would
+    // come to disagree about which core an OK addresses.
     let draft = code_only(&read_src("shell/core_settings/draft.rs"));
+    let send = braced_body(&draft, "pub(crate) fn send_core_config(");
+    assert!(
+        send.contains("resolve_core_settings_write("),
+        "send_core_config must resolve its write address through resolve_core_settings_write, \
+         not a bare b.active_trade_core(group)"
+    );
     let commit = braced_body(&draft, "pub(crate) fn commit_core_draft(");
     assert!(
-        commit.contains("resolve_core_settings_write("),
-        "commit_core_draft must resolve its write address through resolve_core_settings_write, \
-         not a bare b.active_trade_core(&self.group)"
+        commit.contains("send_core_config("),
+        "commit_core_draft must send through send_core_config, which carries the seeded-target \
+         guard, the leverage clamp and the section mask"
+    );
+
+    // The expert window is the second surface, and it must not grow its own send: `edit_core_config`
+    // there would bypass the guard, the clamp and the mask in one step.
+    // The module's root AND its directory: `read_module` covers the files beside `core_expert.rs`
+    // but not that file itself, and the send lives in it.
+    let expert_module = code_only(&format!(
+        "{}\n{}",
+        read_src("core_expert.rs"),
+        read_module("core_expert")
+    ));
+    assert!(
+        !expert_module.contains("edit_core_config("),
+        "the expert core-settings window must reach the core through send_core_config, never call \
+         session.edit_core_config directly"
+    );
+    let expert = code_only(&read_src("core_expert.rs"));
+    let commit_expert = braced_body(&expert, "fn commit(");
+    assert!(
+        commit_expert.contains("send_core_config("),
+        "CoreExpertView::commit must send the staged page through send_core_config"
     );
 }
 

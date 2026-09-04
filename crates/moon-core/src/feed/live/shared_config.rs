@@ -78,9 +78,12 @@ impl FieldMask {
         ignore_strat_sell_price: false,
     };
 
-    /// The five gear-popup sections and nothing else. The manual block is deliberately absent: a
-    /// popup OK may never change a manual-trading field, checkbox on or off — see
-    /// `commit_core_draft` in `moon-ui-gpui`.
+    /// The five sections the terminal's core-settings surfaces render, and nothing else. The manual
+    /// block is deliberately absent: an OK may never change a manual-trading field, checkbox on or
+    /// off — see `send_core_config` in `moon-ui-gpui`, the one applier both the compact gear popup
+    /// and the expert window send through. A surface that grows a page outside these five sections
+    /// needs the mask widened with it; drawing such a page against this mask would show controls
+    /// whose values OK silently cannot carry.
     pub const RENDERED_SECTIONS: Self = Self {
         auto_start: true,
         btc_blink: true,

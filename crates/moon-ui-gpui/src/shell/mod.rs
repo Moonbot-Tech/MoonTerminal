@@ -18,6 +18,10 @@
 
 mod actions;
 mod core_settings;
+// The two items the expert window shares with the gear popup, re-exported so the rest of the crate
+// reaches THEM rather than every `pub(crate)` member of the popup's module tree.
+pub(crate) use core_settings::draft::send_core_config;
+pub(crate) use core_settings::resolve_core_settings_write;
 pub(crate) mod core_settings_popup;
 mod docks;
 mod header;

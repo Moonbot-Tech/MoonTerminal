@@ -1,4 +1,4 @@
-//! Draft state for the core-settings popup.
+//! Staged core-settings page: the popup's draft, and the send both faces of the gear share.
 //!
 //! Both tabs edit ONE draft and commit it under a single OK, the way the Moonbot settings window
 //! they reproduce does. Nothing reaches the core while the user types: a write sends the core's
@@ -16,6 +16,9 @@ use moon_ui::{MoonInputEvent, MoonInputState, MoonSliderEvent, MoonSliderState};
 
 use moon_core::feed::{CoreConfig, FieldMask};
 
+use moon_core::session::CoreId;
+
+use crate::Backend;
 use crate::shell::Shell;
 use crate::shell::core_settings::resolve_core_settings_write;
 
@@ -114,42 +117,22 @@ impl Shell {
         // Blur has NOT fired by the time OK runs: without this the popup would commit the text the
         // field held when it was last blurred and silently discard what the user just typed.
         self.stage_blacklist_text(cx);
-        let Some(mut draft) = self.core_settings_draft.clone() else {
+        let Some(draft) = self.core_settings_draft.clone() else {
             return;
         };
-        // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
-        // non-positive multiplier and no supported venue offers more than 125x, but clamping while
-        // the user types would make the field disagree with what OK sends.
-        draft.leverage.fix_lev = draft.leverage.fix_lev.clamp(1, MAX_FIX_LEVERAGE);
-        let b = self.backend.read(cx);
-        let active = b.active_trade_core(&self.group);
-        let Some(core) = resolve_core_settings_write(self.core_settings_target, active) else {
-            // Silence here would be indistinguishable from a successful save: the popup closes
-            // either way, and the user pressed OK expecting the values on screen to be applied.
-            log::warn!("core settings OK ignored: the active core moved since the popup opened");
-            self.close_core_settings_popup();
+        if !send_core_config(
+            &self.backend,
+            &self.group,
+            self.core_settings_target,
+            draft,
+            cx,
+        ) {
+            // The page reached nothing. Closing anyway is what makes a refused write look like a
+            // save, so the popup stays up: pressing OK again once the core is back is the recovery,
+            // and dismissing it is still the way out. The expert window answers the same case with
+            // a banner, which a popover has no room for.
             cx.notify();
             return;
-        };
-        // The popup renders exactly five sections — AutoStart, BtcBlink, General, Leverage and the
-        // Signals alerts — and may write only those: the manual block belongs to the toolbar, never
-        // to a page this
-        // popup does not draw. Naming the mask here, rather than deriving it from what changed, is
-        // what makes an OK unable to reach the manual block AT ALL, checkbox on or off — not merely
-        // unlikely to in the common case.
-        if let Err(error) =
-            b.session
-                .edit_core_config(core, draft.clone(), FieldMask::RENDERED_SECTIONS)
-        {
-            log::warn!("core config edit failed: {error:#}");
-        }
-        // The blacklist-delta filter has a client-side half that moonproto applies to its own
-        // retained analytics: the core's copy alone would leave this terminal's deltas unchanged
-        // until a restart. Nothing is cached for it here — the checkbox reads the core's own value
-        // out of the draft.
-        let exclude = draft.general.exclude_blacklisted_from_deltas;
-        if let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude) {
-            log::warn!("exclude delta failed: {error:#}");
         }
         self.close_core_settings_popup();
         cx.notify();
@@ -301,4 +284,78 @@ impl Shell {
             }
         }
     }
+}
+
+/// Send one staged page to the core it was seeded from, as Moonbot's OK does.
+///
+/// Shared by the compact gear popup and by [`crate::core_expert`]'s window: both stage a whole
+/// projection of ONE core, and both must refuse to write it into a core that moved underneath
+/// them, so the clamp, the [`resolve_core_settings_write`] guard, the section mask and the
+/// client-side half of the blacklist-delta filter live here once instead of being re-derived per
+/// caller.
+///
+/// Args:
+///     backend: Application state holding the session the page travels through.
+///     group: Group whose active trading core the seed is checked against.
+///     seeded: Core the page was seeded from; the only core it may reach.
+///     draft: Staged page, taken by value because the leverage clamp below rewrites it.
+///     cx: Application context used to read the session.
+///
+/// Returns:
+///     Whether the page actually reached the session for the seeded core. A caller that closes on
+///     OK must close only on `true`: closing on a refused write is indistinguishable from a save.
+pub(crate) fn send_core_config(
+    backend: &Entity<Backend>,
+    group: &str,
+    seeded: Option<CoreId>,
+    mut draft: CoreConfig,
+    cx: &App,
+) -> bool {
+    // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
+    // non-positive multiplier and no supported venue offers more than 125x, but clamping while the
+    // user types would make the field disagree with what OK sends.
+    //
+    // The one value spared is an untouched 0: `fix_lev` defaults to 0 on the wire and 0 is the
+    // "none chosen" value gated by `auto_fix_lev`, so clamping THAT would rewrite the core's 0 to 1
+    // on every OK — including one pressed on a surface drawing no leverage control at all. Anything
+    // a user actually typed is still bounded here, which is the only place it is bounded:
+    // `general::field_specs`' editor is deliberately unclamped so mid-typing digits do not fight
+    // the field.
+    if draft.leverage.auto_fix_lev || draft.leverage.fix_lev != 0 {
+        draft.leverage.fix_lev = draft.leverage.fix_lev.clamp(1, MAX_FIX_LEVERAGE);
+    }
+    let b = backend.read(cx);
+    let active = b.active_trade_core(group);
+    let Some(core) = resolve_core_settings_write(seeded, active) else {
+        // Silence here would be indistinguishable from a successful save: the surface closes either
+        // way, and the user pressed OK expecting the values on screen to be applied.
+        log::warn!("core settings OK ignored: the active core moved since the page was seeded");
+        return false;
+    };
+    // The rendered surfaces cover exactly five sections — AutoStart, BtcBlink, General, Leverage
+    // and the Signals alerts — and may write only those: the manual block belongs to the toolbar,
+    // never to a page they do not draw. Naming the mask here, rather than deriving it from what
+    // changed, is what makes an OK unable to reach the manual block AT ALL, checkbox on or off —
+    // not merely unlikely to in the common case.
+    // Read before the page is handed over, so the send below can consume it without a clone of the
+    // whole projection.
+    let exclude = draft.general.exclude_blacklisted_from_deltas;
+    if let Err(error) = b
+        .session
+        .edit_core_config(core, draft, FieldMask::RENDERED_SECTIONS)
+    {
+        // The page never reached the session. Reporting success here is what would let a caller
+        // close on it.
+        log::warn!("core config edit failed: {error:#}");
+        return false;
+    }
+    // The blacklist-delta filter has a client-side half that moonproto applies to its own retained
+    // analytics: the core's copy alone would leave this terminal's deltas unchanged until a
+    // restart. Issued only after the page went out, so the two halves cannot diverge the other way
+    // — this terminal filtering deltas the core was never told about. Nothing is cached for it here:
+    // the checkbox reads the core's own value out of the draft.
+    if let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude) {
+        log::warn!("exclude delta failed: {error:#}");
+    }
+    true
 }

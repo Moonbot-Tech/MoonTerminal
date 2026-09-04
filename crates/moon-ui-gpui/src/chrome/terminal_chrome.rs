@@ -21,6 +21,18 @@ use moon_core::util::fmt;
 use crate::shell::Shell;
 use crate::{Backend, design};
 
+/// The header gear's trigger, built once for both faces it can open.
+///
+/// The two branches that use it are structurally different — one is a `MoonPopover`'s trigger, the
+/// other a plain button — but the button itself must be the SAME: an icon that changed with the
+/// preference would read as a different control rather than the same one behaving differently.
+fn gear_trigger() -> MoonButton {
+    MoonButton::new("core-gear")
+        .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
+        .size(MoonButtonSize::Action)
+        .variant(MoonButtonVariant::Panel)
+}
+
 /// Compose the terminal header for one group from the current backend and shell state.
 ///
 /// `chrome_width` is the window width and controls priority-based ticker collapse on narrow windows.
@@ -80,7 +92,10 @@ pub fn header(
     // The emulator/real tag shares this same `scoped_core`: fetching `emu_mode` through a
     // helper that calls `active_trade_core` first would read that arbitrary core even when the
     // helper then discards it.
-    let (overview, balance, trade_emu) = {
+    // `expert_settings` — which face the gear opens — is resolved in the SAME borrow as `overview`
+    // because both decide that one element: read apart, one repaint could draw the popover trigger
+    // over a state the other half no longer agrees with.
+    let (overview, balance, trade_emu, expert_settings) = {
         let b = backend.read(cx);
         let overview = b.is_auto_overview_scope(group);
         let scoped_core = if overview {
@@ -101,7 +116,7 @@ pub fn header(
         let trade_emu = core
             .and_then(|cd| cd.client_settings.as_ref())
             .map(|cs| cs.emu_mode);
-        (overview, balance, trade_emu)
+        (overview, balance, trade_emu, b.core_settings_expert())
     };
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
@@ -184,7 +199,28 @@ pub fn header(
                 // already-open popup on the same predicate: without that, the state would stay
                 // open behind a button that is no longer drawn and the popup would reappear the
                 // moment a core is selected again.
-                .children((!overview).then(|| {
+                // Expert mode replaces the popover with a plain button opening the full Moonbot
+                // settings window (`crate::core_expert`). The two faces cannot both be live: the
+                // expert window owns its own draft of the same page, and a popup staged beside it
+                // would give one core two pending pages with no rule for which OK wins.
+                .children((!overview && expert_settings).then(|| {
+                    let backend = backend.clone();
+                    let group = group.to_string();
+                    gear_trigger()
+                        .on_click(move |_, window, cx| {
+                            let owner_display =
+                                crate::window::windowing::window_display_id(window, cx);
+                            crate::core_expert::open(
+                                backend.clone(),
+                                Some(window.window_handle()),
+                                owner_display,
+                                group.clone(),
+                                cx,
+                            );
+                        })
+                        .render()
+                }))
+                .children((!overview && !expert_settings).then(|| {
                     let shell = shell.clone();
                     header_gear_popover(
                         "core-gear",
@@ -192,11 +228,7 @@ pub fn header(
                         crate::shell::core_settings_popup::CONTENT_W,
                         core_settings_open,
                         core_settings_content,
-                        MoonButton::new("core-gear")
-                            .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
-                            .size(MoonButtonSize::Action)
-                            .variant(MoonButtonVariant::Panel)
-                            .render(),
+                        gear_trigger().render(),
                         move |open, window, cx| {
                             shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
                         },

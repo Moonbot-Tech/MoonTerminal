@@ -1,0 +1,85 @@
+# Expert core-settings window: Moonbot's own Settings dialog reproduced over the wire.
+# Tab labels deliberately repeat Moonbot's own wording, so a trader reads the same strip here —
+# including `tab_hotkeys`, which Moonbot itself writes in Latin script in every language.
+# The two pages the compact gear popup also draws (Основные, Автостарт), and the OK/Cancel pair,
+# are NOT repeated here: the window reads `core_settings.*` for those, so one Moonbot page cannot
+# end up named differently by the two faces of the same gear.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+core_expert.window_title:
+  ru: "Настройки ядра — экспертный режим"
+  en: "Core settings — expert mode"
+  es: "Ajustes del núcleo: modo experto"
+core_expert.tab_login:
+  ru: "Логин"
+  en: "Login"
+  es: "Acceso"
+core_expert.tab_telegram:
+  ru: "Телеграм"
+  en: "Telegram"
+  es: "Telegram"
+core_expert.tab_autobuy:
+  ru: "АвтоПокупка"
+  en: "AutoBuy"
+  es: "Compra automática"
+core_expert.tab_special:
+  ru: "Специальные"
+  en: "Special"
+  es: "Especiales"
+core_expert.tab_interface:
+  ru: "Интерфейс"
+  en: "Interface"
+  es: "Interfaz"
+core_expert.tab_hotkeys:
+  ru: "Hotkeys"
+  en: "Hotkeys"
+  es: "Hotkeys"
+core_expert.tab_help:
+  ru: "Помощь с настройкой"
+  en: "Setup help"
+  es: "Ayuda de configuración"
+core_expert.tab_pro:
+  ru: "PRO"
+  en: "PRO"
+  es: "PRO"
+core_expert.no_core:
+  ru: "Нет активного ядра: выберите ядро в шапке окна группы."
+  en: "No active core: pick one in the group window's header."
+  es: "No hay núcleo activo: elija uno en la cabecera de la ventana del grupo."
+core_expert.overview:
+  ru: "Группа показывает обзор всех ядер. Настройки принадлежат одному ядру — выберите его в шапке группы."
+  en: "The group is showing every core at once. These settings belong to a single core — pick one in the group header."
+  es: "El grupo muestra todos los núcleos a la vez. Estos ajustes pertenecen a un solo núcleo: elija uno en la cabecera del grupo."
+core_expert.core_moved:
+  ru: "Активное ядро группы сменилось. Страница описывает прежнее ядро, поэтому отправить её нельзя — нажмите шестерёнку заново."
+  en: "The group's active core changed. This page describes the previous core, so it cannot be sent — press the gear again."
+  es: "El núcleo activo del grupo cambió. Esta página describe el núcleo anterior, así que no puede enviarse: pulse el engranaje de nuevo."
+core_expert.waiting:
+  ru: "Ждём настройки ядра — ядро присылает их фоном сразу после подключения."
+  en: "Waiting for the core's settings — the core sends them in the background after connecting."
+  es: "Esperando los ajustes del núcleo: el núcleo los envía en segundo plano tras conectarse."
+core_expert.replaced:
+  ru: "На этом подключении отвечает уже другой процесс Moonbot. Прежняя страница отброшена, чтобы не записать её в новый процесс, — нажмите шестерёнку заново."
+  en: "A different Moonbot process now answers on this connection. The previous page was dropped rather than written into the new process — press the gear again."
+  es: "En esta conexión responde ahora otro proceso de Moonbot. La página anterior se descartó en vez de escribirse en el nuevo proceso: pulse el engranaje de nuevo."
+core_expert.stale:
+  ru: "Связь с ядром не готова: страница показана по сохранённому снимку и отправлена не будет, пока ядро не ответит заново."
+  en: "The link to the core is not ready: this page is a retained snapshot and will not be sent until the core answers again."
+  es: "El enlace con el núcleo no está listo: esta página es una instantánea retenida y no se enviará hasta que el núcleo responda de nuevo."
+core_expert.write_refused:
+  ru: "Настройки не отправлены: ядро сменилось или отказало в приёме страницы. Окно оставлено открытым, чтобы отказ не выглядел как сохранение."
+  en: "Nothing was sent: the core moved, or refused the page. The window stays open so a refusal cannot look like a save."
+  es: "No se envió nada: el núcleo cambió o rechazó la página. La ventana permanece abierta para que un rechazo no parezca un guardado."
+core_expert.page_todo:
+  ru: "Страница ещё не перенесена. Каркас окна готов: вкладки, экспертный режим и отправка по OK."
+  en: "This page is not ported yet. The frame is in place: tabs, expert mode and the send on OK."
+  es: "Esta página aún no está portada. El marco está listo: pestañas, modo experto y el envío con OK."
+core_expert.page_unprojected:
+  ru: "Эти настройки приходят по проводу, но терминал их пока не разбирает: чтобы страницу можно было заполнить и отправить, нужно расширить проекцию настроек ядра и маску отправляемых секций."
+  en: "These settings do cross the wire, but the terminal does not read them yet: filling and sending this page needs the core-settings projection and the sent-section mask widened first."
+  es: "Estos ajustes sí viajan por el cable, pero el terminal aún no los interpreta: para rellenar y enviar esta página hay que ampliar antes la proyección de ajustes del núcleo y la máscara de secciones enviadas."
+core_expert.page_absent:
+  ru: "Эти настройки не приходят по проводу: ключи API, пароль и лицензия в безопасное подмножество не входят, а мастер настройки — действие Moonbot, а не значение. Страница остаётся заблокированной."
+  en: "These settings never cross the wire: API keys, the password and the licence are outside the safe subset, and the setup wizard is a Moonbot action rather than a value. The page stays blocked."
+  es: "Estos ajustes no viajan por el cable: las claves API, la contraseña y la licencia quedan fuera del subconjunto seguro, y el asistente es una acción de Moonbot, no un valor. La página permanece bloqueada."
