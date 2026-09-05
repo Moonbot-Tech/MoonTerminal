@@ -3,27 +3,29 @@
 // Explicit imports on purpose: the parent re-exports `gpui::*`, whose `test` would
 // shadow the built-in attribute and make `#[test]` expand recursively.
 use super::{
-    basecurrency_text, cell_display_text, cell_tooltip, effective_visible_columns, header_for,
-    is_numeric_report_column, toggled_all_columns, value_to_string,
+    basecurrency_text, cell, cell_display_text, effective_visible_columns, header_for,
+    header_label, is_numeric_report_column, report_columns, toggled_all_columns, value_to_string,
 };
+use crate::panels::common::side_word;
+use chrono_tz::Tz;
+use moon_core::db::ReportAxis;
+use moon_ui::MoonPalette;
 use rusqlite::types::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-/// Breakage: changing `cell_tooltip` to return `None` for the valuation-source column hides the
-/// second conversion leg and successor delay even though the database retained both.
-#[test]
-fn valuation_source_tooltip_keeps_complete_provenance() {
-    let provenance = "hyperliquid_spot USDH/USDC -> binance_spot USDCUSDT +126720m";
-    assert_eq!(
-        cell_tooltip(moon_core::db::VALUATION_SOURCE_COLUMN, provenance).as_deref(),
-        Some(provenance)
-    );
-    assert_eq!(cell_tooltip("coin", provenance), None);
-    assert_eq!(
-        cell_tooltip(moon_core::db::VALUATION_SOURCE_COLUMN, ""),
-        None
-    );
-}
+// REPAIRED at the PROVE task, by removal: `cell_tooltip` -- the free-text-column-gated tooltip
+// this test probed (`valuation_source_tooltip_keeps_complete_provenance`) -- no longer exists.
+// The fix barrier deliberately superseded it: `report_data_cell`'s own docstring now states
+// "every non-empty cell now truncates and tooltips its complete text, not only the free-text
+// columns", so the exact distinction this test drew (VALUATION_SOURCE_COLUMN tooltips, "coin"
+// does not) is not a narrowed contract that regressed -- it is a contract that was intentionally
+// widened and has no equivalent function left to call. `report_data_cell` is a private fn
+// returning an opaque `MoonDataCell` (no accessor reaches its built tooltip text without a
+// `gpui::TestAppContext` render pass), so there is no cheap unit-level successor; the widened
+// claim is covered structurally by
+// `tests/theme_contract/report.rs::the_date_cell_builds_display_and_tooltip_from_one_resolved_zone_in_the_right_order`
+// for the date branch, which is the one branch this PROVE task's ranked list calls out as
+// unreviewed production code.
 
 /// A generic text cell uses the shared flattener and trims its edges.
 #[test]
@@ -129,4 +131,92 @@ fn auto_core_all_toggle_preserves_the_dormant_core_name_preference() {
         HashSet::from(["closedate".to_string(), "coin".to_string()]),
         "All must not re-enable a dormant preference that the user saved hidden"
     );
+}
+
+/// Breakage: `report_columns` passes `header_label(col)` as the `MoonDataTableColumn` KEY as well
+/// as its title, instead of only its title. Consequence: every user's persisted column widths and
+/// sort column are stored under the raw name, so a switch to the localized key orphans every saved
+/// layout silently on upgrade and the table resets.
+#[test]
+fn report_columns_key_stays_the_raw_name_while_the_title_is_the_label() {
+    let cols = vec!["profitbtc".to_string(), "coin".to_string()];
+    let vis = vec![0usize, 1usize];
+    let widths: HashMap<String, f32> = HashMap::new();
+    let built = report_columns(&cols, &vis, &widths);
+
+    assert_eq!(
+        built[0].key.to_string(),
+        "profitbtc",
+        "the persisted key must stay the raw DB name"
+    );
+    assert_eq!(
+        built[0].title.to_string(),
+        header_label("profitbtc"),
+        "the visible title is the human label"
+    );
+    assert_eq!(built[1].key.to_string(), "coin");
+}
+
+/// Breakage: `header_label`'s fallback for a runtime column outside `DISPLAY_COLUMNS` implemented
+/// as a bare `t!(format!("report.col.{col}"))`. `t!` returns the literal key text on a miss, and the
+/// runtime schema genuinely carries columns outside `DISPLAY_COLUMNS`
+/// (`moon-core/src/db/report_read.rs`), so an unknown core column's header would render as the raw
+/// text `report.col.whatever` instead of falling back to the column's own name.
+#[test]
+fn header_label_falls_back_to_the_raw_name_for_an_unkeyed_column() {
+    let unkeyed = "a_core_column_outside_display_columns";
+    let label = header_label(unkeyed);
+    assert_eq!(
+        label,
+        header_for(unkeyed),
+        "an unkeyed column must fall back to the same raw text header_for uses"
+    );
+    assert!(
+        !label.starts_with("report.col."),
+        "a locale miss must never leak the raw key text: got {label:?}"
+    );
+}
+
+/// Breakage: compacting the date INSIDE `cell()` instead of in the render path.
+/// `widths.rs::natural_widths` measures `cell()`'s own output, so on a page where every visible row
+/// is from today the date column would be measured at clock width and then clip the full
+/// timestamps that appear the instant an older row scrolls into view -- a width that jitters with
+/// the data. `cell()` must therefore always return the LONG form; only the render path may compact.
+#[test]
+fn cell_keeps_the_long_date_form_even_for_a_row_from_today() {
+    let now = moon_core::util::time::now_unix_secs() as i64;
+    let axis = ReportAxis::identity_core_local();
+    let p = MoonPalette::default();
+
+    let (text, _) = cell(
+        "closedate",
+        &Value::Integer(now),
+        None,
+        p,
+        &axis,
+        0,
+        Tz::UTC,
+    );
+
+    assert_eq!(
+        text,
+        moon_core::util::display_time::format_minute(now, axis.zone()),
+        "cell() must always render the full timestamp; compaction belongs to the render path"
+    );
+}
+
+/// Breakage: the shared badge word changes (`common::side_word`) without `cell()`'s `"isshort"`
+/// arm changing to match. Consequence: `widths.rs::natural_widths` measures `cell()`'s text for a
+/// column that is actually painted through the dedicated side badge cell, so the column is sized
+/// for text it never paints.
+#[test]
+fn cell_isshort_text_matches_the_shared_side_word() {
+    let axis = ReportAxis::identity_core_local();
+    let p = MoonPalette::default();
+
+    let (short_text, _) = cell("isshort", &Value::Integer(1), None, p, &axis, 0, Tz::UTC);
+    let (long_text, _) = cell("isshort", &Value::Integer(0), None, p, &axis, 0, Tz::UTC);
+
+    assert_eq!(short_text, side_word(true));
+    assert_eq!(long_text, side_word(false));
 }

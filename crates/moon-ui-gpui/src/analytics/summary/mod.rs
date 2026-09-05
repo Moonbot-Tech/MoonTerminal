@@ -4,10 +4,7 @@
 //! analytics-mock artifact.
 
 use gpui::*;
-use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonSegmentItem, MoonSegmentedControl,
-    MoonTone, h_flex, v_flex,
-};
+use moon_ui::{MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -795,17 +792,7 @@ fn top_card(
                         .gap(design::ui_px(cx, 4.0))
                         .items_center()
                         .child(div().min_w_0().truncate().child(tr.coin.clone()))
-                        .child(
-                            MoonBadge::new(if tr.is_short { "S" } else { "L" })
-                                .tone(if tr.is_short {
-                                    MoonTone::Negative
-                                } else {
-                                    MoonTone::Positive
-                                })
-                                .variant(MoonBadgeVariant::Soft)
-                                .size(MoonBadgeSize::Tiny)
-                                .render_with_palette(p),
-                        ),
+                        .child(crate::panels::common::side_badge(tr.is_short, p)),
                 )
                 .child(
                     div()

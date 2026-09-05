@@ -250,9 +250,12 @@ pub fn format_minute(secs: i64, zone: Tz) -> String {
         return String::new();
     }
     at(secs, zone)
-        .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
+        .map(|value| value.format(MINUTE_FORMAT).to_string())
         .unwrap_or_default()
 }
+
+/// The one date-and-minute pattern [`format_minute`] prints.
+const MINUTE_FORMAT: &str = "%Y-%m-%d %H:%M";
 
 /// Format UTC Unix seconds as `YYYY-MM-DD` in the selected zone.
 ///

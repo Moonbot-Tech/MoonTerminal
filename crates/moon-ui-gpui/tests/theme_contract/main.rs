@@ -21,6 +21,7 @@ mod core_status;
 mod detects;
 mod dock_chrome;
 mod naming;
+mod report;
 mod shared_config;
 mod shell;
 mod shot;

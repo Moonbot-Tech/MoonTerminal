@@ -1,8 +1,183 @@
 # Report panel (trades): filters, totals, and cell values.
 # rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
-# Column headers are not localized. `columns::header_for` uses raw DB names except for the legacy
-# `profitbtc`/`spentbtc`/`gainedbtc` names, which display as `profit`/`spent`/`gained`.
+# Table headers come from `report.col.<runtime DB column name>` (`columns::header_label`).
+# Columns with no such key, the technical columns deliberately kept raw (see `locales/README.md`),
+# and dynamically added core fields all fall through to the raw name (`columns::header_for`).
+# Exports and the clipboard always use the raw name via `header_for`, never a `report.col.*` value.
 _version: 2
+
+# --- Column headers ---
+# In `crates/moon-core/src/db/report_read.rs::DISPLAY_COLUMNS` order. Every column NOT listed here
+# keeps its raw DB name as its header: the six `locales/README.md` deliberately-untranslated
+# technical columns (id, taskid, exorderid, strategyid, basecurrency, sellsetdate), plus `lev` and
+# `fname` — kept raw per this goal's own spec, not the README six — and every `*delta`/`*ratio`
+# metric column. This list is one decision mirrored in `columns::header_label`'s `matches!` guard —
+# keep both in sync, in the same `DISPLAY_COLUMNS` order.
+report.col.buydate:
+  ru: "Открыта"
+  en: "Opened"
+  es: "Abierta"
+report.col.closedate:
+  ru: "Закрыта"
+  en: "Closed"
+  es: "Cerrada"
+report.col.core_name:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+report.col.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+report.col.isshort:
+  ru: "Сторона"
+  en: "Side"
+  es: "Lado"
+report.col.quantity:
+  ru: "Кол-во"
+  en: "Qty"
+  es: "Cant."
+report.col.boughtq:
+  ru: "Куплено"
+  en: "Bought"
+  es: "Comprado"
+report.col.buyprice:
+  ru: "Покупка"
+  en: "Buy"
+  es: "Compra"
+report.col.sellprice:
+  ru: "Продажа"
+  en: "Sell"
+  es: "Venta"
+report.col.spentbtc:
+  ru: "Потрачено"
+  en: "Spent"
+  es: "Gastado"
+report.col.gainedbtc:
+  ru: "Получено"
+  en: "Gained"
+  es: "Obtenido"
+report.col.profitbtc:
+  ru: "Профит"
+  en: "Profit"
+  es: "Beneficio"
+report.col.valuation_profit_usdt:
+  ru: "Профит USDT"
+  en: "Profit USDT"
+  es: "Beneficio USDT"
+# %{amount} arm precedent: locales/analytics.yml `analytics.col.profit_pct` keeps the same three
+# identical strings, so a mixed Rust/YAML review does not read it as a missed translation.
+report.col.profitpct:
+  ru: "Profit %"
+  en: "Profit %"
+  es: "Profit %"
+report.col.valuation_rate:
+  ru: "Курс"
+  en: "Rate"
+  es: "Tasa"
+report.col.valuation_rate_source:
+  ru: "Ист. курса"
+  en: "Rate src"
+  es: "Fuente tasa"
+report.col.source:
+  ru: "Источник"
+  en: "Source"
+  es: "Origen"
+report.col.channel:
+  ru: "Канал"
+  en: "Channel"
+  es: "Canal"
+report.col.channelname:
+  ru: "Имя канала"
+  en: "Channel name"
+  es: "Nombre canal"
+report.col.signaltype:
+  ru: "Сигнал"
+  en: "Signal"
+  es: "Señal"
+report.col.emulator:
+  ru: "Эму"
+  en: "Emu"
+  es: "Emu"
+report.col.status:
+  ru: "Статус"
+  en: "Status"
+  es: "Estado"
+report.col.sellreason:
+  ru: "Причина закрытия"
+  en: "Sell reason"
+  es: "Motivo cierre"
+report.col.comment:
+  ru: "Комментарий"
+  en: "Comment"
+  es: "Comentario"
+# The remaining keyed columns are MoonBot's own tuner/filter field grid labels
+# (`crates/moon-core/src/db/tuner/fields.rs`) — industry-standard abbreviations, not dictionary
+# words, so all three locales carry the identical label (the same convention `report.export.csv`
+# already uses for "CSV").
+report.col.pump1h:
+  ru: "Pump1H"
+  en: "Pump1H"
+  es: "Pump1H"
+report.col.dump1h:
+  ru: "Dump1H"
+  en: "Dump1H"
+  es: "Dump1H"
+report.col.d24h:
+  ru: "d24h"
+  en: "d24h"
+  es: "d24h"
+report.col.d3h:
+  ru: "d3h"
+  en: "d3h"
+  es: "d3h"
+report.col.d1h:
+  ru: "d1h"
+  en: "d1h"
+  es: "d1h"
+report.col.d15m:
+  ru: "d15m"
+  en: "d15m"
+  es: "d15m"
+report.col.d5m:
+  ru: "d5m"
+  en: "d5m"
+  es: "d5m"
+report.col.d1m:
+  ru: "d1m"
+  en: "d1m"
+  es: "d1m"
+report.col.dbtc1m:
+  ru: "dBTC1m"
+  en: "dBTC1m"
+  es: "dBTC1m"
+report.col.vd1m:
+  ru: "Vd1m"
+  en: "Vd1m"
+  es: "Vd1m"
+report.col.pricebug:
+  ru: "PriceBug"
+  en: "PriceBug"
+  es: "PriceBug"
+report.col.hvol:
+  ru: "H.Vol"
+  en: "H.Vol"
+  es: "H.Vol"
+report.col.hvolf:
+  ru: "H.VolF"
+  en: "H.VolF"
+  es: "H.VolF"
+report.col.dvol:
+  ru: "D.Vol"
+  en: "D.Vol"
+  es: "D.Vol"
+# `takeprofitlag` is deliberately NOT keyed: unlike every other column in this block it has no
+# `tuner/fields.rs` FieldSpec, so there is no MoonBot label to mirror and any wording here would be
+# invented rather than sourced. It falls through to its raw DB name via `columns::header_for`.
+report.col.last_update_at:
+  ru: "Обновлено"
+  en: "Updated"
+  es: "Actualizado"
 
 # --- Side/emulator cell values ---
 report.side.short:

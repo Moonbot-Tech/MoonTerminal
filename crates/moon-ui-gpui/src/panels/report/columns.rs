@@ -9,6 +9,20 @@ use rust_i18n::t;
 /// Report column that is redundant when a group-owned Auto workspace selects one core.
 const CORE_NAME_COLUMN: &str = "core_name";
 
+/// Per-row rendering context shared by every generic cell in one Report row.
+///
+/// Built ONCE at the top of [`report_data_row`] and passed by reference, so [`report_data_cell`]
+/// takes four parameters instead of eight — it already sat at the `too_many_arguments` clippy
+/// threshold (7, no raised limit in `clippy.toml`), and `docs/AGENT_RULES.md` rule 16 bans an
+/// `#[allow]` to paper over it.
+struct RowCellCtx<'a> {
+    quote: Option<QuoteCurrency>,
+    p: MoonPalette,
+    axis: &'a ReportAxis,
+    core_uid: u64,
+    display_zone: Tz,
+}
+
 /// Exact Report row identity needed to open its chart and durable history.
 #[derive(Clone)]
 pub(super) struct ReportCoinTarget {
@@ -152,7 +166,7 @@ pub(super) fn report_columns(
                 .copied()
                 .unwrap_or_else(|| width_for(col));
             let column =
-                MoonDataTableColumn::new(col.to_string(), header_for(col), width).sortable(true);
+                MoonDataTableColumn::new(col.to_string(), header_label(col), width).sortable(true);
             if is_numeric_report_column(col) {
                 column.right()
             } else {
@@ -198,6 +212,13 @@ pub(super) fn report_data_row(
         // Resolved from the whole row, not from the visible set: money precision must not change
         // because the user hid the currency column.
         let quote = row_quote(cols, r);
+        let ctx = RowCellCtx {
+            quote,
+            p,
+            axis,
+            core_uid,
+            display_zone,
+        };
         for &i in vis {
             let cname = cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
@@ -223,17 +244,10 @@ pub(super) fn report_data_row(
                 cells.push(core_cell(ri, val, core_uid, view, p));
             } else if cname == "deleted" {
                 cells.push(deleted_cell(ri, val));
+            } else if cname == "isshort" {
+                cells.push(side_cell(ri, val, p));
             } else {
-                cells.push(report_data_cell(
-                    ri,
-                    cname,
-                    val,
-                    quote,
-                    p,
-                    axis,
-                    core_uid,
-                    display_zone,
-                ));
+                cells.push(report_data_cell(ri, cname, val, &ctx));
             }
         }
     }
@@ -364,17 +378,23 @@ fn coin_cell(
     let coin = value_to_string(val);
     let backend = backend.clone();
     let view = view.clone();
+    let tip: SharedString = coin.clone().into();
     let el = div()
         .id(SharedString::from(format!("rep-coin-{ri}")))
         .w_full()
         .h_full()
         .flex()
         .items_center()
+        .min_w_0()
+        .truncate()
         .cursor_pointer()
         // Tone and weight make the scanned coin column the row's visual anchor.
         .text_color(rgb(MoonTone::Accent.color(p)))
         .font_weight(FontWeight::BOLD)
         .child(coin.clone())
+        .when(!tip.is_empty(), |d| {
+            d.tooltip(crate::panels::common::text_tooltip(tip))
+        })
         .on_click(move |_, window, app| {
             // A Shift or Ctrl click is a selection gesture wherever it lands, so let those bubble
             // to the row handler. A plain click opens the chart and stops there: otherwise it would
@@ -519,15 +539,21 @@ fn core_cell(
 ) -> MoonDataCell {
     let name = value_to_string(val);
     let view = view.clone();
+    let tip: SharedString = name.clone().into();
     let el = div()
         .id(SharedString::from(format!("rep-core-{ri}")))
         .w_full()
         .h_full()
         .flex()
         .items_center()
+        .min_w_0()
+        .truncate()
         .cursor_pointer()
-        .text_color(rgb(MoonTone::Muted.color(p)))
+        .text_color(rgb(cell_color("core_name", p)))
         .child(name)
+        .when(!tip.is_empty(), |d| {
+            d.tooltip(crate::panels::common::text_tooltip(tip))
+        })
         .on_click(move |_, window, app| {
             // Changing the Classic filter, or consuming an ignored Auto shortcut, is the whole
             // gesture; see the coin cell above for why a plain click must not also reach the row
@@ -569,120 +595,130 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
     )
 }
 
-/// Render one Report value with column-specific formatting and alignment.
+/// The `isshort` long/short direction cell, drawn as the shared [`side_badge`] rather than text.
+///
+/// No click handler: the row click and its right-click context menu must keep working exactly as
+/// they do on every other cell, and a plain child never intercepts either.
+///
+/// Args:
+///     ri: Visible row index used to give the hover target a stable identity.
+///     val: Database value; `Some(1)`/`Some(0)` render the badge, anything else an empty cell —
+///         matching `cell()`'s own third `isshort` arm.
+///     p: Active palette.
+///
+/// Returns:
+///     Table cell hosting the badge with a full-word tooltip, or an empty cell.
+fn side_cell(ri: usize, val: &Value, p: MoonPalette) -> MoonDataCell {
+    let is_short = match as_i64(val) {
+        Some(1) => true,
+        Some(0) => false,
+        _ => return MoonDataCell::element(div().w_full().h_full()),
+    };
+    let side = if is_short {
+        SideFilter::Short
+    } else {
+        SideFilter::Long
+    };
+    let el = div()
+        .id(SharedString::from(format!("rep-side-{ri}")))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .child(crate::panels::common::side_badge(is_short, p))
+        .tooltip(crate::panels::common::text_tooltip(
+            crate::panels::common::side_label(side),
+        ));
+    MoonDataCell::element(el)
+}
+
+/// Render one Report value with column-specific formatting, alignment, and hover affordances.
+///
+/// Every non-empty cell now truncates and tooltips its complete text, not only the free-text
+/// columns: `.truncate()` in this pinned GPUI fork already draws the ellipsis for any clipped
+/// cell (`MoonUI crates/moon-gpui/src/styled.rs:149-151`), so the ellipsis was never missing —
+/// only the tooltip coverage was. A date column shows its full `YYYY-MM-DD HH:MM` form in the
+/// cell itself (the owner rejected a today-collapsed clock form) and repeats it in the tooltip
+/// like every other column.
 ///
 /// Args:
 ///     row: Visible row index used to give the hover target a stable identity.
 ///     col: Runtime report column name.
 ///     val: SQLite value from the row.
-///     quote: The row's quote currency, deciding money precision.
-///     p: Active MoonUI palette.
-///     zone: Selected IANA display zone for timestamp columns.
+///     ctx: Per-row rendering context shared by every generic cell in this row.
 ///
 /// Returns:
-///     Table cell with ellipsis and full-text hover affordances for free-text values.
-fn report_data_cell(
-    row: usize,
-    col: &str,
-    val: &Value,
-    quote: Option<QuoteCurrency>,
-    p: MoonPalette,
-    axis: &ReportAxis,
-    core_uid: u64,
-    display_zone: Tz,
-) -> MoonDataCell {
-    let (text, color) = cell(col, val, quote, p, axis, core_uid, display_zone);
+///     Table cell with ellipsis and full-text hover affordances for every non-empty value.
+fn report_data_cell(row: usize, col: &str, val: &Value, ctx: &RowCellCtx<'_>) -> MoonDataCell {
     // Clip formatted content to the column's actual width. Alignment matches the column, while
     // MoonDataTable also protects cell boundaries at the container level. Every other column's
     // font styling comes from the cell style through MoonUI cascading.
     let right = is_numeric_report_column(col);
-    let color = color.unwrap_or_else(|| MoonTone::Default.color(p));
-    let free_text = is_free_text_report_value(col, val);
-    let tooltip =
-        cell_tooltip(col, &text).or_else(|| (free_text && !text.is_empty()).then(|| text.clone()));
+    // The SharedString is built exactly ONCE and shared between the child and the tooltip via a
+    // cheap clone (a refcount bump) rather than `text.clone()`'s heap allocation — the difference
+    // matters at 50 000 rows. A date column takes the same path: `cell()` resolves its instant
+    // once and returns the full form, which is also what `widths.rs::natural_widths` measures.
+    let (text, color) = cell(
+        col,
+        val,
+        ctx.quote,
+        ctx.p,
+        ctx.axis,
+        ctx.core_uid,
+        ctx.display_zone,
+    );
+    let color = color.unwrap_or_else(|| cell_color(col, ctx.p));
+    let display: SharedString = text.into();
+    let tooltip = (!display.is_empty()).then(|| display.clone());
     let inner = div()
         .id(SharedString::from(format!("report-cell-{row}-{col}")))
         .flex()
         .w_full()
         .min_w_0()
         .overflow_hidden()
-        .when(free_text, |d| d.truncate())
+        .truncate()
         .when(right, |d| d.justify_end())
         .text_color(rgb(color))
         .font_weight(cell_weight(col))
-        .child(text)
+        .child(display)
         .when_some(tooltip, |cell, tip| {
             cell.tooltip(crate::panels::common::text_tooltip(tip))
         });
     MoonDataCell::element(inner)
 }
 
-/// Preserve complete free text when its compact Report column clips it.
+/// Resolve the UTC instant and zone one Report date column paints from its stored value.
+///
+/// **Load-bearing, do not flatten**: `buydate`/`closedate`/`sellsetdate` are replicated from the
+/// core on the core's OWN wall clock, so `axis` owns both halves of that projection — converting
+/// the stored seconds to UTC AND choosing the zone. `last_update_at` is a freshness marker THIS
+/// terminal wrote itself (see `strat_db::stats`), already true UTC, so it takes the user's selected
+/// `display_zone` directly instead. Applying `display_zone` on top of the axis for the first three
+/// would silently double-convert them.
 ///
 /// Args:
 ///     col: Runtime report column name.
-///     text: Fully formatted cell text.
+///     v: Database value from the row.
+///     axis: Time axis for the replicated columns.
+///     core_uid: The row's owning core, needed by the axis conversion.
+///     display_zone: User-selected zone for the terminal-authored column.
 ///
 /// Returns:
-///     Full text for a non-empty free-text cell, otherwise `None`.
-fn cell_tooltip(col: &str, text: &str) -> Option<String> {
-    (is_free_text_report_column(col) && !text.is_empty()).then(|| text.to_string())
-}
-
-/// Return whether a generic Report cell carries free text rather than a number, date, or enum.
-///
-/// Args:
-///     col: Runtime report column name.
-///
-/// Returns:
-///     `true` for columns whose complete text must remain reachable when clipped.
-fn is_free_text_report_column(col: &str) -> bool {
-    matches!(
-        col,
-        db::VALUATION_SOURCE_COLUMN
-            | "exorderid"
-            | "source"
-            | "channel"
-            | "channelname"
-            | "signaltype"
-            | "fname"
-            | "status"
-            | "sellreason"
-            | "comment"
-    )
-}
-
-/// Return whether this runtime value must keep its complete text reachable when clipped.
-///
-/// The core can append columns that are not part of the terminal's known schema. Their SQLite
-/// value is the only type signal available at this boundary, while known numeric and date column
-/// names remain authoritative when an old or repaired database stores one as text.
-///
-/// Args:
-///     col: Runtime report column name.
-///     value: SQLite value supplied for this row and column.
-///
-/// Returns:
-///     `true` for known free-text columns and runtime text outside numeric/date columns.
-fn is_free_text_report_value(col: &str, value: &Value) -> bool {
-    is_free_text_report_column(col)
-        || (matches!(value, Value::Text(_))
-            && !is_numeric_report_column(col)
-            && !is_date_report_column(col))
-}
-
-/// Return whether a Report column carries a timestamp rather than prose.
-///
-/// Args:
-///     col: Runtime report column name.
-///
-/// Returns:
-///     `true` for the replicated and terminal-authored timestamp columns.
-fn is_date_report_column(col: &str) -> bool {
-    matches!(
-        col,
-        "buydate" | "closedate" | "sellsetdate" | "last_update_at"
-    )
+///     `(UTC seconds, zone to render in)`, or `None` for a non-date column or an unreadable value.
+fn date_cell_instant(
+    col: &str,
+    v: &Value,
+    axis: &ReportAxis,
+    core_uid: u64,
+    display_zone: Tz,
+) -> Option<(i64, Tz)> {
+    match col {
+        "buydate" | "closedate" | "sellsetdate" => {
+            as_i64(v).map(|secs| (axis.to_utc(secs, core_uid), axis.zone()))
+        }
+        "last_update_at" => as_i64(v).map(|secs| (secs, display_zone)),
+        _ => None,
+    }
 }
 
 /// Return the font weight a GENERIC Report data cell's text is drawn — and MEASURED — with.
@@ -710,6 +746,27 @@ pub(super) fn cell_weight(col: &str) -> FontWeight {
     match col {
         db::VALUATION_PROFIT_COLUMN | db::PROFIT_PERCENT_COLUMN => FontWeight::SEMIBOLD,
         _ => FontWeight::NORMAL,
+    }
+}
+
+/// Fallback text colour for a generic Report cell that carries no sign colour of its own.
+///
+/// Colour, not weight, carries this table's identity-recedes hierarchy — `cell_weight` above is
+/// UNCHANGED. This is deliberately OUTSIDE `design::MonoBodyFontSignature` (the natural-width
+/// cache key, documented above `cell_weight`): colour never resolves a different `FontId`, only
+/// weight does, so a third weight would strand stale widths with nothing to invalidate them, while
+/// an extra colour arm here is always cache-safe to add.
+///
+/// Args:
+///     col: Runtime report column name.
+///     p: Active palette.
+///
+/// Returns:
+///     `p.text_muted` for the two identity columns, otherwise the table's default text tone.
+pub(super) fn cell_color(col: &str, p: MoonPalette) -> u32 {
+    match col {
+        "core_name" | "channelname" => p.text_muted,
+        _ => MoonTone::Default.color(p),
     }
 }
 
@@ -779,28 +836,27 @@ pub(super) fn cell(
     display_zone: Tz,
 ) -> (String, Option<u32>) {
     match col {
-        // Replicated from the core, on the core's clock: the axis owns both halves of the
-        // projection, so the selected zone must NOT be applied on top of it.
-        "buydate" | "closedate" | "sellsetdate" => (
-            as_i64(v)
-                .map(|secs| {
-                    let utc = axis.to_utc(secs, core_uid);
-                    moon_core::util::display_time::format_minute(utc, axis.zone())
-                })
+        // Replicated columns are on the CORE's own wall clock (the axis owns both halves of that
+        // projection) while `last_update_at` is genuine UTC this terminal wrote itself — see
+        // `date_cell_instant`'s docstring for why the two must never share a zone step.
+        "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (
+            date_cell_instant(col, v, axis, core_uid, display_zone)
+                .map(|(secs, zone)| moon_core::util::display_time::format_minute(secs, zone))
                 .unwrap_or_default(),
             None,
         ),
-        // Written by THIS terminal as a freshness marker (see `strat_db::stats`), so it is genuine
-        // UTC and belongs in the user's selected zone like any other local timestamp.
-        "last_update_at" => (
-            as_i64(v)
-                .map(|secs| moon_core::util::display_time::format_minute(secs, display_zone))
-                .unwrap_or_default(),
-            None,
-        ),
+        // The badge word, not the localized word: this is what `side_cell`'s badge actually paints, and
+        // `widths.rs` measures this same text, so it must measure what is actually painted. The
+        // translated word now lives only in the badge's tooltip, via `side_label`.
         "isshort" => match as_i64(v) {
-            Some(1) => (t!("report.side.short").to_string(), Some(p.red)),
-            Some(0) => (t!("report.side.long").to_string(), Some(p.green)),
+            Some(1) => (
+                crate::panels::common::side_word(true).to_string(),
+                Some(p.red),
+            ),
+            Some(0) => (
+                crate::panels::common::side_word(false).to_string(),
+                Some(p.green),
+            ),
             _ => (String::new(), Some(p.text_soft)),
         },
         "emulator" => match as_i64(v) {
@@ -943,12 +999,16 @@ fn cell_display_text(v: &Value) -> String {
     }
 }
 
-/// Return the raw DB column name as the table and export header, without i18n.
+/// Return the raw DB column name as the export and clipboard header, without i18n.
 ///
 /// This makes dynamically added core fields available automatically. The legacy Moonbot
 /// `profitbtc`, `spentbtc`, and `gainedbtc` names are the exception: their `btc` suffix is
 /// historical, while values are denominated in each row's quote currency. Neutral `profit`,
 /// `spent`, and `gained` headers avoid implying BTC on non-BTC pairs.
+///
+/// This is the raw name feeding `export.rs:204` (CSV), `export.rs:347` (XLSX) and
+/// `selection.rs:324` (the TSV clipboard copy) — those three output contracts are UNCHANGED by
+/// [`header_label`], which is the TABLE-only, translated header.
 pub(super) fn header_for(col: &str) -> String {
     match col {
         "profitbtc" => "profit".to_string(),
@@ -959,6 +1019,102 @@ pub(super) fn header_for(col: &str) -> String {
         "valuation_rate" => "rate".to_string(),
         "valuation_rate_source" => "rate src".to_string(),
         _ => col.to_string(),
+    }
+}
+
+/// Report columns carrying a `report.col.<name>` translation in `locales/report.yml`'s
+/// `# --- Column headers ---` block.
+///
+/// `t!` does not fall back to a default on a missing key — it returns the literal
+/// `"report.col.<name>"` string — and the runtime schema genuinely carries columns outside this
+/// set (`DISPLAY_COLUMNS`' six deliberately-untranslated technical names, `lev`, `fname`, every
+/// `*delta`/`*ratio` metric column, and any dynamically added core field), so [`header_label`]
+/// must test membership here rather than trying `t!` on every column and hoping for the best.
+/// **Kept in sync with `locales/report.yml` by hand — one decision in two places.**
+fn is_keyed_report_header(col: &str) -> bool {
+    matches!(
+        col,
+        "buydate"
+            | "closedate"
+            | "core_name"
+            | "coin"
+            | "isshort"
+            | "quantity"
+            | "boughtq"
+            | "buyprice"
+            | "sellprice"
+            | "spentbtc"
+            | "gainedbtc"
+            | "profitbtc"
+            | "valuation_profit_usdt"
+            | "profitpct"
+            | "valuation_rate"
+            | "valuation_rate_source"
+            | "source"
+            | "channel"
+            | "channelname"
+            | "signaltype"
+            | "emulator"
+            | "status"
+            | "sellreason"
+            | "comment"
+            | "pump1h"
+            | "dump1h"
+            | "d24h"
+            | "d3h"
+            | "d1h"
+            | "d15m"
+            | "d5m"
+            | "d1m"
+            | "dbtc1m"
+            | "vd1m"
+            | "pricebug"
+            | "hvol"
+            | "hvolf"
+            | "dvol"
+            // `takeprofitlag` is deliberately absent: it is the one tuner column with no
+            // `tuner/fields.rs` FieldSpec to mirror, so it keeps its raw DB name rather than an
+            // invented label. Keep this in step with `locales/report.yml`.
+            | "last_update_at"
+    )
+}
+
+/// Localized Report TABLE header, falling back to [`header_for`]'s raw name for a column with no
+/// `report.col.*` key.
+///
+/// Args:
+///     col: Runtime report column name.
+///
+/// Returns:
+///     Translated label for a keyed column, otherwise the raw DB name.
+pub(super) fn header_label(col: &str) -> String {
+    if is_keyed_report_header(col) {
+        t!(format!("report.col.{col}")).to_string()
+    } else {
+        header_for(col)
+    }
+}
+
+/// Columns menu label: the translated header plus the raw schema name, so the Columns menu stays
+/// the one place in the UI where the raw name is still reachable once headers are relabelled.
+///
+/// `MoonDataTableColumn` has no tooltip field and `data_table/header.rs` renders bare text
+/// (MoonUI `data_table.rs:89-132`, `data_table/header.rs:88-96`), so a header tooltip is
+/// impossible without editing MoonUI.
+///
+/// Args:
+///     col: Runtime report column name.
+///
+/// Returns:
+///     `"{label} — {raw}"` when the translated label differs from the raw name, otherwise the raw
+///     name alone (no redundant `"x — x"`).
+pub(super) fn column_menu_label(col: &str) -> String {
+    let label = header_label(col);
+    let raw = header_for(col);
+    if label == raw {
+        raw
+    } else {
+        format!("{label} — {raw}")
     }
 }
 
@@ -977,7 +1133,17 @@ pub(super) fn width_for(col: &str) -> f32 {
         | "valuation_profit_usdt"
         | "valuation_rate" => 96.0,
         "valuation_rate_source" => 130.0,
-        "lev" | "isshort" | "emulator" => 52.0,
+        "lev" | "emulator" => 52.0,
+        // The narrowest this column can legitimately be: the Tiny badge holding `SHORT` (five
+        // caption-size caps, ~32 design units, plus 2 x pad_x 4, MoonUI `badge.rs:301-308`) plus
+        // MoonDataTable's own cell padding (12 + 8 = 20, MoonUI `table.rs:36-37`) = 60.
+        //
+        // It is a FLOOR, not the width the column usually takes. `widths.rs::natural_widths`
+        // measures the localized HEADER at SEMIBOLD, and every locale's word for "side" is wider
+        // than the badge, so the natural width normally lands above this and clamps toward the
+        // ceiling instead. The floor still earns its place: it is what the column falls back to
+        // when no natural width has been measured yet.
+        "isshort" => 60.0,
         _ => 82.0,
     }
 }

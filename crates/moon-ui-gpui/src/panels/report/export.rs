@@ -385,3 +385,6 @@ fn write_xlsx(
     wb.save(path)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
