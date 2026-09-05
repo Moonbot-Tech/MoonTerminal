@@ -477,20 +477,45 @@ fn workspace_navigation_uses_the_shared_virtual_rail_and_owner_action() {
 }
 
 /// Removing the full-width centered summary wrapper or the Overview content group must fail: the
-/// two high-level choices would return to left alignment or lose symmetric truncation at narrow widths.
+/// two high-level choices would return to left alignment or lose symmetric clipping at narrow widths.
+///
+/// Re-pinned for goal B (Auto workspace rail): the summary used to have ONE truncating child
+/// (`div().min_w_0().truncate().text_center().child(summary_text)`); goal B replaced that
+/// Full/Compact child with a segmented alarm render (`problem_color`) inside the SAME centered
+/// wrapper, which stays byte-identical, and moved the CLIPPING duty from that one child's
+/// `truncate()` onto the fixed-height summary bar's own `.overflow_hidden()` (`workspace.rs:1037`)
+/// so several independently-truncating segments cannot force the bar taller. The old single-child
+/// pin no longer applies; this asserts the centered wrapper, the bar-level clip, and the alarm
+/// segment's own clip-safety instead. PROVE-repaired against real code: the implementer did not
+/// use `flex_none` on the alarm segment (AUTHOR's guess from the plan text), and wraps the colour
+/// in `rgb(..)` like every sibling segment.
+///
+/// RE-PROVE-repaired: the alarm segment now also carries an explicit
+/// `.flex_shrink(design::RAIL_ALARM_SHRINK)` between `.truncate()` and `.text_color(..)`, fixing
+/// the bug where both segments shared gpui's default `flex_shrink: 1.0` and the short problem
+/// count lost its digit first under proportional shrink. That call is now part of the pinned chain.
 #[test]
 fn auto_rail_centers_only_the_summary_and_overview_content() {
     let workspace = code_only(&read_src("shell/workspace.rs"));
     let rail = braced_body(&workspace, "fn workspace_rail(")
         .split_whitespace()
         .collect::<String>();
-    let summary_group = rail
-        .find(".child(div().w_full().min_w_0().flex().justify_center()")
-        .expect("the summary must own a full-width centered group");
-    let summary_label = rail
-        .find("div().min_w_0().truncate().text_center().child(summary_text)")
-        .expect("the summary label must truncate symmetrically");
-    assert!(summary_group < summary_label);
+    assert!(
+        rail.contains(".child(div().w_full().min_w_0().flex().justify_center()"),
+        "the summary must own a full-width centered group"
+    );
+    assert!(
+        rail.contains(".h(design::fit_h_px(cx,38.0,11.0,8.0)).overflow_hidden()"),
+        "the fixed-height summary bar must clip its segmented content rather than overflow, now \
+         that the summary is several independently-truncating segments instead of one"
+    );
+    assert!(
+        rail.contains(
+            ".child(div().min_w_0().truncate().flex_shrink(design::RAIL_ALARM_SHRINK).text_color(rgb(problem_color))"
+        ),
+        "the alarm segment must stay clip-safe (min_w_0 + truncate) and explicitly shrink-guarded \
+         like its sibling segments"
+    );
 
     let render = braced_body(&workspace, "fn render_rail_item(")
         .split_whitespace()
@@ -937,4 +962,161 @@ fn configured_workspace_scope_is_derived_from_configuration_not_sessions() {
             "configured scope must not derive its universe through {forbidden}"
         );
     }
+}
+
+// ---- goal B: Auto workspace rail (breakage-proof AUTHOR Task, run_06f99d9f96b9) ----
+//
+// Every test below is authored against plan-B.md before the implementation lands, so each pins
+// literal source text taken verbatim from the plan rather than from code that exists yet. That
+// text is a best-effort guess at what the implementer will write, not a confirmed shape: repair,
+// never re-author, at the PROVE Task once the real diff exists.
+
+/// A1 (band A) — a silent alarm is worse than no alarm: the rail summary's problem segment must
+/// resolve to the danger colour whenever the roster's `problem` count is non-zero and fall back to
+/// `text_muted` at zero, and it must stay clip-safe (`min_w_0` + `truncate`) like its sibling
+/// segments. `crates/moon-ui-gpui/src/shell/workspace.rs::workspace_rail`, summary block.
+///
+/// PROVE-repaired: the real gate is `let has_problem = roster.summary.problem > 0;` feeding
+/// `problem_color`, not an inline `if problem > 0` (AUTHOR's guess from the plan text).
+///
+/// RE-PROVE-repaired: the segment is no longer bare — both segments used to share gpui's default
+/// `flex_shrink: 1.0`, which taffy 0.10.1 distributes PROPORTIONALLY across negative space, so the
+/// short `проблем: N` segment ellipsized at the same percentage as the long `cores_ready` sibling
+/// and lost its digit first (the opposite of the old "the longer sibling absorbs shrink" claim).
+/// The fix pins an explicit `.flex_shrink(design::RAIL_ALARM_SHRINK)`, strictly between `0.0` and
+/// `cores_ready`'s implicit `1.0`, so `cores_ready` now absorbs shrink first for real. This test
+/// now also pins that mechanism: deleting the `.flex_shrink(..)` call, or widening the constant
+/// back to `1.0`, must redden it — that is exactly the defect the repair closed.
+///
+/// Future edit that must redden this: change `roster.summary.problem > 0` to `> 1`, drop the
+/// `danger_color` branch so every segment renders `text_muted`, or delete the
+/// `.flex_shrink(design::RAIL_ALARM_SHRINK)` call / raise the constant to `1.0`.
+#[test]
+fn rail_summary_problem_segment_alarms_in_danger_colour_and_resists_truncation() {
+    let design = read_src("design.rs");
+    let alarm_shrink = parse_f32_const(&design, "RAIL_ALARM_SHRINK")
+        .expect("design.rs must define RAIL_ALARM_SHRINK as a goal-B token");
+    assert!(
+        0.0 < alarm_shrink && alarm_shrink < 1.0,
+        "RAIL_ALARM_SHRINK ({alarm_shrink}) must sit strictly between 0.0 and cores_ready's \
+         implicit default flex_shrink of 1.0, or the alarm segment loses its shrink-priority edge"
+    );
+
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let rail = braced_body(&workspace, "fn workspace_rail(")
+        .split_whitespace()
+        .collect::<String>();
+    assert!(
+        rail.contains(
+            "lethas_problem=roster.summary.problem>0;letproblem_color=ifhas_problem{design::danger_color(p)}else{p.text_muted};"
+        ),
+        "the alarm segment's colour must branch on the roster's problem count: danger above zero, \
+         muted at zero"
+    );
+    let alarm = rail
+        .find(
+            ".child(div().min_w_0().truncate().flex_shrink(design::RAIL_ALARM_SHRINK).text_color(rgb(problem_color))"
+        )
+        .expect(
+            "the alarm segment must stay clip-safe (min_w_0 + truncate), explicitly \
+             shrink-guarded via RAIL_ALARM_SHRINK, and driven by problem_color",
+        );
+    let tooltip = rail
+        .find(".tooltip(")
+        .expect("the summary block must still carry its tooltip");
+    assert!(
+        alarm < tooltip,
+        "the alarm segment must render inside the summary block, before its tooltip is attached"
+    );
+}
+
+/// A3 (band B) — a problem core's status dot must render larger than a ready core's, in every
+/// rail density, or the operator loses the one enlargement cue that used to live only in colour.
+/// `crates/moon-ui-gpui/src/shell/workspace.rs::render_rail_item`, the `RailItem::Core` arm.
+///
+/// NAME-ONLY item, anchor corrected but NOT mutation-proven (out of the PROVE Task's TOP-2 cap):
+/// the real gate is `matches!(row.status, WorkspaceCoreStatus::Unavailable | WorkspaceCoreStatus::Problem)`,
+/// not a bare `row.status == WorkspaceCoreStatus::Problem` (AUTHOR's guess from the plan text) —
+/// the implementer deliberately widened enlargement to `Unavailable` too (source comment beside
+/// it: "Enlarges for every status the summary's `problem` count includes"), while colour stays
+/// `Problem`-only via `workspace_status_color`, untouched by this change.
+///
+/// Future edit that must redden this: delete the `+ design::RAIL_PROBLEM_DOT_STEP` term, or drop
+/// `Unavailable` from the `matches!` guard, so an enlarged-eligible dot renders at
+/// `metrics.dot_size`. `core_rail_metrics(density)` already varies `dot_size` per density, so this
+/// contract holds identically at every density without density itself being named here.
+#[test]
+fn rail_problem_core_dot_is_larger_than_the_ready_dot_in_every_density() {
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let render = braced_body(&workspace, "fn render_rail_item(");
+    let core_start = render
+        .find("RailItem::Core {")
+        .expect("render_rail_item must keep an explicit Core arm");
+    let core_arm = render[core_start..].split_whitespace().collect::<String>();
+    assert!(
+        core_arm.contains(
+            "letdot_size=ifmatches!(row.status,WorkspaceCoreStatus::Unavailable|WorkspaceCoreStatus::Problem){metrics.dot_size+design::RAIL_PROBLEM_DOT_STEP}else{metrics.dot_size};"
+        ),
+        "a Problem- or Unavailable-status dot must render metrics.dot_size + RAIL_PROBLEM_DOT_STEP; \
+         a Ready dot must keep metrics.dot_size unchanged"
+    );
+}
+
+/// A4 (band B) — a core's name is the user's data and must render verbatim: a product rule, not a
+/// cosmetic choice, so it must never be recoloured by connection status; only the dot and the
+/// (Full-only) status label carry colour. Same `RailItem::Core` arm as A3.
+///
+/// Future edit that must redden this: add `.text_color(rgb(dot))` to the name div (plan-B.md
+/// explicitly forbids this: "the name div gets no colour — never colour the user's core name").
+#[test]
+fn rail_core_name_is_never_recoloured_by_status() {
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let render = braced_body(&workspace, "fn render_rail_item(");
+    let core_start = render
+        .find("RailItem::Core {")
+        .expect("render_rail_item must keep an explicit Core arm");
+    let core_arm = render[core_start..].split_whitespace().collect::<String>();
+    assert!(
+        core_arm.contains(".child(div().flex_1().min_w_0().truncate().child(name))"),
+        "the name's own div chain must carry no colour call between .truncate() and .child(name)"
+    );
+}
+
+/// A5 (band C) — the rail's hover state must stay visibly weaker than its selected state but
+/// strictly above zero, and hover must remain gated behind `selectable` so a disabled row never
+/// highlights. `crates/moon-ui-gpui/src/shell/workspace.rs::rail_row_base`, plus the two new
+/// `design.rs` alpha tokens (plan-B.md Step 0).
+///
+/// Future edit that must redden this: set `RAIL_ROW_HOVER_ALPHA` to `0.0`, or move `.hover(..)`
+/// outside `.when(selectable, ..)` so a disabled row also highlights.
+#[test]
+fn rail_hover_alpha_sits_strictly_between_zero_and_selected_and_stays_selectable_gated() {
+    let design = read_src("design.rs");
+    let hover = parse_f32_const(&design, "RAIL_ROW_HOVER_ALPHA")
+        .expect("design.rs must define RAIL_ROW_HOVER_ALPHA as a goal-B token");
+    let selected = parse_f32_const(&design, "RAIL_ROW_SELECTED_ALPHA")
+        .expect("design.rs must define RAIL_ROW_SELECTED_ALPHA as a goal-B token");
+    assert!(
+        0.0 < hover && hover < selected,
+        "hover ({hover}) must sit strictly between 0.0 and the selected alpha ({selected})"
+    );
+
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let row_base = braced_body(&workspace, "fn rail_row_base(")
+        .split_whitespace()
+        .collect::<String>();
+    let guard = row_base
+        .find(".when(selectable,")
+        .expect("hover chrome must stay gated behind the selectable guard");
+    let hover_call = row_base
+        .find(".hover(")
+        .expect("the row must still paint a hover state");
+    let guard_close = row_base[guard..]
+        .find("})")
+        .map(|offset| guard + offset)
+        .expect("the selectable guard closure must close");
+    assert!(
+        guard < hover_call && hover_call < guard_close,
+        ".hover( must remain inside the .when(selectable, ..) closure, not applied unconditionally"
+    );
 }

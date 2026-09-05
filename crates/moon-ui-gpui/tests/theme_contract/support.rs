@@ -140,6 +140,26 @@ pub fn chain_between<'a>(source: &'a str, anchor: &str, stop: &str, what: &str) 
         .0
 }
 
+/// Parse the literal value out of a `pub const NAME: f32 = VALUE;` declaration.
+///
+/// A source-text equivalent of reading the constant directly: `moon-ui-gpui` has no library
+/// target (see the module doc), so a numeric design token cannot be imported into an integration
+/// test and compared as a real `f32` any other way.
+///
+/// Args:
+///     source: Rust source containing the declaration.
+///     name: Constant identifier to find.
+///
+/// Returns:
+///     The parsed value, or `None` if the declaration or a valid float literal is not found.
+pub fn parse_f32_const(source: &str, name: &str) -> Option<f32> {
+    let needle = format!("const {name}:");
+    let after_name = source.split_once(&needle)?.1;
+    let after_eq = after_name.split_once('=')?.1;
+    let literal = after_eq.split_once(';')?.0;
+    literal.trim().parse::<f32>().ok()
+}
+
 /// Strip line comments so a substring ban cannot be satisfied by the prose explaining it.
 ///
 /// Every ban written as a substring search has the same gotcha: `braced_body` returns COMMENTS

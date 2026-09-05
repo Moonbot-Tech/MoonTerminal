@@ -434,6 +434,15 @@ fn absent_saved_eligible_tab_falls_back_to_report_without_rewriting_it() {
 
 /// Restoring the ready/configured fraction in `shell/workspace.rs:icon_workspace_summary` must
 /// fail: a 200-core rail would exceed the accepted three-character Icon summary budget at 52 px.
+/// Re-pinned for goal B (Auto workspace rail): the summary used to have ONE truncating child for
+/// every density (`div().min_w_0().truncate().text_center().child(summary_text)`), which
+/// plan-B.md Step 3 replaces with a segmented alarm render for Full/Compact density inside the
+/// SAME full-width centered group. Icon density keeps routing through `icon_workspace_summary`'s
+/// bounded output either way (the plan does not change that let-binding), which is what actually
+/// protects the 52 px density this test is named for — that half of the old pin still holds.
+/// AUTHOR-stage: the exact Icon-density wrapper shape (colour added per plan-B.md Step 3) is NOT
+/// verified against real code yet, so the old exact-chain pin covering it is dropped rather than
+/// guessed; PROVE must add it back once the implementation exists.
 #[test]
 fn icon_summary_stays_bounded_for_two_hundred_cores() {
     let summary = icon_workspace_summary(200);
@@ -447,11 +456,56 @@ fn icon_summary_stays_bounded_for_two_hundred_cores() {
         .expect("workspace rail must retain a bounded implementation");
     let rail = rail.split_whitespace().collect::<String>();
     assert!(
-        rail.contains(
-            "div().w_full().min_w_0().flex().justify_center().child(div().min_w_0().truncate().text_center().child(summary_text)"
-        ),
-        "summary text must center across the rail and clip safely inside the 52 px density"
+        rail.contains(".child(div().w_full().min_w_0().flex().justify_center()")
+            && rail.contains("icon_workspace_summary("),
+        "the summary must stay inside the full-width centered group, and Icon density must keep \
+         routing through icon_workspace_summary's bounded output"
     );
+}
+
+/// A2 (band A) — the three new locale segments (`workspace.summary_cores/_ready/_problem`) must
+/// still compose the EXACT sentence `workspace.summary` renders, joined by the code-side " · "
+/// separator, in every shipped locale — or a translator editing one segment silently desyncs the
+/// rail from its own tooltip (which still reads the frozen `workspace.summary` string) in that one
+/// locale only, invisible to anyone reading the source. `locales/workspace.yml`, the NEW keys
+/// against the deliberately UNCHANGED `workspace.summary` (plan-B.md Step 3).
+///
+/// The oracle (`workspace.summary`) is independent of the code under test: it is the pre-existing,
+/// untouched sentence: this composes the NEW keys and checks they still equal it, never the other
+/// way around. Verified against the pinned `rust-i18n 4.2.1` (Cargo.lock): `t!(key, locale = "de",
+/// name = "Jason")` is a documented form
+/// (`rust-i18n-4.2.1/src/lib.rs` doc example), so this asserts through the real macro rather than
+/// re-parsing the YAML.
+///
+/// Future edit that must redden this: change `workspace.summary_ready`'s `en` value from
+/// `ready: %{n}` to `Ready: %{n}`, or drop the `es` sibling of any one of the three new keys.
+#[test]
+fn rail_summary_segments_still_compose_the_frozen_summary_sentence_per_locale() {
+    const SEP: &str = " · ";
+    let cases: [(u32, u32, u32); 2] = [(56, 41, 3), (7, 7, 0)];
+    for locale in ["ru", "en", "es"] {
+        for (configured, ready, problem) in cases {
+            let sentence = rust_i18n::t!(
+                "workspace.summary",
+                locale = locale,
+                configured = configured,
+                ready = ready,
+                problem = problem
+            )
+            .to_string();
+            let composed = format!(
+                "{}{SEP}{}{SEP}{}",
+                rust_i18n::t!("workspace.summary_cores", locale = locale, n = configured),
+                rust_i18n::t!("workspace.summary_ready", locale = locale, n = ready),
+                rust_i18n::t!("workspace.summary_problem", locale = locale, n = problem),
+            );
+            assert_eq!(
+                composed, sentence,
+                "locale {locale}, configured={configured} ready={ready} problem={problem}: the \
+                 three segments must compose the frozen workspace.summary sentence"
+            );
+        }
+    }
 }
 
 /// Catches clearing the topology guard in `Shell::apply_workspace_mode` before GPUI delivers

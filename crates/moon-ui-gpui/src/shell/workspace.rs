@@ -12,9 +12,9 @@ use moon_core::config::{
 use moon_core::feed::{ConnStatus, CoreStartupStatus};
 use moon_core::venue::CoreVenue;
 use moon_ui::{
-    DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonPalette,
-    MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList, PanelView, h_flex, moon_h_resizable,
-    moon_resizable_panel, v_flex,
+    DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize,
+    MoonBadgeVariant, MoonPalette, MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList,
+    PanelView, h_flex, moon_h_resizable, moon_resizable_panel, v_flex,
 };
 use rust_i18n::t;
 
@@ -940,9 +940,72 @@ impl Shell {
             summary.push(' ');
             summary.push_str(fact);
         }
-        let summary_text = match density {
-            WorkspaceRailDensity::Icon => icon_workspace_summary(roster.summary.configured),
-            WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => summary.clone(),
+        let has_problem = roster.summary.problem > 0;
+        let problem_color = if has_problem {
+            design::danger_color(p)
+        } else {
+            p.text_muted
+        };
+        let marker_tail =
+            (!marker_facts.is_empty()).then(|| format!(" {}", marker_facts.join(" ")));
+        let summary_content = match density {
+            WorkspaceRailDensity::Icon => {
+                let icon_color = if has_problem {
+                    design::danger_color(p)
+                } else {
+                    p.text_soft
+                };
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_center()
+                    .text_color(rgb(icon_color))
+                    .child(icon_workspace_summary(roster.summary.configured))
+                    .into_any_element()
+            }
+            WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => {
+                let cores_ready = format!(
+                    "{}{SUMMARY_SEP}{}{SUMMARY_SEP}",
+                    t!("workspace.summary_cores", n = roster.summary.configured),
+                    t!("workspace.summary_ready", n = roster.summary.ready)
+                );
+                let problem_seg =
+                    t!("workspace.summary_problem", n = roster.summary.problem).to_string();
+                h_flex()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_center()
+                            .text_color(rgb(p.text_muted))
+                            .child(cores_ready),
+                    )
+                    .child(
+                        // `RAIL_ALARM_SHRINK` keeps this segment's flex-shrink small against
+                        // `cores_ready`'s default 1.0, so `cores_ready` absorbs essentially all of
+                        // the shrink first and the alarm stays fully visible until the row is
+                        // genuinely out of room. It still shrinks a little rather than 0, so the
+                        // bar's `overflow_hidden()` never hard-clips it without an ellipsis in that
+                        // last resort. The full text is always in the bar's own tooltip.
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .flex_shrink(design::RAIL_ALARM_SHRINK)
+                            .text_color(rgb(problem_color))
+                            .child(problem_seg),
+                    )
+                    .when_some(marker_tail.clone(), |row, tail| {
+                        row.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(rgb(p.text_muted))
+                                .child(tail),
+                        )
+                    })
+                    .into_any_element()
+            }
         };
         // The closing hint line lives in the tooltip only — Icon density's bare count never gets
         // it either, since both densities share this one tooltip.
@@ -973,13 +1036,13 @@ impl Shell {
                     )))
                     .flex_none()
                     .h(design::fit_h_px(cx, 38.0, 11.0, 8.0))
+                    .overflow_hidden()
                     .px(design::ui_px(cx, 8.0))
                     .flex()
                     .items_center()
                     .min_w_0()
                     .text_size(design::t_caption(cx))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(p.text_soft))
                     .border_b_1()
                     .border_color(rgb(p.border_soft))
                     .child(
@@ -988,7 +1051,7 @@ impl Shell {
                             .min_w_0()
                             .flex()
                             .justify_center()
-                            .child(div().min_w_0().truncate().text_center().child(summary_text)),
+                            .child(summary_content),
                     )
                     .tooltip(move |_window, cx| {
                         cx.new(|_| MoonTooltipView::new(summary.clone())).into()
@@ -998,6 +1061,13 @@ impl Shell {
             .into_any_element()
     }
 }
+
+/// Separator between the rail summary's three rendered segments.
+///
+/// Must match `workspace.summary`'s own spacing byte for byte (space, U+00B7 MIDDLE DOT, space):
+/// the tooltip still renders that original one-string value, so a mismatch would put two
+/// different-looking separators on screen at once.
+const SUMMARY_SEP: &str = " · ";
 
 /// Render the absolute-fill host used by both Classic and Auto around the one DockArea.
 ///
@@ -1104,31 +1174,44 @@ fn render_rail_item(
                 WorkspaceRailDensity::Icon => None,
                 WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => Some(label),
             };
-            h_flex()
+            // The gap is paid out of this 30-unit cell (`design::RAIL_SECTION_GAP`), which is why
+            // it is 6 and not 8: at font +6 the caption line box is ~18 px, leaving room inside
+            // the remaining 23 units. The outer element stays transparent so the rail's own
+            // `p.gutter` shows through as the section gap; the inner row alone paints the solid
+            // one-step-up background, so the heading itself reads as elevated, not the gap above
+            // it.
+            div()
                 .id(row_id)
                 .size_full()
-                .items_center()
-                .gap(design::ui_px(cx, 6.0))
-                .px(design::ui_px(cx, 8.0))
                 .min_w_0()
-                .text_size(design::t_caption(cx))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(p.text_muted))
-                .bg(design::moon_alpha(p.panel_high, 0.72))
-                .border_b_1()
-                .border_color(rgb(p.border_soft))
-                .when_some(logo, |row, logo| {
-                    row.child(
-                        img(logo)
-                            .flex_none()
-                            .w(design::ui_px(cx, 13.0))
-                            .h(design::ui_px(cx, 13.0))
-                            .rounded(design::ui_px(cx, 2.0)),
-                    )
-                })
-                .when_some(compact_label, |row, label| {
-                    row.child(div().min_w_0().truncate().child(label))
-                })
+                .pt(design::ui_px(cx, design::RAIL_SECTION_GAP))
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .h_full()
+                        .items_center()
+                        .gap(design::ui_px(cx, 6.0))
+                        .px(design::ui_px(cx, 8.0))
+                        .min_w_0()
+                        .text_size(design::t_caption(cx))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(p.text_muted))
+                        .bg(rgb(p.panel_high))
+                        .border_b_1()
+                        .border_color(rgb(p.border_soft))
+                        .when_some(logo, |row, logo| {
+                            row.child(
+                                img(logo)
+                                    .flex_none()
+                                    .w(design::ui_px(cx, 13.0))
+                                    .h(design::ui_px(cx, 13.0))
+                                    .rounded(design::ui_px(cx, 2.0)),
+                            )
+                        })
+                        .when_some(compact_label, |row, label| {
+                            row.child(div().min_w_0().truncate().child(label))
+                        }),
+                )
                 .tooltip(move |_window, cx| {
                     cx.new(|_| MoonTooltipView::new(tooltip.clone())).into()
                 })
@@ -1146,6 +1229,19 @@ fn render_rail_item(
                 WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => row.name.clone(),
             };
             let metrics = core_rail_metrics(density);
+            // Enlarges for every status the summary's `problem` count includes (`Unavailable` as
+            // well as `Problem`, see `workspace.rs`'s roster tally), so a counted row is always
+            // findable. Colour still separates severity: `Unavailable` keeps `p.amber` and
+            // `Problem` keeps the danger colour via `workspace_status_color`, untouched below —
+            // only the pill's danger treatment stays `Problem`-only.
+            let dot_size = if matches!(
+                row.status,
+                WorkspaceCoreStatus::Unavailable | WorkspaceCoreStatus::Problem
+            ) {
+                metrics.dot_size + design::RAIL_PROBLEM_DOT_STEP
+            } else {
+                metrics.dot_size
+            };
             let vertical_stem = div()
                 .absolute()
                 .left_0()
@@ -1175,16 +1271,28 @@ fn render_rail_item(
                                 .bg(rgb(p.border_soft)),
                         ),
                 )
-                .child(design::status_dot_sized(dot, metrics.dot_size, cx))
+                .child(design::status_dot_sized(dot, dot_size, cx))
                 .child(div().flex_1().min_w_0().truncate().child(name));
             if workspace_status_label_visible(row.status, density) {
-                content = content.child(
+                // The pill stays `Problem`-only, deliberately narrower than the dot above: it is
+                // the danger treatment, and `Unavailable` is not danger — it already gets its own
+                // plain label below via `workspace_status_label_visible`. Do not widen this back to
+                // match the dot; the two signals answer different questions on purpose.
+                //
+                // `AnyElement` boxing here is load-bearing, not incidental: `rail_problem_pill` now
+                // returns `MoonBadge` (`impl IntoElement`) while the other arm returns `Div` — the
+                // two arms genuinely differ in type, so this is where the divergence gets erased.
+                let label_child: AnyElement = if row.status == WorkspaceCoreStatus::Problem {
+                    rail_problem_pill(status, p).into_any_element()
+                } else {
                     div()
                         .flex_none()
                         .text_size(design::t_caption(cx))
                         .text_color(rgb(p.text_muted))
-                        .child(status),
-                );
+                        .child(status)
+                        .into_any_element()
+                };
+                content = content.child(label_child);
             }
             let action = crate::workspace::plan_workspace_navigation(&current_group, &row);
             let selectable = action.is_some();
@@ -1261,6 +1369,35 @@ fn workspace_core_tooltip(row: &WorkspaceRosterRow) -> String {
     lines.join("\n")
 }
 
+/// Build the tinted danger pill that replaces the plain status label for a `Problem` core row in
+/// Full density.
+///
+/// `MoonBadge` with `MoonBadgeSize::Status` — sized for exactly this use, through the crate's
+/// `tokens.ui(..)`/`tokens.line_height(..)` pipeline rather than raw px — reuses the same tinted
+/// idiom this pill hand-rolled before: `danger_color` is a text token, never a fill (`design.rs`'s
+/// own docstring), so the badge's background and border stay the raw `p.red` hue and only the text
+/// carries the legible per-theme colour, matching the amber warnings in
+/// `analytics/tuner/list/table.rs` and `analytics/calendar/day.rs`. Confirmed at the Font slider's
+/// +6 ceiling: `MoonBadgeSize::Status` scales to a 23px box (`line_height(12.0)` = 18px, plus
+/// `ui(2.5)` pad_y on each side = 5px, for 23px total), well inside the fixed 30-unit row cell.
+///
+/// Args:
+///     status: Localized status text, already resolved to "Problem" in the active locale.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A rounded, tinted badge, well inside the fixed 30-unit cell at every font scale.
+fn rail_problem_pill(status: String, p: MoonPalette) -> impl IntoElement {
+    MoonBadge::new(status)
+        .variant(MoonBadgeVariant::Outline)
+        .size(MoonBadgeSize::Status)
+        .bg_color(p.red)
+        .bg_alpha(design::RAIL_PILL_BG_ALPHA)
+        .border_color(p.red)
+        .border_alpha(design::RAIL_PILL_BORDER_ALPHA)
+        .text_color(design::danger_color(p))
+}
+
 /// Build shared selection, hover, and disabled chrome for one interactive rail row.
 ///
 /// Args:
@@ -1293,10 +1430,16 @@ fn rail_row_base(
         .px(design::ui_px(cx, horizontal_padding))
         .text_size(design::t_body(cx))
         .text_color(rgb(if selectable { p.text } else { p.text_muted }))
-        .when(selected, |row| row.bg(design::moon_alpha(p.accent, 0.18)))
+        .when(selected, |row| {
+            row.bg(design::moon_alpha(
+                p.accent,
+                design::RAIL_ROW_SELECTED_ALPHA,
+            ))
+        })
         .when(selectable, |row| {
-            row.cursor_pointer()
-                .hover(move |row| row.bg(design::moon_alpha(p.accent, 0.10)))
+            row.cursor_pointer().hover(move |row| {
+                row.bg(design::moon_alpha(p.accent, design::RAIL_ROW_HOVER_ALPHA))
+            })
         })
 }
 
@@ -1378,9 +1521,9 @@ fn workspace_status_color(status: WorkspaceCoreStatus, p: MoonPalette) -> u32 {
 
 /// Decide whether a rail row needs a visible status label beside its dot.
 ///
-/// Ready is already conveyed by the enlarged green dot and would waste the width needed for long
-/// server names. Failure states remain explicit in Full density and stay available in every
-/// density through the row tooltip.
+/// Ready is conveyed by the green dot; `Problem` and `Unavailable` both get an enlarged dot, and
+/// `Problem` alone also gets, in Full density, a tinted danger pill. Failure states remain
+/// explicit in Full density and stay available in every density through the row tooltip.
 ///
 /// Args:
 ///     status: Derived core status.
