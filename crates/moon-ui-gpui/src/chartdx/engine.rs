@@ -74,6 +74,7 @@ fn initial_palette_from_theme(theme: &ChartTheme) -> moon_ui::MoonPalette {
         table_head: panel,
         table_body: panel,
         table_selected: panel,
+        table_hover: panel,
         green,
         green_btn: green,
         green_text: green,

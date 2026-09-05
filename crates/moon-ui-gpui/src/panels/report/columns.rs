@@ -165,8 +165,15 @@ pub(super) fn report_columns(
                 .get(col)
                 .copied()
                 .unwrap_or_else(|| width_for(col));
-            let column =
-                MoonDataTableColumn::new(col.to_string(), header_label(col), width).sortable(true);
+            let label = header_label(col);
+            let raw = header_for(col);
+            // The raw schema name rides the header tooltip whenever the title was relabelled,
+            // so the wire name a support chat quotes stays one hover away.
+            let mut column =
+                MoonDataTableColumn::new(col.to_string(), label.clone(), width).sortable(true);
+            if label != raw {
+                column = column.tooltip(raw);
+            }
             if is_numeric_report_column(col) {
                 column.right()
             } else {
@@ -1098,9 +1105,8 @@ pub(super) fn header_label(col: &str) -> String {
 /// Columns menu label: the translated header plus the raw schema name, so the Columns menu stays
 /// the one place in the UI where the raw name is still reachable once headers are relabelled.
 ///
-/// `MoonDataTableColumn` has no tooltip field and `data_table/header.rs` renders bare text
-/// (MoonUI `data_table.rs:89-132`, `data_table/header.rs:88-96`), so a header tooltip is
-/// impossible without editing MoonUI.
+/// The header itself carries the raw name as a tooltip (`report_columns`); the menu keeps it
+/// inline so the mapping is readable without hovering each column.
 ///
 /// Args:
 ///     col: Runtime report column name.
