@@ -16,6 +16,14 @@
 //! Nothing here depends on moonproto: the mapping between these types and the wire sections lives
 //! in `feed::live::shared_config`, so the UI layer stays transport-agnostic like the rest of
 //! `feed::types`.
+//!
+//! [`CoreConfigEditRow`] breaks that layering in ONE place: it borrows `FieldMask` from
+//! `feed::live::shared_config`. `FieldMask` is a set of AREA flags over the types below and carries
+//! no transport of its own, so it belongs HERE beside [`CoreConfigArea`] rather than in the
+//! sequencer that happens to have introduced it. Moving it is the fix; until then this import is a
+//! stated exception rather than a precedent.
+
+use crate::feed::FieldMask;
 
 /// Slice of the core's safe-share configuration the terminal renders.
 ///
@@ -1350,11 +1358,22 @@ pub struct CoreConfigEditRow {
     pub phase: CoreConfigEditPhase,
     pub submitted_at_ms: i64,
     /// The projection this edit asked the core to hold.
+    ///
+    /// Authoritative only inside [`Self::touched`]: it is the projection of the PACKET that went
+    /// out, whose other areas are whatever the core's snapshot held at that moment. Nothing renders
+    /// it; it exists so the store can tell one edit from another.
     pub config: CoreConfig,
+    /// Which areas of [`Self::config`] this edit actually asked to change.
+    ///
+    /// Carried so the store can compare two submissions WITHIN the mask. Without it the only
+    /// available comparison was whole-projection equality, and an area the edit never named,
+    /// drifting on the core between two attempts, made a retry look like a different edit.
+    pub touched: FieldMask,
     /// The most recent rejection this edit received, if any. Retained across a retry's own
     /// `Submitted` event and cleared only by [`CoreConfigEditResult::Confirmed`] or a fresh user
     /// edit — never by a retry of the same edit; this is a store-arm rule, applied in
-    /// `session::store`.
+    /// `session::store`. What counts as "the same edit" is [`Self::touched`] plus equality within
+    /// it.
     pub mismatches: Option<CoreConfigRejection>,
 }
 

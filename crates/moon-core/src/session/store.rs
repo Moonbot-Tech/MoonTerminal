@@ -822,23 +822,49 @@ impl CoreData {
                             phase,
                             submitted_at_ms,
                             config,
+                            touched,
                             mismatches: _,
                         } = *row;
-                        // A retry of the SAME edit reapplies the identical projection: keep the
-                        // last rejection it received so a `NotApplied` that reached the UI on a
-                        // previous attempt is not wiped by this attempt's own `Submitted`. A
-                        // genuinely different projection (a new user edit queued, or scope grown by
-                        // coalescing) is treated as fresh — see the store-arm rule in
-                        // `feed::live::shared_config`'s module doc.
+                        // A retry of the SAME work keeps the last rejection it received, so a
+                        // `NotApplied` that reached the UI on a previous attempt is not wiped by
+                        // this attempt's own `Submitted`. A genuinely different edit is treated as
+                        // fresh — the rule [`CoreConfigEditRow::mismatches`] states.
+                        //
+                        // Three conditions, and each answers a way the old whole-projection
+                        // equality got it wrong:
+                        //
+                        // 1. The row must still be a LIVE edit. A `GaveUp` row describes work that
+                        //    left the queue, and a later submission repeating the same values is a
+                        //    new edit, not a retry of a dead one. This stops the dead verdict from
+                        //    being INHERITED; it does not preserve it. There is one row per core
+                        //    and this arm overwrites it, so a give-up is blanked by whatever is
+                        //    submitted next — and `phase` reaches no surface at all, `mismatches`
+                        //    being the only field anything renders. Giving a give-up a life of its
+                        //    own needs a second slot, or a row per edit; neither is here.
+                        // 2. The new mask must be CONTAINED in the old. A send's mask is the union
+                        //    of everything queued and narrows as entries leave, so a batch whose
+                        //    head was confirmed re-sends the rest under a smaller mask — still the
+                        //    same work. Scope GROWING means a new user edit joined the batch, and
+                        //    that starts fresh.
+                        // 3. The two must agree WITHIN the new mask. The row's `config` is the
+                        //    projection of the packet that went out, so its unnamed areas carry
+                        //    whatever the core held when it was built: comparing those made a
+                        //    trader's own change elsewhere, landing between two attempts, read as a
+                        //    different edit and drop the notice.
                         let mismatches = self
                             .core_config_edit
                             .as_ref()
-                            .filter(|existing| existing.config == config)
+                            .filter(|existing| {
+                                existing.phase == CoreConfigEditPhase::Pending
+                                    && existing.touched.contains(touched)
+                                    && touched.agrees_within(&existing.config, &config)
+                            })
                             .and_then(|existing| existing.mismatches.clone());
                         self.core_config_edit = Some(CoreConfigEditRow {
                             phase,
                             submitted_at_ms,
                             config,
+                            touched,
                             mismatches,
                         });
                     }

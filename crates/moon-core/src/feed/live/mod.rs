@@ -284,6 +284,13 @@ use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
 pub use shared_config::FieldMask;
 pub(in crate::feed) use shared_config::SharedConfigSequence;
+/// The only way to build a [`crate::feed::CoreConfig`] — it deliberately has no `Default` — which
+/// the session store's own tests need to drive its edit-row rules with.
+///
+/// Behind `cfg(test)` because nothing in a shipping build has any business making a projection:
+/// the wire makes them and the UI reads them.
+#[cfg(test)]
+pub(crate) use shared_config::core_config_from_proto;
 use startup_watchdog::{StartupStalled, StartupWatchdog};
 
 /// What to do with an arriving report alive map.
