@@ -948,20 +948,27 @@ impl Shell {
         };
         let marker_tail =
             (!marker_facts.is_empty()).then(|| format!(" {}", marker_facts.join(" ")));
-        let summary_content = match density {
+        // Rendered as a LIST of segments that the summary's centered wrapper below takes as its
+        // direct children, never as a nested flex row of their own: a nested row measured its
+        // truncating children at zero and collapsed the whole line to "...problems..." at full
+        // rail width (seen live 2026-09-05). The wrapper's row lays the segments out side by side
+        // at their content size, and the shrink priority applies only when it is out of room.
+        let summary_content: Vec<AnyElement> = match density {
             WorkspaceRailDensity::Icon => {
                 let icon_color = if has_problem {
                     design::danger_color(p)
                 } else {
                     p.text_soft
                 };
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_center()
-                    .text_color(rgb(icon_color))
-                    .child(icon_workspace_summary(roster.summary.configured))
-                    .into_any_element()
+                vec![
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_center()
+                        .text_color(rgb(icon_color))
+                        .child(icon_workspace_summary(roster.summary.configured))
+                        .into_any_element(),
+                ]
             }
             WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => {
                 let cores_ready = format!(
@@ -971,40 +978,38 @@ impl Shell {
                 );
                 let problem_seg =
                     t!("workspace.summary_problem", n = roster.summary.problem).to_string();
-                h_flex()
-                    .min_w_0()
-                    .child(
+                let mut segments = vec![
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(p.text_muted))
+                        .child(cores_ready)
+                        .into_any_element(),
+                    // `RAIL_ALARM_SHRINK` keeps this segment's flex-shrink small against
+                    // `cores_ready`'s default 1.0, so `cores_ready` absorbs essentially all of
+                    // the shrink first and the alarm stays fully visible until the row is
+                    // genuinely out of room. It still shrinks a little rather than 0, so the
+                    // bar's `overflow_hidden()` never hard-clips it without an ellipsis in that
+                    // last resort. The full text is always in the bar's own tooltip.
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .flex_shrink(design::RAIL_ALARM_SHRINK)
+                        .text_color(rgb(problem_color))
+                        .child(problem_seg)
+                        .into_any_element(),
+                ];
+                if let Some(tail) = marker_tail.clone() {
+                    segments.push(
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_center()
                             .text_color(rgb(p.text_muted))
-                            .child(cores_ready),
-                    )
-                    .child(
-                        // `RAIL_ALARM_SHRINK` keeps this segment's flex-shrink small against
-                        // `cores_ready`'s default 1.0, so `cores_ready` absorbs essentially all of
-                        // the shrink first and the alarm stays fully visible until the row is
-                        // genuinely out of room. It still shrinks a little rather than 0, so the
-                        // bar's `overflow_hidden()` never hard-clips it without an ellipsis in that
-                        // last resort. The full text is always in the bar's own tooltip.
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .flex_shrink(design::RAIL_ALARM_SHRINK)
-                            .text_color(rgb(problem_color))
-                            .child(problem_seg),
-                    )
-                    .when_some(marker_tail.clone(), |row, tail| {
-                        row.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(rgb(p.text_muted))
-                                .child(tail),
-                        )
-                    })
-                    .into_any_element()
+                            .child(tail)
+                            .into_any_element(),
+                    );
+                }
+                segments
             }
         };
         // The closing hint line lives in the tooltip only — Icon density's bare count never gets
@@ -1051,7 +1056,7 @@ impl Shell {
                             .min_w_0()
                             .flex()
                             .justify_center()
-                            .child(summary_content),
+                            .children(summary_content),
                     )
                     .tooltip(move |_window, cx| {
                         cx.new(|_| MoonTooltipView::new(summary.clone())).into()

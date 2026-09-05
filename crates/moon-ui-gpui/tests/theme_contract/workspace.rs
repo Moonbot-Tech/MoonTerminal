@@ -494,6 +494,16 @@ fn workspace_navigation_uses_the_shared_virtual_rail_and_owner_action() {
 /// `.flex_shrink(design::RAIL_ALARM_SHRINK)` between `.truncate()` and `.text_color(..)`, fixing
 /// the bug where both segments shared gpui's default `flex_shrink: 1.0` and the short problem
 /// count lost its digit first under proportional shrink. That call is now part of the pinned chain.
+///
+/// RE-PROVE-repaired again, after the rail-summary layout fix: the segments used to be chained
+/// onto their own nested `h_flex()` row inside the centered wrapper; that row measured its
+/// truncating children at zero and collapsed the whole line to the alarm text alone at full rail
+/// width. The fix hands the segments to the centered wrapper directly as a `Vec<AnyElement>` via
+/// `.children(..)`, so each segment is now a DIRECT child of the wrapper this test already pins,
+/// never wrapped back into a row of its own. The alarm chain no longer opens with `.child(` — it
+/// is a member of that `Vec` — so this test pins the chain on its own and pins the wrapper's
+/// `.children(summary_content)` call as directly adjacent to `.justify_center()`, which a
+/// reintroduced nested row would break.
 #[test]
 fn auto_rail_centers_only_the_summary_and_overview_content() {
     let workspace = code_only(&read_src("shell/workspace.rs"));
@@ -509,12 +519,25 @@ fn auto_rail_centers_only_the_summary_and_overview_content() {
         "the fixed-height summary bar must clip its segmented content rather than overflow, now \
          that the summary is several independently-truncating segments instead of one"
     );
+    let alarm_pos = rail
+        .find(
+            "div().min_w_0().truncate().flex_shrink(design::RAIL_ALARM_SHRINK).text_color(rgb(problem_color))"
+        )
+        .expect(
+            "the alarm segment must stay clip-safe (min_w_0 + truncate) and explicitly \
+             shrink-guarded like its sibling segments",
+        );
+    let segments_vec = rail
+        .find("letmutsegments=vec![")
+        .expect("the summary segments must be built as a Vec, not chained .child() calls");
     assert!(
-        rail.contains(
-            ".child(div().min_w_0().truncate().flex_shrink(design::RAIL_ALARM_SHRINK).text_color(rgb(problem_color))"
-        ),
-        "the alarm segment must stay clip-safe (min_w_0 + truncate) and explicitly shrink-guarded \
-         like its sibling segments"
+        segments_vec < alarm_pos,
+        "the alarm segment must be a member of the segments Vec, not re-nested into a row of its own"
+    );
+    assert!(
+        rail.contains(".justify_center().children(summary_content)"),
+        "the segments must render as DIRECT children of the centered wrapper — a nested flex row \
+         around them measures its truncating children at zero and collapses the whole summary line"
     );
 
     let render = braced_body(&workspace, "fn render_rail_item(")
@@ -988,6 +1011,11 @@ fn configured_workspace_scope_is_derived_from_configuration_not_sessions() {
 /// now also pins that mechanism: deleting the `.flex_shrink(..)` call, or widening the constant
 /// back to `1.0`, must redden it — that is exactly the defect the repair closed.
 ///
+/// RE-PROVE-repaired again, after the rail-summary layout fix: the segment chain no longer opens
+/// with `.child(` — the summary's segments moved off a nested `h_flex()` row and onto a plain
+/// `Vec<AnyElement>` handed to the wrapper's `.children(..)`, so the alarm chain is pinned on its
+/// own instead of as a `.child(...)` call.
+///
 /// Future edit that must redden this: change `roster.summary.problem > 0` to `> 1`, drop the
 /// `danger_color` branch so every segment renders `text_muted`, or delete the
 /// `.flex_shrink(design::RAIL_ALARM_SHRINK)` call / raise the constant to `1.0`.
@@ -1015,7 +1043,7 @@ fn rail_summary_problem_segment_alarms_in_danger_colour_and_resists_truncation()
     );
     let alarm = rail
         .find(
-            ".child(div().min_w_0().truncate().flex_shrink(design::RAIL_ALARM_SHRINK).text_color(rgb(problem_color))"
+            "div().min_w_0().truncate().flex_shrink(design::RAIL_ALARM_SHRINK).text_color(rgb(problem_color))"
         )
         .expect(
             "the alarm segment must stay clip-safe (min_w_0 + truncate), explicitly \
