@@ -9,7 +9,9 @@
 //! window against Moonbot's, and a missing row reads as a bug where a dead one reads as a limit. So
 //! most helpers take an `enabled` flag. The `_live` ones do not: they exist for the rows this
 //! terminal CAN fill. Where a page needs the same control dead it reaches for the plain helper
-//! beside it — and where no plain helper is left, that is because no page needs one.
+//! beside it — and where no plain helper is left, that is because no page needs one. The checkbox
+//! is the exception, because it is the row every page has most of: `flag_live` and `flag_dead` name
+//! both halves outright, so a call site says which it is without reading an argument.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -18,6 +20,8 @@ use moon_ui::{
     MoonGroupBox, MoonInput, MoonLink, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRadio,
     MoonRadioSize, MoonSlider, MoonStepper, MoonStepperSize, MoonText, h_flex, v_flex,
 };
+
+use rust_i18n::t;
 
 use moon_core::feed::CoreConfig;
 
@@ -59,6 +63,30 @@ pub(super) fn flag(
                 this.edit_draft(|draft| set(draft, on), cx);
             });
         })
+}
+
+/// One checkbox row a page draws but the snapshot cannot fill: a caption, and no write.
+///
+/// It and [`flag_live`] take the locale KEY rather than a formatted string, which is what separates
+/// them from [`flag`]: they are for the plain rows, where the caption is the whole line. A row that
+/// formats a VALUE into its own caption, as Moonbot's do, calls `flag` and formats it itself.
+pub(super) fn flag_dead(
+    id: &'static str,
+    key: &'static str,
+    view: &Entity<CoreExpertView>,
+) -> impl IntoElement {
+    flag(id, t!(key).to_string(), false, false, view, |_, _| {})
+}
+
+/// One checkbox row the snapshot carries, staging into the page.
+pub(super) fn flag_live(
+    id: &'static str,
+    key: &'static str,
+    checked: bool,
+    view: &Entity<CoreExpertView>,
+    set: fn(&mut CoreConfig, bool),
+) -> impl IntoElement {
+    flag(id, t!(key).to_string(), checked, true, view, set)
 }
 
 /// One label, sized to its own text.

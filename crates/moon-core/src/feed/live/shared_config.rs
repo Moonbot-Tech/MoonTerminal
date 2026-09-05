@@ -753,6 +753,7 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             auto_close_zero_pos: t.auto_close_zero_pos,
             auto_lower_lev: t.auto_lower_lev,
             use_websocket_api: t.use_websocket_api,
+            futures_rules: t.futures_rules,
             iceberg_step: t.iceberg_step,
             sell_x2_level: t.sell_x2_level,
             no_trades_markets_text: t.no_trades_markets_text.clone(),
@@ -843,9 +844,20 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             book_cumulative_opacity: v.book_cumulative_opacity,
             book_orders_opacity: v.book_orders_opacity,
             book_orders_width: v.book_orders_width,
-            play_signal_sound: cfg.signals.play_signal_sound,
+            play_signal_sound: sig.play_signal_sound,
             confirm_close: u.confirm_close,
             hide_demo_button: u.hide_demo_button,
+            auto_show_on_signal: sig.auto_show_on_signal,
+            show_market_captions: v.show_market_captions,
+            show_usd_on_charts: v.show_usd_on_charts,
+            show_detects_tool: v.show_detects_tool,
+            auto_request_charts: v.auto_request_charts,
+            new_markets_max_scale: v.new_markets_max_scale,
+            new_markets_on_top: u.new_markets_on_top,
+            use_last_detect_caption: sig.use_last_detect_caption,
+            full_screen_prevent_signals: sig.full_screen_prevent_signals,
+            pending_buy_price: t.pending_buy_price,
+            hide_cashback_info: t.cashback_settings.hide_info,
         },
         signals: SignalsSettings {
             play_sell_alert: sig.play_sell_alert,
@@ -1153,7 +1165,7 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
 /// Apply Moonbot's "Специальные" page to `trading` and its `send_shots_config` and
 /// `orders_control` sub-records.
 ///
-/// Thirty-five fields across `trading`, its `send_shots_config` and its `orders_control`:
+/// Thirty-six fields across `trading`, its `send_shots_config` and its `orders_control`:
 /// everything else in that section — including its `unknown_tail`, the exits [`apply_general`] owns
 /// and the leverage block [`apply_leverage`] owns — travels back untouched.
 ///
@@ -1180,6 +1192,7 @@ fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     t.auto_close_zero_pos = s.auto_close_zero_pos;
     t.auto_lower_lev = s.auto_lower_lev;
     t.use_websocket_api = s.use_websocket_api;
+    t.futures_rules = s.futures_rules;
     t.iceberg_step = s.iceberg_step;
     t.sell_x2_level = s.sell_x2_level;
     t.no_trades_markets_text = s.no_trades_markets_text.clone();
@@ -1262,20 +1275,17 @@ fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
 
 /// Apply Moonbot's interface page across the four sections it lives in.
 ///
-/// Twenty-nine fields of the several hundred those sections hold: everything else in each of them
-/// — including all four `unknown_tail`s — travels back untouched, exactly as `apply_general` leaves
+/// Forty fields of the several hundred those sections hold: everything else in each of them —
+/// including all four `unknown_tail`s — travels back untouched, exactly as `apply_general` leaves
 /// the rest of `trading` alone.
 ///
 /// Three of Moonbot's rows on that page are deliberately NOT here, and the page draws them
-/// disabled. `trading.pending_buy_price` is not the drawing flag its caption suggests: the wire
-/// documents it as using the pending-buy price instead of the current ask for SELL calculations,
-/// which is trading maths, not appearance. `trading.use_lev_for_take` already belongs to
+/// disabled. `trading.use_lev_for_take` and `trading.ignore_strat_sell_price` already belong to
 /// [`crate::feed::ManualSettings`], and projecting one wire field into two areas would leave the
 /// second stale after a write and make `edit_satisfied` false for any mask naming that area.
-/// `visual`'s
-/// `manual_charts_full_screen` sits behind that section's tail gate, so a core older than the field
-/// reads it back as `false` however it was written — an edit that could never echo, and would burn
-/// all three attempts.
+/// `visual.manual_charts_full_screen` sits behind that section's tail gate, so a core older than
+/// the field reads it back as `false` however it was written — an edit that could never echo, and
+/// would burn all three attempts.
 fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
     let t = &mut cfg.trading;
     t.buy_on_enter = i.buy_on_enter;
@@ -1284,6 +1294,8 @@ fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
     t.draw_stop = i.draw_stop;
     t.pending_orders_spread = i.pending_orders_spread;
     t.pending_orders_spread_h_delta = i.pending_orders_spread_h_delta;
+    t.pending_buy_price = i.pending_buy_price;
+    t.cashback_settings.hide_info = i.hide_cashback_info;
     let v = &mut cfg.visual;
     v.hide_forum_label = i.hide_forum_label;
     v.scrolling_charts = i.scrolling_charts;
@@ -1298,6 +1310,11 @@ fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
     v.hide_cashback_button = i.hide_cashback_button;
     v.remember_chart_buttons = i.remember_chart_buttons;
     v.show_filters.scale_tool = i.scale_tool;
+    v.show_market_captions = i.show_market_captions;
+    v.show_usd_on_charts = i.show_usd_on_charts;
+    v.show_detects_tool = i.show_detects_tool;
+    v.auto_request_charts = i.auto_request_charts;
+    v.new_markets_max_scale = i.new_markets_max_scale;
     v.icon_selection = i.icon_selection;
     v.colors.price_line_width = i.price_line_width;
     v.panic_sell_opacity = i.panic_sell_opacity;
@@ -1305,10 +1322,15 @@ fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
     v.book_cumulative_opacity = i.book_cumulative_opacity;
     v.book_orders_opacity = i.book_orders_opacity;
     v.book_orders_width = i.book_orders_width;
-    cfg.signals.play_signal_sound = i.play_signal_sound;
+    let s = &mut cfg.signals;
+    s.play_signal_sound = i.play_signal_sound;
+    s.auto_show_on_signal = i.auto_show_on_signal;
+    s.use_last_detect_caption = i.use_last_detect_caption;
+    s.full_screen_prevent_signals = i.full_screen_prevent_signals;
     let u = &mut cfg.ui;
     u.confirm_close = i.confirm_close;
     u.hide_demo_button = i.hide_demo_button;
+    u.new_markets_on_top = i.new_markets_on_top;
 }
 
 /// Apply the leverage-management block.
