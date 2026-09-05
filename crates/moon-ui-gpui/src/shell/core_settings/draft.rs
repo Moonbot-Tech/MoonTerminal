@@ -49,6 +49,11 @@ pub(crate) fn parse_num(s: &str) -> Option<f64> {
         .parse::<f64>()
         .ok()
         .filter(|v| v.is_finite())
+        // Canonical zero. "-0" parses to `-0.0`, which the projection's `total_cmp` equality orders
+        // BELOW `0.0` — so a core echoing a plain zero would never match the draft, and every OK on
+        // that page would burn its retry budget. One place, rather than a special case in each of
+        // the five hand-written comparisons downstream.
+        .map(|v| if v == 0.0 { 0.0 } else { v })
 }
 
 /// Parse an `HH:MM` work-time boundary into minutes since midnight.

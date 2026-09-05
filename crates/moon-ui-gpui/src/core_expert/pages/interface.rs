@@ -337,10 +337,13 @@ pub(super) fn body(
                 h_flex()
                     .items_center()
                     .gap(design::ui_px(cx, 6.0))
+                    // Live whichever way the alert flag stands, like the level beside it and
+                    // like the compact popup's copy of this row: the flag switches the ALERT, not
+                    // the ability to choose the sound it will use. Gating one half of the pair made
+                    // the two faces of one gear disagree about the same row.
                     .child(sound_cell(
                         "exp-int-sell-sound-pick",
                         sig.signal_sound_2,
-                        sig.play_sell_alert,
                         view,
                         |d, v| d.signals.signal_sound_2 = v,
                         p,
@@ -365,10 +368,13 @@ pub(super) fn body(
                 h_flex()
                     .items_center()
                     .gap(design::ui_px(cx, 6.0))
+                    // Live whichever way the alert flag stands, like the level beside it and
+                    // like the compact popup's copy of this row: the flag switches the ALERT, not
+                    // the ability to choose the sound it will use. Gating one half of the pair made
+                    // the two faces of one gear disagree about the same row.
                     .child(sound_cell(
                         "exp-int-buy-sound-pick",
                         sig.buy_signal_sound,
-                        sig.play_buy_alert,
                         view,
                         |d, v| d.signals.buy_signal_sound = v,
                         p,

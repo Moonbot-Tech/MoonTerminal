@@ -509,10 +509,13 @@ pub(super) fn num(
 /// so the sound pickers in this application cannot drift apart. Picking does NOT play; the preview
 /// button does, and picking the sound already selected stages nothing — the guard every other live
 /// helper here carries, for the reason [`radio_live`] states.
+///
+/// Always live, and takes no `enabled` like the rest of this module: the switch beside one of these
+/// turns the ALERT on and off, not the ability to choose which sound it will use. Gating it made
+/// this window disagree with the compact popup, whose own `sound_cell` has never had the parameter.
 pub(super) fn sound_cell(
     id: &'static str,
     current: i32,
-    enabled: bool,
     view: &Entity<CoreExpertView>,
     set: fn(&mut CoreConfig, i32),
     p: MoonPalette,
@@ -559,8 +562,7 @@ pub(super) fn sound_cell(
                 .trigger_width_scaled(94.0)
                 .menu_width_scaled(128.0)
                 .menu_size(MoonMenuSize::Compact)
-                .items(items)
-                .disabled(!enabled),
+                .items(items),
         )
         .child(crate::panels::common::sound_preview_button(
             SharedString::from(format!("{id}-play")),

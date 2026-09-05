@@ -785,7 +785,6 @@ pub(super) fn body(
                         .child(sound_cell(
                             "exp-as-alarm-sound",
                             i32::from(b.alarm_type),
-                            b.alarm_btc,
                             view,
                             |d, v| d.btc_blink.alarm_type = v.clamp(0, i32::from(u8::MAX)) as u8,
                             p,

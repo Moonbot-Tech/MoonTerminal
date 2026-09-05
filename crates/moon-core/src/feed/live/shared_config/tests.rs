@@ -76,6 +76,111 @@ fn edit_already_reflected_is_dropped_without_a_send() {
     ));
 }
 
+/// Regression target: the "already reflected" check is the same comparison as the confirmation, so
+/// it must be scoped the same way.
+///
+/// An OK that changed nothing used to send the whole snapshot anyway whenever ANY projected field
+/// had drifted since the surface seeded — the drift is in the surface's frozen copy of an area this
+/// edit never named, and says nothing about whether the edit has work to do.
+#[test]
+fn a_no_op_edit_is_dropped_even_when_an_untouched_area_drifted() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    // The surface's copy: nothing changed on its own page.
+    sequence.enqueue(edit_from(&base, |_| {}), FieldMask::RENDERED_SECTIONS);
+
+    // Meanwhile the core moved something no mask here names.
+    let drifted = {
+        let mut cfg = base.clone();
+        cfg.trading.multi_orders.buy_move_click = 7;
+        cfg
+    };
+    let mut events = Vec::new();
+    assert!(
+        matches!(
+            sequence.next_action(&drifted, TEST_CORE, &mut events),
+            SequenceAction::Idle
+        ),
+        "the edit asks for nothing this core does not already hold"
+    );
+    assert!(
+        matches!(
+            events.as_slice(),
+            [CoreConfigEditEvent::Resolved(
+                CoreConfigEditResult::Confirmed
+            )]
+        ),
+        "dropping it without resolving leaves the toolbar cell pending forever, got {events:?}"
+    );
+}
+
+/// Regression target: one core has ONE edit row, and `Confirmed` clears it outright, so a second
+/// entry's success in the same pass must not erase the verdict the first one just earned.
+///
+/// Narrowing the echo comparison to the mask is what made this reachable: "the core already holds
+/// this" went from near-impossible to common, and the drop that follows it used to announce itself
+/// after a `GaveUp` had already been announced.
+#[test]
+fn a_satisfied_drop_does_not_erase_a_give_up_from_the_same_pass() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mask = FieldMask::RENDERED_SECTIONS;
+
+    // Spend the whole budget on an edit the core never reflects, WITHOUT letting the drain run
+    // afterwards: the last packet's echo is timed out instead, so the pass under test carries a
+    // give-up and no rejection beside it.
+    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
+    for _ in 0..MAX_ATTEMPTS {
+        let sent = next_config(&mut sequence, &base);
+        sequence.observe_send_success(&sent, 1, mask);
+        sequence.observe_update();
+    }
+    sequence.observe_echo_timeout();
+
+    // A second edit asking for nothing lands behind it and is drained in the same pass.
+    sequence.enqueue(edit_from(&base, |_| {}), mask);
+    let mut events = Vec::new();
+    let _ = sequence.next_action(&base, TEST_CORE, &mut events);
+
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            CoreConfigEditEvent::Resolved(CoreConfigEditResult::GaveUp)
+        )),
+        "the first edit exhausted its budget, got {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            CoreConfigEditEvent::Resolved(CoreConfigEditResult::Confirmed)
+        )),
+        "a Confirmed beside it clears the row carrying the give-up, got {events:?}"
+    );
+}
+
+/// A core holding a non-finite number in the AutoStart or BTC-blink area must still compare equal
+/// to itself.
+///
+/// Both areas are in the compact popup's own mask, and the echo comparison is now the single
+/// answer to "confirmed", "rejected" and "already satisfied" alike — so an area that cannot equal
+/// itself makes every OK naming it unresolvable, three sends and a `GaveUp` at a time.
+#[test]
+fn a_non_finite_autostart_or_blink_number_still_equals_itself() {
+    let mut base = SharedConfig::default();
+    base.trading.auto_start.auto_stop_loss = f64::NAN;
+    base.trading.auto_start.panic_btc_delta = f64::NAN;
+    base.visual.blink_config.blink_btc_delta = f64::NAN;
+    let projected = core_config_from_proto(&base);
+
+    assert_eq!(projected.auto_start, projected.auto_start.clone());
+    assert_eq!(projected.btc_blink, projected.btc_blink.clone());
+    assert!(edit_satisfied(
+        &base,
+        &projected,
+        FieldMask::RENDERED_SECTIONS
+    ));
+}
+
 /// Regression target: removing the echo barrier lets a second OK press build on the pre-edit
 /// snapshot, so the first press is silently reverted.
 #[test]
@@ -134,6 +239,52 @@ fn an_echo_that_never_arrives_is_not_a_rejection() {
     assert!(
         events.is_empty(),
         "a timed-out echo must resolve nothing, got {events:?}"
+    );
+}
+
+/// Regression target: a core-side change to a field this write never named must not cost the write
+/// its confirmation.
+///
+/// The echo comparison used to be `actual == expected` over the WHOLE projection, so a trader
+/// moving anything in Moonbot's own dialogs while a packet was in flight made the echo differ,
+/// resolved nothing, and sent the whole snapshot again. Enough of them in a row and an edit that
+/// LANDED is dropped as `GaveUp`. `rejection_within_mask` already knew the difference; the
+/// confirmation did not ask it.
+#[test]
+fn a_concurrent_change_outside_the_mask_still_confirms_the_edit() {
+    let base = SharedConfig::default();
+    let mut sequence = SharedConfigSequence::new();
+    let mask = FieldMask::RENDERED_SECTIONS;
+    sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
+
+    let sent = next_config(&mut sequence, &base);
+    sequence.observe_send_success(&sent, 1, mask);
+    sequence.observe_update();
+
+    // The core applied the edit AND changed a field this write never named — someone moved a mouse
+    // gesture in Moonbot's own Hotkeys dialog while the packet was in flight.
+    let echoed = {
+        let mut cfg = base.clone();
+        cfg.trading.auto_start.errors_level = 9;
+        cfg.trading.multi_orders.buy_move_click = 7;
+        cfg
+    };
+    let mut events = Vec::new();
+    assert!(
+        matches!(
+            sequence.next_action(&echoed, TEST_CORE, &mut events),
+            SequenceAction::Idle
+        ),
+        "the edit landed; nothing should be re-sent"
+    );
+    assert!(
+        matches!(
+            events.as_slice(),
+            [CoreConfigEditEvent::Resolved(
+                CoreConfigEditResult::Confirmed
+            )]
+        ),
+        "expected one Confirmed, got {events:?}"
     );
 }
 
@@ -641,7 +792,11 @@ fn a_non_finite_special_amount_still_equals_itself() {
     let projected = core_config_from_proto(&base);
 
     assert_eq!(projected.special, projected.special.clone());
-    assert!(edit_satisfied(&base, &projected));
+    assert!(edit_satisfied(
+        &base,
+        &projected,
+        FieldMask::EMPTY.with_special()
+    ));
 }
 
 /// The Special page shares `trading` with General, AutoStart and the Interface page but not a mask
@@ -967,5 +1122,9 @@ fn a_non_finite_general_number_still_equals_itself() {
 
     assert_eq!(projected.general, projected.general.clone());
     assert_eq!(projected.order_rules, projected.order_rules.clone());
-    assert!(edit_satisfied(&base, &projected));
+    assert!(edit_satisfied(
+        &base,
+        &projected,
+        FieldMask::EMPTY.with_general().with_order_rules()
+    ));
 }

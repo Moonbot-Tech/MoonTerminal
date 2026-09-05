@@ -312,6 +312,15 @@ impl SharedConfigSequence {
     /// arrived yet. `touched` names the fields this edit actually asked to change; see
     /// [`FieldMask`].
     pub(super) fn enqueue(&mut self, config: CoreConfig, touched: FieldMask) {
+        if touched == FieldMask::EMPTY {
+            // Not refused — an edit that names nothing is satisfied by any snapshot, so the queue
+            // drops it and reports `Confirmed` without a send, which is the honest answer to "write
+            // nothing". Logged because reaching here means a CALLER lost its section list, and that
+            // reads as a successful save.
+            log::warn!(
+                "shared config edit queued with an empty section mask: nothing will be sent"
+            );
+        }
         self.gated_logged = false;
         self.queue.push_back(QueuedEdit {
             config,
@@ -497,37 +506,41 @@ impl SharedConfigSequence {
         }
         if let Some((expected, touched, edit_count)) = self.pending_confirmation.take() {
             let actual = core_config_from_proto(config);
-            if actual == expected {
-                for _ in 0..edit_count {
-                    self.queue.pop_front();
+            // Scoped to `touched`, not the whole projection. Anything this write did not name is
+            // free to have moved between the send and the echo — a trader in Moonbot's own dialogs
+            // — and comparing it would leave a landed edit unconfirmed, re-sending the whole
+            // snapshot until the budget ran out and the edit was dropped as `GaveUp`.
+            match rejection_within_mask(&expected, &actual, touched) {
+                None => {
+                    for _ in 0..edit_count {
+                        self.queue.pop_front();
+                    }
+                    events.push(CoreConfigEditEvent::Resolved(
+                        CoreConfigEditResult::Confirmed,
+                    ));
                 }
-                events.push(CoreConfigEditEvent::Resolved(
-                    CoreConfigEditResult::Confirmed,
-                ));
-            } else if let Some(rejection) = rejection_within_mask(&expected, &actual, touched) {
-                // Logged, not only evented: a core that keeps its own value leaves no other trace
-                // until the budget runs out. NOT phrased as a refusal — `observe_update` lifts the
-                // barrier on ANY `SharedConfigUpdated`, so a first mismatch can be a pre-write
-                // snapshot. The give-up line is where a refusal becomes a verdict.
-                log::warn!(
-                    "core {} shared config echo did not carry the requested value (retrying): \
-                     {rejection:?}",
-                    crate::feed::core_label(server_id)
-                );
-                // Not dequeued: the entries stay queued and MAX_ATTEMPTS below still ends it.
-                events.push(CoreConfigEditEvent::Resolved(
-                    CoreConfigEditResult::NotApplied(rejection),
-                ));
+                Some(rejection) => {
+                    // Logged, not only evented: a core that keeps its own value leaves no other
+                    // trace until the budget runs out. NOT phrased as a refusal — `observe_update`
+                    // lifts the barrier on ANY `SharedConfigUpdated`, so a first mismatch can be a
+                    // pre-write snapshot. The give-up line is where a refusal becomes a verdict.
+                    log::warn!(
+                        "core {} shared config echo did not carry the requested value (retrying): \
+                         {rejection:?}",
+                        crate::feed::core_label(server_id)
+                    );
+                    // Not dequeued: the entries stay queued and MAX_ATTEMPTS below still ends it.
+                    events.push(CoreConfigEditEvent::Resolved(
+                        CoreConfigEditResult::NotApplied(rejection),
+                    ));
+                }
             }
-            // Else: the whole projection differs only in fields this edit never touched — a
-            // concurrent core-side change, not a rejection (goal A's B6 property). Emit nothing
-            // and replan below on the fresh base.
         }
         loop {
             let Some(head) = self.queue.front() else {
                 return SequenceAction::Idle;
             };
-            if edit_satisfied(config, &head.config) {
+            if edit_satisfied(config, &head.config, head.touched) {
                 // The quietest of the three ways an edit leaves the queue: no send line precedes
                 // it, so "the core already holds this" and "it was never sent" read alike.
                 log::info!(
@@ -539,12 +552,24 @@ impl SharedConfigSequence {
                 // CONFIRMED, because it is. It also catches the case `observe_echo_timeout` opens:
                 // a late echo reaches the queue HERE, and `CoreData::core_config_edit` clears on
                 // nothing else, so a succeeded write would leave the cell pending for the session.
-                // Suppressed after a REJECTION in the same pass — that would clear the row
-                // carrying it — but not after a `GaveUp`, whose row stays put either way.
+                //
+                // Suppressed after EITHER terminal verdict in the same pass. There is one row per
+                // core (`CoreData::core_config_edit`), `Confirmed` sets it to `None`, and both a
+                // rejection and a give-up live IN that row — so another entry's success would erase
+                // the news the user most needs. The give-up was excluded here until the comparison
+                // above was narrowed to the mask, which turned "this entry is already satisfied"
+                // from a near-unreachable case into a common one.
+                //
+                // The cost is real and chosen: this entry's own success then goes unannounced, and
+                // the row keeps the other's verdict until the next edit is submitted over it. With
+                // ONE row per core those are the only two options, and a failure a trader never
+                // sees is the worse of them — they would read a write that did not land as saved.
                 if !events.iter().any(|event| {
                     matches!(
                         event,
-                        CoreConfigEditEvent::Resolved(CoreConfigEditResult::NotApplied(_))
+                        CoreConfigEditEvent::Resolved(
+                            CoreConfigEditResult::NotApplied(_) | CoreConfigEditResult::GaveUp
+                        )
                     )
                 }) {
                     events.push(CoreConfigEditEvent::Resolved(
@@ -583,55 +608,82 @@ impl SharedConfigSequence {
     }
 }
 
-/// Whether the core's snapshot already carries everything this write would set.
-fn edit_satisfied(config: &SharedConfig, wanted: &CoreConfig) -> bool {
-    &core_config_from_proto(config) == wanted
+/// Whether the core's snapshot already carries everything this write would set IN THE AREAS IT
+/// NAMES.
+///
+/// Restricted to the areas `touched` names, like the confirmation that shares its comparison: the
+/// rest of `wanted` is the surface's own copy, frozen when it seeded, and a field that drifted
+/// there says nothing about whether THIS edit still has work to do. Comparing it made an OK that
+/// changed nothing send the whole snapshot whenever anything else on the core had moved since.
+fn edit_satisfied(config: &SharedConfig, wanted: &CoreConfig, touched: FieldMask) -> bool {
+    rejection_within_mask(wanted, &core_config_from_proto(config), touched).is_none()
 }
 
 /// What the echo disagreed with the terminal about, restricted to the fields `touched` actually
 /// names — never the whole projection, so a concurrent core-side change to an untouched field
-/// cannot read as this edit's rejection. `None` means every touched field matches: the mismatch
-/// lies entirely outside what this edit asked to change.
+/// cannot read as this edit's rejection. `None` means every touched field matches, which is also
+/// what CONFIRMS a write and what tells the queue an edit needs no send at all: the three questions
+/// are one comparison, and they were not always asked the same way.
 fn rejection_within_mask(
     expected: &CoreConfig,
     actual: &CoreConfig,
     touched: FieldMask,
 ) -> Option<CoreConfigRejection> {
+    // Destructured rather than read through `touched.`: a bit added to the mask must then be
+    // NAMED here or the pattern does not compile (E0027). That is the half worth having — leaving
+    // a named bit unused is only a warning, so the pattern makes the omission impossible to miss
+    // rather than impossible to make. It matters more than it reads: this function is now also
+    // what decides an edit is already satisfied, so a bit with no arm would make every edit naming
+    // it drop without ever being sent.
+    let FieldMask {
+        auto_buy,
+        auto_start,
+        btc_blink,
+        general,
+        gestures,
+        interface,
+        order_rules,
+        leverage,
+        signals,
+        special,
+        telegram,
+        ignore_strat_sell_price,
+    } = touched;
     let mut areas = Vec::new();
-    if touched.auto_buy && expected.auto_buy != actual.auto_buy {
+    if auto_buy && expected.auto_buy != actual.auto_buy {
         areas.push(CoreConfigArea::AutoBuy);
     }
-    if touched.auto_start && expected.auto_start != actual.auto_start {
+    if auto_start && expected.auto_start != actual.auto_start {
         areas.push(CoreConfigArea::AutoStart);
     }
-    if touched.btc_blink && expected.btc_blink != actual.btc_blink {
+    if btc_blink && expected.btc_blink != actual.btc_blink {
         areas.push(CoreConfigArea::BtcBlink);
     }
-    if touched.general && expected.general != actual.general {
+    if general && expected.general != actual.general {
         areas.push(CoreConfigArea::General);
     }
-    if touched.gestures && expected.gestures != actual.gestures {
+    if gestures && expected.gestures != actual.gestures {
         areas.push(CoreConfigArea::Gestures);
     }
-    if touched.interface && expected.interface != actual.interface {
+    if interface && expected.interface != actual.interface {
         areas.push(CoreConfigArea::Interface);
     }
-    if touched.order_rules && expected.order_rules != actual.order_rules {
+    if order_rules && expected.order_rules != actual.order_rules {
         areas.push(CoreConfigArea::OrderRules);
     }
-    if touched.leverage && expected.leverage != actual.leverage {
+    if leverage && expected.leverage != actual.leverage {
         areas.push(CoreConfigArea::Leverage);
     }
-    if touched.signals && expected.signals != actual.signals {
+    if signals && expected.signals != actual.signals {
         areas.push(CoreConfigArea::Signals);
     }
-    if touched.special && expected.special != actual.special {
+    if special && expected.special != actual.special {
         areas.push(CoreConfigArea::Special);
     }
-    if touched.telegram && expected.telegram != actual.telegram {
+    if telegram && expected.telegram != actual.telegram {
         areas.push(CoreConfigArea::Telegram);
     }
-    if touched.ignore_strat_sell_price
+    if ignore_strat_sell_price
         && expected.manual.ignore_strat_sell_price != actual.manual.ignore_strat_sell_price
     {
         areas.push(CoreConfigArea::Manual);
@@ -935,40 +987,57 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
 /// never send a value the projection cannot show, nor show one it cannot send — the mask narrows
 /// WHEN a named field is written, never WHETHER an unnamed one could be.
 pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, touched: FieldMask) {
-    if touched.auto_buy {
+    // Destructured for the reason `rejection_within_mask` is, and it matters MORE here: a bit with
+    // a comparison arm but no applier arm would send every edit naming it, never apply it, and burn
+    // the retry budget into a `GaveUp` — the two functions have to grow together.
+    let FieldMask {
+        auto_buy,
+        auto_start,
+        btc_blink,
+        general,
+        gestures,
+        interface,
+        order_rules,
+        leverage,
+        signals,
+        special,
+        telegram,
+        ignore_strat_sell_price,
+    } = touched;
+    if auto_buy {
         apply_auto_buy(cfg, &wanted.auto_buy);
     }
-    if touched.auto_start {
+    if auto_start {
         apply_auto_start(cfg, &wanted.auto_start);
     }
-    if touched.btc_blink {
+    if btc_blink {
         apply_btc_blink(cfg, &wanted.btc_blink);
     }
-    if touched.general {
+    if general {
         apply_general(cfg, &wanted.general);
     }
-    if touched.gestures {
+    if gestures {
         apply_gestures(cfg, &wanted.gestures);
     }
-    if touched.interface {
+    if interface {
         apply_interface(cfg, &wanted.interface);
     }
-    if touched.order_rules {
+    if order_rules {
         apply_order_rules(cfg, &wanted.order_rules);
     }
-    if touched.leverage {
+    if leverage {
         apply_leverage(cfg, &wanted.leverage);
     }
-    if touched.signals {
+    if signals {
         apply_signals(cfg, &wanted.signals);
     }
-    if touched.special {
+    if special {
         apply_special(cfg, &wanted.special);
     }
-    if touched.telegram {
+    if telegram {
         apply_telegram(cfg, &wanted.telegram);
     }
-    if touched.ignore_strat_sell_price {
+    if ignore_strat_sell_price {
         cfg.trading.ignore_strat_sell_price = wanted.manual.ignore_strat_sell_price;
     }
 }
@@ -1171,7 +1240,8 @@ fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
 /// documents it as using the pending-buy price instead of the current ask for SELL calculations,
 /// which is trading maths, not appearance. `trading.use_lev_for_take` already belongs to
 /// [`crate::feed::ManualSettings`], and projecting one wire field into two areas would leave the
-/// second stale after a write and make `edit_satisfied` false forever. `visual`'s
+/// second stale after a write and make `edit_satisfied` false for any mask naming that area.
+/// `visual`'s
 /// `manual_charts_full_screen` sits behind that section's tail gate, so a core older than the field
 /// reads it back as `false` however it was written — an edit that could never echo, and would burn
 /// all three attempts.

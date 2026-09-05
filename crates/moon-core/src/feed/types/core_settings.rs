@@ -92,7 +92,7 @@ pub struct SignalsSettings {
 /// Field names follow the wire names in `moonproto::shared_config::{AutoStartConfig,
 /// AutoStartConfig2}` so a value can be traced to its section without a translation table. The one
 /// deliberate departure is the work-time window: see [`AutoStartSettings::work_time_from_min`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct AutoStartSettings {
     // --- Enable on launch ---
     /// Start the market runtime when the core launches.
@@ -207,12 +207,111 @@ pub struct AutoStartSettings {
     pub restart_ping_time: i32,
 }
 
+/// Hand-written for the reason [`GeneralSettings`]'s is, and this area needs it most: EIGHT of its
+/// fields come off the wire as `f64`, and one non-finite among them makes the area never equal
+/// itself — so `feed::live::shared_config` can neither confirm a write naming it nor recognise one
+/// as already satisfied, and every such OK burns its whole retry budget.
+impl PartialEq for AutoStartSettings {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            auto_start,
+            auto_detect_on,
+            strategies_on,
+            remember_state,
+            auto_update,
+            dont_wait_sells,
+            work_time,
+            work_time_from_min,
+            work_time_to_min,
+            auto_stop_if_loss,
+            auto_stop_loss,
+            stop_trades,
+            sell_if_loss,
+            auto_stop_if_loss_hours,
+            auto_stop_hours_val,
+            stop_hours,
+            stop_hours_trades,
+            ignore_emulator,
+            reset_session,
+            rs_hours,
+            max_session_cap,
+            panic_btc,
+            panic_btc_delta,
+            panic_btc_delta_up,
+            panic_market,
+            panic_market_delta,
+            restart_on_market,
+            btc_higher_then,
+            btc_lower_then,
+            market_higher_then,
+            auto_stop_on_errors,
+            errors_level,
+            sell_all_on_errors,
+            restart_after_err,
+            restart_err_time,
+            auto_stop_on_ping,
+            ping_level,
+            sell_all_on_ping,
+            restart_after_ping,
+            restart_ping_time,
+        } = self;
+        *auto_start == other.auto_start
+            && *auto_detect_on == other.auto_detect_on
+            && *strategies_on == other.strategies_on
+            && *remember_state == other.remember_state
+            && *auto_update == other.auto_update
+            && *dont_wait_sells == other.dont_wait_sells
+            && *work_time == other.work_time
+            && *work_time_from_min == other.work_time_from_min
+            && *work_time_to_min == other.work_time_to_min
+            && *auto_stop_if_loss == other.auto_stop_if_loss
+            && auto_stop_loss.total_cmp(&other.auto_stop_loss).is_eq()
+            && *stop_trades == other.stop_trades
+            && *sell_if_loss == other.sell_if_loss
+            && *auto_stop_if_loss_hours == other.auto_stop_if_loss_hours
+            && auto_stop_hours_val
+                .total_cmp(&other.auto_stop_hours_val)
+                .is_eq()
+            && *stop_hours == other.stop_hours
+            && *stop_hours_trades == other.stop_hours_trades
+            && *ignore_emulator == other.ignore_emulator
+            && *reset_session == other.reset_session
+            && *rs_hours == other.rs_hours
+            && *max_session_cap == other.max_session_cap
+            && *panic_btc == other.panic_btc
+            && panic_btc_delta.total_cmp(&other.panic_btc_delta).is_eq()
+            && panic_btc_delta_up
+                .total_cmp(&other.panic_btc_delta_up)
+                .is_eq()
+            && *panic_market == other.panic_market
+            && panic_market_delta
+                .total_cmp(&other.panic_market_delta)
+                .is_eq()
+            && *restart_on_market == other.restart_on_market
+            && btc_higher_then.total_cmp(&other.btc_higher_then).is_eq()
+            && btc_lower_then.total_cmp(&other.btc_lower_then).is_eq()
+            && market_higher_then
+                .total_cmp(&other.market_higher_then)
+                .is_eq()
+            && *auto_stop_on_errors == other.auto_stop_on_errors
+            && *errors_level == other.errors_level
+            && *sell_all_on_errors == other.sell_all_on_errors
+            && *restart_after_err == other.restart_after_err
+            && *restart_err_time == other.restart_err_time
+            && *auto_stop_on_ping == other.auto_stop_on_ping
+            && *ping_level == other.ping_level
+            && *sell_all_on_ping == other.sell_all_on_ping
+            && *restart_after_ping == other.restart_after_ping
+            && *restart_ping_time == other.restart_ping_time
+    }
+}
+
 /// BTC price blink and alarm settings from `visual.blink_config`.
 ///
 /// Drawn at the bottom of the Moonbot AutoStart tab even though it lives in the visual section, and
 /// it is the ONLY channel that carries these two controls — the compact settings snapshot has no
 /// counterpart for them.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct BtcBlinkSettings {
     /// Highlight the BTC rate when it moves past either threshold.
     pub blink_btc: bool,
@@ -224,6 +323,26 @@ pub struct BtcBlinkSettings {
     pub alarm_btc: bool,
     /// Sound variant, an opaque Moonbot ordinal.
     pub alarm_type: u8,
+}
+
+/// Hand-written for the reason [`AutoStartSettings`]'s is: both BTC deltas are wire `f64`.
+impl PartialEq for BtcBlinkSettings {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            blink_btc,
+            blink_btc_delta,
+            blink_btc_delta_up,
+            alarm_btc,
+            alarm_type,
+        } = self;
+        blink_btc_delta.total_cmp(&other.blink_btc_delta).is_eq()
+            && blink_btc_delta_up
+                .total_cmp(&other.blink_btc_delta_up)
+                .is_eq()
+            && *blink_btc == other.blink_btc
+            && *alarm_btc == other.alarm_btc
+            && *alarm_type == other.alarm_type
+    }
 }
 
 /// Exit rules and risk limits — the part of Moonbot's "Основные" page BOTH faces of the gear draw.
@@ -695,7 +814,7 @@ pub struct SpecialSettings {
 
 /// Hand-written for the reason [`ManualSettings`]'s is: three of these come off the wire as `f64`,
 /// and a core holding a non-finite one must still compare equal to itself, or
-/// `feed::live::shared_config::edit_satisfied` is false for it forever.
+/// `feed::live::shared_config::edit_satisfied` is false for any mask naming this area, forever.
 impl PartialEq for SpecialSettings {
     fn eq(&self, other: &Self) -> bool {
         self.auto_buy_bnb_level
