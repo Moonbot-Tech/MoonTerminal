@@ -1011,9 +1011,9 @@ core_expert.sp_websocket_api:
   en: "WebSocket API"
   es: "WebSocket API"
 core_expert.sp_iceberg_step:
-  ru: "Ставить Iceberg если шаг цены < %{v}"
-  en: "Use Iceberg when the price step < %{v}"
-  es: "Usar Iceberg si el paso de precio < %{v}"
+  ru: "Ставить Iceberg если шаг цены < %{v}%"
+  en: "Use Iceberg when the price step < %{v}%"
+  es: "Usar Iceberg si el paso de precio < %{v}%"
 core_expert.sp_sell_x2:
   ru: "Уровень Sell x2 для анализа монет: %{v}"
   en: "Sell x2 level for coin analysis: %{v}"

@@ -5,14 +5,18 @@
 //! whole message-filter block in two columns.
 //!
 //! What is live is `moon_core::feed::AutoBuySettings`: the `signals` section, its `signal_config`
-//! sub-record, and the one `trading` field Moonbot files under this page. The two price-approach
+//! sub-record, and the two `trading` fields Moonbot files under this page. The two price-approach
 //! alert sounds of that same wire section are NOT here — they belong to the Interface page, which
 //! is where Moonbot draws them, and one wire field belongs to one area.
 //!
-//! Two rows stay disabled, and neither is an oversight: the TradingView webhook with its URL and
-//! "показать" link, and "не покупать пересланное", whose only plausible neighbour
-//! (`trading.dont_buy_forward`) is documented as skipping forward CONTRACTS rather than forwarded
-//! messages.
+//! One row stays disabled and it is not an oversight: the TradingView webhook with its URL and
+//! "показать" link.
+//!
+//! "Не покупать пересланное" was disabled beside it for one revision, because the wire documents
+//! `trading.dont_buy_forward` as skipping forward CONTRACTS rather than forwarded messages. That
+//! doc is wrong — Moonbot's own log line for the flag reads "Нашел монету в пересланном (forward)
+//! сообщении, не буду ее покупать!" — so the row is live, next to the "ответное" twin it belongs
+//! with.
 //!
 //! Two things about this page were settled against Moonbot's own dialog rather than against the
 //! protocol, because the protocol alone points the wrong way on both.
@@ -22,12 +26,14 @@
 //! buttons with exactly one selected, so the factory default is a value its own OK normalises. This
 //! page mirrors that, and stages nothing on a click that changes no mode; see [`SearchMode`].
 //!
-//! "Захватывать буфер": `signals.monitor_clipboard` is documented as enabling clipboard monitoring
-//! at all, which reads like a title for the group rather than a row inside it — but that dialog
-//! puts no checkbox in either frame caption, and this is the only clipboard control left once
-//! auto-buy, lowercase and the mode pair have their fields. `signals.do_monitoring`, the master
-//! toggle for the whole signal pipeline, has no control on THIS page for the same reason; it most
-//! likely belongs to the Telegram tab.
+//! "Захватывать буфер": `signals.monitor_clipboard`, and Moonbot's own hint for that row states
+//! the field's meaning outright — "бот будет искать монету в буфере, даже если не стоит
+//! автопокупка; в этом случае бот покажет монету но не купит". Which is exactly what separates it
+//! from `clipboard_auto_buy` beside it. The row was bound by elimination for one revision, before
+//! that hint was read.
+//!
+//! `signals.do_monitoring`, the master toggle for the whole signal pipeline, has no control on THIS
+//! page; it most likely belongs to the Telegram tab.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -317,10 +323,10 @@ pub(super) fn body(
                     .child(flag(
                         "exp-buy-tlg-no-forward",
                         t!("core_expert.buy_no_forwarded").to_string(),
-                        false,
-                        false,
+                        b.dont_buy_forward,
+                        true,
                         view,
-                        |_, _| {},
+                        |d, on| d.auto_buy.dont_buy_forward = on,
                     ))
                     .child(flag(
                         "exp-buy-tlg-no-reply",

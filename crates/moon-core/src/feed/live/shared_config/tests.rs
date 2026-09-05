@@ -444,6 +444,7 @@ fn interface_base() -> SharedConfig {
     cfg.visual.icon_selection = 3;
     cfg.visual.colors.price_line_width = 4;
     cfg.visual.panic_sell_opacity = 55;
+    cfg.visual.glass_opacity = 37;
     cfg.visual.book_cumulative_opacity = 60;
     cfg.visual.book_orders_opacity = 65;
     cfg.visual.book_orders_width = 7;
@@ -481,7 +482,9 @@ fn the_interface_page_round_trips_through_the_projection() {
 fn an_interface_edit_writes_its_own_field_and_leaves_the_section_alone() {
     let mut base = interface_base();
     base.trading.g_take_profit = 3.5;
-    base.visual.glass_opacity = 42;
+    // A `visual` field no area projects at all — `glass_opacity` used to serve here and cannot
+    // any more, now that the Interface page writes it.
+    base.visual.hv_opacity = 0.42;
     base.ui.coins_sort_order = 2;
     base.visual.unknown_tail = vec![9, 9, 9];
 
@@ -494,7 +497,7 @@ fn an_interface_edit_writes_its_own_field_and_leaves_the_section_alone() {
 
     assert_eq!(sent.visual.book_orders_width, 11);
     assert_eq!(sent.trading.g_take_profit, 3.5);
-    assert_eq!(sent.visual.glass_opacity, 42);
+    assert_eq!(sent.visual.hv_opacity, 0.42);
     assert_eq!(sent.ui.coins_sort_order, 2);
     assert_eq!(sent.visual.unknown_tail, vec![9, 9, 9]);
 }
@@ -532,6 +535,8 @@ fn auto_buy_base() -> SharedConfig {
     sig.look_full_link_tlg = !sig.look_full_link_tlg;
     sig.advanced_filter = !sig.advanced_filter;
     sig.dont_buy_reply = !sig.dont_buy_reply;
+    // The other half of the same pair of message filters, which the wire keeps in `trading`.
+    cfg.trading.dont_buy_forward = !cfg.trading.dont_buy_forward;
     sig.msg_keywords_long = "pump,long".to_string();
     sig.msg_keywords_short = "dump,short".to_string();
     sig.msg_black_words = "called,dont".to_string();
