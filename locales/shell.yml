@@ -127,6 +127,10 @@ toolbar.lev_unset_unreported:
   ru: "Биржа не сообщает плечо для этого рынка."
   en: "The exchange does not report leverage for this market."
   es: "La bolsa no informa del apalancamiento para este mercado."
+toolbar.sl_unset_tip:
+  ru: "Стоп задаёт стратегия, но её значение сейчас недоступно от ядра."
+  en: "The strategy owns the stop, but its value is not available from the core right now."
+  es: "La estrategia controla el stop, pero su valor no está disponible del núcleo ahora mismo."
 toolbar.tp_main_active_hint:
   ru: "Основной TP активен. Выбор ячейки S перенесёт синюю подсветку на неё."
   en: "Main TP is active. Selecting an S slot moves the blue highlight to that slot."

@@ -155,3 +155,91 @@ fn brand_cuts_match_their_geometry_and_scheme() {
         );
     }
 }
+
+// --- Goal A: header/toolbar chrome polish -----------------------------------------------------
+//
+// AUTHOR MODE: the four names below (`CHROME_RULE_H`, `readout_color`, `chrome_toggle_tone`,
+// `chrome_toggle_label_color`) do not exist in `design.rs` yet — the implementation is being
+// typed in a different worktree while this file is authored. The three tests below use the first
+// three of those names and are therefore EXPECTED NOT TO COMPILE against today's tree; that is
+// the documented AUTHOR-mode state, not a defect in the test. `chrome_toggle_label_color` has no
+// test of its own here because it is not one of the five named contract-level breakages in this
+// packet (it is a supporting symbol `chrome/quiet.rs` calls, covered indirectly by the
+// `theme_contract` toggle-tone check instead).
+
+use super::{CHROME_RULE_H, HEADER_TOP_H, TOOLBAR_H, chrome_toggle_tone, readout_color};
+use moon_core::config::{UI_FONT_DELTA_MAX, UI_FONT_DELTA_MIN};
+use moon_ui::{MoonPalette, MoonThemeTokens};
+
+/// `design::readout_color` is the ONE place a toolbar readout decides muted-vs-present.
+///
+/// Breakage this pins: `readout_color`'s two arms swapped, or a call site reverting to a bare
+/// `p.text` regardless of presence — the whole of acceptance item A2. Either turns the bare `–`
+/// shown for an unreported leverage, an unknown exchange max order or an unknown manual stop into
+/// a colour indistinguishable from a live figure, so a trader reads "no value" as a real one.
+#[test]
+fn readout_color_is_muted_when_absent_and_full_strength_when_present() {
+    let p = MoonPalette::LIGHT;
+    assert_eq!(
+        readout_color(p, false),
+        p.text_muted,
+        "an absent readout must render text_muted"
+    );
+    assert_eq!(
+        readout_color(p, true),
+        p.text,
+        "a present readout must render full text"
+    );
+    assert_ne!(
+        readout_color(p, false),
+        readout_color(p, true),
+        "the two arms must not collapse onto the same colour"
+    );
+}
+
+/// `CHROME_RULE_H` must stay strictly under the shorter of the header and toolbar bands at EVERY
+/// supported font delta (`UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX`), or the seam
+/// `design::chrome_divider` draws paints outside the chrome strip and over the dock border below
+/// it — and since `chrome_divider` has ~11 consumers app-wide, that lands in every one of them at
+/// once.
+///
+/// Breakage this pins: raising `CHROME_RULE_H` to make the seam more visible without checking the
+/// narrowest band (at `UI_FONT_DELTA_MIN` both bands are 32px; the token is 20).
+///
+/// Computed directly against `MoonThemeTokens::fit_height` rather than through
+/// `design::header_height`/`design::toolbar_height`, because those two need a live `App` this
+/// unit test does not have — `fit_height` is the pure formula both delegate to, so mirroring their
+/// exact base-height/base-line-height/base-pad-y triples here is genuinely equivalent, not an
+/// approximation.
+#[test]
+fn chrome_rule_h_stays_under_both_chrome_bands_at_every_font_delta() {
+    let mut tokens = MoonThemeTokens::default();
+    let mut delta = UI_FONT_DELTA_MIN;
+    while delta <= UI_FONT_DELTA_MAX {
+        tokens.scale.font_delta = delta as f32;
+        let header = tokens.fit_height(HEADER_TOP_H, 14.0, 9.0);
+        let toolbar = tokens.fit_height(TOOLBAR_H, 13.0, 9.5);
+        assert!(
+            CHROME_RULE_H < header.min(toolbar),
+            "font delta {delta}: CHROME_RULE_H {CHROME_RULE_H} must stay under header {header} \
+             and toolbar {toolbar}"
+        );
+        delta += 1;
+    }
+}
+
+/// `design::chrome_toggle_tone` is the one truth table every chrome toggle (Sleep, own-trade, SL)
+/// must share, so "amber" keeps meaning "this one is a caution state" everywhere it appears — the
+/// whole of acceptance item A3.
+///
+/// Breakage this pins: a fourth chrome toggle hand-passing `.tone(MoonTone::Warning)`, or one of
+/// the three existing ones dropping the call and naming a tone itself.
+#[test]
+fn chrome_toggle_tone_is_warning_only_when_on_and_caution() {
+    use moon_ui::MoonTone;
+
+    assert_eq!(chrome_toggle_tone(true, true), MoonTone::Warning);
+    assert_eq!(chrome_toggle_tone(true, false), MoonTone::Info);
+    assert_eq!(chrome_toggle_tone(false, true), MoonTone::Info);
+    assert_eq!(chrome_toggle_tone(false, false), MoonTone::Info);
+}

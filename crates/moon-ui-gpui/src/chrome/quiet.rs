@@ -17,7 +17,7 @@
 //! colour: the component paints its own label in `text_soft` with no way to override it.
 
 use gpui::*;
-use moon_ui::{MoonPopoverPlacement, MoonToggle, MoonToggleSize, MoonTone, h_flex};
+use moon_ui::{MoonPopoverPlacement, MoonToggle, MoonToggleSize, h_flex};
 use rust_i18n::t;
 
 use crate::panels::popup_gear_trigger;
@@ -108,7 +108,7 @@ pub(crate) fn header_quiet_cluster(
                         .flex_none()
                         .font_family(design::mono())
                         .text_size(design::t_caption(cx))
-                        .text_color(rgb(if sleeping { p.amber } else { p.text_soft }))
+                        .text_color(rgb(design::chrome_toggle_label_color(p, sleeping, true)))
                         .child(toggle_label()),
                 )
                 .child(
@@ -117,11 +117,7 @@ pub(crate) fn header_quiet_cluster(
                         .size(MoonToggleSize::Compact)
                         // Amber while asleep, matching the label: the switch is the larger target
                         // for the eye, so both have to carry the state or it reads as decoration.
-                        .tone(if sleeping {
-                            MoonTone::Warning
-                        } else {
-                            MoonTone::Info
-                        })
+                        .tone(design::chrome_toggle_tone(sleeping, true))
                         // The click carries `checked`, but the authority is the backend: a schedule
                         // can have the terminal asleep with nothing switched on by hand, and only
                         // `toggle_quiet` knows whether that means "sleep now" or "wake this window".

@@ -504,6 +504,7 @@ pub(super) fn sl_toggle(
         .checked(on)
         .size(MoonToggleSize::Compact)
         .disabled(disabled)
+        .tone(design::chrome_toggle_tone(on, false))
         .on_change(move |ch: &bool, _w, app| {
             let v = *ch;
             backend.update(app, |b, _| {
