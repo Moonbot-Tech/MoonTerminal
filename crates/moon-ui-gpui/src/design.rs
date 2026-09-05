@@ -1331,6 +1331,46 @@ pub fn status_dot_stale(color: u32, cx: &App) -> impl IntoElement {
     dot(5.0, moon_alpha(color, STALE_ALPHA), cx)
 }
 
+// ---- goal B: Auto workspace rail ----
+
+/// Top gap paid out of the rail's fixed 30-unit cell before an exchange heading, so the section
+/// separates from the row above it without a taller cell the Font slider cannot size.
+pub const RAIL_SECTION_GAP: f32 = 6.0;
+
+/// Amount added to a core row's status-dot size for `Problem` and `Unavailable` — the two
+/// statuses the rail summary's `problem` tally counts — so a counted core reads as alarmed by
+/// size as well as by colour.
+pub const RAIL_PROBLEM_DOT_STEP: f32 = 2.0;
+
+/// Background alpha for the danger pill's tint, over the raw `p.red` hue.
+///
+/// `danger_color` is a TEXT token (the theme's legible red), never a fill — the pill follows the
+/// tinted-background-plus-border idiom already used for amber warnings elsewhere in this crate
+/// (`analytics/tuner/list/table.rs`, `analytics/calendar/day.rs`), with the strong colour carried
+/// by the text instead.
+pub const RAIL_PILL_BG_ALPHA: f32 = 0.16;
+
+/// Border alpha for the danger pill's outline, over the raw `p.red` hue.
+pub const RAIL_PILL_BORDER_ALPHA: f32 = 0.5;
+
+/// Selection background alpha for a rail row, applied over the accent colour.
+pub const RAIL_ROW_SELECTED_ALPHA: f32 = 0.18;
+
+/// Hover background alpha for a rail row, applied over the accent colour.
+///
+/// Raised from the previous 0.10 to be visibly stronger on the light theme (owner's choice, not a
+/// measured precedent: `panels/assets/table.rs:901` and `panels/core_status/by_ip_header.rs:124`
+/// also use 0.14, but both are column-resize drag-handle hover strips with a mandatory
+/// `.occlude()`, a different interaction from a virtualized list row).
+pub const RAIL_ROW_HOVER_ALPHA: f32 = 0.14;
+
+/// Flex-shrink factor for the summary bar's alarm segment (`проблем: N`), against its
+/// `cores_ready` sibling's default `1.0`. Taffy distributes shrink proportionally to
+/// `flex_basis * flex_shrink`, so this small non-zero ratio makes `cores_ready` give up
+/// essentially all its own width first, while still letting the alarm segment shrink — and
+/// therefore ellipsize instead of hard-clip under `overflow_hidden` — as the last resort.
+pub const RAIL_ALARM_SHRINK: f32 = 0.05;
+
 /// The one geometry both status dots draw, so a faded dot cannot drift from the solid one it
 /// stands in for.
 fn dot(size: f32, fill: impl Into<gpui::Fill>, cx: &App) -> impl IntoElement {

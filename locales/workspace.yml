@@ -36,6 +36,20 @@ workspace.summary:
   ru: "Ядер: %{configured} · готово: %{ready} · проблем: %{problem}"
   en: "Cores: %{configured} · ready: %{ready} · problems: %{problem}"
   es: "Núcleos: %{configured} · listos: %{ready} · problemas: %{problem}"
+# The three segments of the rail summary, rendered separately so the problem count can carry its
+# own colour. `workspace.summary` above stays byte-identical and remains the tooltip / tour string.
+workspace.summary_cores:
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"
+workspace.summary_ready:
+  ru: "готово: %{n}"
+  en: "ready: %{n}"
+  es: "listos: %{n}"
+workspace.summary_problem:
+  ru: "проблем: %{n}"
+  en: "problems: %{n}"
+  es: "problemas: %{n}"
 # The rail's first row is a MODE, not a core: it aggregates every core at once, while every row
 # below it selects exactly one. The label says "full" so the two readings cannot be confused.
 workspace.overview:
