@@ -562,6 +562,12 @@ pub enum CoreCmd {
     /// not a wire settings field; it uses moonproto
     /// `settings().set_exclude_blacklisted_markets_from_exchange_delta`.
     SetExcludeBlacklistedDelta(bool),
+    /// Locally derive the short retained deltas from raw trade extrema rather than from candles.
+    ///
+    /// The CLIENT half of the wire's `trading.deltas_by_trades`: moonproto keeps its own copy for
+    /// the analytics this terminal retains, so setting the core's alone would leave the two in
+    /// different modes until a restart. Uses moonproto `streams().set_deltas_by_trades`.
+    SetDeltasByTrades(bool),
     /// Arm or update a chart alert, represented by a drawn object with its Alert option enabled,
     /// on a core market. `blob` is a serialized `TChartObject`; see `alert_blob`. This calls
     /// moonproto `chart_alerts().upsert(market, obj_uid, blob)`. The server is authoritative and

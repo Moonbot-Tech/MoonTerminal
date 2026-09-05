@@ -1060,6 +1060,14 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::SetBlacklist { on, text }) => {
                 client_settings_sequence.enqueue_blacklist(on, text);
             }
+            Ok(CoreCmd::SetDeltasByTrades(on)) => {
+                if let Err(error) = client.streams().set_deltas_by_trades(on) {
+                    log::warn!(
+                        "core {} set deltas by trades failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
             Ok(CoreCmd::SetExcludeBlacklistedDelta(on)) => {
                 if let Err(error) = client
                     .settings()

@@ -199,9 +199,8 @@ impl CoreExpertView {
             .filter(|_| self.state.can_send())
             .and_then(|draft| pages::page(self.tab, &view, &self.editors, draft, &ctx, p, cx));
         // A page whose rows are all dead still says WHY above itself: the note explains the page a
-        // trader is looking at, rather than standing in for one that is missing. Both dead kinds
-        // qualify — nothing will ever arrive for an Absent page, and a Wire page waits on the
-        // projection and the field mask.
+        // trader is looking at, rather than standing in for one that is missing. Only Login
+        // qualifies now — nothing will ever arrive for it.
         let source_note_over_page = page.is_some() && self.tab.source() != TabSource::Projected;
         // Only when there is no page to draw: a note about a page the trader is already looking at
         // would be describing what is on screen beside it.
@@ -213,8 +212,10 @@ impl CoreExpertView {
             PageState::Replaced => t!("core_expert.replaced"),
             PageState::Stale => t!("core_expert.stale"),
             PageState::Ready => match self.tab.source() {
+                // Reached only if a page rated `Projected` builds no body at all, which no page
+                // does today: the arm is the fallback that keeps such a page explained rather than
+                // blank, not a state the strip can currently be in.
                 TabSource::Projected => t!("core_expert.page_todo"),
-                TabSource::Wire => t!("core_expert.page_unprojected"),
                 TabSource::Absent => t!("core_expert.page_absent"),
             },
         });

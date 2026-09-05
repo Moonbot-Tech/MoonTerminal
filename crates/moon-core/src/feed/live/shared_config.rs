@@ -23,8 +23,9 @@ use crate::feed::{
     AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
-    InterfaceSettings, LeverageSettings, ManualSettings, SignalsSettings, SpecialSettings,
-    TelegramSettings, day_fraction_to_minutes, minutes_to_day_fraction,
+    GestureSettings, InterfaceSettings, LeverageSettings, ManualSettings, OrderRulesSettings,
+    SignalsSettings, SpecialSettings, TelegramSettings, day_fraction_to_minutes,
+    minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -58,9 +59,16 @@ pub struct FieldMask {
     auto_start: bool,
     btc_blink: bool,
     general: bool,
+    /// The mouse-gesture block of Moonbot's Hotkeys page: `trading.multi_orders` and one field of
+    /// `trading` beside it. The rest of that page mirrors the manual block, which no mask reaches.
+    gestures: bool,
     /// Moonbot's own interface page, which reaches into `trading`, `visual`, `signals` AND `ui`.
     /// One area rather than four because it is one PAGE: what a surface draws is what it may write.
     interface: bool,
+    /// The rows of Moonbot's General page the COMPACT popup does not draw — the one place the
+    /// "an area is a page" rule splits a page in two, because the rule it serves is that a surface
+    /// writes only what it drew. See `feed::OrderRulesSettings`.
+    order_rules: bool,
     leverage: bool,
     /// The `signals` section's two price-approach alerts. The FIRST field the terminal writes
     /// outside `trading`/`visual`; the send carries every section either way, so this narrows only
@@ -85,7 +93,9 @@ impl FieldMask {
         auto_start: false,
         btc_blink: false,
         general: false,
+        gestures: false,
         interface: false,
+        order_rules: false,
         leverage: false,
         signals: false,
         special: false,
@@ -107,9 +117,14 @@ impl FieldMask {
         auto_start: true,
         btc_blink: true,
         general: true,
+        // NOT the Hotkeys page: the compact popup does not draw it.
+        gestures: false,
         // NOT the interface page: the compact popup does not draw it. The expert window names it
         // itself, through `with_interface`.
         interface: false,
+        // NOT the seven General-page rows below the popup's own: it draws the exits and the
+        // blacklist, and naming these would let its OK stamp them back from a frozen draft.
+        order_rules: false,
         leverage: true,
         signals: true,
         // NOT the Special page: the compact popup does not draw it.
@@ -170,6 +185,26 @@ impl FieldMask {
         self
     }
 
+    /// Whether this mask names the `order_rules` area.
+    ///
+    /// For the same caller [`Self::writes_general`] serves: `deltas_by_trades` also has a
+    /// client-side half, and it must move only when its area does.
+    pub const fn writes_order_rules(self) -> bool {
+        self.order_rules
+    }
+
+    /// Name the General page's rows below the compact popup's own.
+    pub const fn with_order_rules(mut self) -> Self {
+        self.order_rules = true;
+        self
+    }
+
+    /// Name the mouse-gesture block of Moonbot's Hotkeys page.
+    pub const fn with_gestures(mut self) -> Self {
+        self.gestures = true;
+        self
+    }
+
     /// Name Moonbot's interface page — its own windows, charts and order-book zones.
     pub const fn with_interface(mut self) -> Self {
         self.interface = true;
@@ -188,7 +223,9 @@ impl FieldMask {
             auto_start: self.auto_start || other.auto_start,
             btc_blink: self.btc_blink || other.btc_blink,
             general: self.general || other.general,
+            gestures: self.gestures || other.gestures,
             interface: self.interface || other.interface,
+            order_rules: self.order_rules || other.order_rules,
             leverage: self.leverage || other.leverage,
             signals: self.signals || other.signals,
             special: self.special || other.special,
@@ -573,8 +610,14 @@ fn rejection_within_mask(
     if touched.general && expected.general != actual.general {
         areas.push(CoreConfigArea::General);
     }
+    if touched.gestures && expected.gestures != actual.gestures {
+        areas.push(CoreConfigArea::Gestures);
+    }
     if touched.interface && expected.interface != actual.interface {
         areas.push(CoreConfigArea::Interface);
+    }
+    if touched.order_rules && expected.order_rules != actual.order_rules {
+        areas.push(CoreConfigArea::OrderRules);
     }
     if touched.leverage && expected.leverage != actual.leverage {
         areas.push(CoreConfigArea::Leverage);
@@ -611,6 +654,7 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let sc = &cfg.signals.signal_config;
     let shots = &cfg.trading.send_shots_config;
     let oc = &cfg.trading.orders_control;
+    let mo = &cfg.trading.multi_orders;
     CoreConfig {
         special: SpecialSettings {
             log_level: t.log_level,
@@ -791,6 +835,34 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             blacklist_text: t.coins_black_list_text.clone(),
             exclude_blacklisted_from_deltas: t.exclude_black_list_delta,
         },
+        order_rules: OrderRulesSettings {
+            trailing_float: t.trailing_float,
+            auto_sell_partial: t.auto_sell_partial,
+            auto_cancel_buy_order: t.auto_cancel_buy_order,
+            cancel_buy_on_sell_fill: t.cancel_buy_on_sell_fill,
+            dont_buy_new_coins: t.dont_buy_new_coins,
+            deltas_by_trades: t.deltas_by_trades,
+            analyze_on_start: sig.load_deep_history,
+        },
+        gestures: GestureSettings {
+            buy_set_click: mo.buy_set_click,
+            short_set_click: mo.short_set_click,
+            pending_order_set_click: t.pending_order_set_click,
+            pending_short_set_click: mo.pending_short_set_click,
+            same_hotkeys_for_move: mo.same_hotkeys_for_move,
+            buy_move_click: mo.buy_move_click,
+            short_buy_move_click: mo.short_buy_move_click,
+            replace_buy_kind: mo.replace_buy_kind,
+            sell_move_click: mo.sell_move_click,
+            short_sell_move_click: mo.short_sell_move_click,
+            replace_sell_kind: mo.replace_sell_kind,
+            buy_move_click_2: mo.buy_move_click_2,
+            short_buy_move_click_2: mo.short_buy_move_click_2,
+            replace_buy_kind_2: mo.replace_buy_kind_2,
+            sell_move_click_2: mo.sell_move_click_2,
+            short_sell_move_click_2: mo.short_sell_move_click_2,
+            replace_sell_kind_2: mo.replace_sell_kind_2,
+        },
         leverage: LeverageSettings {
             auto_max_order: m.auto_max_order,
             auto_lev_up: m.auto_lev_up,
@@ -875,8 +947,14 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
     if touched.general {
         apply_general(cfg, &wanted.general);
     }
+    if touched.gestures {
+        apply_gestures(cfg, &wanted.gestures);
+    }
     if touched.interface {
         apply_interface(cfg, &wanted.interface);
+    }
+    if touched.order_rules {
+        apply_order_rules(cfg, &wanted.order_rules);
     }
     if touched.leverage {
         apply_leverage(cfg, &wanted.leverage);
@@ -909,6 +987,52 @@ fn apply_signals(cfg: &mut SharedConfig, s: &SignalsSettings) {
     sig.play_buy_alert = s.play_buy_alert;
     sig.buy_alert_level = s.buy_alert_level;
     sig.buy_signal_sound = s.buy_signal_sound;
+}
+
+/// Apply the Hotkeys page's mouse-gesture block to `trading.multi_orders`.
+///
+/// Sixteen of the record's twenty-four fields, plus `trading.pending_order_set_click` beside it.
+/// The eight left out are: `join_sell_kind`, which the wire marks a mirror of
+/// `ClientSettingsCommand::join_sell_kind`, so it travels on the compact channel too and writing it
+/// from here would set two routes fighting over one field; `use_multi_orders`, `split_sells`,
+/// `show_orders_num`, `kir_style`, `fix_pos` and `done_opacity`, which are in the record but not on
+/// this PAGE — Moonbot draws them with its chart, not with its gestures; and `ver`, which is the
+/// wire's own version byte, not a setting.
+fn apply_gestures(cfg: &mut SharedConfig, g: &GestureSettings) {
+    cfg.trading.pending_order_set_click = g.pending_order_set_click;
+    let mo = &mut cfg.trading.multi_orders;
+    mo.buy_set_click = g.buy_set_click;
+    mo.short_set_click = g.short_set_click;
+    mo.pending_short_set_click = g.pending_short_set_click;
+    mo.same_hotkeys_for_move = g.same_hotkeys_for_move;
+    mo.buy_move_click = g.buy_move_click;
+    mo.short_buy_move_click = g.short_buy_move_click;
+    mo.replace_buy_kind = g.replace_buy_kind;
+    mo.sell_move_click = g.sell_move_click;
+    mo.short_sell_move_click = g.short_sell_move_click;
+    mo.replace_sell_kind = g.replace_sell_kind;
+    mo.buy_move_click_2 = g.buy_move_click_2;
+    mo.short_buy_move_click_2 = g.short_buy_move_click_2;
+    mo.replace_buy_kind_2 = g.replace_buy_kind_2;
+    mo.sell_move_click_2 = g.sell_move_click_2;
+    mo.short_sell_move_click_2 = g.short_sell_move_click_2;
+    mo.replace_sell_kind_2 = g.replace_sell_kind_2;
+}
+
+/// Apply the rest of Moonbot's General page — the rows the compact popup does not draw.
+///
+/// Six fields of `trading` plus `signals.load_deep_history`, which is the one field of this area
+/// outside `trading` and cannot collide with [`apply_signals`]: that applier owns six other fields
+/// of the same section and none of them is this one.
+fn apply_order_rules(cfg: &mut SharedConfig, r: &OrderRulesSettings) {
+    cfg.signals.load_deep_history = r.analyze_on_start;
+    let t = &mut cfg.trading;
+    t.trailing_float = r.trailing_float;
+    t.auto_sell_partial = r.auto_sell_partial;
+    t.auto_cancel_buy_order = r.auto_cancel_buy_order;
+    t.cancel_buy_on_sell_fill = r.cancel_buy_on_sell_fill;
+    t.dont_buy_new_coins = r.dont_buy_new_coins;
+    t.deltas_by_trades = r.deltas_by_trades;
 }
 
 /// Apply the General tab to the exit rules, iceberg flags and blacklist in `trading`.

@@ -697,3 +697,275 @@ fn an_unnamed_special_is_not_written() {
     assert_eq!(written.trading.max_orders, 11);
     assert_eq!(written.trading.log_level, 4);
 }
+
+/// A snapshot whose gesture fields all differ from the wire's own defaults, the discipline the other
+/// page bases follow.
+///
+/// The twelve gesture ordinals are distinct from each other and the four move kinds from each
+/// other, so a projection that crossed two fields of the same kind — the long and short columns of
+/// one row, or a row and its "additional command" twin — fails rather than passing on a
+/// coincidence. The round trip below additionally pins each field to its NAMED wire slot, which is
+/// what catches a cross that is symmetric between the read and the write.
+fn gesture_base() -> SharedConfig {
+    let mut cfg = SharedConfig::default();
+    cfg.trading.pending_order_set_click = 3;
+    let mo = &mut cfg.trading.multi_orders;
+    mo.buy_set_click = 4;
+    mo.short_set_click = 5;
+    mo.pending_short_set_click = 6;
+    mo.same_hotkeys_for_move = !mo.same_hotkeys_for_move;
+    mo.buy_move_click = 7;
+    mo.short_buy_move_click = 8;
+    mo.replace_buy_kind = 2;
+    mo.sell_move_click = 9;
+    mo.short_sell_move_click = 10;
+    mo.replace_sell_kind = 3;
+    mo.buy_move_click_2 = 11;
+    mo.short_buy_move_click_2 = 12;
+    mo.replace_buy_kind_2 = 4;
+    mo.sell_move_click_2 = 13;
+    mo.short_sell_move_click_2 = 14;
+    mo.replace_sell_kind_2 = 5;
+    // The one field of the sub-record this page must never write, off its default so the assertion
+    // that it survives can actually fail.
+    mo.join_sell_kind = 2;
+    // And the six the record holds for Moonbot's chart rather than for its gestures.
+    mo.use_multi_orders = !mo.use_multi_orders;
+    mo.split_sells = 4;
+    mo.show_orders_num = !mo.show_orders_num;
+    mo.kir_style = !mo.kir_style;
+    mo.fix_pos = 1;
+    mo.done_opacity = 0.25;
+    cfg
+}
+
+/// Every gesture field must survive read -> write unchanged: the write rebuilds the whole snapshot,
+/// so a field the projection forgets is a field the next OK reverts.
+#[test]
+fn the_gesture_block_round_trips_through_the_projection() {
+    let base = gesture_base();
+    let projected = core_config_from_proto(&base);
+    assert_ne!(
+        projected.gestures,
+        core_config_from_proto(&SharedConfig::default()).gestures,
+        "the base must differ from the wire default, or this test proves nothing"
+    );
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &projected, FieldMask::EMPTY.with_gestures());
+
+    assert_eq!(
+        core_config_from_proto(&written).gestures,
+        projected.gestures
+    );
+
+    // Against the NAMED wire slots too. The assertion above compares a projection with a
+    // projection, so a read and a write that cross the same two fields cancel out and pass; these
+    // do not.
+    assert_eq!(written.trading.pending_order_set_click, 3);
+    let mo = &written.trading.multi_orders;
+    assert_eq!(mo.buy_set_click, 4);
+    assert_eq!(mo.short_set_click, 5);
+    assert_eq!(mo.pending_short_set_click, 6);
+    assert_eq!(mo.buy_move_click, 7);
+    assert_eq!(mo.short_buy_move_click, 8);
+    assert_eq!(mo.replace_buy_kind, 2);
+    assert_eq!(mo.sell_move_click, 9);
+    assert_eq!(mo.short_sell_move_click, 10);
+    assert_eq!(mo.replace_sell_kind, 3);
+    assert_eq!(mo.buy_move_click_2, 11);
+    assert_eq!(mo.short_buy_move_click_2, 12);
+    assert_eq!(mo.replace_buy_kind_2, 4);
+    assert_eq!(mo.sell_move_click_2, 13);
+    assert_eq!(mo.short_sell_move_click_2, 14);
+    assert_eq!(mo.replace_sell_kind_2, 5);
+    assert_eq!(
+        mo.same_hotkeys_for_move,
+        gesture_base().trading.multi_orders.same_hotkeys_for_move
+    );
+}
+
+/// The gesture block shares `trading` and its `multi_orders` record with rows no page of this
+/// window draws, and with one field the compact channel also carries. A gesture write must leave
+/// every one of them exactly as the core sent it.
+#[test]
+fn a_gesture_edit_leaves_the_rest_of_multi_orders_alone() {
+    let base = gesture_base();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.gestures.buy_set_click = 15;
+    // What another surface would have staged, and what this write must NOT carry.
+    wanted.general.take_profit_pct = 0.0;
+    wanted.special.max_orders = 1;
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(wanted, FieldMask::EMPTY.with_gestures());
+    let sent = next_config(&mut sequence, &base);
+
+    assert_eq!(sent.trading.multi_orders.buy_set_click, 15);
+    assert_eq!(sent.trading.g_take_profit, base.trading.g_take_profit);
+    assert_eq!(sent.trading.max_orders, base.trading.max_orders);
+    // `join_sell_kind` mirrors `ClientSettingsCommand::join_sell_kind`, so two routes writing it
+    // would fight; the six below are in the record but on Moonbot's chart, not on this page.
+    let sent_mo = &sent.trading.multi_orders;
+    let base_mo = &base.trading.multi_orders;
+    assert_eq!(sent_mo.join_sell_kind, base_mo.join_sell_kind);
+    assert_eq!(sent_mo.use_multi_orders, base_mo.use_multi_orders);
+    assert_eq!(sent_mo.split_sells, base_mo.split_sells);
+    assert_eq!(sent_mo.show_orders_num, base_mo.show_orders_num);
+    assert_eq!(sent_mo.kir_style, base_mo.kir_style);
+    assert_eq!(sent_mo.fix_pos, base_mo.fix_pos);
+    assert_eq!(sent_mo.done_opacity, base_mo.done_opacity);
+}
+
+/// The mask decides, not the projection: the compact popup's mask must not carry this block, and
+/// neither must a mask naming only the General page it shares `trading` with.
+#[test]
+fn an_unnamed_gesture_block_is_not_written() {
+    let base = gesture_base();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.gestures.buy_set_click = 0;
+    wanted.gestures.replace_sell_kind_2 = 0;
+
+    let mut written = gesture_base();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+    assert_eq!(written.trading.multi_orders.buy_set_click, 4);
+    assert_eq!(written.trading.multi_orders.replace_sell_kind_2, 5);
+
+    let mut written = gesture_base();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_general());
+    assert_eq!(written.trading.multi_orders.buy_set_click, 4);
+    assert_eq!(written.trading.multi_orders.replace_sell_kind_2, 5);
+}
+
+/// The order-rules area reaches one field of the `signals` section — the startup analysis Moonbot
+/// draws above its two columns — while the alert sounds in the same section belong to another mask
+/// bit. Each must leave the other exactly as the core sent it, or the two surfaces revert each
+/// other.
+#[test]
+fn the_order_rules_and_alert_halves_of_signals_do_not_cross() {
+    let mut base = SharedConfig::default();
+    base.signals.load_deep_history = !base.signals.load_deep_history;
+    base.signals.play_buy_alert = !base.signals.play_buy_alert;
+    base.signals.buy_alert_level = 7;
+    base.signals.unknown_tail = vec![9, 9];
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.order_rules.analyze_on_start = !wanted.order_rules.analyze_on_start;
+    wanted.signals.buy_alert_level = 0;
+
+    let mut written = base.clone();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_order_rules());
+    assert_eq!(
+        written.signals.load_deep_history,
+        wanted.order_rules.analyze_on_start
+    );
+    assert_eq!(written.signals.buy_alert_level, 7);
+    assert_eq!(written.signals.play_buy_alert, base.signals.play_buy_alert);
+    assert_eq!(written.signals.unknown_tail, vec![9, 9]);
+
+    let mut written = base.clone();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_signals());
+    assert_eq!(written.signals.buy_alert_level, 0);
+    assert_eq!(
+        written.signals.load_deep_history,
+        base.signals.load_deep_history
+    );
+}
+
+/// The seven General rows below the compact popup's own must reach the wire and come back.
+///
+/// `deltas_by_trades` is deliberately among them: it is a TAIL field of the `trading` section, and
+/// a projection that dropped it would look identical on a modern core until the first OK reverted
+/// whatever the trader had set in Moonbot.
+#[test]
+fn the_order_rules_area_round_trips() {
+    let mut base = SharedConfig::default();
+    let t = &mut base.trading;
+    t.trailing_float = 0.375;
+    t.auto_sell_partial = 55;
+    t.auto_cancel_buy_order = 44;
+    t.cancel_buy_on_sell_fill = !t.cancel_buy_on_sell_fill;
+    t.dont_buy_new_coins = 123;
+    t.deltas_by_trades = !t.deltas_by_trades;
+    base.signals.load_deep_history = !base.signals.load_deep_history;
+
+    let projected = core_config_from_proto(&base);
+    assert_ne!(
+        projected.order_rules,
+        core_config_from_proto(&SharedConfig::default()).order_rules,
+        "the base must differ from the wire default, or this test proves nothing"
+    );
+
+    let mut written = SharedConfig::default();
+    apply_core_config(
+        &mut written,
+        &projected,
+        FieldMask::EMPTY.with_order_rules(),
+    );
+
+    assert_eq!(
+        core_config_from_proto(&written).order_rules,
+        projected.order_rules
+    );
+    // And against the named wire slots, for the reason the gesture round trip states.
+    assert_eq!(written.trading.trailing_float, 0.375);
+    assert_eq!(written.trading.auto_sell_partial, 55);
+    assert_eq!(written.trading.auto_cancel_buy_order, 44);
+    assert_eq!(written.trading.dont_buy_new_coins, 123);
+    assert_eq!(
+        written.trading.deltas_by_trades,
+        base.trading.deltas_by_trades
+    );
+    assert_eq!(
+        written.signals.load_deep_history,
+        base.signals.load_deep_history
+    );
+}
+
+/// The compact popup draws the exits and the blacklist and NOT the seven rows beside them, so its
+/// own mask must not carry them: an OK pressed there would otherwise stamp all seven back from a
+/// draft frozen when the popup opened, over whatever Moonbot changed meanwhile.
+///
+/// This is the whole reason the General page is two areas rather than one, and the assertion that
+/// keeps it that way.
+#[test]
+fn the_compact_popups_mask_does_not_carry_the_order_rules() {
+    let mut base = SharedConfig::default();
+    base.trading.auto_cancel_buy_order = 44;
+    base.trading.dont_buy_new_coins = 123;
+    base.signals.load_deep_history = !base.signals.load_deep_history;
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.order_rules.auto_cancel_buy_order = 0;
+    wanted.order_rules.dont_buy_new_coins = 0;
+    wanted.order_rules.analyze_on_start = !wanted.order_rules.analyze_on_start;
+    // Something the popup DOES draw, so the write is not a no-op and the assertions below are
+    // about the mask rather than about nothing having happened.
+    wanted.general.take_profit_pct = 4.5;
+
+    let mut written = base.clone();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+
+    assert_eq!(written.trading.g_take_profit, 4.5);
+    assert_eq!(written.trading.auto_cancel_buy_order, 44);
+    assert_eq!(written.trading.dont_buy_new_coins, 123);
+    assert_eq!(
+        written.signals.load_deep_history,
+        base.signals.load_deep_history
+    );
+}
+
+/// A core holding a non-finite number in either half of the General page must still compare equal
+/// to itself, or `edit_satisfied` is false for it forever and every OK on that core burns its whole
+/// retry budget. The hand-written `PartialEq` on both structs exists for exactly this.
+#[test]
+fn a_non_finite_general_number_still_equals_itself() {
+    let mut base = SharedConfig::default();
+    base.trading.g_take_profit = f64::NAN;
+    base.trading.trailing_float = f64::NAN;
+    let projected = core_config_from_proto(&base);
+
+    assert_eq!(projected.general, projected.general.clone());
+    assert_eq!(projected.order_rules, projected.order_rules.clone());
+    assert!(edit_satisfied(&base, &projected));
+}

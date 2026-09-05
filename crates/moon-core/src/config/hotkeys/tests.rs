@@ -347,3 +347,55 @@ fn the_shipped_move_kind_is_moonbots_parallel_shift() {
     assert_eq!(old.sell_move_kind, MoveKind::ParallelShift);
     assert_eq!(old.buy_move_kind2, MoveKind::ParallelShift);
 }
+
+/// The POSITION of a variant in these two lists is a wire value.
+///
+/// `feed::GestureSettings` carries Moonbot's mouse gestures and move kinds as the raw bytes the
+/// safe-share config holds, and the expert window's Hotkeys page turns a byte into a menu entry by
+/// indexing `ALL`. Nothing else pins the two together, so reordering either list — a harmless-
+/// looking edit, since both are "just a display order" — would silently rewrite every core's stored
+/// gestures on the next OK.
+///
+/// The anchors are moonproto's own annotated defaults (`shared_config/sections.rs`:
+/// `buy_set_click: 1, // Dbl_Click`, `sell_move_click: 2, // CTRL_Click`) and its
+/// `ReplaceMultiKind` constants (`commands/trade/enums.rs`, `TReplaceMultiKind` at Vars.pas:37),
+/// which run None=0, Shift=1, TopVol=2, LowVol=3, TopProfit=4, All=5, LastSet=6, LastMoved=7.
+#[test]
+fn wire_ordinals_are_the_positions_in_these_lists() {
+    // Every position, not a handful: a reorder in the middle of the list is exactly as damaging
+    // as one at its ends, and pinning only the ends would let it through.
+    assert_eq!(
+        MouseGestureBinding::ALL,
+        [
+            MouseGestureBinding::None,
+            MouseGestureBinding::LeftDouble,
+            MouseGestureBinding::LeftCtrl,
+            MouseGestureBinding::LeftShift,
+            MouseGestureBinding::LeftAlt,
+            MouseGestureBinding::Middle,
+            MouseGestureBinding::MiddleCtrl,
+            MouseGestureBinding::MiddleShift,
+            MouseGestureBinding::MiddleAlt,
+            MouseGestureBinding::RightDouble,
+            MouseGestureBinding::RightCtrl,
+            MouseGestureBinding::RightShift,
+            MouseGestureBinding::RightAlt,
+            MouseGestureBinding::LeftCtrlDouble,
+            MouseGestureBinding::LeftShiftDouble,
+            MouseGestureBinding::LeftAltDouble,
+        ]
+    );
+    assert_eq!(
+        MoveKind::ALL,
+        [
+            MoveKind::None,
+            MoveKind::ParallelShift,
+            MoveKind::TopVolume,
+            MoveKind::LowVolume,
+            MoveKind::TopProfit,
+            MoveKind::AllToOnePrice,
+            MoveKind::LastSet,
+            MoveKind::LastMoved,
+        ]
+    );
+}

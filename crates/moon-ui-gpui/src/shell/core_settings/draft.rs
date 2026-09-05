@@ -294,6 +294,12 @@ pub(crate) fn send_core_config(
     let exclude = sections
         .writes_general()
         .then_some(draft.general.exclude_blacklisted_from_deltas);
+    // The same for the trade-derived deltas, under its own area for the same reason: the value is
+    // this surface's frozen copy, and a mask that does not carry the area must not set the client
+    // half from it.
+    let by_trades = sections
+        .writes_order_rules()
+        .then_some(draft.order_rules.deltas_by_trades);
     if let Err(error) = b.session.edit_core_config(core, draft, sections) {
         // The page never reached the session. Reporting success here is what would let a caller
         // close on it.
@@ -305,11 +311,17 @@ pub(crate) fn send_core_config(
     // restart. Issued only after the page went out, so the two halves cannot diverge the other way
     // — this terminal filtering deltas the core was never told about. Nothing is cached for it here:
     // the checkbox reads the core's own value out of the draft.
-    let Some(exclude) = exclude else {
-        return true;
-    };
-    if let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude) {
+    if let Some(exclude) = exclude
+        && let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude)
+    {
         log::warn!("exclude delta failed: {error:#}");
+    }
+    // moonproto keeps its own copy of this one too: the core's alone would leave this terminal's
+    // retained short deltas in candle mode until a restart, disagreeing with the core it mirrors.
+    if let Some(by_trades) = by_trades
+        && let Err(error) = b.session.set_deltas_by_trades(core, by_trades)
+    {
+        log::warn!("deltas by trades failed: {error:#}");
     }
     true
 }

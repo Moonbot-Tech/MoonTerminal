@@ -247,6 +247,71 @@ pub(super) fn dropdown(id: &'static str, current: String, enabled: bool) -> impl
         .disabled(!enabled)
 }
 
+/// The same selector with its menu live: one of a fixed list of wire ordinals, staged into the
+/// page.
+///
+/// The options are `(ordinal, key, label)` in the order Moonbot lists them — `radio_items`' own
+/// shape — and the ordinal is what reaches the draft, the page never converting. A core holding a
+/// value outside the list keeps it: nothing is staged until an item is picked, and the trigger says
+/// so by showing the raw number rather than guessing at the nearest name.
+///
+/// Picking the value ALREADY shown stages nothing, for the reason [`radio_live`] gives: staging
+/// latches the window against the core for the rest of its life and puts this page's whole area on
+/// the wire, and a menu that closes on the item it opened with moved nothing.
+///
+/// BORROWED, and the list is the caller's to hold: a page draws up to sixteen of these and is
+/// rebuilt on every frame, so an owned list would be cloned per selector — which is what this
+/// helper did for one revision, at some two hundred string allocations a frame. A DISABLED selector
+/// builds no items at all: `MoonDropdown` returns its trigger before it builds the popover, so
+/// every item behind one is constructed and dropped unseen.
+pub(super) fn choice_live(
+    id: &'static str,
+    options: &[(u8, SharedString, SharedString)],
+    current: u8,
+    enabled: bool,
+    view: &Entity<CoreExpertView>,
+    // A closure, not a `fn` pointer like this module's other setters: a Move row addresses its two
+    // gesture slots through one projection method and has to carry which row it is.
+    set: impl Fn(&mut CoreConfig, u8) + 'static,
+) -> impl IntoElement {
+    // Shared because `radio_items` clones the handler once per item; the closure itself is built
+    // once per selector either way.
+    let set = std::rc::Rc::new(set);
+    let label = options
+        .iter()
+        .find(|(value, _, _)| *value == current)
+        .map_or_else(
+            || SharedString::from(format!("#{current}")),
+            |(_, _, name)| name.clone(),
+        );
+    let view = view.clone();
+    let items = if enabled {
+        crate::panels::common::radio_items(
+            options.iter().cloned(),
+            current,
+            crate::panels::common::RadioMark::Check,
+            move |app, value| {
+                if value == current {
+                    return;
+                }
+                view.update(app, |this, cx| {
+                    this.edit_draft(|draft| set(draft, value), cx);
+                });
+            },
+        )
+    } else {
+        Vec::new()
+    };
+    MoonDropdown::new(id)
+        .label(label)
+        .trigger_caret(true)
+        .trigger_variant(MoonButtonVariant::Soft)
+        .trigger_size(MoonButtonSize::Action)
+        .menu_size(MoonMenuSize::Compact)
+        .items(items)
+        .disabled(!enabled)
+}
+
 /// One option of a Moonbot radio group that stages into the page.
 ///
 /// The write takes the whole GROUP, not this option's own flag: Moonbot's control is exclusive
@@ -442,7 +507,8 @@ pub(super) fn num(
 ///
 /// The same pair the compact popup and the core-warning settings draw, from the same two sources,
 /// so the sound pickers in this application cannot drift apart. Picking does NOT play; the preview
-/// button does.
+/// button does, and picking the sound already selected stages nothing — the guard every other live
+/// helper here carries, for the reason [`radio_live`] states.
 pub(super) fn sound_cell(
     id: &'static str,
     current: i32,
@@ -473,6 +539,9 @@ pub(super) fn sound_cell(
         current,
         crate::panels::common::RadioMark::Check,
         move |app, ordinal| {
+            if ordinal == current {
+                return;
+            }
             view.update(app, |this, cx| {
                 this.edit_draft(|draft| set(draft, ordinal), cx);
             });

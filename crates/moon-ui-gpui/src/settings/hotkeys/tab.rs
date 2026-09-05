@@ -582,20 +582,17 @@ impl SettingsView {
         let wip = mouse_slot_wip(slot);
         let items = MouseGestureBinding::ALL.into_iter().map(move |gesture| {
             let backend = backend.clone();
-            MoonMenuItem::with_key(
-                gesture.config_value(),
-                format!("{} ({})", gesture.label(), gesture.moonbot_name()),
-            )
-            .checked(gesture == current)
-            .on_click(move |_, _, cx| {
-                backend.update(cx, |b, bcx| {
-                    if let Some(p) = b.preview.as_mut() {
-                        if set_mouse_slot_value(&mut p.hotkeys, slot, gesture) {
-                            bcx.notify();
+            MoonMenuItem::with_key(gesture.config_value(), gesture.menu_label())
+                .checked(gesture == current)
+                .on_click(move |_, _, cx| {
+                    backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut() {
+                            if set_mouse_slot_value(&mut p.hotkeys, slot, gesture) {
+                                bcx.notify();
+                            }
                         }
-                    }
-                });
-            })
+                    });
+                })
         });
 
         let mut row = self.row_head(title.into(), desc.into(), disabled, cx);
@@ -634,7 +631,7 @@ impl SettingsView {
         let backend = self.backend.clone();
         let items = MoveKind::ALL.into_iter().map(move |kind| {
             let backend = backend.clone();
-            let label_key = format!("hotkeys.move_kind.{}", kind.id());
+            let label_key = kind.locale_key();
             MoonMenuItem::with_key(kind.id(), t!(&label_key).to_string())
                 .checked(kind == current)
                 .on_click(move |_, _, cx| {
@@ -647,7 +644,7 @@ impl SettingsView {
                     });
                 })
         });
-        let current_key = format!("hotkeys.move_kind.{}", current.id());
+        let current_key = current.locale_key();
         Self::row_dropdown(
             format!("move-kind-{}", move_kind_slot_id(slot)),
             t!(&current_key).to_string(),

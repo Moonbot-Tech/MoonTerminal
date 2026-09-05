@@ -84,6 +84,7 @@ fn projected_pages_are_only_the_ones_the_terminal_reads_and_writes() {
             "autobuy",
             "special",
             "interface",
+            "hotkeys",
             "autostart"
         ]
     );

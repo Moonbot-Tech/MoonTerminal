@@ -67,10 +67,6 @@ core_expert.page_todo:
   ru: "Страница ещё не перенесена. Каркас окна готов: вкладки, экспертный режим и отправка по OK."
   en: "This page is not ported yet. The frame is in place: tabs, expert mode and the send on OK."
   es: "Esta página aún no está portada. El marco está listo: pestañas, modo experto y el envío con OK."
-core_expert.page_unprojected:
-  ru: "Эти настройки приходят по проводу, но терминал их пока не разбирает: чтобы страницу можно было заполнить и отправить, нужно расширить проекцию настроек ядра и маску отправляемых секций."
-  en: "These settings do cross the wire, but the terminal does not read them yet: filling and sending this page needs the core-settings projection and the sent-section mask widened first."
-  es: "Estos ajustes sí viajan por el cable, pero el terminal aún no los interpreta: para rellenar y enviar esta página hay que ampliar antes la proyección de ajustes del núcleo y la máscara de secciones enviadas."
 core_expert.page_absent:
   ru: "Эти настройки не приходят по проводу: ключи API, пароль и лицензия в безопасное подмножество не входят. Контролы страницы заблокированы; OK отправляет остальную страницу настроек ядра, как и раньше."
   en: "These settings never cross the wire: API keys, the password and the licence are outside the safe subset. This page's controls are blocked; OK still sends the rest of the core's settings page."
@@ -97,6 +93,14 @@ core_expert.gen_auto_cancel:
   ru: "Авто отмена покупки: %{v}"
   en: "Auto-cancel a buy: %{v}"
   es: "Cancelación automática de compra: %{v}"
+core_expert.gen_auto_cancel_sec:
+  ru: "%{v} сек"
+  en: "%{v} s"
+  es: "%{v} s"
+core_expert.gen_auto_cancel_min:
+  ru: "%{v} мин"
+  en: "%{v} min"
+  es: "%{v} min"
 core_expert.gen_cancel_buy_after_sell:
   ru: "Отменять buy после исполнения Sell"
   en: "Cancel the buy once the Sell fills"
@@ -704,6 +708,14 @@ core_expert.int_spread_hdelta:
   ru: "+ hDelta*"
   en: "+ hDelta*"
   es: "+ hDelta*"
+core_expert.hk_mirror_only:
+  ru: "Значения этой вкладки — с ядра, только для чтения: менять их здесь нельзя."
+  en: "This tab shows the core's own values, read-only: they cannot be changed here."
+  es: "Esta pestaña muestra los valores del núcleo, solo lectura: no se pueden cambiar aquí."
+core_expert.hk_grid_read_only:
+  ru: "Сетка «Управление» — клавиши ядра, только для чтения."
+  en: "The Controls grid shows the core's own keys, read-only."
+  es: "La cuadrícula Control muestra las teclas del núcleo, solo lectura."
 core_expert.hk_built_in:
   ru: "Встроенные хоткеи"
   en: "Built-in hotkeys"

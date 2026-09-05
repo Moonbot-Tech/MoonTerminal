@@ -16,23 +16,23 @@ use moon_core::feed::FieldMask;
 
 /// How far one page's values actually reach this window — the answer to "why can I not edit this".
 ///
-/// There are two separate limits, and conflating them would make the window lie about which one a
-/// page is behind:
+/// There are two separate limits behind that question:
 ///
 /// 1. The WIRE is the safe-share configuration (`moonproto::shared_config`): a deliberately safe
 ///    subset of Moonbot's settings, carrying no secrets and no machine-local state.
 /// 2. The PROJECTION is `moon_core::feed::CoreConfig`, the part of that subset this terminal reads
 ///    into typed fields and — through the mask a surface builds with [`ExpertTab::add_sections`] —
 ///    is allowed to write back.
+///
+/// Only the first now separates one page from another. There used to be a third rating for a page
+/// on the wire but not yet projected, and every such page has since been ported; a page added in
+/// that state again needs the rating back, because without it the window would promise values it
+/// cannot seed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabSource {
     /// Both limits cleared: the values are on the wire AND in the terminal's projection, so this
     /// page's controls can be seeded and sent as soon as they are drawn.
     Projected,
-    /// On the wire, but not projected yet. Drawing this page needs `CoreConfig` and the field mask
-    /// extended first — until then there is nothing to seed a control from and nothing OK could
-    /// carry, however complete the layout looks.
-    Wire,
     /// Not on the wire at all: API keys, the local password and the licence state are exactly what
     /// safe-share excludes, and the setup wizard is a Moonbot action rather than a value.
     Absent,
@@ -124,7 +124,9 @@ impl ExpertTab {
     /// touched sends no write at all.
     pub(crate) fn add_sections(self, mask: FieldMask) -> FieldMask {
         match self {
-            Self::General => mask.with_general(),
+            // Two areas for one Moonbot page: the compact popup draws only the first, so the
+            // seven rows below it are their own — see `moon_core::feed::OrderRulesSettings`.
+            Self::General => mask.with_general().with_order_rules(),
             // Moonbot's AutoStart page draws `visual.blink_config` beside `trading.auto_start`, so
             // the page owns both sections.
             Self::AutoStart => mask.with_auto_start().with_btc_blink(),
@@ -134,7 +136,10 @@ impl ExpertTab {
             Self::AutoBuy => mask.with_auto_buy(),
             Self::Telegram => mask.with_telegram(),
             Self::Special => mask.with_special(),
-            Self::Login | Self::Hotkeys => mask,
+            // Only the mouse-gesture block of the Hotkeys page: the rest of it mirrors the
+            // manual block, which no mask may reach.
+            Self::Hotkeys => mask.with_gestures(),
+            Self::Login => mask,
         }
     }
 
@@ -143,13 +148,12 @@ impl ExpertTab {
     /// `Projected` is what `moon_core::feed::CoreConfig` carries AND this window draws: the General
     /// page's exits and risk limits, the AutoStart page with its watchdogs and BTC blink, the
     /// Interface page's appearance block together with the alert sounds Moonbot puts on it, the
-    /// AutoBuy page's signal sources and message filter, the Telegram page's channels, and the
-    /// Special page's engine switches, its logging and its order
-    /// watchdog. Whatever is left is on the wire but unprojected, and Login is
-    /// not on the wire at all.
+    /// AutoBuy page's signal sources and message filter, the Telegram page's channels, the Special
+    /// page's engine switches with its logging and its order watchdog, and the Hotkeys page's
+    /// mouse gestures. That is every page but Login, which is not on the wire at all.
     ///
-    /// A `Projected` page is not necessarily projected in FULL — every one of the six draws rows the
-    /// snapshot does not carry. The rating answers "can this page be filled and sent at all",
+    /// A `Projected` page is not necessarily projected in FULL — every one of the seven draws rows
+    /// the snapshot does not carry. The rating answers "can this page be filled and sent at all",
     /// which is what decides whether the window prints a note OVER it; a row that cannot be filled
     /// answers for itself, by being disabled.
     pub(crate) fn source(self) -> TabSource {
@@ -163,8 +167,8 @@ impl ExpertTab {
             | Self::Interface
             | Self::AutoBuy
             | Self::Telegram
+            | Self::Hotkeys
             | Self::Special => TabSource::Projected,
-            Self::Hotkeys => TabSource::Wire,
         }
     }
 

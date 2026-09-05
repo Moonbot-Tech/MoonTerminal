@@ -8,9 +8,9 @@ pub use core_settings::{
     AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CORE_HOTKEY_ACTION_COUNT, CoreConfig,
     CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult,
     CoreConfigEditRow, CoreConfigRejection, CoreConfigState, CoreHotkeyAction, CoreHotkeyLayout,
-    CoreStratButtons, GeneralSettings, InterfaceSettings, LeverageSettings, ManualSettings,
-    ProfitState, SignalsSettings, SpecialSettings, TelegramSettings, day_fraction_to_minutes,
-    minutes_to_day_fraction,
+    CoreStratButtons, GeneralSettings, GestureSettings, InterfaceSettings, LeverageSettings,
+    ManualSettings, MoveRow, OrderRulesSettings, ProfitState, SignalsSettings, SpecialSettings,
+    TelegramSettings, day_fraction_to_minutes, minutes_to_day_fraction,
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,

@@ -23,8 +23,10 @@
 //! and the only thing that decides whether OK can be pressed.
 //!
 //! What this window does NOT reproduce is Moonbot's ability to edit everything on those pages: the
-//! wire carries a SAFE subset, and this terminal projects a subset of THAT. [`tabs::TabSource`]
-//! records which of the two limits a page sits behind. Every page it DOES carry is drawn, in
+//! wire carries a SAFE subset, and this terminal projects a subset of THAT.
+//! [`tabs::TabSource`] records whether a whole PAGE is behind the first of those
+//! limits; a row behind either answers for itself, by being drawn disabled with
+//! its reason stated beside it. Every page it DOES carry is drawn, in
 //! Moonbot's own slot, because hiding one would renumber the rest for a trader who reaches for a
 //! page by position — the two Moonbot tabs that are pure actions of that process (its setup wizard
 //! and its PRO purchase) are left out entirely instead, having no setting to mirror.

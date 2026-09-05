@@ -814,6 +814,12 @@ impl SessionManager {
         )
     }
 
+    /// Locally derive the short retained deltas from raw trade extrema — the client half of the
+    /// wire's `trading.deltas_by_trades`.
+    pub fn set_deltas_by_trades(&self, core: CoreId, on: bool) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::SetDeltasByTrades(on), "set deltas by trades")
+    }
+
     /// Return read-only access to account-plane state such as statuses, orders, detects, and
     /// strategies. Only the manager mutates the store.
     pub fn store(&self) -> &CoreStore {
