@@ -227,6 +227,10 @@ assets.wallets_hint:
   ru: "Кошельки · перетащи монету между контейнерами"
   en: "Wallets · drag a coin between containers"
   es: "Carteras · arrastra una moneda entre contenedores"
+assets.refresh_hint:
+  ru: "Обновить балансы ядра"
+  en: "Refresh core balances"
+  es: "Actualizar saldos del núcleo"
 # --- Wallet-section display settings (the gear beside the refresh button) ---
 assets.settings.title:
   ru: "Настройки кошельков"

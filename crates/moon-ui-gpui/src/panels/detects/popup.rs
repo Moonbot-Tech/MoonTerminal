@@ -153,14 +153,7 @@ pub(super) fn toolbar(
     if let Some(body) = body {
         popover = popover.content(body);
     }
-    h_flex()
-        .w_full()
-        .flex_none()
-        .h(design::fit_h_px(cx, 28.0, 13.0, 7.5))
-        .items_center()
-        .px_2()
-        .bg(rgb(p.tabbar))
-        .child(popover)
+    crate::panels::panel_band(cx).child(popover)
 }
 
 /// Builds a slider row with a left caption and a right value label.

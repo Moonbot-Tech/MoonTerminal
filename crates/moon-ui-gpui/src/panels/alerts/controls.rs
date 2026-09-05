@@ -51,20 +51,19 @@ impl AlertsPanel {
 
     /// Build the shared core dropdown from the effective Classic or Auto scope.
     ///
-    /// Classic mode presents the retained multi-selection. Auto mode pins the workspace label and
-    /// disables the control so callbacks cannot alter the retained Classic selection.
+    /// Classic mode presents the retained multi-selection. Auto mode renders a non-interactive
+    /// pinned scope chip naming the workspace label instead of the dropdown, so callbacks cannot
+    /// alter the retained Classic selection.
     ///
     /// Args:
     ///     cx: Panel context used to resolve workspace ownership and wire Classic callbacks.
     ///
     /// Returns:
-    ///     Interactive Classic selector or disabled Auto scope indicator.
-    fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    ///     Interactive Classic selector or non-interactive pinned scope chip.
+    fn core_combo(&self, cx: &Context<Self>) -> AnyElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope.is_workspace_owned();
         let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
-        let view = cx.entity();
-        let exchange_view = view.clone();
         let (cores, venues) = {
             let b = self.backend.read(cx);
             (self.group_cores(b), b.session.core_venues())
@@ -80,35 +79,60 @@ impl AlertsPanel {
             crate::workspace::EffectiveScopeLabel::All
             | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
         };
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
-        let combo = crate::controls::core_combo(
-            "alerts-cores",
-            &cores,
-            &venues,
-            if workspace_owned {
-                &effective_selection
-            } else {
-                &self.sel_cores
-            },
-            crate::controls::CoreAllRowMode::ImplicitOrComplete,
-            t!("alerts.all_cores").to_string(),
-            |n| t!("alerts.cores_n", n = n).to_string(),
-            170.0,
-            extras,
-            move |id, app| {
-                view.update(app, |this, cx| this.toggle_core(id, cx));
-            },
-            move |exchange_cores, app| {
-                exchange_view.update(app, |this, cx| {
-                    this.toggle_exchange_cores(exchange_cores, cx)
-                });
-            },
-        )
-        .disabled(workspace_owned);
-        if let Some(label) = pinned_label {
-            combo.label(label)
+        let selection = if workspace_owned {
+            &effective_selection
         } else {
-            combo
+            &self.sel_cores
+        };
+        if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let label = pinned_label.unwrap_or_else(|| {
+                crate::controls::core_selection_summary(
+                    &cores,
+                    selection,
+                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                    &t!("alerts.all_cores").to_string(),
+                    &|n| t!("alerts.cores_n", n = n).to_string(),
+                )
+                .label
+            });
+            let width = px(crate::controls::wrap_fit::action_width(
+                cx,
+                crate::controls::CORE_COMBO_TRIGGER_W,
+            ));
+            crate::panels::pinned_scope_host(
+                "alerts-cores-tip",
+                "alerts-cores",
+                label,
+                width,
+                p,
+                cx,
+            )
+        } else {
+            let view = cx.entity();
+            let exchange_view = view.clone();
+            let extras =
+                crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
+            crate::controls::core_combo(
+                "alerts-cores",
+                &cores,
+                &venues,
+                selection,
+                crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                t!("alerts.all_cores").to_string(),
+                |n| t!("alerts.cores_n", n = n).to_string(),
+                170.0,
+                extras,
+                move |id, app| {
+                    view.update(app, |this, cx| this.toggle_core(id, cx));
+                },
+                move |exchange_cores, app| {
+                    exchange_view.update(app, |this, cx| {
+                        this.toggle_exchange_cores(exchange_cores, cx)
+                    });
+                },
+            )
+            .into_any_element()
         }
     }
 

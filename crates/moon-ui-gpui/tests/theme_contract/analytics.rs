@@ -967,13 +967,15 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
     for needle in [
         "backend.group_cores(&self.group)",
         "selected_auto_core_name(core, &live_cores, &cores)",
-        // The widening itself, AND the measurement the row budgets with: the pinned name fits
-        // between the shared width and the Auto ceiling, and the same bounds resolve the width the
-        // wrapping row is allowed to spend on this section.
-        ".fit_trigger_width(",
+        // The measurement the row budgets with: the pinned name fits between the shared width and
+        // the Auto ceiling, bounding what the shared host below is handed as `width`.
         "MoonDropdown::fitted_trigger_label(",
         "AUTO_CORE_TRIGGER_MAX_W",
-        "host.tooltip(crate::panels::common::text_tooltip(label))",
+        // The pinned arm no longer builds its own fitted dropdown or wires its own tooltip — both
+        // moved into the shared chip host, which is what keeps this and every other pinned-scope
+        // call site from drifting apart. Pinning the exact call (not just the symbol) is what
+        // proves the bounded `width` computed above is what actually reaches the chip.
+        "crate::panels::pinned_scope_host(\"rep-core-tip\", \"rep-core\", label, width, p, cx)",
     ] {
         assert!(
             core_combo.contains(needle),

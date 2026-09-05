@@ -98,3 +98,9 @@ workspace.scope.all_hidden:
   ru: "Все ядра скрыты активным режимом рабочего пространства"
   en: "Every core is hidden by the active workspace preset"
   es: "Todos los núcleos están ocultos por el modo de espacio de trabajo activo"
+# The tooltip a pinned scope chip shows in place of the picker menu it replaces — the picker is
+# disabled by the active workspace, and this is the only place that says why (`panels::common`).
+workspace.scope.pinned_hint:
+  ru: "Область задана рабочим пространством: %{scope}. Сменить её можно в панели слева"
+  en: "The scope is set by the workspace: %{scope}. Change it from the panel on the left"
+  es: "El ámbito lo define el espacio de trabajo: %{scope}. Puede cambiarlo en el panel izquierdo"

@@ -111,10 +111,7 @@ fn state_marker(a: Option<&CoreAgg>) -> Option<String> {
 
 /// Small muted caption — the trust markers and the total's labels.
 fn caption(text: String, p: MoonPalette, cx: &App) -> Div {
-    div()
-        .text_size(design::t_caption(cx))
-        .text_color(rgb(p.text_muted))
-        .child(text)
+    crate::panels::footer_caption(text, p, cx)
 }
 
 /// A money figure at body size in the caller's colour — the companion to [`caption`].
