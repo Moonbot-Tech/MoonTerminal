@@ -10,11 +10,30 @@
 //! safe-share subset altogether, which is why what IS live inside Remote is only the screenshot
 //! rules and the multi-command switch. The iceberg pair belongs to `GeneralSettings`, which the
 //! compact popup edits: one wire field belongs to one area, or a write from either surface would
-//! put the other's frozen copy back. A few rows have no wire field that means what their caption
-//! says — "Не проверять лимиты позиции" is the clearest, whose nearest neighbour
-//! `trading.free_position_check` is documented as CLOSING orphaned positions and travels on the
-//! compact `ClientSettings` route besides. And one row is held back by this window rather than by
-//! the wire: see "No trades on markets" below.
+//! put the other's frozen copy back. And two rows are held back by this window rather than by the
+//! wire: see "No trades on markets" below, and "Не проверять лимиты позиции" next.
+//!
+//! That row IS `trading.free_position_check`: Moonbot's own checkbox for it is named
+//! `cbFreePositionCheck`, and its hint describes position limits ("лимит позиции 5k. С этой опцией
+//! можно ставить лонг на 5k и шорт на 5k вместе"), not the orphaned-position cleanup the wire's doc
+//! claims. Three things still stand between that row and being live, and only the first blocks it
+//! today; the third is plain work.
+//!
+//! The DIRECTION. The caption is negative ("НЕ проверять") and
+//! the field name is positive, so which way the box maps onto the flag is a guess — and the wrong
+//! guess silently stops a position-limit check for a trader who asked for one. Moonbot's own
+//! warning ("с включенной галкой возможны потери ордеров") and the wire's default of `false` both
+//! point at ticked-means-true, but pointing is not the same as knowing. One look at Moonbot with
+//! the box ticked settles it.
+//!
+//! And the field is MIRRORED: `absorb_client_settings_raw` lists it, so it is a two-route field
+//! like `sign_orders` below. That does not veto it — nine mirrored fields this window already
+//! writes are in the same table — but it does put the row under the hazard
+//! `feed::live::client_settings` states beside its one-way gate: a compact write issued while a
+//! safe-share packet is unechoed can revert what the two channels share.
+//!
+//! Third, `free_position_check` is not in `SpecialSettings` at all, so the projection and its
+//! applier have to gain it. That part is only work.
 //!
 //! Four fields of the `trading.orders_control` block behind these rows stay out.
 //!
@@ -59,8 +78,10 @@ const PCT: (f32, f32, f32) = (0.0, 100.0, 1.0);
 const LOG_LEVEL: (f32, f32, f32) = (0.0, 5.0, 1.0);
 const LOG_DAYS: (f32, f32, f32) = (0.0, 365.0, 1.0);
 const CHART_MINUTES: (f32, f32, f32) = (0.0, 1440.0, 1.0);
-/// The iceberg slice is a FRACTION of the order — the wire's own default is 0.1 — and the only one
-/// of these it carries as a float. A percentage range would pin every real value at the far left.
+/// The iceberg threshold is a PER CENT of price step, not the fraction of the order the wire's doc
+/// claims: Moonbot formats the row as "Ставить Iceberg если шаг цены < %s%%". Its default is 0.1,
+/// meaning a tenth of a per cent, and this range — the only float among these — suits that reading
+/// as it stood.
 const ICEBERG_STEP: (f32, f32, f32) = (0.0, 1.0, 0.01);
 
 /// Print an amount so that reading it back yields the same number — Rust's default `f64` formatting

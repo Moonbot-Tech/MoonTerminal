@@ -46,6 +46,20 @@ const DEAD_NUM: fn(&mut CoreConfig, f32) = |_, _| {};
 /// dead ones resemble, so a track this terminal cannot fill still moves like its neighbours.
 const PCT: (f32, f32, f32) = (0.0, 100.0, 1.0);
 
+/// The order-book BORDER track, which stops where Moonbot's own does.
+///
+/// Its `bGlassOpacity` declares `Max = 75` while the two tracks beside it declare none, and
+/// `super::autobuy`'s rule is to widen a range only where Moonbot states none — here it states one.
+/// What that buys is narrow and worth stating exactly: it stops the USER producing a value Moonbot's
+/// own control cannot, which is the kind the core is most likely to clamp — and a clamped value
+/// never echoes back, so the write would spend its whole retry budget before being dropped.
+///
+/// It does NOT bound what is sent. A slider clamps for display only (`shell::core_settings::editors`
+/// stages nothing on a re-seed), so a core already holding more than 75 keeps that value: the thumb
+/// sits at the end of the track while the caption beside it prints the truth, and OK sends the
+/// truth. The wire's own type is 0..100, so 76..100 stays legal and simply unreachable from here.
+const BORDER_PCT: (f32, f32, f32) = (0.0, 75.0, 1.0);
+
 /// Floor for the two line widths, both drawn as a spinner rather than a track. A width is a pixel
 /// count, so below zero is meaningless; there is no ceiling, because the wire states none and
 /// inventing one would show a number OK does not send.
@@ -127,9 +141,13 @@ pub(super) fn slider_specs(
     let i = &draft.interface;
     vec![
         ("exp-int-pixel-size", PCT, 0.0, DEAD_NUM, None),
-        // "Границы" stays dead: the section carries several order-book opacities and which one
-        // Moonbot puts behind this track is not settled by its documentation.
-        ("exp-int-zone-border", PCT, 0.0, DEAD_NUM, None),
+        (
+            "exp-int-zone-border",
+            BORDER_PCT,
+            i.glass_opacity as f32,
+            |d, v| d.interface.glass_opacity = v.round() as i32,
+            None,
+        ),
         (
             "exp-int-zone-fill",
             PCT,
@@ -536,12 +554,16 @@ pub(super) fn body(
                             .min_w_0()
                             .gap(gap)
                             .child(caption(
-                                t!("core_expert.int_zone_border", v = NO_VALUE).to_string(),
-                                false,
+                                t!(
+                                    "core_expert.int_zone_border",
+                                    v = i.glass_opacity.to_string()
+                                )
+                                .to_string(),
+                                true,
                                 p,
                                 cx,
                             ))
-                            .children(slider(store, "exp-int-zone-border", false)),
+                            .children(slider(store, "exp-int-zone-border", true)),
                     )
                     .child(
                         v_flex()

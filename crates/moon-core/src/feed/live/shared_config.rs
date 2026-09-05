@@ -53,8 +53,8 @@ const ECHO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// rendered sections — cannot reach the manual block at all, checkbox on or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldMask {
-    /// Moonbot's autobuy page, which reaches into `signals`, its `signal_config` sub-record and one
-    /// field of `trading`. One area because it is one PAGE.
+    /// Moonbot's autobuy page, which reaches into `signals`, its `signal_config` sub-record and two
+    /// fields of `trading`. One area because it is one PAGE.
     auto_buy: bool,
     auto_start: bool,
     btc_blink: bool,
@@ -792,6 +792,7 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             look_full_link_tlg: sig.look_full_link_tlg,
             advanced_filter: sig.advanced_filter,
             dont_buy_reply: sig.dont_buy_reply,
+            dont_buy_forward: t.dont_buy_forward,
             msg_keywords_long: sig.msg_keywords_long.clone(),
             msg_keywords_short: sig.msg_keywords_short.clone(),
             msg_black_words: sig.msg_black_words.clone(),
@@ -838,6 +839,7 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             icon_selection: v.icon_selection,
             price_line_width: v.colors.price_line_width,
             panic_sell_opacity: v.panic_sell_opacity,
+            glass_opacity: v.glass_opacity,
             book_cumulative_opacity: v.book_cumulative_opacity,
             book_orders_opacity: v.book_orders_opacity,
             book_orders_width: v.book_orders_width,
@@ -1215,10 +1217,10 @@ fn apply_telegram(cfg: &mut SharedConfig, t: &TelegramSettings) {
     cfg.trading.use_moon_bl = t.use_moon_bl;
 }
 
-/// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and one `trading`
-/// field.
+/// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and two `trading`
+/// fields.
 ///
-/// Thirty-two fields: everything else in each section — including their `unknown_tail`s and the two
+/// Thirty-three fields: everything else in each section — including their `unknown_tail`s and the two
 /// price-approach alerts [`apply_signals`] owns — travels back untouched.
 fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
     let sig = &mut cfg.signals;
@@ -1232,6 +1234,7 @@ fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
     sig.look_full_link_tlg = b.look_full_link_tlg;
     sig.advanced_filter = b.advanced_filter;
     sig.dont_buy_reply = b.dont_buy_reply;
+    cfg.trading.dont_buy_forward = b.dont_buy_forward;
     sig.msg_keywords_long = b.msg_keywords_long.clone();
     sig.msg_keywords_short = b.msg_keywords_short.clone();
     sig.msg_black_words = b.msg_black_words.clone();
@@ -1259,7 +1262,7 @@ fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
 
 /// Apply Moonbot's interface page across the four sections it lives in.
 ///
-/// Twenty-eight fields of the several hundred those sections hold: everything else in each of them
+/// Twenty-nine fields of the several hundred those sections hold: everything else in each of them
 /// — including all four `unknown_tail`s — travels back untouched, exactly as `apply_general` leaves
 /// the rest of `trading` alone.
 ///
@@ -1298,6 +1301,7 @@ fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
     v.icon_selection = i.icon_selection;
     v.colors.price_line_width = i.price_line_width;
     v.panic_sell_opacity = i.panic_sell_opacity;
+    v.glass_opacity = i.glass_opacity;
     v.book_cumulative_opacity = i.book_cumulative_opacity;
     v.book_orders_opacity = i.book_orders_opacity;
     v.book_orders_width = i.book_orders_width;

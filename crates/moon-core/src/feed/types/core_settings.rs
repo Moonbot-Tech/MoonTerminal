@@ -68,9 +68,14 @@ pub struct CoreConfig {
 /// the section calls it. The pairing is read off the section's own field order, where each sound
 /// sits with the alert flag and level it belongs to — `signal_sound_2` between `sell_alert_level`
 /// and `play_sell_alert`, `buy_signal_sound` beside `play_buy_alert` and `buy_alert_level`. The
-/// wire's own doc for `signal_sound_2` says only "the second alert tier", so the pairing is the
-/// one thing here that layout evidence rather than a stated contract settles; a core whose two
-/// rows come back swapped in the popup is the symptom, and the fix is to swap them here.
+/// wire's own doc for `signal_sound_2` says only "the second alert tier", so it names neither
+/// alert. Two arguments settle it together, and neither reaches all three fields alone:
+/// `buy_signal_sound` names its own half, and Moonbot draws exactly two such rows ("Звук если до
+/// цены продажи меньше N%" and "…до цены покупки…"); while the section's field ORDER is what
+/// separates `signal_sound_2` from the plain `signal_sound`, which sits fifteen fields earlier —
+/// each of the two alert sounds is grouped with the flag and level it belongs to, and that one is
+/// not. A core whose two rows come back swapped in the popup is the
+/// symptom, and the fix is to swap them here.
 ///
 /// The two levels are WHOLE PER CENT, as the wire carries them and as Moonbot's own spinner shows
 /// them — not fractions. Zero is a legitimate value and means "when the price has reached the
@@ -754,12 +759,13 @@ pub struct SpecialSettings {
     pub auto_lower_lev: bool,
     /// `trading.use_websocket_api`: place orders over the socket rather than REST.
     pub use_websocket_api: bool,
-    /// `trading.iceberg_step`: the slice an iceberg order is cut into, as a FRACTION of the order —
-    /// the wire's own default is 0.1.
+    /// `trading.iceberg_step`: the price step below which an order is placed as an iceberg, as a
+    /// PER CENT. The wire's own default is 0.1, meaning a tenth of a per cent.
     ///
-    /// Moonbot draws it as a price step ("Ставить Iceberg если шаг цены < …"), which is the third
-    /// caption on this page the wire words differently. The fraction is what the range of the track
-    /// is built on, so the two readings are not interchangeable here.
+    /// The wire calls it "iceberg slice size as a fraction of total", and that is wrong. Moonbot
+    /// formats the row itself as "Ставить Iceberg если шаг цены < %s%%" — a literal per cent sign
+    /// after the value — so the number is a percentage of price, not a share of the order. The
+    /// control's 0..1 range suits that reading as well, which is why it did not have to move.
     pub iceberg_step: f64,
     /// `trading.sell_x2_level`: the volume percentile above which the sell quantity doubles.
     pub sell_x2_level: i32,
@@ -798,18 +804,27 @@ pub struct SpecialSettings {
     pub h_pos_black_list_text: String,
     /// `trading.multi_commands`: accept batched commands.
     ///
-    /// Moonbot's caption is "Мультистроковые команды"; the wire's own doc calls it batch order
-    /// operations from a thin client. The names match exactly and it is the only such flag in the
-    /// section, so the binding stands on that — but the two descriptions are not one sentence.
+    /// Moonbot's caption is "Мультистроковые команды" and its hint for that row says what it does:
+    /// "Принимать несколько команд в одном сообщении в Телеграме". Several commands in ONE Telegram
+    /// message — not the "batch order operations from a thin client" the wire's doc describes. The
+    /// field is right, the wire's sentence is not.
     pub multi_commands: bool,
     /// `trading.send_shots_config.may_send` and the thresholds under it: when a trade's chart is
     /// posted to Telegram, and how that chart is scaled.
     ///
-    /// Two of these carry a caption the wire words differently, and both bindings rest on there
-    /// being no other candidate in the sub-record: `profit_session` is drawn as "или профит за час"
-    /// while the wire calls it a session profit — the two coincide only when the session resets
-    /// hourly — and `time_scale` is drawn as a per cent while the wire calls it seconds of history.
-    /// The number travels either way; what may differ is the unit Moonbot's own dialog prints.
+    /// Two of these carry a caption the wire words differently.
+    ///
+    /// `time_scale` is a PER CENT and the wire's "seconds of history" is wrong: Moonbot's own hint
+    /// reads "Масштаб по оси времени от 100% до 400% означает, насколько график на скрине длиннее,
+    /// чем заняла сама сделка" — a zoom factor, and one that states its own range. `price_scale`
+    /// beside it is the same kind of number, and its hint confirms what the wire's default already
+    /// implied: "Если 0 … применяется авто-масштабирование".
+    ///
+    /// `profit_session` is drawn as "или профит за час" while the wire calls it a session profit;
+    /// the two coincide only when the session resets hourly. The binding is settled by POSITION
+    /// rather than by either wording: Moonbot's group is three thresholds — "Если профит $ >",
+    /// "или профит % >", "или профит за час $ >" — against this record's `profit_abs`,
+    /// `profit_pers`, `profit_session`, in that order.
     pub send_shots: bool,
     pub profit_abs: i32,
     pub profit_pers: i32,
@@ -898,7 +913,7 @@ pub struct TelegramSettings {
 /// Moonbot's "АвтоПокупка" page: where a buy signal may come from, and which messages count.
 ///
 /// An area is a PAGE, not a wire section — see [`InterfaceSettings`] for why. This one reads from
-/// `signals`, from its `signal_config` sub-record, and from one field of `trading`, which is exactly
+/// `signals`, from its `signal_config` sub-record, and from two fields of `trading`, which is exactly
 /// how Moonbot's own page is put together.
 ///
 /// It deliberately does NOT overlap [`SignalsSettings`]: that block is the two price-approach alert
@@ -915,8 +930,10 @@ pub struct TelegramSettings {
 pub struct AutoBuySettings {
     /// `signals.monitor_clipboard`: watch the clipboard for token names at all.
     ///
-    /// Moonbot's "захватывать буфер", by elimination: its own dialog puts no switch in the group's
-    /// caption, and this is the only clipboard control left once the others have their fields.
+    /// Moonbot's "Захватывать буфер", and its own hint for that row says exactly this field's
+    /// meaning: "бот будет искать монету в буфере, даже если не стоит автопокупка; в этом случае
+    /// бот покажет монету но не купит". Which is the difference between this flag and
+    /// [`Self::clipboard_auto_buy`] beside it.
     pub monitor_clipboard: bool,
     /// `signals.clipboard_auto_buy`: buy when the clipboard yields a token.
     pub clipboard_auto_buy: bool,
@@ -936,6 +953,17 @@ pub struct AutoBuySettings {
     pub advanced_filter: bool,
     /// `signals.dont_buy_reply`: ignore a signal that is a reply to another message.
     pub dont_buy_reply: bool,
+    /// `trading.dont_buy_forward`: ignore a signal that was FORWARDED from another chat.
+    ///
+    /// The wire's own doc for this field says something else — "skip buying forward contracts /
+    /// pre-market tokens" — and that doc is wrong. Moonbot carries its own log line for the flag,
+    /// "Нашел монету в пересланном (forward) сообщении, не буду ее покупать!", which names the
+    /// behaviour and the field in one sentence; its dialog draws the row beside "Не покупать
+    /// ответное", which is [`Self::dont_buy_reply`]. Two message filters, one pair.
+    ///
+    /// The only oddity left is the wire's: this half lives in `trading` while its twin lives in
+    /// `signals`.
+    pub dont_buy_forward: bool,
     /// `signals.msg_keywords_long` and `signals.msg_keywords_short`: comma-separated words that
     /// mark a message as a long or a short signal.
     pub msg_keywords_long: String,
@@ -1050,9 +1078,21 @@ pub struct InterfaceSettings {
     pub price_line_width: i32,
     /// `visual.panic_sell_opacity`, in whole per cent.
     pub panic_sell_opacity: i32,
-    /// `visual.book_cumulative_opacity` and `visual.book_orders_opacity`, in whole per cent, and
-    /// `visual.book_orders_width` in pixels: the order-book zone fill, its order levels, and how
-    /// wide a level is drawn.
+    /// `visual.glass_opacity`, `visual.book_cumulative_opacity` and `visual.book_orders_opacity` in
+    /// whole per cent, plus `visual.book_orders_width` in pixels: the three opacities of Moonbot's
+    /// "Прозрачность зон стакана" group, and how wide an order level is drawn.
+    ///
+    /// `glass_opacity` is the "Границы" track, and Moonbot's own form says so by POSITION rather
+    /// than by name: under the group label `lOrderBookSettings` its three tracks sit on one row,
+    /// left to right at x=14, 152 and 290 — `bGlassOpacity`, `bBookCumulative`, `bBookOrders` —
+    /// against the caption run "Границы", "Заливка", "Ордера" in that order.
+    ///
+    /// Worth stating because the wire disagrees: its own doc calls this one the orderbook PANEL
+    /// opacity, and its default of 5 beside a fill of 100 reads oddly for a border. That prose has
+    /// already proved wrong about three other fields in this section, and the three defaults do
+    /// compose as independent parts — a solid fill, invisible levels, a faint border — where a
+    /// panel-wide 5 would make the fill's 100 meaningless.
+    pub glass_opacity: i32,
     pub book_cumulative_opacity: i32,
     pub book_orders_opacity: i32,
     pub book_orders_width: i32,
@@ -1106,6 +1146,7 @@ impl PartialEq for InterfaceSettings {
             && self.play_signal_sound == other.play_signal_sound
             && self.confirm_close == other.confirm_close
             && self.hide_demo_button == other.hide_demo_button
+            && self.glass_opacity == other.glass_opacity
             && self.icon_selection == other.icon_selection
             && self.price_line_width == other.price_line_width
             && self.panic_sell_opacity == other.panic_sell_opacity
