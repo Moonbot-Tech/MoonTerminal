@@ -670,6 +670,19 @@ pub struct WindowLayout {
     /// "Screener" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub screener_window: Option<GeomRect>,
+    /// Expert core-settings window geometry (singleton), so it reopens in its previous position.
+    #[serde(default)]
+    pub core_expert_window: Option<GeomRect>,
+    /// Whether the core-settings gear opens the EXPERT window instead of the compact popup.
+    ///
+    /// Application-wide rather than per core or per group: it selects a way of working, not a
+    /// property of any one MoonBot. `None` — every layout written before this field existed —
+    /// resolves to the compact popup, so an established profile keeps what it already has.
+    ///
+    /// Read leniently, like every other preference in this hand-edited file: one mistyped value
+    /// here must not reject the whole document and cost the user every window position in it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub core_settings_expert: Option<bool>,
     /// "Analytics" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,

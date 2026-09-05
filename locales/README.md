@@ -27,6 +27,7 @@ rust-i18n мёржит **все** файлы в этой папке в одно 
 | `common.yml`       | строки, общие для нескольких панелей (загрузка, ошибки чтения БД) |
 | `city.yml`         | названия городов для выбора пояса в часах шапки               |
 | `workspace.yml`    | режим автоторговли, навигация по ядрам и статусы доступности  |
+| `core_expert.yml`  | окно «Настройки ядра — экспертный режим» (вкладки Moonbot, состояния страницы) |
 
 Новый раздел UI → новый файл; ключ именуем `<область>.<...>` (точка как разделитель).
 
@@ -39,6 +40,13 @@ rust-i18n мёржит **все** файлы в этой папке в одно 
     Size · Sell · SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port
     USDT eq. в подписи Size, USDT eq. — техническое обозначение эквивалента
     PRO · FREE (названия тарифов)
+    Hotkeys (ярлык вкладки в экспертных настройках ядра — так же подписан в самом Moonbot)
+    Copy to ClipBoard · Paste (кнопки «Переноса настроек» — в Moonbot они латиницей на всех языках)
+    HMAC · RSA · @MBOnlineBot · RU/EN/ES (вкладка «Логин» экспертных настроек — так же в Moonbot)
+    Remote · System (заголовки секций вкладки «Специальные» — в Moonbot латиницей на всех языках)
+    Orders Controls · Fixed Order Sizes · Fixed Sell Prices · Manual strategies (внутренние вкладки Hotkeys — так же в Moonbot)
+    Max Orders · Listen UDP port · UDP Commands Port/Pass · Control VDS IP (подписи «Специальных» — так же в Moonbot)
+    Add @TMoonBot to your channel · Generate PIN code · Reset channel · Cancel buys · Apply (кнопки «Специальных» — так же в Moonbot)
     RTT · MTU (сетевые аббревиатуры в телеметрии старта ядра)
     строку метрик статус-бара (ticks / book / fps / present / CPU / RAM)
     вкладка Настройки → «Линии» целиком (Buy/Sell/Stop/dashed/knots/…)

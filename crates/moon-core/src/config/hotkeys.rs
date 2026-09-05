@@ -84,6 +84,12 @@ impl MoveKind {
         Self::LastMoved,
     ];
 
+    /// Locale key of this kind's own name, so the three surfaces that draw the list cannot come
+    /// to look it up under different keys.
+    pub fn locale_key(self) -> String {
+        format!("hotkeys.move_kind.{}", self.id())
+    }
+
     /// Stable identifier for locale keys and for the settings selector's element ids.
     pub fn id(self) -> &'static str {
         match self {
@@ -224,6 +230,15 @@ impl MouseGestureBinding {
             Self::LeftShiftDouble => "Shift+Left dbl",
             Self::LeftAltDouble => "Alt+Left dbl",
         }
+    }
+
+    /// How a menu names this gesture: the readable form with Moonbot's own name beside it.
+    ///
+    /// Both surfaces that offer the list draw it this way — a trader reads one of them beside
+    /// Moonbot's dialog, where `Ctrl+Left` alone does not match `CTRL_Click` on sight. Built here
+    /// rather than at each call site so the two cannot drift.
+    pub fn menu_label(self) -> String {
+        format!("{} ({})", self.label(), self.moonbot_name())
     }
 
     pub fn config_value(self) -> &'static str {

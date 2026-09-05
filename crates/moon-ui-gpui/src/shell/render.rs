@@ -241,8 +241,12 @@ impl Render for Shell {
         // rail click that enters Overview really can leave focus inside one. Blurring hands focus
         // back to the window root, which is what MoonUI's own close path does in this case.
         let overview = self.backend.read(cx).is_auto_overview_scope(&self.group);
-        let overview_strands_focus = overview
-            && (self.core_settings_open || self.strat_slots_open || self.strat_slot_menu.is_some());
+        // The core-settings gear strands focus whenever it stops drawing a popover — in Overview
+        // AND in expert mode, which `Shell::gear_popup_unavailable` names as one predicate. The
+        // quick-select gear and the slot menu go with Overview alone: expert mode does not touch
+        // them.
+        let strands_focus = (self.core_settings_open && self.gear_popup_unavailable(cx))
+            || (overview && (self.strat_slots_open || self.strat_slot_menu.is_some()));
         if overview && (self.strat_slots_open || self.strat_slot_menu.is_some()) {
             // Closing the popup drops the slot menu with it — the same coupling a click-away
             // already relies on.
@@ -254,7 +258,7 @@ impl Render for Shell {
         // it closes outright, on the predicate above.
         self.reconcile_core_settings_popup(cx);
 
-        if overview_strands_focus {
+        if strands_focus {
             window.blur();
         }
 

@@ -1,4 +1,4 @@
-//! Draft state for the core-settings popup.
+//! Staged core-settings page: the popup's draft, and the send both faces of the gear share.
 //!
 //! Both tabs edit ONE draft and commit it under a single OK, the way the Moonbot settings window
 //! they reproduce does. Nothing reaches the core while the user types: a write sends the core's
@@ -9,15 +9,16 @@
 //! configuration first arrives, if the popup opened before it), and is dropped on Cancel, on OK, and
 //! whenever the popup stops belonging to its core.
 
-use std::collections::hash_map::Entry;
-
 use gpui::*;
-use moon_ui::{MoonInputEvent, MoonInputState, MoonSliderEvent, MoonSliderState};
+use moon_ui::{MoonInputState, MoonSliderState};
 
 use moon_core::feed::{CoreConfig, FieldMask};
 
+use moon_core::session::CoreId;
+
+use crate::Backend;
 use crate::shell::Shell;
-use crate::shell::core_settings::resolve_core_settings_write;
+use crate::shell::core_settings::{editors, resolve_core_settings_write};
 
 /// Slider bounds `(minimum, maximum, step)` used by the popup's rows.
 ///
@@ -37,8 +38,22 @@ const MAX_FIX_LEVERAGE: i32 = 125;
 
 /// Parse a number the way every other numeric field in this terminal does, accepting the decimal
 /// comma a Russian keyboard produces.
+///
+/// A non-finite value is REFUSED, not passed on: Rust parses "nan" and "inf" happily, and these
+/// fields are thresholds the core compares against — a NaN one compares false to everything, which
+/// turns a panic-sell or a watchdog off while the checkbox beside it still reads as on. There is no
+/// second finiteness check between here and the wire.
 pub(crate) fn parse_num(s: &str) -> Option<f64> {
-    s.trim().replace(',', ".").parse::<f64>().ok()
+    s.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        // Canonical zero. "-0" parses to `-0.0`, which the projection's `total_cmp` equality orders
+        // BELOW `0.0` — so a core echoing a plain zero would never match the draft, and every OK on
+        // that page would burn its retry budget. One place, rather than a special case in each of
+        // the five hand-written comparisons downstream.
+        .map(|v| if v == 0.0 { 0.0 } else { v })
 }
 
 /// Parse an `HH:MM` work-time boundary into minutes since midnight.
@@ -79,9 +94,7 @@ impl Shell {
         };
         self.core_settings_seed = Some(config.clone());
         self.core_settings_draft = Some(config);
-        // A new generation is what tells the retained editors to take the core's values back; see
-        // [`Self::core_settings_input`].
-        self.core_settings_seed_gen = self.core_settings_seed_gen.wrapping_add(1);
+        self.core_settings_editors.reseeded();
         true
     }
 
@@ -114,42 +127,23 @@ impl Shell {
         // Blur has NOT fired by the time OK runs: without this the popup would commit the text the
         // field held when it was last blurred and silently discard what the user just typed.
         self.stage_blacklist_text(cx);
-        let Some(mut draft) = self.core_settings_draft.clone() else {
+        let Some(draft) = self.core_settings_draft.clone() else {
             return;
         };
-        // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
-        // non-positive multiplier and no supported venue offers more than 125x, but clamping while
-        // the user types would make the field disagree with what OK sends.
-        draft.leverage.fix_lev = draft.leverage.fix_lev.clamp(1, MAX_FIX_LEVERAGE);
-        let b = self.backend.read(cx);
-        let active = b.active_trade_core(&self.group);
-        let Some(core) = resolve_core_settings_write(self.core_settings_target, active) else {
-            // Silence here would be indistinguishable from a successful save: the popup closes
-            // either way, and the user pressed OK expecting the values on screen to be applied.
-            log::warn!("core settings OK ignored: the active core moved since the popup opened");
-            self.close_core_settings_popup();
+        if !send_core_config(
+            &self.backend,
+            &self.group,
+            self.core_settings_target,
+            draft,
+            FieldMask::RENDERED_SECTIONS,
+            cx,
+        ) {
+            // The page reached nothing. Closing anyway is what makes a refused write look like a
+            // save, so the popup stays up: pressing OK again once the core is back is the recovery,
+            // and dismissing it is still the way out. The expert window answers the same case with
+            // a banner, which a popover has no room for.
             cx.notify();
             return;
-        };
-        // The popup renders exactly five sections — AutoStart, BtcBlink, General, Leverage and the
-        // Signals alerts — and may write only those: the manual block belongs to the toolbar, never
-        // to a page this
-        // popup does not draw. Naming the mask here, rather than deriving it from what changed, is
-        // what makes an OK unable to reach the manual block AT ALL, checkbox on or off — not merely
-        // unlikely to in the common case.
-        if let Err(error) =
-            b.session
-                .edit_core_config(core, draft.clone(), FieldMask::RENDERED_SECTIONS)
-        {
-            log::warn!("core config edit failed: {error:#}");
-        }
-        // The blacklist-delta filter has a client-side half that moonproto applies to its own
-        // retained analytics: the core's copy alone would leave this terminal's deltas unchanged
-        // until a restart. Nothing is cached for it here — the checkbox reads the core's own value
-        // out of the draft.
-        let exclude = draft.general.exclude_blacklisted_from_deltas;
-        if let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude) {
-            log::warn!("exclude delta failed: {error:#}");
         }
         self.close_core_settings_popup();
         cx.notify();
@@ -191,7 +185,7 @@ impl Shell {
         }
         self.core_settings_seed = Some(latest.clone());
         self.core_settings_draft = Some(latest);
-        self.core_settings_seed_gen = self.core_settings_seed_gen.wrapping_add(1);
+        self.core_settings_editors.reseeded();
         true
     }
 
@@ -201,16 +195,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// Retained editor for one numeric or text field, created on first render of that field.
-    ///
-    /// An existing editor is written to ONLY when the draft has been re-seeded since it last saw it
-    /// — Cancel, a core switch, or the core's first configuration arriving. It deliberately does not
-    /// follow the draft the way `strategies::StrategiesView::field_input_state` follows its staged
-    /// value: there the staged text IS what the user typed, so the round trip is an identity, while
-    /// here the draft holds a PARSED value that formats back differently. Re-synchronizing from it
-    /// on every repaint would rewrite "5.5" as "5.50" mid-word, refill a field the user just
-    /// cleared, and — since `sync_value` collapses the selection to the end — move the caret while
-    /// they type.
+    /// Retained editor for one row, through the store both faces of the gear share.
     pub(crate) fn core_settings_input(
         &mut self,
         id: &'static str,
@@ -219,36 +204,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonInputState> {
-        let seed_gen = self.core_settings_seed_gen;
-        if let Some((seen, state)) = self.core_settings_inputs.get_mut(id) {
-            let state = state.clone();
-            let stale = *seen != seed_gen;
-            *seen = seed_gen;
-            if stale && state.read(cx).value() != value {
-                state.update(cx, |s, c| s.sync_value(value, c));
-            }
-            return state;
-        }
-        let state = cx.new(|c| MoonInputState::new(window, c).default_value(value));
-        cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                let text = state.read(cx).value().to_string();
-                this.edit_core_draft(|draft| stage(draft, &text), cx);
-            }
-        })
-        .detach();
-        self.core_settings_inputs
-            .insert(id, (seed_gen, state.clone()));
-        state
+        editors::input_state(self, id, value, stage, window, cx)
     }
 
-    /// Retained slider for one numeric field, created on first render of that row.
-    ///
-    /// Unlike the text editors, sliders DO follow the draft on every render (the caller skips it
-    /// mid-drag), because a slider has no partially typed state to protect and its thumb would
-    /// otherwise ignore a value changed elsewhere — by Cancel, by a re-seed, or by the field beside
-    /// it. `MoonSliderState::set_value` emits no Change, so this cannot loop back through the
-    /// staging subscription below.
+    /// Retained slider for one row, through the store both faces of the gear share.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn core_settings_slider(
         &mut self,
@@ -260,45 +219,114 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonSliderState> {
-        let (min, max, step) = bounds;
-        let value = value.clamp(min, max);
-        match self.core_settings_sliders.entry(id) {
-            Entry::Occupied(slot) => {
-                let state = slot.get().clone();
-                if !cx.has_active_drag() && state.read(cx).value().end() != value {
-                    state.update(cx, |s, c| s.set_value(value, window, c));
-                }
-                state
-            }
-            Entry::Vacant(slot) => {
-                let state = cx.new(|_| {
-                    MoonSliderState::new()
-                        .min(min)
-                        .max(max)
-                        .step(step)
-                        .default_value(value)
-                });
-                cx.subscribe(&state, move |this, _state, ev: &MoonSliderEvent, cx| {
-                    if let MoonSliderEvent::Change(v) = ev {
-                        let v = v.end();
-                        this.edit_core_draft(|draft| stage(draft, v), cx);
-                        // A row that also shows the value in an editor writes it there directly:
-                        // the editor only re-reads the draft on a re-seed (so typing survives), and
-                        // without this the number would contradict the thumb the user is dragging.
-                        // Every such pair in this popup is a whole count — an error level, a ping in
-                        // milliseconds — so a rounded integer is the whole formatting rule.
-                        if let Some(field) = mirror
-                            .and_then(|m| this.core_settings_inputs.get(m))
-                            .map(|(_, state)| state.clone())
-                        {
-                            this.live_set_field(field, format!("{}", v.round() as i64), cx);
-                        }
-                    }
-                })
-                .detach();
-                slot.insert(state.clone());
-                state
-            }
-        }
+        editors::slider_state(self, id, bounds, value, stage, mirror, window, cx)
     }
+}
+
+impl editors::CoreDraftHost for Shell {
+    fn editors(&mut self) -> &mut editors::EditorStore {
+        &mut self.core_settings_editors
+    }
+
+    fn stage_draft(&mut self, apply: impl FnOnce(&mut CoreConfig), cx: &mut Context<Self>) {
+        self.edit_core_draft(apply, cx);
+    }
+
+    fn editor_window(&self) -> AnyWindowHandle {
+        self.window_handle
+    }
+}
+
+/// Send one staged page to the core it was seeded from, as Moonbot's OK does.
+///
+/// Shared by the compact gear popup and by [`crate::core_expert`]'s window: both stage a whole
+/// projection of ONE core, and both must refuse to write it into a core that moved underneath
+/// them, so the clamp, the [`resolve_core_settings_write`] guard, the section mask and the
+/// client-side half of the blacklist-delta filter live here once instead of being re-derived per
+/// caller.
+///
+/// Args:
+///     backend: Application state holding the session the page travels through.
+///     group: Group whose active trading core the seed is checked against.
+///     seeded: Core the page was seeded from; the only core it may reach.
+///     draft: Staged page, taken by value because the leverage clamp below rewrites it.
+///     cx: Application context used to read the session.
+///
+/// Returns:
+///     Whether the page actually reached the session for the seeded core. A caller that closes on
+///     OK must close only on `true`: closing on a refused write is indistinguishable from a save.
+pub(crate) fn send_core_config(
+    backend: &Entity<Backend>,
+    group: &str,
+    seeded: Option<CoreId>,
+    mut draft: CoreConfig,
+    sections: FieldMask,
+    cx: &App,
+) -> bool {
+    // One clamp for the whole page, here rather than per keystroke: the exchange refuses a
+    // non-positive multiplier and no supported venue offers more than 125x, but clamping while the
+    // user types would make the field disagree with what OK sends.
+    //
+    // The one value spared is an untouched 0: `fix_lev` defaults to 0 on the wire and 0 is the
+    // "none chosen" value gated by `auto_fix_lev`, so clamping THAT would rewrite the core's 0 to 1
+    // on every OK — including one pressed on a surface drawing no leverage control at all. Anything
+    // a user actually typed is still bounded here, which is the only place it is bounded:
+    // `general::field_specs`' editor is deliberately unclamped so mid-typing digits do not fight
+    // the field.
+    if draft.leverage.auto_fix_lev || draft.leverage.fix_lev != 0 {
+        draft.leverage.fix_lev = draft.leverage.fix_lev.clamp(1, MAX_FIX_LEVERAGE);
+    }
+    let b = backend.read(cx);
+    let active = b.active_trade_core(group);
+    let Some(core) = resolve_core_settings_write(seeded, active) else {
+        // Silence here would be indistinguishable from a successful save: the surface closes either
+        // way, and the user pressed OK expecting the values on screen to be applied.
+        log::warn!("core settings OK ignored: the active core moved since the page was seeded");
+        return false;
+    };
+    // The mask comes from the CALLER, because what a surface may write is what it DRAWS, and a
+    // draft seeded when that surface opened is stale everywhere the user could not see it. The
+    // compact popup draws all five rendered sections and names all five; the expert window names
+    // only the sections of the PAGES its user actually edited, so its OK cannot write its own
+    // frozen copy of a page nobody opened back over a change made elsewhere while it stood open.
+    // Neither can name the manual block at all: no mask reachable from here carries it, checkbox on
+    // or off.
+    // Read before the page is handed over, so the send below can consume it without a clone of the
+    // whole projection. Only meaningful when this write names `general`: the value is the surface's
+    // own copy of that section, frozen when it was seeded, and applying it from a mask that does not
+    // carry the section would set the CLIENT half from a stale number while the core kept the newer
+    // one — the two halves of one filter, disagreeing.
+    let exclude = sections
+        .writes_general()
+        .then_some(draft.general.exclude_blacklisted_from_deltas);
+    // The same for the trade-derived deltas, under its own area for the same reason: the value is
+    // this surface's frozen copy, and a mask that does not carry the area must not set the client
+    // half from it.
+    let by_trades = sections
+        .writes_order_rules()
+        .then_some(draft.order_rules.deltas_by_trades);
+    if let Err(error) = b.session.edit_core_config(core, draft, sections) {
+        // The page never reached the session. Reporting success here is what would let a caller
+        // close on it.
+        log::warn!("core config edit failed: {error:#}");
+        return false;
+    }
+    // The blacklist-delta filter has a client-side half that moonproto applies to its own retained
+    // analytics: the core's copy alone would leave this terminal's deltas unchanged until a
+    // restart. Issued only after the page went out, so the two halves cannot diverge the other way
+    // — this terminal filtering deltas the core was never told about. Nothing is cached for it here:
+    // the checkbox reads the core's own value out of the draft.
+    if let Some(exclude) = exclude
+        && let Err(error) = b.session.set_exclude_blacklisted_delta(core, exclude)
+    {
+        log::warn!("exclude delta failed: {error:#}");
+    }
+    // moonproto keeps its own copy of this one too: the core's alone would leave this terminal's
+    // retained short deltas in candle mode until a restart, disagreeing with the core it mirrors.
+    if let Some(by_trades) = by_trades
+        && let Err(error) = b.session.set_deltas_by_trades(core, by_trades)
+    {
+        log::warn!("deltas by trades failed: {error:#}");
+    }
+    true
 }

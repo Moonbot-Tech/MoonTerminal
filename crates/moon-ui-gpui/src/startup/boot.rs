@@ -250,6 +250,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         strategies_goto: None,
         assets_window: None,
         screener_window: None,
+        core_expert_window: None,
+        core_expert_view: None,
         analytics_window: None,
         profit_monitor_window: None,
         profit_monitor_open_pending: None,

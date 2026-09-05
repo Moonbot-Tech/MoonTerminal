@@ -1397,6 +1397,25 @@ impl Backend {
         true
     }
 
+    /// Whether the core-settings gear opens the expert window instead of the compact popup.
+    pub(crate) fn core_settings_expert(&self) -> bool {
+        self.layout.core_settings_expert.unwrap_or(false)
+    }
+
+    /// Persist which face the core-settings gear opens.
+    ///
+    /// Only the shared backend is woken: both surfaces that read this observe it, and neither is on
+    /// the frame path — the gear reads the flag when it is CLICKED, not while it renders. An
+    /// unchanged value exits without touching layout state.
+    pub(crate) fn set_core_settings_expert(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.core_settings_expert() == on {
+            return;
+        }
+        self.layout.core_settings_expert = Some(on);
+        self.layout_dirty = true;
+        cx.notify();
+    }
+
     /// Persist a group workspace mode and publish one effective-scope transition.
     ///
     /// Args:

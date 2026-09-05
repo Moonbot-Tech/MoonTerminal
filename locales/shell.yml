@@ -321,6 +321,26 @@ toolbar.core_config_area_general:
   ru: "Основные"
   en: "General"
   es: "General"
+toolbar.core_config_area_gestures:
+  ru: "Хоткеи: мышь"
+  en: "Hotkeys: mouse"
+  es: "Atajos: ratón"
+toolbar.core_config_area_special:
+  ru: "Специальные"
+  en: "Special"
+  es: "Especiales"
+toolbar.core_config_area_telegram:
+  ru: "Телеграм"
+  en: "Telegram"
+  es: "Telegram"
+toolbar.core_config_area_auto_buy:
+  ru: "АвтоПокупка"
+  en: "AutoBuy"
+  es: "Compra automática"
+toolbar.core_config_area_interface:
+  ru: "Интерфейс"
+  en: "Interface"
+  es: "Interfaz"
 toolbar.core_config_area_signals:
   ru: "Звуковые алерты"
   en: "Alert sounds"
@@ -577,6 +597,14 @@ core_settings.tab_autostart:
   ru: "Автостарт"
   en: "AutoStart"
   es: "Inicio automático"
+core_settings.expert:
+  ru: "Экспертный режим"
+  en: "Expert mode"
+  es: "Modo experto"
+core_settings.expert_hint:
+  ru: "шестерёнка откроет полное окно настроек Moonbot"
+  en: "the gear opens the full Moonbot settings window"
+  es: "el engranaje abre la ventana completa de ajustes de Moonbot"
 core_settings.ok:
   ru: "OK"
   en: "OK"

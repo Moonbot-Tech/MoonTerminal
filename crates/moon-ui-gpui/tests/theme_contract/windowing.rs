@@ -64,17 +64,21 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
     let settings = fs::read_to_string(root.join("settings").join("mod.rs")).unwrap();
     let strategies = fs::read_to_string(root.join("strategies").join("window.rs")).unwrap();
     let assets = fs::read_to_string(root.join("panels").join("assets").join("window.rs")).unwrap();
+    let core_expert = fs::read_to_string(root.join("core_expert.rs")).unwrap();
 
     assert!(
         settings.contains("tool_window_options(")
             && strategies.contains("tool_window_options(")
-            && assets.contains("tool_window_options("),
-        "settings, strategies and assets are MoonWindowFrame::tool windows and must use tool_window_options"
+            && assets.contains("tool_window_options(")
+            && core_expert.contains("tool_window_options("),
+        "settings, strategies, assets and the expert core-settings window are \
+         MoonWindowFrame::tool windows and must use tool_window_options"
     );
     assert!(
         !settings.contains("standalone_window_options(")
             && !strategies.contains("standalone_window_options(")
-            && !assets.contains("standalone_window_options("),
+            && !assets.contains("standalone_window_options(")
+            && !core_expert.contains("standalone_window_options("),
         "tool/secondary windows must not be opened as standalone taskbar applications"
     );
 }

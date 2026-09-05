@@ -533,12 +533,21 @@ fn own_trade_toggle(
 /// the mapping lives here like every other caption of a `moon-core` enum in this module.
 fn area_caption(area: CoreConfigArea) -> String {
     let key = match area {
+        CoreConfigArea::AutoBuy => "toolbar.core_config_area_auto_buy",
         CoreConfigArea::AutoStart => "toolbar.core_config_area_auto_start",
         CoreConfigArea::BtcBlink => "toolbar.core_config_area_btc_blink",
-        CoreConfigArea::General => "toolbar.core_config_area_general",
+        // Both halves of Moonbot's "Основные" page answer to its name. They are two areas
+        // because two surfaces draw different parts of it, which is a fact about this terminal's
+        // internals; a trader reading a rejection knows one page. The join below de-duplicates, so
+        // an OK that failed on both does not print the name twice.
+        CoreConfigArea::General | CoreConfigArea::OrderRules => "toolbar.core_config_area_general",
+        CoreConfigArea::Gestures => "toolbar.core_config_area_gestures",
+        CoreConfigArea::Interface => "toolbar.core_config_area_interface",
         CoreConfigArea::Leverage => "toolbar.core_config_area_leverage",
         CoreConfigArea::Manual => "toolbar.core_config_area_manual",
         CoreConfigArea::Signals => "toolbar.core_config_area_signals",
+        CoreConfigArea::Special => "toolbar.core_config_area_special",
+        CoreConfigArea::Telegram => "toolbar.core_config_area_telegram",
     };
     t!(key).to_string()
 }
@@ -557,11 +566,14 @@ fn manual_area_rejection_tip(mismatches: Option<&CoreConfigRejection>) -> Option
     if areas.is_empty() {
         return None;
     }
-    let areas = areas
-        .iter()
-        .map(|&area| area_caption(area))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let mut captions: Vec<String> = Vec::with_capacity(areas.len());
+    for caption in areas.iter().map(|&area| area_caption(area)) {
+        // Two areas can share one caption when they are two halves of one Moonbot page.
+        if !captions.contains(&caption) {
+            captions.push(caption);
+        }
+    }
+    let areas = captions.join(", ");
     Some(SharedString::from(
         t!("toolbar.core_config_areas_rejected", areas = areas).to_string(),
     ))

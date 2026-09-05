@@ -23,6 +23,7 @@ mod chartdx;
 mod chrome;
 mod conn_diag;
 mod controls;
+mod core_expert;
 mod core_order;
 mod design;
 mod diag;
@@ -373,6 +374,16 @@ struct Backend {
     assets_window: Option<WindowHandle<Root>>,
     /// Singleton Screener window covering all exchanges with provider deduplication.
     screener_window: Option<WindowHandle<Root>>,
+    /// Singleton expert core-settings window, the full Moonbot settings dialog.
+    ///
+    /// One for the whole application, like every other tool window here: it addresses ONE core,
+    /// named by `core_expert::CoreExpertView`, and a second window over a second core would give
+    /// two drafts of the same page no way to agree on which core OK writes to.
+    core_expert_window: Option<WindowHandle<Root>>,
+    /// The live expert-settings view, retained weakly so the gear of ANOTHER group can rebind the
+    /// singleton window to that group instead of focusing a window that still edits the first.
+    /// Mirrors `report_window_view`, which exists for the same reason.
+    core_expert_view: Option<WeakEntity<crate::core_expert::CoreExpertView>>,
     /// Singleton Analytics window containing report analyzers, retained for deduplication and focus.
     analytics_window: Option<WindowHandle<Root>>,
     /// Independent singleton Profit Monitor desktop window.

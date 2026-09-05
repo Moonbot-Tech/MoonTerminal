@@ -1791,13 +1791,159 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
     }
 
     // The OK press is the one write that carries the whole staged draft, so it is the one that must
-    // never fall back to whatever core is active when the button is clicked.
+    // never fall back to whatever core is active when the button is clicked. Two surfaces stage
+    // such a draft now — the compact popup and the expert window — and BOTH reach the wire through
+    // one function, which is where the guard lives: a second copy of the send is how the two would
+    // come to disagree about which core an OK addresses.
     let draft = code_only(&read_src("shell/core_settings/draft.rs"));
+    let send = braced_body(&draft, "pub(crate) fn send_core_config(");
+    assert!(
+        send.contains("resolve_core_settings_write("),
+        "send_core_config must resolve its write address through resolve_core_settings_write, \
+         not a bare b.active_trade_core(group)"
+    );
     let commit = braced_body(&draft, "pub(crate) fn commit_core_draft(");
     assert!(
-        commit.contains("resolve_core_settings_write("),
-        "commit_core_draft must resolve its write address through resolve_core_settings_write, \
-         not a bare b.active_trade_core(&self.group)"
+        commit.contains("send_core_config("),
+        "commit_core_draft must send through send_core_config, which carries the seeded-target \
+         guard, the leverage clamp and the section mask"
+    );
+
+    // The expert window is the second surface, and it must not grow its own send: `edit_core_config`
+    // there would bypass the guard, the clamp and the mask in one step.
+    // The module's root, its directory AND its pages: `read_module` reads neither `core_expert.rs`
+    // itself nor any subdirectory, and the pages under `core_expert/pages/` are where every control
+    // that stages a value lives.
+    let expert_module = code_only(&format!(
+        "{}\n{}\n{}",
+        read_src("core_expert.rs"),
+        read_module("core_expert"),
+        read_module("core_expert/pages")
+    ));
+    assert!(
+        !expert_module.contains("edit_core_config("),
+        "the expert core-settings window must reach the core through send_core_config, never call \
+         session.edit_core_config directly"
+    );
+    let expert = code_only(&read_src("core_expert.rs"));
+    let commit_expert = braced_body(&expert, "fn commit(");
+    assert!(
+        commit_expert.contains("send_core_config("),
+        "CoreExpertView::commit must send the staged page through send_core_config"
+    );
+}
+
+/// The expert window's pages must own their control ids, and must not draw a control they never
+/// declared.
+///
+/// Ids address ONE store shared by the whole window (`shell::core_settings::editors`), and a page
+/// looks a control up by id at draw time. Two failures follow from that and neither is visible at
+/// runtime: two pages claiming one id share a single control — whichever draws second moves the
+/// other's row — and a body that asks for an id no spec declared simply draws nothing, silently,
+/// which on one of the deliberately dead rows nobody would ever notice.
+///
+/// Checked over the sources because the specs cannot be called from a test: they take a
+/// `CoreConfig`, which is projected from the wire and deliberately has no `Default`.
+#[test]
+fn expert_pages_own_their_control_ids() {
+    // Every page and the prefix its ids carry. A new page is a line here, which is the point: the
+    // prefix is what keeps two pages' ids apart in one store.
+    const PAGES: [(&str, &str); 8] = [
+        ("general", "exp-gen-"),
+        ("login", "exp-log-"),
+        ("telegram", "exp-tlg-"),
+        ("autobuy", "exp-buy-"),
+        ("autostart", "exp-as-"),
+        ("interface", "exp-int-"),
+        ("hotkeys", "exp-hk-"),
+        ("special", "exp-sp-"),
+    ];
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("core_expert")
+        .join("pages");
+    let files: Vec<String> = fs::read_dir(&root)
+        .expect("core_expert/pages must exist")
+        .map(|entry| entry.expect("readable page entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .map(|path| {
+            path.file_stem()
+                .expect("page file name")
+                .to_string_lossy()
+                .to_string()
+        })
+        // The repo's conventional siblings are not pages: unit tests live beside their module and
+        // shared helpers in `common.rs`. Without this they would fail here with a message about id
+        // prefixes, which is not what would be wrong with them.
+        .filter(|name| !matches!(name.as_str(), "tests" | "common" | "mod"))
+        .collect();
+    for page in &files {
+        assert!(
+            PAGES.iter().any(|(name, _)| name == page),
+            "core_expert/pages/{page}.rs is not listed in this test: give it an id prefix of its \
+             own so its controls cannot collide with another page's"
+        );
+    }
+
+    let mut owners: Vec<(&str, String)> = Vec::new();
+    for (page, prefix) in PAGES {
+        assert!(
+            files.iter().any(|name| name == page),
+            "this test lists a page {page} that no longer exists"
+        );
+        let src =
+            code_only(&fs::read_to_string(root.join(format!("{page}.rs"))).expect("readable page"));
+        let ids: Vec<String> = src
+            .split('"')
+            .filter(|part| part.starts_with("exp-"))
+            .map(str::to_string)
+            .collect();
+        for id in &ids {
+            assert!(
+                id.starts_with(prefix),
+                "{page}.rs declares {id}, which does not carry that page's prefix {prefix}"
+            );
+        }
+        // A control the body draws must also be declared: every `widgets::` helper that takes the
+        // store returns None for an id no spec built, and the row then renders without its control
+        // and without a word. Whitespace is collapsed first, because rustfmt wraps roughly half of
+        // these calls between the helper and its id — matching the raw source silently skipped
+        // them, which is every draw site on two of the pages.
+        let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+        for id in &ids {
+            let draws: usize = ["slider", "field", "field_masked", "num"]
+                .iter()
+                .map(|helper| flat.matches(&format!("{helper}(store, \"{id}\"")).count())
+                .sum();
+            // Counted with the quotes, not as a substring: `exp-as-blink` occurs inside
+            // `exp-as-blink-up`, so a bare substring count let a drawn-but-undeclared id pass on the
+            // strength of an unrelated longer one beside it. And measured AGAINST the draw sites,
+            // not against a fixed two, so an id drawn on two rows and declared by no spec cannot
+            // vouch for itself.
+            assert!(
+                draws == 0 || flat.matches(&format!("\"{id}\"")).count() > draws,
+                "{page}.rs draws {id} but declares no spec for it, so the row renders empty"
+            );
+        }
+        let mut unique = ids;
+        unique.sort_unstable();
+        unique.dedup();
+        owners.extend(unique.into_iter().map(|id| (page, id)));
+    }
+
+    assert!(
+        !owners.is_empty(),
+        "no expert-page control ids found; this check would pass vacuously"
+    );
+    let mut ids: Vec<&String> = owners.iter().map(|(_, id)| id).collect();
+    ids.sort_unstable();
+    let before = ids.len();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        before,
+        "two expert pages share one control id: {owners:?}"
     );
 }
 

@@ -20,10 +20,12 @@ use moonproto::MoonClient;
 use moonproto::shared_config::SharedConfig;
 
 use crate::feed::{
-    AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
-    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
-    CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings, LeverageSettings,
-    ManualSettings, SignalsSettings, day_fraction_to_minutes, minutes_to_day_fraction,
+    AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CoreConfig, CoreConfigArea,
+    CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
+    CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
+    GestureSettings, InterfaceSettings, LeverageSettings, ManualSettings, OrderRulesSettings,
+    SignalsSettings, SpecialSettings, TelegramSettings, day_fraction_to_minutes,
+    minutes_to_day_fraction,
 };
 
 /// Sends of one edit that may go unconfirmed before it is dropped.
@@ -51,14 +53,31 @@ const ECHO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// rendered sections — cannot reach the manual block at all, checkbox on or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldMask {
+    /// Moonbot's autobuy page, which reaches into `signals`, its `signal_config` sub-record and one
+    /// field of `trading`. One area because it is one PAGE.
+    auto_buy: bool,
     auto_start: bool,
     btc_blink: bool,
     general: bool,
+    /// The mouse-gesture block of Moonbot's Hotkeys page: `trading.multi_orders` and one field of
+    /// `trading` beside it. The rest of that page mirrors the manual block, which no mask reaches.
+    gestures: bool,
+    /// Moonbot's own interface page, which reaches into `trading`, `visual`, `signals` AND `ui`.
+    /// One area rather than four because it is one PAGE: what a surface draws is what it may write.
+    interface: bool,
+    /// The rows of Moonbot's General page the COMPACT popup does not draw — the one place the
+    /// "an area is a page" rule splits a page in two, because the rule it serves is that a surface
+    /// writes only what it drew. See `feed::OrderRulesSettings`.
+    order_rules: bool,
     leverage: bool,
     /// The `signals` section's two price-approach alerts. The FIRST field the terminal writes
     /// outside `trading`/`visual`; the send carries every section either way, so this narrows only
     /// when those six fields are overwritten, exactly as the four above do for theirs.
     signals: bool,
+    /// Moonbot's "Специальные" page: the engine switches, logging and the screenshot block.
+    special: bool,
+    /// Moonbot's Telegram page: the signal channels, their rules, and the cloud blacklist flag.
+    telegram: bool,
     /// `trading.ignore_strat_sell_price`, the one manual-block field the terminal still WRITES.
     ///
     /// It is core behaviour, not a value the terminal can hold locally: it decides whether the core
@@ -70,25 +89,127 @@ pub struct FieldMask {
 impl FieldMask {
     /// No fields touched. Base value for building a narrow mask with the `with_*` methods below.
     pub const EMPTY: Self = Self {
+        auto_buy: false,
         auto_start: false,
         btc_blink: false,
         general: false,
+        gestures: false,
+        interface: false,
+        order_rules: false,
         leverage: false,
         signals: false,
+        special: false,
+        telegram: false,
         ignore_strat_sell_price: false,
     };
 
-    /// The five gear-popup sections and nothing else. The manual block is deliberately absent: a
-    /// popup OK may never change a manual-trading field, checkbox on or off — see
-    /// `commit_core_draft` in `moon-ui-gpui`.
+    /// The five sections the COMPACT gear popup renders, and nothing else.
+    ///
+    /// Not "everything the terminal renders" any more: the expert window builds its own mask out of
+    /// the pages its user actually edited (`ExpertTab::add_sections` in `moon-ui-gpui`), and one of
+    /// them reaches a sixth section this popup does not draw. Each surface names what it drew.
+    ///
+    /// The manual block is deliberately absent from BOTH: an OK may never change a manual-trading
+    /// field, checkbox on or off — see `send_core_config`, the one applier they share.
     pub const RENDERED_SECTIONS: Self = Self {
+        // NOT the autobuy page: the compact popup does not draw it.
+        auto_buy: false,
         auto_start: true,
         btc_blink: true,
         general: true,
+        // NOT the Hotkeys page: the compact popup does not draw it.
+        gestures: false,
+        // NOT the interface page: the compact popup does not draw it. The expert window names it
+        // itself, through `with_interface`.
+        interface: false,
+        // NOT the seven General-page rows below the popup's own: it draws the exits and the
+        // blacklist, and naming these would let its OK stamp them back from a frozen draft.
+        order_rules: false,
         leverage: true,
         signals: true,
+        // NOT the Special page: the compact popup does not draw it.
+        special: false,
+        // NOT the Telegram page: the compact popup does not draw it.
+        telegram: false,
         ignore_strat_sell_price: false,
     };
+
+    /// Whether this mask names the `general` section.
+    ///
+    /// For a caller that keeps a second, CLIENT-side copy of one of that section's fields: it must
+    /// move only when the section itself does, or the two halves drift apart the first time a
+    /// surface sends a mask without `general` in it.
+    pub const fn writes_general(self) -> bool {
+        self.general
+    }
+
+    /// Name the `general` section: the exits, the risk limits and the blacklist.
+    pub const fn with_general(mut self) -> Self {
+        self.general = true;
+        self
+    }
+
+    /// Name the `auto_start` section: what the core turns on, its loss caps and its watchdogs.
+    pub const fn with_auto_start(mut self) -> Self {
+        self.auto_start = true;
+        self
+    }
+
+    /// Name the `signals` section's alert sounds.
+    pub const fn with_signals(mut self) -> Self {
+        self.signals = true;
+        self
+    }
+
+    /// Name the `btc_blink` section: the BTC-rate highlight and its alarm.
+    pub const fn with_btc_blink(mut self) -> Self {
+        self.btc_blink = true;
+        self
+    }
+
+    /// Name Moonbot's "Специальные" page — the engine switches, logging and screenshots.
+    pub const fn with_special(mut self) -> Self {
+        self.special = true;
+        self
+    }
+
+    /// Name Moonbot's Telegram page — its signal channels and the rules over them.
+    pub const fn with_telegram(mut self) -> Self {
+        self.telegram = true;
+        self
+    }
+
+    /// Name Moonbot's autobuy page — its signal sources and its message filter.
+    pub const fn with_auto_buy(mut self) -> Self {
+        self.auto_buy = true;
+        self
+    }
+
+    /// Whether this mask names the `order_rules` area.
+    ///
+    /// For the same caller [`Self::writes_general`] serves: `deltas_by_trades` also has a
+    /// client-side half, and it must move only when its area does.
+    pub const fn writes_order_rules(self) -> bool {
+        self.order_rules
+    }
+
+    /// Name the General page's rows below the compact popup's own.
+    pub const fn with_order_rules(mut self) -> Self {
+        self.order_rules = true;
+        self
+    }
+
+    /// Name the mouse-gesture block of Moonbot's Hotkeys page.
+    pub const fn with_gestures(mut self) -> Self {
+        self.gestures = true;
+        self
+    }
+
+    /// Name Moonbot's interface page — its own windows, charts and order-book zones.
+    pub const fn with_interface(mut self) -> Self {
+        self.interface = true;
+        self
+    }
 
     /// Name the core's "ignore a manual strategy's own sell price" flag.
     pub fn with_ignore_strat_sell_price(mut self) -> Self {
@@ -98,11 +219,17 @@ impl FieldMask {
 
     fn union(self, other: Self) -> Self {
         Self {
+            auto_buy: self.auto_buy || other.auto_buy,
             auto_start: self.auto_start || other.auto_start,
             btc_blink: self.btc_blink || other.btc_blink,
             general: self.general || other.general,
+            gestures: self.gestures || other.gestures,
+            interface: self.interface || other.interface,
+            order_rules: self.order_rules || other.order_rules,
             leverage: self.leverage || other.leverage,
             signals: self.signals || other.signals,
+            special: self.special || other.special,
+            telegram: self.telegram || other.telegram,
             ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
         }
     }
@@ -185,6 +312,15 @@ impl SharedConfigSequence {
     /// arrived yet. `touched` names the fields this edit actually asked to change; see
     /// [`FieldMask`].
     pub(super) fn enqueue(&mut self, config: CoreConfig, touched: FieldMask) {
+        if touched == FieldMask::EMPTY {
+            // Not refused — an edit that names nothing is satisfied by any snapshot, so the queue
+            // drops it and reports `Confirmed` without a send, which is the honest answer to "write
+            // nothing". Logged because reaching here means a CALLER lost its section list, and that
+            // reads as a successful save.
+            log::warn!(
+                "shared config edit queued with an empty section mask: nothing will be sent"
+            );
+        }
         self.gated_logged = false;
         self.queue.push_back(QueuedEdit {
             config,
@@ -370,37 +506,41 @@ impl SharedConfigSequence {
         }
         if let Some((expected, touched, edit_count)) = self.pending_confirmation.take() {
             let actual = core_config_from_proto(config);
-            if actual == expected {
-                for _ in 0..edit_count {
-                    self.queue.pop_front();
+            // Scoped to `touched`, not the whole projection. Anything this write did not name is
+            // free to have moved between the send and the echo — a trader in Moonbot's own dialogs
+            // — and comparing it would leave a landed edit unconfirmed, re-sending the whole
+            // snapshot until the budget ran out and the edit was dropped as `GaveUp`.
+            match rejection_within_mask(&expected, &actual, touched) {
+                None => {
+                    for _ in 0..edit_count {
+                        self.queue.pop_front();
+                    }
+                    events.push(CoreConfigEditEvent::Resolved(
+                        CoreConfigEditResult::Confirmed,
+                    ));
                 }
-                events.push(CoreConfigEditEvent::Resolved(
-                    CoreConfigEditResult::Confirmed,
-                ));
-            } else if let Some(rejection) = rejection_within_mask(&expected, &actual, touched) {
-                // Logged, not only evented: a core that keeps its own value leaves no other trace
-                // until the budget runs out. NOT phrased as a refusal — `observe_update` lifts the
-                // barrier on ANY `SharedConfigUpdated`, so a first mismatch can be a pre-write
-                // snapshot. The give-up line is where a refusal becomes a verdict.
-                log::warn!(
-                    "core {} shared config echo did not carry the requested value (retrying): \
-                     {rejection:?}",
-                    crate::feed::core_label(server_id)
-                );
-                // Not dequeued: the entries stay queued and MAX_ATTEMPTS below still ends it.
-                events.push(CoreConfigEditEvent::Resolved(
-                    CoreConfigEditResult::NotApplied(rejection),
-                ));
+                Some(rejection) => {
+                    // Logged, not only evented: a core that keeps its own value leaves no other
+                    // trace until the budget runs out. NOT phrased as a refusal — `observe_update`
+                    // lifts the barrier on ANY `SharedConfigUpdated`, so a first mismatch can be a
+                    // pre-write snapshot. The give-up line is where a refusal becomes a verdict.
+                    log::warn!(
+                        "core {} shared config echo did not carry the requested value (retrying): \
+                         {rejection:?}",
+                        crate::feed::core_label(server_id)
+                    );
+                    // Not dequeued: the entries stay queued and MAX_ATTEMPTS below still ends it.
+                    events.push(CoreConfigEditEvent::Resolved(
+                        CoreConfigEditResult::NotApplied(rejection),
+                    ));
+                }
             }
-            // Else: the whole projection differs only in fields this edit never touched — a
-            // concurrent core-side change, not a rejection (goal A's B6 property). Emit nothing
-            // and replan below on the fresh base.
         }
         loop {
             let Some(head) = self.queue.front() else {
                 return SequenceAction::Idle;
             };
-            if edit_satisfied(config, &head.config) {
+            if edit_satisfied(config, &head.config, head.touched) {
                 // The quietest of the three ways an edit leaves the queue: no send line precedes
                 // it, so "the core already holds this" and "it was never sent" read alike.
                 log::info!(
@@ -412,12 +552,24 @@ impl SharedConfigSequence {
                 // CONFIRMED, because it is. It also catches the case `observe_echo_timeout` opens:
                 // a late echo reaches the queue HERE, and `CoreData::core_config_edit` clears on
                 // nothing else, so a succeeded write would leave the cell pending for the session.
-                // Suppressed after a REJECTION in the same pass — that would clear the row
-                // carrying it — but not after a `GaveUp`, whose row stays put either way.
+                //
+                // Suppressed after EITHER terminal verdict in the same pass. There is one row per
+                // core (`CoreData::core_config_edit`), `Confirmed` sets it to `None`, and both a
+                // rejection and a give-up live IN that row — so another entry's success would erase
+                // the news the user most needs. The give-up was excluded here until the comparison
+                // above was narrowed to the mask, which turned "this entry is already satisfied"
+                // from a near-unreachable case into a common one.
+                //
+                // The cost is real and chosen: this entry's own success then goes unannounced, and
+                // the row keeps the other's verdict until the next edit is submitted over it. With
+                // ONE row per core those are the only two options, and a failure a trader never
+                // sees is the worse of them — they would read a write that did not land as saved.
                 if !events.iter().any(|event| {
                     matches!(
                         event,
-                        CoreConfigEditEvent::Resolved(CoreConfigEditResult::NotApplied(_))
+                        CoreConfigEditEvent::Resolved(
+                            CoreConfigEditResult::NotApplied(_) | CoreConfigEditResult::GaveUp
+                        )
                     )
                 }) {
                     events.push(CoreConfigEditEvent::Resolved(
@@ -456,37 +608,82 @@ impl SharedConfigSequence {
     }
 }
 
-/// Whether the core's snapshot already carries everything this write would set.
-fn edit_satisfied(config: &SharedConfig, wanted: &CoreConfig) -> bool {
-    &core_config_from_proto(config) == wanted
+/// Whether the core's snapshot already carries everything this write would set IN THE AREAS IT
+/// NAMES.
+///
+/// Restricted to the areas `touched` names, like the confirmation that shares its comparison: the
+/// rest of `wanted` is the surface's own copy, frozen when it seeded, and a field that drifted
+/// there says nothing about whether THIS edit still has work to do. Comparing it made an OK that
+/// changed nothing send the whole snapshot whenever anything else on the core had moved since.
+fn edit_satisfied(config: &SharedConfig, wanted: &CoreConfig, touched: FieldMask) -> bool {
+    rejection_within_mask(wanted, &core_config_from_proto(config), touched).is_none()
 }
 
 /// What the echo disagreed with the terminal about, restricted to the fields `touched` actually
 /// names — never the whole projection, so a concurrent core-side change to an untouched field
-/// cannot read as this edit's rejection. `None` means every touched field matches: the mismatch
-/// lies entirely outside what this edit asked to change.
+/// cannot read as this edit's rejection. `None` means every touched field matches, which is also
+/// what CONFIRMS a write and what tells the queue an edit needs no send at all: the three questions
+/// are one comparison, and they were not always asked the same way.
 fn rejection_within_mask(
     expected: &CoreConfig,
     actual: &CoreConfig,
     touched: FieldMask,
 ) -> Option<CoreConfigRejection> {
+    // Destructured rather than read through `touched.`: a bit added to the mask must then be
+    // NAMED here or the pattern does not compile (E0027). That is the half worth having — leaving
+    // a named bit unused is only a warning, so the pattern makes the omission impossible to miss
+    // rather than impossible to make. It matters more than it reads: this function is now also
+    // what decides an edit is already satisfied, so a bit with no arm would make every edit naming
+    // it drop without ever being sent.
+    let FieldMask {
+        auto_buy,
+        auto_start,
+        btc_blink,
+        general,
+        gestures,
+        interface,
+        order_rules,
+        leverage,
+        signals,
+        special,
+        telegram,
+        ignore_strat_sell_price,
+    } = touched;
     let mut areas = Vec::new();
-    if touched.auto_start && expected.auto_start != actual.auto_start {
+    if auto_buy && expected.auto_buy != actual.auto_buy {
+        areas.push(CoreConfigArea::AutoBuy);
+    }
+    if auto_start && expected.auto_start != actual.auto_start {
         areas.push(CoreConfigArea::AutoStart);
     }
-    if touched.btc_blink && expected.btc_blink != actual.btc_blink {
+    if btc_blink && expected.btc_blink != actual.btc_blink {
         areas.push(CoreConfigArea::BtcBlink);
     }
-    if touched.general && expected.general != actual.general {
+    if general && expected.general != actual.general {
         areas.push(CoreConfigArea::General);
     }
-    if touched.leverage && expected.leverage != actual.leverage {
+    if gestures && expected.gestures != actual.gestures {
+        areas.push(CoreConfigArea::Gestures);
+    }
+    if interface && expected.interface != actual.interface {
+        areas.push(CoreConfigArea::Interface);
+    }
+    if order_rules && expected.order_rules != actual.order_rules {
+        areas.push(CoreConfigArea::OrderRules);
+    }
+    if leverage && expected.leverage != actual.leverage {
         areas.push(CoreConfigArea::Leverage);
     }
-    if touched.signals && expected.signals != actual.signals {
+    if signals && expected.signals != actual.signals {
         areas.push(CoreConfigArea::Signals);
     }
-    if touched.ignore_strat_sell_price
+    if special && expected.special != actual.special {
+        areas.push(CoreConfigArea::Special);
+    }
+    if telegram && expected.telegram != actual.telegram {
+        areas.push(CoreConfigArea::Telegram);
+    }
+    if ignore_strat_sell_price
         && expected.manual.ignore_strat_sell_price != actual.manual.ignore_strat_sell_price
     {
         areas.push(CoreConfigArea::Manual);
@@ -504,7 +701,122 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let sig = &cfg.signals;
     let hotkeys = &cfg.ui.hotkeys_config;
     let strat_buttons = &cfg.trading.manual_strats_config;
+    let v = &cfg.visual;
+    let u = &cfg.ui;
+    let sc = &cfg.signals.signal_config;
+    let shots = &cfg.trading.send_shots_config;
+    let oc = &cfg.trading.orders_control;
+    let mo = &cfg.trading.multi_orders;
     CoreConfig {
+        special: SpecialSettings {
+            log_level: t.log_level,
+            auto_delete_logs: t.auto_delete_logs,
+            chart_clean_up_time: t.chart_clean_up_time,
+            max_orders: t.max_orders,
+            unlimited_orders: t.unlimited_orders,
+            random_price: t.random_price,
+            correct_order_price: t.correct_order_price,
+            use_book_ticker: t.use_book_ticker,
+            m_avg_use_vol_weight: t.m_avg_use_vol_weight,
+            auto_buy_bnb: t.auto_buy_bnb,
+            auto_buy_bnb_level: t.auto_buy_bnb_level,
+            auto_buy_bnb_volume: t.auto_buy_bnb_volume,
+            auto_reduce_order: t.auto_reduce_order,
+            auto_close_zero_pos: t.auto_close_zero_pos,
+            auto_lower_lev: t.auto_lower_lev,
+            use_websocket_api: t.use_websocket_api,
+            iceberg_step: t.iceberg_step,
+            sell_x2_level: t.sell_x2_level,
+            no_trades_markets_text: t.no_trades_markets_text.clone(),
+            multi_commands: t.multi_commands,
+            h_pos_black_list_text: t.h_pos_black_list_text.clone(),
+            liq_control: oc.liq_control,
+            ignore_replacing_bug: oc.ignore_replacing_bug,
+            ignore_protection: oc.ignore_protection,
+            orders_control_active: oc.active,
+            h_pos_report: oc.h_pos_report,
+            h_pos_auto_sell: oc.h_pos_auto_sell,
+            send_shots: shots.may_send,
+            profit_abs: shots.profit_abs,
+            profit_pers: shots.profit_pers,
+            profit_session: shots.profit_session,
+            send_negative: shots.send_negative,
+            send_public: shots.send_public,
+            time_scale: shots.time_scale,
+            price_scale: shots.price_scale,
+        },
+        telegram: TelegramSettings {
+            pump_channel: sig.pump_channel.clone(),
+            pump_channels: sig.pump_channels.clone(),
+            multi_channels: sig.multi_channels,
+            more_then_1_channel: sig.more_then_1_channel,
+            listen_moon_channel: sig.listen_moon_channel,
+            use_moon_bl: t.use_moon_bl,
+        },
+        auto_buy: AutoBuySettings {
+            monitor_clipboard: sig.monitor_clipboard,
+            clipboard_auto_buy: sig.clipboard_auto_buy,
+            lower_case_token_cbd: sig.lower_case_token_cbd,
+            look_full_link_cbd: sig.look_full_link_cbd,
+            advanced_filter_clipboard: sig.advanced_filter_clipboard,
+            telegram_auto_buy: sig.telegram_auto_buy,
+            lower_case_token_tlg: sig.lower_case_token_tlg,
+            look_full_link_tlg: sig.look_full_link_tlg,
+            advanced_filter: sig.advanced_filter,
+            dont_buy_reply: sig.dont_buy_reply,
+            msg_keywords_long: sig.msg_keywords_long.clone(),
+            msg_keywords_short: sig.msg_keywords_short.clone(),
+            msg_black_words: sig.msg_black_words.clone(),
+            msg_token_tags: sig.msg_token_tags.clone(),
+            lower_price_words: sig.lower_price_words.clone(),
+            use_keywords: sc.use_keywords,
+            buy_key_dist: sc.buy_key_dist,
+            use_black_words: sc.use_black_words,
+            use_words_count: sc.use_words_count,
+            words_count: sc.words_count,
+            use_lower_price_words: sc.use_lower_price_words,
+            x_lower_price: sc.x_lower_price,
+            x_found_price: sc.x_found_price,
+            buy_if_price_found: sc.buy_if_price_found,
+            use_price: sc.use_price,
+            use_stops: sc.use_stops,
+            only_1_token: sc.only_1_token,
+            use_token_tags: sc.use_token_tags,
+            tokens_no_tags: sc.tokens_no_tags,
+            token_links: sc.token_links,
+            special_formats: sc.special_formats,
+            auto_cancel_lower_buy: t.auto_cancel_lower_buy,
+        },
+        interface: InterfaceSettings {
+            buy_on_enter: t.buy_on_enter,
+            dbl_click_panic_sell: t.dbl_click_panic_sell,
+            chart_split_zones: t.chart_split_zones,
+            draw_stop: t.draw_stop,
+            pending_orders_spread: t.pending_orders_spread,
+            pending_orders_spread_h_delta: t.pending_orders_spread_h_delta,
+            hide_forum_label: v.hide_forum_label,
+            scrolling_charts: v.scrolling_charts,
+            startup_load_charts: v.startup_load_charts,
+            hide_right_chart_panel: v.hide_right_chart_panel,
+            left_chart_info: v.left_chart_info,
+            show_iceberg: v.show_iceberg,
+            show_orders_captions: v.show_orders_captions,
+            orders_captions_lower: v.orders_captions_lower,
+            hide_pnl: v.hide_pnl,
+            hide_buy_button: v.hide_buy_button,
+            hide_cashback_button: v.hide_cashback_button,
+            remember_chart_buttons: v.remember_chart_buttons,
+            scale_tool: v.show_filters.scale_tool,
+            icon_selection: v.icon_selection,
+            price_line_width: v.colors.price_line_width,
+            panic_sell_opacity: v.panic_sell_opacity,
+            book_cumulative_opacity: v.book_cumulative_opacity,
+            book_orders_opacity: v.book_orders_opacity,
+            book_orders_width: v.book_orders_width,
+            play_signal_sound: cfg.signals.play_signal_sound,
+            confirm_close: u.confirm_close,
+            hide_demo_button: u.hide_demo_button,
+        },
         signals: SignalsSettings {
             play_sell_alert: sig.play_sell_alert,
             sell_alert_level: sig.sell_alert_level,
@@ -574,6 +886,34 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             blacklist_on: t.use_coins_black_list,
             blacklist_text: t.coins_black_list_text.clone(),
             exclude_blacklisted_from_deltas: t.exclude_black_list_delta,
+        },
+        order_rules: OrderRulesSettings {
+            trailing_float: t.trailing_float,
+            auto_sell_partial: t.auto_sell_partial,
+            auto_cancel_buy_order: t.auto_cancel_buy_order,
+            cancel_buy_on_sell_fill: t.cancel_buy_on_sell_fill,
+            dont_buy_new_coins: t.dont_buy_new_coins,
+            deltas_by_trades: t.deltas_by_trades,
+            analyze_on_start: sig.load_deep_history,
+        },
+        gestures: GestureSettings {
+            buy_set_click: mo.buy_set_click,
+            short_set_click: mo.short_set_click,
+            pending_order_set_click: t.pending_order_set_click,
+            pending_short_set_click: mo.pending_short_set_click,
+            same_hotkeys_for_move: mo.same_hotkeys_for_move,
+            buy_move_click: mo.buy_move_click,
+            short_buy_move_click: mo.short_buy_move_click,
+            replace_buy_kind: mo.replace_buy_kind,
+            sell_move_click: mo.sell_move_click,
+            short_sell_move_click: mo.short_sell_move_click,
+            replace_sell_kind: mo.replace_sell_kind,
+            buy_move_click_2: mo.buy_move_click_2,
+            short_buy_move_click_2: mo.short_buy_move_click_2,
+            replace_buy_kind_2: mo.replace_buy_kind_2,
+            sell_move_click_2: mo.sell_move_click_2,
+            short_sell_move_click_2: mo.short_sell_move_click_2,
+            replace_sell_kind_2: mo.replace_sell_kind_2,
         },
         leverage: LeverageSettings {
             auto_max_order: m.auto_max_order,
@@ -647,22 +987,57 @@ pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
 /// never send a value the projection cannot show, nor show one it cannot send — the mask narrows
 /// WHEN a named field is written, never WHETHER an unnamed one could be.
 pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, touched: FieldMask) {
-    if touched.auto_start {
+    // Destructured for the reason `rejection_within_mask` is, and it matters MORE here: a bit with
+    // a comparison arm but no applier arm would send every edit naming it, never apply it, and burn
+    // the retry budget into a `GaveUp` — the two functions have to grow together.
+    let FieldMask {
+        auto_buy,
+        auto_start,
+        btc_blink,
+        general,
+        gestures,
+        interface,
+        order_rules,
+        leverage,
+        signals,
+        special,
+        telegram,
+        ignore_strat_sell_price,
+    } = touched;
+    if auto_buy {
+        apply_auto_buy(cfg, &wanted.auto_buy);
+    }
+    if auto_start {
         apply_auto_start(cfg, &wanted.auto_start);
     }
-    if touched.btc_blink {
+    if btc_blink {
         apply_btc_blink(cfg, &wanted.btc_blink);
     }
-    if touched.general {
+    if general {
         apply_general(cfg, &wanted.general);
     }
-    if touched.leverage {
+    if gestures {
+        apply_gestures(cfg, &wanted.gestures);
+    }
+    if interface {
+        apply_interface(cfg, &wanted.interface);
+    }
+    if order_rules {
+        apply_order_rules(cfg, &wanted.order_rules);
+    }
+    if leverage {
         apply_leverage(cfg, &wanted.leverage);
     }
-    if touched.signals {
+    if signals {
         apply_signals(cfg, &wanted.signals);
     }
-    if touched.ignore_strat_sell_price {
+    if special {
+        apply_special(cfg, &wanted.special);
+    }
+    if telegram {
+        apply_telegram(cfg, &wanted.telegram);
+    }
+    if ignore_strat_sell_price {
         cfg.trading.ignore_strat_sell_price = wanted.manual.ignore_strat_sell_price;
     }
 }
@@ -671,7 +1046,8 @@ pub(super) fn apply_core_config(cfg: &mut SharedConfig, wanted: &CoreConfig, tou
 ///
 /// Six fields of a section with about a hundred: everything else in it — including its
 /// `unknown_tail` — travels back untouched, exactly as `apply_general` leaves the rest of
-/// `trading` alone.
+/// `trading` alone. The connectivity alert that neighbours them on the wire is NOT here: it belongs
+/// to [`apply_interface`], the page that draws it.
 fn apply_signals(cfg: &mut SharedConfig, s: &SignalsSettings) {
     let sig = &mut cfg.signals;
     sig.play_sell_alert = s.play_sell_alert;
@@ -680,6 +1056,52 @@ fn apply_signals(cfg: &mut SharedConfig, s: &SignalsSettings) {
     sig.play_buy_alert = s.play_buy_alert;
     sig.buy_alert_level = s.buy_alert_level;
     sig.buy_signal_sound = s.buy_signal_sound;
+}
+
+/// Apply the Hotkeys page's mouse-gesture block to `trading.multi_orders`.
+///
+/// Sixteen of the record's twenty-four fields, plus `trading.pending_order_set_click` beside it.
+/// The eight left out are: `join_sell_kind`, which the wire marks a mirror of
+/// `ClientSettingsCommand::join_sell_kind`, so it travels on the compact channel too and writing it
+/// from here would set two routes fighting over one field; `use_multi_orders`, `split_sells`,
+/// `show_orders_num`, `kir_style`, `fix_pos` and `done_opacity`, which are in the record but not on
+/// this PAGE — Moonbot draws them with its chart, not with its gestures; and `ver`, which is the
+/// wire's own version byte, not a setting.
+fn apply_gestures(cfg: &mut SharedConfig, g: &GestureSettings) {
+    cfg.trading.pending_order_set_click = g.pending_order_set_click;
+    let mo = &mut cfg.trading.multi_orders;
+    mo.buy_set_click = g.buy_set_click;
+    mo.short_set_click = g.short_set_click;
+    mo.pending_short_set_click = g.pending_short_set_click;
+    mo.same_hotkeys_for_move = g.same_hotkeys_for_move;
+    mo.buy_move_click = g.buy_move_click;
+    mo.short_buy_move_click = g.short_buy_move_click;
+    mo.replace_buy_kind = g.replace_buy_kind;
+    mo.sell_move_click = g.sell_move_click;
+    mo.short_sell_move_click = g.short_sell_move_click;
+    mo.replace_sell_kind = g.replace_sell_kind;
+    mo.buy_move_click_2 = g.buy_move_click_2;
+    mo.short_buy_move_click_2 = g.short_buy_move_click_2;
+    mo.replace_buy_kind_2 = g.replace_buy_kind_2;
+    mo.sell_move_click_2 = g.sell_move_click_2;
+    mo.short_sell_move_click_2 = g.short_sell_move_click_2;
+    mo.replace_sell_kind_2 = g.replace_sell_kind_2;
+}
+
+/// Apply the rest of Moonbot's General page — the rows the compact popup does not draw.
+///
+/// Six fields of `trading` plus `signals.load_deep_history`, which is the one field of this area
+/// outside `trading` and cannot collide with [`apply_signals`]: that applier owns six other fields
+/// of the same section and none of them is this one.
+fn apply_order_rules(cfg: &mut SharedConfig, r: &OrderRulesSettings) {
+    cfg.signals.load_deep_history = r.analyze_on_start;
+    let t = &mut cfg.trading;
+    t.trailing_float = r.trailing_float;
+    t.auto_sell_partial = r.auto_sell_partial;
+    t.auto_cancel_buy_order = r.auto_cancel_buy_order;
+    t.cancel_buy_on_sell_fill = r.cancel_buy_on_sell_fill;
+    t.dont_buy_new_coins = r.dont_buy_new_coins;
+    t.deltas_by_trades = r.deltas_by_trades;
 }
 
 /// Apply the General tab to the exit rules, iceberg flags and blacklist in `trading`.
@@ -696,6 +1118,165 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.use_coins_black_list = g.blacklist_on;
     t.coins_black_list_text = g.blacklist_text.clone();
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
+}
+
+/// Apply Moonbot's "Специальные" page to `trading` and its `send_shots_config` and
+/// `orders_control` sub-records.
+///
+/// Thirty-five fields across `trading`, its `send_shots_config` and its `orders_control`:
+/// everything else in that section — including its `unknown_tail`, the exits [`apply_general`] owns
+/// and the leverage block [`apply_leverage`] owns — travels back untouched.
+///
+/// `orders_control.sign_orders` is NOT among them on purpose: the wire's own doc marks it a mirror
+/// of `ClientSettingsCommand::sign_orders`, so it travels on the compact channel too, and writing it
+/// from here would set two routes fighting over one field. Its neighbours `min_price`, `max_time`
+/// and `h_pos_control` are absent for the plainer reason that no row of this page draws them — see
+/// `core_expert::pages::special`, which states what that costs.
+fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
+    let t = &mut cfg.trading;
+    t.log_level = s.log_level;
+    t.auto_delete_logs = s.auto_delete_logs;
+    t.chart_clean_up_time = s.chart_clean_up_time;
+    t.max_orders = s.max_orders;
+    t.unlimited_orders = s.unlimited_orders;
+    t.random_price = s.random_price;
+    t.correct_order_price = s.correct_order_price;
+    t.use_book_ticker = s.use_book_ticker;
+    t.m_avg_use_vol_weight = s.m_avg_use_vol_weight;
+    t.auto_buy_bnb = s.auto_buy_bnb;
+    t.auto_buy_bnb_level = s.auto_buy_bnb_level;
+    t.auto_buy_bnb_volume = s.auto_buy_bnb_volume;
+    t.auto_reduce_order = s.auto_reduce_order;
+    t.auto_close_zero_pos = s.auto_close_zero_pos;
+    t.auto_lower_lev = s.auto_lower_lev;
+    t.use_websocket_api = s.use_websocket_api;
+    t.iceberg_step = s.iceberg_step;
+    t.sell_x2_level = s.sell_x2_level;
+    t.no_trades_markets_text = s.no_trades_markets_text.clone();
+    t.multi_commands = s.multi_commands;
+    t.h_pos_black_list_text = s.h_pos_black_list_text.clone();
+    let oc = &mut t.orders_control;
+    oc.liq_control = s.liq_control;
+    oc.ignore_replacing_bug = s.ignore_replacing_bug;
+    oc.ignore_protection = s.ignore_protection;
+    oc.active = s.orders_control_active;
+    oc.h_pos_report = s.h_pos_report;
+    oc.h_pos_auto_sell = s.h_pos_auto_sell;
+    let shots = &mut t.send_shots_config;
+    shots.may_send = s.send_shots;
+    shots.profit_abs = s.profit_abs;
+    shots.profit_pers = s.profit_pers;
+    shots.profit_session = s.profit_session;
+    shots.send_negative = s.send_negative;
+    shots.send_public = s.send_public;
+    shots.time_scale = s.time_scale;
+    shots.price_scale = s.price_scale;
+}
+
+/// Apply Moonbot's Telegram page to `signals` and the one `trading` flag beside it.
+///
+/// Six fields: everything else in both sections — including their `unknown_tail`s, the alert sounds
+/// [`apply_signals`] owns and the message filter [`apply_auto_buy`] owns — travels back untouched.
+fn apply_telegram(cfg: &mut SharedConfig, t: &TelegramSettings) {
+    let sig = &mut cfg.signals;
+    sig.pump_channel = t.pump_channel.clone();
+    sig.pump_channels = t.pump_channels.clone();
+    sig.multi_channels = t.multi_channels;
+    sig.more_then_1_channel = t.more_then_1_channel;
+    sig.listen_moon_channel = t.listen_moon_channel;
+    cfg.trading.use_moon_bl = t.use_moon_bl;
+}
+
+/// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and one `trading`
+/// field.
+///
+/// Thirty-two fields: everything else in each section — including their `unknown_tail`s and the two
+/// price-approach alerts [`apply_signals`] owns — travels back untouched.
+fn apply_auto_buy(cfg: &mut SharedConfig, b: &AutoBuySettings) {
+    let sig = &mut cfg.signals;
+    sig.monitor_clipboard = b.monitor_clipboard;
+    sig.clipboard_auto_buy = b.clipboard_auto_buy;
+    sig.lower_case_token_cbd = b.lower_case_token_cbd;
+    sig.look_full_link_cbd = b.look_full_link_cbd;
+    sig.advanced_filter_clipboard = b.advanced_filter_clipboard;
+    sig.telegram_auto_buy = b.telegram_auto_buy;
+    sig.lower_case_token_tlg = b.lower_case_token_tlg;
+    sig.look_full_link_tlg = b.look_full_link_tlg;
+    sig.advanced_filter = b.advanced_filter;
+    sig.dont_buy_reply = b.dont_buy_reply;
+    sig.msg_keywords_long = b.msg_keywords_long.clone();
+    sig.msg_keywords_short = b.msg_keywords_short.clone();
+    sig.msg_black_words = b.msg_black_words.clone();
+    sig.msg_token_tags = b.msg_token_tags.clone();
+    sig.lower_price_words = b.lower_price_words.clone();
+    let c = &mut sig.signal_config;
+    c.use_keywords = b.use_keywords;
+    c.buy_key_dist = b.buy_key_dist;
+    c.use_black_words = b.use_black_words;
+    c.use_words_count = b.use_words_count;
+    c.words_count = b.words_count;
+    c.use_lower_price_words = b.use_lower_price_words;
+    c.x_lower_price = b.x_lower_price;
+    c.x_found_price = b.x_found_price;
+    c.buy_if_price_found = b.buy_if_price_found;
+    c.use_price = b.use_price;
+    c.use_stops = b.use_stops;
+    c.only_1_token = b.only_1_token;
+    c.use_token_tags = b.use_token_tags;
+    c.tokens_no_tags = b.tokens_no_tags;
+    c.token_links = b.token_links;
+    c.special_formats = b.special_formats;
+    cfg.trading.auto_cancel_lower_buy = b.auto_cancel_lower_buy;
+}
+
+/// Apply Moonbot's interface page across the four sections it lives in.
+///
+/// Twenty-eight fields of the several hundred those sections hold: everything else in each of them
+/// — including all four `unknown_tail`s — travels back untouched, exactly as `apply_general` leaves
+/// the rest of `trading` alone.
+///
+/// Three of Moonbot's rows on that page are deliberately NOT here, and the page draws them
+/// disabled. `trading.pending_buy_price` is not the drawing flag its caption suggests: the wire
+/// documents it as using the pending-buy price instead of the current ask for SELL calculations,
+/// which is trading maths, not appearance. `trading.use_lev_for_take` already belongs to
+/// [`crate::feed::ManualSettings`], and projecting one wire field into two areas would leave the
+/// second stale after a write and make `edit_satisfied` false for any mask naming that area.
+/// `visual`'s
+/// `manual_charts_full_screen` sits behind that section's tail gate, so a core older than the field
+/// reads it back as `false` however it was written — an edit that could never echo, and would burn
+/// all three attempts.
+fn apply_interface(cfg: &mut SharedConfig, i: &InterfaceSettings) {
+    let t = &mut cfg.trading;
+    t.buy_on_enter = i.buy_on_enter;
+    t.dbl_click_panic_sell = i.dbl_click_panic_sell;
+    t.chart_split_zones = i.chart_split_zones;
+    t.draw_stop = i.draw_stop;
+    t.pending_orders_spread = i.pending_orders_spread;
+    t.pending_orders_spread_h_delta = i.pending_orders_spread_h_delta;
+    let v = &mut cfg.visual;
+    v.hide_forum_label = i.hide_forum_label;
+    v.scrolling_charts = i.scrolling_charts;
+    v.startup_load_charts = i.startup_load_charts;
+    v.hide_right_chart_panel = i.hide_right_chart_panel;
+    v.left_chart_info = i.left_chart_info;
+    v.show_iceberg = i.show_iceberg;
+    v.show_orders_captions = i.show_orders_captions;
+    v.orders_captions_lower = i.orders_captions_lower;
+    v.hide_pnl = i.hide_pnl;
+    v.hide_buy_button = i.hide_buy_button;
+    v.hide_cashback_button = i.hide_cashback_button;
+    v.remember_chart_buttons = i.remember_chart_buttons;
+    v.show_filters.scale_tool = i.scale_tool;
+    v.icon_selection = i.icon_selection;
+    v.colors.price_line_width = i.price_line_width;
+    v.panic_sell_opacity = i.panic_sell_opacity;
+    v.book_cumulative_opacity = i.book_cumulative_opacity;
+    v.book_orders_opacity = i.book_orders_opacity;
+    v.book_orders_width = i.book_orders_width;
+    cfg.signals.play_signal_sound = i.play_signal_sound;
+    let u = &mut cfg.ui;
+    u.confirm_close = i.confirm_close;
+    u.hide_demo_button = i.hide_demo_button;
 }
 
 /// Apply the leverage-management block.
