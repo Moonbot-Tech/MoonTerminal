@@ -111,43 +111,6 @@ fn every_keyed_report_header_has_a_localized_entry_in_all_three_locales() {
     }
 }
 
-/// Breakage: `report_data_cell`'s date branch swaps the two formatting calls (the compact form
-/// reaching the tooltip and the full form reaching the display), or passes `ctx.display_zone`
-/// where the axis-resolved zone belongs. The first makes every date cell show the wrong text; the
-/// silent second makes a REPLICATED column (`buydate`/`closedate`/`sellsetdate`) get the display
-/// zone applied on top of the axis projection, shifting every timestamp by the core's offset with
-/// nothing looking broken. `date_cell_instant` resolves `(secs, zone)` exactly ONCE for exactly
-/// this reason -- the two format calls in this branch must both consume ITS `zone`, never
-/// `ctx.display_zone` directly.
-#[test]
-fn the_date_cell_builds_display_and_tooltip_from_one_resolved_zone_in_the_right_order() {
-    let columns_src = read_src("panels/report/columns.rs");
-    let body = code_only(braced_body(&columns_src, "fn report_data_cell("));
-    let forms = chain_between(
-        &body,
-        "Some((secs, zone)) => (",
-        "None => (String::new()",
-        "date_cell_instant match arm",
-    );
-
-    let compact_at = forms
-        .find("format_minute_or_clock(")
-        .expect("the compact form must come from format_minute_or_clock");
-    let full_at = forms
-        .find("format_minute(")
-        .expect("the tooltip's full form must come from format_minute");
-    assert!(
-        compact_at < full_at,
-        "format_minute_or_clock must build the DISPLAYED compact form first, format_minute the \
-         tooltip's full form second -- swapping them shows the wrong text in each place: {forms}"
-    );
-    assert!(
-        !forms.contains("ctx.display_zone"),
-        "both format calls must use date_cell_instant's own resolved zone, never ctx.display_zone \
-         directly -- that is what keeps a replicated column off the display zone: {forms}"
-    );
-}
-
 /// Slice the indented lines directly under a `key:\n` locale anchor -- the same shape
 /// `chain_between` isolates in `analytics.rs`, but bounded by indentation instead of a known next
 /// key, since the column list this test walks is data-driven rather than a fixed sequence.

@@ -76,14 +76,15 @@ pub(crate) fn side_label(side: moon_core::db::SideFilter) -> String {
 
 // ---- goal D: report table ----
 
-/// Single-letter glyph for a trade's long/short side, shared by every table cell that draws the
-/// [`side_badge`] so the glyph painted and the glyph measured for column width are the same call.
+/// Full word for a trade's long/short side, shared by every table cell that draws the
+/// [`side_badge`] so the word painted and the word measured for column width are the same call.
 ///
-/// `"L"` / `"S"` are glyph-like abbreviations rather than dictionary words, so they stay
-/// untranslated (`locales/README.md`); the localized word lives in the badge's tooltip instead, via
-/// [`side_label`].
-pub(crate) fn side_glyph(is_short: bool) -> &'static str {
-    if is_short { "S" } else { "L" }
+/// `LONG` / `SHORT` are on the deliberately-untranslated list (`locales/README.md`), so the badge
+/// reads the same in every locale; the localized word lives in the badge's tooltip instead, via
+/// [`side_label`]. Full words rather than `L`/`S` by the owner's decision: the single letter did
+/// not read at a glance.
+pub(crate) fn side_word(is_short: bool) -> &'static str {
+    if is_short { "SHORT" } else { "LONG" }
 }
 
 /// Builder for the long/short side badge, shared by the Report table and the Analytics top-trades
@@ -102,7 +103,7 @@ pub(crate) fn side_glyph(is_short: bool) -> &'static str {
 ///     table's `isshort` cell has always used.
 pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
     let c = if is_short { p.red } else { p.green };
-    MoonBadge::new(side_glyph(is_short))
+    MoonBadge::new(side_word(is_short))
         .variant(MoonBadgeVariant::Soft)
         .size(MoonBadgeSize::Tiny)
         .bg_color(c)

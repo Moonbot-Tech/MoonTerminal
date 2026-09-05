@@ -6,7 +6,7 @@ use super::{
     basecurrency_text, cell, cell_display_text, effective_visible_columns, header_for,
     header_label, is_numeric_report_column, report_columns, toggled_all_columns, value_to_string,
 };
-use crate::panels::common::side_glyph;
+use crate::panels::common::side_word;
 use chrono_tz::Tz;
 use moon_core::db::ReportAxis;
 use moon_ui::MoonPalette;
@@ -205,18 +205,18 @@ fn cell_keeps_the_long_date_form_even_for_a_row_from_today() {
     );
 }
 
-/// Breakage: the shared badge glyph changes (`common::side_glyph`) without `cell()`'s `"isshort"`
+/// Breakage: the shared badge word changes (`common::side_word`) without `cell()`'s `"isshort"`
 /// arm changing to match. Consequence: `widths.rs::natural_widths` measures `cell()`'s text for a
 /// column that is actually painted through the dedicated side badge cell, so the column is sized
 /// for text it never paints.
 #[test]
-fn cell_isshort_text_matches_the_shared_side_glyph() {
+fn cell_isshort_text_matches_the_shared_side_word() {
     let axis = ReportAxis::identity_core_local();
     let p = MoonPalette::default();
 
     let (short_text, _) = cell("isshort", &Value::Integer(1), None, p, &axis, 0, Tz::UTC);
     let (long_text, _) = cell("isshort", &Value::Integer(0), None, p, &axis, 0, Tz::UTC);
 
-    assert_eq!(short_text, side_glyph(true));
-    assert_eq!(long_text, side_glyph(false));
+    assert_eq!(short_text, side_word(true));
+    assert_eq!(long_text, side_word(false));
 }

@@ -177,7 +177,7 @@ fn width_bounds(column: &str) -> (f32, f32) {
         "valuation_rate" => (86.0, 150.0),
         "valuation_rate_source" => (100.0, 220.0),
         "lev" | "emulator" => (52.0, 90.0),
-        "isshort" => (44.0, 90.0),
+        "isshort" => (60.0, 110.0),
         _ => (68.0, 180.0),
     }
 }

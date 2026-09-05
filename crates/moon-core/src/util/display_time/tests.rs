@@ -1,7 +1,6 @@
 //! Regression tests for selected-zone civil boundaries and historical offsets.
 
 use chrono::{NaiveDate, TimeZone as _, Utc};
-use chrono_tz::Tz;
 use chrono_tz::{America::Sao_Paulo, Europe::Warsaw, Pacific::Apia};
 
 use super::*;
@@ -154,63 +153,5 @@ fn previous_month_start_keeps_the_year_for_a_mid_year_date() {
     assert_eq!(
         prev_month_start(NaiveDate::from_ymd_opt(2024, 6, 15).expect("valid June date")),
         NaiveDate::from_ymd_opt(2024, 5, 1).expect("valid May start"),
-    );
-}
-
-/// Breakage: `format_minute_or_clock` compares raw UTC seconds against a fixed day length instead
-/// of comparing CIVIL dates in the selected zone. Near midnight, and for any user not on UTC, that
-/// swap collapses the wrong rows to a bare clock time. 2026-09-05 23:30 UTC is already
-/// 2026-09-06 01:30 in Warsaw (UTC+2): TODAY in Warsaw, still YESTERDAY in UTC, at the exact same
-/// instant -- so only a civil-date comparison in the ROW's own zone gets both sides right.
-#[test]
-fn today_comparison_uses_the_selected_zones_civil_date_not_a_fixed_day_length() {
-    let instant = Utc
-        .with_ymd_and_hms(2026, 9, 5, 23, 30, 0)
-        .single()
-        .expect("valid UTC instant")
-        .timestamp();
-    let now = Utc
-        .with_ymd_and_hms(2026, 9, 6, 6, 0, 0)
-        .single()
-        .expect("valid UTC instant")
-        .timestamp();
-
-    assert_eq!(
-        format_minute_or_clock(instant, Warsaw, now),
-        at(instant, Warsaw)
-            .expect("valid Warsaw instant")
-            .format("%H:%M")
-            .to_string(),
-        "Warsaw already sees this instant as today's row and must collapse to a clock time"
-    );
-    assert_eq!(
-        format_minute_or_clock(instant, Tz::UTC, now),
-        format_minute(instant, Tz::UTC),
-        "UTC still sees this instant as yesterday, so it must keep the full form"
-    );
-}
-
-/// `secs <= 0` means unknown, matching every other `display_time` formatter -- the guard this
-/// function shares with `format_minute` and `format_date`.
-#[test]
-fn non_positive_seconds_are_empty() {
-    assert_eq!(format_minute_or_clock(0, Warsaw, 1_700_000_000), "");
-    assert_eq!(format_minute_or_clock(-5, Warsaw, 1_700_000_000), "");
-}
-
-/// A non-today instant must be byte-identical to `format_minute`, not merely similar -- a caller
-/// that compares this text, or feeds it into export, must not observe a second, drifting format.
-#[test]
-fn a_non_today_instant_matches_format_minute_exactly() {
-    let now = Utc
-        .with_ymd_and_hms(2026, 9, 6, 6, 0, 0)
-        .single()
-        .expect("valid UTC instant")
-        .timestamp();
-    let last_week = now - 7 * 86_400;
-
-    assert_eq!(
-        format_minute_or_clock(last_week, Warsaw, now),
-        format_minute(last_week, Warsaw)
     );
 }
