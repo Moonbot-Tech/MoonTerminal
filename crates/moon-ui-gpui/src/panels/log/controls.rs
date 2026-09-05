@@ -8,14 +8,17 @@ impl LogPanel {
     ///
     /// A removed selected core remains visible as its numeric id until the user chooses another
     /// source, rather than being mislabeled as Local. Known exchange headers select a live
-    /// aggregate for that exchange; the unknown-exchange header remains passive.
+    /// aggregate for that exchange; the unknown-exchange header remains passive. While an Auto
+    /// workspace owns the panel, this renders a non-interactive pinned scope chip naming the
+    /// current source instead of the dropdown.
     ///
     /// Args:
     ///     sources: Available aggregate, local, and core log sources.
     ///     cx: Panel context used to read exchanges and wire source callbacks.
     ///
     /// Returns:
-    ///     The configured source dropdown.
+    ///     The configured source dropdown, or a non-interactive pinned scope chip while Auto owns
+    ///     the panel.
     pub(super) fn source_combo(
         &self,
         sources: &[LogSourceItem],
@@ -43,6 +46,21 @@ impl LogPanel {
                     .unwrap_or_else(|| crate::controls::venue_id_label(*exchange)),
                 LogSource::Aggregate | LogSource::Local => t!("log.source.local").to_string(),
             });
+        if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let width = px(crate::controls::wrap_fit::action_width(
+                cx,
+                crate::controls::CORE_COMBO_TRIGGER_W,
+            ));
+            return crate::panels::pinned_scope_host(
+                "log-source-tip",
+                "log-source",
+                cur,
+                width,
+                p,
+                cx,
+            );
+        }
         let cores: Vec<(CoreId, String)> = sources
             .iter()
             .filter_map(|item| match &item.source {
@@ -110,7 +128,6 @@ impl LogPanel {
         }
         MoonDropdown::new("log-source")
             .label(cur)
-            .disabled(workspace_owned)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -122,16 +139,21 @@ impl LogPanel {
             .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(360.0)
             .items(items)
+            .into_any_element()
     }
 
     /// Builds the Live-and-history file dropdown used for non-aggregate sources.
+    ///
+    /// While an Auto workspace owns the panel, this renders a non-interactive pinned scope chip
+    /// naming Live instead of the dropdown — Auto always resolves to the live file.
     ///
     /// Args:
     ///     files: Available named log files for the effective source.
     ///     cx: Panel context used to resolve workspace ownership and wire callbacks.
     ///
     /// Returns:
-    ///     File dropdown pinned to Live while Auto owns the panel.
+    ///     The file dropdown, or a non-interactive pinned scope chip naming Live while Auto owns
+    ///     the panel.
     pub(super) fn file_combo(&self, files: &[String], cx: &Context<Self>) -> impl IntoElement {
         let (_, effective_file, workspace_owned) = self.effective_selection(self.backend.read(cx));
         let live = t!("log.live").to_string();
@@ -139,6 +161,11 @@ impl LogPanel {
             LogFile::Live => live.clone(),
             LogFile::Named(n) => n.clone(),
         };
+        if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let width = px(crate::controls::wrap_fit::action_width(cx, 180.0));
+            return crate::panels::pinned_scope_host("log-file-tip", "log-file", cur, width, p, cx);
+        }
         let view = cx.entity();
         let mut items = vec![
             MoonMenuItem::with_key("lf-live", live.clone())
@@ -165,7 +192,6 @@ impl LogPanel {
         }
         MoonDropdown::new("log-file")
             .label(cur)
-            .disabled(workspace_owned)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -173,5 +199,6 @@ impl LogPanel {
             .fit_menu_width(220.0, 560.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
+            .into_any_element()
     }
 }

@@ -200,28 +200,25 @@ impl Render for OrdersPanel {
         .to_string();
         let footer_split = scope_marker::scope_footer(head, Some(&marker));
         let footer_tip = scope_marker::scope_footer_tooltip(&footer_split, Some(&marker));
-        let footer = h_flex()
-            .w_full()
-            .flex_none()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
+        let footer = crate::panels::footer_row(cx)
             .child(
-                div()
-                    // The id is what lets the head carry a tooltip at all — GPUI hangs one off an
-                    // interactive element only. It changes nothing about the layout.
-                    .id("orders-footer-head")
-                    // `flex_none` only while a tail exists to yield in its place. With nothing
-                    // hidden there is no tail, and pinning the head then would change how this row
-                    // behaves at a narrow width for a marker that is not on screen.
-                    .when(!footer_split.tail.is_empty(), |el| el.flex_none())
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .tooltip(crate::panels::common::text_tooltip(SharedString::from(
-                        head_tip,
-                    )))
-                    .child(footer_split.head),
+                crate::panels::footer_text_style(
+                    div(),
+                    crate::panels::FooterWeight::Regular,
+                    p.text_soft,
+                    cx,
+                )
+                // The id is what lets the head carry a tooltip at all — GPUI hangs one off an
+                // interactive element only. It changes nothing about the layout.
+                .id("orders-footer-head")
+                // `flex_none` only while a tail exists to yield in its place. With nothing hidden
+                // there is no tail, and pinning the head then would change how this row behaves
+                // at a narrow width for a marker that is not on screen.
+                .when(!footer_split.tail.is_empty(), |el| el.flex_none())
+                .tooltip(crate::panels::common::text_tooltip(SharedString::from(
+                    head_tip,
+                )))
+                .child(footer_split.head),
             )
             .children(scope_marker::scope_footer_tail(
                 "orders-footer-tail",

@@ -48,10 +48,12 @@ pub(crate) mod tab_menu;
 
 pub(crate) use arb_edit::open_arb_edit;
 pub(crate) use common::{
-    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, POPUP_GROUP_CAPTION_FONT,
-    POPUP_GROUP_INSET, RadioMark, RenderGate, data_table_host, detach_button, micro_button,
-    micro_icon_button, num, popup_apply_all_button, popup_close_button, popup_gear_trigger,
-    popup_group, popup_group_inset_px, popup_title, radio_items, side_label, toggle_variant,
+    COMPACT_CHECKBOX_FONT, COMPACT_CHECKBOX_GAP, COMPACT_CHECKBOX_MARK, FooterWeight,
+    POPUP_GROUP_CAPTION_FONT, POPUP_GROUP_INSET, RadioMark, RenderGate, data_table_host,
+    detach_button, footer_caption, footer_row, footer_text_style, footer_value, micro_button,
+    micro_icon_button, num, panel_band, pinned_scope_host, popup_apply_all_button,
+    popup_close_button, popup_gear_trigger, popup_group, popup_group_inset_px, popup_title,
+    radio_items, side_label, toggle_variant,
 };
 pub(crate) use label_edit::open_label_edit;
 pub(crate) use order_edit::open_order_edit;

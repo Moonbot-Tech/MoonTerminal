@@ -487,11 +487,14 @@ impl Render for ReportPanel {
         // their intrinsic widths while overflow clips the tail at its right edge.
         let fact_el = move |index: usize, fact: totals::FooterFact| {
             let color = match fact.tone {
-                totals::FactTone::Soft | totals::FactTone::Untrusted => p.text_soft,
+                totals::FactTone::Soft | totals::FactTone::Untrusted => {
+                    design::footer_tone_color(p, MoonTone::Muted)
+                }
                 // Through the accessors: the light theme needs its darker tokens to stay legible,
                 // and this match is the one place the footer picks a money colour.
-                totals::FactTone::Positive => design::positive_color(p),
-                totals::FactTone::Negative | totals::FactTone::Alarm => design::danger_color(p),
+                totals::FactTone::Positive => design::footer_tone_color(p, MoonTone::Positive),
+                totals::FactTone::Negative => design::footer_tone_color(p, MoonTone::Danger),
+                totals::FactTone::Alarm => design::danger_color(p),
                 totals::FactTone::Warn => p.orange,
             };
             let el = div()
@@ -503,7 +506,12 @@ impl Render for ReportPanel {
                 .when(fact.section_start, |chip| {
                     chip.pl_2().border_l_1().border_color(rgb(p.border))
                 })
-                .when(fact.bold, |chip| chip.font_bold())
+                // `footer_text_style`'s Total branch does nothing past what this row already sets
+                // (`t_body` + `color`) besides SEMIBOLD, and it cannot be called here: `fact_el` is
+                // a `move` closure over `cx: &mut Context<Self>` (not `Copy`), so routing this arm
+                // through the helper would move `cx` into the closure and strand every later use of
+                // it in `render` (`footer_row(cx)` included). SEMIBOLD applied directly instead.
+                .when(fact.bold, |chip| chip.font_weight(FontWeight::SEMIBOLD))
                 .child(fact.text);
             match fact.tip {
                 // A fact carrying diagnostics keeps its own tooltip; hovering it wins over the
@@ -552,12 +560,7 @@ impl Render for ReportPanel {
                 .flex_none()
                 .ml_auto()
         });
-        let totals = h_flex()
-            .w_full()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
+        let totals = crate::panels::footer_row(cx)
             .when(selection_actions.is_some(), |row| {
                 row.bg(rgba_from(p.accent, 0.08))
             })

@@ -621,6 +621,61 @@ pub fn micro_control_h(cx: &App) -> Pixels {
     px(micro_control_h_value(cx))
 }
 
+// ---- Goal C: dock chrome shared by every panel ----
+
+/// Return the drawn height of an Action-size control, in base px.
+///
+/// Derived the same way [`micro_control_h_value`] derives XSmall: base height, base line-height,
+/// and `pad_y` as `(height - line_height) / 2`. Nothing checks this against MoonUI automatically
+/// (`MoonButtonMetrics` is private there and the sibling checkout is not guaranteed present in
+/// CI) — if MoonUI's Action metrics move, this must follow by hand. This is a THIRD
+/// control-height tier beside [`micro_control_h_value`]: reuse was not possible because the Micro
+/// height is genuinely smaller and the pinned chip must match the Action-size controls standing
+/// beside it in the same row.
+pub fn action_control_h_value(cx: &App) -> f32 {
+    fit_h_value(cx, 26.0, 14.0, 6.0)
+}
+
+/// [`action_control_h_value`] as `Pixels` — the `*_value`/`*_px` pair every geometry helper in
+/// this file ships.
+pub fn action_control_h_px(cx: &App) -> Pixels {
+    px(action_control_h_value(cx))
+}
+
+/// Height floor a panel footer row never sits below, so a footer carrying only text never reads
+/// shorter than one carrying a Micro control beside it.
+pub fn panel_band_min_h_px(cx: &App) -> Pixels {
+    px(micro_control_h_value(cx))
+}
+
+/// Glyph a pinned scope chip draws in place of the interactive trigger's dropdown caret.
+///
+/// MoonUI ships no lock or pin icon — the whole `moon-ui-components-assets` icon set was checked
+/// and carries none. A colour emoji such as `🔒` (U+1F512) is drawn from a colour glyph table and
+/// therefore ignores `text_color`, which would break the muted-vs-disabled distinction this whole
+/// change exists to make, and `▦` (U+25A6) already failed on this Windows font stack (see
+/// [`COLUMN_SELECTOR_ICON`]'s doc above). `●` is proven to render here AND already means "pinned"
+/// in this app — `panels/chart/render.rs:823` draws `●` for a pinned chart pane and `○` for an
+/// unpinned one.
+pub const PINNED_SCOPE_GLYPH: &str = "●";
+
+/// Design-unit gap between a pinned scope chip's glyph and its label.
+pub const PINNED_SCOPE_GAP: f32 = 4.0;
+
+/// Design-unit horizontal padding a pinned scope chip applies on both sides.
+pub const PINNED_SCOPE_PAD_X: f32 = 7.0;
+
+/// The colour a panel footer fact renders at for a shared tone. `Warn` and `Alarm` are
+/// deliberately absent: every caller that needs them already has its own literal and this helper
+/// only covers the tones more than one footer resolves the same way.
+pub fn footer_tone_color(p: MoonPalette, tone: MoonTone) -> u32 {
+    match tone {
+        MoonTone::Positive => positive_color(p),
+        MoonTone::Danger => danger_color(p),
+        _ => p.text_soft,
+    }
+}
+
 /// Width of mono text drawn at the terminal's body size — [`ui_text_width`] with the theme's body
 /// base filled in.
 ///

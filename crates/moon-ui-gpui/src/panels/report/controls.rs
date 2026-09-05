@@ -434,14 +434,14 @@ impl ReportPanel {
     /// Render the shared core combo under the panel's current scope authority.
     ///
     /// Standalone and Classic group Reports expose the retained multi-selection. Group Auto mode
-    /// displays the pinned effective workspace scope and disables the selector without changing
-    /// retained state.
+    /// renders a non-interactive pinned scope chip naming the effective workspace scope instead,
+    /// leaving retained state unchanged.
     ///
     /// Args:
     ///     cx: Panel context used to order database cores, read exchanges, and wire callbacks.
     ///
     /// Returns:
-    ///     The interactive retained-scope selector or disabled Auto scope indicator, and the
+    ///     The interactive retained-scope selector or non-interactive pinned scope chip, and the
     ///     rendered widths its trigger occupies full and compact. Those widths are the row's only
     ///     content-sized ones — a pinned workspace fits the trigger to a core name — so both the
     ///     compaction saving and the row's composition digest are resolved from them rather than
@@ -492,7 +492,6 @@ impl ReportPanel {
                 crate::workspace::EffectiveScopeLabel::All
                 | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
             });
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
         // Resolved once: the trigger, its compact form and the tooltip that recovers the shed words
         // must all describe the SAME set, and a second reading of it is how they drift apart.
         let selection = if workspace_owned {
@@ -500,26 +499,6 @@ impl ReportPanel {
         } else {
             &self.sel_cores
         };
-        let combo = crate::controls::core_combo(
-            "rep-core",
-            &cores,
-            &venues,
-            selection,
-            crate::controls::CoreAllRowMode::ImplicitOrComplete,
-            t!("report.all_cores").to_string(),
-            |n| t!("report.cores_n", n = n).to_string(),
-            180.0,
-            extras,
-            move |uid, app| {
-                view.update(app, |t, c| t.toggle_core(uid, c));
-            },
-            move |exchange_cores, app| {
-                exchange_view.update(app, |t, c| {
-                    t.toggle_exchange_cores(exchange_cores, c);
-                });
-            },
-        )
-        .disabled(workspace_owned);
         // Only an AutoCore trigger sizes itself to its content; every other state renders the
         // shared width. Measured through MoonUI's own fitting, so the number the row budgets with is
         // the number the row draws — the fitted TEXT is deliberately discarded, since it carries the
@@ -540,67 +519,89 @@ impl ReportPanel {
                 crate::controls::wrap_fit::action_width(cx, crate::controls::CORE_COMBO_TRIGGER_W)
             }
         };
-        // EVERY pinned scope names itself on the trigger — Overview as much as a core — and only
-        // AutoCore may widen past the shared width to do it.
-        let combo = if let Some(label) = pinned_label.clone() {
-            combo.label(label).when(auto_core && !compact, |combo| {
-                combo.fit_trigger_width(
-                    crate::controls::CORE_COMBO_TRIGGER_W,
-                    AUTO_CORE_TRIGGER_MAX_W,
-                )
-            })
-        } else {
-            combo
-        };
-        // The compact label and the tooltip that recovers it come from one pass over the selection,
-        // through the SAME helper the trigger's own summary uses: a second reading with different
-        // rules could disagree with the menu about what "all" means. Asked for only where it is
-        // rendered — neither a full row nor a pinned one needs it, since a pinned scope names itself.
         let compact_all_word = all_cores_short();
-        let compact_summary = (compact && pinned_label.is_none()).then(|| {
-            crate::controls::core_selection_summary(
+        // A scope pinned by an Auto workspace reads as PINNED, never as a control that refuses a
+        // click: no dropdown, no caret, no handler, just the same text the disabled trigger showed.
+        let el = if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let label = pinned_label.clone().unwrap_or_else(|| {
+                crate::controls::core_selection_summary(
+                    &cores,
+                    selection,
+                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                    &t!("report.all_cores").to_string(),
+                    &|n| t!("report.cores_n", n = n).to_string(),
+                )
+                .label
+            });
+            let width = if compact {
+                px(crate::controls::wrap_fit::compact_trigger_width(
+                    cx,
+                    &label,
+                    &compact_all_word,
+                ))
+            } else {
+                px(full_w)
+            };
+            crate::panels::pinned_scope_host("rep-core-tip", "rep-core", label, width, p, cx)
+        } else {
+            let extras =
+                crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
+            let combo = crate::controls::core_combo(
+                "rep-core",
                 &cores,
+                &venues,
                 selection,
                 crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                &compact_all_word,
-                &|n| n.to_string(),
-            )
-        });
-        let combo = if compact {
-            // A pinned selector keeps NAMING its scope when compact — the name is the whole content
-            // of that state — and only gives up the width it was allowed to spend on it, which the
-            // component's own fitting then ellipsizes into. An interactive one gives up the word
-            // beside its count, which the icon now carries.
-            let label = pinned_label.clone().unwrap_or_else(|| {
-                compact_summary
-                    .as_ref()
-                    .map_or_else(String::new, |summary| summary.label.clone())
+                t!("report.all_cores").to_string(),
+                |n| t!("report.cores_n", n = n).to_string(),
+                180.0,
+                extras,
+                move |uid, app| {
+                    view.update(app, |t, c| t.toggle_core(uid, c));
+                },
+                move |exchange_cores, app| {
+                    exchange_view.update(app, |t, c| {
+                        t.toggle_exchange_cores(exchange_cores, c);
+                    });
+                },
+            );
+            // The compact label and the tooltip that recovers it come from one pass over the
+            // selection, through the SAME helper the trigger's own summary uses: a second reading
+            // with different rules could disagree with the menu about what "all" means.
+            let compact_summary = compact.then(|| {
+                crate::controls::core_selection_summary(
+                    &cores,
+                    selection,
+                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                    &compact_all_word,
+                    &|n| n.to_string(),
+                )
             });
-            crate::controls::compact_core_trigger(cx, combo, label, &compact_all_word)
-        } else {
-            combo
-        };
-        // The pinned name has always had a tooltip, since it truncates at any width. The compact
-        // form adds one wherever it drops a word, so nothing this row sheds becomes unreachable —
-        // and a pinned trigger keeps naming its own scope there, never the core COUNT, which would
-        // annotate the label with something other than what it says.
-        let tooltip = pinned_label.filter(|_| auto_core || compact).or_else(|| {
-            compact_summary.as_ref().map(|summary| {
+            let combo = if compact {
+                let label = compact_summary
+                    .as_ref()
+                    .map_or_else(String::new, |summary| summary.label.clone());
+                crate::controls::compact_core_trigger(cx, combo, label, &compact_all_word)
+            } else {
+                combo
+            };
+            let tooltip = compact_summary.as_ref().map(|summary| {
                 if summary.all_on {
                     t!("report.all_cores").to_string()
                 } else {
                     t!("report.cores_n", n = summary.selected).to_string()
                 }
-            })
-        });
-        let el = div()
-            .id("rep-core-tip")
-            .flex_none()
-            .when_some(tooltip, |host, label| {
-                host.tooltip(crate::panels::common::text_tooltip(label))
-            })
-            .child(combo)
-            .into_any_element();
+            });
+            div()
+                .id("rep-core-tip")
+                .flex_none()
+                .when_some(tooltip, |host, label| {
+                    host.tooltip(crate::panels::common::text_tooltip(label))
+                })
+                .child(combo)
+                .into_any_element()
+        };
         (
             el,
             CoreFit {

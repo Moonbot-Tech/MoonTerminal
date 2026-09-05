@@ -1,7 +1,6 @@
 //! Source, order-kind, column, sorting, and filtering controls for the Orders panel.
 
 use super::*;
-use gpui::prelude::FluentBuilder;
 use rust_i18n::t;
 
 /// Maximum fitted width that keeps the pinned Auto core inside the narrow Orders panel by itself.
@@ -12,18 +11,19 @@ const SETTINGS_MENU_MIN_W: f32 = 220.0;
 const SETTINGS_MENU_MAX_W: f32 = 560.0;
 
 impl OrdersPanel {
-    /// Build the effective core dropdown shared with the Report and Assets panels through
-    /// [`crate::controls::core_combo`].
+    /// Build the effective core dropdown. Classic mode routes through
+    /// [`crate::controls::core_combo`], shared with the Report and Assets panels.
     ///
     /// Classic mode shows the retained selection and permits core or exchange toggles. Auto mode
-    /// shows the pinned workspace label and disables the control without mutating Classic state.
+    /// renders a non-interactive pinned scope chip naming the workspace label instead, without
+    /// mutating Classic state.
     ///
     /// Args:
     ///     cores: Group cores in canonical display order.
     ///     cx: Panel context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     Interactive Classic selector or disabled Auto scope indicator.
+    ///     Interactive Classic selector or non-interactive pinned scope chip.
     pub(super) fn source_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> AnyElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope.is_workspace_owned();
@@ -40,56 +40,72 @@ impl OrdersPanel {
             crate::workspace::EffectiveScopeLabel::All
             | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
         };
-        let view = cx.entity();
-        let exchange_view = view.clone();
-        let venues = self.backend.read(cx).session.core_venues();
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
-        let combo = crate::controls::core_combo(
-            "orders-source",
-            cores,
-            &venues,
-            if workspace_owned {
-                &effective_selection
-            } else {
-                &self.sel_cores
-            },
-            crate::controls::CoreAllRowMode::ImplicitOrComplete,
-            t!("orders.all_cores").to_string(),
-            |n| t!("orders.cores_n", n = n).to_string(),
-            170.0,
-            extras,
-            move |id, app| {
-                view.update(app, |t, c| t.toggle_core(id, c));
-            },
-            move |exchange_cores, app| {
-                exchange_view.update(app, |t, c| {
-                    t.toggle_exchange_cores(exchange_cores, c);
-                });
-            },
-        )
-        .disabled(workspace_owned);
-        let tooltip = pinned_label.clone();
-        let combo = if let Some(label) = pinned_label {
-            combo.label(label).when(auto_core, |combo| {
-                combo.fit_trigger_width(
+        let selection = if workspace_owned {
+            &effective_selection
+        } else {
+            &self.sel_cores
+        };
+        if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let label = pinned_label.unwrap_or_else(|| {
+                crate::controls::core_selection_summary(
+                    cores,
+                    selection,
+                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                    &t!("orders.all_cores").to_string(),
+                    &|n| t!("orders.cores_n", n = n).to_string(),
+                )
+                .label
+            });
+            let width = if auto_core {
+                px(MoonDropdown::fitted_trigger_label(
+                    cx,
+                    &label,
+                    MoonButtonSize::Action,
                     crate::controls::CORE_COMBO_TRIGGER_W,
                     AUTO_CORE_TRIGGER_MAX_W,
                 )
-            })
+                .1)
+            } else {
+                px(crate::controls::wrap_fit::action_width(
+                    cx,
+                    crate::controls::CORE_COMBO_TRIGGER_W,
+                ))
+            };
+            crate::panels::pinned_scope_host(
+                "orders-source-tip",
+                "orders-source",
+                label,
+                width,
+                p,
+                cx,
+            )
         } else {
-            combo
-        };
-        if auto_core {
-            div()
-                .id("orders-source-tip")
-                .flex_none()
-                .when_some(tooltip, |host, label| {
-                    host.tooltip(crate::panels::common::text_tooltip(label))
-                })
-                .child(combo)
-                .into_any_element()
-        } else {
-            combo.into_any_element()
+            let view = cx.entity();
+            let exchange_view = view.clone();
+            let venues = self.backend.read(cx).session.core_venues();
+            let extras =
+                crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
+            crate::controls::core_combo(
+                "orders-source",
+                cores,
+                &venues,
+                selection,
+                crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                t!("orders.all_cores").to_string(),
+                |n| t!("orders.cores_n", n = n).to_string(),
+                170.0,
+                extras,
+                move |id, app| {
+                    view.update(app, |t, c| t.toggle_core(id, c));
+                },
+                move |exchange_cores, app| {
+                    exchange_view.update(app, |t, c| {
+                        t.toggle_exchange_cores(exchange_cores, c);
+                    });
+                },
+            )
+            .into_any_element()
         }
     }
 

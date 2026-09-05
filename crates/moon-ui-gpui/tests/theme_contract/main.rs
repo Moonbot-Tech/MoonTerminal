@@ -19,6 +19,7 @@ mod chart;
 mod core_pick;
 mod core_status;
 mod detects;
+mod dock_chrome;
 mod naming;
 mod shared_config;
 mod shell;

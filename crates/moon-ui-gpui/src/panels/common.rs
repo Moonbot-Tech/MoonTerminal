@@ -470,6 +470,159 @@ pub(crate) fn data_table_host(
         })
 }
 
+/// Non-interactive scope chip a pinned Auto workspace host renders in place of its disabled
+/// dropdown trigger.
+///
+/// It sets NO tooltip and wires NO handler — ever. The tooltip belongs to [`pinned_scope_host`],
+/// its sole caller, which wraps this chip in the tooltip contract. Non-interactivity is the
+/// point: this element exists so that a pinned selector cannot be clicked at all, rather than
+/// being a control that refuses.
+///
+/// Args:
+///     id: Stable element identity.
+///     label: The SAME text the disabled trigger showed — never a new wording.
+///     width: Rendered width, already scaled by the caller.
+///     p: Active palette.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The rendered chip.
+pub(crate) fn pinned_scope_label(
+    id: impl Into<ElementId>,
+    label: String,
+    width: Pixels,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    moon_ui::h_flex()
+        .id(id)
+        .flex_none()
+        .w(width)
+        .h(design::action_control_h_px(cx))
+        .items_center()
+        .gap(design::ui_px(cx, design::PINNED_SCOPE_GAP))
+        .px(design::ui_px(cx, design::PINNED_SCOPE_PAD_X))
+        .rounded(design::r_button(cx))
+        .border_1()
+        .border_color(design::moon_alpha(p.border, 0.42))
+        .font_family(design::mono())
+        .text_size(design::text_px(cx, design::ACTION_LABEL_BASE))
+        .text_color(rgb(p.text_muted))
+        .child(div().flex_none().child(design::PINNED_SCOPE_GLYPH))
+        .child(div().min_w_0().truncate().child(label))
+        .into_any_element()
+}
+
+/// The one place the pinned-scope tooltip contract lives: wraps [`pinned_scope_label`] in the
+/// tooltip host every pinned-scope call site used to build by hand, so the tooltip text and its
+/// wiring cannot drift between the seven hosts that render this chip.
+///
+/// Args:
+///     tip_id: Stable identity for the tooltip-hosting wrapper.
+///     chip_id: Stable identity for the chip itself, forwarded to [`pinned_scope_label`].
+///     label: The SAME text the disabled trigger showed — never a new wording.
+///     width: Rendered width, already scaled by the caller.
+///     p: Active palette.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The tooltip-hosting wrapper around the rendered chip.
+pub(crate) fn pinned_scope_host(
+    tip_id: impl Into<ElementId>,
+    chip_id: impl Into<ElementId>,
+    label: String,
+    width: Pixels,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    div()
+        .id(tip_id)
+        .flex_none()
+        .tooltip(text_tooltip(
+            rust_i18n::t!("workspace.scope.pinned_hint", scope = label.clone()).to_string(),
+        ))
+        .child(pinned_scope_label(chip_id, label, width, p, cx))
+        .into_any_element()
+}
+
+/// The container every panel footer builds: one full-width row floored at
+/// [`design::panel_band_min_h_px`] so a footer carrying only text never sits shorter than one
+/// carrying a Micro control beside it.
+pub(crate) fn footer_row(cx: &App) -> Div {
+    moon_ui::h_flex()
+        .w_full()
+        .flex_none()
+        .gap_2()
+        .items_center()
+        .px_2()
+        .py_1()
+        .min_h(design::panel_band_min_h_px(cx))
+}
+
+/// Which typographic step a footer element renders at — [`footer_total`]'s SEMIBOLD emphasis, or
+/// the regular weight every other footer element uses.
+#[derive(Clone, Copy)]
+pub(crate) enum FooterWeight {
+    Regular,
+    Total,
+}
+
+/// A footer's caption text — a muted label naming what the value beside it is, one step smaller
+/// than the value it names. Deliberately NOT [`footer_text_style`], which is `t_body`-based: a
+/// caption sits at `t_caption`.
+pub(crate) fn footer_caption(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> Div {
+    div()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(text.into())
+}
+
+/// A footer's plain value text, one step brighter than [`footer_caption`].
+pub(crate) fn footer_value(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> Div {
+    footer_text_style(div(), FooterWeight::Regular, p.text_soft, cx).child(text.into())
+}
+
+/// A footer's ONE emphasised total, SEMIBOLD at the panel's full text colour.
+///
+/// No call site in this crate today: Report's own SEMIBOLD fact goes through
+/// [`footer_text_style`] directly (it must also carry an id and a border), and Orders/Core Status
+/// are barred from emphasising their single-string totals (see their footer docs). Kept as the
+/// convenience wrapper a future single-string total would reach for, matching the frozen shape
+/// this goal's spec defines.
+#[allow(dead_code)]
+pub(crate) fn footer_total(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> Div {
+    footer_text_style(div(), FooterWeight::Total, p.text, cx).child(text.into())
+}
+
+/// Styling only, for a footer fact whose element the caller must own because it carries an id, a
+/// tooltip or a border. Applies [`design::t_body`], the given colour, and SEMIBOLD when `Total`.
+pub(crate) fn footer_text_style(el: Div, weight: FooterWeight, color: u32, cx: &App) -> Div {
+    let el = el.text_size(design::t_body(cx)).text_color(rgb(color));
+    match weight {
+        FooterWeight::Regular => el,
+        FooterWeight::Total => el.font_weight(FontWeight::SEMIBOLD),
+    }
+}
+
+/// The container every panel's top band builds: one full-width row floored at
+/// [`design::action_control_h_px`].
+///
+/// Every sibling band derives its height from the Action-size control it carries (Orders, Alerts,
+/// Core Status, Report and News all use the same chain with no explicit height), while the
+/// Detects band carries only a Micro gear ([`popup_gear_trigger`]) — so without this floor the
+/// Detects row would sit visibly shorter than every tab beside it, which is the defect this
+/// helper exists to remove.
+pub(crate) fn panel_band(cx: &App) -> Div {
+    moon_ui::h_flex()
+        .w_full()
+        .flex_none()
+        .gap_2()
+        .items_center()
+        .px_2()
+        .py_1()
+        .min_h(design::action_control_h_px(cx))
+}
+
 /// Coalesces panel repaint requests by data signature and wall-clock second. A signature change or a
 /// new second bucket makes a notification eligible, while a monotonic 250 ms floor limits accepted
 /// requests to at most 4 Hz.

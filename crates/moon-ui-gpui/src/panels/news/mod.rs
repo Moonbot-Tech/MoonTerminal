@@ -1076,20 +1076,13 @@ impl NewsView {
                 app.open_url("https://moonbot.pro/moonbot-pro/modules/moon-news")
             })
             .child(text);
-        h_flex()
-            .w_full()
-            .flex_none()
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .px_2()
-            .py_1()
+        crate::panels::footer_row(cx)
             .child(design::status_dot(p.green, cx))
-            .child(
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(t!("news.live").to_string()),
-            )
+            .child(crate::panels::footer_caption(
+                t!("news.live").to_string(),
+                p,
+                cx,
+            ))
             .child(div().flex_1())
             .child(pill)
     }

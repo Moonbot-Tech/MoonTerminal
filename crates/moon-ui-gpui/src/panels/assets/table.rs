@@ -217,15 +217,16 @@ impl AssetsView {
 
     /// Render the shared exchange-grouped core selector under the current scope authority.
     ///
-    /// Global and Classic group views expose the retained multi-selection. Group Auto pins the
-    /// effective workspace label and disables the selector without changing Classic state.
+    /// Global and Classic group views expose the retained multi-selection. Group Auto renders a
+    /// non-interactive pinned scope chip naming the effective workspace label instead of the
+    /// selector, leaving Classic state unchanged.
     ///
     /// Args:
     ///     cores: Scoped cores in canonical display order.
     ///     cx: View context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     Interactive retained-scope selector or disabled Auto scope indicator.
+    ///     Interactive retained-scope selector or non-interactive pinned scope chip.
     pub(super) fn core_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope
@@ -246,38 +247,54 @@ impl AssetsView {
             crate::workspace::EffectiveScopeLabel::All
             | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
         });
-        let view = cx.entity();
-        let exchange_view = view.clone();
-        let venues = self.backend.read(cx).session.core_venues();
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
-        let combo = crate::controls::core_combo(
-            "assets-core",
-            cores,
-            &venues,
-            if workspace_owned {
-                &effective_selection
-            } else {
-                &self.sel_cores
-            },
-            crate::controls::CoreAllRowMode::ImplicitOrComplete,
-            t!("assets.all_cores").to_string(),
-            |n| t!("assets.cores_n", n = n).to_string(),
-            170.0,
-            extras,
-            move |id, app| {
-                view.update(app, |t, c| t.toggle_core(id, c));
-            },
-            move |exchange_cores, app| {
-                exchange_view.update(app, |t, c| {
-                    t.toggle_exchange_cores(exchange_cores, c);
-                });
-            },
-        )
-        .disabled(workspace_owned);
-        if let Some(label) = pinned_label {
-            combo.label(label)
+        let selection = if workspace_owned {
+            &effective_selection
         } else {
-            combo
+            &self.sel_cores
+        };
+        if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let label = pinned_label.unwrap_or_else(|| {
+                crate::controls::core_selection_summary(
+                    cores,
+                    selection,
+                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                    &t!("assets.all_cores").to_string(),
+                    &|n| t!("assets.cores_n", n = n).to_string(),
+                )
+                .label
+            });
+            let width = px(crate::controls::wrap_fit::action_width(
+                cx,
+                crate::controls::CORE_COMBO_TRIGGER_W,
+            ));
+            crate::panels::pinned_scope_host("assets-core-tip", "assets-core", label, width, p, cx)
+        } else {
+            let view = cx.entity();
+            let exchange_view = view.clone();
+            let venues = self.backend.read(cx).session.core_venues();
+            let extras =
+                crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
+            crate::controls::core_combo(
+                "assets-core",
+                cores,
+                &venues,
+                selection,
+                crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                t!("assets.all_cores").to_string(),
+                |n| t!("assets.cores_n", n = n).to_string(),
+                170.0,
+                extras,
+                move |id, app| {
+                    view.update(app, |t, c| t.toggle_core(id, c));
+                },
+                move |exchange_cores, app| {
+                    exchange_view.update(app, |t, c| {
+                        t.toggle_exchange_cores(exchange_cores, c);
+                    });
+                },
+            )
+            .into_any_element()
         }
     }
 
@@ -325,13 +342,7 @@ impl AssetsView {
             table_tip.push('\n');
             table_tip.push_str(&t!("assets.footer_rows_unpriced", n = excluded));
         }
-        h_flex()
-            .w_full()
-            .flex_none()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
+        crate::panels::footer_row(cx)
             .overflow_x_hidden()
             .child(
                 h_flex()
@@ -343,18 +354,12 @@ impl AssetsView {
                         cx.new(|_| moon_ui::MoonTooltipView::new(table_tip.clone()))
                             .into()
                     })
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_soft))
-                            .child(t!("assets.section_positions").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_muted))
-                            .child(format!("{count}")),
-                    )
+                    .child(crate::panels::footer_caption(
+                        t!("assets.section_positions").to_string(),
+                        p,
+                        cx,
+                    ))
+                    .child(crate::panels::footer_value(format!("{count}"), p, cx))
                     .child(super::balances::amount(
                         format!("Σ {sigma}"),
                         if excluded == 0 {
@@ -681,6 +686,7 @@ impl AssetsView {
                     .ghost()
                     .size(MoonButtonSize::Micro)
                     .label("↻")
+                    .tooltip(t!("assets.refresh_hint").to_string())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Err(error) =
                             this.backend.read(cx).session.refresh_transfer_assets(core)

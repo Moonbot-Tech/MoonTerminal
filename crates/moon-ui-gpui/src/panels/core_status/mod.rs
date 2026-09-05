@@ -976,15 +976,17 @@ impl Render for CoreStatusView {
 impl CoreStatusView {
     /// Render the effective core scope in the top bar.
     ///
-    /// Classic mode exposes the retained multi-selector and exchange batch toggles. Auto mode pins
-    /// the workspace label and disables the selector without changing retained Classic state.
+    /// Classic mode exposes the retained multi-selector and exchange batch toggles. Auto mode
+    /// renders a non-interactive pinned scope chip naming the workspace label instead, without
+    /// changing retained Classic state.
     ///
     /// Args:
     ///     cores: Group cores in canonical display order.
     ///     cx: View context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     The top-bar row containing an interactive Classic selector or pinned Auto indicator.
+    ///     The top-bar row containing an interactive Classic selector or non-interactive pinned
+    ///     scope chip.
     fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope.is_workspace_owned();
@@ -1000,38 +1002,61 @@ impl CoreStatusView {
             crate::workspace::EffectiveScopeLabel::All
             | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
         };
-        let view = cx.entity();
-        let exchange_view = view.clone();
-        let venues = self.backend.read(cx).session.core_venues();
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
-        let combo = crate::controls::core_combo(
-            "core-status-core",
-            cores,
-            &venues,
-            if workspace_owned {
-                &effective_selection
-            } else {
-                &self.sel_cores
-            },
-            crate::controls::CoreAllRowMode::ImplicitOrComplete,
-            t!("core_status.all_cores").to_string(),
-            |n| t!("core_status.cores_n", n = n).to_string(),
-            170.0,
-            extras,
-            move |id, app| {
-                view.update(app, |t, c| t.toggle_core(id, c));
-            },
-            move |exchange_cores, app| {
-                exchange_view.update(app, |t, c| {
-                    t.toggle_exchange_cores(exchange_cores, c);
-                });
-            },
-        )
-        .disabled(workspace_owned);
-        let combo = if let Some(label) = pinned_label {
-            combo.label(label)
+        let selection = if workspace_owned {
+            &effective_selection
         } else {
-            combo
+            &self.sel_cores
+        };
+        let combo: AnyElement = if workspace_owned {
+            let p = MoonPalette::active(cx);
+            let label = pinned_label.unwrap_or_else(|| {
+                crate::controls::core_selection_summary(
+                    cores,
+                    selection,
+                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                    &t!("core_status.all_cores").to_string(),
+                    &|n| t!("core_status.cores_n", n = n).to_string(),
+                )
+                .label
+            });
+            let width = px(crate::controls::wrap_fit::action_width(
+                cx,
+                crate::controls::CORE_COMBO_TRIGGER_W,
+            ));
+            crate::panels::pinned_scope_host(
+                "core-status-core-tip",
+                "core-status-core",
+                label,
+                width,
+                p,
+                cx,
+            )
+        } else {
+            let view = cx.entity();
+            let exchange_view = view.clone();
+            let venues = self.backend.read(cx).session.core_venues();
+            let extras =
+                crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
+            crate::controls::core_combo(
+                "core-status-core",
+                cores,
+                &venues,
+                selection,
+                crate::controls::CoreAllRowMode::ImplicitOrComplete,
+                t!("core_status.all_cores").to_string(),
+                |n| t!("core_status.cores_n", n = n).to_string(),
+                170.0,
+                extras,
+                move |id, app| {
+                    view.update(app, |t, c| t.toggle_core(id, c));
+                },
+                move |exchange_cores, app| {
+                    exchange_view.update(app, |t, c| {
+                        t.toggle_exchange_cores(exchange_cores, c);
+                    });
+                },
+            )
+            .into_any_element()
         };
         let weak_view = cx.entity().downgrade();
         let mode_palette = MoonPalette::active(cx);
@@ -1172,30 +1197,19 @@ impl CoreStatusView {
         let footer_split = scope_marker::scope_footer(head_text, Some(marker));
         let tip = scope_marker::scope_footer_tooltip(&footer_split, Some(marker));
         let has_tail = !footer_split.tail.is_empty();
-        h_flex()
-            .w_full()
-            .flex_none()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
-            .text_size(body)
-            .text_color(rgb(p.text_muted))
+        crate::panels::footer_row(cx)
             .child(
-                div()
-                    // `flex_none` only while a tail exists to yield in its place — see the same
-                    // gate in `panels/orders/render.rs`.
-                    .when(has_tail, |el| el.flex_none())
-                    .text_size(body)
-                    .text_color(rgb(p.text_muted))
-                    .child(footer_split.head),
+                // `flex_none` only while a tail exists to yield in its place — see the same
+                // gate in `panels/orders/render.rs`.
+                crate::panels::footer_value(footer_split.head, p, cx)
+                    .when(has_tail, |el| el.flex_none()),
             )
             .children(scope_marker::scope_footer_tail(
                 "core-status-footer-tail",
                 footer_split.tail,
                 tip,
                 body,
-                p.text_muted,
+                p.text_soft,
             ))
             // Exactly one of these two holds the slot: the tail when a marker is on screen, this
             // bare spacer otherwise.
@@ -1216,10 +1230,14 @@ impl CoreStatusView {
                     .gap_2()
                     .when(!update_parts.is_empty(), |row| {
                         row.child(
-                            div()
-                                .flex_none()
-                                .text_color(rgb(p.amber))
-                                .child(update_parts.join(" - ")),
+                            crate::panels::footer_text_style(
+                                div(),
+                                crate::panels::FooterWeight::Regular,
+                                p.amber,
+                                cx,
+                            )
+                            .flex_none()
+                            .child(update_parts.join(" - ")),
                         )
                     })
                     .child(

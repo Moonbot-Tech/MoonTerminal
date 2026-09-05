@@ -390,32 +390,44 @@ fn shared_core_selectors_batch_exchange_changes_once() {
 ///
 /// Plausible regression: removing the Auto-only wrap makes a fitted live name crowd the trailing
 /// controls in a narrow dock; applying it to every branch instead changes the interactive Classic
-/// toolbar. The live firetest independently verifies that the fitted cap shows the observed name.
+/// toolbar; or rendering the pinned scope as a disabled dropdown instead of through the shared
+/// static host reopens the click-through hole `pinned_scope_label`'s own contract closes. The live
+/// firetest independently verifies that the fitted cap shows the observed name.
 #[test]
 fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
     let controls = read_src("panels/orders/controls.rs");
     let render = read_src("panels/orders/render.rs");
     let combo = braced_body(&controls, "pub(super) fn source_combo(");
-    let fitted_auto = combo
-        .split_once("combo.label(label).when(auto_core, |combo| {")
-        .and_then(|(_, rest)| rest.split_once("})"))
+    let owned_branch = combo
+        .split_once("if workspace_owned {")
+        .and_then(|(_, rest)| rest.split_once("let view = cx.entity();"))
+        .map(|(body, _)| body)
+        .expect("Orders pinned scope must stay inside the workspace_owned guard");
+    let classic_branch = combo
+        .split_once("let view = cx.entity();")
+        .map(|(_, rest)| rest)
+        .expect("Orders Classic core selector must build the interactive combo");
+    let width_auto = owned_branch
+        .split_once("let width = if auto_core {")
+        .and_then(|(_, rest)| rest.split_once("} else {"))
         .map(|(body, _)| body)
         .expect("Orders content fitting must stay inside the AutoCore guard");
-    let tooltip_auto = combo
-        .split_once("if auto_core {")
-        .map(|(_, rest)| rest)
-        .expect("Orders tooltip host must stay inside the AutoCore branch");
 
     assert!(
         combo.contains("let auto_core = scope.is_auto_core();")
             && combo.contains("crate::display_text::flatten_lines(name)")
-            && fitted_auto.contains("combo.fit_trigger_width(")
-            && fitted_auto.contains("crate::controls::CORE_COMBO_TRIGGER_W,")
-            && fitted_auto.contains("AUTO_CORE_TRIGGER_MAX_W,")
-            && combo.contains("let tooltip = pinned_label.clone();")
-            && tooltip_auto.contains(".when_some(tooltip, |host, label|")
-            && tooltip_auto.contains("host.tooltip(crate::panels::common::text_tooltip(label))"),
-        "Orders AutoCore must fit and expose the complete live name within its bounded budget"
+            && width_auto.contains("MoonDropdown::fitted_trigger_label(")
+            && width_auto.contains("crate::controls::CORE_COMBO_TRIGGER_W,")
+            && width_auto.contains("AUTO_CORE_TRIGGER_MAX_W,")
+            && owned_branch.contains("crate::panels::pinned_scope_host(")
+            && owned_branch.contains("\"orders-source-tip\",")
+            && owned_branch.contains("\"orders-source\",")
+            && !owned_branch.contains(".disabled(")
+            && !owned_branch.contains("crate::controls::core_combo(")
+            && classic_branch.contains("crate::controls::core_combo(")
+            && !classic_branch.contains("pinned_scope_host("),
+        "Orders AutoCore must fit its live name within its bounded budget and render it through \
+         the shared non-interactive pinned-scope host, never a disabled dropdown"
     );
     let max_width = controls
         .lines()
@@ -455,8 +467,7 @@ fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
         "only AutoCore may wrap its right-aligned Orders action group"
     );
     assert!(
-        combo.contains(".disabled(workspace_owned)")
-            && combo.contains("if workspace_owned {")
+        combo.contains("if workspace_owned {")
             && combo.contains("&effective_selection")
             && combo.contains("&self.sel_cores")
             && combo.contains("view.update(app, |t, c| t.toggle_core(id, c));")
