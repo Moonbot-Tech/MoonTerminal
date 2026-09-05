@@ -20,6 +20,7 @@ mod core_pick;
 mod core_status;
 mod detects;
 mod naming;
+mod report;
 mod shared_config;
 mod shell;
 mod shot;

@@ -1,6 +1,6 @@
 //! Report panel dropdown filters and the visible-column selection menu.
 
-use super::columns::header_for;
+use super::columns::column_menu_label;
 use super::*;
 use rust_i18n::t;
 
@@ -968,7 +968,7 @@ impl ReportPanel {
                 let on = self.visible.contains(c.as_str());
                 let name = c.clone();
                 let view = view.clone();
-                MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
+                MoonMenuItem::with_key(format!("col-{i}"), column_menu_label(c))
                     .checked(on)
                     .on_click(move |_, _, app| {
                         let name = name.clone();

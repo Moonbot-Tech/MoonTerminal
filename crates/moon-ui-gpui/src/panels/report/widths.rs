@@ -132,7 +132,7 @@ fn natural_widths(
         .iter()
         .filter_map(|&column_index| {
             let column = cols.get(column_index)?;
-            let header = columns::header_for(column);
+            let header = columns::header_label(column);
             let mut width = measurer.text_width(&header, FontWeight::SEMIBOLD);
             // Generic cells use the same predicate in the renderer, so the two emphasized profit
             // columns cannot be measured light and then clip the wider glyphs they paint. Resolve it
@@ -176,7 +176,8 @@ fn width_bounds(column: &str) -> (f32, f32) {
         // A rate needs more room than a profit: eight significant digits, no thousands grouping.
         "valuation_rate" => (86.0, 150.0),
         "valuation_rate_source" => (100.0, 220.0),
-        "lev" | "isshort" | "emulator" => (52.0, 90.0),
+        "lev" | "emulator" => (52.0, 90.0),
+        "isshort" => (44.0, 90.0),
         _ => (68.0, 180.0),
     }
 }

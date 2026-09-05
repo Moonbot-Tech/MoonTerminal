@@ -250,8 +250,45 @@ pub fn format_minute(secs: i64, zone: Tz) -> String {
         return String::new();
     }
     at(secs, zone)
-        .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
+        .map(|value| value.format(MINUTE_FORMAT).to_string())
         .unwrap_or_default()
+}
+
+/// The one date-and-minute pattern, shared by [`format_minute`] and [`format_minute_or_clock`].
+///
+/// Stated once because the two must print the SAME thing for a non-today instant: the Report
+/// table tooltips one and displays the other on the same cell, so a second literal would let the
+/// two drift apart silently the first time this pattern is ever changed.
+const MINUTE_FORMAT: &str = "%Y-%m-%d %H:%M";
+
+/// Format UTC Unix seconds as `HH:MM` when the civil date matches `now_secs`'s, otherwise the same
+/// full `YYYY-MM-DD HH:MM` form [`format_minute`] prints.
+///
+/// Resolves `secs` into a zone-aware instant exactly ONCE and formats both branches from it,
+/// rather than calling [`format_minute`] (which would re-resolve the same instant a second time).
+/// The non-today branch stays byte-identical to [`format_minute`] because both spell the pattern
+/// through the shared [`MINUTE_FORMAT`] const rather than a literal of their own.
+///
+/// Args:
+///     secs: UTC Unix timestamp in seconds; non-positive values mean unknown.
+///     zone: Selected display zone.
+///     now_secs: UTC Unix seconds used for the "is this today" comparison.
+///
+/// Returns:
+///     `HH:MM`, the full `YYYY-MM-DD HH:MM` form, or an empty string for an unknown/out-of-range
+///     value.
+pub fn format_minute_or_clock(secs: i64, zone: Tz, now_secs: i64) -> String {
+    if secs <= 0 {
+        return String::new();
+    }
+    let Some(value) = at(secs, zone) else {
+        return String::new();
+    };
+    if self::date(now_secs, zone) == Some(value.date_naive()) {
+        value.format("%H:%M").to_string()
+    } else {
+        value.format(MINUTE_FORMAT).to_string()
+    }
 }
 
 /// Format UTC Unix seconds as `YYYY-MM-DD` in the selected zone.
