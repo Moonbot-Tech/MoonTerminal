@@ -534,8 +534,8 @@ core_expert.int_encrypt_reports:
   es: "Cifrar los informes"
 core_expert.int_detect_buttons:
   ru: "Окно кнопок детектов"
-  en: "Detect-buttons window"
-  es: "Ventana de botones de detección"
+  en: "Alert buttons window"
+  es: "Ventana de alertas"
 core_expert.int_hide_buy:
   ru: "Скрыть кнопку Buy"
   en: "Hide the Buy button"
@@ -682,8 +682,8 @@ core_expert.int_stop_line:
   es: "Dibujar la línea de stop"
 core_expert.int_compact:
   ru: "В сжатом виде"
-  en: "Compact"
-  es: "Compacto"
+  en: "Open in max scale"
+  es: "Abrir a escala máx."
 core_expert.int_info_right:
   ru: "Информация на графике справа"
   en: "Chart info on the right"

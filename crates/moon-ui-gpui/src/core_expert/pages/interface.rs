@@ -11,17 +11,17 @@
 //! `moon_core::feed::SignalsSettings`, which Moonbot draws on this page and the compact popup draws
 //! on its own. This tab names both areas; see `super::super::ExpertTab::add_sections`.
 //!
-//! The rest of the page is drawn and disabled for one of three reasons. Either the snapshot does not
-//! carry it at all (Moonbot's window style, its Pixel Size, the report form), or which wire field
-//! backs it could not be established from the section's own documentation — a mirrored control
-//! wired to the wrong field is worse than one that plainly does nothing.
+//! What is left disabled is disabled for a reason that can be named per row, and no longer for the
+//! want of one. Four checkbox rows have no field in the snapshot at all — the two windows Moonbot
+//! opens on start, closing to the tray, encrypting its reports — and neither do the style picker,
+//! the Pixel Size track, the background image or the price panel. Nor do the two buttons: "Colors
+//! Setup" opens a dialog of its own and "Reset Reports form" acts on Moonbot's report window, and
+//! an action is not a setting to carry.
 //!
-//! Three rows are held back for a third reason, and it is named in `moon_core`'s `apply_interface`
-//! rather than here: "Use Leverage for TP" and "Не учитывать SellPrice ручной стратегии" are
-//! `trading.use_lev_for_take` and `trading.ignore_strat_sell_price`, which already belong to
-//! `ManualSettings` — one wire field belongs to one area — and "Открывать выбранные вручную монеты
-//! в FullScreen" is `visual.manual_charts_full_screen`, which sits behind that section's tail gate
-//! and so could never echo on a core older than the field.
+//! Three more are held back although the field IS there — "Use Leverage for TP", "Не учитывать
+//! SellPrice ручной стратегии" and "Открывать выбранные вручную монеты в FullScreen". Which fields
+//! those are, and why each cannot be written from here, is named once in `moon_core`'s
+//! `apply_interface` rather than repeated here.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -35,8 +35,8 @@ use crate::shell::parse_num;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, caption, columns, dropdown, flag, group, num, rows, slider, sound_cell, stepper_live,
-    text_line,
+    action, caption, columns, dropdown, flag_dead, flag_live, group, num, rows, slider, sound_cell,
+    stepper_live, text_line,
 };
 
 /// The write for a slider this page draws but the snapshot does not carry.
@@ -173,22 +173,6 @@ pub(super) fn slider_specs(
     ]
 }
 
-/// One dead checkbox row, which this page still has a dozen of.
-fn row(id: &'static str, key: &'static str, view: &Entity<CoreExpertView>) -> impl IntoElement {
-    flag(id, t!(key).to_string(), false, false, view, |_, _| {})
-}
-
-/// One checkbox row the snapshot carries, staging into the page.
-fn live(
-    id: &'static str,
-    key: &'static str,
-    checked: bool,
-    view: &Entity<CoreExpertView>,
-    set: fn(&mut CoreConfig, bool),
-) -> impl IntoElement {
-    flag(id, t!(key).to_string(), checked, true, view, set)
-}
-
 /// Build the page.
 pub(super) fn body(
     view: &Entity<CoreExpertView>,
@@ -205,44 +189,50 @@ pub(super) fn body(
     let main_window = group("exp-int-main", t!("core_expert.int_main_frame").to_string()).child(
         rows(cx)
             .gap(gap)
-            .child(live(
+            .child(flag_live(
                 "exp-int-buy-enter",
                 "core_expert.int_buy_on_enter",
                 i.buy_on_enter,
                 view,
                 |d, on| d.interface.buy_on_enter = on,
             ))
-            .child(row(
+            .child(flag_dead(
                 "exp-int-log-window",
                 "core_expert.int_log_window",
                 view,
             ))
-            .child(row(
+            .child(flag_dead(
                 "exp-int-orders-window",
                 "core_expert.int_orders_window",
                 view,
             ))
-            .child(row("exp-int-to-tray", "core_expert.int_to_tray", view))
-            .child(row(
-                "exp-int-restore-on-signal",
-                "core_expert.int_restore_on_signal",
+            .child(flag_dead(
+                "exp-int-to-tray",
+                "core_expert.int_to_tray",
                 view,
             ))
-            .child(live(
+            .child(flag_live(
+                "exp-int-restore-on-signal",
+                "core_expert.int_restore_on_signal",
+                i.auto_show_on_signal,
+                view,
+                |d, on| d.interface.auto_show_on_signal = on,
+            ))
+            .child(flag_live(
                 "exp-int-hide-forum",
                 "core_expert.int_hide_forum",
                 i.hide_forum_label,
                 view,
                 |d, on| d.interface.hide_forum_label = on,
             ))
-            .child(live(
+            .child(flag_live(
                 "exp-int-scroll-charts",
                 "core_expert.int_scroll_charts",
                 i.scrolling_charts,
                 view,
                 |d, on| d.interface.scrolling_charts = on,
             ))
-            .child(live(
+            .child(flag_live(
                 "exp-int-open-all",
                 "core_expert.int_open_all_charts",
                 i.startup_load_charts,
@@ -254,12 +244,12 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 12.0))
-                    .child(row(
+                    .child(flag_dead(
                         "exp-int-lev-for-tp",
                         "core_expert.int_lev_for_tp",
                         view,
                     ))
-                    .child(live(
+                    .child(flag_live(
                         "exp-int-ask-on-exit",
                         "core_expert.int_ask_on_exit",
                         i.confirm_close,
@@ -267,7 +257,7 @@ pub(super) fn body(
                         |d, on| d.interface.confirm_close = on,
                     )),
             )
-            .child(row(
+            .child(flag_dead(
                 "exp-int-ignore-ms-sell",
                 "core_expert.int_ignore_ms_sell",
                 view,
@@ -277,15 +267,17 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 12.0))
-                    .child(row(
+                    .child(flag_dead(
                         "exp-int-encrypt-reports",
                         "core_expert.int_encrypt_reports",
                         view,
                     ))
-                    .child(row(
+                    .child(flag_live(
                         "exp-int-detect-buttons",
                         "core_expert.int_detect_buttons",
+                        i.show_detects_tool,
                         view,
+                        |d, on| d.interface.show_detects_tool = on,
                     )),
             )
             .child(
@@ -293,14 +285,14 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 12.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-int-hide-buy",
                         "core_expert.int_hide_buy",
                         i.hide_buy_button,
                         view,
                         |d, on| d.interface.hide_buy_button = on,
                     ))
-                    .child(live(
+                    .child(flag_live(
                         "exp-int-hide-demo",
                         "core_expert.int_hide_demo",
                         i.hide_demo_button,
@@ -313,23 +305,25 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 12.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-int-hide-bonus",
                         "core_expert.int_hide_bonus",
                         i.hide_cashback_button,
                         view,
                         |d, on| d.interface.hide_cashback_button = on,
                     ))
-                    .child(row(
+                    .child(flag_live(
                         "exp-int-hide-candy",
                         "core_expert.int_hide_candy",
+                        i.hide_cashback_info,
                         view,
+                        |d, on| d.interface.hide_cashback_info = on,
                     )),
             )
             // Moonbot's three alert sounds, each a switch over a picker and — for the last two — a
             // level. These are the `signals` section the compact popup draws on its own General
             // tab; Moonbot keeps them here, so this page owns them.
-            .child(live(
+            .child(flag_live(
                 "exp-int-net-sound",
                 "core_expert.int_network_sound",
                 i.play_signal_sound,
@@ -344,7 +338,7 @@ pub(super) fn body(
                 NO_VALUE.to_string(),
                 false,
             ))
-            .child(live(
+            .child(flag_live(
                 "exp-int-sell-sound",
                 "core_expert.int_sell_sound",
                 sig.play_sell_alert,
@@ -375,7 +369,7 @@ pub(super) fn body(
                         |d, v| d.signals.sell_alert_level = v,
                     )),
             )
-            .child(live(
+            .child(flag_live(
                 "exp-int-buy-sound",
                 "core_expert.int_buy_sound",
                 sig.play_buy_alert,
@@ -501,13 +495,21 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(row("exp-int-hints", "core_expert.int_chart_hints", view))
-                            .child(row(
+                            .child(flag_live(
+                                "exp-int-hints",
+                                "core_expert.int_chart_hints",
+                                i.show_market_captions,
+                                view,
+                                |d, on| d.interface.show_market_captions = on,
+                            ))
+                            .child(flag_live(
                                 "exp-int-profit-usd",
                                 "core_expert.int_profit_in_usd",
+                                i.show_usd_on_charts,
                                 view,
+                                |d, on| d.interface.show_usd_on_charts = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-label-iceberg",
                                 "core_expert.int_label_iceberg",
                                 i.show_iceberg,
@@ -520,14 +522,14 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-label-orders",
                                 "core_expert.int_label_orders",
                                 i.show_orders_captions,
                                 view,
                                 |d, on| d.interface.show_orders_captions = on,
                             ))
-                            .child(div().pl(design::ui_px(cx, 18.0)).child(live(
+                            .child(div().pl(design::ui_px(cx, 18.0)).child(flag_live(
                                 "exp-int-under-line",
                                 "core_expert.int_under_line",
                                 i.orders_captions_lower,
@@ -646,48 +648,56 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-dbl-panic",
                                 "core_expert.int_double_click_panic",
                                 i.dbl_click_panic_sell,
                                 view,
                                 |d, on| d.interface.dbl_click_panic_sell = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-zones",
                                 "core_expert.int_control_zones",
                                 i.chart_split_zones,
                                 view,
                                 |d, on| d.interface.chart_split_zones = on,
                             ))
-                            .child(row(
+                            .child(flag_live(
                                 "exp-int-new-on-top",
                                 "core_expert.int_new_charts_on_top",
+                                i.new_markets_on_top,
                                 view,
+                                |d, on| d.interface.new_markets_on_top = on,
                             ))
-                            .child(row(
+                            .child(flag_live(
                                 "exp-int-update-title",
                                 "core_expert.int_update_title",
+                                i.use_last_detect_caption,
                                 view,
+                                |d, on| d.interface.use_last_detect_caption = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-hide-right",
                                 "core_expert.int_hide_right_panel",
                                 i.hide_right_chart_panel,
                                 view,
                                 |d, on| d.interface.hide_right_chart_panel = on,
                             ))
-                            .child(row(
+                            .child(flag_live(
                                 "exp-int-server-charts",
                                 "core_expert.int_server_charts",
+                                i.auto_request_charts,
                                 view,
+                                |d, on| d.interface.auto_request_charts = on,
                             ))
-                            .child(row(
+                            .child(flag_live(
                                 "exp-int-pending-price",
                                 "core_expert.int_pending_price",
+                                i.pending_buy_price,
                                 view,
+                                |d, on| d.interface.pending_buy_price = on,
                             ))
-                            .child(row(
+                            .child(flag_dead(
                                 "exp-int-manual-fullscreen",
                                 "core_expert.int_manual_fullscreen",
                                 view,
@@ -698,41 +708,49 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(row(
+                            .child(flag_live(
                                 "exp-int-one-fullscreen",
                                 "core_expert.int_one_fullscreen",
+                                i.full_screen_prevent_signals,
                                 view,
+                                |d, on| d.interface.full_screen_prevent_signals = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-stop-line",
                                 "core_expert.int_stop_line",
                                 i.draw_stop,
                                 view,
                                 |d, on| d.interface.draw_stop = on,
                             ))
-                            .child(row("exp-int-compact", "core_expert.int_compact", view))
-                            .child(live(
+                            .child(flag_live(
+                                "exp-int-compact",
+                                "core_expert.int_compact",
+                                i.new_markets_max_scale,
+                                view,
+                                |d, on| d.interface.new_markets_max_scale = on,
+                            ))
+                            .child(flag_live(
                                 "exp-int-info-right",
                                 "core_expert.int_info_right",
                                 !i.left_chart_info,
                                 view,
                                 |d, on| d.interface.left_chart_info = !on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-hide-pnl",
                                 "core_expert.int_hide_pnl",
                                 i.hide_pnl,
                                 view,
                                 |d, on| d.interface.hide_pnl = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-scale-tool",
                                 "core_expert.int_scale_tool",
                                 i.scale_tool,
                                 view,
                                 |d, on| d.interface.scale_tool = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-int-buttons-memory",
                                 "core_expert.int_buttons_memory",
                                 i.remember_chart_buttons,

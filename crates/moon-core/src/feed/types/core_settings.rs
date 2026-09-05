@@ -759,6 +759,14 @@ pub struct SpecialSettings {
     pub auto_lower_lev: bool,
     /// `trading.use_websocket_api`: place orders over the socket rather than REST.
     pub use_websocket_api: bool,
+    /// `trading.futures_rules`: Moonbot's "Quantitative Rules" — the futures position-mode checks.
+    ///
+    /// Its control is `cbFuturesRules`, which is the wire's own name for the field; caption and name
+    /// disagree only in wording. Unlike `free_position_check`, which this page still draws dead, the
+    /// caption carries no negation — ticked means on, and no direction is left to guess. That it can
+    /// turn a live safety check off is what Moonbot's own checkbox does too, and mirroring that
+    /// dialog is this window's whole contract.
+    pub futures_rules: bool,
     /// `trading.iceberg_step`: the price step below which an order is placed as an iceberg, as a
     /// PER CENT. The wire's own default is 0.1, meaning a tenth of a per cent.
     ///
@@ -840,46 +848,85 @@ pub struct SpecialSettings {
 /// `feed::live::shared_config::edit_satisfied` is false for any mask naming this area, forever.
 impl PartialEq for SpecialSettings {
     fn eq(&self, other: &Self) -> bool {
-        self.auto_buy_bnb_level
+        // Destructured for the reason [`GeneralSettings`]'s is.
+        let Self {
+            log_level,
+            auto_delete_logs,
+            chart_clean_up_time,
+            max_orders,
+            unlimited_orders,
+            random_price,
+            correct_order_price,
+            use_book_ticker,
+            m_avg_use_vol_weight,
+            auto_buy_bnb,
+            auto_buy_bnb_level,
+            auto_buy_bnb_volume,
+            auto_reduce_order,
+            auto_close_zero_pos,
+            auto_lower_lev,
+            use_websocket_api,
+            futures_rules,
+            iceberg_step,
+            sell_x2_level,
+            no_trades_markets_text,
+            liq_control,
+            ignore_replacing_bug,
+            ignore_protection,
+            orders_control_active,
+            h_pos_report,
+            h_pos_auto_sell,
+            h_pos_black_list_text,
+            multi_commands,
+            send_shots,
+            profit_abs,
+            profit_pers,
+            profit_session,
+            send_negative,
+            send_public,
+            time_scale,
+            price_scale,
+        } = self;
+        auto_buy_bnb_level
             .total_cmp(&other.auto_buy_bnb_level)
             .is_eq()
-            && self
-                .auto_buy_bnb_volume
+            && auto_buy_bnb_volume
                 .total_cmp(&other.auto_buy_bnb_volume)
                 .is_eq()
-            && self.iceberg_step.total_cmp(&other.iceberg_step).is_eq()
-            && self.no_trades_markets_text == other.no_trades_markets_text
-            && self.h_pos_black_list_text == other.h_pos_black_list_text
-            && self.liq_control == other.liq_control
-            && self.ignore_replacing_bug == other.ignore_replacing_bug
-            && self.ignore_protection == other.ignore_protection
-            && self.orders_control_active == other.orders_control_active
-            && self.h_pos_report == other.h_pos_report
-            && self.h_pos_auto_sell == other.h_pos_auto_sell
-            && self.unlimited_orders == other.unlimited_orders
-            && self.random_price == other.random_price
-            && self.correct_order_price == other.correct_order_price
-            && self.use_book_ticker == other.use_book_ticker
-            && self.m_avg_use_vol_weight == other.m_avg_use_vol_weight
-            && self.auto_buy_bnb == other.auto_buy_bnb
-            && self.auto_reduce_order == other.auto_reduce_order
-            && self.auto_close_zero_pos == other.auto_close_zero_pos
-            && self.auto_lower_lev == other.auto_lower_lev
-            && self.use_websocket_api == other.use_websocket_api
-            && self.multi_commands == other.multi_commands
-            && self.send_shots == other.send_shots
-            && self.send_negative == other.send_negative
-            && self.send_public == other.send_public
-            && self.log_level == other.log_level
-            && self.auto_delete_logs == other.auto_delete_logs
-            && self.chart_clean_up_time == other.chart_clean_up_time
-            && self.max_orders == other.max_orders
-            && self.sell_x2_level == other.sell_x2_level
-            && self.profit_abs == other.profit_abs
-            && self.profit_pers == other.profit_pers
-            && self.profit_session == other.profit_session
-            && self.time_scale == other.time_scale
-            && self.price_scale == other.price_scale
+            && iceberg_step.total_cmp(&other.iceberg_step).is_eq()
+            && *log_level == other.log_level
+            && *auto_delete_logs == other.auto_delete_logs
+            && *chart_clean_up_time == other.chart_clean_up_time
+            && *max_orders == other.max_orders
+            && *unlimited_orders == other.unlimited_orders
+            && *random_price == other.random_price
+            && *correct_order_price == other.correct_order_price
+            && *use_book_ticker == other.use_book_ticker
+            && *m_avg_use_vol_weight == other.m_avg_use_vol_weight
+            && *auto_buy_bnb == other.auto_buy_bnb
+            && *auto_reduce_order == other.auto_reduce_order
+            && *auto_close_zero_pos == other.auto_close_zero_pos
+            && *auto_lower_lev == other.auto_lower_lev
+            && *use_websocket_api == other.use_websocket_api
+            && *futures_rules == other.futures_rules
+            && *sell_x2_level == other.sell_x2_level
+            && *no_trades_markets_text == other.no_trades_markets_text
+            && *liq_control == other.liq_control
+            && *ignore_replacing_bug == other.ignore_replacing_bug
+            && *ignore_protection == other.ignore_protection
+            && *orders_control_active == other.orders_control_active
+            && *h_pos_report == other.h_pos_report
+            && *h_pos_auto_sell == other.h_pos_auto_sell
+            && *h_pos_black_list_text == other.h_pos_black_list_text
+            && *multi_commands == other.multi_commands
+            && *send_shots == other.send_shots
+            && *profit_abs == other.profit_abs
+            && *profit_pers == other.profit_pers
+            && *profit_session == other.profit_session
+            && *send_negative == other.send_negative
+            && *send_public == other.send_public
+            && *time_scale == other.time_scale
+            && *price_scale == other.price_scale
     }
 }
 
@@ -1019,16 +1066,29 @@ pub struct AutoBuySettings {
 /// answered on a LIVE trading bot, and they are here because that is the page Moonbot puts them on.
 ///
 /// Spread across four wire sections, as the page itself is: `trading` for the rules about what is
-/// drawn on an order, `visual` for chart and order-book appearance, `ui` for the two main-window
-/// switches, and one flag of `signals` for the connectivity alert. Field names follow the WIRE, not Moonbot's caption, like every other block here — so
-/// the button Moonbot calls "MoonBonus" is [`Self::hide_cashback_button`], which is what the
-/// section calls it.
+/// drawn on an order, `visual` for chart and order-book appearance, `ui` for the main-window
+/// switches, and four flags of `signals` — the connectivity alert and three chart-window rules
+/// Moonbot files under this tab.
 ///
-/// Moonbot's page has about twice this many controls. The rest are drawn disabled by the expert
-/// window because the safe-share snapshot does not carry them at all — its own sound pickers, its
-/// window style, the report form — or because which wire field backs them could not be established
-/// from the section's own documentation, and a mirrored control wired to the wrong field is worse
-/// than one that plainly does nothing.
+/// Field names follow the WIRE, not Moonbot's caption, like every other block here — so the button
+/// Moonbot calls "MoonBonus" is [`Self::hide_cashback_button`], which is what the section calls
+/// it.
+///
+/// Moonbot's page has more controls than this, and the page draws the rest disabled;
+/// `core_expert::pages::interface` says which and why, so that inventory has one home rather than
+/// one per crate.
+///
+/// Eleven of the fields below were among those dead rows until Moonbot's own binary was read,
+/// because the wire's prose does not place them. Two joins place them, and both are mechanical.
+/// moonproto's field names were derived from Moonbot's CONTROL names — `bGlassOpacity` to
+/// `glass_opacity`, `cbFreePositionCheck` to `free_position_check` — so a control found in the form
+/// is a field found in the section. And the exe's localisation table lays out English, Russian and
+/// Spanish in that order, followed by that row's HINT in the same three, so the caption a trader
+/// reads and the sentence explaining it travel together.
+///
+/// The hint is what settles most of them, and it is evidence of a different kind from the names: it
+/// says what the flag DOES, in Moonbot's own words, where the wire's prose has now been wrong eight
+/// times. Each field below carries its own, where one exists.
 #[derive(Debug, Clone)]
 pub struct InterfaceSettings {
     /// `trading.buy_on_enter`: the Enter key buys.
@@ -1110,6 +1170,83 @@ pub struct InterfaceSettings {
     pub confirm_close: bool,
     /// `ui.hide_demo_button`.
     pub hide_demo_button: bool,
+    /// `signals.auto_show_on_signal`: bring Moonbot's own window up when a signal arrives.
+    ///
+    /// No hint on this row. It rests on the control: `CheckBox5` in the main-window group carries
+    /// the design-time text "Auto Show on signal", which is the wire's name for the field.
+    pub auto_show_on_signal: bool,
+    /// `visual.show_market_captions`: Moonbot's "Подсказки на графике".
+    ///
+    /// Placed by POSITION, the way [`Self::glass_opacity`] was, because its own control carries a
+    /// stale placeholder instead of its text. The page reproduces Moonbot's column; the two rows
+    /// under this one are `cbShowMarketUSD` at (11, 112) and `cbShowIceberg` at (11, 136) and both
+    /// are settled independently; and nineteen of that group's twenty controls are accounted for by
+    /// a row of this page. So the slot at (11, 88) is `cbShowMarketCaptions`.
+    ///
+    /// Which does NOT make the wire's "market name captions" what it does: this row's own hint says
+    /// "display order replacement status and activity messages on the chart area". The control kept
+    /// a name it outgrew and the wire's field inherited that name. The name is the join; the hint is
+    /// the meaning.
+    pub show_market_captions: bool,
+    /// `visual.show_usd_on_charts`: Moonbot's "Показывать профит в $" — its hint, "show profit in $
+    /// on market charts and in the orders list".
+    ///
+    /// The weakest join of these, and worth saying why it holds anyway. The control is
+    /// `cbShowMarketUSD`, which does NOT derive this field's name — the rule above would give
+    /// `show_market_usd`. What carries it is that the control's design-time text is the caption
+    /// itself, "Show profit in $", and that this is the only USD field in the whole snapshot.
+    pub show_usd_on_charts: bool,
+    /// `visual.show_detects_tool`: the detect buttons get a WINDOW of their own — the row's hint is
+    /// "show alert buttons in a separate window".
+    ///
+    /// The wire calls it a button on the chart toolbar, and that is the reading the hint refutes.
+    /// The control is `cbDetectsTool`, whose own design-time text reads "Separate alert window",
+    /// and it sits in the main-window group rather than the chart one. Its nearest rival,
+    /// `visual.show_filters.show_detects`, loses on the name: this control is a detects TOOL.
+    pub show_detects_tool: bool,
+    /// `visual.auto_request_charts`: pull chart history from Moonbot's server — its hint,
+    /// "auto-load charts from the MoonServer (if unchecked, you can still load one manually)".
+    pub auto_request_charts: bool,
+    /// `visual.new_markets_max_scale`: a new market's chart opens compressed along TIME rather than
+    /// zoomed in — the hint is "open new charts in max. time scale (6 hours)", which is what
+    /// Moonbot's "В сжатом виде" means and why its own English for the row is "Open in max scale".
+    pub new_markets_max_scale: bool,
+    /// `ui.new_markets_on_top`: a new market's chart opens above the others — the hint is "open new
+    /// charts on top of the charts workspace".
+    ///
+    /// The wire says "newly listed markets at the top of the LIST", and the hint is what refutes
+    /// that: the row is about charts. The control is `cbNewMarketsOnTop`, in the chart group beside
+    /// `cbNewMarketsMaxScale`.
+    pub new_markets_on_top: bool,
+    /// `signals.use_last_detect_caption`: the last detect's caption becomes the chart's title — the
+    /// hint states the whole rule, "update chart's caption with last detect info; if unchecked, the
+    /// very first detect will be used".
+    pub use_last_detect_caption: bool,
+    /// `signals.full_screen_prevent_signals`: in full screen, a signal opens no second chart —
+    /// Moonbot's "Только 1 график в Full Screen".
+    ///
+    /// No hint on this row. It rests on both sides being unique: `cbFullScreenPreventSIgnals` is the
+    /// only full-screen control in the dialog, and this is the only full-screen field in the
+    /// snapshot.
+    pub full_screen_prevent_signals: bool,
+    /// `trading.pending_buy_price`: DRAW a pending order's buy price on the chart.
+    ///
+    /// The wire documents a sell-calculation rule instead — "use pending-buy price instead of the
+    /// current ask for sell calculations" — and the hint settles it outright: "draw the buy price of
+    /// a pending order as an additional line on a chart; the main order's line is its conditional
+    /// price". The control is `cbPendingBuyPrice`, in the chart group at (11, 475).
+    ///
+    /// Worth this much text because it is the one row of these whose two readings differ in
+    /// CONSEQUENCE: cosmetic under the hint, live sell pricing under the wire's prose. Under either
+    /// reading the box is Moonbot's own box carrying Moonbot's own caption, so this window stays a
+    /// faithful mirror — but the hazard is named here rather than left for a trader to find.
+    pub pending_buy_price: bool,
+    /// `trading.cashback_settings.hide_info`: hide the cashback TABLE — Moonbot's "Скрыть табличку
+    /// Candy", drawn beside the button [`Self::hide_cashback_button`] hides.
+    ///
+    /// Two controls one word apart: `bHideCashBack` is the button and `bHideCashBackInfo` is this
+    /// one, and the second name is the one that carries "info".
+    pub hide_cashback_info: bool,
 }
 
 /// Hand-written for the same reason [`ManualSettings`]'s is: the two spreads are `f64` read off the
@@ -1119,40 +1256,93 @@ pub struct InterfaceSettings {
 /// every OK on it would burn all three attempts and give up.
 impl PartialEq for InterfaceSettings {
     fn eq(&self, other: &Self) -> bool {
-        self.pending_orders_spread
+        // Destructured for the reason [`GeneralSettings`]'s is.
+        let Self {
+            buy_on_enter,
+            dbl_click_panic_sell,
+            chart_split_zones,
+            draw_stop,
+            pending_orders_spread,
+            pending_orders_spread_h_delta,
+            hide_forum_label,
+            scrolling_charts,
+            startup_load_charts,
+            hide_right_chart_panel,
+            left_chart_info,
+            show_iceberg,
+            show_orders_captions,
+            orders_captions_lower,
+            hide_pnl,
+            hide_buy_button,
+            hide_cashback_button,
+            remember_chart_buttons,
+            scale_tool,
+            icon_selection,
+            price_line_width,
+            panic_sell_opacity,
+            glass_opacity,
+            book_cumulative_opacity,
+            book_orders_opacity,
+            book_orders_width,
+            play_signal_sound,
+            confirm_close,
+            hide_demo_button,
+            auto_show_on_signal,
+            show_market_captions,
+            show_usd_on_charts,
+            show_detects_tool,
+            auto_request_charts,
+            new_markets_max_scale,
+            new_markets_on_top,
+            use_last_detect_caption,
+            full_screen_prevent_signals,
+            pending_buy_price,
+            hide_cashback_info,
+        } = self;
+        pending_orders_spread
             .total_cmp(&other.pending_orders_spread)
             .is_eq()
-            && self
-                .pending_orders_spread_h_delta
+            && pending_orders_spread_h_delta
                 .total_cmp(&other.pending_orders_spread_h_delta)
                 .is_eq()
-            && self.buy_on_enter == other.buy_on_enter
-            && self.dbl_click_panic_sell == other.dbl_click_panic_sell
-            && self.chart_split_zones == other.chart_split_zones
-            && self.draw_stop == other.draw_stop
-            && self.hide_forum_label == other.hide_forum_label
-            && self.scrolling_charts == other.scrolling_charts
-            && self.startup_load_charts == other.startup_load_charts
-            && self.hide_right_chart_panel == other.hide_right_chart_panel
-            && self.left_chart_info == other.left_chart_info
-            && self.show_iceberg == other.show_iceberg
-            && self.show_orders_captions == other.show_orders_captions
-            && self.orders_captions_lower == other.orders_captions_lower
-            && self.hide_pnl == other.hide_pnl
-            && self.hide_buy_button == other.hide_buy_button
-            && self.hide_cashback_button == other.hide_cashback_button
-            && self.remember_chart_buttons == other.remember_chart_buttons
-            && self.scale_tool == other.scale_tool
-            && self.play_signal_sound == other.play_signal_sound
-            && self.confirm_close == other.confirm_close
-            && self.hide_demo_button == other.hide_demo_button
-            && self.glass_opacity == other.glass_opacity
-            && self.icon_selection == other.icon_selection
-            && self.price_line_width == other.price_line_width
-            && self.panic_sell_opacity == other.panic_sell_opacity
-            && self.book_cumulative_opacity == other.book_cumulative_opacity
-            && self.book_orders_opacity == other.book_orders_opacity
-            && self.book_orders_width == other.book_orders_width
+            && *buy_on_enter == other.buy_on_enter
+            && *dbl_click_panic_sell == other.dbl_click_panic_sell
+            && *chart_split_zones == other.chart_split_zones
+            && *draw_stop == other.draw_stop
+            && *hide_forum_label == other.hide_forum_label
+            && *scrolling_charts == other.scrolling_charts
+            && *startup_load_charts == other.startup_load_charts
+            && *hide_right_chart_panel == other.hide_right_chart_panel
+            && *left_chart_info == other.left_chart_info
+            && *show_iceberg == other.show_iceberg
+            && *show_orders_captions == other.show_orders_captions
+            && *orders_captions_lower == other.orders_captions_lower
+            && *hide_pnl == other.hide_pnl
+            && *hide_buy_button == other.hide_buy_button
+            && *hide_cashback_button == other.hide_cashback_button
+            && *remember_chart_buttons == other.remember_chart_buttons
+            && *scale_tool == other.scale_tool
+            && *icon_selection == other.icon_selection
+            && *price_line_width == other.price_line_width
+            && *panic_sell_opacity == other.panic_sell_opacity
+            && *glass_opacity == other.glass_opacity
+            && *book_cumulative_opacity == other.book_cumulative_opacity
+            && *book_orders_opacity == other.book_orders_opacity
+            && *book_orders_width == other.book_orders_width
+            && *play_signal_sound == other.play_signal_sound
+            && *confirm_close == other.confirm_close
+            && *hide_demo_button == other.hide_demo_button
+            && *auto_show_on_signal == other.auto_show_on_signal
+            && *show_market_captions == other.show_market_captions
+            && *show_usd_on_charts == other.show_usd_on_charts
+            && *show_detects_tool == other.show_detects_tool
+            && *auto_request_charts == other.auto_request_charts
+            && *new_markets_max_scale == other.new_markets_max_scale
+            && *new_markets_on_top == other.new_markets_on_top
+            && *use_last_detect_caption == other.use_last_detect_caption
+            && *full_screen_prevent_signals == other.full_screen_prevent_signals
+            && *pending_buy_price == other.pending_buy_price
+            && *hide_cashback_info == other.hide_cashback_info
     }
 }
 
@@ -1279,16 +1469,28 @@ pub struct ManualSettings {
 /// came back" rather than "the same real number".
 impl PartialEq for ManualSettings {
     fn eq(&self, other: &Self) -> bool {
-        self.order_sizes
+        // Destructured for the reason [`GeneralSettings`]'s is. This was the last impl in the file
+        // still comparing through `self.`, which is the one shape where a new field can go missing
+        // without the compiler saying so.
+        let Self {
+            order_sizes,
+            order_size_sel,
+            strat_names,
+            strat_buttons,
+            core_hotkeys,
+            ignore_strat_sell_price,
+            use_lev_for_take,
+        } = self;
+        order_sizes
             .iter()
             .zip(other.order_sizes.iter())
             .all(|(a, b)| a.total_cmp(b).is_eq())
-            && self.order_size_sel == other.order_size_sel
-            && self.strat_names == other.strat_names
-            && self.strat_buttons == other.strat_buttons
-            && self.core_hotkeys == other.core_hotkeys
-            && self.ignore_strat_sell_price == other.ignore_strat_sell_price
-            && self.use_lev_for_take == other.use_lev_for_take
+            && *order_size_sel == other.order_size_sel
+            && *strat_names == other.strat_names
+            && *strat_buttons == other.strat_buttons
+            && *core_hotkeys == other.core_hotkeys
+            && *ignore_strat_sell_price == other.ignore_strat_sell_price
+            && *use_lev_for_take == other.use_lev_for_take
     }
 }
 

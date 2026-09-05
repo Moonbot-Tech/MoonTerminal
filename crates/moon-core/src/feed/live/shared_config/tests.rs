@@ -428,6 +428,8 @@ fn interface_base() -> SharedConfig {
     cfg.trading.draw_stop = !cfg.trading.draw_stop;
     cfg.trading.pending_orders_spread = 0.125;
     cfg.trading.pending_orders_spread_h_delta = 0.0625;
+    cfg.trading.pending_buy_price = !cfg.trading.pending_buy_price;
+    cfg.trading.cashback_settings.hide_info = !cfg.trading.cashback_settings.hide_info;
     cfg.visual.hide_forum_label = !cfg.visual.hide_forum_label;
     cfg.visual.scrolling_charts = !cfg.visual.scrolling_charts;
     cfg.visual.startup_load_charts = !cfg.visual.startup_load_charts;
@@ -441,6 +443,11 @@ fn interface_base() -> SharedConfig {
     cfg.visual.hide_cashback_button = !cfg.visual.hide_cashback_button;
     cfg.visual.remember_chart_buttons = !cfg.visual.remember_chart_buttons;
     cfg.visual.show_filters.scale_tool = !cfg.visual.show_filters.scale_tool;
+    cfg.visual.show_market_captions = !cfg.visual.show_market_captions;
+    cfg.visual.show_usd_on_charts = !cfg.visual.show_usd_on_charts;
+    cfg.visual.show_detects_tool = !cfg.visual.show_detects_tool;
+    cfg.visual.auto_request_charts = !cfg.visual.auto_request_charts;
+    cfg.visual.new_markets_max_scale = !cfg.visual.new_markets_max_scale;
     cfg.visual.icon_selection = 3;
     cfg.visual.colors.price_line_width = 4;
     cfg.visual.panic_sell_opacity = 55;
@@ -449,8 +456,12 @@ fn interface_base() -> SharedConfig {
     cfg.visual.book_orders_opacity = 65;
     cfg.visual.book_orders_width = 7;
     cfg.signals.play_signal_sound = !cfg.signals.play_signal_sound;
+    cfg.signals.auto_show_on_signal = !cfg.signals.auto_show_on_signal;
+    cfg.signals.use_last_detect_caption = !cfg.signals.use_last_detect_caption;
+    cfg.signals.full_screen_prevent_signals = !cfg.signals.full_screen_prevent_signals;
     cfg.ui.confirm_close = !cfg.ui.confirm_close;
     cfg.ui.hide_demo_button = !cfg.ui.hide_demo_button;
+    cfg.ui.new_markets_on_top = !cfg.ui.new_markets_on_top;
     cfg
 }
 
@@ -738,6 +749,7 @@ fn special_base() -> SharedConfig {
     t.auto_close_zero_pos = !t.auto_close_zero_pos;
     t.auto_lower_lev = !t.auto_lower_lev;
     t.use_websocket_api = !t.use_websocket_api;
+    t.futures_rules = !t.futures_rules;
     t.iceberg_step = 0.0625;
     t.sell_x2_level = 73;
     t.no_trades_markets_text = "BTC\nETH".to_string();

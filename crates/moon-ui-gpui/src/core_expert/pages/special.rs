@@ -8,10 +8,21 @@
 //! What stays disabled, and why. The Remote block's own identity — the bot token, its PIN and the
 //! UDP password, and the control VDS address the watchdog below it carries — is outside the
 //! safe-share subset altogether, which is why what IS live inside Remote is only the screenshot
-//! rules and the multi-command switch. The iceberg pair belongs to `GeneralSettings`, which the
-//! compact popup edits: one wire field belongs to one area, or a write from either surface would
-//! put the other's frozen copy back. And two rows are held back by this window rather than by the
-//! wire: see "No trades on markets" below, and "Не проверять лимиты позиции" next.
+//! rules and the multi-command switch — and why the two checkboxes beside them stay dead too: "I
+//! have my own bot ID" names the identity, and "Слать отчёты о сделках" switches the reporting that
+//! identity does, neither of which the snapshot carries.
+//!
+//! Seven more rows, in the engine and System blocks, have no field in the snapshot at all: Custom
+//! IP and Auto DNS, Extended Debug Mode, the two exports, accepting beta versions, and "Old coins as
+//! New Listing" — whose control is named `cbGateOldListing`, for one venue's quirk, where the
+//! section's nearest free field is the autostart block's `show_old_listing`. A name that close is
+//! not a name that matches, so that row stays dead rather than being bound on a resemblance.
+//!
+//! The iceberg pair belongs to `GeneralSettings`, which the compact popup edits: one wire field
+//! belongs to one area, or a write from either surface would put the other's frozen copy back.
+//!
+//! And two rows are held back by this window rather than by the wire: see "No trades on markets"
+//! below, and "Не проверять лимиты позиции" next.
 //!
 //! That row IS `trading.free_position_check`: Moonbot's own checkbox for it is named
 //! `cbFreePositionCheck`, and its hint describes position limits ("лимит позиции 5k. С этой опцией
@@ -64,7 +75,8 @@ use crate::shell::parse_num;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, caption, dropdown, field, flag, hint, link, list_box, num, slider, text_block,
+    action, caption, dropdown, field, flag_dead, flag_live, hint, link, list_box, num, slider,
+    text_block,
 };
 
 /// The writes of the rows this page draws but the snapshot does not carry.
@@ -105,17 +117,6 @@ fn stage_count(t: &str, floor: i32) -> Option<i32> {
     // Out of range is refused rather than saturated: `as` would turn a typo into `i32::MAX`, which
     // the core stores without objection.
     (v >= f64::from(floor) && v <= f64::from(i32::MAX)).then_some(v as i32)
-}
-
-/// One checkbox row the snapshot carries, staging into the page.
-fn live(
-    id: &'static str,
-    key: &'static str,
-    checked: bool,
-    view: &Entity<CoreExpertView>,
-    set: fn(&mut CoreConfig, bool),
-) -> impl IntoElement {
-    flag(id, t!(key).to_string(), checked, true, view, set)
 }
 
 /// Range of the one slider left dead, resembling Moonbot's on a control that writes nothing.
@@ -291,11 +292,6 @@ pub(super) fn slider_specs(
     ]
 }
 
-/// One dead checkbox row, which this page has three dozen of.
-fn row(id: &'static str, key: &'static str, view: &Entity<CoreExpertView>) -> impl IntoElement {
-    flag(id, t!(key).to_string(), false, false, view, |_, _| {})
-}
-
 /// A section header that opens and closes its body, as Moonbot's own bar does.
 fn header(
     section: SpecialSection,
@@ -361,12 +357,12 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(row(
+                            .child(flag_dead(
                                 "exp-sp-iceberg-buys",
                                 "core_expert.sp_iceberg_buys",
                                 view,
                             ))
-                            .child(row(
+                            .child(flag_dead(
                                 "exp-sp-no-pos-limit",
                                 "core_expert.sp_no_position_limit",
                                 view,
@@ -375,7 +371,7 @@ pub(super) fn body(
                                 h_flex()
                                     .items_center()
                                     .gap(design::ui_px(cx, 8.0))
-                                    .child(live(
+                                    .child(flag_live(
                                         "exp-sp-replacing",
                                         "core_expert.sp_ignore_replacing",
                                         sp.ignore_replacing_bug,
@@ -392,7 +388,13 @@ pub(super) fn body(
                                 h_flex()
                                     .items_center()
                                     .gap(design::ui_px(cx, 8.0))
-                                    .child(row("exp-sp-quant", "core_expert.sp_quantitative", view))
+                                    .child(flag_live(
+                                        "exp-sp-quant",
+                                        "core_expert.sp_quantitative",
+                                        sp.futures_rules,
+                                        view,
+                                        |d, on| d.special.futures_rules = on,
+                                    ))
                                     .child(link(
                                         "exp-sp-help-2",
                                         t!("core_expert.sp_help").to_string(),
@@ -403,14 +405,14 @@ pub(super) fn body(
                                 h_flex()
                                     .items_center()
                                     .gap(design::ui_px(cx, 12.0))
-                                    .child(live(
+                                    .child(flag_live(
                                         "exp-sp-auto-lev",
                                         "core_expert.sp_auto_leverage",
                                         sp.auto_lower_lev,
                                         view,
                                         |d, on| d.special.auto_lower_lev = on,
                                     ))
-                                    .child(live(
+                                    .child(flag_live(
                                         "exp-sp-close-zero",
                                         "core_expert.sp_auto_close_zero",
                                         sp.auto_close_zero_pos,
@@ -418,7 +420,7 @@ pub(super) fn body(
                                         |d, on| d.special.auto_close_zero_pos = on,
                                     )),
                             )
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-ws-api",
                                 "core_expert.sp_websocket_api",
                                 sp.use_websocket_api,
@@ -431,61 +433,65 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(row(
+                            .child(flag_dead(
                                 "exp-sp-iceberg-sells",
                                 "core_expert.sp_iceberg_sells",
                                 view,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-book-ticker",
                                 "core_expert.sp_book_ticker",
                                 sp.use_book_ticker,
                                 view,
                                 |d, on| d.special.use_book_ticker = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-random-pct",
                                 "core_expert.sp_random_percent",
                                 sp.random_price,
                                 view,
                                 |d, on| d.special.random_price = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-weighted",
                                 "core_expert.sp_weighted_mavg",
                                 sp.m_avg_use_vol_weight,
                                 view,
                                 |d, on| d.special.m_avg_use_vol_weight = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-reduce",
                                 "core_expert.sp_auto_reduce",
                                 sp.auto_reduce_order,
                                 view,
                                 |d, on| d.special.auto_reduce_order = on,
                             ))
-                            .child(row("exp-sp-old-coins", "core_expert.sp_old_as_new", view)),
+                            .child(flag_dead(
+                                "exp-sp-old-coins",
+                                "core_expert.sp_old_as_new",
+                                view,
+                            )),
                     )
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-correct-price",
                                 "core_expert.sp_correct_price",
                                 sp.correct_order_price,
                                 view,
                                 |d, on| d.special.correct_order_price = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-liq-control",
                                 "core_expert.sp_liquidation_control",
                                 sp.liq_control,
                                 view,
                                 |d, on| d.special.liq_control = on,
                             ))
-                            .child(live(
+                            .child(flag_live(
                                 "exp-sp-bnb",
                                 "core_expert.sp_auto_buy_bnb",
                                 sp.auto_buy_bnb,
@@ -570,8 +576,16 @@ pub(super) fn body(
                     .child(
                         v_flex()
                             .gap(design::ui_px(cx, 2.0))
-                            .child(row("exp-sp-custom-ip", "core_expert.sp_custom_ip", view))
-                            .child(row("exp-sp-auto-dns", "core_expert.sp_auto_dns", view)),
+                            .child(flag_dead(
+                                "exp-sp-custom-ip",
+                                "core_expert.sp_custom_ip",
+                                view,
+                            ))
+                            .child(flag_dead(
+                                "exp-sp-auto-dns",
+                                "core_expert.sp_auto_dns",
+                                view,
+                            )),
                     )
                     .child(
                         v_flex()
@@ -670,7 +684,11 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(design::ui_px(cx, 2.0))
-                            .child(row("exp-sp-own-bot", "core_expert.sp_own_bot_id", view))
+                            .child(flag_dead(
+                                "exp-sp-own-bot",
+                                "core_expert.sp_own_bot_id",
+                                view,
+                            ))
                             .children(field(store, "exp-sp-bot-token", false)),
                     )
                     .child(
@@ -695,7 +713,7 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 10.0))
-                    .child(row(
+                    .child(flag_dead(
                         "exp-sp-send-reports",
                         "core_expert.sp_send_trade_reports",
                         view,
@@ -705,7 +723,7 @@ pub(super) fn body(
                         NO_VALUE.to_string(),
                         false,
                     ))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-multiline",
                         "core_expert.sp_multiline_commands",
                         sp.multi_commands,
@@ -718,21 +736,21 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 12.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-send-shots",
                         "core_expert.sp_send_shots",
                         sp.send_shots,
                         view,
                         |d, on| d.special.send_shots = on,
                     ))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-send-public",
                         "core_expert.sp_send_public",
                         sp.send_public,
                         view,
                         |d, on| d.special.send_public = on,
                     ))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-send-negative",
                         "core_expert.sp_send_negative",
                         sp.send_negative,
@@ -866,20 +884,28 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 16.0))
-                    .child(row("exp-sp-debug", "core_expert.sp_extended_debug", view))
-                    .child(row(
+                    .child(flag_dead(
+                        "exp-sp-debug",
+                        "core_expert.sp_extended_debug",
+                        view,
+                    ))
+                    .child(flag_dead(
                         "exp-sp-market-export",
                         "core_expert.sp_market_export",
                         view,
                     ))
-                    .child(row("exp-sp-udp-export", "core_expert.sp_udp_export", view)),
+                    .child(flag_dead(
+                        "exp-sp-udp-export",
+                        "core_expert.sp_udp_export",
+                        view,
+                    )),
             )
             .child(
                 h_flex()
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 8.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-unlimited",
                         "core_expert.sp_unlimited_orders",
                         sp.unlimited_orders,
@@ -896,7 +922,7 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 16.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-no-protection",
                         "core_expert.sp_turn_off_protection",
                         sp.ignore_protection > 0,
@@ -913,7 +939,7 @@ pub(super) fn body(
                             };
                         },
                     ))
-                    .child(row("exp-sp-beta", "core_expert.sp_accept_beta", view)),
+                    .child(flag_dead("exp-sp-beta", "core_expert.sp_accept_beta", view)),
             )
     };
 
@@ -933,7 +959,7 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 10.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-watch-orders",
                         "core_expert.sp_watch_orders",
                         sp.orders_control_active,
@@ -960,14 +986,14 @@ pub(super) fn body(
                     .w_full()
                     .items_center()
                     .gap(design::ui_px(cx, 10.0))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-report-tg",
                         "core_expert.sp_report_to_telegram",
                         sp.h_pos_report,
                         view,
                         |d, on| d.special.h_pos_report = on,
                     ))
-                    .child(live(
+                    .child(flag_live(
                         "exp-sp-autosell",
                         "core_expert.sp_autosell",
                         sp.h_pos_auto_sell,
