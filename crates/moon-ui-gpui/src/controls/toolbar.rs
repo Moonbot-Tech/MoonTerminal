@@ -516,6 +516,7 @@ fn own_trade_toggle(
                 MoonToggle::new("toolbar-own-trade-toggle")
                     .checked(on)
                     .size(MoonToggleSize::Compact)
+                    .tone(design::chrome_toggle_tone(on, false))
                     .on_change(move |checked: &bool, _w, app| {
                         let on = *checked;
                         toggle_backend.update(app, |b, cx| {
@@ -676,6 +677,7 @@ pub fn toolbar(
         tp_value,
         tp_engaged,
         sl_value,
+        sl_present,
         sl_on,
         lev_value,
         sell_pcts,
@@ -772,6 +774,9 @@ pub fn toolbar(
                 .map(|ms| ms.stop_on)
                 .unwrap_or(exit.stop_loss_enabled),
         );
+        // Threaded alongside `sl_value` rather than re-derived from it below, so the readout's
+        // colour and tooltip cannot disagree with the dash by matching different text later.
+        let sl_present = !matches!(manual_stop, ManualStop::Unknown);
         let sl_value = match manual_stop {
             ManualStop::Strategy { pct, .. } => format!("{}%", fmt_field2_signed(pct)),
             ManualStop::Unknown => DASH.to_string(),
@@ -810,6 +815,7 @@ pub fn toolbar(
             tp_value,
             tp_engaged,
             sl_value,
+            sl_present,
             sl_on,
             lev_value,
             sell_pcts,
@@ -837,6 +843,7 @@ pub fn toolbar(
         && lev_value.is_some();
     let tp_available = TradeMetric::Tp.available_with(has_core, sl_on, manual_on, sl_locked);
     let sl_available = TradeMetric::Sl.available_with(has_core, sl_on, manual_on, sl_locked);
+    let lev_present = lev_value.is_some();
     let lev_str = lev_value.unwrap_or_else(|| "—".to_string());
     let tp_tip = (!manual_on).then(|| {
         if tp_engaged {
@@ -849,6 +856,9 @@ pub fn toolbar(
             .to_string()
         }
     });
+    // Unlike Lev (`lev_unset_tip`) and MAX (`max_order_tip`), the SL dash used to carry no
+    // explanation at all — muting it without saying why still leaves the operator guessing.
+    let sl_unset_tip = (!sl_present).then(|| t!("toolbar.sl_unset_tip").to_string());
 
     // Cells are fitted BEFORE rendering: both the strip itself and the row budget that decides the
     // labels' fate read them. One computation, one source.
@@ -972,7 +982,7 @@ pub fn toolbar(
                 .child(metric_button(
                     TradeMetric::Lev,
                     lev_str,
-                    p.text,
+                    design::readout_color(p, lev_present),
                     design::font_w(cx, LEV_W),
                     lev_popup.is_some(),
                     false,
@@ -997,7 +1007,10 @@ pub fn toolbar(
                     div()
                         .id("toolbar-max-order")
                         .flex_none()
-                        .child(strip_text(max_order_value, p.text))
+                        .child(strip_text(
+                            max_order_value,
+                            design::readout_color(p, max_order.value().is_some()),
+                        ))
                         .tooltip(crate::panels::common::text_tooltip(max_order_tip)),
                 ),
         )
@@ -1017,12 +1030,16 @@ pub fn toolbar(
                 .child(metric_button(
                     TradeMetric::Sl,
                     sl_value,
-                    sl_color,
+                    if sl_present {
+                        sl_color
+                    } else {
+                        design::readout_color(p, false)
+                    },
                     design::font_w(cx, SL_W),
                     sl_popup.is_some(),
                     false,
                     sl_available,
-                    None,
+                    sl_unset_tip.map(SharedString::from),
                     sl_popup,
                     shell.clone(),
                     p,

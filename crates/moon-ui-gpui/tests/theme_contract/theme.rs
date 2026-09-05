@@ -401,3 +401,180 @@ fn connections_cells_apply_their_resolved_growth_cap() {
         "SettingsView::cell must resolve ConnColId::max_width and apply it with Div::max_w"
     );
 }
+
+// --- Goal A: header/toolbar chrome polish -----------------------------------------------------
+//
+// These four are text-based checks against symbols that do NOT exist in the tree yet
+// (`design::readout_color`, `design::chrome_toggle_tone`) or against call forms the current
+// production code does not use yet (`design::delta_tone` in `ticker_readout`,
+// `design::fit_h_value` in `core_selector`). Every check below is a plain substring search over
+// source text, so all four COMPILE against today's tree exactly as the existing tests in this
+// file do; they are simply expected to FAIL until the implementation lands, which is the
+// documented pre-implementation state for an AUTHOR-mode packet, not a defect in the test.
+
+/// The header ticker's 1h/24h percentage deltas must resolve their colour through
+/// `design::delta_tone(sign)`, the single documented sign-to-tone mapping, and never through a
+/// hand-picked `MoonTone` or a hand-rolled `sign.pick(..)`.
+///
+/// The future edit this pins against: replacing `design::delta_tone(sign)` with
+/// `sign.pick(MoonTone::Positive, MoonTone::Negative, MoonTone::Muted)` — a plausible edit,
+/// because "Negative" reads like the right name for a loss. `MoonTone::Negative` is ORANGE in the
+/// dark theme, not red, so a losing delta would render orange while every other money cell in the
+/// app renders red. `delta_span` is a closure INSIDE `ticker_readout`, so a `braced_body` grab of
+/// the enclosing fn covers it, exactly as it does for [`pnl_money_cells_take_their_tone_from_the_shared_delta_mapping`]
+/// above.
+#[test]
+fn header_ticker_deltas_take_their_tone_from_the_shared_delta_mapping() {
+    let source = read_src("chrome/terminal_chrome.rs");
+    let signature = "fn ticker_readout(";
+    assert_eq!(
+        source.matches(signature).count(),
+        1,
+        "`{signature}` must name exactly one header ticker readout"
+    );
+    let body = code_only(braced_body(&source, signature));
+
+    assert!(
+        body.contains("design::delta_tone("),
+        "chrome/terminal_chrome.rs:{signature} must resolve its delta colour through design::delta_tone"
+    );
+    for hand_rolled in [
+        "MoonTone::Positive",
+        "MoonTone::Danger",
+        "MoonTone::Negative",
+    ] {
+        assert!(
+            !body.contains(hand_rolled),
+            "chrome/terminal_chrome.rs:{signature} must not name {hand_rolled} itself; delta_tone owns that mapping"
+        );
+    }
+    assert!(
+        !body.contains("sign.pick("),
+        "chrome/terminal_chrome.rs:{signature} must not hand-roll a sign.pick(..) tone selection"
+    );
+}
+
+/// The header's core pill must size its in-flow trigger height with the same fit triple as the
+/// Small buttons beside it — `design::fit_h_value(cx, SEL_H, 14.0, 6.0)` — never a flat
+/// `design::ui_value(cx, SEL_H)`.
+///
+/// The future edit this pins against: reverting to `design::ui_value(cx, SEL_H)`, which looks
+/// equivalent and is the more obvious of the two calls, and is what the tree ships today.
+/// MoonUI's `ToolbarCompact`/`Action` buttons resolve through `fit_height(26,14,6)` and land at 29
+/// at the default +3 font delta and 32 at +6, while a flat `ui_value(26)` stays 26 — the pill
+/// would then sit 3-6px shorter than every neighbour in the same band.
+#[test]
+fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
+    let source = read_src("chrome/terminal_chrome.rs");
+    let signature = "fn core_selector(";
+    assert_eq!(
+        source.matches(signature).count(),
+        1,
+        "`{signature}` must name exactly one core-pill builder"
+    );
+    let body = code_only(braced_body(&source, signature));
+
+    assert!(
+        body.contains("design::fit_h_value(cx, SEL_H, 14.0, 6.0)"),
+        "chrome/terminal_chrome.rs:{signature} must size the pill trigger with fit_h_value(cx, SEL_H, 14.0, 6.0)"
+    );
+    assert!(
+        !body.contains("design::ui_value(cx, SEL_H)"),
+        "chrome/terminal_chrome.rs:{signature} must not fall back to a flat ui_value(cx, SEL_H)"
+    );
+}
+
+/// Every toolbar readout that can be absent — Lev, the exchange max-order figure, and SL — must
+/// resolve its colour through `design::readout_color`, never a bare `p.text` that renders a live
+/// figure and an unreported "–" the same weight (the whole of acceptance item A2).
+///
+/// The future edit this pins against: a call site reverting to a bare `p.text` — which is exactly
+/// what the Lev and max-order sites do today (`p.text` unconditionally, at the current
+/// `metric_button(TradeMetric::Lev, ..)` and `strip_text(max_order_value, p.text)` call forms).
+/// Counted rather than location-pinned: `pub fn toolbar` is one long builder, and grabbing its
+/// whole body survives the exact call sites moving a few lines as the implementation lands.
+#[test]
+fn toolbar_unset_readouts_resolve_their_colour_through_readout_color() {
+    let source = read_src("controls/toolbar.rs");
+    let signature = "pub fn toolbar(";
+    assert_eq!(
+        source.matches(signature).count(),
+        1,
+        "`{signature}` must name exactly one toolbar builder"
+    );
+    let body = code_only(braced_body(&source, signature));
+
+    assert_eq!(
+        body.matches("design::readout_color(").count(),
+        3,
+        "controls/toolbar.rs:{signature} must route exactly its three optional readouts (Lev, \
+         max order, SL) through design::readout_color"
+    );
+}
+
+/// The three chrome toggles — the header's Sleep toggle, the toolbar's own-trade toggle, and the
+/// SL toggle beside it — must resolve their tone through `design::chrome_toggle_tone` rather than
+/// naming a `MoonTone` inline, so "amber" keeps meaning "this one is a caution state" everywhere
+/// it appears (the whole of acceptance item A3).
+///
+/// The future edit this pins against: a fourth chrome toggle hand-passing
+/// `.tone(MoonTone::Warning)`, or one of these three dropping the call — which is what the Sleep
+/// toggle does today (`.tone(if sleeping { MoonTone::Warning } else { MoonTone::Info })` inline)
+/// and what the SL toggle does today (no `.tone(..)` call at all).
+/// The core pill's `MoonSelectorPill` builder must consume `trigger_h_units` — the DESIGN-unit
+/// value undone from the final-pixel `trigger_h` — for both `.height(..)` and `.radius(..)`, never
+/// the final-pixel `trigger_h` itself.
+///
+/// The future edit this pins against: passing `trigger_h` straight into `.radius(..)` (e.g.
+/// `.radius(trigger_h / 2.0)`). `MoonSelectorPill::radius` is itself a design-unit input scaled
+/// again at `selector.rs`'s own `tokens.ui(self.radius)`, so a final-pixel value there gets scaled
+/// twice — invisible at the default `ui_scale = 1.0`, where the double multiply is the identity,
+/// and wrong the moment anyone hand-edits the UI slider.
+#[test]
+fn core_pill_height_and_radius_use_design_units_not_final_pixels() {
+    let source = read_src("chrome/terminal_chrome.rs");
+    let signature = "fn core_selector(";
+    assert_eq!(
+        source.matches(signature).count(),
+        1,
+        "`{signature}` must name exactly one core-pill builder"
+    );
+    let body = code_only(braced_body(&source, signature));
+
+    assert!(
+        body.contains(".height(trigger_h_units)"),
+        "chrome/terminal_chrome.rs:{signature} must size the pill with the design-unit trigger_h_units"
+    );
+    assert!(
+        body.contains(".radius(trigger_h_units / 2.0)"),
+        "chrome/terminal_chrome.rs:{signature} must radius the pill from trigger_h_units, not final pixels"
+    );
+    assert!(
+        !body.contains(".radius(trigger_h / 2.0)"),
+        "chrome/terminal_chrome.rs:{signature} must not radius the pill from the final-pixel \
+         trigger_h, which MoonSelectorPill::radius would scale a second time"
+    );
+}
+
+#[test]
+fn chrome_toggles_resolve_their_tone_through_one_helper() {
+    const SITES: [(&str, &str); 3] = [
+        ("chrome/quiet.rs", "pub(crate) fn header_quiet_cluster("),
+        ("controls/toolbar.rs", "fn own_trade_toggle("),
+        ("controls/metric.rs", "pub(super) fn sl_toggle("),
+    ];
+
+    for (rel, signature) in SITES {
+        let source = read_src(rel);
+        assert_eq!(
+            source.matches(signature).count(),
+            1,
+            "{rel}: `{signature}` must name exactly one chrome toggle builder"
+        );
+        let body = code_only(braced_body(&source, signature));
+        assert!(
+            body.contains("design::chrome_toggle_tone("),
+            "{rel}:{signature} must resolve its tone through design::chrome_toggle_tone"
+        );
+    }
+}

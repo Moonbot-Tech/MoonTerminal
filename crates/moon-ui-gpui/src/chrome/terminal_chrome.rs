@@ -25,12 +25,15 @@ use crate::{Backend, design};
 ///
 /// The two branches that use it are structurally different — one is a `MoonPopover`'s trigger, the
 /// other a plain button — but the button itself must be the SAME: an icon that changed with the
-/// preference would read as a different control rather than the same one behaving differently.
+/// preference would read as a different control rather than the same one behaving differently. The
+/// tooltip names the thing it opens (core settings), not the face it opens it in — that stays
+/// right whichever branch is live.
 fn gear_trigger() -> MoonButton {
     MoonButton::new("core-gear")
         .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
         .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Panel)
+        .tooltip(t!("core_settings.title").to_string())
 }
 
 /// Compose the terminal header for one group from the current backend and shell state.
@@ -571,18 +574,12 @@ fn ticker_readout(
         })
         .unwrap_or_else(|| "BTC".to_string());
     // Each delta carries its window as a label; without one the tooltip is the only place that
-    // says which span a percentage covers.
+    // says which span a percentage covers. Colour goes through `design::delta_tone`, the ONE
+    // sign-to-colour mapping, so this readout can never drift from every other money cell.
     let delta_span = |label: String, v: f64| {
         let (text, color) = match fmt::signed_pct(v, 1) {
             // Zero renders neutral: colouring it would report movement that is not there.
-            Some((text, sign)) => (
-                text,
-                sign.pick(
-                    design::positive_color(p),
-                    design::danger_color(p),
-                    p.text_soft,
-                ),
-            ),
+            Some((text, sign)) => (text, design::delta_tone(sign).color(p)),
             None => ("—".to_string(), p.text_muted),
         };
         h_flex()
@@ -735,8 +732,9 @@ fn core_selector(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // The pill keeps a fixed height and full rounding; its content width is capped below so a long
-    // user-defined name cannot displace the header's right-hand readouts.
+    // The pill now follows the same Small `fit_h_value` triple as its neighbouring chips, so it
+    // shares one top/bottom edge with them at every font delta; its content width is still capped
+    // below so a long user-defined name cannot displace the header's right-hand readouts.
     const SEL_H: f32 = 26.0;
 
     let b = backend.read(cx);
@@ -798,7 +796,13 @@ fn core_selector(
         design::ui_value(cx, 44.0),
         |text| design::ui_text_width(cx, text, 10.5, 500.0, true),
     );
-    let trigger_h = design::ui_value(cx, SEL_H);
+    let trigger_h = design::fit_h_value(cx, SEL_H, 14.0, 6.0);
+    // `MoonSelectorPill` takes `height` and `radius` in DESIGN units and scales them by
+    // `tokens.ui()` itself, while `bounds` takes final pixels. `trigger_h` is already scaled, so
+    // undo that once here and feed the design-unit value to the two that will be scaled again —
+    // otherwise the radius is scaled twice and the pill stops being a stadium at any `ui_scale`
+    // other than the default 1.0, where the double multiply is invisible.
+    let trigger_h_units = trigger_h / design::ui_value(cx, 1.0);
 
     // The header renders continuously, but exchange discovery scans every client snapshot. Build
     // the hidden menu only after controlled open state triggers a repaint.
@@ -854,8 +858,8 @@ fn core_selector(
         .child(
             MoonSelectorPill::new("header-core-pill")
                 .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
-                .height(SEL_H)
-                .radius(SEL_H / 2.0)
+                .height(trigger_h_units)
+                .radius(trigger_h_units / 2.0)
                 .leading_dot(dot_color)
                 .disabled(auto)
                 .caret(!auto)

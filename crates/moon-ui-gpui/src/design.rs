@@ -113,6 +113,53 @@ pub fn chrome_section(cx: &App) -> Div {
         .gap(ui_px(cx, CHROME_GAP))
 }
 
+// ---- goal A: chrome group rhythm (header + toolbar) ----
+
+/// Height of [`chrome_divider`]'s rule, tall enough to read as a group boundary against the row's
+/// own chips at 100% zoom.
+///
+/// A 26px-tall chip made a 16px rule read as decoration rather than a seam; 20 of that 26 draws a
+/// rule that visibly interrupts the row instead of floating inside it. Goes through [`ui_px`], like
+/// every other chrome-strip dimension — it follows the UI slider, not the Font slider, matching
+/// [`vline`]'s own scaling rule.
+pub const CHROME_RULE_H: f32 = 20.0;
+
+/// Colour for a readout that may be empty: full `p.text` when a value is present, `p.text_muted`
+/// when it is not.
+///
+/// Without this, an absent Lev/MAX/SL readout renders a bare dash at the same weight as a live
+/// figure, so the operator cannot tell "nothing set" from "reading zero" at a glance.
+pub fn readout_color(p: MoonPalette, present: bool) -> u32 {
+    if present { p.text } else { p.text_muted }
+}
+
+/// Tone for a chrome toggle whose ON state should read as a caution rather than an ordinary
+/// affordance.
+///
+/// Mirrors `chrome/quiet.rs`'s own toggle exactly, so the sleep toggle, the own-trade toggle and
+/// the SL toggle resolve their tone from one place and cannot drift apart.
+///
+/// Two of those three pass `caution: false` and therefore land on `Info`, which is also
+/// `MoonToggle`'s own default — so those calls render identically with or without this helper
+/// today. That is the point rather than dead weight: the call is what pins the tone at the site,
+/// so a later change to the default, or to one toggle's meaning, moves all three together instead
+/// of silently splitting them.
+pub fn chrome_toggle_tone(on: bool, caution: bool) -> MoonTone {
+    if on && caution {
+        MoonTone::Warning
+    } else {
+        MoonTone::Info
+    }
+}
+
+/// Label colour for a chrome toggle whose ON state should read as a caution rather than an
+/// ordinary affordance.
+///
+/// Mirrors `chrome/quiet.rs`'s own toggle label exactly; see [`chrome_toggle_tone`].
+pub fn chrome_toggle_label_color(p: MoonPalette, on: bool, caution: bool) -> u32 {
+    if on && caution { p.amber } else { p.text_soft }
+}
+
 /// Icon standing for "which columns does this table show", on every column selector in the app.
 ///
 /// All six pickers — Orders, Figures, Assets, the Screener, the Analytics tuner list and the
@@ -1230,13 +1277,18 @@ pub fn vline(cx: &App, height: f32, color: u32) -> impl IntoElement {
 /// One definition of the chrome-height rule, so those two strips cannot drift apart, and so the
 /// height matches the separator MoonUI's own brand cluster draws.
 ///
+/// [`CHROME_RULE_H`] is 20 of a 26px-tall chip rather than a shorter hairline: at 100% zoom a rule
+/// that only spans the middle of the row reads as decoration floating inside the chips beside it,
+/// not as a seam between them. Tall enough to visibly interrupt the row's own height is what makes
+/// it read as a boundary.
+///
 /// Drawn in `border_hover` rather than `border`: against `shell_high`, `border` measures about
 /// 1.2:1 in the dark palette and 1.3:1 in the light palette. These rules are the only thing marking
 /// where one group ends and the next begins because spacing inside and between groups is identical.
 /// `border_hover` is one step stronger in both palettes (about 1.5:1 dark and 1.7:1 light), which
 /// reads as a boundary without reading as a frame.
 pub fn chrome_divider(cx: &App, p: MoonPalette) -> impl IntoElement {
-    vline(cx, 16.0, p.border_hover)
+    vline(cx, CHROME_RULE_H, p.border_hover)
 }
 
 pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {
