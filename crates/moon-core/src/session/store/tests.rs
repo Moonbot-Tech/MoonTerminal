@@ -2,8 +2,10 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use super::{BalanceState, ConnStatus, CoreData};
 use crate::feed::{
-    ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreStartupStatus,
-    CoreSysStatus, FeedMsg, OrderRow, OrderTrace, OrderTracePoint,
+    ApiKeyExpiry, ConnFault, ConnFaultKind, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
+    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
+    CoreEndpoint, CoreIdentityFacts, CoreStartupStatus, CoreSysStatus, FeedMsg, FieldMask,
+    OrderRow, OrderTrace, OrderTracePoint,
 };
 
 /// A core with the given freshness inputs; everything else stays at its default.
@@ -780,4 +782,189 @@ fn an_unchanged_quota_does_not_bump_the_revision() {
         "a new number is a change"
     );
     assert_eq!(core.api_quota, Some(1_065_400));
+}
+
+/// The projection one attempt of an edit carried, as the sequence builds it: the core's own
+/// snapshot with the edited area laid over it.
+///
+/// `drift` moves a field NO mask here names, which is what a second attempt picks up when a trader
+/// changes something in Moonbot's own dialogs between two sends of the same edit.
+fn attempt(drift: bool) -> CoreConfig {
+    let mut cfg = moonproto::shared_config::SharedConfig::default();
+    if drift {
+        // Asserted, not assumed: were this ever the wire default, the drift would be no drift and
+        // the regression tests below would pass against any implementation.
+        assert_ne!(
+            cfg.trading.multi_orders.buy_move_click, 7,
+            "the drifted value must differ from the wire default"
+        );
+        cfg.trading.multi_orders.buy_move_click = 7;
+    }
+    let mut projected = crate::feed::live::core_config_from_proto(&cfg);
+    // The edit itself, identical on every attempt.
+    projected.general.take_profit_pct = 7.5;
+    projected
+}
+
+/// One `Submitted` for that attempt, under the mask the SEND named — the union of everything
+/// queued, which is not always the mask of one user edit.
+fn submitted_with(config: CoreConfig, touched: FieldMask) -> FeedMsg {
+    FeedMsg::CoreConfigEdit(CoreConfigEditEvent::Submitted(Box::new(
+        CoreConfigEditRow {
+            phase: CoreConfigEditPhase::Pending,
+            submitted_at_ms: 0,
+            config,
+            touched,
+            mismatches: None,
+        },
+    )))
+}
+
+/// The common case: one edit of the General page.
+fn submitted(config: CoreConfig) -> FeedMsg {
+    submitted_with(config, FieldMask::EMPTY.with_general())
+}
+
+/// The core's verdict on the areas it refused.
+fn rejected() -> FeedMsg {
+    FeedMsg::CoreConfigEdit(CoreConfigEditEvent::Resolved(
+        CoreConfigEditResult::NotApplied(CoreConfigRejection::Areas(vec![CoreConfigArea::General])),
+    ))
+}
+
+/// The rejection currently on the retained row, if any.
+fn retained_rejection(cd: &CoreData) -> Option<&CoreConfigRejection> {
+    cd.core_config_edit
+        .as_ref()
+        .expect("a submitted edit is retained")
+        .mismatches
+        .as_ref()
+}
+
+/// Regression target: a RETRY of the same edit must keep the rejection it already received.
+///
+/// The row's `config` is the store's only way to ask "same edit or a new one", and the sequence
+/// fills it with the projection of the SENT PACKET — the core's snapshot with the edited area laid
+/// over it. So a field the write never named, moved on the core between two attempts, made the two
+/// projections differ, the retry read as a fresh edit, and the "the core refused these areas"
+/// notice the trader had been shown was dropped.
+#[test]
+fn a_retry_keeps_its_rejection_when_an_untouched_area_drifted() {
+    let mut cd = CoreData::new();
+
+    // Both preconditions, asserted rather than assumed: the drift must survive INTO the
+    // projection (a field dropped from `CoreConfig` would make it no drift at all), and the
+    // rejection must actually reach the row.
+    assert_ne!(
+        attempt(false),
+        attempt(true),
+        "the drift must be visible in the projection this predicate compares"
+    );
+    cd.apply(submitted(attempt(false)));
+    cd.apply(rejected());
+    assert!(
+        retained_rejection(&cd).is_some(),
+        "the rejection must reach the row first, or this test proves nothing"
+    );
+
+    // The same edit, sent again on a snapshot that drifted outside its mask.
+    cd.apply(submitted(attempt(true)));
+
+    assert!(
+        retained_rejection(&cd).is_some(),
+        "a retry of the SAME edit must keep the rejection it already received"
+    );
+}
+
+/// A send's mask is the UNION of everything queued, so it NARROWS when a coalesced batch's head is
+/// confirmed and the rest goes out again. That is the same work still in flight and must keep its
+/// verdict — mask EQUALITY would call it a different edit, and this is the commonest retry there is.
+///
+/// Unlike its neighbours this guards the new predicate's SHAPE rather than the shipped bug: the old
+/// whole-projection comparison passed it by accident, since the two submissions were identical.
+#[test]
+fn a_batch_that_narrowed_after_a_partial_apply_keeps_its_rejection() {
+    let mut cd = CoreData::new();
+
+    cd.apply(submitted_with(
+        attempt(false),
+        FieldMask::EMPTY.with_general().with_special(),
+    ));
+    cd.apply(rejected());
+
+    // The `special` half was confirmed and left the queue; the rest re-sends under what remains.
+    cd.apply(submitted_with(
+        attempt(false),
+        FieldMask::EMPTY.with_general(),
+    ));
+
+    assert!(
+        retained_rejection(&cd).is_some(),
+        "a narrowed batch is still the same work and keeps its verdict"
+    );
+}
+
+/// Scope GROWING is a new user edit joining the batch, and that starts fresh: the old verdict
+/// describes a packet which did not carry the new area.
+#[test]
+fn a_batch_that_grew_by_coalescing_starts_fresh() {
+    let mut cd = CoreData::new();
+
+    cd.apply(submitted(attempt(false)));
+    cd.apply(rejected());
+
+    cd.apply(submitted_with(
+        attempt(false),
+        FieldMask::EMPTY.with_general().with_special(),
+    ));
+
+    assert!(
+        retained_rejection(&cd).is_none(),
+        "a batch that gained an area is not a retry of the old one"
+    );
+}
+
+/// A row that already gave up describes work which LEFT the queue. A later submission repeating the
+/// same values is a new edit, and inheriting the dead one's verdict would show a refusal for a
+/// write nobody has answered yet.
+#[test]
+fn a_submission_after_a_give_up_does_not_inherit_its_verdict() {
+    let mut cd = CoreData::new();
+
+    cd.apply(submitted(attempt(false)));
+    cd.apply(rejected());
+    cd.apply(FeedMsg::CoreConfigEdit(CoreConfigEditEvent::Resolved(
+        CoreConfigEditResult::GaveUp,
+    )));
+
+    cd.apply(submitted(attempt(false)));
+
+    assert!(
+        retained_rejection(&cd).is_none(),
+        "the dead edit's verdict must not attach to a new one"
+    );
+}
+
+/// The other half of the rule: a genuinely different edit must NOT inherit the previous one's
+/// rejection, or the notice would name areas the new write never asked about.
+///
+/// It held before the mask was carried too — whole-projection equality separated these two as
+/// well — but it is NOT redundant: it is the only test that fails if the within-mask comparison is
+/// dropped, because it is the only one where two submissions differ inside the mask and nowhere
+/// else.
+#[test]
+fn a_different_edit_does_not_inherit_the_previous_rejection() {
+    let mut cd = CoreData::new();
+
+    cd.apply(submitted(attempt(false)));
+    cd.apply(rejected());
+
+    let mut other = attempt(false);
+    other.general.take_profit_pct = 9.25;
+    cd.apply(submitted(other));
+
+    assert!(
+        retained_rejection(&cd).is_none(),
+        "a fresh edit starts without a verdict"
+    );
 }

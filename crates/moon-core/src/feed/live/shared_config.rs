@@ -185,6 +185,28 @@ impl FieldMask {
         self
     }
 
+    /// Whether two projections agree on every area this mask names.
+    ///
+    /// The same comparison the echo path uses to decide "confirmed", "rejected" and "already
+    /// satisfied" — shared with the SESSION store, which needs it to tell a retry of one edit from
+    /// a different edit. Comparing whole projections there had the defect it had here: the areas an
+    /// edit never named are free to drift, and a drift is not a different edit.
+    ///
+    /// Not a predicate about the mask alone, unlike its `writes_*` neighbours: it takes two
+    /// configurations and answers about THEM.
+    pub(crate) fn agrees_within(self, a: &CoreConfig, b: &CoreConfig) -> bool {
+        rejection_within_mask(a, b, self).is_none()
+    }
+
+    /// Whether every area `other` names is also named here.
+    ///
+    /// A send's mask is the UNION of everything queued, so it NARROWS as entries leave — a batch
+    /// whose head is confirmed re-sends the rest under a smaller mask. That is still the same work
+    /// in flight, which is why the store asks for containment rather than equality.
+    pub(crate) fn contains(self, other: Self) -> bool {
+        self.union(other) == self
+    }
+
     /// Whether this mask names the `order_rules` area.
     ///
     /// For the same caller [`Self::writes_general`] serves: `deltas_by_trades` also has a
@@ -471,6 +493,7 @@ impl SharedConfigSequence {
                                 phase: CoreConfigEditPhase::Pending,
                                 submitted_at_ms: 0,
                                 config: wanted,
+                                touched,
                                 mismatches: None,
                             },
                         )));
@@ -616,7 +639,7 @@ impl SharedConfigSequence {
 /// there says nothing about whether THIS edit still has work to do. Comparing it made an OK that
 /// changed nothing send the whole snapshot whenever anything else on the core had moved since.
 fn edit_satisfied(config: &SharedConfig, wanted: &CoreConfig, touched: FieldMask) -> bool {
-    rejection_within_mask(wanted, &core_config_from_proto(config), touched).is_none()
+    touched.agrees_within(wanted, &core_config_from_proto(config))
 }
 
 /// What the echo disagreed with the terminal about, restricted to the fields `touched` actually
@@ -692,7 +715,12 @@ fn rejection_within_mask(
 }
 
 /// Project the settings the terminal renders out of a full safe-share snapshot.
-pub(super) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
+///
+/// `pub(crate)` rather than `pub(super)` for one reason: [`CoreConfig`] deliberately has no
+/// `Default`, so this is the only way to build one, and the store's own tests need a projection to
+/// drive its edit-row rules with. It stays crate-internal — the UI receives projections, it does
+/// not make them.
+pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let a = &cfg.trading.auto_start;
     let a2 = &cfg.trading.auto_start_2;
     let b = &cfg.visual.blink_config;
