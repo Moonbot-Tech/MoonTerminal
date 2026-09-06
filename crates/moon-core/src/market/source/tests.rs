@@ -319,3 +319,78 @@ fn a_broken_rate_does_not_take_the_countdown_with_it() {
     assert_eq!(pct, None);
     assert_eq!(at_ms, Some(1_756_000_000_000));
 }
+
+/// The venue's minimum is one figure in MONEY, whatever unit the market's quantity counts.
+///
+/// Regression target, 2026-09-06: Gate's `STONKS_USDT` reports `min_qty=1000` — one 1000-coin
+/// contract, about $17.70 at 0.0177 — and the order path compared a trader's `$200` against that
+/// `1000` as if both were the same unit, refusing eight orders in a row while Moonbot placed $120
+/// ones on the same contract.
+#[test]
+fn the_venue_minimum_is_one_money_figure_for_both_units() {
+    use MarketQuantityUnit::{Coins, Contracts};
+
+    // GateF STONKS_USDT: `max(step, 1000) * 0.0177` in a USDT quote, which is USD one for one. The
+    // coin count never reaches the comparison — $200 clears a $17.70 floor.
+    let floor = min_order_floor(Coins, 1000.0, 17.7, Some(1.0)).expect("a priced lot has a floor");
+    assert!((floor - 17.7).abs() < 1e-9);
+    assert!(200.0 > floor, "the order that was refused");
+    // BB1 VELVETUSDT: 10 coins at 0.0712 is $0.71, floored by the exchange's $5 min_notional —
+    // which the lot value already carries and the coin minimum alone would have missed.
+    assert_eq!(min_order_floor(Coins, 10.0, 5.0, Some(1.0)), Some(5.0));
+    // A quote currency that is not the dollar is converted, not assumed.
+    assert_eq!(
+        min_order_floor(Coins, 1.0, 0.5, Some(60_000.0)),
+        Some(30_000.0)
+    );
+
+    // Coin-margined: a contract is denominated in quote currency, so the floor is the count times
+    // one contract's value — no rate, no price, and never below one whole contract, which cannot be
+    // split. SOLUSD_260925 is $10 a contract; BTCUSD_PERP $100.
+    assert_eq!(min_order_floor(Contracts(10.0), 1.0, 0.0, None), Some(10.0));
+    assert_eq!(
+        min_order_floor(Contracts(100.0), 0.0, 0.0, None),
+        Some(100.0)
+    );
+    assert_eq!(min_order_floor(Contracts(10.0), 3.0, 0.0, None), Some(30.0));
+    // A broken count must not take the floor down with it: an infinite `min_qty` would multiply
+    // out to infinity and be discarded as "no floor at all", letting through what one contract
+    // would have stopped.
+    assert_eq!(
+        min_order_floor(Contracts(10.0), f64::INFINITY, 0.0, None),
+        Some(10.0)
+    );
+    assert_eq!(
+        min_order_floor(Contracts(10.0), f64::NAN, 0.0, None),
+        Some(10.0)
+    );
+    // Its lot value is coin-priced and must never be reached for: on `BTCUSD_PERP` it reads about
+    // $60 000 where one contract is $100.
+    assert_eq!(
+        min_order_floor(Contracts(100.0), 1.0, 60_000.0, Some(1.0)),
+        Some(100.0)
+    );
+
+    // NOT KNOWN is `None`, and the caller must not block on it: the exchange rejects an undersized
+    // order itself, whereas a floor invented from figures that have not arrived refuses orders the
+    // venue would have taken.
+    assert_eq!(
+        min_order_floor(Coins, 1000.0, 17.7, None),
+        None,
+        "unpriceable quote"
+    );
+    assert_eq!(
+        min_order_floor(Coins, 1000.0, 0.0, Some(1.0)),
+        None,
+        "no price tick yet"
+    );
+    assert_eq!(min_order_floor(Coins, 0.0, -5.0, Some(1.0)), None);
+    assert_eq!(min_order_floor(Coins, 0.0, f64::NAN, Some(1.0)), None);
+    assert_eq!(min_order_floor(Coins, 0.0, 17.7, Some(f64::NAN)), None);
+    assert_eq!(min_order_floor(Coins, 0.0, 17.7, Some(0.0)), None);
+    assert_eq!(
+        min_order_floor(Coins, 0.0, f64::MAX, Some(f64::MAX)),
+        None,
+        "overflow is not a floor"
+    );
+}
