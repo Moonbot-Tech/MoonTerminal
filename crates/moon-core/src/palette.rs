@@ -37,3 +37,9 @@ pub const RED: [u8; 3] = [0xff, 0x4a, 0x4a];
 pub const ORANGE: [u8; 3] = [0xff, 0x8e, 0x5a];
 /// `--tp`: light blue for take-profit.
 pub const TP: [u8; 3] = [0x7f, 0xc9, 0xff];
+
+/// Rising candle, shared by both chart themes: a desaturated teal that carries on the dark
+/// background and on white alike, instead of a saturated primary green.
+pub const CANDLE_UP: [u8; 3] = [0x26, 0xa6, 0x9a];
+/// Falling candle, shared by both chart themes: a soft coral red rather than pure `#FF0000`.
+pub const CANDLE_DOWN: [u8; 3] = [0xef, 0x53, 0x50];
