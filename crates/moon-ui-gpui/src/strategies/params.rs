@@ -510,6 +510,13 @@ impl StrategiesView {
         // Capture the complete visible draft set in the rendered Apply button. If the singleton
         // workspace moves before its callback runs, `apply_field_edits` rejects this plan whole.
         let apply_plan = Arc::new(self.field_edit_plan(cx));
+        // What Apply will actually land: drafts the core would refuse are not part of it.
+        let sendable = {
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            self.sendable_field_edits(apply_plan.edit_keys(), store)
+                .len()
+        };
         // Two-item switch between per-section and full mode, built per the pinned MoonUI source:
         // `on_click` takes a plain indexed `Fn`, not a `cx.listener`.
         let mode_view = cx.entity();
@@ -551,19 +558,25 @@ impl StrategiesView {
                             .child(count),
                     )
                     .when(dirty > 0, |row| {
-                        row.child(
-                            MoonButton::new("strat-fields-apply")
-                                .success()
-                                .size(MoonButtonSize::Micro)
-                                .label(t!("strat.fields_apply", n = dirty).to_string())
-                                .on_click({
-                                    let apply_plan = apply_plan.clone();
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.apply_field_edits(apply_plan.as_ref(), cx)
+                        // Apply counts what the plan will actually send, which excludes every
+                        // draft the core would refuse: promising "Apply 3" and landing 2 is the
+                        // silence this change exists to end. Revert stays on the full draft count,
+                        // because a refused draft is exactly what one wants to take back.
+                        row.when(sendable > 0, |row| {
+                            row.child(
+                                MoonButton::new("strat-fields-apply")
+                                    .success()
+                                    .size(MoonButtonSize::Micro)
+                                    .label(t!("strat.fields_apply", n = sendable).to_string())
+                                    .on_click({
+                                        let apply_plan = apply_plan.clone();
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.apply_field_edits(apply_plan.as_ref(), cx)
+                                        })
                                     })
-                                })
-                                .render(),
-                        )
+                                    .render(),
+                            )
+                        })
                         .child(
                             MoonButton::new("strat-fields-revert")
                                 .ghost()
@@ -901,8 +914,17 @@ impl StrategiesView {
         // field needs its diff arrow stacked vertically rather than beside a control it cannot
         // share a line with.
         let stacked = is_memo_field(f, &value);
-        let control: AnyElement = match f.ui {
-            SchemaFieldUi::Checkbox => {
+        // Computed here, before `value` moves into a control: text the core would refuse to store
+        // paints the input red, and `sendable_field_edits` keeps it out of Apply, so it says so
+        // instead of accepting the press and quietly restoring the old value. Only a DRAFT can be
+        // rejected — a value the core itself holds is not the user's to answer for, and a core that
+        // reports a `NaN` would otherwise paint an untouched row red for good. A mixed selection's
+        // empty control is not a draft either.
+        let rejected = dirty && !differ && draft_rejected(f, &value);
+        // ONE control table, shared with `draft_rejected` through `field_control`: the marker has
+        // to know which rows are free text, and a second copy of this decision would drift.
+        let control: AnyElement = match field_control(f) {
+            FieldControl::Checkbox => {
                 let on = is_on(&value);
                 let keys = keys.to_vec();
                 let field = field_name.clone();
@@ -923,7 +945,7 @@ impl StrategiesView {
             }
             // A color field combines a hex input with a clickable palette swatch, exposing the
             // actual color and palette selection rather than only a color index.
-            SchemaFieldUi::Color => {
+            FieldControl::Color => {
                 let keys_arc = Arc::new(keys.to_vec());
                 let state = self.field_input_state(
                     row_id.clone(),
@@ -962,7 +984,7 @@ impl StrategiesView {
                     )
                     .into_any_element()
             }
-            SchemaFieldUi::Combo if !f.picklist.is_empty() => {
+            FieldControl::Picklist => {
                 let mut items = Vec::with_capacity(f.picklist.len());
                 for option in &f.picklist {
                     let option_value = option.clone();
@@ -1094,7 +1116,11 @@ impl StrategiesView {
                         MoonInput::new(SharedString::from(format!("field-input-{row_id}")))
                             .state(&state)
                             .small()
-                            .tone(if differ || matches!(f.ui, SchemaFieldUi::Color) {
+                            // No colour case here: a colour field draws its own input in the arm
+                            // above, so this one only ever renders free text.
+                            .tone(if rejected {
+                                MoonTone::Danger
+                            } else if differ {
                                 MoonTone::Warning
                             } else {
                                 MoonTone::Info

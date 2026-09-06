@@ -19,7 +19,18 @@ pub(super) struct FieldEditPlan {
     workspace_generation: Option<u64>,
     targets: Vec<Key>,
     edit_keys: Vec<FieldEditKey>,
+    /// The grouped payload, and with it the VALUES: `edit_keys` names the fields, so this is what
+    /// makes the pre-dispatch `captured == current` comparison notice a retyped value. Dispatch
+    /// regroups the sendable subset rather than sending this.
     actions: Vec<(CoreId, Vec<(u64, Vec<(String, String)>)>)>,
+}
+
+impl FieldEditPlan {
+    /// The drafts this plan covers, for a caller that must narrow them (see
+    /// [`StrategiesView::sendable_field_edits`]).
+    pub(super) fn edit_keys(&self) -> &[FieldEditKey] {
+        &self.edit_keys
+    }
 }
 
 /// Return whether every captured target still belongs to the same workspace generation.
@@ -236,11 +247,28 @@ impl StrategiesView {
         targets.sort_unstable();
         targets.dedup();
 
+        let actions = self.group_field_edits(&edit_keys);
+        FieldEditPlan {
+            workspace_generation: self.action_workspace_generation(cx),
+            targets,
+            edit_keys,
+            actions,
+        }
+    }
+
+    /// Group the given draft keys into the per-core payload the feed command carries.
+    ///
+    /// Shared by the captured plan and by dispatch, which groups a SUBSET of the same drafts, so
+    /// the two cannot order or group one strategy's fields differently.
+    fn group_field_edits(
+        &self,
+        keys: &[FieldEditKey],
+    ) -> Vec<(CoreId, Vec<(u64, Vec<(String, String)>)>)> {
         let mut grouped: std::collections::BTreeMap<
             CoreId,
             std::collections::BTreeMap<u64, Vec<(String, String)>>,
         > = std::collections::BTreeMap::new();
-        for (core, id, field) in &edit_keys {
+        for (core, id, field) in keys {
             let Some(value) = self.field_edits.get(&(*core, *id, field.clone())) else {
                 continue;
             };
@@ -251,16 +279,49 @@ impl StrategiesView {
                 .or_default()
                 .push((field.clone(), value.clone()));
         }
-        let actions = grouped
+        grouped
             .into_iter()
             .map(|(core, strategies)| (core, strategies.into_iter().collect()))
-            .collect();
-        FieldEditPlan {
-            workspace_generation: self.action_workspace_generation(cx),
-            targets,
-            edit_keys,
-            actions,
-        }
+            .collect()
+    }
+
+    /// The drafts among `keys` that the core would actually accept.
+    ///
+    /// Borrowed, not cloned, because the params header calls this every frame only to count them.
+    ///
+    /// The rejection test needs live store state (a draft is keyed by field NAME, and only the
+    /// strategy's own kind says what type that name has), so it deliberately stays OUT of
+    /// [`Self::field_edit_plan`]: the captured plan is compared with a fresh one before dispatch,
+    /// and a schema that came or went between the render and the click would fail that comparison
+    /// and drop the press with no explanation. Applied at dispatch instead, a store change costs
+    /// nothing but the accuracy of one button label for one frame.
+    pub(super) fn sendable_field_edits<'a>(
+        &'a self,
+        keys: &'a [FieldEditKey],
+        store: &CoreStore,
+    ) -> Vec<&'a FieldEditKey> {
+        let kinds = kind_ordinals(store, keys.iter().map(|(core, id, _)| (*core, *id)));
+        // The schema lookup is memoized, the verdict is NOT: drafts of one multi-selection share a
+        // field name but need not share its text, and judging the second by the first would let one
+        // row's typo decide for another.
+        let mut fields: HashMap<(CoreId, u8, &str), Option<&SchemaField>> = HashMap::new();
+        keys.iter()
+            .filter(|key| {
+                let (core, id, name) = key;
+                let Some(text) = self.field_edits.get(*key) else {
+                    return false;
+                };
+                // A strategy or a kind this store cannot resolve is not judged here: the sender
+                // still has the snapshot's own value type to go on.
+                let Some(ord) = kinds.get(&(*core, *id)).copied() else {
+                    return true;
+                };
+                let field = *fields
+                    .entry((*core, ord, name.as_str()))
+                    .or_insert_with(|| schema_field_in_kind(store, *core, ord, name));
+                !field.is_some_and(|f| draft_rejected(f, text))
+            })
+            .collect()
     }
 
     /// Dispatch one exact field-edit plan and retain every draft hidden by the current scope.
@@ -293,8 +354,26 @@ impl StrategiesView {
         } {
             return;
         }
+        // Drafts the core would refuse are dropped HERE rather than in the captured plan: sending
+        // one costs the typed text and changes nothing, which is the very "my value did not
+        // arrive" this path exists to prevent. Keeping them staged leaves the row red, revertable,
+        // and correctable.
+        let sendable: Vec<FieldEditKey> = {
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            self.sendable_field_edits(&plan.edit_keys, store)
+                .into_iter()
+                .cloned()
+                .collect()
+        };
+        // Every draft refused: there is nothing to send, and clearing the editor cache would take
+        // the caret out of the one field the user still has to correct.
+        if sendable.is_empty() {
+            return;
+        }
+        let actions = self.group_field_edits(&sendable);
         let b = self.backend.read(cx);
-        for (core, edits) in &plan.actions {
+        for (core, edits) in &actions {
             if let Err(error) = b.session.edit_strategies(*core, edits.clone()) {
                 log::warn!("edit strategies failed: {error}");
                 return;
@@ -305,8 +384,7 @@ impl StrategiesView {
         // tiers in `logic::edited_field_value`) instead of vanishing until the next echo. This
         // function deliberately raises no notification and keeps no intent map of its own — GitHub
         // issue #328 proposed re-adding one; that hand-rolled tracking is what this design replaces.
-        self.field_edits
-            .retain(|key, _| !plan.edit_keys.contains(key));
+        self.field_edits.retain(|key, _| !sendable.contains(key));
         self.clear_field_editor_cache();
         cx.notify();
     }

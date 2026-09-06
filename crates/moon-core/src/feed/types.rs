@@ -561,7 +561,9 @@ pub enum SchemaFieldUi {
 pub struct SchemaField {
     pub name: String,
     /// Type name from the core schema, such as `Bool`, `Int32`, `Double`, or `String`. The UI uses
-    /// it to avoid rendering numeric fields as multiline memos; see `is_memo_field`.
+    /// it to avoid rendering numeric fields as multiline memos (see `is_memo_field`) and to decide
+    /// whether typed text is a value this field can hold at all (see
+    /// [`field_text_is_valid`](crate::feed::field_text_is_valid)).
     pub type_name: String,
     pub ui: SchemaFieldUi,
     /// Static value list used to populate the field's Combo editor.

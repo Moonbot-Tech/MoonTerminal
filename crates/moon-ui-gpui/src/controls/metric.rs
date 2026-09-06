@@ -398,7 +398,17 @@ fn limit_note(text: String, p: MoonPalette, cx: &App) -> impl IntoElement {
 /// Returns:
 ///     The parsed leverage, or zero when the field is not a valid number.
 fn current_lev(input: &Entity<MoonInputState>, cx: &App) -> f32 {
-    input.read(cx).value().trim().parse::<f32>().unwrap_or(0.0)
+    lev_input(input, cx).unwrap_or(0.0) as f32
+}
+
+/// The number the leverage field holds, read the ONE way for both the over-limit caption and Apply.
+///
+/// Through the crate's shared [`crate::shell::parse_num`], so a decimal comma reads as a dot here
+/// as it does everywhere else a number is typed, and `nan`/`inf` — which Rust parses happily — are
+/// refused rather than compared against an exchange cap. Apply then requires a WHOLE number on top
+/// of this, since leverage is integral; the caption deliberately describes what was typed.
+fn lev_input(input: &Entity<MoonInputState>, cx: &App) -> Option<f64> {
+    crate::shell::parse_num(&input.read(cx).value())
 }
 
 /// Base width of a metric popup's content — slider, field, checkboxes.
@@ -846,7 +856,14 @@ pub fn metric_popup_content(
                 .size(MoonButtonSize::ToolbarCompact)
                 .full_width()
                 .on_click(move |_, _w, app| {
-                    let Ok(v) = input.read(app).value().trim().parse::<i32>() else {
+                    // Leverage is whole: a fraction is refused rather than truncated, the same
+                    // rule the strategy fields follow for an integer parameter. The range is the
+                    // one `parse::<i32>()` accepted before, endpoints included.
+                    let Some(v) = lev_input(&input, app)
+                        .filter(|v| v.fract() == 0.0)
+                        .filter(|v| (i32::MIN as f64..=i32::MAX as f64).contains(v))
+                        .map(|v| v as i32)
+                    else {
                         return;
                     };
                     let b = backend.read(app);
