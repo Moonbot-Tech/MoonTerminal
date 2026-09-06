@@ -225,7 +225,7 @@ impl StrategiesView {
         let locale = rust_i18n::locale();
         let locale: &str = &locale;
         let metrics =
-            design::text_metrics_key(cx, design::ACTION_LABEL_BASE, FOOTER_LABEL_WEIGHT, true);
+            design::text_metrics_key(cx, design::ACTION_LABEL_BASE, FOOTER_LABEL_WEIGHT, false);
         // Compared field by field rather than against a freshly built key: owning the locale means
         // allocating it, and doing that on a HIT would put a per-frame allocation in the one path
         // this module exists to keep empty.
@@ -334,11 +334,14 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
             label,
             design::ACTION_LABEL_BASE,
             FOOTER_LABEL_WEIGHT,
-            true,
+            false,
         )
     })
     .sum();
     if staged > 0 {
+        // MONO, unlike the action labels summed above: `strat.staged` welds its label to a COUNT
+        // in one locale string, so `staged_slot` keeps the data face while the rest of the footer
+        // reads in the UI face. This term measures the family that slot actually draws.
         width += design::ui_text_width(
             cx,
             &t!("strat.staged", n = staged),

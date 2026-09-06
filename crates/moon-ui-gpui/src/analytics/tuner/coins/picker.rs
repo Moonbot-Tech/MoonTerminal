@@ -437,6 +437,7 @@ impl AnalyticsView {
                     (
                         div()
                             .w_full()
+                            .font_family(design::ui_font())
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
                             .child(if picked_any {

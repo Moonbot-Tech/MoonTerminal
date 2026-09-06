@@ -152,8 +152,11 @@ fn settings_content_width(cx: &App) -> f32 {
         &t!(SETTINGS_TITLE),
         tokens.typography.mono_font_size,
         400.0,
-        true,
+        false,
     );
+    // `MoonGroupBox::title()` hardcodes `MoonText::new(..).mono(true)` in MoonUI (group_box.rs)
+    // with no builder override — this caption stays mono no matter what the popup root does, so
+    // the measurement stays mono too.
     let group_width = design::ui_text_width(
         cx,
         &t!(DISPLAY_GROUP),
@@ -196,6 +199,7 @@ fn settings_content(
     v_flex()
         .id("assets-wallets-settings-popup")
         .w_full()
+        .font_family(design::ui_font())
         .gap(design::ui_px(cx, 8.0))
         .child(
             h_flex()

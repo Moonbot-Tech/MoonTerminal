@@ -517,6 +517,12 @@ fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> 
     );
     div()
         .id("header-workspace-mode-tip")
+        // No family is set here on purpose. The mode name IS a caption and the rule would move it
+        // to the UI face, but `MoonDropdown` forces its trigger mono -- `DROPDOWN_TRIGGER_MONO`
+        // (MoonUI `moon/dropdown.rs:27`) reaches both the render (`dropdown/trigger.rs:494`) and
+        // the fitted-label measurement (`:471`, `:516`), with no builder override. Setting the
+        // family on this wrapper could not reach the trigger, so it would leave a font call that
+        // does nothing behind a comment claiming otherwise.
         .tooltip(crate::panels::common::text_tooltip(tooltip))
         .child(
             MoonDropdown::new("header-workspace-mode")

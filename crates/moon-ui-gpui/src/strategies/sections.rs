@@ -119,7 +119,8 @@ impl StrategiesView {
     /// Measure the longest selected runtime section title for responsive first-run layout.
     ///
     /// The localized panel heading is the fallback when no selected runtime schema is available.
-    /// Measurement matches the monospaced body text inherited by section rows.
+    /// Section titles render as the clickable caption of a table-of-contents row, so this measures
+    /// them in the UI face they actually render in.
     ///
     /// Args:
     ///     store: Live core store containing the selected strategy schema.
@@ -133,7 +134,7 @@ impl StrategiesView {
                 sections
                     .iter()
                     .map(|section| {
-                        design::mono_body_text_width(
+                        design::ui_body_text_width(
                             cx,
                             &section_display_title(&section.title),
                             400.0,
@@ -142,7 +143,7 @@ impl StrategiesView {
                     .reduce(f32::max)
             })
             .unwrap_or_else(|| {
-                design::mono_body_text_width(cx, &t!("strat.sections").to_string(), 600.0)
+                design::ui_body_text_width(cx, &t!("strat.sections").to_string(), 600.0)
             })
     }
 
@@ -174,6 +175,7 @@ impl StrategiesView {
             .gap(design::ui_px(cx, 7.0))
             .child(
                 div()
+                    .font_family(design::ui_font())
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("strat.sections").to_string()),
             )
@@ -183,13 +185,22 @@ impl StrategiesView {
         // right already says so. Repeating the sentence here made the window ask the same question
         // twice side by side, so the column keeps its heading and stays otherwise empty.
         let Some(sections) = selected_sections(self, store) else {
-            return col.into_any_element();
+            return col
+                .child(
+                    div()
+                        .mt_2()
+                        .font_family(design::ui_font())
+                        .text_color(moon(p.text_muted))
+                        .child(t!("strat.no_selection").to_string()),
+                )
+                .into_any_element();
         };
         if sections.is_empty() {
             return col
                 .child(
                     div()
                         .mt_2()
+                        .font_family(design::ui_font())
                         .text_color(moon(p.text_muted))
                         .child(t!("strat.no_schema").to_string()),
                 )
@@ -216,6 +227,7 @@ impl StrategiesView {
             };
             let on_all = self.versions.section.is_none();
             let mut all_row = row_base("sec-ver-all".into(), cx)
+                .font_family(design::ui_font())
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(moon(p.text))
                 .child(t!("strat.sections_all").to_string())
@@ -257,6 +269,7 @@ impl StrategiesView {
                 }
                 let on = self.versions.section == Some(i);
                 let mut row = row_base(SharedString::from(format!("sec-ver-{i}")), cx)
+                    .font_family(design::ui_font())
                     .text_color(moon(p.text))
                     // The count badge beside it cannot shrink, and a Russian section name is
                     // half again as long as the schema's own: without this the title paints
@@ -335,6 +348,7 @@ impl StrategiesView {
                 .flex()
                 .items_center()
                 .cursor_pointer()
+                .font_family(design::ui_font())
                 .text_color(moon(tcol))
                 // The pane is user-resizable down to a width no Russian section name fits, so the
                 // caption degrades to an ellipsis rather than spilling into the splitter.

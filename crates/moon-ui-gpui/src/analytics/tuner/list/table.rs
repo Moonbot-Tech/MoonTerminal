@@ -102,6 +102,7 @@ impl AnalyticsView {
                     let note = div()
                         .w_full()
                         .p(design::ui_px(cx, 18.0))
+                        .font_family(design::ui_font())
                         .text_center()
                         .text_color(moon(p.text_muted))
                         .child(t!("analytics.strat.no_match").to_string());
@@ -192,6 +193,9 @@ impl AnalyticsView {
                     .py(design::ui_px(cx, 8.0))
                     .items_center()
                     .gap(design::ui_px(cx, 8.0))
+                    // Title, mode buttons and the trailing counter are all prose — no data value
+                    // sits in this row.
+                    .font_family(design::ui_font())
                     .child(
                         div()
                             .flex_none()

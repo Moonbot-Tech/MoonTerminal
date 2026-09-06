@@ -722,6 +722,7 @@ impl Render for DetectsPanel {
                 .justify_center()
                 .px_3()
                 .py_2()
+                .font_family(crate::design::ui_font())
                 .text_size(crate::design::t_body(cx))
                 .text_color(rgb(p.text_soft))
                 .child(

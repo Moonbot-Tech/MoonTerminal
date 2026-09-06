@@ -438,20 +438,22 @@ impl AnalyticsView {
             .child(self.strat_type_menu(cx))
             .child(self.strat_lists_menu(cx))
             .child(
-                MoonCheckbox::new("an-strat-active")
-                    .checked(self.strat_active_only)
-                    .size(MoonCheckboxSize::Compact)
-                    .label(t!("analytics.strat.active_only").to_string())
-                    .on_change({
-                        let view = cx.entity();
-                        move |ch: &bool, _w, app| {
-                            let on = *ch;
-                            view.update(app, |this, cx| {
-                                this.strat_active_only = on;
-                                cx.notify();
-                            });
-                        }
-                    }),
+                div().font_family(design::ui_font()).child(
+                    MoonCheckbox::new("an-strat-active")
+                        .checked(self.strat_active_only)
+                        .size(MoonCheckboxSize::Compact)
+                        .label(t!("analytics.strat.active_only").to_string())
+                        .on_change({
+                            let view = cx.entity();
+                            move |ch: &bool, _w, app| {
+                                let on = *ch;
+                                view.update(app, |this, cx| {
+                                    this.strat_active_only = on;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
             )
             .child(self.strat_column_menu(cx))
             .into_any_element()

@@ -353,21 +353,33 @@ impl AssetsView {
                     let input = content_view.read(cx).transfer_input.clone();
                     let mut body = v_flex()
                         .gap(design::ui_px(cx, 10.0))
-                        .font_family(design::mono())
+                        .font_family(design::ui_font())
                         .child(
+                            // MIXED NODE: `assets.transfer_title` combines the coin ticker and
+                            // the from/to wallet names with the sentence in one text node
+                            // (locales/assets.yml:253-256) — stays mono.
                             div()
+                                .font_family(design::mono())
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(p.text))
                                 .child(title.clone()),
                         )
                         .child(
+                            // MIXED NODE: `assets.free` combines the label with the figure in one
+                            // text node (locales/assets.yml:257-260) — stays mono.
                             div()
+                                .font_family(design::mono())
                                 .text_size(design::t_body(cx))
                                 .text_color(rgb(p.text_muted))
                                 .child(t!("assets.free", n = num(pending.free)).to_string()),
                         );
                     if let Some(input) = input {
-                        body = body.child(MoonInput::new("transfer-amount").state(&input).small());
+                        body = body.child(
+                            MoonInput::new("transfer-amount")
+                                .state(&input)
+                                .small()
+                                .mono(true),
+                        );
                     }
                     content.child(body)
                 })

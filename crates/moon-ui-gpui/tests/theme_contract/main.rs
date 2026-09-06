@@ -20,6 +20,7 @@ mod core_pick;
 mod core_status;
 mod detects;
 mod dock_chrome;
+mod fonts;
 mod log;
 mod naming;
 mod report;

@@ -699,6 +699,7 @@ impl StrategiesView {
                 .child(div().w_full().h(px(1.0)).bg(border))
                 .child(
                     div()
+                        .font_family(design::ui_font())
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.text_muted))
                         .child(t!("strat.versions_history").to_string()),
@@ -877,7 +878,7 @@ impl StrategiesView {
         // away (defect 5, and it must be unlosable).
         if let (Some(vf), true) = (self.versions.sel, live_exists) {
             let compact =
-                design::mono_body_text_width(cx, &t!("strat.version_restore").to_string(), 400.0)
+                design::ui_body_text_width(cx, &t!("strat.version_restore").to_string(), 400.0)
                     + 40.0
                     > self.panels.versions_w - design::ui_value(cx, VERSIONS_PANE_PADDING * 2.0);
             col = col.child(
@@ -885,6 +886,7 @@ impl StrategiesView {
                     .flex_none()
                     .w_full()
                     .pt(design::ui_px(cx, 6.0))
+                    .font_family(design::ui_font())
                     .child(self.version_restore_button(vf, compact, cx)),
             );
         }

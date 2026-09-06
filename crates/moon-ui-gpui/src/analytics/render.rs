@@ -168,6 +168,7 @@ impl Render for AnalyticsView {
                                 .bg(moon(p.panel_high))
                                 .border_1()
                                 .border_color(moon(p.border))
+                                .font_family(design::ui_font())
                                 .text_size(design::t_body(cx))
                                 .text_color(moon(p.text_soft))
                                 .child(t!("common.loading").to_string()),

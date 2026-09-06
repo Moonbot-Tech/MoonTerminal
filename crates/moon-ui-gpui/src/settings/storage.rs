@@ -228,6 +228,7 @@ impl SettingsView {
                     .child(div().font_bold().child(t!("storage.data_dir").to_string()))
                     .child(
                         div()
+                            .font_family(design::mono())
                             .text_color(muted)
                             .child(paths::db_dir().display().to_string()),
                     )
@@ -245,23 +246,32 @@ impl SettingsView {
                             .render(),
                     ),
             )
-            .child(hint(
-                t!("storage.total_size", size = fmt_size(total)).to_string(),
-            ))
+            // MIXED NODE: `storage.total_size` combines the localized "Total:" label with the
+            // figure in one text node (locales/storage.yml:22-25) — cannot style half of it, so
+            // it stays mono.
+            .child(
+                hint(t!("storage.total_size", size = fmt_size(total)).to_string())
+                    .font_family(design::mono()),
+            )
             .child(separator(p, cx))
             // ── Reports ─────────────────────────────────────────────────────
             .child(section(&t!("storage.reports_title"), p, cx))
-            .child(hint(format!(
-                "{} · {}",
-                size_line(info.reports),
-                match &info.report_rows {
-                    Some(Ok(rows)) => t!("storage.reports_rows", rows = rows).to_string(),
-                    // A missing replica and a pending snapshot are non-errors,
-                    // but neither is evidence of zero rows.
-                    Some(Err(moon_core::db::ReadFail::NotReady)) | None => "—".to_string(),
-                    Some(Err(_)) => t!("common.db_read_failed_short").to_string(),
-                }
-            )))
+            // MIXED NODE: `size_line` and `storage.reports_rows` each combine a localized label
+            // with a figure in one text node (locales/storage.yml:22-25, 43-46) — stays mono.
+            .child(
+                hint(format!(
+                    "{} · {}",
+                    size_line(info.reports),
+                    match &info.report_rows {
+                        Some(Ok(rows)) => t!("storage.reports_rows", rows = rows).to_string(),
+                        // A missing replica and a pending snapshot are non-errors,
+                        // but neither is evidence of zero rows.
+                        Some(Err(moon_core::db::ReadFail::NotReady)) | None => "—".to_string(),
+                        Some(Err(_)) => t!("common.db_read_failed_short").to_string(),
+                    }
+                ))
+                .font_family(design::mono()),
+            )
             .child(
                 h_flex().child(
                     tool_btn("reports-compact", t!("storage.compact").to_string(), busy)
@@ -293,16 +303,20 @@ impl SettingsView {
                     })),
             )
             .child(hint(t!("storage.strategies_enabled_hint").to_string()))
-            .child(hint(format!(
-                "{} · {}",
-                size_line(info.strategies),
-                t!(
-                    "storage.strategies_rows",
-                    live = info.strat_live,
-                    deleted = info.strat_deleted,
-                    versions = info.strat_versions
-                )
-            )))
+            // MIXED NODE: same as the reports readout above — stays mono.
+            .child(
+                hint(format!(
+                    "{} · {}",
+                    size_line(info.strategies),
+                    t!(
+                        "storage.strategies_rows",
+                        live = info.strat_live,
+                        deleted = info.strat_deleted,
+                        versions = info.strat_versions
+                    )
+                ))
+                .font_family(design::mono()),
+            )
             .child(
                 h_flex()
                     .gap(design::ui_px(cx, 8.0))
@@ -353,7 +367,8 @@ impl SettingsView {
             .child(separator(p, cx))
             // ── Kline cache ─────────────────────────────────────────────────
             .child(section(&t!("storage.klines_title"), p, cx))
-            .child(hint(size_line(info.klines)))
+            // MIXED NODE: `size_line` combines label and figure — stays mono.
+            .child(hint(size_line(info.klines)).font_family(design::mono()))
             .child(hint(t!("storage.klines_hint").to_string()))
     }
 }

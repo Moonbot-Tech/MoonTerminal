@@ -611,6 +611,8 @@ impl AnalyticsView {
         // Plain buttons preserve the navigation actions' independent disabled states. Keep the
         // divider inside their group so it cannot wrap onto a line by itself.
         let nav = design::chrome_section(cx)
+            // Prev/next and the current-period readout are navigation chrome, not data.
+            .font_family(design::ui_font())
             .child(design::chrome_divider(cx, p))
             .child(nav_btn(
                 "cal-prev",
@@ -620,6 +622,11 @@ impl AnalyticsView {
             ))
             .child(
                 div()
+                    // The prev/next buttons around it are chrome, but this readout is the current
+                    // PERIOD -- a date, which the rule keeps mono. The grid below it renders its
+                    // dates mono too, and a header in the other face would disagree with the very
+                    // cells it labels.
+                    .font_family(design::mono())
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(moon(p.text))
@@ -657,6 +664,7 @@ impl AnalyticsView {
                 div()
                     .min_w_0()
                     .truncate()
+                    .font_family(design::ui_font())
                     .text_size(design::t_title(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(moon(p.text))

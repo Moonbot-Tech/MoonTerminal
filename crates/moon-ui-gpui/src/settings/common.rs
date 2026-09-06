@@ -107,6 +107,7 @@ pub(super) fn slider_row(
                             h_flex()
                                 .w_full()
                                 .justify_between()
+                                .font_family(design::mono())
                                 .text_size(design::t_caption(cx))
                                 .text_color(rgba_from(p.text_muted, 1.0))
                                 .child(min)
@@ -117,6 +118,7 @@ pub(super) fn slider_row(
                     div()
                         .w(design::font_w_px(cx, 76.0))
                         .flex_none()
+                        .font_family(design::mono())
                         .text_align(TextAlign::Right)
                         .text_color(rgba_from(p.text_muted, 1.0))
                         .child(val),

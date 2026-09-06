@@ -447,9 +447,12 @@ fn settings_content(
     cx: &App,
 ) -> AnyElement {
     // Chrome belongs to MoonPopover; a second surface here would double the popup's background.
+    // Every title, caption, and checkbox label here is prose, so the popup flips to the UI face
+    // on its own root rather than inheriting the monitor root's mono.
     v_flex()
         .id("profit-monitor-settings-popup")
         .w_full()
+        .font_family(design::ui_font())
         .gap(design::ui_px(cx, 8.0))
         .child(
             h_flex()

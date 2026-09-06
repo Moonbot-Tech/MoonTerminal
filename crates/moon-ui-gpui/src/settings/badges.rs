@@ -422,14 +422,16 @@ impl SettingsView {
                 .child(
                     MoonInput::new(SharedString::from(format!("badge-ord-{idx}")))
                         .state(&row.ordinal)
-                        .small(),
+                        .small()
+                        .mono(true),
                 ),
             )
             .child(
                 div().flex_none().w(px(120.0)).child(
                     MoonInput::new(SharedString::from(format!("badge-name-{idx}")))
                         .state(&row.name)
-                        .small(),
+                        .small()
+                        .mono(true),
                 ),
             )
             .child(active_chk)
@@ -442,7 +444,8 @@ impl SettingsView {
                 .child(
                     MoonInput::new(SharedString::from(format!("badge-code-{idx}")))
                         .state(&row.code)
-                        .small(),
+                        .small()
+                        .mono(true),
                 ),
             )
             .child(distinguish_chk)
@@ -456,7 +459,8 @@ impl SettingsView {
                     .child(
                         MoonInput::new(SharedString::from(format!("badge-codeshort-{idx}")))
                             .state(&row.code_short)
-                            .small(),
+                            .small()
+                            .mono(true),
                     ),
                 )
             })
