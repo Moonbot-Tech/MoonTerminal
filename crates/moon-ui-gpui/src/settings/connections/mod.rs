@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
 use moon_ui::{MoonColorPickerState, MoonInputEvent, MoonInputState};
+use rust_i18n::t;
 
 use super::SettingsView;
 use crate::Backend;
@@ -60,7 +61,7 @@ pub(super) struct ConnRow {
     color: Entity<MoonColorPickerState>,
 }
 
-/// The ten per-row element-id strings the row factory used to rebuild with `format!` on every
+/// The thirteen per-row element-id strings the row factory used to rebuild with `format!` on every
 /// frame. Built once in [`build_conn`] and read from thereafter, so `server_row` allocates none of
 /// them.
 ///
@@ -73,7 +74,15 @@ pub(super) struct ConnRowIds {
     pub(super) group: SharedString,
     pub(super) bundle: SharedString,
     pub(super) feed: SharedString,
+    /// Id of the interactive wrapper that carries the data cell's tooltip.
+    ///
+    /// Separate from [`Self::feed`]: `MoonDropdown` has no tooltip prop, so the tooltip lives on
+    /// a `div` around it, and gpui needs its own id for an interactive element.
+    pub(super) feed_tip: SharedString,
     pub(super) proto: SharedString,
+    /// Id of the interactive wrapper that carries the proto cell's tooltip. See
+    /// [`Self::feed_tip`].
+    pub(super) proto_tip: SharedString,
     pub(super) preset: SharedString,
     pub(super) act: SharedString,
     pub(super) win: SharedString,
@@ -117,7 +126,9 @@ impl ConnRowIds {
             group: SharedString::from(format!("group-{ident}")),
             bundle: SharedString::from(format!("bundle-{ident}")),
             feed: SharedString::from(format!("feed-{ident}")),
+            feed_tip: SharedString::from(format!("feed-tip-{ident}")),
             proto: SharedString::from(format!("proto-{ident}")),
+            proto_tip: SharedString::from(format!("proto-tip-{ident}")),
             preset: SharedString::from(format!("preset-{ident}")),
             act: SharedString::from(format!("act-{ident}")),
             win: SharedString::from(format!("win-{ident}")),
@@ -151,6 +162,8 @@ pub(super) fn sync_groups_from_servers(
 ///     i: Draft index of the server field.
 ///     row_key: Per-session identity of the owning row.
 ///     init: Initial field value.
+///     placeholder: Hint shown while the field is empty, or `None` for a field whose empty
+///         state needs no explanation.
 ///     get: Accessor for the draft field.
 ///     set: Mutator for the draft field.
 ///     sync_groups: Whether a change must synchronize draft group rows.
@@ -163,11 +176,22 @@ fn conn_input(
     i: usize,
     row_key: u64,
     init: String,
+    placeholder: Option<String>,
     get: fn(&ServerConfig) -> String,
     set: fn(&mut ServerConfig, String),
     sync_groups: bool,
 ) -> Entity<MoonInputState> {
-    let st = cx.new(|cx| MoonInputState::new(window, cx).default_value(init));
+    // The placeholder belongs on the STATE, never on the `MoonInput` builder: MoonUI applies
+    // `MoonInput::placeholder` only inside its `self.state.unwrap_or_else(..)` branch, so a
+    // widget handed an external `.state(..)` -- which every field here is -- drops it silently.
+    // That is why the "Charts" column rendered as an empty box with no hint at all.
+    let st = cx.new(|cx| {
+        let st = MoonInputState::new(window, cx).default_value(init);
+        match placeholder {
+            Some(ph) => st.placeholder(ph),
+            None => st,
+        }
+    });
     cx.subscribe(&st, move |this, emitter, ev: &MoonInputEvent, cx| {
         if matches!(ev, MoonInputEvent::Change) {
             let val = emitter.read(cx).value().to_string();
@@ -251,6 +275,9 @@ pub(super) fn build_conn(
                     i,
                     row_key,
                     s.name.clone(),
+                    // No placeholder: a nameless core is not a state worth explaining, and the
+                    // user's own text is the only thing this field ever holds.
+                    None,
                     |s| s.name.clone(),
                     |s, v| s.name = v,
                     false,
@@ -264,6 +291,7 @@ pub(super) fn build_conn(
                         i,
                         row_key,
                         s.key.expose().to_string(),
+                        Some(t!("conn.key_ph").to_string()),
                         |s| s.key.expose().to_string(),
                         |s, v| {
                             // Typing or Ctrl+V into the field fills a row's transport mode the
@@ -290,6 +318,9 @@ pub(super) fn build_conn(
                     i,
                     row_key,
                     s.group.clone(),
+                    // No placeholder: `build_conn` is only ever handed saved or pending rows
+                    // whose group defaults to "default", so the field is never empty in practice.
+                    None,
                     |s| s.group.clone(),
                     |s, v| s.group = v,
                     true,
@@ -300,6 +331,10 @@ pub(super) fn build_conn(
                     i,
                     row_key,
                     s.chart_bundle.clone(),
+                    // An empty bundle field is the DEFAULT, not an omission: the core then
+                    // follows the global chart setting. The hint is what says so, and without it
+                    // the column reads as a blank box nobody can interpret.
+                    Some(t!("conn.bundle_ph").to_string()),
                     |s| s.chart_bundle.clone(),
                     |s, v| s.chart_bundle = v,
                     false,

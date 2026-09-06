@@ -116,10 +116,33 @@ impl Render for SettingsView {
         let body = div().flex_1().min_h(px(0.0)).w_full().child(body_inner);
 
         // ── Footer: Save and status ─────────────────────────────────────────
+        // Whether Save has anything to do. TWO sources, because Save itself has two: the config
+        // draft, and the password draft that `security.rs` deliberately keeps outside `AppConfig`
+        // -- `save` applies the latter BEFORE the config write, so a password-only edit makes this
+        // very button write key slots to disk. `Some(Err(..))` counts as dirty too: the user typed
+        // a pair, Save will act on it and report the error, so "no changes" would be false there.
+        //
+        // The two are combined HERE and nowhere else, and `self.draft_dirty` is READ, never
+        // written. That field is the observer's own repaint memo and holds the config term ALONE
+        // (`settings/mod.rs`); folding the security term back into it made one field carry two
+        // different definitions, which broke both ways at once. A pending password left it stuck
+        // at `true`, so a later `transport` or `chart_bundle` edit -- the very fields
+        // `settings_sig` skips, and therefore the only ones this flag exists to catch -- found
+        // the observer already believing `true` and issued no repaint at all. In the other
+        // direction the observer wrote `false` back on the next backend notification and render
+        // wrote `true` again, repainting the whole window on every unrelated backend tick for as
+        // long as the password stayed pending. Reading the memo also drops two full `draft_sig`
+        // passes (56 servers serialized twice) from every render, including a plain tab switch.
+        let dirty = self.draft_dirty || self.security.has_pending_request(cx);
+
         // Resolve status keys against the current locale here so a language change cannot leave
         // text from the previous locale behind.
         let status_el = match &self.status {
-            Some((msg, err)) => {
+            // A SUCCESS status is suppressed once the draft is dirty again: "Сохранено" beside a
+            // caption reading "есть несохранённые изменения" is a contradiction, and the stale
+            // half is the one that has to go. An ERROR status always stays -- it reports
+            // something that happened and was never superseded by a later edit.
+            Some((msg, err)) if *err || !dirty => {
                 let text = match msg {
                     super::StatusMsg::Key(k) => t!(*k).to_string(),
                     super::StatusMsg::Text(s) => s.clone(),
@@ -128,7 +151,7 @@ impl Render for SettingsView {
                     .text_color(rgba_from(if *err { p.red } else { p.green }, 1.0))
                     .child(text)
             }
-            None => div(),
+            _ => div(),
         };
         let footer = h_flex()
             .w_full()
@@ -141,12 +164,42 @@ impl Render for SettingsView {
             .border_color(rgba_from(p.border, 1.0))
             .child(
                 MoonButton::new("save")
-                    .primary()
+                    // Primary while there is something to save, plain otherwise. NEVER disabled:
+                    // an always-enabled Save costs a redundant write at worst, while a disabled
+                    // one strands a user whose change the indicator failed to notice.
+                    .variant(if dirty {
+                        MoonButtonVariant::Blue
+                    } else {
+                        MoonButtonVariant::Neutral
+                    })
                     .small()
                     .width(110.0)
                     .label(t!("settings.save").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
                     .render(),
+            )
+            .child(
+                // Shrinkable and truncating, because the status beside it is not: `StatusMsg::Text`
+                // carries arbitrary save and storage error text, and at a narrow Settings width
+                // this caption's intrinsic minimum would otherwise push that error out of the
+                // footer. The caption is the half that can afford to clip -- it says one of two
+                // known things, while the error says something only it knows. `min_w_0` sits on
+                // the truncating element itself, never on a wrapper around it.
+                // Shrinking is the flex default here -- `table.rs::cell` has to opt OUT of it with
+                // `flex_shrink_0` -- so `min_w_0` is the whole mechanism: it is what lets the item
+                // go below its content width, which is what `truncate` then acts on.
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgba_from(p.text_muted, 1.0))
+                    .child(
+                        t!(if dirty {
+                            "settings.dirty"
+                        } else {
+                            "settings.clean"
+                        })
+                        .to_string(),
+                    ),
             )
             .child(status_el)
             .child(div().flex_1())
