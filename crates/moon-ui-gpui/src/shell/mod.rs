@@ -236,4 +236,9 @@ pub(crate) struct Shell {
     ticker_popup_hovered: bool,
     /// Coin search field used to build the ticker popup's market/core result list.
     ticker_input: Entity<MoonInputState>,
+    /// Coin rows of the ticker popup whose core list the user has flipped open or shut.
+    ///
+    /// Holds what was TOGGLED away from the default, not what is open, so an opening popup needs no
+    /// seeding; see `controls::coin_search::group_is_open`.
+    ticker_expanded: std::collections::HashSet<crate::controls::coin_search::CoinGroupKey>,
 }

@@ -1282,6 +1282,20 @@ chart.coin.no_suggestions:
   ru: "Пока нечего предложить — начните вводить монету"
   en: "Nothing to suggest yet — start typing a coin"
   es: "Aún no hay sugerencias: empiece a escribir una moneda"
+# Trailing count on a coin row that names how many cores offer the instrument.
+chart.coin.cores:
+  # Noun-then-colon, the form already used by `chart_labels.cores_count` and `figures_count`:
+  # Russian declines the noun by count ("2 ядра", "5 ядер"), so "%{n} ядер" is wrong at 2-4, and a
+  # plural mechanism is not worth inventing for a row label.
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"
+# The only line under the logo of an empty Main chart stack. It names the ONE gesture that exists:
+# there is no double-click on a core row that opens a chart.
+chart.empty.hint:
+  ru: "Введите монету в поле поиска справа и нажмите Enter — график откроется на активном ядре"
+  en: "Type a coin in the search field on the right and press Enter — the chart opens on the active core"
+  es: "Escriba una moneda en el campo de búsqueda de la derecha y pulse Enter: el gráfico se abrirá en el núcleo activo"
 # --- Stack orientation (vertical/horizontal) and width labels in horizontal mode ---
 chart.layout.orientation_tip:
   ru: "Ориентация: вертикально / горизонтально"

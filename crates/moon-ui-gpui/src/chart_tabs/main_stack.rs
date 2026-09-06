@@ -1619,12 +1619,26 @@ impl Render for MainChartStack {
                 .size_full()
                 .bg(rgb(palette.chart_bg))
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .gap(crate::design::ui_px(cx, 10.0))
                 .child(crate::design::logo_glow_sized(
                     cx,
                     crate::design::EMPTY_STACK_LOGO_W,
                 ))
+                // A logo alone says the stack is empty but not what to do about it. One muted line,
+                // naming the ONE gesture that actually opens a chart from here: there is no
+                // double-click on a core row that does it — the rail only RETARGETS a chart that
+                // already exists (`sync_auto_workspace_chart` returns early on an empty Main).
+                .child(
+                    div()
+                        .max_w(crate::design::font_w_px(cx, 420.0))
+                        .text_center()
+                        .text_size(crate::design::t_body(cx))
+                        .text_color(rgb(palette.text_muted))
+                        .child(rust_i18n::t!("chart.empty.hint").to_string()),
+                )
                 .into_any_element();
             // Measured here too, for the reason the fullscreen branch keeps its probe: a resize
             // taken while the stack is empty must not leave a size the first divided frame uses.

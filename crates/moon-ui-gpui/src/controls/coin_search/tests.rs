@@ -4,10 +4,29 @@
 //! test, so these tests exercise the pure helpers they delegate to instead.
 
 use super::{
-    CoinHit, MOVER_VOL_REF, Mover, group_hits, merge_ranked_heads, mover_score,
-    neutralize_blind_provider, turnover_usd, whole_row_cap,
+    CoinHit, CoinResults, MOVER_VOL_REF, Mover, direct_row_count, enter_target, group_hits,
+    group_is_open, group_starts_expanded, merge_ranked_heads, mover_score,
+    neutralize_blind_provider, pick_core, turnover_usd, whole_row_cap,
 };
 use moon_core::market::MarketLabel;
+use moon_core::venue::CoreVenue;
+use std::collections::HashSet;
+
+/// Build one coin hit with a stable full instrument label for grouped-search assertions.
+fn coin_hit(core: u64, venue: u8, coin: &str) -> CoinHit {
+    CoinHit {
+        core,
+        market: format!("{coin}USDT"),
+        server: format!("Core {core}"),
+        label: MarketLabel {
+            coin: coin.to_string(),
+            canonic: String::new(),
+            quote: "USDT".to_string(),
+            contract: None,
+        },
+        venue: Some(CoreVenue::identify(venue, "", None)),
+    }
+}
 
 /// Build one ranked candidate the way `suggest_volatile` does, so a test states only what it is
 /// about.
@@ -172,63 +191,6 @@ fn a_provider_reporting_no_turnover_still_competes() {
     );
 }
 
-/// `coin_search.rs:group_hits` must key a run on the FULL instrument label
-/// ([`MarketLabel::pair`]), never a contract-stripped coin.
-///
-/// Breakage this pins: changing the grouping key to `MarketLabel::match_key` or
-/// `MarketLabel::display_coin`, reasoning "same coin, group it together". A perpetual and a
-/// dated contract of the same coin would then merge into one run, and the continuation row would
-/// make the two instruments indistinguishable in the dropdown.
-#[test]
-fn a_dated_contract_never_groups_with_its_perpetual() {
-    let perpetual = CoinHit {
-        core: 1,
-        market: "BTCUSDT".to_string(),
-        server: "Core A".to_string(),
-        label: MarketLabel {
-            coin: "BTC".to_string(),
-            canonic: String::new(),
-            quote: "USDT".to_string(),
-            contract: None,
-        },
-    };
-    let dated = CoinHit {
-        core: 2,
-        market: "BTCUSD0925".to_string(),
-        server: "Core B".to_string(),
-        label: MarketLabel {
-            coin: "BTC_0925".to_string(),
-            canonic: String::new(),
-            quote: "USDT".to_string(),
-            contract: None,
-        },
-    };
-    // `match_key`/`display_coin` would fold both hits to "BTC", which is exactly the collapse
-    // this test must catch if the grouping key is ever weakened to either of them.
-    assert_eq!(perpetual.label.match_key(), dated.label.match_key());
-
-    let rows = group_hits(vec![perpetual, dated]);
-
-    assert_eq!(
-        rows.len(),
-        2,
-        "both instruments must survive as distinct rows"
-    );
-    let runs: Vec<(String, bool)> = rows
-        .into_iter()
-        .map(|row| (row.pair.to_string(), row.first_of_group))
-        .collect();
-    assert_eq!(
-        runs,
-        vec![
-            ("BTC-USDT".to_string(), true),
-            ("BTC-USDT-0925".to_string(), true),
-        ],
-        "a perpetual and a dated contract of the same coin must form two SEPARATE runs, each \
-         opening its own group, not one run where the second row reads as a continuation: {runs:?}"
-    );
-}
-
 /// `coin_search.rs:turnover_usd` must keep "this market traded nothing" apart from "this market's
 /// turnover cannot be converted".
 ///
@@ -316,5 +278,165 @@ fn render_popup_wires_whole_row_cap_instead_of_raw_height() {
     assert!(
         !popup_source.contains(".max_h(px(340.0))"),
         "render_popup must not restore the raw 340 px cap"
+    );
+}
+
+/// `coin_search.rs::group_hits` must fold all core offerings of one instrument on one venue into
+/// one expandable group while retaining every original choice in core order.
+///
+/// Breakage this pins: reverting grouping to one visible row per `CoinHit`. A coin available on
+/// many cores would flood the dropdown and hide unrelated instruments below the scroll cap.
+#[test]
+fn fifty_six_cores_of_one_coin_fold_into_one_coin_row() {
+    let hits = (1..=56).map(|core| coin_hit(core, 1, "BTC")).collect();
+
+    let sections = group_hits(hits);
+
+    assert_eq!(sections.len(), 1, "one venue must make one section");
+    assert_eq!(
+        sections[0].groups.len(),
+        1,
+        "one full instrument label on one venue must make one group"
+    );
+    let members = &sections[0].groups[0].members;
+    assert_eq!(
+        members.len(),
+        56,
+        "the group must retain every core offering"
+    );
+    assert_eq!(
+        members.iter().map(|hit| hit.core).collect::<Vec<_>>(),
+        (1..=56).collect::<Vec<_>>(),
+        "members must preserve the canonical input order"
+    );
+}
+
+/// `coin_search.rs::group_hits` must key groups by the full `MarketLabel::pair`, rather than a
+/// contract-stripped search key.
+///
+/// Breakage this pins: changing the key to `match_key` or `display_coin`. A perpetual and dated
+/// contract would merge, so selecting the visible coin could open the wrong instrument.
+#[test]
+fn a_dated_contract_never_groups_with_its_perpetual() {
+    let perpetual = coin_hit(1, 1, "BTC");
+    let dated = coin_hit(2, 1, "BTC_0925");
+
+    assert_eq!(perpetual.label.match_key(), dated.label.match_key());
+    assert_ne!(perpetual.label.pair(), dated.label.pair());
+
+    let sections = group_hits(vec![perpetual, dated]);
+
+    assert_eq!(sections.len(), 1, "one venue must stay one section");
+    assert_eq!(
+        sections[0].groups.len(),
+        2,
+        "distinct full instrument labels must remain distinct groups"
+    );
+}
+
+/// `coin_search.rs::group_hits` must make the venue a section boundary as well as grouping by
+/// full instrument label.
+///
+/// Breakage this pins: dropping the exchange section from the group key. Identically named
+/// markets on two exchanges would collapse into one ambiguous choice.
+#[test]
+fn the_same_coin_on_two_exchanges_stays_in_two_groups() {
+    let sections = group_hits(vec![coin_hit(1, 1, "BTC"), coin_hit(2, 2, "BTC")]);
+
+    assert_eq!(
+        sections.len(),
+        2,
+        "each exchange must retain its own section"
+    );
+    assert!(
+        sections.iter().all(|section| section.groups.len() == 1),
+        "each exchange section must hold its own BTC group"
+    );
+}
+
+/// `coin_search.rs::direct_row_count` must count a collapsed multi-core group as one row and an
+/// open multi-core group as its trigger plus its cores, while a single-member group stays one row.
+///
+/// Breakage this pins: dropping `group.members.len() > 1 &&` from the child-row guard. A
+/// single-core group has no caret but would count as two rows, so the continuation fade appears
+/// over a list with nothing below it.
+#[test]
+fn a_collapsed_group_is_one_row_and_an_open_one_is_its_cores() {
+    let sections = group_hits(vec![
+        coin_hit(1, 1, "BTC"),
+        coin_hit(2, 1, "BTC"),
+        coin_hit(3, 1, "ETH"),
+    ]);
+    let toggled = HashSet::from([sections[0].groups[0].key.clone()]);
+    assert_eq!(
+        direct_row_count(&sections, &toggled),
+        2,
+        "a collapsed multi-core group and a single-core group each contribute one trigger"
+    );
+    assert!(
+        group_is_open(
+            &sections[0].groups[0].key,
+            sections[0].groups[0].members.len(),
+            &HashSet::new(),
+        ),
+        "the two-core group must start open before its explicit toggle"
+    );
+    assert_eq!(
+        direct_row_count(&sections, &HashSet::new()),
+        4,
+        "an open two-core group draws three rows and its single-core neighbour draws one"
+    );
+}
+
+/// `coin_search.rs::group_starts_expanded` must expand no more than three cores by default.
+///
+/// Breakage this pins: raising or removing the automatic-collapse boundary. A large multi-core
+/// search would consume the dropdown before the user can see other matching instruments.
+#[test]
+fn groups_above_three_cores_start_collapsed() {
+    assert!(group_starts_expanded(3));
+    assert!(!group_starts_expanded(4));
+}
+
+/// `coin_search.rs::pick_core` must prefer the active core when it offers the selected market.
+///
+/// Breakage this pins: always taking the first group member. Enter or click would open the same
+/// coin on a foreign core despite the user searching from a narrowed workspace.
+#[test]
+fn pick_core_prefers_the_active_core_and_falls_back_to_the_first() {
+    let members = vec![coin_hit(11, 1, "BTC"), coin_hit(22, 1, "BTC")];
+
+    assert_eq!(pick_core(&members, Some(22)).map(|hit| hit.core), Some(22));
+    assert_eq!(pick_core(&members, Some(99)).map(|hit| hit.core), Some(11));
+    assert_eq!(pick_core(&members, None).map(|hit| hit.core), Some(11));
+}
+
+/// `coin_search.rs::enter_target` must open only a typed-query match, selecting its active-core
+/// group member when available.
+///
+/// Breakage this pins: returning a suggestion from the `Suggest` arm. Pressing Enter in an empty
+/// field would unexpectedly open an arbitrary top-mover chart.
+#[test]
+fn enter_opens_the_first_match_on_the_active_core_and_nothing_otherwise() {
+    let query = CoinResults::Query(vec![coin_hit(11, 1, "BTC"), coin_hit(22, 1, "BTC")]);
+    assert_eq!(
+        enter_target(query, Some(22)),
+        Some((22, "BTCUSDT".to_string()))
+    );
+    assert_eq!(
+        enter_target(CoinResults::Query(Vec::new()), Some(22)),
+        None,
+        "an empty query has no market to open"
+    );
+    assert_eq!(
+        enter_target(
+            CoinResults::Suggest {
+                recent: vec![coin_hit(11, 1, "BTC")],
+                volatile: vec![coin_hit(22, 2, "ETH")],
+            },
+            Some(22),
+        ),
+        None,
+        "Enter on an empty field must not select a suggestion"
     );
 }

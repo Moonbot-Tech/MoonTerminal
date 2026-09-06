@@ -123,16 +123,26 @@ impl Render for DetachedChartHost {
         let header_h = design::fit_h_px(cx, 34.0, 13.0, 10.5);
         let coin_popup = self.popup_shows(ChartPopup::Coin).then(|| {
             let results = self.coin_results(cx);
+            // The same resolution the strip uses: a coin row opens on the core this window is
+            // addressing. Its hits are already bucket-scoped, so a foreign active core simply
+            // falls through to the first in-scope member.
+            let active_core = common::CoinPopupHost::coin_active_core(self, cx);
+            let view_expand = cx.entity();
             coin_search::render_popup(
                 "detached-coin",
                 results,
                 &std::collections::HashSet::new(),
+                &self.coin_expanded,
                 false,
+                active_core,
                 None,
                 p,
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),
                 |_core, _market, _app| {},
+                move |key, app| {
+                    view_expand.update(app, |this, cx| this.toggle_coin_expanded(key, cx));
+                },
                 |_window, _app| {},
             )
             .absolute()

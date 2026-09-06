@@ -85,6 +85,11 @@ pub(super) struct DetachedChartHost {
     coin_input: Entity<MoonInputState>,
     /// Current market-search text mirroring `coin_input`.
     coin_query: String,
+    /// Coin rows of the search dropdown whose core list the user has flipped open or shut.
+    ///
+    /// Holds what was TOGGLED away from the default, not what is open, so a freshly opened list
+    /// needs no seeding; see `controls::coin_search::group_is_open`.
+    coin_expanded: std::collections::HashSet<crate::controls::coin_search::CoinGroupKey>,
     /// Window-root focus handle for receiving `on_key_down` hotkeys when nothing else is focused.
     ///
     /// The root receives focus on creation. Clicking market input moves focus there, but key events
@@ -363,6 +368,12 @@ impl DetachedChartHost {
                     this.open_coin_popup(cx);
                     return;
                 }
+                // Enter opens the first match on the active core -- the fast path beside the
+                // multi-select one. See `common::coin_enter_handler`.
+                if matches!(ev, MoonInputEvent::PressEnter { .. }) {
+                    super::common::coin_enter_handler(this, input.clone(), window, cx);
+                    return;
+                }
                 if matches!(ev, MoonInputEvent::Change) {
                     let value = input.read(cx).value().to_string();
                     if let std::borrow::Cow::Owned(en) =
@@ -374,6 +385,11 @@ impl DetachedChartHost {
                     if this.coin_query != value {
                         // Clearing the text falls back to suggestions rather than closing.
                         this.coin_query = value;
+                        // Keep this direct reopen path aligned with `open_coin_popup`, which it
+                        // bypasses when the popup was already closed.
+                        if !this.popup_shows(ChartPopup::Coin) {
+                            this.coin_expanded.clear();
+                        }
                         this.open_chart_popup(ChartPopup::Coin, cx);
                     }
                 }
@@ -402,6 +418,7 @@ impl DetachedChartHost {
             custom_name_input,
             coin_input,
             coin_query: String::new(),
+            coin_expanded: std::collections::HashSet::new(),
             focus,
             modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
             taskbar_hide,
@@ -441,6 +458,12 @@ impl DetachedChartHost {
         // Same first rule as the group window: Escape leaves the Sells-to-zone mode regardless of
         // the modifier held with it.
         if crate::hotkeys::escape_leaves_sells_zone(ev, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        // Then Escape ends an open market search, BEFORE the hotkey table sees it: otherwise it
+        // resolves to CloseActiveChart and shuts the chart under the list.
+        if super::common::coin_escape_ends_search(self, ev, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -623,10 +646,24 @@ impl DetachedChartHost {
         CoinResults::Suggest { recent, volatile }
     }
 
+    /// Records an explicit expansion override so the shared size-based defaults need no seeding.
+    pub(super) fn toggle_coin_expanded(
+        &mut self,
+        key: crate::controls::coin_search::CoinGroupKey,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.coin_expanded.remove(&key) {
+            self.coin_expanded.insert(key);
+        }
+        cx.notify();
+    }
+
     /// Open this window's coin dropdown, refreshing the suggestions it reads.
     pub(super) fn open_coin_popup(&mut self, cx: &mut Context<Self>) {
         // Resync the query mirror with the field; see `ChartTabs::open_coin_popup`.
         self.coin_query = self.coin_input.read(cx).value().to_string();
+        // Reset the open rows on OPEN, for the reason `ChartTabs::open_coin_popup` states.
+        self.coin_expanded.clear();
         let (group, bucket) = (self.group.clone(), self.bucket.clone());
         self.backend
             .update(cx, |b, _| b.refresh_coin_suggest(&group, Some(&bucket)));
@@ -934,9 +971,20 @@ impl CoinPopupHost for DetachedChartHost {
 
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
+        // The next open starts from the defaults, like the query does.
+        self.coin_expanded.clear();
         self.close_chart_popup(ChartPopup::Coin, cx);
         cx.notify();
     }
+    fn coin_popup_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
+        self.coin_results(cx)
+    }
+
+    /// Reuses the strip's core resolution so a row opens in the currently addressed core.
+    fn coin_active_core(&self, cx: &App) -> Option<CoreId> {
+        self.backend.read(cx).active_trade_core(&self.group)
+    }
+
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         self.panel.update(cx, |p, c| {
             p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)

@@ -80,6 +80,11 @@ impl ChartTabs {
         // without rewriting the input, so reopening on focus must resync both values or suggestions
         // can appear under text the user can still see in the field.
         self.coin_query = self.coin_input.read(cx).value().to_string();
+        // Reset the open rows HERE rather than on each way the list can close. Six paths close it
+        // without passing `clear_coin_search` — a displaced popup through `settle_closed_popup`,
+        // an Auto scope change, the toolbar press layer — so chasing them all is how one gets
+        // missed. Opening is the ONE funnel, and defaults on open is the behaviour anyway.
+        self.coin_expanded.clear();
         // Resolve through the same helper the render path uses: the bucket is the suggestion
         // cache key, so a mismatch here would refresh one entry and read another, leaving the
         // Top 24h section permanently empty.
@@ -114,6 +119,18 @@ impl ChartTabs {
             self.persist_custom_active(cx);
         }
         self.sync_main_chart_target(cx);
+        cx.notify();
+    }
+
+    /// Records an explicit expansion override so the shared size-based defaults need no seeding.
+    pub(super) fn toggle_coin_expanded(
+        &mut self,
+        key: crate::controls::coin_search::CoinGroupKey,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.coin_expanded.remove(&key) {
+            self.coin_expanded.insert(key);
+        }
         cx.notify();
     }
 
@@ -191,6 +208,7 @@ impl ChartTabs {
         // Clear the selection, field, and popup.
         self.coin_selected.clear();
         self.coin_query.clear();
+        self.coin_expanded.clear();
         self.close_chart_popup(ChartPopup::Coin, cx);
         self.sync_active_scale(cx);
         self.sync_inactive_chart_visibility(cx);
@@ -760,10 +778,21 @@ impl CoinPopupHost for ChartTabs {
     /// Clear the coin field and close the list after selection or an outside click.
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
+        // The next open starts from the defaults, like the query does.
+        self.coin_expanded.clear();
         self.close_chart_popup(ChartPopup::Coin, cx);
         cx.notify();
     }
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         self.open_coin_on_active(core, market, cx);
+    }
+
+    fn coin_popup_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
+        self.coin_results(cx)
+    }
+
+    /// Reuses the trading controls' core resolution so a row opens in the currently addressed core.
+    fn coin_active_core(&self, cx: &App) -> Option<CoreId> {
+        self.backend.read(cx).active_trade_core(&self.group)
     }
 }
