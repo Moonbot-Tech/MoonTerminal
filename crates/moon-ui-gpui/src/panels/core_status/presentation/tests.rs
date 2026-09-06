@@ -3,8 +3,12 @@
 //! Explicit imports (no `use super::*`) per the crate's test convention: the panel's parent module
 //! re-exports `gpui::*`, whose own `test` would shadow the built-in attribute.
 
-use super::{LoadLevel, api_expiry_level, api_expiry_text};
+use super::{
+    LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, cpu_level, free_mem_level,
+    status_level,
+};
 use crate::panels::core_status::model::ApiKeyState;
+use moon_core::feed::ConnStatus;
 
 /// The cell carries a BARE number — the unit lives in the column heading. A per-row "дн" would
 /// repeat itself down the whole column and push the heading's meaning into the data.
@@ -128,4 +132,72 @@ fn a_quota_colours_only_while_it_has_a_number() {
         LoadLevel::Normal,
         "a stale flag must not colour an absence"
     );
+}
+
+/// `presentation.rs:cpu_level` must include both CPU thresholds. Mutation: change either `>=`
+/// comparison to `>` or swap the thresholds; a core exactly at 10% or 25% system CPU would stop
+/// being marked, hiding the outlier this view is meant to surface.
+#[test]
+fn cpu_thresholds_include_the_boundary_that_marks_an_outlier() {
+    assert_eq!(cpu_level(None), LoadLevel::Normal);
+    assert_eq!(cpu_level(Some(9)), LoadLevel::Normal);
+    assert_eq!(cpu_level(Some(10)), LoadLevel::Warning);
+    assert_eq!(cpu_level(Some(24)), LoadLevel::Warning);
+    assert_eq!(cpu_level(Some(25)), LoadLevel::Critical);
+    assert_eq!(cpu_level(Some(100)), LoadLevel::Critical);
+}
+
+/// `presentation.rs:free_mem_level` must classify absolute free-memory boundaries. Mutation:
+/// change either `<` to `<=` or reconstruct a percentage from process RAM; 299 MB free could
+/// render as normal and hide a core approaching memory exhaustion.
+#[test]
+fn free_memory_uses_absolute_headroom_with_exclusive_limits() {
+    assert_eq!(free_mem_level(None), LoadLevel::Normal);
+    assert_eq!(free_mem_level(Some(300)), LoadLevel::Normal);
+    assert_eq!(free_mem_level(Some(299)), LoadLevel::Warning);
+    assert_eq!(free_mem_level(Some(150)), LoadLevel::Warning);
+    assert_eq!(free_mem_level(Some(149)), LoadLevel::Critical);
+    assert_eq!(free_mem_level(Some(0)), LoadLevel::Critical);
+}
+
+/// `presentation.rs:status_level` must keep reconnecting states warning-level and outages
+/// critical. Mutation: move `Connecting` or `Stage(_)` to Critical, or `Disconnected` to Warning;
+/// ordinary backoff would cause alarm fatigue or a lost core would no longer read as an alarm.
+#[test]
+fn connection_states_distinguish_reconnects_from_outages() {
+    assert_eq!(status_level(&ConnStatus::Ready), LoadLevel::Normal);
+    assert_eq!(status_level(&ConnStatus::Connecting), LoadLevel::Warning);
+    assert_eq!(
+        status_level(&ConnStatus::Stage("reconnecting".to_string())),
+        LoadLevel::Warning
+    );
+    assert_eq!(
+        status_level(&ConnStatus::Failed("authentication refused".to_string())),
+        LoadLevel::Critical
+    );
+    assert_eq!(status_level(&ConnStatus::Disconnected), LoadLevel::Critical);
+}
+
+/// `presentation.rs:api_expiry_tooltip` must explain the infinity glyph for a perpetual key.
+/// Mutation: return `None` for `ApiKeyState::Perpetual`; the API-days column would show an
+/// unexplained infinity glyph again.
+#[test]
+fn perpetual_api_keys_keep_an_explanatory_tooltip() {
+    let perpetual_tip = api_expiry_tooltip(ApiKeyState::Perpetual)
+        .expect("a perpetual key needs a tooltip that explains its infinity glyph");
+    assert!(
+        !perpetual_tip.trim().is_empty(),
+        "the glyph explanation must contain readable text"
+    );
+    for state in [
+        ApiKeyState::Unknown,
+        ApiKeyState::Days(0),
+        ApiKeyState::Days(-1),
+    ] {
+        assert_eq!(
+            api_expiry_tooltip(state),
+            None,
+            "only the infinity glyph needs this explanatory tooltip"
+        );
+    }
 }

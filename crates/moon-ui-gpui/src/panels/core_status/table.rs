@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use super::model::{ApiKeyState, ServerKey};
 use super::ordering::{FlatLine, FlatSection};
 use super::presentation::{
-    api_expiry_level, api_expiry_text, api_quota_level, api_quota_text, connection_presentation,
-    level_color, memory_u16, percent, ping, update_badge, version_behind_tooltip, version_color,
+    LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, api_quota_level,
+    api_quota_text, connection_presentation, cpu_level, free_mem_level, lat_level, level_color,
+    memory_u16, percent, ping, status_level, update_badge, version_behind_tooltip, version_color,
     version_text,
 };
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
@@ -127,11 +128,13 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
                 t!("core_status.col.ping_exch").to_string(),
                 96.0,
             ),
-            "cpus" => numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
+            "cpus" => numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0)
+                .tooltip(t!("core_status.col_tip.cpus").to_string()),
             // Right-aligned like every other metric: the cells are now bare day counts, and a column of
             // numbers has to align on the digit. The three word forms ("-", "∞", "истёк") are short
             // enough to sit right without reading oddly.
-            "api_key" => numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0),
+            "api_key" => numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0)
+                .tooltip(t!("core_status.col_tip.api_key").to_string()),
             // Beside the key it belongs with: both answer "can this core still trade", one by date and
             // one by budget. Right-aligned like every other count, and wide enough for the seven digits
             // a HyperLiquid address reports.
@@ -153,6 +156,7 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
             "tz_off" => {
                 MoonDataTableColumn::new("tz_off", t!("core_status.col.tz_off").to_string(), 110.0)
                     .sortable(true)
+                    .tooltip(t!("core_status.col_tip.tz_off").to_string())
             }
             _ => unreachable!("canonical Flat column key"),
         })
@@ -284,6 +288,39 @@ pub(super) fn core_status_table(
 
 /// Render one core and its latest telemetry sample in the table's column order.
 ///
+/// Each status and metric cell now carries an explicit colour. Cells representing shared severity
+/// use the same [`level_color`] as the By-IP tree; identity cells remain plain, and `version`
+/// keeps its dedicated colour logic. Before this, the numeric cells rendered at full `p.text`, so
+/// a dense table made every value compete equally for attention. The resting `text_soft` tone is
+/// what gives the two or three deviating cells something to stand out from.
+///
+/// Which classifier each column uses, and why:
+/// - `cpu_proc` / `cpu_sys` / `free_phys` — the panel's absolute display thresholds
+///   ([`cpu_level`], [`free_mem_level`]).
+/// - `ping` / `ping_exch` — the ENGINE's severity, never a millisecond constant. It judges each
+///   core against that core's own rolling baseline, so a link that is always slow makes that its
+///   normal and stays quiet while a spike speaks even on a fast link; it is also what keeps these
+///   cells and the engine's ping warning from ever disagreeing.
+/// - `mem_used` / `cpus` / `startup` / `tz_off` — `Normal` unconditionally. A core's own resident
+///   memory is only interpretable against that core's history, which this table does not carry;
+///   a machine's core count is a fact about the hardware, never a problem. They take the resting
+///   tone so they stop competing with the columns that DO classify.
+/// - `server` / `core` are plain identifiers, and `version` keeps its own colour logic inside
+///   [`version_hover_cell`].
+///
+/// The row constructor below carries `#[rustfmt::skip]`, and it is LOAD-BEARING, not tidiness.
+/// `tests/theme_contract/core_status.rs` pins the constructor's opening line as source TEXT, and
+/// once the arms grew a `.text_color(...)` each, rustfmt began rewriting that closure into the
+/// block form `|key| { match *key { ... } }` — which breaks the contract test with NO compile
+/// error and no fmt complaint, since `cargo fmt --check` is perfectly happy with the form it
+/// itself produced. The formatter and the contract genuinely disagree here; pinning the format is
+/// what resolves it. The `let row = ...; row` binding exists only to give the attribute a
+/// statement to attach to.
+///
+/// If you edit the arms, re-run `cargo test -p moon-ui-gpui --test theme_contract` and do NOT
+/// trust a `grep` for the pinned line — this doc comment contains it too, so a naive count
+/// matches even when the code no longer does.
+///
 /// Args:
 ///     r: Cached core snapshot.
 ///     column_keys: Exact ordered keys used to build the table descriptors.
@@ -310,30 +347,67 @@ fn core_status_row(
     // One verdict per row, derived once and shared by the status cell and its hover, so the two can
     // never state different things about the same core.
     let diag = diagnose(&r.status, r.fault.as_ref(), &r.startup);
-    MoonDataRow::new(column_keys.iter().map(|key| match *key {
+    #[rustfmt::skip]
+    let row = MoonDataRow::new(column_keys.iter().map(|key| match *key {
         "server" => MoonDataCell::text(server.clone()),
         "core" => MoonDataCell::text(r.name.clone()),
-        "status" => MoonDataCell::element(status_cell(r, diag.as_ref())),
+        "status" => MoonDataCell::element(status_cell(r, diag.as_ref()))
+            .text_color(level_color(status_level(&r.status), p)),
         "version" => MoonDataCell::element(version_hover_cell(r, backend, p, app)),
-        "cpu_proc" => MoonDataCell::text(percent(sys.process_cpu_percent)),
-        "cpu_sys" => MoonDataCell::text(percent(sys.system_cpu_percent)),
-        "mem_used" => MoonDataCell::text(memory_u16(sys.used_memory_mb)),
-        "free_phys" => MoonDataCell::text(memory_u16(sys.free_physical_memory_mb)),
-        "ping" => MoonDataCell::text(ping(sys.round_trip_ms)),
-        "ping_exch" => MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
-        "cpus" => MoonDataCell::text(count(sys.logical_cpu_count)),
-        "api_key" => MoonDataCell::text(api_expiry_text(r.api_key)).text_color(level_color(
-            api_expiry_level(r.api_key, r.api_warn, r.api_notice),
-            p,
-        )),
+        "cpu_proc" => MoonDataCell::text(percent(sys.process_cpu_percent))
+            .text_color(level_color(cpu_level(sys.process_cpu_percent), p)),
+        "cpu_sys" => MoonDataCell::text(percent(sys.system_cpu_percent))
+            .text_color(level_color(cpu_level(sys.system_cpu_percent), p)),
+        "mem_used" => MoonDataCell::text(memory_u16(sys.used_memory_mb))
+            .text_color(level_color(LoadLevel::Normal, p)),
+        "free_phys" => MoonDataCell::text(memory_u16(sys.free_physical_memory_mb))
+            .text_color(level_color(free_mem_level(sys.free_physical_memory_mb), p)),
+        "ping" => MoonDataCell::text(ping(sys.round_trip_ms))
+            .text_color(level_color(lat_level(r.ping_sev), p)),
+        "ping_exch" => MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from)))
+            .text_color(level_color(lat_level(r.exch_sev), p)),
+        "cpus" => MoonDataCell::text(count(sys.logical_cpu_count))
+            .text_color(level_color(LoadLevel::Normal, p)),
+        "api_key" => api_key_cell(r, p),
         "api_quota" => MoonDataCell::text(api_quota_text(r.api_quota)).text_color(level_color(
             api_quota_level(r.api_quota, r.api_quota_warn),
             p,
         )),
-        "startup" => MoonDataCell::element(startup_hover_cell(r)),
-        "tz_off" => MoonDataCell::element(tz_offset_hover_cell(r)),
+        "startup" => MoonDataCell::element(startup_hover_cell(r))
+            .text_color(level_color(LoadLevel::Normal, p)),
+        "tz_off" => MoonDataCell::element(tz_offset_hover_cell(r))
+            .text_color(level_color(LoadLevel::Normal, p)),
         _ => unreachable!("canonical Flat column key"),
-    }))
+    }));
+    row
+}
+
+/// The API-key cell: a bare day count, or the infinity glyph with the phrase behind it.
+///
+/// Two shapes rather than one because `MoonDataCell::text` carries no tooltip — only an element
+/// cell can host one — and paying for a stateful element on every row to explain a glyph that
+/// appears on some of them would be waste. The colour is identical either way, so the two shapes
+/// are indistinguishable until the reader hovers.
+///
+/// Args:
+///     r: The row being rendered.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     The cell, with a hover only where there is something to explain.
+fn api_key_cell(r: &CoreStatusRow, p: MoonPalette) -> MoonDataCell {
+    let text = api_expiry_text(r.api_key);
+    let color = level_color(api_expiry_level(r.api_key, r.api_warn, r.api_notice), p);
+    match api_expiry_tooltip(r.api_key) {
+        Some(tip) => MoonDataCell::element(
+            div()
+                .id(SharedString::from(format!("cs-api-key-{}", r.id)))
+                .child(text)
+                .tooltip(crate::panels::common::text_tooltip(tip)),
+        )
+        .text_color(color),
+        None => MoonDataCell::text(text).text_color(color),
+    }
 }
 
 /// Left padding `MoonDataTable` puts inside every cell, mirrored from MoonUI's own

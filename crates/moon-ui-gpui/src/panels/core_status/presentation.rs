@@ -51,6 +51,26 @@ pub(super) fn connection_presentation(
     ConnectionPresentation { label }
 }
 
+/// Classify one connection state for the Flat status-cell colour.
+///
+/// `Connecting` and `Stage` are `Warning` rather than `Critical` deliberately: they are
+/// recoverable phases a reconnect passes through before `Ready`. Painting them red would turn a
+/// transient state into an alarm and teach the reader to ignore the colour. `Failed` and
+/// `Disconnected` are the states that require the alarm treatment.
+///
+/// Args:
+///     status: Latest core connection state.
+///
+/// Returns:
+///     `Normal` when ready, `Warning` while connecting, `Critical` once it has failed or dropped.
+pub(super) fn status_level(status: &ConnStatus) -> LoadLevel {
+    match status {
+        ConnStatus::Ready => LoadLevel::Normal,
+        ConnStatus::Connecting | ConnStatus::Stage(_) => LoadLevel::Warning,
+        ConnStatus::Failed(_) | ConnStatus::Disconnected => LoadLevel::Critical,
+    }
+}
+
 /// Return the localized connection label for reuse outside the Core Status panel.
 ///
 /// Args:
@@ -133,6 +153,26 @@ pub(super) fn api_expiry_text(state: ApiKeyState) -> String {
         ApiKeyState::Perpetual => "\u{221e}".to_string(),
         ApiKeyState::Days(days) if days < 0 => t!("core_status.api_expired").to_string(),
         ApiKeyState::Days(days) => days.to_string(),
+    }
+}
+
+/// Hover text for an API-key cell whose glyph does not explain itself.
+///
+/// Only [`ApiKeyState::Perpetual`] earns one. Its cell prints `∞`, and that glyph is the single
+/// most opaque thing in the table: under a heading that says "days" it could as easily read as
+/// "unknown", "not measured" or "very many" as the thing it means. Every other state prints a
+/// number, a dash or a word that already says what it is, and a hover repeating the visible text
+/// is noise on every row.
+///
+/// Args:
+///     state: The key's state as classified for this frame.
+///
+/// Returns:
+///     The phrase behind the infinity glyph, or `None` for a cell that needs no explaining.
+pub(super) fn api_expiry_tooltip(state: ApiKeyState) -> Option<String> {
+    match state {
+        ApiKeyState::Perpetual => Some(t!("core_status.api_perpetual").to_string()),
+        ApiKeyState::Unknown | ApiKeyState::Days(_) => None,
     }
 }
 
@@ -331,6 +371,25 @@ pub(super) fn memory_free(process_mem_mb: Option<u64>, free_mb: Option<u16>) -> 
     t!("core_status.mem_free", pct = pct, gb = total_gb).to_string()
 }
 
+/// CPU percentage from which a cell stops reading as normal.
+///
+/// These four constants are the panel's absolute DISPLAY thresholds. They are deliberately not
+/// settings (nothing here is user-tunable) and deliberately not the engine's episode thresholds
+/// (`backend::core_warn`): the engine decides when to OPEN A WARNING — a sustained, trend-based
+/// judgement that plays a sound and writes an episode — while these decide when a NUMBER stops
+/// looking like its 55 neighbours. A fleet's cores idle at 0-5 %, so 10 % is the outlier an
+/// operator is scanning for, and a display threshold set at the engine's 70 % would mark nothing
+/// on a healthy fleet and leave the table exactly as flat as it was.
+///
+/// The consequence is intended: a cell can be yellow with no warning triangle beside it. That
+/// state already existed for the 70-89 % band and `server_view::metric_cell` documents the two
+/// signals as distinct — colour says where this number is now, the triangle says the engine has an
+/// open episode.
+const CPU_WARN_PCT: u8 = 10;
+
+/// CPU percentage from which a cell reads as an alarm. See [`CPU_WARN_PCT`].
+const CPU_ALARM_PCT: u8 = 25;
+
 /// Operational load state of a core along one axis (CPU load or free memory).
 ///
 /// Ordered `Normal < Notice < Warning < Critical`, so severities combine with `max`. Exposed for
@@ -354,41 +413,46 @@ pub(super) enum LoadLevel {
 ///     percent: CPU percentage, process or whole-machine.
 ///
 /// Returns:
-///     `Warning` from 70%, `Critical` from 90%, else `Normal` (including unknown).
+///     `Warning` from [`CPU_WARN_PCT`], `Critical` from [`CPU_ALARM_PCT`], else `Normal`
+///     (including unknown — an absent reading is never a problem claim).
 pub(super) fn cpu_level(percent: Option<u8>) -> LoadLevel {
     match percent {
-        Some(percent) if percent >= 90 => LoadLevel::Critical,
-        Some(percent) if percent >= 70 => LoadLevel::Warning,
+        Some(percent) if percent >= CPU_ALARM_PCT => LoadLevel::Critical,
+        Some(percent) if percent >= CPU_WARN_PCT => LoadLevel::Warning,
         _ => LoadLevel::Normal,
     }
 }
 
-/// Classify free memory, where a lower free share is worse.
+/// Free physical memory, in MB, below which a cell stops reading as normal. See [`CPU_WARN_PCT`]
+/// for why these are display thresholds rather than settings or engine thresholds.
+const FREE_MEM_WARN_MB: u16 = 300;
+
+/// Free physical memory, in MB, below which a cell reads as an alarm. See [`FREE_MEM_WARN_MB`].
+const FREE_MEM_ALARM_MB: u16 = 150;
+
+/// Classify free memory, where less free memory is worse.
 ///
-/// Uses the same reconstructed total as [`memory_free`] (process RAM sum + free physical).
+/// ABSOLUTE megabytes, not a share of a reconstructed total. The share was the wrong quantity for
+/// this decision twice over: it needed [`memory_free`]'s reconstruction (process RAM sum + free
+/// physical), which is an ESTIMATE of a number MoonProto never reports, so the colour inherited
+/// that estimate's error; and what actually kills a core is running out of megabytes, which a
+/// percentage of a bigger machine hides. 300 MB free reads the same on a 4 GB box and a 64 GB one,
+/// and on both it is the number that matters.
+///
+/// [`memory_free`] keeps the reconstruction for its TEXT — "12% free (2 GB)" is still the right
+/// thing to READ; it is only the classification that stops depending on it.
 ///
 /// Args:
-///     process_mem_mb: Sum of per-process resident memory on the machine, decimal MB.
 ///     free_mb: Free physical memory on the machine, decimal MB.
 ///
 /// Returns:
-///     `Warning` below 10% free, `Critical` below 5% free, else `Normal` (including unknown).
-pub(super) fn free_mem_level(process_mem_mb: Option<u64>, free_mb: Option<u16>) -> LoadLevel {
-    let Some(free_mb) = free_mb else {
-        return LoadLevel::Normal;
-    };
-    let free_mb = u64::from(free_mb);
-    let total_mb = process_mem_mb.unwrap_or(0) + free_mb;
-    if total_mb == 0 {
-        return LoadLevel::Normal;
-    }
-    let free_pct = free_mb * 100 / total_mb;
-    if free_pct < 5 {
-        LoadLevel::Critical
-    } else if free_pct < 10 {
-        LoadLevel::Warning
-    } else {
-        LoadLevel::Normal
+///     `Warning` below [`FREE_MEM_WARN_MB`], `Critical` below [`FREE_MEM_ALARM_MB`], else
+///     `Normal` — including unknown, because an absent reading is never a problem claim.
+pub(super) fn free_mem_level(free_mb: Option<u16>) -> LoadLevel {
+    match free_mb {
+        Some(free_mb) if free_mb < FREE_MEM_ALARM_MB => LoadLevel::Critical,
+        Some(free_mb) if free_mb < FREE_MEM_WARN_MB => LoadLevel::Warning,
+        _ => LoadLevel::Normal,
     }
 }
 
