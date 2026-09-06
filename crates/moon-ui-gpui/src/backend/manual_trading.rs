@@ -450,8 +450,12 @@ pub(crate) struct ManualOrderTerms {
     /// `planned_sell`, and its stop is applied to the order itself, so waiting for those settings
     /// only delays the order by a retry budget of round trips.
     pub(crate) sync_exit: bool,
-    /// Quantity sent to the target core, in THAT MARKET's own unit: a coin amount on a linear or
-    /// spot market, a contract count on a coin-settled one. See `manual_order_size_base`.
+    /// Quantity sent to the target core, in the ACCOUNT's balance currency for that market — which
+    /// is the coin on a coin-margined market and the quote currency, so dollars, on a linear or
+    /// spot one. See `manual_order_size_base`.
+    ///
+    /// NOT a coin amount on a linear market — reading it as one is what compared a dollar figure
+    /// against a coin minimum. `manual_order_size_base` carries the measurement that settles it.
     pub(crate) size_base: f64,
     /// Visible USD equivalent, absent when an isolated FireTest overrides the base size.
     pub(crate) size_usd: Option<f64>,
@@ -1784,15 +1788,17 @@ impl Backend {
     /// per-core opt-in is on (display and order must never be able to disagree) — into the unit
     /// the core places an order in ON THIS MARKET.
     ///
-    /// Two units, because a quantity does not mean the same thing on every market and the wire
-    /// field is one `size`:
+    /// ONE rule with two faces, because the wire field is a single `size`: **the core takes the
+    /// account's balance currency for that market**, and which currency that is depends on the
+    /// market:
     ///
-    /// - **Inverse (coin-margined) markets take a CONTRACT COUNT**, each contract worth a fixed
-    ///   amount of quote currency (`BTCUSD_PERP` = $100, other `*USD` = $10), so the size is
-    ///   `usd / contract_size` and no price is involved. Sending the USD figure itself put a
-    ///   $500 order in as 500 contracts — $50 000 — on the 2026-08-31 QQ run.
-    /// - **Linear and spot markets take the account's balance currency**, so the size is
-    ///   `usd / rate`, unchanged.
+    /// - **Inverse (coin-margined) markets are margined in the COIN**, so the size is `usd / price`
+    ///   and `contract_size` does not enter it — measured on the 2026-08-31 QQ run, where a sent
+    ///   `50` came back as a $4 990 order (50 SOL) rather than 50 contracts. The contract count is
+    ///   how the venue states its LIMITS and how it reports positions, not how it takes an order.
+    /// - **Linear and spot markets are margined in the quote currency**, so the size is
+    ///   `usd / rate` — dollars on a USDT account. Confirmed against the core's own log on
+    ///   2026-09-06: a sent `60` on `VELVETUSDT` was logged by the core as `OrderSize: 60.00$`.
     ///
     /// The unit comes from `MarketDataSource::market_quantity_unit`, the same rule the market's
     /// maximum-order cap uses: a cap stated in USD beside an order sized in contracts is exactly
@@ -1823,11 +1829,6 @@ impl Backend {
         // account's worth of coin as a quantity.
         let rules = source.order_size_rules(core, market)?;
         let rate = match rules.unit {
-            // Coin-margined: the wire field is the account's balance currency, which on these
-            // markets is the COIN — so the amount is `usd / price`, exactly as on a linear market
-            // quoted in dollars. `contract_size` does NOT belong here: the core reports positions
-            // in contracts but takes orders in coin, measured on the 2026-08-31 QQ run where a
-            // sent `50` came back as a $4 990 order (50 SOL), not as 50 contracts ($500).
             MarketQuantityUnit::Contracts(_) => (price.is_finite() && price > 0.0).then_some(price),
             MarketQuantityUnit::Coins => {
                 source.currency_usd_rate(core, self.session.core_base(core)?)
@@ -1836,24 +1837,16 @@ impl Backend {
         let size = usd_to_base_amount(usd, rate)?;
         // Below what the venue accepts the order cannot be placed at all, so refusing is the honest
         // answer: rounding down reaches zero, rounding up spends more than the trader asked for.
-        // On a coin-margined market the venue states its minimum in CONTRACTS while the order is
-        // sent in coin, so the floor is converted the same way a position is read back —
-        // `min_qty * contract_size / price` — and never drops below one whole contract, which
-        // cannot be split.
-        let (floor, notional) = match rules.unit {
-            MarketQuantityUnit::Contracts(contract_size) => {
-                let contracts = rules.min_qty.max(1.0);
-                (
-                    contracts * contract_size / price,
-                    format!(", about ${} of notional", contracts * contract_size),
-                )
-            }
-            MarketQuantityUnit::Coins => (rules.min_qty, String::new()),
-        };
-        if floor > 0.0 && size < floor {
+        //
+        // Compared in DOLLARS, which is the one currency both units share — the trader's figure is
+        // always dollars, while the wire quantity is coins on one market and contracts on another.
+        // Checking the venue's raw QUANTITY here instead is what read `$200 < 1000 STONKS` as one
+        // comparison and refused every manual order on Gate's `STONKS_USDT`. An absent floor never
+        // blocks; `min_order_floor` argues why.
+        if let Some(floor) = rules.min_order_usd.filter(|floor| usd < *floor) {
             log::warn!(
-                "manual order refused: core={core} market={market} ${usd} is below this market's \
-                 minimum: {size:.8} < {floor:.8} ({:?}){notional}",
+                "manual order refused: core={core} market={market} ${usd:.2} is below this \
+                 market's minimum order value ${floor:.2} ({:?}, wire size {size:.8})",
                 rules.unit
             );
             return None;

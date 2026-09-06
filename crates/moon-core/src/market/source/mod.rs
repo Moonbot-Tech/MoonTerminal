@@ -257,7 +257,7 @@ fn quote_is_absent(quote: &str) -> bool {
 }
 
 /// What a manual order on one market must satisfy: the unit its quantity counts, and the smallest
-/// quantity the exchange accepts.
+/// order the exchange accepts.
 ///
 /// One value rather than two lookups: both come from the same market record, and reading them
 /// separately would let a snapshot land between them and pair one market's unit with another's
@@ -266,8 +266,13 @@ fn quote_is_absent(quote: &str) -> bool {
 pub struct OrderSizeRules {
     /// What one unit of `size` is on this market.
     pub unit: MarketQuantityUnit,
-    /// Exchange minimum quantity, in that same unit. `0` when the venue states none.
-    pub min_qty: f64,
+    /// Smallest order the venue accepts, in USD, or `None` when that is NOT KNOWN.
+    ///
+    /// Stated in MONEY for both units on purpose, because money is the only currency the two
+    /// share: a trader's order size is always dollars, while the wire quantity is coins on one
+    /// market and contracts on another. Handing the caller the venue's raw quantity instead is
+    /// what let a dollar figure be compared against a coin count — see [`min_order_floor`].
+    pub min_order_usd: Option<f64>,
 }
 
 /// What a market's quantity field counts, from the two figures the core reports about it.
@@ -307,6 +312,81 @@ pub(crate) fn market_quantity_unit(quote: &str, contract_size: f64) -> Option<Ma
         true => Some(MarketQuantityUnit::Coins),
         false => Some(MarketQuantityUnit::Contracts(contract_size)),
     }
+}
+
+/// The smallest order the venue accepts, in USD, whatever unit its quantity counts.
+///
+/// ONE derivation site for the venue's minimum, mirroring [`max_order_notional`] on the other end
+/// of the same range: a floor read one way here and another way at a call site is how a coin count
+/// gets compared against a dollar figure. That is not hypothetical — it refused every manual order
+/// on Gate's `STONKS_USDT` on 2026-09-06, where `$200 < 1000` compared a trader's dollars against
+/// the market's 1000-COIN minimum, about $17.70, while Moonbot placed $120 orders on that same
+/// contract minutes earlier. Everything else that day had a minimum of 10 coins or less, which any
+/// order in dollars clears by accident, so nothing but a cheap coin ever showed it.
+///
+/// The two units reach the same figure by different routes, and neither route works for the other:
+///
+/// - **Coins** — the lot value the core already derives on every price tick,
+///   `max(step_size, min_qty) * mid` floored by the exchange's own `min_notional`
+///   (`state/markets/prices.rs`, parity with Moonbot's Delphi `MinLotSize`), converted out of the
+///   market's quote currency. Re-deriving it here from `min_qty` would restate a rule the core owns
+///   AND drop the `min_notional` half of it.
+/// - **Contracts** — a contract is denominated in quote currency, so its floor is the count the
+///   venue insists on times one contract's value, with no exchange rate and no price involved. The
+///   lot value is useless here: it multiplies a CONTRACT count by a COIN price, reading about
+///   $60 000 on `BTCUSD_PERP` where one contract is $100.
+///
+/// Args:
+///     unit: What the market's quantity counts, from [`market_quantity_unit`].
+///     min_qty: Exchange minimum quantity in that unit; only a contract count is read from it, and
+///         never below one whole contract, which cannot be split.
+///     min_lot_value: The market's smallest lot in its own quote currency, `0` before the first
+///         price tick has set it; read on a linear market only.
+///     quote_usd_rate: USD value of one unit of that quote currency, from
+///         [`MarketDataSource::quote_usd_rate`] — which answers `1.0` for the DEX markets that name
+///         no quote at all, and is why the caller does not ask `currency_usd_rate` directly. Read
+///         on a linear market only.
+///
+/// Returns:
+///     The floor in USD, or `None` when there is none to state: a quote this core cannot price, or
+///     a market whose first price tick has not landed. Both mean DO NOT BLOCK, deliberately — the
+///     exchange is the authority on its own minimum and rejects an undersized order itself, whereas
+///     a floor invented from figures that have not arrived refuses orders the venue would have
+///     taken. Every caller must honour that.
+///
+/// One residual gap, and it is inherited rather than introduced: an inverse contract worth exactly
+/// one dollar reads as linear, so its floor comes back coin-priced and would refuse orders.
+/// [`market_quantity_unit`] already argues that trade-off and takes it deliberately — the other
+/// reading empties an account — and no supported venue lists such a contract.
+pub(crate) fn min_order_floor(
+    unit: MarketQuantityUnit,
+    min_qty: f64,
+    min_lot_value: f64,
+    quote_usd_rate: Option<f64>,
+) -> Option<f64> {
+    let usd = match unit {
+        MarketQuantityUnit::Contracts(contract_size) => {
+            // A count that arrives non-finite is garbage, not a minimum, and it must not take the
+            // floor down with it: an infinite `min_qty` multiplies out to infinity, which the
+            // finite check below would turn into "no floor at all". One contract is the smallest
+            // thing the venue can accept and cannot be split, so that is what a broken count falls
+            // back to. `f64::max` already maps a NaN count there; infinity does not.
+            let contracts = match min_qty.is_finite() {
+                true => min_qty.max(1.0),
+                false => 1.0,
+            };
+            contracts * contract_size
+        }
+        MarketQuantityUnit::Coins => {
+            let rate = quote_usd_rate?;
+            if !(min_lot_value.is_finite() && min_lot_value > 0.0 && rate.is_finite() && rate > 0.0)
+            {
+                return None;
+            }
+            min_lot_value * rate
+        }
+    };
+    (usd.is_finite() && usd > 0.0).then_some(usd)
 }
 
 /// The exchange maximum order size in the quote currency, from the figures a market carries.

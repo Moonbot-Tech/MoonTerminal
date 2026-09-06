@@ -872,7 +872,8 @@ impl MarketDataSource {
         }))
     }
 
-    /// What a manual order on `market` must satisfy: its quantity unit and the exchange's minimum.
+    /// What a manual order on `market` must satisfy: its quantity unit, and the smallest order the
+    /// exchange accepts, in money — see `min_order_floor`, which derives that floor for both units.
     ///
     /// `None` means NOT KNOWN: the provider, its client, the snapshot or the market itself has not
     /// arrived, or the market reports neither a quote nor a contract value. It never means
@@ -898,22 +899,42 @@ impl MarketDataSource {
         };
         let snapshot = client.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
-        let (quote, contract_size, min_qty, settlement) = handle.with(|m| {
+        let (quote, contract_size, min_qty, min_lot_value, settlement) = handle.with(|m| {
             (
                 m.base_currency.clone(),
                 m.contract_size(),
                 m.min_qty(),
+                m.price.min_lot_size,
                 m.futures_type.name(),
             )
         });
         let unit = super::market_quantity_unit(&quote, contract_size)?;
+        // The rate is asked for ONLY on a linear market, because only that market's floor is a
+        // converted lot value; a contract's floor is a count times a contract's own quote-currency
+        // value. That keeps a second lock off the coin-margined path entirely.
+        //
+        // `quote_usd_rate` rather than `currency_usd_rate`: the latter answers `None` for an empty
+        // currency, which is exactly how an HL/HIP-3 perpetual names its USDC quote, and a `None`
+        // there silently switches the floor off for that whole venue. When it is taken, its lock is
+        // sequential to the market read above rather than nested — that guard is long dropped — and
+        // on every USD-stable quote it short-circuits before taking one at all.
+        let quote_rate = matches!(unit, super::MarketQuantityUnit::Coins)
+            .then(|| self.quote_usd_rate(core, market))
+            .flatten();
+        let min_order_usd = super::min_order_floor(unit, min_qty, min_lot_value, quote_rate);
         // Printed because the figures this decision rests on are otherwise invisible from the
-        // outside, and getting it wrong sizes a REAL order. Called once per order, never per frame.
+        // outside, and getting it wrong sizes a REAL order. `min_lot` rides along beside the floor
+        // so an absent floor says WHICH absence it was — no price tick yet (`min_lot=0`) against a
+        // quote this core cannot price (a lot value with no floor beside it). Called once per
+        // order, never per frame.
         log::info!(
-            "core {} market {market} order size rules: {unit:?} min_qty={min_qty}              (quote={quote:?}, contract_size={contract_size}, futures_type={settlement})",
+            "core {} market {market} order size rules: {unit:?} min_qty={min_qty} min_order={min_order_usd:?} (quote={quote:?}, contract_size={contract_size}, min_lot={min_lot_value}, futures_type={settlement})",
             crate::feed::core_label(core)
         );
-        Some(OrderSizeRules { unit, min_qty })
+        Some(OrderSizeRules {
+            unit,
+            min_order_usd,
+        })
     }
 
     /// Build a frozen snapshot for a detection card.

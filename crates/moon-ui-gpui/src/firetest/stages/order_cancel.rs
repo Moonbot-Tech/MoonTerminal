@@ -93,7 +93,12 @@ impl Runtime {
                         .order_size_rules(core, &market)
                         .map(|rules| rules.unit)
                     {
-                        // Both units take a COIN amount on the wire; see `manual_order_size_base`.
+                        // `quote / price` is a COIN amount, right only on a coin-margined market;
+                        // a linear one is margined in its quote currency, so this over-sizes by
+                        // `1 / price` (a $10 order on `VELVETUSDT` at 0.0712 leaves as ~$140) and
+                        // reaches the wire without the venue-minimum check. Left as measured, not
+                        // changed blind: this stage places a REAL order. See
+                        // `manual_order_size_base`, which the live path uses and which is right.
                         Some(MarketQuantityUnit::Contracts(_) | MarketQuantityUnit::Coins) => {
                             Some(quote / price)
                         }
