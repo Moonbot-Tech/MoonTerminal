@@ -161,7 +161,17 @@ const WIDTH_SLACK: f32 = 48.0;
 /// One glyph advance is measured per call rather than the whole string: the rows are monospace, so
 /// the product is exact for ASCII and close enough elsewhere given the slack.
 pub(crate) fn content_width(widest_chars: usize, cx: &App) -> f32 {
-    crate::design::mono_body_text_width(cx, "0", 400.0) * widest_chars as f32 + WIDTH_SLACK
+    chars_width(widest_chars, cx) + WIDTH_SLACK
+}
+
+/// Width of `chars` monospace advances at the row body size, in unscaled pixels.
+///
+/// The same measurement [`content_width`] sizes a viewport with, without its slack, so a row that
+/// reserves a fixed column — the Log's severity badge slot — spends exactly the characters its own
+/// width budget charges it for. Measuring one advance rather than a string keeps this to a single
+/// glyph measurement per call.
+pub(crate) fn chars_width(chars: usize, cx: &App) -> f32 {
+    crate::design::mono_body_text_width(cx, "0", 400.0) * chars as f32
 }
 
 /// Wrap a vertical row list in a horizontally scrolling viewport with both scrollbars.

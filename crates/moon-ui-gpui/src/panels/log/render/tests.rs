@@ -52,6 +52,59 @@ fn multiline_message_flattens_and_keeps_the_coin_range_valid() {
     assert_eq!(base, "SPK");
 }
 
+/// `render.rs:LineView::msg_start` returning zero, skipping only eight clock bytes, or
+/// `head_clock` accepting non-digit clock bytes would redraw or indent the core clock, or panic
+/// while slicing a multi-byte message head.
+#[test]
+fn core_head_clock_moves_only_the_drawn_prefix_while_preserving_search_and_coin_offsets() {
+    let message = "09:25:06   SPK<Short> : [1] Panic sell";
+    let line = LogLine::core(0, message.to_string());
+    let view = LineView::parse(&line, &HashSet::new(), chrono_tz::UTC);
+
+    assert_eq!(view.core_time(), Some("09:25:06"));
+    assert_eq!(
+        view.msg_start(),
+        11,
+        "the core clock and every following blank must be hidden"
+    );
+    assert_eq!(
+        &view.flat[view.msg_start()..],
+        "SPK<Short> : [1] Panic sell"
+    );
+    assert_eq!(
+        view.flat, message,
+        "filtering and copying retain the original whole line"
+    );
+    assert_eq!(view.lower, message.to_lowercase());
+    assert_eq!(
+        view.coin,
+        Some((11..14, "SPK".to_string())),
+        "coin offsets remain relative to the whole, untrimmed message"
+    );
+
+    let ordinary = LogLine::core(0, "connection restored".to_string());
+    let ordinary = LineView::parse(&ordinary, &HashSet::new(), chrono_tz::UTC);
+    assert_eq!(ordinary.msg_start(), 0);
+    assert_eq!(ordinary.core_time(), None);
+
+    let colons_without_digits = LogLine::core(0, "ab:cd:ef stays visible".to_string());
+    let colons_without_digits =
+        LineView::parse(&colons_without_digits, &HashSet::new(), chrono_tz::UTC);
+    assert_eq!(colons_without_digits.msg_start(), 0);
+    assert_eq!(colons_without_digits.core_time(), None);
+
+    let multi_byte = std::panic::catch_unwind(|| {
+        let line = LogLine::core(0, "12:34:5🚀 stays visible".to_string());
+        let view = LineView::parse(&line, &HashSet::new(), chrono_tz::UTC);
+        (view.msg_start(), view.core_time().map(str::to_string))
+    });
+    assert!(
+        multi_byte.is_ok(),
+        "a non-ASCII byte at clock offset eight must not create an invalid UTF-8 slice"
+    );
+    assert_eq!(multi_byte.expect("checked above"), (0, None));
+}
+
 /// `render.rs:RefreshGate::observe` removing the active guard would rebuild a hidden Log tab on
 /// every backend revision instead of catching up once when the user opens it.
 #[test]

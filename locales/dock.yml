@@ -325,6 +325,12 @@ log.count:
   ru: "%{shown} из %{total}"
   en: "%{shown} of %{total}"
   es: "%{shown} de %{total}"
+# Hover tooltip of a log row. The line shows ONE clock — this terminal's, in the selected display
+# zone — and the core's own clock, which it repeats at the head of its own message, moves here.
+log.core_time:
+  ru: "время ядра: %{time}"
+  en: "core time: %{time}"
+  es: "hora del núcleo: %{time}"
 log.follow_tail:
   ru: "Live"
   en: "Live"

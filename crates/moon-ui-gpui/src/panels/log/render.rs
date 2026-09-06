@@ -112,6 +112,16 @@ pub(super) struct LineView {
     ///
     /// For example, token `USDT-SPK` yields base `SPK`.
     pub(super) coin: Option<(Range<usize>, String)>,
+    /// Byte range in `flat` of the clock the CORE wrote at the head of its own message, when it
+    /// wrote one.
+    ///
+    /// A core repeats its local time inside every task line, so a row carries two clocks: the one
+    /// this terminal formats from `ts` in the selected display zone, and this one. Two clocks
+    /// spaced two hours apart is what made the line read as an addressing puzzle, so the row draws
+    /// from [`Self::msg_start`] and moves this one into the row tooltip — a RANGE and not a
+    /// removal, because `flat` is also what the filters match, what the copy spells and what the
+    /// coin offsets index into.
+    head: Option<Range<usize>>,
 }
 
 impl LineView {
@@ -139,6 +149,7 @@ impl LineView {
         let lower = flat.to_lowercase();
         let cl = line_list::classify_lower(line.level, &lower);
         let coin = find_coin(&flat, known);
+        let head = head_clock(&flat);
         Self {
             ts: line.ts.clone(),
             time,
@@ -148,6 +159,7 @@ impl LineView {
             flat,
             lower,
             coin,
+            head,
         }
     }
 
@@ -169,6 +181,54 @@ impl LineView {
     pub(super) fn time(&self) -> &str {
         &self.time
     }
+
+    /// Return the clock the core wrote at the head of its own message, or `None` when it wrote
+    /// none.
+    ///
+    /// Returns:
+    ///     `HH:MM:SS` in the core's own reckoning, for the row's tooltip.
+    pub(super) fn core_time(&self) -> Option<&str> {
+        self.head
+            .as_ref()
+            .map(|head| &self.flat[head.start..head.end])
+    }
+
+    /// Return the byte offset in `flat` where the RENDERED message begins.
+    ///
+    /// Everything before it — the core's repeated clock and the blanks behind it — is drawn as the
+    /// tooltip instead. The offset is what the row renders and measures from; nothing else reads
+    /// it, so filtering, copying and the coin range keep indexing the whole string.
+    ///
+    /// Returns:
+    ///     `0` when the message carries no head clock.
+    pub(super) fn msg_start(&self) -> usize {
+        let Some(end) = self.head.as_ref().map(|head| head.end) else {
+            return 0;
+        };
+        let rest = &self.flat[end..];
+        end + (rest.len() - rest.trim_start_matches(' ').len())
+    }
+}
+
+/// Byte range of the `HH:MM:SS` clock a core repeats at the head of its own message, or `None`.
+///
+/// Recognized by shape rather than by parsing: a message that opens with two colons at those exact
+/// offsets is a core task line in every sample. Shared with [`coin_at_head`] so the head the row
+/// hides and the head the coin scanner steps over can never disagree.
+///
+/// The six digits are checked as well as the two colons, and that is not decoration: the returned
+/// range is SLICED out of the message, so a leading `12:34:5Я` — colons in place, a multi-byte
+/// character straddling offset 8 — would otherwise cut a char in half and panic. Digits make every
+/// one of the eight bytes ASCII by construction.
+pub(super) fn head_clock(msg: &str) -> Option<Range<usize>> {
+    let bytes = msg.as_bytes();
+    let shaped = bytes.len() > 8
+        && bytes[2] == b':'
+        && bytes[5] == b':'
+        && [0, 1, 3, 4, 6, 7]
+            .iter()
+            .all(|&at| bytes[at].is_ascii_digit());
+    shaped.then_some(0..8)
 }
 
 fn is_tick(b: u8) -> bool {
@@ -207,11 +267,10 @@ const MAX_COIN_LEN: usize = 12;
 /// strict form matches 150k lines of 211k and `PumpDetection` never matches.
 fn coin_at_head(msg: &str) -> Option<Range<usize>> {
     let bytes = msg.as_bytes();
-    // The core repeats its clock inside the message; step over it when present.
-    let mut at = 0;
-    if bytes.len() > 8 && bytes[2] == b':' && bytes[5] == b':' {
-        at = 8;
-    }
+    // The core repeats its clock inside the message; step over it when present. The SAME predicate
+    // the row hides it by: a head one of the two recognized and the other did not would leave the
+    // coin's highlight range pointing into text the row no longer draws.
+    let mut at = head_clock(msg).map_or(0, |head| head.end);
     while bytes.get(at) == Some(&b' ') {
         at += 1;
     }
