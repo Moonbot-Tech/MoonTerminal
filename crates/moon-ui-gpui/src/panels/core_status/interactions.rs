@@ -4,23 +4,43 @@
 
 use std::collections::HashSet;
 use std::net::IpAddr;
+use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputEvent, MoonInputState,
-    MoonNotification, MoonPalette, MoonWindowExt as _, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState,
+    MoonNotification, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 
 use super::by_ip_header::ByIpDragAnchor;
 use super::by_ip_widths::{ByIpCol, MAX_COL_W, MIN_COL_W};
 use super::model::ServerKey;
-use super::{ChartWindow, CoreStatusMode, CoreStatusView};
+use super::update_menu;
+use super::{ChartWindow, CoreStatusMode, CoreStatusView, ordering, server_view};
 use crate::design;
-use moon_core::feed::ConnStatus;
+use moon_core::feed::{ConnStatus, UpdateTarget};
 use moon_core::session::CoreId;
-use moon_core::session::core_update::CoreUpdatePhase;
 use rust_i18n::t;
 
+/// Which of the footer's three bulk buttons opened the confirm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FleetUpdateKind {
+    /// Every offerable core in the panel's scope, or in its selection.
+    All,
+    /// Only those behind the fleet's newest build.
+    Behind,
+    /// Every offerable core, to a build name the operator types inside the confirm.
+    Named,
+}
+
+/// Exactly what a footer bulk update would enqueue, resolved before the confirm opens.
+pub(super) struct FleetUpdatePlan {
+    /// Cores to enqueue, in on-screen order.
+    pub(super) cores: Rc<[CoreId]>,
+    /// Distinct server lanes they span -- the queue runs one core at a time per lane, and the
+    /// confirm says so.
+    pub(super) lanes: usize,
+}
 impl CoreStatusView {
     /// Record where a By IP header divider drag began.
     ///
@@ -447,6 +467,11 @@ impl CoreStatusView {
     pub(super) fn set_mode(&mut self, mode: CoreStatusMode, cx: &mut Context<Self>) {
         if self.mode != mode {
             self.mode = mode;
+            // The selection belongs to the rows that were on screen when it was made. Problems,
+            // Warnings and Updates draw no core rows at all, and By-IP and Flat draw different
+            // ones, so carrying it across a mode change would leave a set nothing highlights --
+            // in a panel where the next gesture enqueues a build onto live cores.
+            self.core_selection.clear();
             // Inside the change gate on purpose: re-selecting the current mode writes nothing and
             // cannot arm a layout flush, matching the width and sort maps beside it.
             crate::persistence::table_persist::set_core_status_mode(
@@ -459,63 +484,241 @@ impl CoreStatusView {
         }
     }
 
-    /// Best-effort preview of what a fleet-wide bulk update is about to enqueue, read from public
-    /// session data rather than the private `SessionManager::eligible` gate it mirrors.
+    /// Every selectable core this panel is drawing RIGHT NOW, in on-screen order.
     ///
-    /// Deliberately fleet-wide, over the whole store rather than this panel's own scope: the
-    /// engine's `cores_behind` and `fleet_newest_version` are already store-wide so that two
-    /// differently scoped panels never disagree, and a bulk action started from either one must
-    /// preview the same fleet it is about to enqueue against.
+    /// The one place a scope comes from. Both presentations map their rows onto cores here, and
+    /// both report the same shape -- `None` for a line that is not a selectable core (a Flat
+    /// exchange heading, a By-IP server row), which the click algorithm ignores. A mode that draws
+    /// no core rows at all reports NOTHING, which is what stops a selection made in By-IP from
+    /// being acted on while the Problems list is on screen.
+    ///
+    /// A COLLAPSED server group contributes nothing either. That is deliberate and it is the
+    /// safety property: a bulk update must never reach a core the user cannot see, so a selection
+    /// resolved through this list shrinks visibly (the footer's own count says so) rather than
+    /// silently keeping targets off screen.
     ///
     /// Args:
-    ///     only_behind: Whether to preview `cores_behind()` or every core the enqueue gate would
-    ///         currently accept.
-    ///     cx: View context used to read the backend snapshot.
+    ///     cx: Application context used to read the sort, the venues and the tree expansion.
     ///
     /// Returns:
-    ///     `(core count, distinct lane/server count)` for the confirm question. An exact match to
-    ///     the engine's own gate is not the point -- wording the question honestly before the
-    ///     press is.
-    fn fleet_update_preview(&self, only_behind: bool, cx: &Context<Self>) -> (usize, usize) {
-        let b = self.backend.read(cx);
-        let store = b.session.store();
-        let mut lanes: HashSet<IpAddr> = HashSet::new();
-        let count = if only_behind {
-            let ids = b.session.cores_behind();
-            for id in &ids {
-                if let Some(address) = store
-                    .core(*id)
-                    .and_then(|data| data.endpoint)
-                    .map(|endpoint| endpoint.address)
-                {
-                    lanes.insert(address);
-                }
+    ///     One entry per rendered row in the current presentation.
+    pub(super) fn visible_order(&self, cx: &App) -> Vec<Option<CoreId>> {
+        match self.mode {
+            CoreStatusMode::Flat => {
+                let (rows, lines) = self.flat_view(cx);
+                ordering::flat_order(&lines, &rows)
             }
-            ids.len()
-        } else {
-            let mut n = 0usize;
-            for (id, data) in store.cores() {
-                if data.status != ConnStatus::Ready || data.server_version.is_none() {
-                    continue;
-                }
-                let Some(endpoint) = data.endpoint else {
-                    continue;
-                };
-                let in_flight = matches!(
-                    b.session.core_update_phase(id),
-                    Some(phase) if !matches!(phase, CoreUpdatePhase::Done(_))
-                );
-                if in_flight {
-                    continue;
-                }
-                n += 1;
-                lanes.insert(endpoint.address);
+            CoreStatusMode::ByIp => {
+                let expanded = self.tree_state.read(cx).expanded_ids();
+                server_view::visible_tree_order(&self.cached_groups, &expanded)
             }
-            n
-        };
-        (count, lanes.len())
+            CoreStatusMode::Problems | CoreStatusMode::Warnings | CoreStatusMode::Updates => {
+                Vec::new()
+            }
+        }
     }
 
+    /// Apply one core-row click to the panel's controlled selection.
+    ///
+    /// A PLAIN click routes through `select_only`, not through `click`: in this panel a plain
+    /// click means "this core", and it has to keep meaning that when the same row is clicked
+    /// twice. Report's shared algorithm deliberately clears a sole selection on the second plain
+    /// click, which is right for a report row and wrong here -- it would leave an ordinary
+    /// double-click with nothing selected, in a panel whose next gesture enqueues a build. Ctrl
+    /// and Shift go to `click` unchanged, so toggling and ranges are the one shared algorithm.
+    ///
+    /// Args:
+    ///     clicked: The clicked core, or `None` for a line that is not a core row.
+    ///     order: Rendered row order from [`Self::visible_order`].
+    ///     modifiers: Native modifier snapshot from the owning window.
+    ///     cx: View context used to repaint.
+    pub(super) fn select_core_row(
+        &mut self,
+        clicked: Option<CoreId>,
+        order: &[Option<CoreId>],
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if modifiers.shift || modifiers.secondary() {
+            self.core_selection
+                .click(clicked, order, modifiers.shift, modifiers.secondary());
+        } else {
+            self.core_selection.select_only(clicked);
+        }
+        cx.notify();
+    }
+
+    /// Select every core the current presentation is drawing.
+    ///
+    /// Args:
+    ///     order: Rendered row order from [`Self::visible_order`].
+    ///     cx: View context used to repaint.
+    pub(super) fn select_all_visible_cores(
+        &mut self,
+        order: &[Option<CoreId>],
+        cx: &mut Context<Self>,
+    ) {
+        self.core_selection.select_all(order);
+        cx.notify();
+    }
+
+    /// Drop the whole core-row selection.
+    ///
+    /// Args:
+    ///     cx: View context used to repaint.
+    pub(super) fn clear_core_selection(&mut self, cx: &mut Context<Self>) {
+        self.core_selection.clear();
+        cx.notify();
+    }
+
+    /// Panel-level keyboard route for the row selection.
+    ///
+    /// Ctrl/Cmd+A selects every core the current presentation draws, Escape drops the selection.
+    /// The Flat table intercepts the same select-all chord itself when the GRID holds focus and
+    /// calls the same handler, so the two routes converge; this one is what gives the By-IP tree,
+    /// which is not a `MoonDataTable`, the identical gesture.
+    ///
+    /// Args:
+    ///     event: The key press.
+    ///     window: Host window, used to confirm this panel actually holds focus.
+    ///     cx: View context used to repaint.
+    pub(super) fn on_selection_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus.contains_focused(window, cx) {
+            return;
+        }
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+        if key == "a" && modifiers.secondary() && !modifiers.shift && !modifiers.alt {
+            let order = self.visible_order(cx);
+            self.select_all_visible_cores(&order, cx);
+        } else if key == "escape" && self.core_selection.len() > 0 {
+            self.clear_core_selection(cx);
+        }
+    }
+    /// Resolve the cores a bulk action should command, intersected with what is on screen.
+    ///
+    /// The SELECTION when the user has made one, the whole displayed scope otherwise -- and either
+    /// way filtered through [`Self::visible_order`], so no caller can enqueue a core the panel is
+    /// not currently drawing.
+    ///
+    /// Args:
+    ///     visible: Cores the current presentation draws, in on-screen order.
+    ///
+    /// Returns:
+    ///     Cores in on-screen order.
+    pub(super) fn selected_or_visible(&self, visible: &[CoreId]) -> Vec<CoreId> {
+        let selecting = self.core_selection.len() > 0;
+        visible
+            .iter()
+            .copied()
+            .filter(|core| !selecting || self.core_selection.contains(Some(*core)))
+            .collect()
+    }
+
+    /// The selectable cores the current presentation is drawing, without the heading rows.
+    ///
+    /// Resolved ONCE per frame by the caller and threaded on, because `visible_order` re-sorts
+    /// the flat rows and re-groups them into exchange sections on every call. The footer alone
+    /// used to ask for it twice, on top of the one `render` already makes for the table, so a
+    /// panel repainting at telemetry rate paid three full sorts of the whole fleet per frame.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the sort, the venues and the tree expansion.
+    ///
+    /// Returns:
+    ///     Cores in on-screen order.
+    pub(super) fn visible_cores(&self, cx: &App) -> Vec<CoreId> {
+        self.visible_order(cx).into_iter().flatten().collect()
+    }
+
+    /// How many SELECTED cores the current presentation is actually drawing.
+    ///
+    /// Not `core_selection.len()`: collapsing a By-IP group hides its cores from the rendered
+    /// order without rebuilding the cache, so the raw set can outnumber what is on screen. The
+    /// footer labels its button with this, so the count it shows is the count its own confirm
+    /// will name and its own press will enqueue.
+    ///
+    /// Args:
+    ///     visible: Cores the presentation is drawing, from [`Self::visible_cores`].
+    ///
+    /// Returns:
+    ///     Size of the visible part of the selection.
+    pub(super) fn visible_selected(&self, visible: &[CoreId]) -> usize {
+        if self.core_selection.len() == 0 {
+            return 0;
+        }
+        visible
+            .iter()
+            .filter(|core| self.core_selection.contains(Some(**core)))
+            .count()
+    }
+    /// What a footer bulk update would actually enqueue, and across how many server lanes.
+    ///
+    /// Built from the cores this panel SHOWS -- its selection when the operator has made one, its
+    /// whole displayed scope otherwise ([`Self::selected_or_visible`]) -- and NOT from the store.
+    /// It used to be fleet-wide: `update_fleet` walked `session.sessions()` and this preview walked
+    /// the whole store, so a panel scoped to one group offered a button that quietly reached all 56
+    /// cores. A control has to act on what it is drawn beside.
+    ///
+    /// Eligibility is read from public session data rather than the private
+    /// `SessionManager::eligible` gate it mirrors; an exact match to that gate is not the point,
+    /// wording the question honestly before the press is. `cores_behind` stays STORE-WIDE and is
+    /// intersected here, so two differently scoped panels still agree about which cores are stale.
+    ///
+    /// Args:
+    ///     only_behind: Whether to keep only the cores behind the fleet's newest build.
+    ///     visible: Cores the presentation is drawing, resolved once per frame by the caller.
+    ///     cx: Application context used to read the backend snapshot.
+    ///
+    /// Returns:
+    ///     The cores to enqueue, in on-screen order, and how many distinct server lanes they span.
+    pub(super) fn fleet_update_plan(
+        &self,
+        only_behind: bool,
+        visible: &[CoreId],
+        cx: &App,
+    ) -> FleetUpdatePlan {
+        let scope = self.selected_or_visible(visible);
+        let b = self.backend.read(cx);
+        let store = b.session.store();
+        let behind: Option<HashSet<CoreId>> =
+            only_behind.then(|| b.session.cores_behind().into_iter().collect());
+        let mut lanes: HashSet<IpAddr> = HashSet::new();
+        let mut cores: Vec<CoreId> = Vec::new();
+        for id in scope {
+            if behind.as_ref().is_some_and(|behind| !behind.contains(&id)) {
+                continue;
+            }
+            let Some(data) = store.core(id) else {
+                continue;
+            };
+            let Some(endpoint) = data.endpoint else {
+                continue;
+            };
+            if !matches!(
+                crate::controls::core_update::offer_state(
+                    &data.status,
+                    data.server_version,
+                    true,
+                    b.session.core_update_phase(id),
+                ),
+                crate::controls::core_update::OfferState::Offerable
+            ) {
+                continue;
+            }
+            cores.push(id);
+            lanes.insert(endpoint.address);
+        }
+        FleetUpdatePlan {
+            cores: Rc::from(cores),
+            lanes: lanes.len(),
+        }
+    }
     /// Whether a core is connected right now.
     ///
     /// Asked again at the moment of sending, not only when the button was drawn: the command
@@ -715,31 +918,68 @@ impl CoreStatusView {
         }
     }
 
-    /// Open the ONE confirm a fleet-wide bulk update gets, naming the core and lane counts before
-    /// the press that fills the whole per-IP queue.
+    /// Open the ONE confirm every footer bulk update gets, naming the core and lane counts
+    /// before the press that fills the per-IP queue.
+    ///
+    /// ONE dialog for all three buttons, and for the named build the PROMPT LIVES INSIDE IT -- a
+    /// prompt followed by a confirm would be two gates on one action, and the damage here is real
+    /// exactly once. The row and server menus keep no confirm at all, as before: those are aimed
+    /// at something the operator pointed at, while this reaches everything the panel shows.
     ///
     /// Args:
-    ///     only_behind: Forwarded to `update_fleet` on confirmation: only cores behind the fleet's
-    ///         newest build, or every core the enqueue gate accepts.
+    ///     kind: Which footer button opened this.
     ///     window: Window that owns the unique dialog.
-    ///     cx: View context used to read the preview counts and build the dialog.
+    ///     cx: View context used to resolve the plan and build the dialog.
     ///
     /// Returns:
-    ///     Nothing; only the Yes button reaches `update_fleet`, and it closes the dialog either way.
+    ///     Nothing; only Yes enqueues, and it closes the dialog either way.
     pub(super) fn confirm_fleet_update(
         &mut self,
-        only_behind: bool,
+        kind: FleetUpdateKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (core_count, lane_count) = self.fleet_update_preview(only_behind, cx);
+        let behind = kind == FleetUpdateKind::Behind;
+        let plan = self.fleet_update_plan(behind, &self.visible_cores(cx), cx);
+        if plan.cores.is_empty() {
+            return;
+        }
+        let names: Rc<[String]> = plan
+            .cores
+            .iter()
+            .map(|core| self.core_display_name(*core, cx))
+            .collect();
+        let core_count = plan.cores.len();
+        let lane_count = plan.lanes;
+        let confirmed: Rc<[CoreId]> = plan.cores.clone();
         let backend = self.backend.clone();
+        let view = cx.entity();
+        let input = (kind == FleetUpdateKind::Named).then(|| {
+            let input = cx.new(|cx| {
+                MoonInputState::new(window, cx).placeholder(
+                    t!(
+                        "core_update.menu.named_ph",
+                        cmd = moon_core::feed::CORE_UPDATE_COMMAND_WORD
+                    )
+                    .to_string(),
+                )
+            });
+            input
+                .clone()
+                .update(cx, |input, cx| input.focus(window, cx));
+            input
+        });
         window.open_unique_moon_dialog(
             "core-status-fleet-update-confirm",
             cx,
             move |dialog, _window, cx| {
                 let p = MoonPalette::active(cx);
                 let confirm_backend = backend.clone();
+                let confirm_view = view.clone();
+                let confirm_cores = confirmed.clone();
+                let confirm_input = input.clone();
+                let field = input.clone();
+                let names = names.clone();
                 let question = t!(
                     "core_update.confirm.q",
                     cores = core_count,
@@ -767,13 +1007,44 @@ impl CoreStatusView {
                     .content(move |content, _window, cx| {
                         let p = MoonPalette::active(cx);
                         content.child(
-                            div()
-                                // MIXED NODE: `core_update.confirm.q` welds the core and server
-                                // COUNTS into the question. Half a node cannot be styled.
-                                .font_family(design::mono())
-                                .text_size(design::t_body(cx))
-                                .text_color(rgb(p.text))
-                                .child(question.clone()),
+                            v_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        // MIXED NODE: `core_update.confirm.q` welds the core and
+                                        // server COUNTS into the question. Half a node cannot be
+                                        // styled.
+                                        .font_family(design::mono())
+                                        .text_size(design::t_body(cx))
+                                        .text_color(rgb(p.text))
+                                        .child(question.clone()),
+                                )
+                                // The same non-truncating list the row menu draws, from the same
+                                // helper: two dialogs describing one scope must not be able to
+                                // word it differently, and a core name is never shortened.
+                                .children(update_menu::scope_name_list(&names, p, cx))
+                                .children(field.clone().map(|field| {
+                                    v_flex()
+                                        .w_full()
+                                        .gap_1()
+                                        .child(div().text_color(rgb(p.text_muted)).child(
+                                            t!("core_update.confirm.named_prompt").to_string(),
+                                        ))
+                                        .child(
+                                            MoonInput::new("core-status-fleet-named-input")
+                                                .state(&field)
+                                                .small(),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_color(rgb(p.text_muted))
+                                                .text_size(design::t_caption(cx))
+                                                .child(
+                                                    t!("core_update.menu.named_hint").to_string(),
+                                                ),
+                                        )
+                                })),
                         )
                     })
                     .footer(
@@ -797,12 +1068,57 @@ impl CoreStatusView {
                                     .variant(MoonButtonVariant::Danger)
                                     .label(format!("  {}  ", t!("dialogs.yes")))
                                     .on_click(move |_, window, cx| {
-                                        crate::controls::core_update::update_fleet(
+                                        let target = match &confirm_input {
+                                            Some(input) => {
+                                                let typed = update_menu::typed_build_name(
+                                                    &input.read(cx).value(),
+                                                );
+                                                let Some(typed) = typed else {
+                                                    // An empty field means do nothing, exactly as
+                                                    // it does in the row menu prompt.
+                                                    window.close_dialog(cx);
+                                                    return;
+                                                };
+                                                UpdateTarget::Named(typed)
+                                            }
+                                            None => UpdateTarget::Release,
+                                        };
+                                        // RE-RESOLVED at the press, then intersected with what
+                                        // the operator confirmed. A dialog can sit open while a
+                                        // preset change or a group switch rebuilds the panel, and
+                                        // `update_scope` re-checks only enqueue ELIGIBILITY, never
+                                        // scope -- so without this a still-ready core that left
+                                        // the shown scope would take the build anyway. The
+                                        // intersection can only ever SHRINK what was confirmed.
+                                        let still: Vec<CoreId> = confirm_view
+                                            .read(cx)
+                                            .fleet_update_plan(
+                                                behind,
+                                                &confirm_view.read(cx).visible_cores(cx),
+                                                cx,
+                                            )
+                                            .cores
+                                            .iter()
+                                            .copied()
+                                            .filter(|core| confirm_cores.contains(core))
+                                            .collect();
+                                        window.close_dialog(cx);
+                                        if still.len() < confirm_cores.len() {
+                                            log::info!(
+                                                "core status: footer update scope shrank {} -> {} while the confirm was open",
+                                                confirm_cores.len(),
+                                                still.len(),
+                                            );
+                                        }
+                                        if still.is_empty() {
+                                            return;
+                                        }
+                                        crate::controls::core_update::update_scope(
                                             &confirm_backend,
-                                            only_behind,
+                                            &Rc::from(still),
+                                            target,
                                             cx,
                                         );
-                                        window.close_dialog(cx);
                                     })
                                     .render(),
                             ),

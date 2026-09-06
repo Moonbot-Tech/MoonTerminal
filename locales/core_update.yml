@@ -159,6 +159,14 @@ core_update.fleet.behind_none:
   ru: "Ни одно ядро не отстаёт от самой новой версии, видимой здесь, а релизы Moonbot терминалу не видны."
   en: "Nothing here reports an older build than the newest one visible, and the terminal can't see Moonbot releases."
   es: "Nada aquí reporta una versión más antigua que la más nueva visible, y la terminal no puede ver los lanzamientos de Moonbot."
+core_update.fleet.selected:
+  ru: "Обновить выбранные (%{n})"
+  en: "Update selected (%{n})"
+  es: "Actualizar seleccionados (%{n})"
+core_update.fleet.named:
+  ru: "До версии…"
+  en: "To a build…"
+  es: "A una build…"
 core_update.confirm.title:
   ru: "Обновление ядер"
   en: "Update cores"
@@ -181,6 +189,22 @@ core_update.menu.named_prompt:
   ru: "Имя сборки для %{core}:"
   en: "Build name for %{core}:"
   es: "Nombre de la build para %{core}:"
+core_update.menu.release_n:
+  ru: "Обновить %{n} ядер до релиза"
+  en: "Update %{n} core(s) to release"
+  es: "Actualizar %{n} núcleo(s) a la versión de lanzamiento"
+core_update.menu.named_n:
+  ru: "Обновить %{n} ядер до версии…"
+  en: "Update %{n} core(s) to a named version…"
+  es: "Actualizar %{n} núcleo(s) a una versión con nombre…"
+core_update.menu.named_prompt_n:
+  ru: "Имя сборки для %{n} ядер:"
+  en: "Build name for %{n} core(s):"
+  es: "Nombre de la build para %{n} núcleo(s):"
+core_update.confirm.named_prompt:
+  ru: "Имя сборки:"
+  en: "Build name:"
+  es: "Nombre de la build:"
 core_update.menu.named_ph:
   ru: "MoonBot-F8 или %{cmd} MoonBot-F8"
   en: "MoonBot-F8 or %{cmd} MoonBot-F8"

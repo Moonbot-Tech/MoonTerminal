@@ -1,5 +1,5 @@
-//! The shared core UPDATE control: enqueue a plain release update for one core or a whole
-//! server, retry a core whose last attempt failed, and update the fleet.
+//! The shared core UPDATE control: enqueue a release or a named build for one core, a whole
+//! server, an exchange section or the whole panel scope, and retry a core whose last attempt failed.
 //!
 //! A SIBLING of [`crate::controls::core_run`], not a fork of it -- read that module before this
 //! one. What is REUSED is its vocabulary and its rules, never its code:
@@ -20,9 +20,11 @@
 //! directly: bulk fills the queue, it never bursts commands.
 
 mod actions;
+mod scope;
 mod view;
 
-pub(crate) use actions::{retry_core, update_core, update_fleet, update_scope};
+pub(crate) use actions::{retry_core, update_core, update_scope};
+pub(crate) use scope::resolve_menu_scope;
 pub(crate) use view::update_button;
 
 use moon_core::feed::ConnStatus;

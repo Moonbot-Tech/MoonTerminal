@@ -71,36 +71,6 @@ pub(crate) fn update_scope(
     });
 }
 
-/// Enqueue the fleet for a plain release update -- every core, or only the ones behind.
-///
-/// Args:
-///     backend: Shared terminal state.
-///     only_behind: `true` selects through `session.cores_behind()`; `false` takes every core the
-///         enqueue gate accepts.
-///     app: Application context used to reach the session.
-pub(crate) fn update_fleet(backend: &Entity<Backend>, only_behind: bool, app: &mut App) {
-    backend.update(app, |backend, cx| {
-        let now_ms = moon_core::util::now_unix_ms_i64();
-        let cores: Vec<CoreId> = if only_behind {
-            backend.session.cores_behind()
-        } else {
-            backend.session.sessions().iter().map(|s| s.id).collect()
-        };
-        let report =
-            backend
-                .session
-                .enqueue_core_updates(&cores, UpdateTarget::Release, now_ms);
-        log::info!(
-            "fleet update enqueue ({}): {} accepted, {} skipped offline/unreachable, {} skipped already tracked",
-            if only_behind { "behind only" } else { "every core" },
-            report.accepted,
-            report.skipped_offline,
-            report.skipped_already,
-        );
-        cx.notify();
-    });
-}
-
 /// Retry one core whose last update attempt ended `Done`, using the target its last attempt
 /// used.
 ///
