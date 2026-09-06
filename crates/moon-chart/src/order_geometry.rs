@@ -3,8 +3,12 @@
 
 /// Moonbot: `ShowLightLines := T.RangeT > 0.02`, where RangeT is measured in Delphi days.
 const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
-/// Moonbot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
-const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
+/// MoonShot corridor fill opacity, independent from the order line alpha.
+///
+/// Moonbot uses a fixed 0.15. Deliberately lower here: these bands span the WHOLE plot width and
+/// several of them stack, so at Moonbot's value they compete with the candles they annotate. The
+/// band has to read as a tint over the price action, not as a layer of its own.
+const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.09;
 
 use crate::layers::{
     LineInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT, MarkerInstance, SEG_CLAMP_NONE,
