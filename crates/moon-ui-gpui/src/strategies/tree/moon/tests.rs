@@ -4,7 +4,7 @@ use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
-use super::{NodeData, drop_dest, id_exchange};
+use super::{NodeData, RowCounts, drop_dest, id_exchange};
 
 /// Compile-time source used to ensure the checkbox producer retains its action guard.
 const SRC: &str = include_str!("../moon.rs");
@@ -171,4 +171,19 @@ fn preview_closures_wire_drag_chip_confinement() {
         folder_preview.contains("path: path.clone()"),
         "FolderDrag payload must remain core + path"
     );
+}
+
+/// `tree/moon.rs::RowCounts::subtree`: dropping the open-orders tooltip clause would leave the
+/// displayed `(N)` count unexplained, so users could no longer tell what the second counter means.
+#[test]
+fn subtree_tooltip_names_counts_and_open_orders_when_present() {
+    let with_orders = RowCounts::subtree(1, 2, 3);
+    let counts_tip = rust_i18n::t!("strat.tree_counts_tip").to_string();
+    let orders_tip = rust_i18n::t!("strat.tree_open_orders_tip").to_string();
+    assert!(with_orders.tip.to_string().contains(&counts_tip));
+    assert!(with_orders.tip.to_string().contains(&orders_tip));
+
+    let without_orders = RowCounts::subtree(1, 2, 0);
+    assert_eq!(without_orders.tip.to_string(), counts_tip);
+    assert!(without_orders.orders.is_empty());
 }

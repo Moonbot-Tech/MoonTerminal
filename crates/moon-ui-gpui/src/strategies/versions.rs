@@ -608,10 +608,12 @@ impl StrategiesView {
             .child(div().w_full().h(px(1.0)).bg(border));
 
         let hint = |s: String| div().mt_2().text_color(moon(p.text_muted)).child(s);
+        // Same rule as the sections column: with nothing selected this pane has nothing to list and
+        // the parameters pane already asks the question, so it keeps its heading and says no more.
+        // Without this the window asked it up to three times at once, since a persisted layout can
+        // leave this pane expanded.
         if logic::selected_key(self).is_none() {
-            return col
-                .child(hint(t!("strat.no_selection").to_string()))
-                .into_any_element();
+            return col.into_any_element();
         }
         // Versions are unavailable for multi-selection because the panes show merged live values.
         if effective.len() > 1 {

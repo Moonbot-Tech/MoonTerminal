@@ -1148,13 +1148,13 @@ impl RowCounts {
 /// Args:
 ///     text: The slot's number, or empty to reserve the width without drawing anything.
 ///     width: Minimum slot width in design units — [`COUNTS_SLOT_W`] or [`ORDERS_SLOT_W`].
+///     color: Palette token for the number, so the two slots can differ.
 ///     step: Local unscaled text-size step, so the number rides the row's own text size.
 ///     app: Application context used for palette and scaled geometry.
 ///
 /// Returns:
 ///     A `flex_none` slot whose content sits on its right edge.
-fn counts_slot(text: String, width: f32, step: f32, app: &App) -> impl IntoElement {
-    let p = MoonPalette::active(app);
+fn counts_slot(text: String, width: f32, color: u32, step: f32, app: &App) -> impl IntoElement {
     h_flex()
         .flex_none()
         .min_w(design::ui_px(app, width))
@@ -1163,7 +1163,7 @@ fn counts_slot(text: String, width: f32, step: f32, app: &App) -> impl IntoEleme
             MoonText::new(text)
                 .mono(true)
                 .uppercase(false)
-                .color(p.text_muted)
+                .color(color)
                 .font_size(design::moon_text_base(app, step))
                 .line_height(ROW_LINE_BASE + step)
                 .render(),
@@ -1311,8 +1311,22 @@ fn core_folder_row(
                 .flex_none()
                 .items_center()
                 .gap(design::ui_px(app, COUNTS_GAP))
-                .child(counts_slot(counts.primary, COUNTS_SLOT_W, step, app))
-                .child(counts_slot(counts.orders, ORDERS_SLOT_W, step, app))
+                .child(counts_slot(
+                    counts.primary,
+                    COUNTS_SLOT_W,
+                    p.text_muted,
+                    step,
+                    app,
+                ))
+                // One tier softer than the fraction beside it: the two numbers mean different
+                // things, and drawn in one colour "57/57 (50)" reads as a single three-part figure.
+                .child(counts_slot(
+                    counts.orders,
+                    ORDERS_SLOT_W,
+                    p.text_soft,
+                    step,
+                    app,
+                ))
                 .tooltip(crate::panels::common::text_tooltip(counts.tip)),
         )
         .on_click(move |_e, window, app| {

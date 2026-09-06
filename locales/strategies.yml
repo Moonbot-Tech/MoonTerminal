@@ -102,14 +102,26 @@ strat.collapse_all:
   en: "Collapse all"
   es: "Contraer todo"
 # The ▶ / ■ glyphs are separate code segments; the locale contains text only.
+# The caption is the VERB alone and the object lives in the tooltip beside it: the footer collapses
+# every label to an icon once the five of them stop fitting the tree pane, and at the font sizes
+# this window is actually used at, spelling the object out on the button is what triggers that
+# collapse -- so the longer wording would have cost the caption entirely.
 strat.start_checked:
-  ru: "отмеченных"
-  en: "checked"
-  es: "marcadas"
+  ru: "Запустить"
+  en: "Start"
+  es: "Iniciar"
 strat.stop_checked:
-  ru: "отмеченных"
-  en: "checked"
-  es: "marcadas"
+  ru: "Остановить"
+  en: "Stop"
+  es: "Detener"
+strat.start_checked_tip:
+  ru: "Запустить отмеченные стратегии"
+  en: "Start the checked strategies"
+  es: "Iniciar las estrategias marcadas"
+strat.stop_checked_tip:
+  ru: "Остановить отмеченные стратегии"
+  en: "Stop the checked strategies"
+  es: "Detener las estrategias marcadas"
 strat.staged:
   ru: "изменений: %{n}"
   en: "staged: %{n}"
@@ -118,6 +130,92 @@ strat.sections:
   ru: "Разделы"
   en: "Sections"
   es: "Secciones"
+# Human names for the schema sections Moonbot streams. moonproto composes a title as either the
+# chapter string itself or "<chapter> / <value>" (strategy_schema.rs:title), and the live spelling
+# differs from the canonical form here in punctuation and spacing -- `Dynamic White\Black List`
+# arrives with a backslash, `Triggers  Master / Slave` with a double space. The lookup normalizes
+# both away (sections.rs:section_title_eq); a section absent from this table keeps its raw title.
+strat.section.Main:
+  ru: "Основные"
+  en: "Main"
+  es: "Principal"
+strat.section.DynamicWhiteBlackList:
+  ru: "Динамический белый/чёрный список"
+  en: "Dynamic white/black list"
+  es: "Lista blanca/negra dinámica"
+strat.section.Filters:
+  ru: "Фильтры"
+  en: "Filters"
+  es: "Filtros"
+strat.section.Filters_Base:
+  ru: "Фильтры / База"
+  en: "Filters / Base"
+  es: "Filtros / Base"
+strat.section.Filters_Delta:
+  ru: "Фильтры / Дельта"
+  en: "Filters / Delta"
+  es: "Filtros / Delta"
+strat.section.Filters_Ping:
+  ru: "Фильтры / Пинг"
+  en: "Filters / Ping"
+  es: "Filtros / Ping"
+strat.section.Filters_PricePosition:
+  ru: "Фильтры / Цена и позиция"
+  en: "Filters / Price and position"
+  es: "Filtros / Precio y posición"
+strat.section.Filters_Time:
+  ru: "Фильтры / Время"
+  en: "Filters / Time"
+  es: "Filtros / Tiempo"
+strat.section.Filters_Volume:
+  ru: "Фильтры / Объём"
+  en: "Filters / Volume"
+  es: "Filtros / Volumen"
+strat.section.BuyConditions:
+  ru: "Условия покупки"
+  en: "Buy conditions"
+  es: "Condiciones de compra"
+strat.section.DeltaModifiers:
+  ru: "Модификаторы дельты"
+  en: "Delta modifiers"
+  es: "Modificadores de delta"
+strat.section.MultipleOrders:
+  ru: "Несколько ордеров"
+  en: "Multiple orders"
+  es: "Órdenes múltiples"
+strat.section.SellOrder:
+  ru: "Ордер на продажу"
+  en: "Sell order"
+  es: "Orden de venta"
+strat.section.SellOrder_SellShot:
+  ru: "Продажа / SellShot"
+  en: "Sell order / SellShot"
+  es: "Venta / SellShot"
+strat.section.SellOrder_SellSpread:
+  ru: "Продажа / SellSpread"
+  en: "Sell order / SellSpread"
+  es: "Venta / SellSpread"
+strat.section.Session:
+  ru: "Сессия"
+  en: "Session"
+  es: "Sesión"
+strat.section.Stops:
+  ru: "Стопы"
+  en: "Stops"
+  es: "Stops"
+strat.section.StrategySettings:
+  ru: "Настройки стратегии"
+  en: "Strategy settings"
+  es: "Ajustes de la estrategia"
+strat.section.Triggers_MasterSlave:
+  ru: "Триггеры Master / Slave"
+  en: "Triggers Master / Slave"
+  es: "Disparadores Master / Slave"
+strat.section.UserInterface:
+  ru: "Интерфейс"
+  en: "User interface"
+  es: "Interfaz"
+# Prefix of a compact-mode field tooltip, where the raw identifier has no line of its own.
 strat.fields_count:
   ru: "полей: %{n}"
   en: "fields: %{n}"
@@ -495,22 +593,42 @@ strat.field.AddToChart:
   ru: "Номер вкладки графика; ноль означает не добавлять детект."
   en: "Chart tab number; zero means do not add the detection."
   es: "Número de pestaña del gráfico; cero significa no añadir la detección."
+strat.label.AddToChart:
+  ru: "Номер вкладки графика"
+  en: "Chart tab number"
+  es: "Número de pestaña del gráfico"
 strat.field.AllowedDrop:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.AllowedDrop:
+  ru: "Допустимая просадка"
+  en: "Allowed drop"
+  es: "Caída permitida"
 strat.field.AllowedDrop3:
   ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
   en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
   es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.label.AllowedDrop3:
+  ru: "Доп. просадка (стоп 3)"
+  en: "Allowed drop (stop 3)"
+  es: "Caída permitida (stop 3)"
 strat.field.AutoBuy:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.AutoBuy:
+  ru: "Автопокупка"
+  en: "Auto buy"
+  es: "Compra automática"
 strat.field.AutoCancelBuy:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.AutoCancelBuy:
+  ru: "Автоотмена покупки"
+  en: "Auto cancel buy"
+  es: "Cancelación automática de compra"
 strat.field.AutoCancelLowerBuy:
   ru: "Доступно, когда TlgUseBuyDipWords равно YES."
   en: "Available when TlgUseBuyDipWords is YES."
@@ -519,10 +637,18 @@ strat.field.AutoSell:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.AutoSell:
+  ru: "Автопродажа"
+  en: "Auto sell"
+  es: "Venta automática"
 strat.field.BinancePriceBug:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePing is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.label.BinancePriceBug:
+  ru: "Ценовой баг Binance"
+  en: "Binance price bug"
+  es: "Fallo de precio de Binance"
 strat.field.BinancePriceBugMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePing is NO."
@@ -531,42 +657,82 @@ strat.field.BinanceTokenTags:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.label.BinanceTokenTags:
+  ru: "Теги токенов Binance"
+  en: "Binance token tags"
+  es: "Etiquetas de tokens de Binance"
 strat.field.BuyDelay:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.BuyDelay:
+  ru: "Задержка покупки"
+  en: "Buy delay"
+  es: "Retardo de compra"
 strat.field.BuyOrderColor:
   ru: "Доступно, когда UseCustomColors равно YES."
   en: "Available when UseCustomColors is YES."
   es: "Disponible cuando UseCustomColors es YES."
+strat.label.BuyOrderColor:
+  ru: "Цвет ордера покупки"
+  en: "Buy order colour"
+  es: "Color de la orden de compra"
 strat.field.buyPrice:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.buyPrice:
+  ru: "Цена покупки"
+  en: "Buy price"
+  es: "Precio de compra"
 strat.field.buyPriceAbsolute:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.buyPriceAbsolute:
+  ru: "Абсолютная цена покупки"
+  en: "Absolute buy price"
+  es: "Precio de compra absoluto"
 strat.field.BuyPriceStep:
   ru: "Доступно, когда OrdersCount не равно 1."
   en: "Available when OrdersCount is not 1."
   es: "Disponible cuando OrdersCount no es 1."
+strat.label.BuyPriceStep:
+  ru: "Шаг цены покупки"
+  en: "Buy price step"
+  es: "Paso del precio de compra"
 strat.field.BuyStepKind:
   ru: "Доступно, когда OrdersCount больше 1."
   en: "Available when OrdersCount is greater than 1."
   es: "Disponible cuando OrdersCount es mayor que 1."
+strat.label.BuyStepKind:
+  ru: "Тип шага покупки"
+  en: "Buy step kind"
+  es: "Tipo de paso de compra"
 strat.field.BuyType:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.BuyType:
+  ru: "Тип покупки"
+  en: "Buy type"
+  es: "Tipo de compra"
 strat.field.BV_SV_FilterRatio:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO и UseBV_SV_Filter равно YES."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO and UseBV_SV_Filter is YES."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO y UseBV_SV_Filter es YES."
+strat.label.BV_SV_FilterRatio:
+  ru: "Фильтр: отношение BV/SV"
+  en: "Filter: BV/SV ratio"
+  es: "Filtro: ratio BV/SV"
 strat.field.BV_SV_FilterRatioMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO и UseBV_SV_Filter равно YES."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO and UseBV_SV_Filter is YES."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO y UseBV_SV_Filter es YES."
+strat.label.BV_SV_FilterRatioMax:
+  ru: "Фильтр: макс. BV/SV"
+  en: "Filter: max BV/SV ratio"
+  es: "Filtro: ratio BV/SV máx."
 strat.field.BV_SV_Kind:
   ru: "Доступно, когда UseBV_SV_Stop равно YES."
   en: "Available when UseBV_SV_Stop is YES."
@@ -575,126 +741,250 @@ strat.field.BV_SV_Ratio:
   ru: "Доступно, когда UseBV_SV_Stop равно YES."
   en: "Available when UseBV_SV_Stop is YES."
   es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.label.BV_SV_Ratio:
+  ru: "Отношение BV/SV для стопа"
+  en: "BV/SV ratio for the stop"
+  es: "Ratio BV/SV para el stop"
 strat.field.BV_SV_Reverse:
   ru: "Доступно, когда UseBV_SV_Stop равно YES."
   en: "Available when UseBV_SV_Stop is YES."
   es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.label.BV_SV_Reverse:
+  ru: "Обратить условие BV/SV"
+  en: "Reverse the BV/SV condition"
+  es: "Invertir la condición BV/SV"
 strat.field.BV_SV_TakeProfit:
   ru: "Доступно, когда UseBV_SV_Stop равно YES."
   en: "Available when UseBV_SV_Stop is YES."
   es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.label.BV_SV_TakeProfit:
+  ru: "Тейк-профит по BV/SV"
+  en: "BV/SV take profit"
+  es: "Take profit por BV/SV"
 strat.field.BV_SV_TradesN:
   ru: "Доступно, когда UseBV_SV_Stop равно YES."
   en: "Available when UseBV_SV_Stop is YES."
   es: "Disponible cuando UseBV_SV_Stop es YES."
+strat.label.BV_SV_TradesN:
+  ru: "Число сделок для BV/SV"
+  en: "BV/SV trade count"
+  es: "Número de operaciones para BV/SV"
 strat.field.CancelBuyAfterSell:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.CancelBuyAfterSell:
+  ru: "Отмена покупки по продаже"
+  en: "Cancel buy after sell"
+  es: "Cancelar la compra tras la venta"
 strat.field.CancelBuyStep:
   ru: "Доступно, когда AutoCancelBuy не равно 0."
   en: "Available when AutoCancelBuy is not 0."
   es: "Disponible cuando AutoCancelBuy no es 0."
+strat.label.CancelBuyStep:
+  ru: "Шаг отмены покупки"
+  en: "Cancel buy step"
+  es: "Paso de cancelación de compra"
 strat.field.CheckFreeBalance:
   ru: "Доступно, когда OrdersCount больше 1."
   en: "Available when OrdersCount is greater than 1."
   es: "Disponible cuando OrdersCount es mayor que 1."
+strat.label.CheckFreeBalance:
+  ru: "Проверять свободный баланс"
+  en: "Check free balance"
+  es: "Comprobar el saldo libre"
 strat.field.Comment:
   ru: "Не влияющая на работу заметка, сохранённая со стратегией."
   en: "A cosmetic note stored with the strategy."
   es: "Nota informativa guardada con la estrategia, sin efecto operativo."
+strat.label.Comment:
+  ru: "Комментарий"
+  en: "Comment"
+  es: "Comentario"
 strat.field.CustomEMA:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.label.CustomEMA:
+  ru: "Своя EMA"
+  en: "Custom EMA"
+  es: "EMA propia"
 strat.field.Delta_24h_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_24h_Max:
+  ru: "Макс. дельта, 24 ч"
+  en: "Max 24h delta"
+  es: "Delta 24 h máx."
 strat.field.Delta_24h_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_24h_Min:
+  ru: "Мин. дельта, 24 ч"
+  en: "Min 24h delta"
+  es: "Delta 24 h mín."
 strat.field.Delta_3h_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_3h_Max:
+  ru: "Макс. дельта, 3 ч"
+  en: "Max 3h delta"
+  es: "Delta 3 h máx."
 strat.field.Delta_3h_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_3h_Min:
+  ru: "Мин. дельта, 3 ч"
+  en: "Min 3h delta"
+  es: "Delta 3 h mín."
 strat.field.Delta_BTC_1m_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_1m_Max:
+  ru: "Макс. дельта BTC, 1 мин"
+  en: "Max 1m BTC delta"
+  es: "Delta BTC 1 min máx."
 strat.field.Delta_BTC_1m_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_1m_Min:
+  ru: "Мин. дельта BTC, 1 мин"
+  en: "Min 1m BTC delta"
+  es: "Delta BTC 1 min mín."
 strat.field.Delta_BTC_24_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_24_Max:
+  ru: "Макс. дельта BTC, 24 ч"
+  en: "Max 24h BTC delta"
+  es: "Delta BTC 24 h máx."
 strat.field.Delta_BTC_24_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_24_Min:
+  ru: "Мин. дельта BTC, 24 ч"
+  en: "Min 24h BTC delta"
+  es: "Delta BTC 24 h mín."
 strat.field.Delta_BTC_5m_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_5m_Max:
+  ru: "Макс. дельта BTC, 5 мин"
+  en: "Max 5m BTC delta"
+  es: "Delta BTC 5 min máx."
 strat.field.Delta_BTC_5m_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_5m_Min:
+  ru: "Мин. дельта BTC, 5 мин"
+  en: "Min 5m BTC delta"
+  es: "Delta BTC 5 min mín."
 strat.field.Delta_BTC_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_Max:
+  ru: "Макс. дельта BTC"
+  en: "Max BTC delta"
+  es: "Delta BTC máx."
 strat.field.Delta_BTC_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_BTC_Min:
+  ru: "Мин. дельта BTC"
+  en: "Min BTC delta"
+  es: "Delta BTC mín."
 strat.field.Delta_Market_24_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_Market_24_Max:
+  ru: "Макс. дельта рынка, 24 ч"
+  en: "Max 24h market delta"
+  es: "Delta de mercado 24 h máx."
 strat.field.Delta_Market_24_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_Market_24_Min:
+  ru: "Мин. дельта рынка, 24 ч"
+  en: "Min 24h market delta"
+  es: "Delta de mercado 24 h mín."
 strat.field.Delta_Market_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_Market_Max:
+  ru: "Макс. дельта рынка"
+  en: "Max market delta"
+  es: "Delta de mercado máx."
 strat.field.Delta_Market_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta_Market_Min:
+  ru: "Мин. дельта рынка"
+  en: "Min market delta"
+  es: "Delta de mercado mín."
 strat.field.Delta2_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta2_Max:
+  ru: "Макс. дельта 2"
+  en: "Max delta 2"
+  es: "Delta 2 máx."
 strat.field.Delta2_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta2_Min:
+  ru: "Мин. дельта 2"
+  en: "Min delta 2"
+  es: "Delta 2 mín."
 strat.field.Delta2_Type:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta2_Type:
+  ru: "Тип дельты 2"
+  en: "Delta 2 type"
+  es: "Tipo de delta 2"
 strat.field.Delta3_Max:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta3_Max:
+  ru: "Макс. дельта 3"
+  en: "Max delta 3"
+  es: "Delta 3 máx."
 strat.field.Delta3_Min:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta3_Min:
+  ru: "Мин. дельта 3"
+  en: "Min delta 3"
+  es: "Delta 3 mín."
 strat.field.Delta3_Type:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.Delta3_Type:
+  ru: "Тип дельты 3"
+  en: "Delta 3 type"
+  es: "Tipo de delta 3"
 strat.field.DeltaSwitch:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
@@ -703,42 +993,82 @@ strat.field.DontKeepOrdersOnChart:
   ru: "Доступно, когда EmulatorMode равно YES."
   en: "Available when EmulatorMode is YES."
   es: "Disponible cuando EmulatorMode es YES."
+strat.label.DontKeepOrdersOnChart:
+  ru: "Убирать ордера с графика"
+  en: "Do not keep orders on the chart"
+  es: "No mantener las órdenes en el gráfico"
 strat.field.DontSellBelowLiq:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.DontSellBelowLiq:
+  ru: "Не продавать ниже ликв."
+  en: "Do not sell below liquidation"
+  es: "No vender por debajo de la liquidación"
 strat.field.DontWriteLog:
   ru: "Доступно, когда EmulatorMode равно YES."
   en: "Available when EmulatorMode is YES."
   es: "Disponible cuando EmulatorMode es YES."
+strat.label.DontWriteLog:
+  ru: "Не писать лог"
+  en: "Do not write the log"
+  es: "No escribir el registro"
 strat.field.EmulatorMode:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.EmulatorMode:
+  ru: "Режим эмулятора"
+  en: "Emulator mode"
+  es: "Modo emulador"
 strat.field.FastStopLoss:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.FastStopLoss:
+  ru: "Быстрый стоп-лосс"
+  en: "Fast stop loss"
+  es: "Stop loss rápido"
 strat.field.FilterBy:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.FilterBy:
+  ru: "Фильтровать по"
+  en: "Filter by"
+  es: "Filtrar por"
 strat.field.FilterMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.FilterMax:
+  ru: "Макс. значение фильтра"
+  en: "Max filter value"
+  es: "Valor de filtro máx."
 strat.field.FilterMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreDelta равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreDelta is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreDelta es NO."
+strat.label.FilterMin:
+  ru: "Мин. значение фильтра"
+  en: "Min filter value"
+  es: "Valor de filtro mín."
 strat.field.FundingAfter:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.label.FundingAfter:
+  ru: "После фандинга"
+  en: "After funding"
+  es: "Después del funding"
 strat.field.FundingBefore:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.label.FundingBefore:
+  ru: "До фандинга"
+  en: "Before funding"
+  es: "Antes del funding"
 strat.field.GlobalDetectPenalty:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
@@ -755,50 +1085,98 @@ strat.field.HODLmode:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.HODLmode:
+  ru: "Режим HODL"
+  en: "HODL mode"
+  es: "Modo HODL"
 strat.field.IgnoreBase:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnoreBase:
+  ru: "Без базовых фильтров"
+  en: "No base filters"
+  es: "Sin filtros base"
 strat.field.IgnoreCancelBuy:
   ru: "Доступно, когда AutoCancelBuy не равно 0 и OrdersCount больше 1."
   en: "Available when AutoCancelBuy is not 0 and OrdersCount is greater than 1."
   es: "Disponible cuando AutoCancelBuy no es 0 y OrdersCount es mayor que 1."
+strat.label.IgnoreCancelBuy:
+  ru: "Без отмены покупки"
+  en: "No cancel buy"
+  es: "Sin cancelación de compra"
 strat.field.IgnoreDelta:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnoreDelta:
+  ru: "Без фильтров дельты"
+  en: "No delta filters"
+  es: "Sin filtros de delta"
 strat.field.IgnoreFilters:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnoreFilters:
+  ru: "Без фильтров"
+  en: "No filters at all"
+  es: "Sin filtros"
 strat.field.IgnorePing:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnorePing:
+  ru: "Без фильтра пинга"
+  en: "No ping filter"
+  es: "Sin filtro de ping"
 strat.field.IgnorePrice:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnorePrice:
+  ru: "Без фильтров цены"
+  en: "No price filters"
+  es: "Sin filtros de precio"
 strat.field.IgnoreSellShot:
   ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
   en: "Available when HODLmode is NO and AutoSell is YES."
   es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.label.IgnoreSellShot:
+  ru: "Без SellShot"
+  en: "No SellShot"
+  es: "Sin SellShot"
 strat.field.IgnoreSellSpread:
   ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
   en: "Available when HODLmode is NO and AutoSell is YES."
   es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.label.IgnoreSellSpread:
+  ru: "Без SellSpread"
+  en: "No SellSpread"
+  es: "Sin SellSpread"
 strat.field.IgnoreSession:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnoreSession:
+  ru: "Без сессии"
+  en: "No session"
+  es: "Sin sesión"
 strat.field.IgnoreTime:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnoreTime:
+  ru: "Без фильтров времени"
+  en: "No time filters"
+  es: "Sin filtros de tiempo"
 strat.field.IgnoreVolume:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.IgnoreVolume:
+  ru: "Без фильтров объёма"
+  en: "No volume filters"
+  es: "Sin filtros de volumen"
 strat.field.JoinPriceFixed:
   ru: "Доступно, когда OrdersCount больше 1."
   en: "Available when OrdersCount is greater than 1."
@@ -811,34 +1189,66 @@ strat.field.KeepAlert:
   ru: "Сколько секунд уведомление о детекте остаётся видимым."
   en: "Number of seconds the detection alert remains visible."
   es: "Segundos durante los que la alerta de detección permanece visible."
+strat.label.KeepAlert:
+  ru: "Сколько держать оповещение"
+  en: "How long the alert stays"
+  es: "Duración del aviso"
 strat.field.KeepInChart:
   ru: "Сколько секунд элемент остаётся на графике; ноль означает бессрочно."
   en: "Seconds the item remains on the chart; zero means indefinitely."
   es: "Segundos que el elemento permanece en el gráfico; cero significa indefinidamente."
+strat.label.KeepInChart:
+  ru: "Сколько держать на графике"
+  en: "How long it stays on the chart"
+  es: "Permanencia en el gráfico"
 strat.field.LastEditDate:
   ru: "Дата последнего изменения стратегии."
   en: "Date of the strategy's most recent edit."
   es: "Fecha de la modificación más reciente de la estrategia."
+strat.label.LastEditDate:
+  ru: "Дата последней правки"
+  en: "Last edit date"
+  es: "Fecha de la última edición"
 strat.field.MarketStopLevel:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.MarketStopLevel:
+  ru: "Уровень рыночного стопа"
+  en: "Market stop level"
+  es: "Nivel del stop de mercado"
 strat.field.MarkPriceMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.label.MarkPriceMax:
+  ru: "Макс. mark-цена"
+  en: "Max mark price"
+  es: "Precio mark máx."
 strat.field.MarkPriceMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.label.MarkPriceMin:
+  ru: "Мин. mark-цена"
+  en: "Min mark price"
+  es: "Precio mark mín."
 strat.field.MaxActiveOrders:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.MaxActiveOrders:
+  ru: "Макс. активных ордеров"
+  en: "Max active orders"
+  es: "Órdenes activas máx."
 strat.field.MaxBalance:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.MaxBalance:
+  ru: "Макс. баланс"
+  en: "Max balance"
+  es: "Saldo máx."
 strat.field.MaxHourlyVolFast:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
@@ -847,38 +1257,74 @@ strat.field.MaxHourlyVolume:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.MaxHourlyVolume:
+  ru: "Макс. часовой объём"
+  en: "Max hourly volume"
+  es: "Volumen por hora máx."
 strat.field.MaxLatency:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePing is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.label.MaxLatency:
+  ru: "Макс. задержка"
+  en: "Max latency"
+  es: "Latencia máx."
 strat.field.MaxLeverage:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.label.MaxLeverage:
+  ru: "Макс. плечо"
+  en: "Max leverage"
+  es: "Apalancamiento máx."
 strat.field.MaxMarkets:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.MaxMarkets:
+  ru: "Макс. число рынков"
+  en: "Max markets"
+  es: "Mercados máx."
 strat.field.MaxOrdersPerMarket:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.MaxOrdersPerMarket:
+  ru: "Макс. ордеров на рынок"
+  en: "Max orders per market"
+  es: "Órdenes por mercado máx."
 strat.field.MaxPing:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePing is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.label.MaxPing:
+  ru: "Макс. пинг"
+  en: "Max ping"
+  es: "Ping máx."
 strat.field.MaxPosition:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.MaxPosition:
+  ru: "Макс. позиция"
+  en: "Max position"
+  es: "Posición máx."
 strat.field.MaxVolume:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.MaxVolume:
+  ru: "Макс. объём"
+  en: "Max volume"
+  es: "Volumen máx."
 strat.field.MinFreeBalance:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.MinFreeBalance:
+  ru: "Мин. свободный баланс"
+  en: "Min free balance"
+  es: "Saldo libre mín."
 strat.field.MinHourlyVolFast:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
@@ -887,26 +1333,50 @@ strat.field.MinHourlyVolume:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.MinHourlyVolume:
+  ru: "Мин. часовой объём"
+  en: "Min hourly volume"
+  es: "Volumen por hora mín."
 strat.field.MinLeverage:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreBase es NO."
+strat.label.MinLeverage:
+  ru: "Мин. плечо"
+  en: "Min leverage"
+  es: "Apalancamiento mín."
 strat.field.MinPing:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePing равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePing is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePing es NO."
+strat.label.MinPing:
+  ru: "Мин. пинг"
+  en: "Min ping"
+  es: "Ping mín."
 strat.field.MinuteVolDeltaMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.MinuteVolDeltaMax:
+  ru: "Макс. дельта мин. объёма"
+  en: "Max minute volume delta"
+  es: "Delta de volumen por minuto máx."
 strat.field.MinuteVolDeltaMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.MinuteVolDeltaMin:
+  ru: "Мин. дельта мин. объёма"
+  en: "Min minute volume delta"
+  es: "Delta de volumen por minuto mín."
 strat.field.MinVolume:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.MinVolume:
+  ru: "Мин. объём"
+  en: "Min volume"
+  es: "Volumen mín."
 strat.field.MoonIntRiskLevel:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreBase равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreBase is NO."
@@ -919,26 +1389,50 @@ strat.field.OrderLineKind:
   ru: "Доступно, когда UseCustomColors равно YES."
   en: "Available when UseCustomColors is YES."
   es: "Disponible cuando UseCustomColors es YES."
+strat.label.OrderLineKind:
+  ru: "Тип линии ордера"
+  en: "Order line kind"
+  es: "Tipo de línea de orden"
 strat.field.OrdersCount:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.OrdersCount:
+  ru: "Число ордеров"
+  en: "Order count"
+  es: "Número de órdenes"
 strat.field.OrderSize:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.OrderSize:
+  ru: "Размер ордера"
+  en: "Order size"
+  es: "Tamaño de la orden"
 strat.field.OrderSizeKind:
   ru: "Доступно, когда OrdersCount больше 1."
   en: "Available when OrdersCount is greater than 1."
   es: "Disponible cuando OrdersCount es mayor que 1."
+strat.label.OrderSizeKind:
+  ru: "Тип размера ордера"
+  en: "Order size kind"
+  es: "Tipo de tamaño de orden"
 strat.field.OrderSizeStep:
   ru: "Доступно, когда OrdersCount больше 1."
   en: "Available when OrdersCount is greater than 1."
   es: "Disponible cuando OrdersCount es mayor que 1."
+strat.label.OrderSizeStep:
+  ru: "Шаг размера ордера"
+  en: "Order size step"
+  es: "Paso del tamaño de orden"
 strat.field.PenaltyTime:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.label.PenaltyTime:
+  ru: "Время штрафа"
+  en: "Penalty time"
+  es: "Tiempo de penalización"
 strat.field.PriceDownAllowedDrop:
   ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
   en: "Available when AutoSell is YES and PriceDownTimer is not 0."
@@ -947,10 +1441,18 @@ strat.field.PriceDownDelay:
   ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
   en: "Available when AutoSell is YES and PriceDownTimer is not 0."
   es: "Disponible cuando AutoSell es YES y PriceDownTimer no es 0."
+strat.label.PriceDownDelay:
+  ru: "Задержка падения цены"
+  en: "Price down delay"
+  es: "Retardo de caída del precio"
 strat.field.PriceDownPercent:
   ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
   en: "Available when AutoSell is YES and PriceDownTimer is not 0."
   es: "Disponible cuando AutoSell es YES y PriceDownTimer no es 0."
+strat.label.PriceDownPercent:
+  ru: "Процент падения цены"
+  en: "Price down percent"
+  es: "Porcentaje de caída del precio"
 strat.field.PriceDownRelative:
   ru: "Доступно, когда AutoSell равно YES и PriceDownTimer не равно 0."
   en: "Available when AutoSell is YES and PriceDownTimer is not 0."
@@ -959,22 +1461,42 @@ strat.field.PriceDownTimer:
   ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
   en: "Available when HODLmode is NO and AutoSell is YES."
   es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.label.PriceDownTimer:
+  ru: "Таймер падения цены"
+  en: "Price down timer"
+  es: "Temporizador de caída del precio"
 strat.field.PriceStepMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.PriceStepMax:
+  ru: "Макс. шаг цены"
+  en: "Max price step"
+  es: "Paso de precio máx."
 strat.field.PriceStepMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.PriceStepMin:
+  ru: "Мин. шаг цены"
+  en: "Min price step"
+  es: "Paso de precio mín."
 strat.field.PriceToSwitch2Stop:
   ru: "Доступно, когда UseStopLoss равно YES и UseSecondStop равно YES."
   en: "Available when UseStopLoss is YES and UseSecondStop is YES."
   es: "Disponible cuando UseStopLoss es YES y UseSecondStop es YES."
+strat.label.PriceToSwitch2Stop:
+  ru: "Цена перехода на стоп 2"
+  en: "Price to switch to stop 2"
+  es: "Precio para pasar al stop 2"
 strat.field.PriceToSwitchStop3:
   ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
   en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
   es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.label.PriceToSwitchStop3:
+  ru: "Цена перехода на стоп 3"
+  en: "Price to switch to stop 3"
+  es: "Precio para pasar al stop 3"
 strat.field.SamePosition:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
@@ -983,18 +1505,34 @@ strat.field.SecondStopLoss:
   ru: "Доступно, когда UseStopLoss равно YES и UseSecondStop равно YES."
   en: "Available when UseStopLoss is YES and UseSecondStop is YES."
   es: "Disponible cuando UseStopLoss es YES y UseSecondStop es YES."
+strat.label.SecondStopLoss:
+  ru: "Второй стоп-лосс"
+  en: "Second stop loss"
+  es: "Segundo stop loss"
 strat.field.SellByCustomEMA:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellByCustomEMA:
+  ru: "Продавать по своей EMA"
+  en: "Sell by the custom EMA"
+  es: "Vender por la EMA propia"
 strat.field.SellByFilters:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellByFilters:
+  ru: "Продавать по фильтрам"
+  en: "Sell by the filters"
+  es: "Vender por los filtros"
 strat.field.SellDelay:
   ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
   en: "Available when HODLmode is NO and AutoSell is YES."
   es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.label.SellDelay:
+  ru: "Задержка продажи"
+  en: "Sell delay"
+  es: "Retardo de venta"
 strat.field.SellEMACheckEnter:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
@@ -1003,30 +1541,58 @@ strat.field.SellEMADelay:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellEMADelay:
+  ru: "Задержка продажи по EMA"
+  en: "Sell EMA delay"
+  es: "Retardo de venta por EMA"
 strat.field.SellFromAssets:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellFromAssets:
+  ru: "Продавать из активов"
+  en: "Sell from assets"
+  es: "Vender desde los activos"
 strat.field.SellLevelAdjust:
   ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
   en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
   es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.label.SellLevelAdjust:
+  ru: "Подстройка уровня продажи"
+  en: "Sell level adjustment"
+  es: "Ajuste del nivel de venta"
 strat.field.SellLevelAllowedDrop:
   ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
   en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
   es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.label.SellLevelAllowedDrop:
+  ru: "Просадка уровня продажи"
+  en: "Sell level allowed drop"
+  es: "Caída permitida del nivel de venta"
 strat.field.SellLevelCount:
   ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
   en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
   es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.label.SellLevelCount:
+  ru: "Число уровней продажи"
+  en: "Sell level count"
+  es: "Número de niveles de venta"
 strat.field.SellLevelDelay:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellLevelDelay:
+  ru: "Задержка уровня продажи"
+  en: "Sell level delay"
+  es: "Retardo del nivel de venta"
 strat.field.SellLevelDelayNext:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellLevelDelayNext:
+  ru: "Задержка след. уровня"
+  en: "Next sell level delay"
+  es: "Retardo del siguiente nivel"
 strat.field.SellLevelRelative:
   ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
   en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
@@ -1035,138 +1601,274 @@ strat.field.SellLevelTime:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellLevelTime:
+  ru: "Время уровня продажи"
+  en: "Sell level time"
+  es: "Tiempo del nivel de venta"
 strat.field.SellLevelWorkTime:
   ru: "Доступно, когда AutoSell равно YES и SellLevelDelay не равно 0 и SellLevelTime не равно 0."
   en: "Available when AutoSell is YES and SellLevelDelay is not 0 and SellLevelTime is not 0."
   es: "Disponible cuando AutoSell es YES y SellLevelDelay no es 0 y SellLevelTime no es 0."
+strat.label.SellLevelWorkTime:
+  ru: "Рабочее время уровня"
+  en: "Sell level working time"
+  es: "Horario del nivel de venta"
 strat.field.SellOrderColor:
   ru: "Доступно, когда UseCustomColors равно YES."
   en: "Available when UseCustomColors is YES."
   es: "Disponible cuando UseCustomColors es YES."
+strat.label.SellOrderColor:
+  ru: "Цвет ордера продажи"
+  en: "Sell order colour"
+  es: "Color de la orden de venta"
 strat.field.SellPrice:
   ru: "Доступно, когда HODLmode равно NO и AutoSell равно YES."
   en: "Available when HODLmode is NO and AutoSell is YES."
   es: "Disponible cuando HODLmode es NO y AutoSell es YES."
+strat.label.SellPrice:
+  ru: "Цена продажи"
+  en: "Sell price"
+  es: "Precio de venta"
 strat.field.SellPriceAbsolute:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellPriceAbsolute:
+  ru: "Абсолютная цена продажи"
+  en: "Absolute sell price"
+  es: "Precio de venta absoluto"
 strat.field.SellQuantity:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.SellQuantity:
+  ru: "Количество на продажу"
+  en: "Sell quantity"
+  es: "Cantidad a vender"
 strat.field.SellShotAllowedDown:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotAllowedDown:
+  ru: "SellShot: доп. падение"
+  en: "SellShot: allowed drop"
+  es: "SellShot: caída permitida"
 strat.field.SellShotAllowedUp:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotAllowedUp:
+  ru: "SellShot: доп. рост"
+  en: "SellShot: allowed rise"
+  es: "SellShot: subida permitida"
 strat.field.SellShotCalcInterval:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotCalcInterval:
+  ru: "SellShot: интервал"
+  en: "SellShot: calculation interval"
+  es: "SellShot: intervalo de cálculo"
 strat.field.SellShotCorridor:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotCorridor:
+  ru: "SellShot: коридор"
+  en: "SellShot: corridor"
+  es: "SellShot: corredor"
 strat.field.SellShotDelay:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotDelay:
+  ru: "SellShot: задержка"
+  en: "SellShot: delay"
+  es: "SellShot: retardo"
 strat.field.SellShotDistance:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotDistance:
+  ru: "SellShot: дистанция"
+  en: "SellShot: distance"
+  es: "SellShot: distancia"
 strat.field.SellShotPriceDown:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotPriceDown:
+  ru: "SellShot: падение цены"
+  en: "SellShot: price down"
+  es: "SellShot: caída del precio"
 strat.field.SellShotPriceDownDelay:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotPriceDownDelay:
+  ru: "SellShot: задержка падения"
+  en: "SellShot: price down delay"
+  es: "SellShot: retardo de caída"
 strat.field.SellShotRaiseWait:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotRaiseWait:
+  ru: "SellShot: ожидание подъёма"
+  en: "SellShot: rise wait"
+  es: "SellShot: espera de subida"
 strat.field.SellShotReplaceDelay:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellShot равно NO."
   en: "Available when AutoSell is YES and IgnoreSellShot is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellShot es NO."
+strat.label.SellShotReplaceDelay:
+  ru: "SellShot: задержка замены"
+  en: "SellShot: replace delay"
+  es: "SellShot: retardo de reposición"
 strat.field.SellSpreadAllowedDrop:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
   en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.label.SellSpreadAllowedDrop:
+  ru: "SellSpread: доп. просадка"
+  en: "SellSpread: allowed drop"
+  es: "SellSpread: caída permitida"
 strat.field.SellSpreadCalcInterval:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
   en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.label.SellSpreadCalcInterval:
+  ru: "SellSpread: интервал"
+  en: "SellSpread: calculation interval"
+  es: "SellSpread: intervalo de cálculo"
 strat.field.SellSpreadDelay:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
   en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.label.SellSpreadDelay:
+  ru: "SellSpread: задержка"
+  en: "SellSpread: delay"
+  es: "SellSpread: retardo"
 strat.field.SellSpreadDistance:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
   en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.label.SellSpreadDistance:
+  ru: "SellSpread: дистанция"
+  en: "SellSpread: distance"
+  es: "SellSpread: distancia"
 strat.field.SellSpreadMinSpread:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
   en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.label.SellSpreadMinSpread:
+  ru: "SellSpread: мин. спред"
+  en: "SellSpread: min spread"
+  es: "SellSpread: spread mín."
 strat.field.SellSpreadReplaceCount:
   ru: "Доступно, когда AutoSell равно YES и IgnoreSellSpread равно NO."
   en: "Available when AutoSell is YES and IgnoreSellSpread is NO."
   es: "Disponible cuando AutoSell es YES y IgnoreSellSpread es NO."
+strat.label.SellSpreadReplaceCount:
+  ru: "SellSpread: число замен"
+  en: "SellSpread: replace count"
+  es: "SellSpread: número de reposiciones"
 strat.field.SessionIncreaseOrder:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionIncreaseOrder:
+  ru: "Сессия: увеличение ордера"
+  en: "Session: order increase"
+  es: "Sesión: aumento de la orden"
 strat.field.SessionIncreaseOrderMax:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionIncreaseOrderMax:
+  ru: "Сессия: макс. увеличение"
+  en: "Session: max order increase"
+  es: "Sesión: aumento de orden máx."
 strat.field.SessionLevelsUSDT:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionLevelsUSDT:
+  ru: "Сессия: уровни в USDT"
+  en: "Session: levels in USDT"
+  es: "Sesión: niveles en USDT"
 strat.field.SessionMinusCount:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionMinusCount:
+  ru: "Сессия: число убыточных"
+  en: "Session: losing count"
+  es: "Sesión: número de pérdidas"
 strat.field.SessionPenaltyTime:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionPenaltyTime:
+  ru: "Сессия: время штрафа"
+  en: "Session: penalty time"
+  es: "Sesión: tiempo de penalización"
 strat.field.SessionPlusCount:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionPlusCount:
+  ru: "Сессия: число прибыльных"
+  en: "Session: winning count"
+  es: "Sesión: número de ganancias"
 strat.field.SessionProfitMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.SessionProfitMax:
+  ru: "Сессия: макс. прибыль"
+  en: "Session: max profit"
+  es: "Sesión: beneficio máx."
 strat.field.SessionProfitMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.SessionProfitMin:
+  ru: "Сессия: мин. прибыль"
+  en: "Session: min profit"
+  es: "Sesión: beneficio mín."
 strat.field.SessionReduceOrder:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionReduceOrder:
+  ru: "Сессия: уменьшение ордера"
+  en: "Session: order reduction"
+  es: "Sesión: reducción de la orden"
 strat.field.SessionReduceOrderMin:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionReduceOrderMin:
+  ru: "Сессия: мин. уменьшение"
+  en: "Session: min order reduction"
+  es: "Sesión: reducción de orden mín."
 strat.field.SessionResetOnMinus:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionResetOnMinus:
+  ru: "Сессия: сброс при убытке"
+  en: "Session: reset on a loss"
+  es: "Sesión: reinicio con pérdida"
 strat.field.SessionResetTime:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionResetTime:
+  ru: "Сессия: время сброса"
+  en: "Session: reset time"
+  es: "Sesión: hora de reinicio"
 strat.field.SessionStratIncreaseMax:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
@@ -1175,10 +1877,18 @@ strat.field.SessionStratMax:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionStratMax:
+  ru: "Сессия: макс. стратегий"
+  en: "Session: strategy max"
+  es: "Sesión: máx. por estrategia"
 strat.field.SessionStratMin:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
   es: "Disponible cuando IgnoreSession es NO."
+strat.label.SessionStratMin:
+  ru: "Сессия: мин. стратегий"
+  en: "Session: strategy min"
+  es: "Sesión: mín. por estrategia"
 strat.field.SessionStratReduceMin:
   ru: "Доступно, когда IgnoreSession равно NO."
   en: "Available when IgnoreSession is NO."
@@ -1187,18 +1897,34 @@ strat.field.Short:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.Short:
+  ru: "Короткая позиция"
+  en: "Short position"
+  es: "Posición corta"
 strat.field.SignalType:
   ru: "Выбирает тип стратегии и схему её параметров."
   en: "Selects the strategy type and its parameter schema."
   es: "Selecciona el tipo de estrategia y su esquema de parámetros."
+strat.label.SignalType:
+  ru: "Тип стратегии"
+  en: "Strategy type"
+  es: "Tipo de estrategia"
 strat.field.SoundAlert:
   ru: "Включает сохраняемое уведомление о детекте."
   en: "Enables the retained detection alert."
   es: "Activa la alerta de detección retenida."
+strat.label.SoundAlert:
+  ru: "Звуковое оповещение"
+  en: "Sound alert"
+  es: "Aviso sonoro"
 strat.field.SoundKind:
   ru: "Выбирает звук уведомления; NONE означает тишину."
   en: "Selects the alert sound; NONE means silence."
   es: "Selecciona el sonido de alerta; NONE significa silencio."
+strat.label.SoundKind:
+  ru: "Звук оповещения"
+  en: "Alert sound"
+  es: "Sonido del aviso"
 strat.field.SplitPiece:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
@@ -1207,34 +1933,66 @@ strat.field.StopAboveLiq:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopAboveLiq:
+  ru: "Стоп выше ликвидации"
+  en: "Stop above liquidation"
+  es: "Stop por encima de la liquidación"
 strat.field.StopLoss:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopLoss:
+  ru: "Стоп-лосс"
+  en: "Stop loss"
+  es: "Stop loss"
 strat.field.StopLoss3:
   ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
   en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
   es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.label.StopLoss3:
+  ru: "Стоп-лосс 3"
+  en: "Stop loss 3"
+  es: "Stop loss 3"
 strat.field.StopLossDelay:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopLossDelay:
+  ru: "Задержка стоп-лосса"
+  en: "Stop loss delay"
+  es: "Retardo del stop loss"
 strat.field.StopLossEMA:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopLossEMA:
+  ru: "Стоп-лосс по EMA"
+  en: "EMA stop loss"
+  es: "Stop loss por EMA"
 strat.field.StopLossFixed:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopLossFixed:
+  ru: "Фиксированный стоп-лосс"
+  en: "Fixed stop loss"
+  es: "Stop loss fijo"
 strat.field.StopLossModifier:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopLossModifier:
+  ru: "Модификатор стоп-лосса"
+  en: "Stop loss modifier"
+  es: "Modificador del stop loss"
 strat.field.StopLossSpread:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.StopLossSpread:
+  ru: "Спред стоп-лосса"
+  en: "Stop loss spread"
+  es: "Spread del stop loss"
 strat.field.StopSpreadAdd1mDelta:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
@@ -1243,118 +2001,1114 @@ strat.field.StrategyName:
   ru: "Пользовательское имя стратегии."
   en: "The strategy's user-assigned name."
   es: "Nombre asignado por el usuario a la estrategia."
+strat.label.StrategyName:
+  ru: "Название стратегии"
+  en: "Strategy name"
+  es: "Nombre de la estrategia"
 strat.field.TakeProfit:
   ru: "Доступно, когда UseTrailing равно YES и UseTakeProfit равно YES."
   en: "Available when UseTrailing is YES and UseTakeProfit is YES."
   es: "Disponible cuando UseTrailing es YES y UseTakeProfit es YES."
+strat.label.TakeProfit:
+  ru: "Тейк-профит"
+  en: "Take profit"
+  es: "Take profit"
 strat.field.TimeToSwitch2Stop:
   ru: "Доступно, когда UseStopLoss равно YES и UseSecondStop равно YES."
   en: "Available when UseStopLoss is YES and UseSecondStop is YES."
   es: "Disponible cuando UseStopLoss es YES y UseSecondStop es YES."
+strat.label.TimeToSwitch2Stop:
+  ru: "Время перехода на стоп 2"
+  en: "Time to switch to stop 2"
+  es: "Tiempo para pasar al stop 2"
 strat.field.TimeToSwitchStop3:
   ru: "Доступно, когда UseStopLoss равно YES и UseStopLoss3 равно YES."
   en: "Available when UseStopLoss is YES and UseStopLoss3 is YES."
   es: "Disponible cuando UseStopLoss es YES y UseStopLoss3 es YES."
+strat.label.TimeToSwitchStop3:
+  ru: "Время перехода на стоп 3"
+  en: "Time to switch to stop 3"
+  es: "Tiempo para pasar al stop 3"
 strat.field.TlgBuyDipPrice:
   ru: "Доступно, когда TlgUseBuyDipWords равно YES."
   en: "Available when TlgUseBuyDipWords is YES."
   es: "Disponible cuando TlgUseBuyDipWords es YES."
+strat.label.TlgBuyDipPrice:
+  ru: "Телеграм: цена на проливе"
+  en: "Telegram: buy-the-dip price"
+  es: "Telegram: precio en la caída"
 strat.field.TlgUseBuyDipWords:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.TlgUseBuyDipWords:
+  ru: "Телеграм: слова о проливе"
+  en: "Telegram: buy-the-dip words"
+  es: "Telegram: palabras de caída"
 strat.field.TotalLoss:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.TotalLoss:
+  ru: "Общий убыток"
+  en: "Total loss"
+  es: "Pérdida total"
 strat.field.TradePenaltyTime:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.label.TradePenaltyTime:
+  ru: "Время штрафа после сделки"
+  en: "Post-trade penalty time"
+  es: "Penalización tras la operación"
 strat.field.TrailingEMA:
   ru: "Доступно, когда UseTrailing равно YES."
   en: "Available when UseTrailing is YES."
   es: "Disponible cuando UseTrailing es YES."
+strat.label.TrailingEMA:
+  ru: "Трейлинг по EMA"
+  en: "EMA trailing"
+  es: "Trailing por EMA"
 strat.field.TrailingPercent:
   ru: "Доступно, когда UseTrailing равно YES."
   en: "Available when UseTrailing is YES."
   es: "Disponible cuando UseTrailing es YES."
+strat.label.TrailingPercent:
+  ru: "Процент трейлинга"
+  en: "Trailing percent"
+  es: "Porcentaje de trailing"
 strat.field.TrailingSpread:
   ru: "Доступно, когда UseTrailing равно YES."
   en: "Available when UseTrailing is YES."
   es: "Disponible cuando UseTrailing es YES."
+strat.label.TrailingSpread:
+  ru: "Спред трейлинга"
+  en: "Trailing spread"
+  es: "Spread del trailing"
 strat.field.Use30SecOldASK:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.Use30SecOldASK:
+  ru: "ASK 30-секундной давности"
+  en: "Use the 30-second-old ASK"
+  es: "Usar el ASK de hace 30 segundos"
 strat.field.UseBTCPriceStep:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.UseBTCPriceStep:
+  ru: "Использовать шаг цены BTC"
+  en: "Use the BTC price step"
+  es: "Usar el paso de precio de BTC"
 strat.field.UseBV_SV_Filter:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreVolume равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreVolume is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreVolume es NO."
+strat.label.UseBV_SV_Filter:
+  ru: "Использовать фильтр BV/SV"
+  en: "Use the BV/SV filter"
+  es: "Usar el filtro BV/SV"
 strat.field.UseBV_SV_Stop:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.UseBV_SV_Stop:
+  ru: "Использовать стоп по BV/SV"
+  en: "Use the BV/SV stop"
+  es: "Usar el stop BV/SV"
 strat.field.UseCustomColors:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.UseCustomColors:
+  ru: "Использовать свои цвета"
+  en: "Use custom colours"
+  es: "Usar colores propios"
 strat.field.UseMarketStop:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.UseMarketStop:
+  ru: "Использовать рыночный стоп"
+  en: "Use the market stop"
+  es: "Usar el stop de mercado"
 strat.field.UseOldPrice:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.UseOldPrice:
+  ru: "Использовать старую цену"
+  en: "Use the old price"
+  es: "Usar el precio antiguo"
 strat.field.UsePostOnly:
   ru: "Доступно, когда AutoBuy равно YES."
   en: "Available when AutoBuy is YES."
   es: "Disponible cuando AutoBuy es YES."
+strat.label.UsePostOnly:
+  ru: "Использовать post-only"
+  en: "Use post-only"
+  es: "Usar post-only"
 strat.field.UseScalpingMode:
   ru: "Доступно, когда AutoSell равно YES."
   en: "Available when AutoSell is YES."
   es: "Disponible cuando AutoSell es YES."
+strat.label.UseScalpingMode:
+  ru: "Режим скальпинга"
+  en: "Use scalping mode"
+  es: "Usar el modo scalping"
 strat.field.UseSecondStop:
   ru: "Определяет доступность зависимых полей стратегии."
   en: "Controls whether dependent strategy fields are available."
   es: "Controla si los campos dependientes de la estrategia están disponibles."
+strat.label.UseSecondStop:
+  ru: "Использовать второй стоп"
+  en: "Use the second stop"
+  es: "Usar el segundo stop"
 strat.field.UseStopLoss:
   ru: "Доступно, когда HODLmode равно NO."
   en: "Available when HODLmode is NO."
   es: "Disponible cuando HODLmode es NO."
+strat.label.UseStopLoss:
+  ru: "Использовать стоп-лосс"
+  en: "Use the stop loss"
+  es: "Usar el stop loss"
 strat.field.UseStopLoss3:
   ru: "Доступно, когда UseStopLoss равно YES."
   en: "Available when UseStopLoss is YES."
   es: "Disponible cuando UseStopLoss es YES."
+strat.label.UseStopLoss3:
+  ru: "Использовать стоп-лосс 3"
+  en: "Use stop loss 3"
+  es: "Usar el stop loss 3"
 strat.field.UseTakeProfit:
   ru: "Доступно, когда UseTrailing равно YES."
   en: "Available when UseTrailing is YES."
   es: "Disponible cuando UseTrailing es YES."
+strat.label.UseTakeProfit:
+  ru: "Использовать тейк-профит"
+  en: "Use the take profit"
+  es: "Usar el take profit"
 strat.field.UseTrailing:
   ru: "Доступно, когда HODLmode равно NO."
   en: "Available when HODLmode is NO."
   es: "Disponible cuando HODLmode es NO."
+strat.label.UseTrailing:
+  ru: "Использовать трейлинг"
+  en: "Use trailing"
+  es: "Usar el trailing"
 strat.field.WorkingPriceMax:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.WorkingPriceMax:
+  ru: "Макс. рабочая цена"
+  en: "Max working price"
+  es: "Precio de trabajo máx."
 strat.field.WorkingPriceMin:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnorePrice равно NO."
   en: "Available when IgnoreFilters is NO and IgnorePrice is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnorePrice es NO."
+strat.label.WorkingPriceMin:
+  ru: "Мин. рабочая цена"
+  en: "Min working price"
+  es: "Precio de trabajo mín."
 strat.field.WorkingTime:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.label.WorkingTime:
+  ru: "Рабочее время"
+  en: "Working time"
+  es: "Horario de trabajo"
 strat.field.WorkingWeekTime:
   ru: "Доступно, когда IgnoreFilters равно NO и IgnoreTime равно NO."
   en: "Available when IgnoreFilters is NO and IgnoreTime is NO."
   es: "Disponible cuando IgnoreFilters es NO y IgnoreTime es NO."
+strat.label.WorkingWeekTime:
+  ru: "Рабочие дни недели"
+  en: "Weekly working time"
+  es: "Horario semanal"
+strat.label.ActiveTrigger:
+  ru: "Активный триггер"
+  en: "Active trigger"
+  es: "Disparador activo"
+strat.label.Add15minDelta:
+  ru: "Добавка дельты 15м"
+  en: "Add 15m delta"
+  es: "Añadir delta 15m"
+strat.label.Add1minDelta:
+  ru: "Добавка дельты 1м"
+  en: "Add 1m delta"
+  es: "Añadir delta 1m"
+strat.label.Add3hDelta:
+  ru: "Добавка дельты 3ч"
+  en: "Add 3h delta"
+  es: "Añadir delta 3h"
+strat.label.Add5minDelta:
+  ru: "Добавка дельты 5м"
+  en: "Add 5m delta"
+  es: "Añadir delta 5m"
+strat.label.AddBTC1mDelta:
+  ru: "Добавка дельты BTC 1м"
+  en: "Add BTC 1m delta"
+  es: "Añadir delta BTC 1m"
+strat.label.AddBTC5mDelta:
+  ru: "Добавка дельты BTC 5м"
+  en: "Add BTC 5m delta"
+  es: "Añadir delta BTC 5m"
+strat.label.AddBTCDelta:
+  ru: "Добавка дельты BTC"
+  en: "Add BTC delta"
+  es: "Añadir delta BTC"
+strat.label.AddDump1h:
+  ru: "Добавка дампа 1ч"
+  en: "Add 1h dump"
+  es: "Añadir dump 1h"
+strat.label.AddHourlyDelta:
+  ru: "Добавка часовой дельты"
+  en: "Add hourly delta"
+  es: "Añadir delta horaria"
+strat.label.AddMarketDelta:
+  ru: "Добавка рыночной дельты"
+  en: "Add market delta"
+  es: "Añadir delta de mercado"
+strat.label.AddPriceBug:
+  ru: "Добавка ценового бага"
+  en: "Add price bug"
+  es: "Añadir bug de precio"
+strat.label.AddPump1h:
+  ru: "Добавка пампа 1ч"
+  en: "Add 1h pump"
+  es: "Añadir pump 1h"
+strat.label.AutoCancelLowerBuy:
+  ru: "Отменять покупку ниже"
+  en: "Cancel lower buy"
+  es: "Cancelar compra inferior"
+strat.label.BV_SV_Kind:
+  ru: "Тип стопа BV/SV"
+  en: "BV/SV stop kind"
+  es: "Tipo de stop BV/SV"
+strat.label.BinancePriceBugMin:
+  ru: "Мин. ценовой баг Binance"
+  en: "Binance price bug min"
+  es: "Bug de precio Binance mín."
+strat.label.BuyModifier:
+  ru: "Модификатор покупки"
+  en: "Buy modifier"
+  es: "Modificador de compra"
+strat.label.BuyOrderReduce:
+  ru: "Уменьшение ордера покупки"
+  en: "Buy order reduce"
+  es: "Reducción de orden de compra"
+strat.label.BuyPriceInSpread:
+  ru: "Цена покупки в спреде"
+  en: "Buy price in spread"
+  es: "Precio de compra en el spread"
+strat.label.CheckAfterBuy:
+  ru: "Проверка после покупки"
+  en: "Check after buy"
+  es: "Comprobar tras la compra"
+strat.label.CoinsBlackList:
+  ru: "Чёрный список монет"
+  en: "Coins black list"
+  es: "Lista negra de monedas"
+strat.label.CoinsWhiteList:
+  ru: "Белый список монет"
+  en: "Coins white list"
+  es: "Lista blanca de monedas"
+strat.label.DeltaInterval:
+  ru: "Интервал дельты"
+  en: "Delta interval"
+  es: "Intervalo de delta"
+strat.label.DeltaLastPrice:
+  ru: "Дельта по последней цене"
+  en: "Delta by last price"
+  es: "Delta por último precio"
+strat.label.DeltaMin:
+  ru: "Мин. дельта"
+  en: "Min delta"
+  es: "Delta mín."
+strat.label.DeltaPrice:
+  ru: "Дельта цены"
+  en: "Price delta"
+  es: "Delta de precio"
+strat.label.DeltaShortInterval:
+  ru: "Короткий интервал дельты"
+  en: "Delta short interval"
+  es: "Intervalo corto de delta"
+strat.label.DeltaSwitch:
+  ru: "Переключатель дельты"
+  en: "Delta switch"
+  es: "Conmutador de delta"
+strat.label.DeltaVol:
+  ru: "Дельта объёма"
+  en: "Volume delta"
+  es: "Delta de volumen"
+strat.label.DeltaVolRaise:
+  ru: "Рост дельты объёма"
+  en: "Volume delta raise"
+  es: "Subida de delta de volumen"
+strat.label.DeltaVolSec:
+  ru: "Дельта объёма, сек"
+  en: "Volume delta, sec"
+  es: "Delta de volumen, s"
+strat.label.DetectModifier:
+  ru: "Модификатор детекта"
+  en: "Detect modifier"
+  es: "Modificador de detección"
+strat.label.DontTradeListing:
+  ru: "Не торговать листинги"
+  en: "Don't trade listings"
+  es: "No operar listados"
+strat.label.DropsLastPriceMA:
+  ru: "Drops: MA последней цены"
+  en: "Drops: last price MA"
+  es: "Drops: MA del último precio"
+strat.label.DropsMaxTime:
+  ru: "Drops: макс. время"
+  en: "Drops: max time"
+  es: "Drops: tiempo máx."
+strat.label.DropsPriceDelta:
+  ru: "Drops: дельта цены"
+  en: "Drops: price delta"
+  es: "Drops: delta de precio"
+strat.label.DropsPriceIsLow:
+  ru: "Drops: цена на минимуме"
+  en: "Drops: price is low"
+  es: "Drops: precio en mínimo"
+strat.label.DropsPriceMA:
+  ru: "Drops: MA цены"
+  en: "Drops: price MA"
+  es: "Drops: MA de precio"
+strat.label.DropsUseLastPrice:
+  ru: "Drops: по последней цене"
+  en: "Drops: use last price"
+  es: "Drops: usar último precio"
+strat.label.DynBL_SortBy:
+  ru: "Дин. ЧС: сортировка"
+  en: "Dyn. BL: sort by"
+  es: "LN din.: ordenar por"
+strat.label.DynBL_SortDesc:
+  ru: "Дин. ЧС: по убыванию"
+  en: "Dyn. BL: descending"
+  es: "LN din.: descendente"
+strat.label.DynWL_Count:
+  ru: "Дин. БС: количество"
+  en: "Dyn. WL: count"
+  es: "LB din.: cantidad"
+strat.label.DynWL_SortBy:
+  ru: "Дин. БС: сортировка"
+  en: "Dyn. WL: sort by"
+  es: "LB din.: ordenar por"
+strat.label.DynWL_SortDesc:
+  ru: "Дин. БС: по убыванию"
+  en: "Dyn. WL: descending"
+  es: "LB din.: descendente"
+strat.label.Dyn_Refresh:
+  ru: "Дин. списки: обновление"
+  en: "Dyn. lists: refresh"
+  es: "Listas din.: actualización"
+strat.label.FastShotAlgo:
+  ru: "Алгоритм FastShot"
+  en: "FastShot algorithm"
+  es: "Algoritmo FastShot"
+strat.label.GlobalDetectPenalty:
+  ru: "Общий штраф детекта"
+  en: "Global detect penalty"
+  es: "Penalización global de detección"
+strat.label.GlobalFilterPenalty:
+  ru: "Общий штраф фильтра"
+  en: "Global filter penalty"
+  es: "Penalización global de filtro"
+strat.label.HFT:
+  ru: "Порог HFT"
+  en: "HFT threshold"
+  es: "Umbral HFT"
+strat.label.HookAntiPump:
+  ru: "Hook: антипамп"
+  en: "Hook: anti-pump"
+  es: "Hook: anti-pump"
+strat.label.HookDetectDepth:
+  ru: "Hook: глубина детекта"
+  en: "Hook: detect depth"
+  es: "Hook: profundidad de detección"
+strat.label.HookDetectDepthMax:
+  ru: "Hook: макс. глубина детекта"
+  en: "Hook: max detect depth"
+  es: "Hook: profundidad máx. de detección"
+strat.label.HookDetectMinVolume:
+  ru: "Hook: мин. объём детекта"
+  en: "Hook: detect min volume"
+  es: "Hook: volumen mín. de detección"
+strat.label.HookDirection:
+  ru: "Hook: направление"
+  en: "Hook: direction"
+  es: "Hook: dirección"
+strat.label.HookDropMax:
+  ru: "Hook: макс. падение"
+  en: "Hook: max drop"
+  es: "Hook: caída máx."
+strat.label.HookDropMin:
+  ru: "Hook: мин. падение"
+  en: "Hook: min drop"
+  es: "Hook: caída mín."
+strat.label.HookInitialPrice:
+  ru: "Hook: начальная цена"
+  en: "Hook: initial price"
+  es: "Hook: precio inicial"
+strat.label.HookInterpolate:
+  ru: "Hook: интерполяция"
+  en: "Hook: interpolate"
+  es: "Hook: interpolar"
+strat.label.HookOppositeOrder:
+  ru: "Hook: встречный ордер"
+  en: "Hook: opposite order"
+  es: "Hook: orden opuesta"
+strat.label.HookPartFilledDelay:
+  ru: "Hook: задержка при частичном исполнении"
+  en: "Hook: part-filled delay"
+  es: "Hook: retardo por ejecución parcial"
+strat.label.HookPriceDistance:
+  ru: "Hook: дистанция цены"
+  en: "Hook: price distance"
+  es: "Hook: distancia de precio"
+strat.label.HookPriceRollBack:
+  ru: "Hook: откат цены"
+  en: "Hook: price rollback"
+  es: "Hook: retroceso de precio"
+strat.label.HookPriceRollBackMax:
+  ru: "Hook: макс. откат цены"
+  en: "Hook: max price rollback"
+  es: "Hook: retroceso máx. de precio"
+strat.label.HookRaiseWait:
+  ru: "Hook: ждать рост"
+  en: "Hook: raise wait"
+  es: "Hook: esperar subida"
+strat.label.HookRepeatAfterSell:
+  ru: "Hook: повтор после продажи"
+  en: "Hook: repeat after sell"
+  es: "Hook: repetir tras la venta"
+strat.label.HookRepeatIfProfit:
+  ru: "Hook: повтор при прибыли"
+  en: "Hook: repeat if profit"
+  es: "Hook: repetir si hay ganancia"
+strat.label.HookReplaceDelay:
+  ru: "Hook: задержка перестановки"
+  en: "Hook: replace delay"
+  es: "Hook: retardo de reemplazo"
+strat.label.HookRollBackWait:
+  ru: "Hook: ждать отката"
+  en: "Hook: rollback wait"
+  es: "Hook: esperar retroceso"
+strat.label.HookSellFixed:
+  ru: "Hook: фикс. продажа"
+  en: "Hook: fixed sell"
+  es: "Hook: venta fija"
+strat.label.HookSellLevel:
+  ru: "Hook: уровень продажи"
+  en: "Hook: sell level"
+  es: "Hook: nivel de venta"
+strat.label.HookTimeFrame:
+  ru: "Hook: таймфрейм"
+  en: "Hook: time frame"
+  es: "Hook: marco temporal"
+strat.label.IndependentSignals:
+  ru: "Независимые сигналы"
+  en: "Independent signals"
+  es: "Señales independientes"
+strat.label.IntervalsForBuySpread:
+  ru: "Интервалы для спреда покупки"
+  en: "Intervals for buy spread"
+  es: "Intervalos para spread de compra"
+strat.label.JoinPriceFixed:
+  ru: "Фикс. цена объединения"
+  en: "Fixed join price"
+  es: "Precio fijo de unión"
+strat.label.JoinSellKey:
+  ru: "Ключ объединения продаж"
+  en: "Join sell key"
+  es: "Clave de unión de ventas"
+strat.label.LiqCount:
+  ru: "Liq: количество"
+  en: "Liq: count"
+  es: "Liq: cantidad"
+strat.label.LiqDirection:
+  ru: "Liq: направление"
+  en: "Liq: direction"
+  es: "Liq: dirección"
+strat.label.LiqSameDirection:
+  ru: "Liq: то же направление"
+  en: "Liq: same direction"
+  es: "Liq: misma dirección"
+strat.label.LiqTime:
+  ru: "Liq: время"
+  en: "Liq: time"
+  es: "Liq: tiempo"
+strat.label.LiqVolumeMax:
+  ru: "Liq: макс. объём"
+  en: "Liq: max volume"
+  es: "Liq: volumen máx."
+strat.label.LiqVolumeMin:
+  ru: "Liq: мин. объём"
+  en: "Liq: min volume"
+  es: "Liq: volumen mín."
+strat.label.LiqWaitTime:
+  ru: "Liq: время ожидания"
+  en: "Liq: wait time"
+  es: "Liq: tiempo de espera"
+strat.label.LiqWithinTime:
+  ru: "Liq: в пределах времени"
+  en: "Liq: within time"
+  es: "Liq: dentro del tiempo"
+strat.label.Liq_BV_SV_Filter:
+  ru: "Liq: фильтр BV/SV"
+  en: "Liq: BV/SV filter"
+  es: "Liq: filtro BV/SV"
+strat.label.Liq_BV_SV_Time:
+  ru: "Liq: время BV/SV"
+  en: "Liq: BV/SV time"
+  es: "Liq: tiempo BV/SV"
+strat.label.ListedType:
+  ru: "Тип листинга"
+  en: "Listed type"
+  es: "Tipo de listado"
+strat.label.MShotAdd15minDelta:
+  ru: "MShot: добавка дельты 15м"
+  en: "MShot: add 15m delta"
+  es: "MShot: añadir delta 15m"
+strat.label.MShotAdd1minDelta:
+  ru: "MShot: добавка дельты 1м"
+  en: "MShot: add 1m delta"
+  es: "MShot: añadir delta 1m"
+strat.label.MShotAdd24hDelta:
+  ru: "MShot: добавка дельты 24ч"
+  en: "MShot: add 24h delta"
+  es: "MShot: añadir delta 24h"
+strat.label.MShotAdd3hDelta:
+  ru: "MShot: добавка дельты 3ч"
+  en: "MShot: add 3h delta"
+  es: "MShot: añadir delta 3h"
+strat.label.MShotAdd5minDelta:
+  ru: "MShot: добавка дельты 5м"
+  en: "MShot: add 5m delta"
+  es: "MShot: añadir delta 5m"
+strat.label.MShotAddBTC5mDelta:
+  ru: "MShot: добавка дельты BTC 5м"
+  en: "MShot: add BTC 5m delta"
+  es: "MShot: añadir delta BTC 5m"
+strat.label.MShotAddBTCDelta:
+  ru: "MShot: добавка дельты BTC"
+  en: "MShot: add BTC delta"
+  es: "MShot: añadir delta BTC"
+strat.label.MShotAddDistance:
+  ru: "MShot: добавка дистанции"
+  en: "MShot: add distance"
+  es: "MShot: añadir distancia"
+strat.label.MShotAddHourlyDelta:
+  ru: "MShot: добавка часовой дельты"
+  en: "MShot: add hourly delta"
+  es: "MShot: añadir delta horaria"
+strat.label.MShotAddMarkDelta:
+  ru: "MShot: добавка дельты марк-цены"
+  en: "MShot: add mark delta"
+  es: "MShot: añadir delta de mark"
+strat.label.MShotAddMarketDelta:
+  ru: "MShot: добавка рыночной дельты"
+  en: "MShot: add market delta"
+  es: "MShot: añadir delta de mercado"
+strat.label.MShotAddPriceBug:
+  ru: "MShot: добавка ценового бага"
+  en: "MShot: add price bug"
+  es: "MShot: añadir bug de precio"
+strat.label.MShotMinusSatoshi:
+  ru: "MShot: минус сатоши"
+  en: "MShot: minus satoshi"
+  es: "MShot: menos satoshi"
+strat.label.MShotPrice:
+  ru: "MShot: цена"
+  en: "MShot: price"
+  es: "MShot: precio"
+strat.label.MShotPriceMin:
+  ru: "MShot: мин. цена"
+  en: "MShot: min price"
+  es: "MShot: precio mín."
+strat.label.MShotRaiseWait:
+  ru: "MShot: ждать рост"
+  en: "MShot: raise wait"
+  es: "MShot: esperar subida"
+strat.label.MShotRepeatAfterBuy:
+  ru: "MShot: повтор после покупки"
+  en: "MShot: repeat after buy"
+  es: "MShot: repetir tras la compra"
+strat.label.MShotRepeatIfProfit:
+  ru: "MShot: повтор при прибыли"
+  en: "MShot: repeat if profit"
+  es: "MShot: repetir si hay ganancia"
+strat.label.MShotRepeatWait:
+  ru: "MShot: пауза перед повтором"
+  en: "MShot: repeat wait"
+  es: "MShot: espera antes de repetir"
+strat.label.MShotReplaceDelay:
+  ru: "MShot: задержка перестановки"
+  en: "MShot: replace delay"
+  es: "MShot: retardo de reemplazo"
+strat.label.MShotSellAtLastPrice:
+  ru: "MShot: продавать по последней цене"
+  en: "MShot: sell at last price"
+  es: "MShot: vender al último precio"
+strat.label.MShotSellPriceAdjust:
+  ru: "MShot: коррекция цены продажи"
+  en: "MShot: sell price adjust"
+  es: "MShot: ajuste del precio de venta"
+strat.label.MShotSortBy:
+  ru: "MShot: сортировка"
+  en: "MShot: sort by"
+  es: "MShot: ordenar por"
+strat.label.MShotSortDesc:
+  ru: "MShot: по убыванию"
+  en: "MShot: descending"
+  es: "MShot: descendente"
+strat.label.MShotUsePrice:
+  ru: "MShot: какую цену брать"
+  en: "MShot: use price"
+  es: "MShot: precio a usar"
+strat.label.MStrikeAdd15minDelta:
+  ru: "MStrike: добавка дельты 15м"
+  en: "MStrike: add 15m delta"
+  es: "MStrike: añadir delta 15m"
+strat.label.MStrikeAddBTCDelta:
+  ru: "MStrike: добавка дельты BTC"
+  en: "MStrike: add BTC delta"
+  es: "MStrike: añadir delta BTC"
+strat.label.MStrikeAddHourlyDelta:
+  ru: "MStrike: добавка часовой дельты"
+  en: "MStrike: add hourly delta"
+  es: "MStrike: añadir delta horaria"
+strat.label.MStrikeAddMarketDelta:
+  ru: "MStrike: добавка рыночной дельты"
+  en: "MStrike: add market delta"
+  es: "MStrike: añadir delta de mercado"
+strat.label.MStrikeBuyDelay:
+  ru: "MStrike: задержка покупки"
+  en: "MStrike: buy delay"
+  es: "MStrike: retardo de compra"
+strat.label.MStrikeBuyLevel:
+  ru: "MStrike: уровень покупки"
+  en: "MStrike: buy level"
+  es: "MStrike: nivel de compra"
+strat.label.MStrikeBuyRelative:
+  ru: "MStrike: покупка относительно"
+  en: "MStrike: buy relative"
+  es: "MStrike: compra relativa"
+strat.label.MStrikeDepth:
+  ru: "MStrike: глубина"
+  en: "MStrike: depth"
+  es: "MStrike: profundidad"
+strat.label.MStrikeDirection:
+  ru: "MStrike: направление"
+  en: "MStrike: direction"
+  es: "MStrike: dirección"
+strat.label.MStrikeSellAdjust:
+  ru: "MStrike: коррекция продажи"
+  en: "MStrike: sell adjust"
+  es: "MStrike: ajuste de venta"
+strat.label.MStrikeSellLevel:
+  ru: "MStrike: уровень продажи"
+  en: "MStrike: sell level"
+  es: "MStrike: nivel de venta"
+strat.label.MStrikeVolume:
+  ru: "MStrike: объём"
+  en: "MStrike: volume"
+  es: "MStrike: volumen"
+strat.label.MStrikeWaitDip:
+  ru: "MStrike: ждать просадку"
+  en: "MStrike: wait dip"
+  es: "MStrike: esperar caída"
+strat.label.MaxHourlyVolFast:
+  ru: "Макс. часовой объём (быстрый)"
+  en: "Max hourly volume (fast)"
+  es: "Volumen horario máx. (rápido)"
+strat.label.MaxModifier:
+  ru: "Макс. модификатор"
+  en: "Max modifier"
+  es: "Modificador máx."
+strat.label.MinHourlyVolFast:
+  ru: "Мин. часовой объём (быстрый)"
+  en: "Min hourly volume (fast)"
+  es: "Volumen horario mín. (rápido)"
+strat.label.MinReducedSize:
+  ru: "Мин. уменьшенный размер"
+  en: "Min reduced size"
+  es: "Tamaño reducido mín."
+strat.label.MoonIntRiskLevel:
+  ru: "Уровень риска MoonInt"
+  en: "MoonInt risk level"
+  es: "Nivel de riesgo MoonInt"
+strat.label.MoonIntStopLevel:
+  ru: "Уровень стопа MoonInt"
+  en: "MoonInt stop level"
+  es: "Nivel de stop MoonInt"
+strat.label.NextDetectPenalty:
+  ru: "Штраф следующего детекта"
+  en: "Next detect penalty"
+  es: "Penalización del siguiente detect"
+strat.label.PendingOrderSpread:
+  ru: "Спред отложенного ордера"
+  en: "Pending order spread"
+  es: "Spread de orden pendiente"
+strat.label.PriceDownAllowedDrop:
+  ru: "Price Down: допустимое падение"
+  en: "Price Down: allowed drop"
+  es: "Price Down: caída permitida"
+strat.label.PriceDownRelative:
+  ru: "Price Down: относительно"
+  en: "Price Down: relative"
+  es: "Price Down: relativo"
+strat.label.PriceIntervalShift:
+  ru: "Сдвиг ценового интервала"
+  en: "Price interval shift"
+  es: "Desplazamiento del intervalo de precio"
+strat.label.PriceIntervals:
+  ru: "Ценовые интервалы"
+  en: "Price intervals"
+  es: "Intervalos de precio"
+strat.label.PriceSpread:
+  ru: "Спред цены"
+  en: "Price spread"
+  es: "Spread de precio"
+strat.label.PriceSpreadMax:
+  ru: "Макс. спред цены"
+  en: "Max price spread"
+  es: "Spread de precio máx."
+strat.label.ReportToTelegram:
+  ru: "Отчёт в Telegram"
+  en: "Report to Telegram"
+  es: "Informe a Telegram"
+strat.label.ReportTradesToTelegram:
+  ru: "Сделки в Telegram"
+  en: "Report trades to Telegram"
+  es: "Operaciones a Telegram"
+strat.label.SamePosition:
+  ru: "Та же позиция"
+  en: "Same position"
+  es: "Misma posición"
+strat.label.SellEMACheckEnter:
+  ru: "Проверять EMA продажи на входе"
+  en: "Check sell EMA on entry"
+  es: "Comprobar EMA de venta al entrar"
+strat.label.SellLevelRelative:
+  ru: "Уровень продажи относительно"
+  en: "Sell level relative"
+  es: "Nivel de venta relativo"
+strat.label.SellModifier:
+  ru: "Модификатор продажи"
+  en: "Sell modifier"
+  es: "Modificador de venta"
+strat.label.SellPriceInSpread:
+  ru: "Цена продажи в спреде"
+  en: "Sell price in spread"
+  es: "Precio de venta en el spread"
+strat.label.SessionStratIncreaseMax:
+  ru: "Макс. увеличение за сессию"
+  en: "Max session increase"
+  es: "Aumento máx. por sesión"
+strat.label.SessionStratReduceMin:
+  ru: "Мин. снижение за сессию"
+  en: "Min session reduce"
+  es: "Reducción mín. por sesión"
+strat.label.SilentNoCharts:
+  ru: "Тихо, без графиков"
+  en: "Silent, no charts"
+  es: "Silencioso, sin gráficos"
+strat.label.SplitPiece:
+  ru: "Часть при дроблении"
+  en: "Split piece"
+  es: "Parte al dividir"
+strat.label.SpreadFlat:
+  ru: "Spread: флэт"
+  en: "Spread: flat"
+  es: "Spread: plano"
+strat.label.SpreadPolarityMax:
+  ru: "Spread: макс. полярность"
+  en: "Spread: max polarity"
+  es: "Spread: polaridad máx."
+strat.label.SpreadPolarityMin:
+  ru: "Spread: мин. полярность"
+  en: "Spread: min polarity"
+  es: "Spread: polaridad mín."
+strat.label.SpreadRepeatIfProfit:
+  ru: "Spread: повтор при прибыли"
+  en: "Spread: repeat if profit"
+  es: "Spread: repetir si hay ganancia"
+strat.label.Spread_BV_SV_Max:
+  ru: "Spread: макс. BV/SV"
+  en: "Spread: BV/SV max"
+  es: "Spread: BV/SV máx."
+strat.label.Spread_BV_SV_Min:
+  ru: "Spread: мин. BV/SV"
+  en: "Spread: BV/SV min"
+  es: "Spread: BV/SV mín."
+strat.label.Spread_BV_SV_Time:
+  ru: "Spread: время BV/SV"
+  en: "Spread: BV/SV time"
+  es: "Spread: tiempo BV/SV"
+strat.label.StopSpreadAdd1mDelta:
+  ru: "Стоп-спред: добавка дельты 1м"
+  en: "Stop spread: add 1m delta"
+  es: "Spread del stop: añadir delta 1m"
+strat.label.StrategyPenalty:
+  ru: "Штраф стратегии"
+  en: "Strategy penalty"
+  es: "Penalización de estrategia"
+strat.label.TMSameDirection:
+  ru: "TM: то же направление"
+  en: "TM: same direction"
+  es: "TM: misma dirección"
+strat.label.TimeInterval:
+  ru: "Интервал времени"
+  en: "Time interval"
+  es: "Intervalo de tiempo"
+strat.label.TradesCountMin:
+  ru: "Мин. число сделок"
+  en: "Min trades count"
+  es: "Número mín. de operaciones"
+strat.label.TradesDensity:
+  ru: "Плотность сделок"
+  en: "Trades density"
+  es: "Densidad de operaciones"
+strat.label.TradesDensityPrev:
+  ru: "Плотность сделок ранее"
+  en: "Previous trades density"
+  es: "Densidad de operaciones previa"
+strat.label.TriggerAllMarkets:
+  ru: "Триггер на все рынки"
+  en: "Trigger all markets"
+  es: "Disparar en todos los mercados"
+strat.label.TriggerByKey:
+  ru: "Триггер по ключу"
+  en: "Trigger by key"
+  es: "Disparar por clave"
+strat.label.TriggerKey:
+  ru: "Ключ триггера"
+  en: "Trigger key"
+  es: "Clave del disparador"
+strat.label.TriggerKeyBuy:
+  ru: "Ключ триггера покупки"
+  en: "Trigger key: buy"
+  es: "Clave del disparador de compra"
+strat.label.TriggerKeysBL:
+  ru: "Ключи триггера: ЧС"
+  en: "Trigger keys: black list"
+  es: "Claves del disparador: lista negra"
+strat.label.TriggerSeconds:
+  ru: "Триггер: секунды"
+  en: "Trigger: seconds"
+  es: "Disparador: segundos"
+strat.label.TriggerSecondsBL:
+  ru: "Триггер: секунды ЧС"
+  en: "Trigger: black-list seconds"
+  es: "Disparador: segundos de lista negra"
+strat.label.VLiteDelta0:
+  ru: "VLite: дельта 0"
+  en: "VLite: delta 0"
+  es: "VLite: delta 0"
+strat.label.VLiteMaxP:
+  ru: "VLite: макс. P"
+  en: "VLite: max P"
+  es: "VLite: P máx."
+strat.label.VLiteMaxSpike:
+  ru: "VLite: макс. спайк"
+  en: "VLite: max spike"
+  es: "VLite: pico máx."
+strat.label.VLiteP1:
+  ru: "VLite: P1"
+  en: "VLite: P1"
+  es: "VLite: P1"
+strat.label.VLiteP2:
+  ru: "VLite: P2"
+  en: "VLite: P2"
+  es: "VLite: P2"
+strat.label.VLiteP3:
+  ru: "VLite: P3"
+  en: "VLite: P3"
+  es: "VLite: P3"
+strat.label.VLitePDelta2:
+  ru: "VLite: дельта P2"
+  en: "VLite: P delta 2"
+  es: "VLite: delta P2"
+strat.label.VLiteReducedVolumes:
+  ru: "VLite: сниженные объёмы"
+  en: "VLite: reduced volumes"
+  es: "VLite: volúmenes reducidos"
+strat.label.VLiteT0:
+  ru: "VLite: T0"
+  en: "VLite: T0"
+  es: "VLite: T0"
+strat.label.VLiteT1:
+  ru: "VLite: T1"
+  en: "VLite: T1"
+  es: "VLite: T1"
+strat.label.VLiteT2:
+  ru: "VLite: T2"
+  en: "VLite: T2"
+  es: "VLite: T2"
+strat.label.VLiteT3:
+  ru: "VLite: T3"
+  en: "VLite: T3"
+  es: "VLite: T3"
+strat.label.VLiteV1:
+  ru: "VLite: V1"
+  en: "VLite: V1"
+  es: "VLite: V1"
+strat.label.VLiteV2:
+  ru: "VLite: V2"
+  en: "VLite: V2"
+  es: "VLite: V2"
+strat.label.VLiteV3:
+  ru: "VLite: V3"
+  en: "VLite: V3"
+  es: "VLite: V3"
+strat.label.VLiteWeightedAvg:
+  ru: "VLite: взвешенное среднее"
+  en: "VLite: weighted average"
+  es: "VLite: media ponderada"
+strat.label.VolAtMaxP:
+  ru: "Объём на макс. цене"
+  en: "Volume at max price"
+  es: "Volumen en precio máx."
+strat.label.VolAtMinP:
+  ru: "Объём на мин. цене"
+  en: "Volume at min price"
+  es: "Volumen en precio mín."
+strat.label.VolBvLongToDailyMax:
+  ru: "Vol: BV long к дневному, макс."
+  en: "Vol: BV long to daily, max"
+  es: "Vol: BV long vs diario, máx."
+strat.label.VolBvLongToDailyMin:
+  ru: "Vol: BV long к дневному, мин."
+  en: "Vol: BV long to daily, min"
+  es: "Vol: BV long vs diario, mín."
+strat.label.VolBvLongToHourlyMax:
+  ru: "Vol: BV long к часовому, макс."
+  en: "Vol: BV long to hourly, max"
+  es: "Vol: BV long vs horario, máx."
+strat.label.VolBvLongToHourlyMin:
+  ru: "Vol: BV long к часовому, мин."
+  en: "Vol: BV long to hourly, min"
+  es: "Vol: BV long vs horario, mín."
+strat.label.VolBvShort:
+  ru: "Vol: BV short"
+  en: "Vol: BV short"
+  es: "Vol: BV short"
+strat.label.VolBvShortToLong:
+  ru: "Vol: BV short к long"
+  en: "Vol: BV short to long"
+  es: "Vol: BV short vs long"
+strat.label.VolBvToSvShort:
+  ru: "Vol: BV к SV short"
+  en: "Vol: BV to SV short"
+  es: "Vol: BV vs SV short"
+strat.label.VolDeltaAtMaxP:
+  ru: "Дельта объёма на макс. цене"
+  en: "Volume delta at max price"
+  es: "Delta de volumen en precio máx."
+strat.label.VolDeltaAtMinP:
+  ru: "Дельта объёма на мин. цене"
+  en: "Volume delta at min price"
+  es: "Delta de volumen en precio mín."
+strat.label.VolLongInterval:
+  ru: "Vol: длинный интервал"
+  en: "Vol: long interval"
+  es: "Vol: intervalo largo"
+strat.label.VolShortInterval:
+  ru: "Vol: короткий интервал"
+  en: "Vol: short interval"
+  es: "Vol: intervalo corto"
+strat.label.VolShortPriseRaise:
+  ru: "Vol: рост цены за короткий интервал"
+  en: "Vol: short-interval price raise"
+  es: "Vol: subida de precio en intervalo corto"
+strat.label.VolSvLong:
+  ru: "Vol: SV long"
+  en: "Vol: SV long"
+  es: "Vol: SV long"
+strat.label.VolTakeLongMaxP:
+  ru: "Vol: брать макс. цену за long"
+  en: "Vol: take long max price"
+  es: "Vol: tomar precio máx. de long"
+strat.label.WavesDelta0:
+  ru: "Waves: дельта 0"
+  en: "Waves: delta 0"
+  es: "Waves: delta 0"
+strat.label.WavesMaxSpike:
+  ru: "Waves: макс. спайк"
+  en: "Waves: max spike"
+  es: "Waves: pico máx."
+strat.label.WavesP1:
+  ru: "Waves: P1"
+  en: "Waves: P1"
+  es: "Waves: P1"
+strat.label.WavesP2:
+  ru: "Waves: P2"
+  en: "Waves: P2"
+  es: "Waves: P2"
+strat.label.WavesP3:
+  ru: "Waves: P3"
+  en: "Waves: P3"
+  es: "Waves: P3"
+strat.label.WavesReducedVolumes:
+  ru: "Waves: сниженные объёмы"
+  en: "Waves: reduced volumes"
+  es: "Waves: volúmenes reducidos"
+strat.label.WavesT0:
+  ru: "Waves: T0"
+  en: "Waves: T0"
+  es: "Waves: T0"
+strat.label.WavesT1:
+  ru: "Waves: T1"
+  en: "Waves: T1"
+  es: "Waves: T1"
+strat.label.WavesT2:
+  ru: "Waves: T2"
+  en: "Waves: T2"
+  es: "Waves: T2"
+strat.label.WavesT3:
+  ru: "Waves: T3"
+  en: "Waves: T3"
+  es: "Waves: T3"
+strat.label.WavesV1:
+  ru: "Waves: V1"
+  en: "Waves: V1"
+  es: "Waves: V1"
+strat.label.WavesV2:
+  ru: "Waves: V2"
+  en: "Waves: V2"
+  es: "Waves: V2"
+strat.label.WavesV3:
+  ru: "Waves: V3"
+  en: "Waves: V3"
+  es: "Waves: V3"
+strat.label.WavesWeightedAvg:
+  ru: "Waves: взвешенное среднее"
+  en: "Waves: weighted average"
+  es: "Waves: media ponderada"
+strat.label.volAsksDeep:
+  ru: "Объём asks в глубине"
+  en: "Deep asks volume"
+  es: "Volumen de asks en profundidad"
+strat.label.volBids:
+  ru: "Объём bids"
+  en: "Bids volume"
+  es: "Volumen de bids"
+strat.label.volBidsDeep:
+  ru: "Объём bids в глубине"
+  en: "Deep bids volume"
+  es: "Volumen de bids en profundidad"
+strat.label.volBidsToAsks:
+  ru: "Объём bids к asks"
+  en: "Bids to asks volume"
+  es: "Volumen bids/asks"
 strat.sections_all_tip:
   ru: "Всего изменённых полей в этой версии: %{n}. Часть из них может отсутствовать в схеме текущего ядра, поэтому счётчики разделов не обязаны давать в сумме это число."
   en: "Total fields changed in this version: %{n}. Some may be absent from the current core's schema, so the section counters need not add up to it."

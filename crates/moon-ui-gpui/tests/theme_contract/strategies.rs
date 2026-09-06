@@ -1,6 +1,8 @@
 //! Strategies-window contracts for folder paths, copy/reveal behavior, refresh routing, MoonTree
 //! ownership, and per-frame tree construction.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::support::*;
 
 /// A strategy copy goes to the core root, sits beside its source, and is revealed to the user.
@@ -1152,8 +1154,8 @@ fn a_core_folder_row_counter_cluster_stays_passive() {
 
     assert!(
         cluster.contains(".flex_none()")
-            && cluster.contains(".child(counts_slot(counts.primary, COUNTS_SLOT_W, step, app))")
-            && cluster.contains(".child(counts_slot(counts.orders, ORDERS_SLOT_W, step, app))"),
+            && cluster.contains("counts_slot(\n                    counts.primary,\n                    COUNTS_SLOT_W,\n                    p.text_muted,")
+            && cluster.contains("counts_slot(\n                    counts.orders,\n                    ORDERS_SLOT_W,\n                    p.text_soft,"),
         "the identified counter cluster must retain both fixed counter slots"
     );
     assert!(
@@ -1369,5 +1371,117 @@ fn version_restore_clears_stale_drafts_only_for_its_own_strategy() {
     assert!(
         restore.contains("*c == core && *i == id"),
         "Restore must match both core and strategy id so other strategies retain their drafts"
+    );
+}
+
+/// `params.rs::field_keys` and `Strategies.yml`: dropping a lookup arm or one locale value
+/// would either fall back to a raw identifier or show a `strat.label.*` key to traders instead of
+/// a human label.
+#[test]
+fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
+    let params = read_src("strategies/params.rs");
+    let lookup = braced_body(&params, "fn field_keys(");
+    let returned: BTreeSet<String> = lookup
+        .match_indices("\"strat.label.")
+        .filter_map(|(at, _)| {
+            lookup[at + 1..]
+                .split_once('"')
+                .map(|(key, _)| key.to_string())
+        })
+        .collect();
+    assert_eq!(
+        returned.len(),
+        414,
+        "the contract labels exactly 414 schema fields; an absent arm silently falls back to raw text"
+    );
+
+    let locales = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("locales")
+            .join("strategies.yml"),
+    )
+    .expect("read Strategies locales");
+    let mut dictionary: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in locales.lines() {
+        let trimmed = line.trim();
+        if !line.starts_with(' ') && trimmed.starts_with("strat.label.") && trimmed.ends_with(':') {
+            let key = trimmed.trim_end_matches(':').to_string();
+            dictionary.entry(key.clone()).or_default();
+            current = Some(key);
+        } else if let Some(key) = &current {
+            if let Some((locale, _)) = trimmed.split_once(':') {
+                if matches!(locale, "ru" | "en" | "es") {
+                    dictionary
+                        .get_mut(key)
+                        .expect("current label key was inserted")
+                        .insert(locale.to_string());
+                }
+            }
+        }
+    }
+    let dictionary_keys: BTreeSet<String> = dictionary.keys().cloned().collect();
+    assert_eq!(
+        returned, dictionary_keys,
+        "the lookup and locale dictionary must expose precisely the same label keys"
+    );
+    for (key, locales) in dictionary {
+        assert_eq!(
+            locales,
+            BTreeSet::from(["en".to_string(), "es".to_string(), "ru".to_string()]),
+            "{key} must have ru, en, and es values so rust-i18n cannot render a locale key"
+        );
+    }
+}
+
+/// `params.rs::StrategiesView::field_row`: returning the label line to a width-less flex makes
+/// every translated field name truncate to an ellipsis, removing the new feature from the editor.
+#[test]
+fn strategy_field_label_cell_keeps_a_definite_width_through_each_truncating_line() {
+    let params = read_src("strategies/params.rs");
+    let field_row = code_only(braced_body(&params, "pub(super) fn field_row("));
+    let label_id = field_row
+        .find("field-label-{row_id}")
+        .expect("field_row must retain the label cell id");
+    let label_start = field_row[..label_id]
+        .rfind("v_flex()")
+        .expect("the label cell id must remain on its vertical width-owning flex");
+    let label_cell = &field_row[label_start..];
+    assert!(
+        label_cell.contains("v_flex()")
+            && label_cell.contains(".w(design::font_w_px(cx, 180.0))")
+            && label_cell.contains(".flex_none()")
+            && label_cell.contains(".min_w_0()"),
+        "the label cell must own the fixed scaled width before either text line can truncate"
+    );
+
+    let before_first_truncate = label_cell
+        .split_once(".truncate()")
+        .expect("the label cell must keep a truncating label line")
+        .0;
+    assert!(
+        before_first_truncate.contains("h_flex()") && before_first_truncate.contains(".w_full()"),
+        "the first label line must be a full-width flex below the fixed-width label cell"
+    );
+    let subtitle_leaf = chain_between(
+        label_cell,
+        ".when_some(subtitle, |cell, raw| {",
+        "\n                    }),",
+        "the subtitle label leaf",
+    );
+    let width = subtitle_leaf
+        .find(".w_full()")
+        .expect("the subtitle leaf must retain a definite width");
+    let min_width = subtitle_leaf
+        .find(".min_w_0()")
+        .expect("the subtitle leaf must be shrinkable before it truncates");
+    let truncate = subtitle_leaf
+        .find(".truncate()")
+        .expect("the subtitle leaf must truncate its raw identifier");
+    assert!(
+        width < min_width && min_width < truncate,
+        "the subtitle leaf must own a definite width and shrinkability before truncation"
     );
 }
