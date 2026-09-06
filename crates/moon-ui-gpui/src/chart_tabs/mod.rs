@@ -245,7 +245,7 @@ fn preferred_auto_workspace_market(
 /// font scaling cannot desynchronize the strip and underline from the tabs. With the default
 /// `ui = 1` and `font_delta = 2`, it returns the former constant value of 30.
 pub(super) fn chart_tab_strip_h(cx: &App) -> f32 {
-    crate::design::fit_h_value(cx, 28.0, 13.0, 7.5)
+    crate::design::tab_strip_h_value(cx)
 }
 
 /// Identity of a chart tab, ported from egui's `ContainerKind`.

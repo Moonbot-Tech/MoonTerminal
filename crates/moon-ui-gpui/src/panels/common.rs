@@ -608,7 +608,7 @@ pub(crate) fn pinned_scope_label(
         .border_color(design::moon_alpha(p.border, 0.42))
         .font_family(design::mono())
         .text_size(design::text_px(cx, design::ACTION_LABEL_BASE))
-        .text_color(rgb(p.text_muted))
+        .text_color(rgb(design::chrome_label_color(p)))
         .child(div().flex_none().child(design::PINNED_SCOPE_GLYPH))
         .child(div().min_w_0().truncate().child(label))
         .into_any_element()

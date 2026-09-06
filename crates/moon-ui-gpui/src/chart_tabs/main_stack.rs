@@ -1512,12 +1512,13 @@ impl MainChartStack {
     /// back to the raw market key rather than rendering blank.
     ///
     /// Args:
-    ///     _window: Unused; the strip is now in-flow and sizes itself.
+    ///     window: Used only to render the strip through its own palette and scale tokens; the
+    ///         strip is in-flow and still sizes itself.
     ///     cx: Stack context, used to read each panel and to build the click handlers.
     ///
     /// Returns:
     ///     The row, or `None` when fewer than two charts are open.
-    fn render_tab_row(&self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_tab_row(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Vacated slots are retained placeholders in COMPRESS layout — they hold a position, not a
         // chart, so they get no tab.
         let live: Vec<(CoreId, String, SharedString)> = self
@@ -1591,6 +1592,12 @@ impl MainChartStack {
                     });
                 }
             });
+        // Same treatment as the Main/Add strip above it: MoonUI keys an inactive tab label off
+        // `text_muted` and offers no per-tab colour prop, so the lift arrives as a palette.
+        // `render_with_theme`, never `render_with_palette` — the latter substitutes default tokens
+        // and would drop the user's font delta, shrinking these labels away from `strip_h`.
+        let strip_palette = moon_ui::MoonPalette::active(cx);
+        let strip = crate::design::chrome_tab_strip(strip, strip_palette, window, cx);
         Some(
             div()
                 .id("main-chart-tab-row")

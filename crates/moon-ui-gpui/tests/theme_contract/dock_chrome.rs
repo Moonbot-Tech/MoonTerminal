@@ -215,3 +215,105 @@ fn detects_toolbar_keeps_the_shared_band_and_drops_tabbar() {
         "p.tabbar is expected to have no remaining use once Goal C lands; found in {hits:?}"
     );
 }
+
+/// Every `MoonDataTable::new` builder must apply `design::table_style(p)`.
+///
+/// Breakage this pins: add a tenth table, or remove this adapter from one of the nine named
+/// builders. Its column headers would then fall back to the low-contrast muted ink while every
+/// sibling table remains readable, making the missing call look like a panel-local rendering bug.
+#[test]
+fn every_data_table_applies_the_chrome_header_style() {
+    const TABLES: [(&str, &str); 9] = [
+        ("panels/alerts/table.rs", "pub(super) fn table("),
+        ("panels/assets/table.rs", "pub(super) fn assets_table("),
+        (
+            "panels/core_status/problems.rs",
+            "pub(super) fn problems_view(",
+        ),
+        (
+            "panels/core_status/table.rs",
+            "pub(super) fn core_status_table(",
+        ),
+        (
+            "panels/core_status/updates_list.rs",
+            "pub(super) fn updates_table(",
+        ),
+        (
+            "panels/core_status/warnings.rs",
+            "pub(super) fn warnings_table(",
+        ),
+        ("panels/orders/table.rs", "pub(super) fn orders_table("),
+        ("panels/report/render.rs", "pub(super) fn table_el("),
+        ("screener/view.rs", "fn table(&self, cx: &Context<Self>)"),
+    ];
+
+    let mut sources = Vec::new();
+    rust_sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    let table_count: usize = sources
+        .iter()
+        .map(|path| {
+            let source = fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+            code_only(&source).matches("MoonDataTable::new(").count()
+        })
+        .sum();
+    assert_eq!(
+        table_count, 9,
+        "the nine planned MoonDataTable builders are the complete app-side table surface"
+    );
+
+    for (path, signature) in TABLES {
+        let source = code_only(&read_src(path));
+        assert_eq!(
+            source.matches("MoonDataTable::new(").count(),
+            1,
+            "{path} must contain exactly one MoonDataTable builder"
+        );
+        let body = braced_body(&source, signature);
+        assert_eq!(
+            body.matches("MoonDataTable::new(").count(),
+            1,
+            "{path}:{signature} must retain its one table builder"
+        );
+        let _builder_chain = chain_between(
+            body,
+            "MoonDataTable::new(",
+            ".style(design::table_style(p))",
+            path,
+        );
+    }
+}
+
+/// `design::chrome_label_color` and `design::table_style` must preserve the contrast lift.
+///
+/// Breakage this pins: simplify the label helper back to muted or dim ink, or theme the table
+/// style before MoonUI applies its runtime palette. Muted ink loses the light-theme contrast floor,
+/// while dim ink can erase the active-versus-inactive distinction in the dark palette.
+#[test]
+fn chrome_label_helpers_keep_the_single_contrast_lift() {
+    let design = code_only(&read_src("design.rs"));
+    let label_color = braced_body(&design, "fn chrome_label_color(");
+    assert!(
+        label_color.contains("p.text_soft"),
+        "chrome_label_color must select text_soft for the chrome contrast lift"
+    );
+    for rejected in ["p.text_muted", "p.text_dim"] {
+        assert!(
+            !label_color.contains(rejected),
+            "chrome_label_color must not regress to {rejected}"
+        );
+    }
+
+    let table_style = braced_body(&design, "fn table_style(");
+    assert!(
+        table_style.contains("header_text: chrome_label_color(p)"),
+        "table_style must route header ink through chrome_label_color"
+    );
+    assert!(
+        !table_style.contains(".themed("),
+        "table_style must leave runtime palette resolution to MoonDataTable"
+    );
+}

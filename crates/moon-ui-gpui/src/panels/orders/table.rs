@@ -129,6 +129,7 @@ pub(super) fn orders_table(
         .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
+        .style(design::table_style(p))
         .on_sort(move |key, ascending, _window, app| {
             let key = key.to_string();
             sort_view.update(app, |this, cx| {

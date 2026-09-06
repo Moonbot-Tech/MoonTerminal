@@ -5,7 +5,7 @@
 
 use gpui::*;
 use moon_core::util::fmt::DeltaSign;
-use moon_ui::{MoonMetrics, MoonPalette, MoonTheme, MoonTone, rgba_from};
+use moon_ui::{MoonMetrics, MoonPalette, MoonTableStyle, MoonTheme, MoonTone, rgba_from};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -158,6 +158,133 @@ pub fn chrome_toggle_tone(on: bool, caution: bool) -> MoonTone {
 /// Mirrors `chrome/quiet.rs`'s own toggle label exactly; see [`chrome_toggle_tone`].
 pub fn chrome_toggle_label_color(p: MoonPalette, on: bool, caution: bool) -> u32 {
     if on && caution { p.amber } else { p.text_soft }
+}
+
+/// Foreground for a SECONDARY chrome label that still has to be read at a glance: an inactive tab
+/// title, a table column header, the pinned-scope chip.
+///
+/// One step above `p.text_muted`, which measures 3.5-3.8:1 against every chrome surface in both
+/// stock themes and therefore sits under the 4.5:1 body floor; `p.text_soft` measures 6.7-7.0:1 on
+/// light and 5.1-5.5:1 on dark. `p.text_dim` is NOT the step up: the dark palette defines it as the
+/// same value as `p.text`, so using it here would erase the active/inactive distinction in dark
+/// mode while looking correct in light mode.
+///
+/// This is the label tone only. The ACTIVE member of a pair keeps `p.text`, so raising the
+/// inactive one narrows the gap rather than closing it.
+///
+/// Args:
+///     p: Active palette whose secondary label tone is being resolved.
+///
+/// Returns:
+///     The accessible secondary-label colour.
+pub fn chrome_label_color(p: MoonPalette) -> u32 {
+    p.text_soft
+}
+
+/// Height of a chrome tab strip, in pixels at the current UI and font scale.
+///
+/// One source for the triple `(28, 13, 7.5)`, which is `MoonTabStrip`'s own tab height: a strip
+/// whose row is a different height from the tabs inside it puts the active-tab underline off the
+/// row's bottom edge. Every strip in the app resolves it here — the two chart strips through
+/// [`chart_tab_strip_h`](crate::chart_tabs::chart_tab_strip_h), which delegates to
+/// [`tab_strip_h_value`], and the four window strips directly.
+///
+/// Args:
+///     cx: Application context supplying the current UI and font scales.
+///
+/// Returns:
+///     The scaled tab-strip height.
+pub fn tab_strip_h(cx: &App) -> Pixels {
+    px(tab_strip_h_value(cx))
+}
+
+/// [`tab_strip_h`] as a bare number, for a caller that needs the value rather than a length.
+///
+/// Args:
+///     cx: Application context supplying the current UI and font scales.
+///
+/// Returns:
+///     The scaled tab-strip height as a raw number.
+pub fn tab_strip_h_value(cx: &App) -> f32 {
+    fit_h_value(cx, 28.0, 13.0, 7.5)
+}
+
+/// Renders one chrome tab strip through the lifted label palette and the LIVE theme tokens.
+///
+/// The one place the three-line incantation lives, because getting it wrong is silent:
+/// `render_with_palette` is one argument shorter, compiles, and substitutes default tokens, which
+/// drops the user's font delta and UI scale — the labels shrink and the strip stops matching
+/// [`tab_strip_h`], putting the active-tab underline out of line. The palette and tokens are read
+/// into locals first because they cannot be read from `cx` in the same argument list that hands
+/// `cx` over mutably, and the result is boxed because it would otherwise hold that `&mut cx`
+/// borrow for as long as the element lives, which every caller still needs.
+///
+/// Returns the strip BARE, with no sizing wrapper: a caller inside an already-sized row wants it
+/// that way, and one placing it as a top-level child adds its own [`tab_strip_h`] box.
+///
+/// Args:
+///     strip: Configured tab-strip builder to render.
+///     p: Active palette whose muted label tone will be lifted.
+///     window: Window that owns the strip's persistent overflow state.
+///     cx: Application context supplying the current theme tokens.
+///
+/// Returns:
+///     The themed, lifted tab strip without a sizing wrapper.
+pub fn chrome_tab_strip(
+    strip: moon_ui::MoonTabStrip,
+    p: MoonPalette,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let palette = chrome_label_palette(p);
+    let tokens = MoonTheme::active_tokens(cx);
+    strip
+        .render_with_theme(window, cx, palette, tokens)
+        .into_any_element()
+}
+
+/// `p` with its muted text lifted to [`chrome_label_color`].
+///
+/// For MoonUI chrome that keys an inactive label off `text_muted` and exposes no per-item colour
+/// prop — `MoonTabStrip` is the case that needs it. Exactly one field moves, so every other colour
+/// the widget draws still comes from the same palette as the row around it.
+///
+/// Args:
+///     p: Active palette to copy.
+///
+/// Returns:
+///     A copy with only `text_muted` raised to the chrome label colour.
+pub fn chrome_label_palette(p: MoonPalette) -> MoonPalette {
+    MoonPalette {
+        text_muted: chrome_label_color(p),
+        ..p
+    }
+}
+
+/// The one table style every `MoonDataTable` in this crate attaches: the palette's own fills and
+/// selection, with the column-header text lifted to [`chrome_label_color`].
+///
+/// `MoonDataTable::render` re-themes any style it is handed, but that pass only replaces a field
+/// still holding the stock dark default, and the lifted `header_text` never equals it — so the
+/// lift survives. Do not call `themed` here; it would be a no-op today and a silent reset the day
+/// the defaults move.
+///
+/// One consequence was weighed and accepted rather than overlooked: MoonUI already draws the
+/// SORTED column's header at this same tone, bypassing `header_text` entirely, so raising the
+/// unsorted ones makes both read alike and leaves the sort arrow as the only sorted cue. The arrow
+/// is part of the header's own text run and unambiguous; the alternative was leaving nine tables'
+/// headings under the contrast floor to preserve a second, weaker signal.
+///
+/// Args:
+///     p: Active palette supplying the table's non-header colours.
+///
+/// Returns:
+///     The table style with an accessible column-header colour.
+pub fn table_style(p: MoonPalette) -> MoonTableStyle {
+    MoonTableStyle {
+        header_text: chrome_label_color(p),
+        ..MoonTableStyle::for_palette(p)
+    }
 }
 
 /// Icon standing for "which columns does this table show", on every column selector in the app.
