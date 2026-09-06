@@ -206,6 +206,12 @@ fn strategies_sig(b: &Backend, workspace_cores: Option<&[CoreId]>) -> u64 {
             a.wrapping_mul(31)
                 .wrapping_add(c.strategies_rev)
                 .wrapping_mul(31)
+                // The core's folder tree, which moves on its own: an empty folder created or
+                // deleted changes no strategy, and without this the window would not repaint for
+                // it — not even for the confirmation of a folder it created itself. It is also what
+                // makes `reconcile_ui_folders` run at the moment its new rule becomes true.
+                .wrapping_add(c.folders_rev)
+                .wrapping_mul(31)
                 .wrapping_add(c.schema_rev)
                 .wrapping_mul(31)
                 .wrapping_add(c.strategy_edit_rev)
@@ -339,6 +345,11 @@ impl StrategiesView {
                     marker_moved = true;
                 }
             }
+            // Asked on EVERY backend tick, not only on a strategy change: a reorder the core
+            // silently drops produces no strategy change at all, and its overlay would then outlive
+            // its window with nothing to notice. Costs a walk of a map that is empty except in the
+            // seconds after the operator pressed a move button.
+            let order_dropped = this.reconcile_pending_order(b.session.store());
             if strategies_changed || goto {
                 if strategies_changed {
                     this.reconcile_ui_folders(b.session.store());
@@ -348,11 +359,12 @@ impl StrategiesView {
                 this.clamp_selected_section(cx);
                 this.persist_session(cx);
                 cx.notify();
-            } else if marker_moved {
-                // The arm above already repainted. This one covers the case it does not reach:
+            } else if marker_moved || order_dropped {
+                // The arm above already repainted. This one covers the cases it does not reach:
                 // a core the preset HIDES connecting or leaving moves the marker's counts while
                 // `strategies_sig` — which folds only over cores the scope already shows — does
-                // not budge.
+                // not budge; and an expired reorder overlay changes what the tree draws without
+                // any core having sent anything.
                 cx.notify();
             }
         })
@@ -546,6 +558,10 @@ impl StrategiesView {
                 .as_ref()
                 .map(|s| s.ui_folders.clone())
                 .unwrap_or_default(),
+            // Deliberately not restored from the session snapshot: an order sent before the window
+            // closed was either confirmed by the core — in which case the store already holds it —
+            // or lost, and a reopened window must not re-assert it.
+            pending_order: HashMap::new(),
             op: None,
             op_input: None,
             op_input_init: String::new(),

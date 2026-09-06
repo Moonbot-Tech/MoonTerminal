@@ -263,6 +263,11 @@ pub struct CoreData {
     /// connection, so the cost of clearing is the seconds until it arrives, stated honestly as
     /// "not known" rather than as a clean bill.
     pub problems: crate::feed::CoreProblems,
+    /// The core's folder tree, empty folders included, observed through `folders_rev`.
+    ///
+    /// Its `supported` flag is what tells a caller whether an empty folder can be sent to this core
+    /// at all; see [`crate::feed::CoreFolders`].
+    pub folders: crate::feed::CoreFolders,
     /// Latest startup progress and channel measurements polled from the moonproto client.
     /// The Core Status panel observes it through `startup_rev`. It FREEZES once the core settles,
     /// so after a successful startup `elapsed_ms` is how long that core took to come up, not a
@@ -368,6 +373,8 @@ pub struct CoreData {
     /// list on every reconnect and again for each newly confirmed row, so an ungated counter would
     /// repaint the panel for a list that has not changed at all.
     pub problems_rev: u64,
+    /// Advances when the reported folder tree actually differs.
+    pub folders_rev: u64,
     /// Advances when the polled startup snapshot reports different PROGRESS, per
     /// `CoreStartupStatus::progress_eq`. Deliberately separate from `sys_rev`: that counter is
     /// documented as covering `KernelHealth` metrics and the decoded endpoint, its field is CLEARED
@@ -463,7 +470,9 @@ impl CoreData {
             chart_alerts_rev: 0,
             sys_rev: 0,
             problems: crate::feed::CoreProblems::default(),
+            folders: crate::feed::CoreFolders::default(),
             problems_rev: 0,
+            folders_rev: 0,
             startup_rev: 0,
             news_rev: 0,
             time_offset: crate::feed::CoreTimeOffsetStatus::default(),
@@ -607,6 +616,13 @@ impl CoreData {
         if self.problems != crate::feed::CoreProblems::default() {
             self.problems = crate::feed::CoreProblems::default();
             self.problems_rev = self.problems_rev.wrapping_add(1);
+        }
+        // The folder tree belongs to the replaced MoonBot too, and clearing `supported` with it is
+        // again the point rather than a side effect: a replacement feed may point at a core that
+        // cannot hold an empty folder, and a retained flag would keep promising that it can.
+        if self.folders != crate::feed::CoreFolders::default() {
+            self.folders = crate::feed::CoreFolders::default();
+            self.folders_rev = self.folders_rev.wrapping_add(1);
         }
         // A replacement feed may point at a different MoonBot on a different clock, so last
         // connection's estimate carries no evidence about this one.
@@ -1003,6 +1019,15 @@ impl CoreData {
                 if self.problems != problems {
                     self.problems = problems;
                     self.problems_rev = self.problems_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::Folders(folders) => {
+                // Compared before adopting, like the diagnostics above: the tree is republished
+                // whenever the strategies move, and an unconditional revision would rebuild the
+                // window's whole strategy tree for a folder list that did not change.
+                if self.folders != folders {
+                    self.folders = folders;
+                    self.folders_rev = self.folders_rev.wrapping_add(1);
                 }
             }
             FeedMsg::ConnFault(fault) => {

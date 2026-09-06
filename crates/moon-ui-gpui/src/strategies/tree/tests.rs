@@ -95,6 +95,7 @@ impl Render for StratDragHarness {
             checked: false,
         });
         let folder_dest = drop_dest(&NodeData::Folder {
+            fill: super::moon::FolderFill::Populated,
             core: 7,
             path: vec!["desk".into(), "live".into()],
             label: "folder".into(),

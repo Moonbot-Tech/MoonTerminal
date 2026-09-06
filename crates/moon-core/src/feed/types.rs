@@ -1,10 +1,12 @@
 //! Domain types sent from the backend to the UI. They are independent of moonproto so the UI and
 //! rendering layer do not need to know about the transport.
 
+mod core_folders;
 mod core_problem;
 mod core_settings;
 mod core_status;
 
+pub use core_folders::CoreFolders;
 pub use core_problem::{CoreProblem, CoreProblemCategory, CoreProblems};
 pub use core_settings::{
     AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CORE_HOTKEY_ACTION_COUNT, CoreConfig,
@@ -1290,6 +1292,14 @@ pub enum FeedMsg {
     /// counter rather than on arrival — the core republishes the same list on reconnect and on
     /// every newly confirmed row alike.
     Problems(CoreProblems),
+    /// The core's folder tree, empty folders included, whenever it or the folders the strategies
+    /// imply have changed.
+    ///
+    /// A FULL replace like `Problems`, for the same reason: the protocol delivers the whole tree
+    /// and a folder that vanished from it has no event of its own. `folders_rev` moves only when
+    /// the projection actually differs, so a core republishing an identical tree on reconnect
+    /// wakes nothing.
+    Folders(CoreFolders),
     /// Core startup progress and channel measurements, POLLED from the moonproto client rather
     /// than pushed by an event — MoonProto publishes it as a passive snapshot at its own bounded
     /// rate. Sent only while the core is starting, plus once when it settles, so an already-started

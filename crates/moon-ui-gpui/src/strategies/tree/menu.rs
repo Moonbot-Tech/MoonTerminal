@@ -145,6 +145,42 @@ impl StrategiesView {
                 );
             }
             MenuTarget::Strategy(id) => {
+                // Acts on the SELECTION, which already contains this row: opening the menu on an
+                // unselected strategy focuses it first (`strategy_row`). So right-clicking one row
+                // moves that row, and right-clicking inside a multi-selection moves the block.
+                let (can_up, can_down) = {
+                    let backend = self.backend.read(cx);
+                    let store = backend.session.store();
+                    self.move_availability(store, backend.session.core_venues())
+                };
+                for (step, enabled) in
+                    [(ops::MoveStep::Up, can_up), (ops::MoveStep::Down, can_down)]
+                {
+                    let (key, label, chord) = match step {
+                        ops::MoveStep::Up => (
+                            "move-up",
+                            t!("strat.menu_move_up"),
+                            t!("strat.move_up_chord"),
+                        ),
+                        ops::MoveStep::Down => (
+                            "move-down",
+                            t!("strat.menu_move_down"),
+                            t!("strat.move_down_chord"),
+                        ),
+                    };
+                    items.push(
+                        MoonMenuItem::with_key(key, label.to_string())
+                            .right_label(chord.to_string())
+                            .disabled(!enabled)
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, app| {
+                                    window.close_context_menu(app);
+                                    view.update(app, |this, cx| this.move_selection(step, cx));
+                                }
+                            }),
+                    );
+                }
                 items.push(
                     MoonMenuItem::with_key("copy-strategy", t!("strat.menu_copy").to_string())
                         .on_click({

@@ -604,7 +604,7 @@ impl StrategiesView {
                         core,
                     )
                 {
-                    self.add_ui_folder(core, &target, name.trim());
+                    self.create_folder(core, &target, name.trim(), cx);
                     self.persist_session(cx);
                 }
             }
@@ -868,6 +868,10 @@ impl StrategiesView {
         ) {
             return Ok(());
         }
+        let mut new_path = old_path.to_vec();
+        if let Some(leaf) = new_path.last_mut() {
+            *leaf = new_name.to_string();
+        }
         let moves = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else {
@@ -875,7 +879,14 @@ impl StrategiesView {
             };
             ops::rename_folder(&cd.strategies, old_path, new_name)
         };
-        self.backend.read(cx).session.move_strategies(core, moves)?;
+        // The subtree that moved travels WITH the rows, because rewriting their paths leaves the
+        // old folder behind on a core that keeps folders of its own. A folder holding no strategy
+        // has no rows at all, and its rename is this same edit with an empty move list.
+        self.backend.read(cx).session.move_strategies(
+            core,
+            moves,
+            Some((ops::join_path(old_path), ops::join_path(&new_path))),
+        )?;
         // Rename an empty UI-only folder locally only after the move command succeeds.
         self.rename_ui_folder(core, old_path, new_name);
         self.persist_session(cx);
@@ -970,10 +981,24 @@ impl StrategiesView {
         ) {
             return Ok(());
         }
-        self.backend
-            .read(cx)
-            .session
-            .delete_folder(core, ops::join_path(path))?;
+        // Two shapes, and which one applies is decided by what the folder HOLDS, not only by what
+        // the core can do. Omission from the desired tree removes a folder and nothing else — the
+        // core keeps any folder a strategy still occupies, and moonproto re-adds it — so it reaches
+        // exactly the folder the legacy command cannot: an empty one on a core that keeps a tree.
+        // A folder with strategies in it still goes the legacy way, which deletes the rows with it.
+        let by_omission = {
+            let store = self.backend.read(cx).session.store();
+            store
+                .core(core)
+                .is_some_and(|cd| cd.folders.editable && !ops::has_row_under(&cd.strategies, path))
+        };
+        let backend = self.backend.read(cx);
+        match by_omission {
+            true => backend
+                .session
+                .remove_core_folder(core, ops::join_path(path))?,
+            false => backend.session.delete_folder(core, ops::join_path(path))?,
+        }
         self.remove_ui_folder(core, path);
         self.persist_session(cx);
         Ok(())

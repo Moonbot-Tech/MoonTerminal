@@ -31,6 +31,24 @@ pub(super) fn footer_labels_fit(
     available_width >= fixed_width + measured_label_width
 }
 
+/// Return whether a keystroke is the reorder chord, Ctrl+Shift with an up or down arrow.
+///
+/// Compared against the whole modifier set rather than testing the two that must be down, and that
+/// is load bearing for one of them: `alt-up`/`alt-down` ship as the bindings for "shift the sell
+/// order's price" (`moon_core::config::hotkeys`), and one chord that rearranges a list in one
+/// window and moves a live order's price in another is a trap regardless of which window has focus
+/// today.
+///
+/// Args:
+///     modifiers: Modifier state of the keystroke.
+///     key: Key name from the keystroke.
+///
+/// Returns:
+///     `true` for exactly Ctrl+Shift plus an arrow.
+fn reorder_chord(modifiers: &Modifiers, key: &str) -> bool {
+    *modifiers == Modifiers::control_shift() && matches!(key, "up" | "down")
+}
+
 /// Where a paste — or a Create — should land, given the tree's two kinds of selection.
 ///
 /// The folder outranks the strategy, and that is structural rather than a preference: making a
@@ -331,10 +349,46 @@ impl StrategiesView {
 
     // ── UI-only folders, empty until populated ────────────────────────────────
 
-    pub(super) fn add_ui_folder(&mut self, core: CoreId, parent: &str, name: &str) {
+    /// Create an empty folder: asked of the core, and marked locally either way.
+    ///
+    /// The local mark is not a fallback but a latency answer — a core that accepts the folder still
+    /// has to echo its tree back, and an operator who just typed a name should not watch nothing
+    /// happen for a round trip. `reconcile_ui_folders` drops the mark once the core reports the
+    /// folder as its own; on a core that keeps no folder tree the mark is all there ever is.
+    ///
+    /// Only the PATH goes to the feed. The wire form is the complete desired tree — the core
+    /// deletes every folder the list omits — and a tree assembled here would be assembled from a
+    /// snapshot that may already be stale, turning a create into a silent delete of whatever
+    /// arrived meanwhile. The feed owns the list; see `CoreCmd::AddFolder`.
+    ///
+    /// Args:
+    ///     core: Core to create the folder on.
+    ///     parent: Folder path to create it under; empty for the core root.
+    ///     name: Leaf name the operator typed, already trimmed.
+    ///     cx: View context used to send the command.
+    ///
+    /// Returns:
+    ///     Nothing; a core that cannot hold the folder keeps the local mark and nothing else.
+    pub(super) fn create_folder(
+        &mut self,
+        core: CoreId,
+        parent: &str,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
         let mut parts = ops::split_path(parent);
         parts.push(name.to_string());
         let key = ops::join_path(&parts);
+
+        if let Err(error) = self
+            .backend
+            .read(cx)
+            .session
+            .add_core_folder(core, key.clone())
+        {
+            log::warn!("create folder failed: {error}");
+        }
+
         self.ui_folders.insert((core, key));
         // Expand the core and parent chain, excluding the new folder itself, so it is immediately
         // visible.
@@ -370,33 +424,53 @@ impl StrategiesView {
         }
     }
 
-    /// Returns empty UI-only folder paths for a core so they can be merged into the tree.
+    /// Returns empty UI-only folder paths for a core, in the order the tree appends them.
+    ///
+    /// SORTED here rather than by the caller: these come out of a `HashSet`, whose iteration order
+    /// is not stable, and the tree appends them in the order it receives them — so unsorted, two
+    /// frames rendering identical data would put the same folders in different places. Ordered
+    /// case-insensitively first and by the spelling itself second, because on the folded key alone
+    /// two siblings differing only in case compare equal and the tie goes back to the set.
     pub(super) fn ui_folder_paths(&self, core: CoreId) -> Vec<Vec<String>> {
-        self.ui_folders
+        let mut paths: Vec<Vec<String>> = self
+            .ui_folders
             .iter()
             .filter(|(c, _)| *c == core)
             .map(|(_, p)| ops::split_path(p))
-            .collect()
+            .collect();
+        paths.sort_by_cached_key(|parts| {
+            let joined = parts.join("/");
+            (joined.to_lowercase(), joined)
+        });
+        paths
     }
 
-    /// Drop UI-only ownership once live core data represents a folder through a strategy row.
+    /// Drop UI-only ownership once the core itself represents the folder.
     ///
-    /// Empty folders exist only in this view until first use. Retaining their local marker after
-    /// a strategy arrives would make the folder reappear as a ghost if another surface later
-    /// deletes that strategy and asks the core to remove the now-empty folder.
+    /// Two ways that happens: a strategy arrives in it, or — on a core that synchronizes folders —
+    /// the core reports the folder in its own tree. Retaining the local marker past either would
+    /// make the folder reappear as a ghost after another surface deleted it, which is precisely
+    /// what the mark cannot be allowed to do once the core owns the answer.
     ///
     /// Args:
-    ///     store: Current per-core live strategy snapshots.
+    ///     store: Current per-core live strategy and folder snapshots.
     pub(in crate::strategies) fn reconcile_ui_folders(&mut self, store: &CoreStore) {
         self.ui_folders.retain(|(core, path)| {
-            keep_ui_folder(
-                path,
-                store.core(*core).map(|data| data.strategies.as_slice()),
-            )
+            let Some(data) = store.core(*core) else {
+                // The core is gone from the store entirely; nothing can contradict the mark.
+                return true;
+            };
+            let confirmed = data.folders.supported
+                && data
+                    .folders
+                    .paths
+                    .iter()
+                    .any(|seen| seen.to_lowercase() == path.to_lowercase());
+            !confirmed && keep_ui_folder(path, Some(data.strategies.as_slice()))
         });
     }
 
-    // ── Keyboard: Ctrl+C, Ctrl+V, and Delete ──────────────────────────────────
+    // ── Keyboard: Ctrl+C, Ctrl+V, Ctrl+Shift+Up/Down, and Delete ──────────────
 
     /// Copy the last clicked visible folder/core root, otherwise the visible strategy selection.
     ///
@@ -444,6 +518,18 @@ impl StrategiesView {
                 self.default_target(b.session.store(), &cores)
             };
             self.paste_into(core, target, cx);
+        } else if reorder_chord(m, key) {
+            // A HELD arrow is refused. OS auto-repeat fires this handler tens of times a second,
+            // and each pass queues a whole-list reorder that the feed turns into a full snapshot to
+            // the core; the repo's own keyboard path (`hotkeys::pre_dispatch`) refuses repeats for
+            // the same reason. One press, one move.
+            if !ev.is_held {
+                let step = match key == "up" {
+                    true => ops::MoveStep::Up,
+                    false => ops::MoveStep::Down,
+                };
+                self.move_selection(step, cx);
+            }
         } else if key == "delete" {
             self.request_delete_selection(window, cx);
         }
@@ -466,6 +552,7 @@ impl StrategiesView {
         store: &CoreStore,
         show_labels: bool,
         has_visible_cores: bool,
+        moves: (bool, bool),
         cx: &Context<Self>,
     ) -> AnyElement {
         let (has_sel, all_off) = self.selection_summary(store);
@@ -477,6 +564,9 @@ impl StrategiesView {
         let paste_label = t!("strat.action_paste").to_string();
         let delete_label = t!("strat.action_delete").to_string();
         let icon_width = design::glyph_btn_w(cx);
+
+        let move_up = self.move_button(ops::MoveStep::Up, moves.0, icon_width, cx);
+        let move_down = self.move_button(ops::MoveStep::Down, moves.1, icon_width, cx);
 
         let mut copy = MoonButton::new("sel-copy")
             .outline()
@@ -525,10 +615,58 @@ impl StrategiesView {
             .flex_none()
             .items_center()
             .gap(design::ui_px(cx, group_gap))
+            .child(move_up.render())
+            .child(move_down.render())
             .child(copy.render())
             .child(paste.render())
             .child(delete.render())
             .into_any_element()
+    }
+
+    /// Build one of the footer's two move buttons.
+    ///
+    /// Icon-only in BOTH densities, unlike its neighbours: the group already carries three labelled
+    /// buttons at the labelled density, and two more would push it past the footer's width at the
+    /// pane sizes this window is normally used at. An arrow needs the word less than "Copy" does,
+    /// and the tooltip names both the action and the chord.
+    ///
+    /// Args:
+    ///     step: Direction this button moves the selection.
+    ///     enabled: Whether the cached plan says it would rearrange anything.
+    ///     icon_width: Shared icon-density button width.
+    ///     cx: View context used to build the click listener.
+    ///
+    /// Returns:
+    ///     The configured button, ready to render.
+    fn move_button(
+        &self,
+        step: ops::MoveStep,
+        enabled: bool,
+        icon_width: f32,
+        cx: &Context<Self>,
+    ) -> MoonButton {
+        let (id, icon, label, chord) = match step {
+            ops::MoveStep::Up => (
+                "sel-move-up",
+                "icons/arrow-up.svg",
+                t!("strat.action_move_up"),
+                t!("strat.move_up_chord"),
+            ),
+            ops::MoveStep::Down => (
+                "sel-move-down",
+                "icons/arrow-down.svg",
+                t!("strat.action_move_down"),
+                t!("strat.move_down_chord"),
+            ),
+        };
+        MoonButton::new(id)
+            .outline()
+            .size(MoonButtonSize::Action)
+            .width(icon_width)
+            .leading_icon(MoonButtonIconSlot::new(icon))
+            .tooltip(format!("{label} · {chord}"))
+            .disabled(!enabled)
+            .on_click(cx.listener(move |this, _, _, cx| this.move_selection(step, cx)))
     }
 
     /// Builds the Create dropdown for a strategy or folder in the tree header.

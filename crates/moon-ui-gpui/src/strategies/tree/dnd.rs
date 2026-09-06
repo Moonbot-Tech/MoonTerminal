@@ -160,11 +160,14 @@ impl StrategiesView {
                     .unwrap_or_default();
                 ops::move_to(&rows, &target)
             };
-            if let Err(error) = self
-                .backend
-                .read(cx)
-                .session
-                .move_strategies(target_core, moves)
+            // No folder tree: dragging strategies OUT of a folder must not delete that folder. The
+            // core keeps an emptied folder now, which is the behaviour to preserve — a tree omitting
+            // it would take it away as a side effect of moving rows.
+            if let Err(error) =
+                self.backend
+                    .read(cx)
+                    .session
+                    .move_strategies(target_core, moves, None)
             {
                 log::warn!("move strategies failed: {error}");
                 return;
@@ -220,22 +223,28 @@ impl StrategiesView {
         }
         let path = drag.path.clone();
         if drag.core == target_core {
+            let mut moved_to = target.clone();
+            moved_to.extend(path.last().cloned());
             let moves = {
                 let store = self.backend.read(cx).session.store();
-                store
-                    .core(target_core)
-                    .map(|c| ops::move_folder(&c.strategies, &path, &target))
-                    .unwrap_or_default()
+                let Some(cd) = store.core(target_core) else {
+                    return;
+                };
+                ops::move_folder(&cd.strategies, &path, &target)
             };
-            if moves.is_empty() {
-                return; // Reject self/descendant targets and empty folders.
+            // Rejects a drop onto the folder itself or into its own subtree, where source and
+            // destination are the same place. An EMPTY folder is no longer rejected here: it has no
+            // rows to move, and its relocation travels as the subtree intent alone.
+            if moves.is_empty() && (moved_to == path || target.starts_with(&path)) {
+                return;
             }
-            if let Err(error) = self
-                .backend
-                .read(cx)
-                .session
-                .move_strategies(target_core, moves)
-            {
+            // Same pairing as a rename: without the subtree the folder's old path survives on the
+            // core as an empty folder, now that empty folders are something it can hold.
+            if let Err(error) = self.backend.read(cx).session.move_strategies(
+                target_core,
+                moves,
+                Some((ops::join_path(&path), ops::join_path(&moved_to))),
+            ) {
                 log::warn!("move strategy folder failed: {error}");
                 return;
             }

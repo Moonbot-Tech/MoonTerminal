@@ -1,7 +1,10 @@
 //! Placement of newly created strategies plus snapshot guards for destructive strategy commands.
 
+use moonproto::StrategySnapshot;
+
 use super::{
-    StrategyPlacementGuard, anchor_on_core, plan_insert_positions, strategy_placements_unchanged,
+    StrategyPlacementGuard, anchor_on_core, plan_insert_positions, regroup_moved,
+    strategy_placements_unchanged,
 };
 
 /// An anchor is honoured only on the core it names.
@@ -127,7 +130,7 @@ fn conditional_deletes_require_live_and_queued_placements_to_agree() {
     let original = vec![(1, "alpha".to_string())];
     let moved = vec![(1, "beta".to_string())];
     let mut guard = StrategyPlacementGuard::new();
-    guard.note_queued_sync(moved.clone());
+    guard.note_queued_sync(moved.clone(), vec![1], 0);
 
     assert!(!guard.allows_snapshot(Some(original.clone()), original));
     assert!(guard.allows_snapshot(Some(moved.clone()), moved.clone()));
@@ -178,7 +181,7 @@ fn every_full_list_sync_updates_the_placement_shadow() {
         .find("client.strategies().sync_local_strategies(full)")
         .expect("the rebuild path must queue its full list");
     let shadow = body
-        .find("strategy_placements.note_queued_sync(placements)")
+        .find("strategy_placements.note_queued_sync(placements,")
         .expect("accepted full-list syncs must update the synchronous shadow");
 
     assert!(
@@ -274,4 +277,174 @@ fn only_an_applied_edit_claims_local_origin() {
         mark > rebuild,
         "the claim must follow the rebuild that decides what was actually edited"
     );
+}
+
+/// `StrategyPlacementGuard::pending_order`: a reorder is owed to the core until the core itself
+/// publishes an order. Every other strategy command in that window rebuilds its outgoing list from
+/// the CONFIRMED order, so without this the next checkbox or field edit would hand the core back
+/// the arrangement the operator had just replaced.
+#[test]
+fn a_queued_order_is_owed_to_the_core_until_it_publishes_one() {
+    let mut guard = StrategyPlacementGuard::new();
+    assert_eq!(guard.pending_order(7), None);
+
+    guard.note_queued_sync(vec![(1, String::new())], vec![3, 1, 2], 7);
+    // The confirmed order has not moved, so this terminal's sequence is still the newest word.
+    assert_eq!(guard.pending_order(7), Some([3, 1, 2].as_slice()));
+    assert_eq!(guard.pending_order(7), Some([3, 1, 2].as_slice()));
+}
+
+/// The other half of the same rule, and the one that makes it terminate: once the core has
+/// published an order — accepting ours or overruling it — the queued sequence is dropped. Kept, it
+/// would be re-asserted on every later sync forever, against a core that had already answered.
+#[test]
+fn the_cores_own_published_order_retires_the_queued_one() {
+    let mut guard = StrategyPlacementGuard::new();
+    guard.note_queued_sync(vec![(1, String::new())], vec![3, 1, 2], 7);
+    assert_eq!(guard.pending_order(9), None);
+    // ... and it stays retired, including for a later call that repeats the old version.
+    assert_eq!(guard.pending_order(7), None);
+}
+
+/// Builds a snapshot carrying only what [`regroup_moved`] reads: its id and its folder path.
+fn placed(id: u64, path: &str) -> StrategySnapshot {
+    StrategySnapshot::new(
+        id,
+        1,
+        0,
+        false,
+        moonproto::StrategyKind::from_ordinal(0),
+        path,
+        Default::default(),
+    )
+}
+
+/// Names the folder of each row in order, which is what the contiguity rule is about.
+fn paths(full: &[StrategySnapshot]) -> Vec<(u64, String)> {
+    full.iter()
+        .map(|sc| (sc.strategy_id, sc.path.to_string()))
+        .collect()
+}
+
+/// A drag into a folder that already holds strategies joins that folder's run, so the destination
+/// stays ONE group. Left split, the tree — which places a folder where its first strategy appears —
+/// can hoist that whole folder somewhere nobody asked for.
+#[test]
+fn a_move_joins_the_run_its_destination_already_occupies() {
+    let mut full = vec![
+        placed(1, "X"),
+        placed(2, "X"),
+        placed(3, "Z"),
+        placed(4, "X"),
+    ];
+    // 4 was relabelled to X by the caller and now has to reach it.
+    regroup_moved(&mut full, &[(4, "X".to_string())]);
+    assert_eq!(
+        paths(&full),
+        vec![
+            (1, "X".into()),
+            (2, "X".into()),
+            (4, "X".into()),
+            (3, "Z".into())
+        ]
+    );
+}
+
+/// Several rows moved at once queue up behind each other in the order they were given, instead of
+/// all taking the same slot — which would reverse them — or anchoring on each other and splitting
+/// the run they are trying to join.
+#[test]
+fn rows_moved_together_land_in_the_order_they_were_given() {
+    let mut full = vec![
+        placed(1, "X"),
+        placed(2, "X"),
+        placed(3, "Z"),
+        placed(4, "X"),
+    ];
+    regroup_moved(&mut full, &[(2, "X".to_string()), (4, "X".to_string())]);
+    assert_eq!(
+        paths(&full),
+        vec![
+            (1, "X".into()),
+            (2, "X".into()),
+            (4, "X".into()),
+            (3, "Z".into())
+        ]
+    );
+}
+
+/// A folder RENAME reaches this through the same command, and it must move nothing: every row
+/// carrying the new name is one of the renamed ones, so there is no existing run to join. Relocating
+/// on a rename would silently change the folder's place in the tree.
+#[test]
+fn a_rename_relocates_nothing() {
+    let mut full = vec![placed(1, "B"), placed(2, "C"), placed(3, "B")];
+    regroup_moved(&mut full, &[(1, "B".to_string()), (3, "B".to_string())]);
+    assert_eq!(
+        paths(&full),
+        vec![(1, "B".into()), (2, "C".into()), (3, "B".into())]
+    );
+}
+
+/// A move into a folder that does not exist yet has nothing to join either, so the row stays where
+/// it is and the new folder is created around it. The alternative — appending to the end of the
+/// whole list — is the placement this module exists to avoid.
+#[test]
+fn a_move_into_a_new_folder_leaves_the_row_in_place() {
+    let mut full = vec![placed(1, "X"), placed(2, "NEW"), placed(3, "X")];
+    regroup_moved(&mut full, &[(2, "NEW".to_string())]);
+    assert_eq!(
+        paths(&full),
+        vec![(1, "X".into()), (2, "NEW".into()), (3, "X".into())]
+    );
+}
+
+/// A row that sits BEFORE its destination run still joins it. The case is worth its own test
+/// because a plan expressed in positions gets this one wrong in the opposite direction from the
+/// backward move above.
+#[test]
+fn a_row_ahead_of_its_destination_still_joins_it() {
+    let mut full = vec![placed(1, "X"), placed(2, "Z"), placed(3, "Z")];
+    regroup_moved(&mut full, &[(1, "Z".to_string())]);
+    assert_eq!(
+        paths(&full),
+        vec![(2, "Z".into()), (3, "Z".into()), (1, "X".into())]
+    );
+}
+
+/// Two destinations interleaved in one move — what a folder move or rename produces whenever it
+/// merges into folders that already exist. Each run comes out whole: a plan carried as absolute
+/// positions goes stale as soon as the first relocation crosses another destination's slot, and
+/// then both folders end up split.
+#[test]
+fn two_destinations_in_one_move_each_come_out_contiguous() {
+    let mut full = vec![
+        placed(101, "D2"),
+        placed(1, "D1"),
+        placed(11, "D1"),
+        placed(21, "D2"),
+        placed(22, "D2"),
+        placed(12, "D1"),
+    ];
+    regroup_moved(
+        &mut full,
+        &[
+            (11, "D1".to_string()),
+            (21, "D2".to_string()),
+            (22, "D2".to_string()),
+            (12, "D1".to_string()),
+        ],
+    );
+    let order = paths(&full);
+    let at = |id: u64| order.iter().position(|(row, _)| *row == id).expect("row");
+    // Every D1 row adjacent to the others, and likewise every D2 row.
+    let mut d1 = [at(1), at(11), at(12)];
+    let mut d2 = [at(101), at(21), at(22)];
+    d1.sort_unstable();
+    d2.sort_unstable();
+    assert_eq!(d1[2] - d1[0], 2, "D1 must be one contiguous run: {order:?}");
+    assert_eq!(d2[2] - d2[0], 2, "D2 must be one contiguous run: {order:?}");
+    // ... and the rows joining each run keep the order they were given.
+    assert!(at(11) < at(12), "D1 joiners keep their order: {order:?}");
+    assert!(at(21) < at(22), "D2 joiners keep their order: {order:?}");
 }

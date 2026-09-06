@@ -12,6 +12,7 @@ pub(crate) mod menu;
 pub(crate) mod moon;
 pub(crate) mod ops;
 pub(in crate::strategies) mod pane_cache;
+pub(crate) mod reorder;
 pub(crate) mod ui;
 
 #[cfg(test)]
@@ -575,6 +576,10 @@ impl StrategiesView {
         let measured_label_width = pane.footer_label_width;
         // Five native leading icons remain in both densities. The full state additionally reserves
         // their label gaps, six group gaps, outer padding, and the hairline divider.
+        //
+        // The two move buttons are counted separately below because they never take a label: they
+        // cost their own width and one group gap each in BOTH densities, and leaving them out of
+        // this sum would let the labelled state be chosen for a row that no longer fits it.
         let action_icon_width =
             (design::font_value(cx, design::ACTION_LABEL_BASE) + 1.0).clamp(10.0, 14.0);
         // Action size ships with pad_x = 0. Labeled footer buttons opt into the same 7-unit
@@ -583,7 +588,9 @@ impl StrategiesView {
         let fixed_width = 5.0 * action_icon_width
             + design::ui_value(cx, 5.0 * 6.0 + 6.0 * design::CHROME_GAP + 16.0)
             + 1.0
-            + labeled_pad;
+            + labeled_pad
+            + 2.0 * design::glyph_btn_w(cx)
+            + 2.0 * design::ui_value(cx, design::CHROME_GAP);
         let show_labels =
             ui::footer_labels_fit(self.panels.tree_w, fixed_width, measured_label_width);
 
@@ -657,7 +664,7 @@ impl StrategiesView {
             // The footer's leading icons carry no text of their own; its action labels are prose.
             // `staged_slot` pins its mixed caption/count node back to mono above.
             .font_family(design::ui_font())
-            .child(self.selection_toolbar(store, show_labels, !cores.is_empty(), cx))
+            .child(self.selection_toolbar(store, show_labels, !cores.is_empty(), pane.moves, cx))
             .child(design::chrome_divider(cx, MoonPalette::active(cx)))
             .child(staged_slot)
             .child(right)

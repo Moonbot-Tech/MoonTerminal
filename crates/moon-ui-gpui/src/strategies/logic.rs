@@ -570,30 +570,81 @@ pub(super) fn toggle<T: std::cmp::Eq + std::hash::Hash>(set: &mut HashSet<T>, ke
 }
 
 /// Folder-tree node containing named child folders and strategies directly in this folder.
+///
+/// Children are kept in INSERTION order, not sorted by name. The strategy list a core sends is an
+/// ordered list the operator arranges in MoonBot, and moonproto synchronizes that order as the row
+/// sequence of a Full snapshot (`docs/strats.md`, "Strategy Order"), with one folder's strategies
+/// forming a contiguous group. So the order a folder first appears in that sequence IS its place in
+/// the core's own tree, and the previous `BTreeMap` threw it away for a byte-wise alphabet that
+/// matched neither MoonBot nor anything the operator arranged — `Zeta` above `alpha`, Cyrillic
+/// names after every Latin one.
+///
+/// Folders holding no strategy have no place in that sequence; [`ensure_folder`] appends them, so
+/// its caller decides their order among themselves.
 #[derive(Default)]
 pub(super) struct FolderNode<'a> {
-    pub(super) children: std::collections::BTreeMap<String, FolderNode<'a>>,
+    /// Child folders, in the order this level first saw each of them.
+    children: Vec<(String, FolderNode<'a>)>,
     pub(super) strategies: Vec<&'a StrategyRow>,
 }
 
+impl<'a> FolderNode<'a> {
+    /// Child folders paired with their names, in display order.
+    pub(super) fn children(&self) -> impl Iterator<Item = (&str, &FolderNode<'a>)> {
+        self.children
+            .iter()
+            .map(|(name, node)| (name.as_str(), node))
+    }
+
+    /// Borrow one child folder by name, appending it when this level has not seen it yet.
+    ///
+    /// Scanned from the END because the core groups one folder's strategies contiguously: for a
+    /// run of rows sharing a path the match is the last child every time, which keeps the walk
+    /// linear in practice instead of quadratic in the sibling count.
+    ///
+    /// Args:
+    ///     name: One path segment, exactly as the data spells it.
+    ///
+    /// Returns:
+    ///     The existing child of that name, or a fresh empty one appended after every sibling.
+    fn child_mut(&mut self, name: &str) -> &mut FolderNode<'a> {
+        match self.children.iter().rposition(|(seen, _)| seen == name) {
+            Some(at) => &mut self.children[at].1,
+            None => {
+                self.children
+                    .push((name.to_string(), FolderNode::default()));
+                let appended = self.children.len() - 1;
+                &mut self.children[appended].1
+            }
+        }
+    }
+}
+
 /// Build a nested tree from strategy paths, split through [`path_segments`].
+///
+/// The iterator must arrive in the core's own strategy order — that sequence is what decides where
+/// each folder sits. See [`FolderNode`].
 pub(super) fn build_node<'a>(it: impl Iterator<Item = &'a StrategyRow>) -> FolderNode<'a> {
     let mut root = FolderNode::default();
     for r in it {
         let mut node = &mut root;
         for part in path_segments(&r.folder_path) {
-            node = node.children.entry(part.to_string()).or_default();
+            node = node.child_mut(part);
         }
         node.strategies.push(r);
     }
     root
 }
 
-/// Ensure that a path exists for empty UI folders that contain no strategies yet.
+/// Ensure that a path exists for empty folders that contain no strategies yet.
+///
+/// A missing level is APPENDED after everything the strategy walk already placed, so the caller's
+/// own order over these paths is the order they appear in — feed them in a deterministic one or the
+/// tree reshuffles between frames.
 pub(super) fn ensure_folder(root: &mut FolderNode, parts: &[String]) {
     let mut node = root;
     for part in parts {
-        node = node.children.entry(part.clone()).or_default();
+        node = node.child_mut(part);
     }
 }
 
@@ -607,10 +658,32 @@ pub(super) fn ensure_folder(root: &mut FolderNode, parts: &[String]) {
 /// introduce none of their own.
 #[derive(Default)]
 pub(super) struct FolderCounts {
-    by_path: HashMap<String, (usize, usize)>,
+    by_path: HashMap<String, FolderStat>,
+    /// The same prefixes lowercased, for the question the CORE asks: it keys folders
+    /// case-insensitively, so a tree spelling `Research` against strategies spelling `research`
+    /// names one folder, and a case-sensitive answer would draw the second one as empty beside it.
+    /// Bounded by the folder count rather than the row count — one entry per prefix, on first
+    /// visit.
+    folded: HashSet<String>,
     root: (usize, usize),
     /// Set for a core whose folders are not built, so no per-folder entry is worth allocating.
     totals_only: bool,
+}
+
+/// What one folder prefix accumulates: its caption's numbers, and its place in the core's order.
+struct FolderStat {
+    /// Checked strategies at or below this folder, after the caption's own filter.
+    active: usize,
+    /// All strategies at or below it, after that same filter.
+    total: usize,
+    /// Index of the FIRST strategy of this folder in the core's own list, filtered by nothing.
+    ///
+    /// The tree orders folders by this rather than by where their first VISIBLE row sits, and the
+    /// difference is not cosmetic: with a filter on, a folder whose early rows are hidden would
+    /// otherwise slide below a folder that starts later, so typing in the search box would
+    /// rearrange the tree around the reader. Recorded on the first visit to each prefix, which is
+    /// the earliest by construction — the walk goes through the list in order.
+    first_seen: usize,
 }
 
 impl FolderCounts {
@@ -632,16 +705,20 @@ impl FolderCounts {
     /// Args:
     ///     row: Strategy contributing to its folder chain when it passes the count predicate.
     ///     filter: Prepared kind/direction count predicate.
+    ///     at: Index of this strategy in the core's own list, for [`FolderStat::first_seen`].
     ///
     /// Returns:
     ///     Nothing; matching counters are updated in place.
-    pub(super) fn add(&mut self, row: &StrategyRow, filter: &PreparedFilter) {
-        if !filter.counts(row) {
-            return;
-        }
-        let hit = usize::from(row.checked);
+    pub(super) fn add(&mut self, row: &StrategyRow, filter: &PreparedFilter, at: usize) {
+        // The walk itself is NOT gated: a folder's place in the tree comes from the core's list as
+        // it stands, not from the rows a filter happens to leave. Only the numbers are gated.
+        // `(checked, counted)` as numbers, once: the three sites below add exactly these two.
+        let (hit, one) = match filter.counts(row) {
+            true => (usize::from(row.checked), 1),
+            false => (0, 0),
+        };
         self.root.0 += hit;
-        self.root.1 += 1;
+        self.root.1 += one;
         if self.totals_only {
             return;
         }
@@ -653,10 +730,18 @@ impl FolderCounts {
             key.push_str(seg);
             // Look up before inserting so a repeat visit to a known folder does not clone the key.
             if let Some(e) = self.by_path.get_mut(&key) {
-                e.0 += hit;
-                e.1 += 1;
+                e.active += hit;
+                e.total += one;
             } else {
-                self.by_path.insert(key.clone(), (hit, 1));
+                self.folded.insert(key.to_lowercase());
+                self.by_path.insert(
+                    key.clone(),
+                    FolderStat {
+                        active: hit,
+                        total: one,
+                        first_seen: at,
+                    },
+                );
             }
         }
     }
@@ -664,7 +749,27 @@ impl FolderCounts {
     /// Returns `(active, total)` at or below a folder, or `(0, 0)` for a folder holding no
     /// strategies — the case of a UI-only folder created before its first strategy.
     pub(super) fn for_path(&self, path: &str) -> (usize, usize) {
-        self.by_path.get(path).copied().unwrap_or((0, 0))
+        self.by_path
+            .get(path)
+            .map_or((0, 0), |stat| (stat.active, stat.total))
+    }
+
+    /// Whether any strategy of this core lives at or below a folder path.
+    ///
+    /// The accumulator walks every row's whole prefix chain regardless of the filter, so this
+    /// answers about the CORE's folders rather than about the rows currently drawn — which is what
+    /// a caller deciding "is this folder empty" has to ask. Case-insensitively, because that is how
+    /// the core decides whether two spellings name one folder.
+    pub(super) fn knows(&self, path: &str) -> bool {
+        self.folded.contains(&path.to_lowercase())
+    }
+
+    /// Where a folder sits in the core's own order, or `None` for one holding no strategy at all.
+    ///
+    /// `None` is the empty folder — it appears in no strategy's path, so the core's list says
+    /// nothing about where it belongs, and the tree appends those instead.
+    pub(super) fn order_of(&self, path: &str) -> Option<usize> {
+        self.by_path.get(path).map(|stat| stat.first_seen)
     }
 
     /// Returns `(active, total)` over every counted strategy, which is the core's own caption.

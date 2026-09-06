@@ -260,12 +260,92 @@ impl SessionManager {
     }
 
     /// Change the folder of existing core strategies to rename a folder or move strategies.
-    /// Each `moves` entry is `(strategy_id, new_folder_path)`. Send one batch per core.
-    pub fn move_strategies(&self, core: CoreId, moves: Vec<(u64, String)>) -> Result<()> {
-        if moves.is_empty() {
+    ///
+    /// Args:
+    ///     core: Core owning the strategies.
+    ///     moves: `(strategy id, new folder path)` per strategy. Send one batch per core.
+    ///     rebase: The folder subtree this move renames or reparents, as `(old path, new path)`.
+    ///         A rename or a folder drag must pass one, or the emptied old path stays behind on the
+    ///         core as a folder of its own — see [`CoreCmd::MoveStrategies`].
+    ///
+    /// Returns:
+    ///     Success once the intent entered that core's command queue. A call with neither moves nor
+    ///     a rebase asks for nothing and is dropped here.
+    pub fn move_strategies(
+        &self,
+        core: CoreId,
+        moves: Vec<(u64, String)>,
+        rebase: Option<(String, String)>,
+    ) -> Result<()> {
+        // A folder holding no strategy has no moves to carry it, and its rename is still a real
+        // edit — so emptiness alone is not the test.
+        if moves.is_empty() && rebase.is_none() {
             return Ok(());
         }
-        self.send_core_cmd(core, CoreCmd::MoveStrategies { moves }, "move strategies")
+        self.send_core_cmd(
+            core,
+            CoreCmd::MoveStrategies { moves, rebase },
+            "move strategies",
+        )
+    }
+
+    /// Create one folder on a core, holding nothing.
+    ///
+    /// Args:
+    ///     core: Core to create it on.
+    ///     path: Canonical folder path.
+    ///
+    /// Returns:
+    ///     Success once the intent entered that core's command queue. Whether the core can hold an
+    ///     empty folder at all is decided on the feed thread, which logs what it declines; callers
+    ///     read `CoreFolders::editable` to decide what to PROMISE the operator, not to gate this.
+    pub fn add_core_folder(&self, core: CoreId, path: String) -> Result<()> {
+        if path.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(core, CoreCmd::AddFolder { path }, "add folder")
+    }
+
+    /// Remove one folder and its whole subtree from a core's tree.
+    ///
+    /// Args:
+    ///     core: Core to remove it from.
+    ///     path: Canonical folder path.
+    ///
+    /// Returns:
+    ///     Success once the intent entered that core's command queue. Strategies inside are NOT
+    ///     deleted by this — the core keeps a folder that still holds one — so a caller removing a
+    ///     populated folder deletes its rows first.
+    pub fn remove_core_folder(&self, core: CoreId, path: String) -> Result<()> {
+        if path.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(core, CoreCmd::RemoveFolder { path }, "remove folder")
+    }
+
+    /// Rearrange a core's strategy list into `order`, the complete desired id sequence.
+    ///
+    /// The core confirms by echoing a full strategy snapshot in that sequence; nothing here waits
+    /// for it. See [`CoreCmd::ReorderStrategies`] for what the feed does with a list that raced
+    /// with a create or a delete.
+    ///
+    /// Args:
+    ///     core: Core whose list is being rearranged.
+    ///     order: Every strategy id of that core, in the desired order.
+    ///
+    /// Returns:
+    ///     Success once the intent entered that core's command queue.
+    ///
+    /// Deliberately without a "too short to matter" early return: one that answered `Ok(())`
+    /// without queueing anything would hand the caller a success for a command that does not
+    /// exist, and the caller draws an unconfirmed arrangement on the strength of it. Whether an
+    /// order says anything is the feed's decision, taken against the list it actually holds.
+    pub fn reorder_strategies(&self, core: CoreId, order: Vec<u64>) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::ReorderStrategies { order },
+            "reorder strategies",
+        )
     }
 
     /// Transfer an asset between wallets of one core through drag and drop in the Assets window.

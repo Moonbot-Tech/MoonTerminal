@@ -4,12 +4,14 @@
 pub(crate) mod assets;
 mod conn_verdict;
 mod core_label;
+pub mod folder_tree;
 pub mod live;
 mod mode_advice;
 pub mod news;
 pub mod news_marks;
 mod order_edit;
 mod strategies;
+pub mod strategy_order;
 pub mod synth;
 mod trade;
 pub mod types;
@@ -366,7 +368,45 @@ pub enum CoreCmd {
     /// Move existing strategies or rename their folder. Each `moves` entry contains
     /// `(strategy_id, new_folder_path)`. The feed patches `path` for the listed strategies in the
     /// full set, advances `last_date`, and sends one `sync_local_strategies`.
-    MoveStrategies { moves: Vec<(u64, String)> },
+    MoveStrategies {
+        moves: Vec<(u64, String)>,
+        /// The folder subtree this move renames or reparents, as `(old path, new path)`.
+        ///
+        /// An INTENT, not a tree. The core now keeps folders that hold no strategy, so rewriting
+        /// the rows' paths leaves the OLD path behind as an empty folder of its own, and only a
+        /// folder tree omitting it removes it — but which tree to omit it FROM is a question only
+        /// the feed can answer, because the newest one it knows includes edits the core has not
+        /// echoed yet. The protocol wants both halves in one snapshot, so the feed builds the tree
+        /// and sends it with these moves.
+        ///
+        /// `None` for a move that changes no folder's identity — dragging strategies between
+        /// folders, which must NOT delete the folder they came from.
+        rebase: Option<(String, String)>,
+    },
+    /// Create one folder on the core, holding nothing.
+    ///
+    /// Carries the path alone, deliberately. The wire form is the complete desired tree — the core
+    /// deletes every empty folder the list omits — and a tree assembled by a window is assembled
+    /// from a snapshot that may already be stale, which turns a create into a silent delete of
+    /// whatever arrived meanwhile. The feed owns the list; this says only what to add to it.
+    AddFolder { path: String },
+    /// Remove one folder and everything under it from the core's tree.
+    ///
+    /// For a folder that holds no strategy; rows are deleted separately and first. Same reasoning
+    /// as [`CoreCmd::AddFolder`]: the intent travels, the list is built where it is known.
+    RemoveFolder { path: String },
+    /// Rearrange the core's strategy list. `order` is the complete desired id sequence.
+    ///
+    /// The sequence itself is the payload: moonproto synchronizes strategy order as the row order
+    /// of a Full snapshot, so the feed sorts the full set into `order` and sends one
+    /// `sync_local_strategies`. Nothing else about a strategy changes — no field is patched and no
+    /// `last_date` is advanced, because the order carries its own version on the wire (moonproto
+    /// `docs/strats.md`, "Strategy Order").
+    ///
+    /// Ids the core does not have are ignored, and ids the core has but `order` omits keep their
+    /// relative places at the end, so a list that raced with a create or a delete still reorders
+    /// what it does name instead of dropping anything.
+    ReorderStrategies { order: Vec<u64> },
     /// Transfer an asset between wallets of one core through drag and drop in the Assets tree.
     /// `from` and `to` are Spot, Futures, or Quarterly wallets; `qty` is in the base coin.
     TransferAsset {

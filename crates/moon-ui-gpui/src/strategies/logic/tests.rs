@@ -108,8 +108,8 @@ fn prefixes() -> Vec<Vec<String>> {
 /// `add`, so pre-filtering here would hide a regression in that gate.
 fn accumulate(rows: &[StrategyRow], filter: &PreparedFilter) -> FolderCounts {
     let mut counts = FolderCounts::default();
-    for r in rows {
-        counts.add(r, filter);
+    for (at, r) in rows.iter().enumerate() {
+        counts.add(r, filter, at);
     }
     counts
 }
@@ -507,4 +507,68 @@ fn a_checkbox_a_colour_or_a_string_is_never_rejected() {
     color.ui = moon_core::feed::SchemaFieldUi::Color;
     assert!(!super::draft_rejected(&color, "FF00AA"));
     assert!(!super::draft_rejected(&edit_field("String"), ""));
+}
+
+/// Names every folder of a built node in the order the tree would draw them, depth first.
+///
+/// Written as its own walk rather than by calling the renderer, so the assertion below compares the
+/// structure with an expectation instead of with the production traversal.
+fn folder_order(node: &super::FolderNode, prefix: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, child) in node.children() {
+        let path = match prefix.is_empty() {
+            true => name.to_string(),
+            false => format!("{prefix}/{name}"),
+        };
+        out.push(path.clone());
+        out.extend(folder_order(child, &path));
+    }
+    out
+}
+
+/// The core's strategy list is an ORDER the operator arranged, and moonproto synchronizes it as the
+/// row sequence of a Full snapshot. So a folder belongs where it first appears in that sequence —
+/// not where a byte-wise alphabet would put it, which is what the previous `BTreeMap` did and which
+/// sorted `Zeta` above `alpha` and every Cyrillic name after every Latin one.
+#[test]
+fn folders_follow_the_cores_own_strategy_order() {
+    let rows = [
+        row(1, "Zeta", 0, false, true),
+        row(2, "alpha", 0, false, true),
+        row(3, "Zeta/inner", 0, false, true),
+        row(4, "омега", 0, false, true),
+        row(5, "alpha", 0, false, true),
+    ];
+    let node = super::build_node(rows.iter());
+    assert_eq!(
+        folder_order(&node, ""),
+        vec!["Zeta", "Zeta/inner", "alpha", "омега"]
+    );
+}
+
+/// A folder's strategies stay in the order the core sent them, which is the same claim one level
+/// down: the rows inside one folder are a sequence, not a set.
+#[test]
+fn strategies_inside_a_folder_keep_the_cores_order() {
+    let rows = [
+        row(7, "a", 0, false, true),
+        row(3, "a", 0, false, true),
+        row(5, "a", 0, false, true),
+    ];
+    let node = super::build_node(rows.iter());
+    let (_, folder) = node.children().next().expect("one folder");
+    let ids: Vec<u64> = folder.strategies.iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec![7, 3, 5]);
+}
+
+/// An empty folder appears in no strategy's path, so it has no place in the core's order and is
+/// appended after the folders that do. Two rows are the point of the case: `ensure_folder` must
+/// find the existing `a` rather than append a second one beside it.
+#[test]
+fn an_empty_folder_is_appended_without_duplicating_a_live_one() {
+    let rows = [row(1, "b", 0, false, true), row(2, "a", 0, false, true)];
+    let mut node = super::build_node(rows.iter());
+    super::ensure_folder(&mut node, &["a".to_string(), "ghost".to_string()]);
+    super::ensure_folder(&mut node, &["zz".to_string()]);
+    assert_eq!(folder_order(&node, ""), vec!["b", "a", "a/ghost", "zz"]);
 }
