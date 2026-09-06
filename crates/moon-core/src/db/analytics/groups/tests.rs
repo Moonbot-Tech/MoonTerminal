@@ -269,15 +269,21 @@ fn reference_sql(src: &str, has_names: bool, by_strategy: bool) -> String {
 /// maps to a visible group.
 fn reference_group_from_row(
     row: &rusqlite::Row,
+    has_names: bool,
+    by_strategy: bool,
 ) -> rusqlite::Result<(GroupStat, Option<(i64, i64)>)> {
     let wsum: f64 = row.get(9)?;
     let lsum: f64 = row.get(10)?;
     let quote = group_quote_scope(row.get(18)?, row.get(19)?, row.get(20)?, row.get(21)?);
     let comparable = matches!(quote, QuoteScope::Single(_));
+    let key: String = row.get(0)?;
+    let name: String = row.get(1)?;
+    let fallback_id = key.split_once('@').map(|(id, _)| id);
     Ok((
         GroupStat {
-            key: row.get(0)?,
-            name: row.get(1)?,
+            name_is_id: by_strategy && (!has_names || fallback_id == Some(name.as_str())),
+            key,
+            name,
             kind: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             core: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
             cores_n: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
@@ -300,8 +306,15 @@ fn reference_group_from_row(
 }
 
 /// Run an arbitrary historical group statement through the reference decoder.
-fn run(conn: &Connection, sql: &str, q: &Query) -> Vec<GroupStat> {
-    try_run(conn, sql, q).unwrap_or_else(|e| panic!("generated SQL must be valid: {e}\n{sql}"))
+fn run(
+    conn: &Connection,
+    sql: &str,
+    q: &Query,
+    has_names: bool,
+    by_strategy: bool,
+) -> Vec<GroupStat> {
+    try_run(conn, sql, q, has_names, by_strategy)
+        .unwrap_or_else(|e| panic!("generated SQL must be valid: {e}\n{sql}"))
 }
 
 /// Compare two group lists BY INDEX, every field of every row.
@@ -368,7 +381,13 @@ fn lifting_enrichment_out_of_the_aggregate_preserves_every_group() {
     for by_strategy in [true, false] {
         for has_names in [true, false] {
             let label = format!("by_strategy={by_strategy} has_names={has_names}");
-            let old = run(&c, &reference_sql(&src, has_names, by_strategy), &q);
+            let old = run(
+                &c,
+                &reference_sql(&src, has_names, by_strategy),
+                &q,
+                has_names,
+                by_strategy,
+            );
             let new = groups(&c, &src, None, &q, has_names, by_strategy).expect("new groups");
             assert!(!old.is_empty(), "{label}: the fixture must produce groups");
             assert_same(&label, &old, &new);
@@ -377,10 +396,16 @@ fn lifting_enrichment_out_of_the_aggregate_preserves_every_group() {
 }
 
 /// Run a group statement without unwrapping, for the paths that are expected to fail.
-fn try_run(conn: &Connection, sql: &str, q: &Query) -> rusqlite::Result<Vec<GroupStat>> {
+fn try_run(
+    conn: &Connection,
+    sql: &str,
+    q: &Query,
+    has_names: bool,
+    by_strategy: bool,
+) -> rusqlite::Result<Vec<GroupStat>> {
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(rusqlite::params![q.from, q.to], |row| {
-        reference_group_from_row(row).map(|(group, _)| group)
+        reference_group_from_row(row, has_names, by_strategy).map(|(group, _)| group)
     })?;
     rows.collect()
 }
@@ -407,7 +432,7 @@ fn an_unattributable_trade_fails_the_same_way_in_both_forms() {
 
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
-    let old = try_run(&c, &reference_sql(&src, true, true), &q);
+    let old = try_run(&c, &reference_sql(&src, true, true), &q, true, true);
     let new = groups(&c, &src, None, &q, true, true);
     assert!(
         old.is_err(),
@@ -495,7 +520,7 @@ fn groups_enrichment_cost_against_a_large_replica() {
     let src = unified_from(&c, &q).expect("source").expect("replica");
 
     let started = std::time::Instant::now();
-    let old = run(&c, &reference_sql(&src, true, true), &q);
+    let old = run(&c, &reference_sql(&src, true, true), &q, true, true);
     let old_took = started.elapsed();
 
     let started = std::time::Instant::now();
@@ -596,6 +621,100 @@ fn a_strategy_missing_from_the_head_table_falls_back_to_its_id() {
     assert_eq!(ten.alive, Some(0));
     assert_eq!(ten.kind, "Orphan", "the version is readable without a head");
     assert_eq!((ten.bl, ten.wl), (0, 0), "no live head, no lists");
+}
+
+/// `groups.rs:group_from_row` must set `GroupStat::name_is_id` from `by_strategy`, not from
+/// whether the SQLite row made a numeric metadata pair. Replacing `name_is_id: by_strategy` with
+/// `name_is_id: pair.is_some()` makes a legacy TEXT-class id look like a user-supplied name in the
+/// Tuner even though the visible label is its unresolved bare id.
+#[test]
+fn textual_strategy_ids_remain_fallbacks_while_named_integer_ids_do_not() {
+    let c = fixture();
+    c.execute(
+        "INSERT INTO orders_rep (core_uid, core_name, coin, isshort, buydate, closedate,
+             profitbtc, strategyid, emulator, spentbtc, basecurrency)
+         VALUES (1, 'alpha', 'DOGE', 0, 1_940, 2_000, 1.0, 'odd-id', 0, 100.0, 1)",
+        [],
+    )
+    .expect("textual strategy trade");
+    let text_storage: String = c
+        .query_row(
+            "SELECT typeof(strategyid) FROM orders_rep WHERE coin = 'DOGE'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("text storage class");
+    let integer_storage: String = c
+        .query_row(
+            "SELECT typeof(strategyid) FROM orders_rep WHERE core_uid = 1 AND strategyid = 7",
+            [],
+            |row| row.get(0),
+        )
+        .expect("integer storage class");
+    assert_eq!(
+        text_storage, "text",
+        "the legacy id is persisted as SQLite TEXT"
+    );
+    assert_eq!(
+        integer_storage, "integer",
+        "strategy 7 remains a numeric metadata key"
+    );
+
+    let q = q();
+    let src = unified_from(&c, &q).expect("source").expect("replica");
+    let out = groups(&c, &src, None, &q, true, true).expect("strategy groups");
+    let textual = out
+        .iter()
+        .find(|group| group.key == "odd-id@1")
+        .expect("textual strategy group");
+    let named_integer = out
+        .iter()
+        .find(|group| group.key == "7@1")
+        .expect("named integer strategy group");
+
+    assert_eq!(
+        textual.name, "odd-id",
+        "a text id has no numeric metadata pair to enrich"
+    );
+    assert!(
+        textual.name_is_id,
+        "the bare TEXT-class id is a fallback, not a user-provided strategy name"
+    );
+    assert_eq!(
+        named_integer.name, "Seven",
+        "the fixture head names integer strategy 7"
+    );
+    assert!(
+        !named_integer.name_is_id,
+        "a resolved head name is not an id fallback"
+    );
+}
+
+/// `strategy_meta.rs:StrategyMetadata::display_name` must reject blank stored names before
+/// `groups.rs:enrich` applies metadata. Dropping the trim-and-empty guard leaves the Tuner's
+/// strategy row blank even though its persisted numeric identity is still available to display.
+#[test]
+fn a_strategy_with_a_blank_head_name_falls_back_to_its_id() {
+    let c = fixture();
+    c.execute(
+        "UPDATE strat.strategies SET name = '' WHERE core_uid = 1 AND strategy_id = 7",
+        [],
+    )
+    .expect("blank strategy head");
+    let q = q();
+    let src = unified_from(&c, &q).expect("source").expect("replica");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
+    let seven = out.iter().find(|g| g.key == "7@1").expect("strategy 7");
+
+    assert_eq!(
+        seven.name, "7",
+        "a blank head name must never erase the visible identity"
+    );
+    assert_eq!(
+        seven.alive,
+        Some(2),
+        "the live checked status remains independent of its label"
+    );
 }
 
 /// `analytics::groups::enrich` must retain `Some(0)` when no strategy metadata exists at all.

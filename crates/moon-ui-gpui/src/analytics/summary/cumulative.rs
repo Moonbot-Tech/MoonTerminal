@@ -10,6 +10,7 @@
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
+use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::charts::{
@@ -37,6 +38,140 @@ const MAX_SWING_LABELS: usize = 14;
 const X_TICKS: usize = 6;
 /// Minimum pixel spacing for the column separators — below it they merge into a wash.
 const MIN_SEP_STEP: f32 = 3.0;
+
+/// Which cores get a line, in drawing order.
+///
+/// The biggest by ABSOLUTE contribution. `core_days` arrives sorted by SIGNED total, so a plain
+/// `take` would keep the twelve best earners and hide exactly the cores that lost the most — the
+/// ones worth looking at. Extracted so the LEGEND names the same cores the chart draws, by
+/// construction rather than by two copies of one rule.
+///
+/// Args:
+///     cores: Per-core series in the order the query returned them.
+///
+/// Returns:
+///     Indices into `cores`, at most [`MAX_CORE_LINES`] of them.
+pub(super) fn drawn_core_order(cores: &[CoreSeries]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..cores.len()).collect();
+    order.sort_by(|&a, &b| cores[b].total.abs().total_cmp(&cores[a].total.abs()));
+    order.truncate(MAX_CORE_LINES);
+    order
+}
+
+/// Legend naming the thin per-core lines drawn inside the cumulative area.
+///
+/// Without it the lines are unattributable: the card said how MANY cores were drawn but never
+/// WHICH, and the hover popup only names them one bucket at a time. The row packs whole names
+/// and moves overflow into a "+N more" tail whose tooltip lists it; only a forced first name on
+/// an exceptionally narrow card truncates, with its full text in a tooltip.
+///
+/// Args:
+///     cores: Per-core series, in the query's own order.
+///     colors: One colour per core, indexed like `cores`.
+///     budget_w: Width the row may occupy, in device pixels.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     The legend row, or `None` when fewer than two lines are drawn — one line duplicates the
+///     total curve and naming it explains nothing.
+pub(super) fn core_legend(
+    cores: &[CoreSeries],
+    colors: &[Hsla],
+    budget_w: f32,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> Option<AnyElement> {
+    let order = drawn_core_order(cores);
+    if order.len() < 2 {
+        return None;
+    }
+    let dot = design::ui_value(cx, 6.0);
+    let gap = design::ui_value(cx, 8.0);
+    let text_w = |s: &str| design::ui_text_width(cx, s, design::base_text(cx) - 2.0, 400.0, true);
+    // Always keep room for the tail: a row that packs to the last pixel and then discovers it
+    // must say "+3 more" has nowhere to put it.
+    let tail_w = text_w(&t!("analytics.popup_more", n = order.len()).to_string()) + gap;
+    let mut used = 0.0;
+    let mut shown = 0usize;
+    for &ci in &order {
+        let w = dot + design::ui_value(cx, 4.0) + text_w(&cores[ci].name) + gap;
+        let last = shown + 1 == order.len();
+        if used + w + if last { 0.0 } else { tail_w } > budget_w {
+            break;
+        }
+        used += w;
+        shown += 1;
+    }
+    // One name always shows, however narrow the card: a legend of nothing but "+10 more" is
+    // strictly worse than the caption it replaced. When even that one name is over budget it is
+    // the ONLY item allowed to yield — a `flex_none` name wider than the card paints straight
+    // over the card's edge — and its full text moves into a tooltip, so nothing is lost.
+    let forced = shown == 0;
+    let shown = shown.max(1);
+    let mut row = h_flex()
+        .w_full()
+        .flex_wrap()
+        .gap_x(px(gap))
+        .items_center()
+        .text_size(design::t_caption(cx));
+    for (slot, &ci) in order.iter().take(shown).enumerate() {
+        let name = cores[ci].name.clone();
+        let swatch = div()
+            .flex_none()
+            .w(px(dot))
+            .h(px(dot))
+            .rounded_full()
+            .bg(core_color(colors, ci, p));
+        let item = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
+        // The text is a direct child of the item row that owns its width: an extra flex around
+        // truncating text renders the whole line as one ellipsis.
+        row = row.child(if forced && slot == 0 {
+            item.flex_1()
+                .min_w_0()
+                .child(swatch)
+                .child(
+                    div()
+                        .id("an-cum-legend-forced")
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(moon(p.text_soft))
+                        .tooltip(crate::panels::common::text_tooltip(name.clone()))
+                        .child(name),
+                )
+                .into_any_element()
+        } else {
+            item.flex_none()
+                .child(swatch)
+                .child(
+                    div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .text_color(moon(p.text_soft))
+                        .child(name),
+                )
+                .into_any_element()
+        });
+    }
+    if shown < order.len() {
+        let hidden = order[shown..]
+            .iter()
+            .map(|&ci| cores[ci].name.clone())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        row = row.child(
+            div()
+                .id("an-cum-legend-more")
+                .flex_none()
+                .whitespace_nowrap()
+                .text_color(moon(p.text_muted))
+                .tooltip(crate::panels::common::text_tooltip(hidden))
+                .child(t!("analytics.popup_more", n = order.len() - shown).to_string()),
+        );
+    }
+    Some(row.into_any_element())
+}
 
 /// Swing points of a curve — the indices worth labelling. A running extremum is CONFIRMED
 /// only once the curve turns back from it by more than `thresh`, which is what keeps a
@@ -227,12 +362,7 @@ pub(super) fn cumulative_area(
         })
         .collect();
     let pts: Vec<f32> = cum.iter().map(|&v| v as f32).collect();
-    // Which cores get a line: the biggest by ABSOLUTE contribution. `core_days` arrives
-    // sorted by SIGNED total, so a plain `take` would keep the twelve best earners and hide
-    // exactly the cores that lost the most — the ones worth looking at.
-    let mut order: Vec<usize> = (0..cores.len()).collect();
-    order.sort_by(|&a, &b| cores[b].total.abs().total_cmp(&cores[a].total.abs()));
-    order.truncate(MAX_CORE_LINES);
+    let order = drawn_core_order(cores);
     let curves: Vec<(Hsla, Vec<f32>)> = order
         .iter()
         .map(|&ci| {

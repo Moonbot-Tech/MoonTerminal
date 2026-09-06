@@ -661,6 +661,31 @@ analytics.manual_orders:
   ru: "Вручную (без стратегии)"
   en: "Manual (no strategy)"
   es: "Manual (sin estrategia)"
+# A strategy the report names by id alone: the strategies database has no head for it, or the
+# head it has carries a blank name. %{id} is the SHORTENED id; the full one is in the tooltip.
+analytics.strategy_deleted:
+  ru: "удалённая стратегия #%{id}"
+  en: "deleted strategy #%{id}"
+  es: "estrategia eliminada #%{id}"
+analytics.strategy_unnamed:
+  ru: "стратегия без имени #%{id}"
+  en: "unnamed strategy #%{id}"
+  es: "estrategia sin nombre #%{id}"
+# Captions baked into the filter triggers, the way `report.cores_n` already reads "Ядер: N".
+# The whole phrase is one key: word order belongs to the locale, not to the code.
+analytics.filter.side_v:
+  ru: "Сторона: %{v}"
+  en: "Side: %{v}"
+  es: "Lado: %{v}"
+analytics.filter.kind_v:
+  ru: "Режим: %{v}"
+  en: "Mode: %{v}"
+  es: "Modo: %{v}"
+# "Metric", not "Currency": this trigger also shows "Profit %", which is not a currency.
+analytics.filter.metric_v:
+  ru: "Метрика: %{v}"
+  en: "Metric: %{v}"
+  es: "Metrica: %{v}"
 analytics.cores_title:
   ru: "Прибыль по ядрам"
   en: "Profit by core"

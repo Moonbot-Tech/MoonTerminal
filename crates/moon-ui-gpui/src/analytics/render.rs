@@ -43,7 +43,7 @@ impl Render for AnalyticsView {
                 quote_split_note(&totals, &self.valuation_status, self.valuation_mode, p, cx)
             }
             None => match self.tab {
-                Tab::Summary => self.summary_tab(p, cx),
+                Tab::Summary => self.summary_tab(p, chrome_width, cx),
                 Tab::Strategies => self.strategies_tab(p, window, cx),
                 Tab::Calendar => self.calendar_tab(p, cx),
             },

@@ -1,6 +1,8 @@
 //! Unit tests for the pure selection and normalization rules behind the per-core ranking.
 
-use super::{core_rank_rows, core_rank_stats, overview_ranges, thinned_labels};
+use super::{
+    core_rank_rows, core_rank_stats, distinct_core_colors, overview_ranges, thinned_labels,
+};
 use moon_core::db::analytics::CoreSeries;
 
 /// Build the minimum core series needed by ranking helpers.
@@ -83,4 +85,70 @@ fn thinned_labels_keep_spaced_daily_extremes() {
         vec![1, 4],
         "only the largest daily move in each overlapping label region may remain"
     );
+}
+
+/// `summary/charts.rs:distinct_core_colors` must give duplicate or missing configured colors a
+/// distinct picker swatch in uid order. Dropping the taken-RGB guard makes chart lines collide,
+/// while using profit order instead of uid makes the same core change color after a reload.
+#[test]
+fn core_colors_are_unique_and_stable_by_uid() {
+    let duplicate = [17, 34, 51];
+    let configured = [
+        (30, Some(duplicate)),
+        (10, Some(duplicate)),
+        (20, None),
+        (40, Some(duplicate)),
+        (50, Some(duplicate)),
+        (60, Some(duplicate)),
+        (70, Some(duplicate)),
+        (80, Some(duplicate)),
+        (90, Some(duplicate)),
+        (100, Some(duplicate)),
+    ];
+    let colors = distinct_core_colors(&configured, moon_ui::MoonPalette::LIGHT);
+    let rgb: Vec<_> = colors
+        .into_iter()
+        .map(crate::design::hsla_to_rgb8)
+        .collect();
+    let unique: std::collections::HashSet<_> = rgb.iter().copied().collect();
+
+    assert_eq!(
+        unique.len(),
+        configured.len(),
+        "every visible core needs a distinct line color"
+    );
+    assert_eq!(
+        rgb[1], duplicate,
+        "the lowest uid keeps the user-configured color"
+    );
+    assert_ne!(
+        rgb[2], duplicate,
+        "a missing color must use an unused picker swatch"
+    );
+
+    let shuffled = [
+        configured[7],
+        configured[1],
+        configured[9],
+        configured[2],
+        configured[5],
+        configured[0],
+        configured[8],
+        configured[3],
+        configured[6],
+        configured[4],
+    ];
+    let shuffled_rgb: std::collections::HashMap<_, _> = shuffled
+        .iter()
+        .copied()
+        .zip(distinct_core_colors(&shuffled, moon_ui::MoonPalette::LIGHT))
+        .map(|((uid, _), color)| (uid, crate::design::hsla_to_rgb8(color)))
+        .collect();
+    for ((uid, _), color) in configured.iter().zip(rgb) {
+        assert_eq!(
+            shuffled_rgb.get(uid),
+            Some(&color),
+            "uid {uid} must keep its color across order changes"
+        );
+    }
 }

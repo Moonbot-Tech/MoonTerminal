@@ -38,6 +38,26 @@ pub(super) struct StrategyMetadata {
 }
 
 impl StrategyMetadata {
+    /// The head's name when it is one a human can read, and `None` when it is not.
+    ///
+    /// THE ONE PLACE for the blank rule, for the same reason [`Self::list_count`] owns the
+    /// live-head gate. `strategies.name` is `NOT NULL DEFAULT ''`, so a head that exists with no
+    /// name resolves to `Some("")`. Every caller wants that treated exactly like an ABSENT head —
+    /// the label falls back to the bare id — and before this method each caller reached for
+    /// `name.clone()` directly and got an empty string it then rendered as an empty cell.
+    ///
+    /// Returns:
+    ///     The name EXACTLY as stored when it is not all whitespace, or `None` when it is. The
+    ///     blank test trims; the returned value never does — a strategy name is what the user
+    ///     typed, and the same filter-without-rewrite shape is what `feed::strategies`'
+    ///     `strat_display_name` already uses.
+    pub(super) fn display_name(&self) -> Option<String> {
+        self.name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+    }
+
     /// Distinct coins this strategy's blacklist names, or zero when no live head can show one.
     ///
     /// Returns:

@@ -2,7 +2,9 @@
 //!
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! would shadow the built-in `#[test]` attribute and make it expand recursively (CONTRIBUTING.md).
-use super::{DeltaGood, delta_parts, fmt_signed_unit, pct_delta};
+use super::{
+    DeltaGood, delta_parts, fmt_signed_unit, pct_delta, short_id, strat_display, strat_display_ex,
+};
 use crate::analytics::{pnl_unit_label, set_pnl_unit};
 use moon_core::db::{ProfitUnit, QuoteCurrency};
 use moon_ui::MoonPalette;
@@ -136,4 +138,41 @@ fn kpi_delta_tones_follow_each_metrics_good_direction() {
         None,
         "a delta that rounds away leaves the tile's muted em dash"
     );
+}
+
+/// `summary/mod.rs:strat_display_ex` must resolve manual orders before the unresolved-id branch,
+/// and `short_id` must expose exactly the final six decimal digits only when the full id exceeds
+/// eight characters. Reordering those rules labels manual orders as deleted and makes a tooltip's
+/// full identity disagree with the muted Summary label a user can see.
+#[test]
+fn unresolved_strategy_labels_keep_their_status_and_readable_id_tail() {
+    rust_i18n::set_locale("en");
+    let id = "-7653179346322682234";
+
+    let deleted = strat_display_ex(id, id, true, Some(0));
+    assert_eq!(deleted.text, "deleted strategy #…682234");
+    assert!(deleted.muted);
+    assert_eq!(deleted.full_id.as_deref(), Some(id));
+
+    for alive in [Some(2), None] {
+        let unnamed = strat_display_ex(id, id, true, alive);
+        assert_eq!(unnamed.text, "unnamed strategy #…682234");
+        assert!(unnamed.muted);
+        assert_eq!(unnamed.full_id.as_deref(), Some(id));
+    }
+
+    let manual = strat_display_ex("0", "0", true, Some(0));
+    assert_eq!(manual.text, "Manual (no strategy)");
+    assert!(!manual.muted);
+    assert_eq!(manual.full_id, None);
+
+    let named = strat_display_ex("Seven", "7", false, Some(0));
+    assert_eq!(named.text, "Seven");
+    assert!(!named.muted);
+    assert_eq!(named.full_id, None);
+    assert_eq!(strat_display("42"), "42");
+    assert_eq!(short_id(id), "…682234");
+    assert_eq!(short_id("odd-id"), "odd-id");
+    assert_eq!(short_id("12345678"), "12345678");
+    assert_eq!(short_id("123456789"), "…456789");
 }

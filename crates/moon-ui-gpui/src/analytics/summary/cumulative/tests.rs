@@ -1,4 +1,19 @@
-use super::{MAX_SWING_LABELS, place_labels, swing_labels, swing_points};
+use super::{
+    MAX_CORE_LINES, MAX_SWING_LABELS, drawn_core_order, place_labels, swing_labels, swing_points,
+};
+use moon_core::db::analytics::CoreSeries;
+
+/// Build only the fields the line-selection helper reads.
+fn core(uid: u64, total: f64) -> CoreSeries {
+    CoreSeries {
+        uid,
+        name: format!("core-{uid}"),
+        per_bucket: Vec::new(),
+        per_bucket_trades: Vec::new(),
+        total,
+        trades: 0,
+    }
+}
 
 /// `cumulative.rs:place_labels` must retain labels separated vertically by one full label height.
 /// Changing its clear-on-either-axis `||` to `&&` drops a readable swing label, hiding a period move.
@@ -99,4 +114,23 @@ fn swing_short_inputs() {
     assert!(swing_points(&[], 1.0).is_empty());
     assert!(swing_points(&[5.0], 1.0).is_empty());
     assert_eq!(swing_points(&[5.0, 7.0], 1.0), vec![0]);
+}
+
+/// `summary/cumulative.rs:drawn_core_order` must cap lines by absolute contribution, not signed
+/// profit. Sorting by signed total hides the largest loss, precisely the line a user needs when
+/// the cumulative chart's total masks one badly losing core.
+#[test]
+fn drawn_core_order_keeps_the_largest_loss_inside_the_line_cap() {
+    let mut cores: Vec<_> = (0..12)
+        .map(|uid| core(uid as u64, 120.0 - uid as f64 * 10.0))
+        .collect();
+    cores.push(core(99, -1_000.0));
+
+    let order = drawn_core_order(&cores);
+    assert_eq!(order.len(), MAX_CORE_LINES);
+    assert_eq!(
+        order[0], 12,
+        "the largest absolute contributor is the loss core"
+    );
+    assert_eq!(order, vec![12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 }
