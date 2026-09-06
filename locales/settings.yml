@@ -11,6 +11,16 @@ settings.saved:
   ru: "Сохранено"
   en: "Saved"
   es: "Guardado"
+# Caption beside the Save button. It is an INDICATOR, never a fence: the button stays enabled in
+# both states and closing the window still discards the draft without a confirmation.
+settings.dirty:
+  ru: "есть несохранённые изменения"
+  en: "unsaved changes"
+  es: "hay cambios sin guardar"
+settings.clean:
+  ru: "изменений нет"
+  en: "no changes"
+  es: "sin cambios"
 settings.window_title:
   ru: "MoonTerminal — Настройки"
   en: "MoonTerminal — Settings"

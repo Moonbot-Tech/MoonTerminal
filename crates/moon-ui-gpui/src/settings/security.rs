@@ -135,6 +135,29 @@ impl SecurityEd {
         }))
     }
 
+    /// Whether this draft is asking Save to do anything at all.
+    ///
+    /// Exposed for the Save button's dirty indicator, which must count a pending password change:
+    /// the password draft lives OUTSIDE `AppConfig` by the design stated at the top of this file,
+    /// and `save` applies it BEFORE the config write, so a password-only edit makes the very same
+    /// button write key slots to disk. An `AppConfig`-only comparison would render it clean.
+    ///
+    /// A boolean rather than the request itself, deliberately: [`Self::pending`] returns the
+    /// private `vault::VaultChange`, and the footer has no business reaching it -- it needs to
+    /// know THAT there is work, never what the work is.
+    ///
+    /// An INVALID request (mismatched pair) counts as pending: the user typed something, Save
+    /// will act on it and report the error, so "no changes" would be false there too.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the password input states.
+    ///
+    /// Returns:
+    ///     `true` when Save must process a password change or report an invalid request.
+    pub(super) fn has_pending_request(&self, cx: &App) -> bool {
+        self.pending(cx).is_some()
+    }
+
     /// Empty every password field after the draft has been accepted.
     fn clear_fields(&self, window: &mut Window, cx: &mut App) {
         self.launch.clear(window, cx);

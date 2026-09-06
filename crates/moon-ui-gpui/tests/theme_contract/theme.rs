@@ -578,3 +578,165 @@ fn chrome_toggles_resolve_their_tone_through_one_helper() {
         );
     }
 }
+
+/// `settings/mod.rs:draft_sig` must stream serde into its hasher rather than
+/// materializing plaintext `Secret` values. Breakage: replacing the writer with `to_string`,
+/// `to_vec`, or debug formatting keeps every core key in an unzeroized allocation on repaint.
+#[test]
+fn connections_dirty_signature_never_materializes_secret_config_text() {
+    let dirty = read_src("settings/mod.rs");
+    let hash_json = code_only(braced_body(&dirty, "fn hash_json<"));
+
+    assert!(
+        hash_json.contains("serde_json::to_writer("),
+        "settings/mod.rs:hash_json must stream serialized settings into its hash sink"
+    );
+    for allocating in ["serde_json::to_string(", "serde_json::to_vec("] {
+        assert!(
+            !hash_json.contains(allocating),
+            "settings/mod.rs:hash_json must not materialize secret-bearing config through `{allocating}`"
+        );
+    }
+}
+
+/// `settings/mod.rs:draft_sig` must account for every `AppConfig::blank` field or name it in its
+/// explicit exclusion list. Breakage: adding a Settings-editable config field without updating the
+/// signature makes its edits read clean forever, so close discards them without a compile error.
+#[test]
+fn settings_dirty_signature_covers_or_explicitly_excludes_every_config_field() {
+    let config = read_core_src("config/mod.rs");
+    let blank = code_only(braced_body(&config, "pub(in crate::config) fn blank("));
+    let settings = read_src("settings/mod.rs");
+    let signature = code_only(braced_body(&settings, "fn draft_sig("));
+    let excluded = ["next_uid", "settings_unreadable", "chart_core_remap_needed"];
+    let fields = blank
+        .lines()
+        .filter_map(|line| line.trim().split_once(':').map(|(field, _)| field.trim()))
+        .filter(|field| {
+            !field.is_empty()
+                && field
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !fields.is_empty(),
+        "moon-core AppConfig::blank must spell out config fields for this coverage contract"
+    );
+    assert!(
+        settings.contains("deliberately EXCLUDED"),
+        "settings/mod.rs:draft_sig must keep an explicit EXCLUDED list for fields it intentionally omits"
+    );
+    for field in excluded {
+        assert!(
+            settings.contains(field),
+            "settings/mod.rs:draft_sig must document its exclusion of AppConfig::{field}"
+        );
+    }
+    for field in fields {
+        let covered = match field {
+            "groups" => signature.contains("canonical_groups("),
+            _ => excluded.contains(&field) || signature.contains(field),
+        };
+        assert!(
+            covered,
+            "settings/mod.rs:draft_sig must hash or explicitly exclude AppConfig::{field}"
+        );
+    }
+}
+
+/// `connections/mod.rs:build_conn` must put key and bundle placeholders on their input state,
+/// while `table.rs:server_row` keeps state-bound widgets free of widget placeholders. Breakage:
+/// moving either placeholder back to `MoonInput` drops it silently, leaving an empty field blank.
+#[test]
+fn connections_placeholders_live_on_state_not_state_bound_widgets() {
+    let connections = read_src("settings/connections/mod.rs");
+    let build_conn = code_only(braced_body(&connections, "fn build_conn("));
+    let table = read_src("settings/connections/table.rs");
+    let server_row = code_only(braced_body(&table, "fn server_row("));
+
+    assert!(
+        build_conn.contains("conn.key_ph") && build_conn.contains("conn.bundle_ph"),
+        "connections/mod.rs:build_conn must seed both state-owned placeholders"
+    );
+    assert!(
+        !server_row.contains(".placeholder("),
+        "connections/table.rs:server_row must not put placeholders on state-bound MoonInput widgets"
+    );
+}
+
+/// `connections/table.rs` must retain tooltip keys beside the compact protocol and feed controls.
+/// Breakage: removing either key leaves `V0` or `8/8` undecodable without searching for a header.
+#[test]
+fn connections_compact_cells_keep_their_explanatory_tooltips() {
+    let table = read_src("settings/connections/table.rs");
+    let proto = code_only(braced_body(&table, "fn proto_dropdown("));
+    let feed = code_only(braced_body(&table, "fn feed_popover("));
+
+    assert!(
+        proto.contains("conn.tip.proto"),
+        "connections/table.rs:proto_dropdown must retain the protocol tooltip"
+    );
+    assert!(
+        feed.contains("conn.tip.flags"),
+        "connections/table.rs:feed_popover must retain the feed-flags tooltip"
+    );
+}
+
+/// `connections/table.rs:col_head` and `hint_label` must use muted, non-underlined headings.
+/// Breakage: restoring underlines makes static headers look like hyperlinks and obscures hierarchy.
+#[test]
+fn connections_headers_are_muted_labels_not_links() {
+    let table = read_src("settings/connections/table.rs");
+    let col_head = code_only(braced_body(&table, "fn col_head("));
+    let hint_label = code_only(braced_body(&table, "fn hint_label("));
+
+    assert!(
+        !col_head.contains(".underline()") && col_head.contains("p.text_muted"),
+        "connections/table.rs:col_head must be muted and un-underlined"
+    );
+    assert!(
+        !hint_label.contains(".underline()"),
+        "connections/table.rs:hint_label must not look like a link"
+    );
+}
+
+/// `settings/render.rs` must show dirty and clean captions and leave Save enabled in either state.
+/// Breakage: disabling Save when clean rejects the explicit no-fence contract, while removing the
+/// neutral variant or caption hides whether the current draft has changes.
+#[test]
+fn settings_save_button_exposes_dirty_state_without_a_disabled_fence() {
+    let render = read_src("settings/render.rs");
+    let save = code_only(chain_between(
+        &render,
+        "MoonButton::new(\"save\")",
+        ".render()",
+        "settings save button",
+    ));
+
+    assert!(
+        render.contains("settings.dirty")
+            && render.contains("settings.clean")
+            && render.contains("MoonButtonVariant::Neutral"),
+        "settings/render.rs must distinguish dirty and clean captions with a neutral clean variant"
+    );
+    assert!(
+        !save.contains(".disabled("),
+        "settings/render.rs:MoonButton::new(\"save\") must remain enabled when clean"
+    );
+}
+
+/// `settings/render.rs:SettingsView::render` must include the password-only security draft in
+/// Save's dirty predicate. Breakage: comparing only `AppConfig` paints a password change Neutral,
+/// so the HOT-path indicator says no changes while Save writes new key slots to `servers.enc`.
+#[test]
+fn settings_save_dirty_predicate_includes_the_pending_security_draft() {
+    let render = read_src("settings/render.rs");
+    let body = code_only(braced_body(&render, "fn render("));
+
+    assert!(
+        body.contains("self.security.has_pending_request(cx)"),
+        "settings/render.rs:SettingsView::render must include the pending security request in Save's dirty predicate"
+    );
+}

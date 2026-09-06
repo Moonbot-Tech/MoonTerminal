@@ -38,7 +38,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::media::icons::IconSet;
-use moon_core::config::{AppConfig, CoreSortMode, Language};
+use moon_core::config::{AppConfig, CoreSortMode, GroupConfig, Language};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::market::MarketDataMode;
 use moon_core::session::CoreId;
@@ -229,6 +229,20 @@ pub struct SettingsView {
     conn_edit_pending: Option<u64>,
     /// Signature of data consumed by Settings: draft/configuration fields plus session statuses.
     last_sig: u64,
+    /// Whether the CONFIG draft differed from the saved config as of the last backend
+    /// notification.
+    ///
+    /// Kept beside [`Self::last_sig`] because it is the SECOND repaint trigger: `settings_sig`
+    /// deliberately ignores `transport` and `chart_bundle`, so a keystroke in the Charts field or
+    /// a pick in the Proto dropdown moves this flag while leaving that signature untouched, and
+    /// the footer would never learn about it.
+    ///
+    /// It carries the CONFIG term ONLY, and the observer below is its ONLY writer. The footer
+    /// combines it with the pending-password term locally and writes nothing back: a field
+    /// written under one definition and compared under another masks exactly the transitions it
+    /// exists to catch. Reading it in `render` rather than recomputing also keeps `draft_sig`
+    /// off the render path, where 56 servers would be serialized twice per frame.
+    draft_dirty: bool,
     /// Last valid Main auto-close timeout retained for this Settings session.
     ///
     /// Disabling the checkbox writes zero to the draft; re-enabling restores this value instead
@@ -444,10 +458,19 @@ impl SettingsView {
         .detach();
 
         let initial_sig = settings_sig(backend.read(cx));
+        let initial_dirty = backend_dirty(backend.read(cx));
         cx.observe(&backend, |this, backend, cx| {
-            let sig = settings_sig(backend.read(cx));
-            if sig != this.last_sig {
+            let b = backend.read(cx);
+            let sig = settings_sig(b);
+            // The dirty flag is a SECOND repaint trigger, not a consequence of the first:
+            // `settings_sig` skips `transport` and `chart_bundle`, so an edit to either moves
+            // only this one and the footer would otherwise keep painting the stale caption.
+            // It flips at most once per clean-to-dirty transition, so this costs one repaint,
+            // not one per keystroke.
+            let dirty = backend_dirty(b);
+            if sig != this.last_sig || dirty != this.draft_dirty {
                 this.last_sig = sig;
+                this.draft_dirty = dirty;
                 cx.notify();
             }
         })
@@ -497,6 +520,7 @@ impl SettingsView {
             conn_entries: Rc::new(Vec::new()),
             conn_edit_pending: None,
             last_sig: initial_sig,
+            draft_dirty: initial_dirty,
             idle_last_secs: std::cell::Cell::new(0),
             import: None,
             security: security_ed,
@@ -593,6 +617,169 @@ fn settings_sig(b: &Backend) -> u64 {
     }
 
     h.finish()
+}
+
+/// Feed a serde stream straight into a hasher, so no serialized copy is ever allocated.
+///
+/// `ServerConfig::key` is a `Secret`, which is `#[serde(transparent)]` over the PLAINTEXT core
+/// key (`moon_core::config::secrets`). `serde_json::to_string`/`to_vec` would therefore build a
+/// `String` holding every one of the user's Moonbot keys -- unzeroized, once per check. Streaming
+/// into the hasher allocates nothing and leaves no plaintext copy behind.
+struct HashSink<'a>(&'a mut DefaultHasher);
+
+impl std::io::Write for HashSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Hasher::write(self.0, buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Fold one serializable config aggregate into the running signature.
+///
+/// Serde is what makes this EXHAUSTIVE per struct: a field added to `ServerConfig` or
+/// `GroupConfig` joins the signature without anyone remembering to list it here.
+///
+/// INVARIANT for whoever adds the next field: every type hashed here must have an INFALLIBLE
+/// `Serialize`. Today all of them do, so the error branch below is unreachable. It is not
+/// merely a fallback if that ever changes: `HashSink` forwards each buffer to the hasher before
+/// any error is known, so a mid-stream failure leaves the bytes written so far mixed in, and two
+/// configs differing only AFTER the common failure point would hash equal. A fallible field
+/// needs a fixed sentinel or a buffered path, not this branch. The one shape that introduces
+/// one is a map with non-string or non-finite-float keys.
+///
+/// KNOWN LIMIT, deliberately not chased: `serde_json` writes a non-finite `f32`/`f64` as `null`
+/// rather than failing, so `NaN` and `+Infinity` in the same nested float hash equal. Only a
+/// hand-edited TOML can produce one, the effect is confined to this caption, and Save is never
+/// gated on the flag -- the scalar floats this function hashes directly go through `to_bits()`
+/// and are unaffected.
+///
+/// Args:
+///     h: Running signature sink that receives the serialized bytes.
+///     value: Config aggregate to serialize into the signature.
+///
+/// Returns:
+///     Nothing; appends the aggregate's JSON representation to `h`.
+fn hash_json<T: serde::Serialize>(h: &mut DefaultHasher, value: &T) {
+    if let Err(err) = serde_json::to_writer(HashSink(h), value) {
+        err.to_string().hash(h);
+    }
+}
+
+/// Reduce a config's group list to exactly what a Save would persist.
+///
+/// `AppConfig::save_impl` runs `ensure_server_group_configs` (add a row for every server group
+/// that lacks one) and then `prune_orphan_groups` (drop every row no server references). The net
+/// persisted set is therefore one row per DISTINCT server group name, and this restates that in
+/// one rule -- restated rather than called because `prune_orphan_groups` is private to
+/// `moon_core::config`.
+///
+/// Doing it on BOTH sides of the comparison is what makes the dirty check answer "would saving
+/// change anything?" instead of "do these two structs differ?". Two live failures depend on it:
+/// the window seeds its draft through `sync_groups_from_servers`, so an un-normalized compare
+/// reads dirty the moment Settings opens; and a group rename typed and then typed back leaves the
+/// intermediate row behind in the draft (`connections/tests.rs` proves it survives until save),
+/// so a reverted edit would report unsaved changes forever.
+///
+/// Args:
+///     cfg: Saved configuration or live draft to normalize.
+///
+/// Returns:
+///     The group rows a Save would persist for the configuration's current server groups.
+fn canonical_groups(cfg: &AppConfig) -> Vec<GroupConfig> {
+    let mut names: Vec<&str> = cfg.servers.iter().map(|s| s.group.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            cfg.groups
+                .iter()
+                .find(|g| g.name == name)
+                .cloned()
+                .unwrap_or_else(|| GroupConfig::new(name))
+        })
+        .collect()
+}
+
+/// Signature of everything a Settings Save would write, for the draft-vs-saved comparison.
+///
+/// Distinct from [`settings_sig`] beside it, which is a REPAINT gate and is deliberately lossy --
+/// it hashes only `key.is_empty()` and skips `transport`, `chart_bundle` and
+/// `workspace_membership` entirely, so reusing it here would call a changed core key or a changed
+/// transport mode "no changes". Distinct from `AppConfig::structural_sig`, which neutralizes
+/// exactly the presentation fields the Connections tab edits.
+///
+/// Three `AppConfig` fields are deliberately EXCLUDED, named here so the `theme_contract`
+/// exhaustiveness test can see them and so a reader knows the omission was a decision:
+/// `next_uid` moves only inside `save`, which then writes the same candidate into both the draft
+/// and the saved config; `settings_unreadable` and `chart_core_remap_needed` are runtime flags no
+/// tab edits. Every other field is covered.
+///
+/// Args:
+///     cfg: Saved config or live draft; both sides go through this identically.
+///
+/// Returns:
+///     A signature equal for two configs that would persist the same bytes.
+fn draft_sig(cfg: &AppConfig) -> u64 {
+    let mut h = DefaultHasher::new();
+
+    hash_json(&mut h, &cfg.servers);
+    hash_json(&mut h, &canonical_groups(cfg));
+    hash_json(&mut h, &cfg.core_groups);
+    hash_json(&mut h, &cfg.hotkeys);
+    hash_json(&mut h, &cfg.theme);
+    hash_json(&mut h, &cfg.orders);
+    hash_json(&mut h, &cfg.badges);
+
+    // `MarketDataMode` and `ValuationMode` are not `Serialize`, so they take the same
+    // stable-code path `settings_sig` uses; the rest are plain scalars.
+    cfg.language.code().hash(&mut h);
+    cfg.market_mode.code().hash(&mut h);
+    cfg.core_sort.hash(&mut h);
+    cfg.report_valuation_mode.hash(&mut h);
+    cfg.ui_theme_mode.hash(&mut h);
+    cfg.charts_split_by_core.hash(&mut h);
+    cfg.charts_stack_scroll.hash(&mut h);
+    cfg.charts_stack_compress.hash(&mut h);
+    cfg.chart_stack_height.hash(&mut h);
+    cfg.separate_control_zones.hash(&mut h);
+    cfg.main_idle_close_secs.hash(&mut h);
+    cfg.log_to_file.hash(&mut h);
+    cfg.log_retention_days.hash(&mut h);
+    cfg.chart_memory_percent.hash(&mut h);
+    cfg.ui_font_delta.to_bits().hash(&mut h);
+    cfg.ui_scale.to_bits().hash(&mut h);
+
+    h.finish()
+}
+
+/// Whether saving the draft would change anything on disk.
+///
+/// Args:
+///     saved: The config as it currently sits on disk.
+///     draft: The Settings window's live draft.
+///
+/// Returns:
+///     `true` when a Save would persist something different.
+pub(super) fn draft_dirty(saved: &AppConfig, draft: &AppConfig) -> bool {
+    draft_sig(saved) != draft_sig(draft)
+}
+
+/// Whether the backend currently holds a draft that differs from the saved config.
+///
+/// Args:
+///     b: Settings backend whose saved configuration and optional draft are compared.
+///
+/// Returns:
+///     `true` when an open draft would change the saved configuration; `false` without a draft.
+fn backend_dirty(b: &Backend) -> bool {
+    b.preview
+        .as_ref()
+        .is_some_and(|draft| draft_dirty(&b.config, draft))
 }
 
 /// Open Settings on its default tab, in a separate OS window backed by a live-preview draft.

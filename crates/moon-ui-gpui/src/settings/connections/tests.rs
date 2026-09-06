@@ -6,9 +6,10 @@ use super::tab::{
     ServerRowMeta, apply_group_transport, pending_server_indices, visible_group_rows,
 };
 use crate::core_order::CoreOrder;
+use crate::settings::draft_dirty;
 use moon_core::config::{
-    AppConfig, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
-    TakeProfitMode, TransportVersion,
+    AppConfig, CoreGroup, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret,
+    ServerConfig, TakeProfitMode, TransportVersion,
 };
 use moon_core::venue::CoreVenue;
 
@@ -297,4 +298,113 @@ fn only_current_server_group_names_become_visible_branches() {
         ],
         "pending, shared, and separate current names must keep their stored metadata"
     );
+}
+
+/// `settings/mod.rs:draft_dirty` must include the masked core key in the draft signature.
+///
+/// Breakage: skipping `Secret` because it is masked lets a newly pasted core key read clean, so
+/// closing Settings silently loses an authentication change with no recovery path.
+#[test]
+fn draft_dirty_detects_a_core_key_change() {
+    let mut saved = AppConfig::load(None, false).expect("test-binary config must load");
+    saved.servers = vec![server("desk")];
+    saved.groups = vec![GroupConfig::new("desk")];
+    let mut draft = saved.clone();
+
+    draft.servers[0].key = Secret::new("k2");
+
+    assert!(draft_dirty(&saved, &draft));
+}
+
+/// `settings/mod.rs:draft_dirty` must normalize missing saved group rows before comparing.
+///
+/// Breakage: removing `ensure_server_group_configs` from the saved baseline makes a seeded-open
+/// Connections window read dirty forever, teaching users that its Save indicator means nothing.
+#[test]
+fn draft_dirty_treats_seeded_preview_groups_as_clean() {
+    let mut saved = AppConfig::load(None, false).expect("test-binary config must load");
+    saved.servers = vec![server("desk")];
+    saved.groups.clear();
+    let mut draft = saved.clone();
+    sync_groups_from_servers(&draft.servers, &mut draft.groups);
+
+    assert!(!draft_dirty(&saved, &draft));
+}
+
+/// `settings/mod.rs:draft_dirty` must include the per-core MoonProto transport mode.
+///
+/// Breakage: reusing `settings_sig`, which does not hash transport, makes a protocol-mode change
+/// read clean and disappear when the user closes Settings.
+#[test]
+fn draft_dirty_detects_a_transport_change() {
+    let mut saved = AppConfig::load(None, false).expect("test-binary config must load");
+    saved.servers = vec![server("desk")];
+    saved.groups = vec![GroupConfig::new("desk")];
+    let mut draft = saved.clone();
+
+    draft.servers[0].transport = Some(TransportVersion::V2);
+
+    assert!(draft_dirty(&saved, &draft));
+}
+
+/// `settings/mod.rs:draft_dirty` must include each server's chart-bundle override.
+///
+/// Breakage: using `AppConfig::structural_sig`, which deliberately blanks this field, makes a
+/// chart-bundle edit read clean and lose the user's per-core chart selection on close.
+#[test]
+fn draft_dirty_detects_a_chart_bundle_change() {
+    let mut saved = AppConfig::load(None, false).expect("test-binary config must load");
+    saved.servers = vec![server("desk")];
+    saved.groups = vec![GroupConfig::new("desk")];
+    let mut draft = saved.clone();
+
+    draft.servers[0].chart_bundle = "x".into();
+
+    assert!(draft_dirty(&saved, &draft));
+}
+
+/// `settings/mod.rs:draft_dirty` must canonicalize an orphaned intermediate group on both sides.
+///
+/// Breakage: normalizing only the saved side leaves `des` behind after `desk -> des -> desk`, so
+/// a reverted group rename reads dirty forever and Save no longer tells users whether work remains.
+#[test]
+fn draft_dirty_is_clean_after_a_group_rename_is_reverted() {
+    let mut saved = AppConfig::load(None, false).expect("test-binary config must load");
+    saved.servers = vec![server("desk")];
+    saved.groups = vec![GroupConfig::new("desk")];
+    let mut draft = saved.clone();
+
+    assert!(!draft_dirty(&saved, &draft));
+    draft.servers[0].group = "des".into();
+    sync_groups_from_servers(&draft.servers, &mut draft.groups);
+    assert!(draft_dirty(&saved, &draft));
+    draft.servers[0].group = "desk".into();
+    sync_groups_from_servers(&draft.servers, &mut draft.groups);
+    assert!(!draft_dirty(&saved, &draft));
+}
+
+/// `settings/mod.rs:draft_dirty` must serialize Settings aggregates as well as servers.
+///
+/// Breakage: dropping one aggregate from the streamed signature makes Hotkeys, per-group trading,
+/// or a saved core set look clean, so an entire Settings tab can be discarded on close.
+#[test]
+fn draft_dirty_detects_hotkey_group_trade_and_core_group_changes() {
+    let mut saved = AppConfig::load(None, false).expect("test-binary config must load");
+    saved.servers = vec![server("desk")];
+    saved.groups = vec![GroupConfig::new("desk")];
+
+    let mut hotkey_draft = saved.clone();
+    hotkey_draft.hotkeys.cancel_buy = "ctrl-shift-k".into();
+    assert!(draft_dirty(&saved, &hotkey_draft));
+
+    let mut group_draft = saved.clone();
+    group_draft.groups[0].trade.exit.stop_loss_pct = -3.0;
+    assert!(draft_dirty(&saved, &group_draft));
+
+    let mut core_group_draft = saved.clone();
+    core_group_draft.core_groups.push(CoreGroup {
+        name: "desk".into(),
+        cores: vec![1],
+    });
+    assert!(draft_dirty(&saved, &core_group_draft));
 }

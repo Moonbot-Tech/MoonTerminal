@@ -519,6 +519,35 @@ impl SettingsView {
     }
 }
 
+/// Wrap one control in an interactive div carrying a wrapping tooltip.
+///
+/// Used where the control itself has no tooltip prop -- `MoonDropdown` has none -- and where a
+/// cryptic label (`V0`, `8/8`) would otherwise be decodable only by finding its column heading.
+/// gpui needs an id on an interactive element, so the caller supplies one from [`ConnRowIds`].
+///
+/// Args:
+///     id: Element id of the wrapper, distinct from the control's own.
+///     tip: Already-localized tooltip text.
+///     max_w: Wrap width; the transport explanation is long enough to need more than the default.
+///     control: The control to wrap.
+///
+/// Returns:
+///     The control under a hover tooltip, occupying the same cell.
+fn with_tip(
+    id: SharedString,
+    tip: SharedString,
+    max_w: f32,
+    control: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .tooltip(move |_window, cx| {
+            cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(max_w))
+                .into()
+        })
+        .child(control)
+}
+
 /// Build the `Data n/8` dropdown ported from egui's `feed_button`.
 ///
 /// The trigger reports enabled feed flags; its eight checkbox items update the draft.
@@ -537,7 +566,7 @@ impl SettingsView {
 ///     cx: Application context.
 ///
 /// Returns:
-///     The feed-flag dropdown for one core row.
+///     The feed-flag dropdown wrapped in its cell tooltip.
 fn feed_popover(
     view: &SettingsView,
     weak: &WeakEntity<SettingsView>,
@@ -594,7 +623,9 @@ fn feed_popover(
     // that MoonUI stores for the life of the element, and a strong handle there would close
     // SettingsView -> element -> closure -> SettingsView and keep the window alive forever.
     let view_weak = weak.clone();
-    MoonDropdown::new(ids.feed.clone())
+    // `8/8` is a count with no visible denominator meaning: the column tooltip already explains
+    // what the eight categories are and what the amber tint means, so reuse it on the cell.
+    let dropdown = MoonDropdown::new(ids.feed.clone())
         .label(format!("{on}/8"))
         .trigger_caret(true)
         .trigger_variant(if tinted {
@@ -617,7 +648,13 @@ fn feed_popover(
                 this.feed_open = now_open.then_some(row_key);
                 cx.notify();
             });
-        })
+        });
+    with_tip(
+        ids.feed_tip.clone(),
+        t!("conn.tip.flags").to_string().into(),
+        320.0,
+        dropdown,
+    )
 }
 
 /// Build the MoonProto transport selector for one server row.
@@ -635,11 +672,12 @@ fn feed_popover(
 ///     view: Settings state read for the row's current draft value.
 ///     weak: Weak owner the select handler closes over.
 ///     i: Draft index of the server being edited.
+///     row_key: Owning row's identity, the value `proto_open` is compared against.
 ///     ids: Precomputed element ids for the row.
 ///     cx: Application context.
 ///
 /// Returns:
-///     A compact dropdown bound to draft `servers[i].transport`.
+///     The transport dropdown, wrapped in its row-level explanatory tooltip.
 fn proto_dropdown(
     view: &SettingsView,
     weak: &WeakEntity<SettingsView>,
@@ -704,7 +742,9 @@ fn proto_dropdown(
     };
 
     let view_weak = weak.clone();
-    MoonDropdown::new(ids.proto.clone())
+    // `V0` alone says nothing: the existing column tooltip is the only thing that explains the
+    // MoonProto trio, and a reader looking at a row should not have to find the heading first.
+    let dropdown = MoonDropdown::new(ids.proto.clone())
         .label(cur.map_or(SharedString::from("-"), |v| SharedString::from(v.label())))
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Neutral)
@@ -720,7 +760,13 @@ fn proto_dropdown(
                 this.proto_open = now_open.then_some(row_key);
                 cx.notify();
             });
-        })
+        });
+    with_tip(
+        ids.proto_tip.clone(),
+        t!("conn.tip.proto").to_string().into(),
+        320.0,
+        dropdown,
+    )
 }
 
 /// Build the workspace-preset selector for one server row.
@@ -946,8 +992,6 @@ pub(super) fn server_row(
                         MoonInput::new(ids.key.clone())
                             .state(&row.key)
                             .small()
-                            // Indicate that this field expects a core key.
-                            .placeholder(t!("conn.key_ph").to_string())
                             .mask_toggle()
                             // Allow the key to be cleared quickly before replacement.
                             .cleanable(true),
@@ -967,13 +1011,12 @@ pub(super) fn server_row(
             .state(&row.group)
             .small()
             .into_any_element(),
-        // An empty bundle field is the DEFAULT, not an omission, so the placeholder names what
-        // the field would hold rather than nudging: it is a bundle NAME (`ChartBucket::Bundle`
-        // in `moon-core/src/config/servers.rs`), which an empty white cell said nothing about.
+        // Both placeholders here live on the STATE instead, in `super::conn_input`: MoonUI honours
+        // `MoonInput::placeholder` only for a widget that creates its own state, so setting it
+        // beside `.state(..)` drops it silently -- which is why this column drew as a blank box.
         MoonInput::new(ids.bundle.clone())
             .state(&row.bundle)
             .small()
-            .placeholder(t!("conn.bundle_ph").to_string())
             .into_any_element(),
         feed_popover(view, weak, i, row_key, ids, cx).into_any_element(),
         MoonColorPicker::new(&row.color).into_any_element(),
@@ -1055,10 +1098,20 @@ impl SettingsView {
 
     /// Build one column heading, with its tooltip, ported from egui's `head_tip`.
     ///
-    /// Underlining and brighter text signal hover help. A column with no `label` -- colour,
-    /// delete, reconnect, status -- yields the bare cell, which still has to be emitted: the
-    /// header's growing columns only receive the same free space the rows give them when the
-    /// trailing widths are reserved too.
+    /// The heading reads like every other table header in the app: muted, unadorned, its tooltip
+    /// found by hovering rather than advertised. It used to be underlined in `text_soft` and set
+    /// in full-strength `text`, which made a sort-and-tooltip heading look like a hyperlink --
+    /// the one place in this codebase that did (`grep -n "underline()"`). The reference is
+    /// MoonUI's own `MoonDataTable` header (`moon/data_table/header.rs`), which paints
+    /// `style.header_text` -- `p.text_muted` -- and attaches its tooltip with no visual
+    /// affordance at all; Report and Orders are drawn by it.
+    ///
+    /// Losing the affordance costs nothing here, because the two cryptic cells that actually
+    /// needed decoding -- `V0` and `8/8` -- now carry their own tooltips on the row itself.
+    ///
+    /// A column with no `label` -- colour, delete, reconnect, status -- yields the bare cell,
+    /// which still has to be emitted: the header's growing columns only receive the same free
+    /// space the rows give them when the trailing widths are reserved too.
     ///
     /// Args:
     ///     col: Which column to head.
@@ -1080,6 +1133,9 @@ impl SettingsView {
             return base.into_any_element();
         };
         let tip: SharedString = t!(spec.tip.unwrap_or(label_key)).to_string().into();
+        // The id and the tooltip go on `base` ITSELF, never on a wrapper: `base` carries the
+        // column's `flex_basis`, cap and grow policy, so anything wrapped around it would become
+        // the flex item instead and the heading would drift off its own column.
         base.id(spec.id)
             .child(
                 div()
@@ -1089,9 +1145,7 @@ impl SettingsView {
                     // widen it, or the heading would push the grid it is describing.
                     .truncate()
                     .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text))
-                    .underline()
-                    .text_decoration_color(rgb(p.text_soft))
+                    .text_color(rgb(p.text_muted))
                     .child(t!(label_key).to_string()),
             )
             .tooltip(move |_window, cx| {
@@ -1101,26 +1155,35 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// Build an arbitrary-width help label with underlining and a wrapping tooltip.
+    /// Build an arbitrary-width help label with a wrapping tooltip.
     ///
     /// Used for section or group headings that need an explanation on hover rather than a column.
+    /// Bold `text` at full strength, matching `settings/common.rs:section`, and NOT underlined:
+    /// a heading is not a link. Same reasoning as [`Self::col_head`] above.
+    ///
+    /// Args:
+    ///     id: Stable identity for the tooltip wrapper.
+    ///     label: Visible heading text.
+    ///     tip: Already-localized explanatory tooltip text.
+    ///     p: Active palette supplying the heading colour.
+    ///
+    /// Returns:
+    ///     The full-strength heading label wrapped in its explanatory tooltip.
     pub(super) fn hint_label(
         id: &'static str,
         label: impl Into<SharedString>,
         tip: SharedString,
         p: MoonPalette,
     ) -> impl IntoElement {
-        div()
-            .id(id)
-            .font_bold()
-            .text_color(rgb(p.text))
-            .underline()
-            .text_decoration_color(rgb(p.text_soft))
-            .child(label.into())
-            .tooltip(move |_window, cx| {
-                cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(360.0))
-                    .into()
-            })
+        with_tip(
+            SharedString::from(id),
+            tip,
+            360.0,
+            div()
+                .font_bold()
+                .text_color(rgb(p.text))
+                .child(label.into()),
+        )
     }
 
     /// Render the core table header over the columns it names.
