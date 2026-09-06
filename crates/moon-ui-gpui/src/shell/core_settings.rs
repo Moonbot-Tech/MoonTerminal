@@ -278,6 +278,15 @@ impl Shell {
             input: &self.blacklist_input,
             area: &self.blacklist_area,
         };
+        // Built here, not inside the content builder: the strip renders through a lifted palette,
+        // which needs `window` and `&mut cx` that `core_settings_content` does not hold.
+        let tab_strip = core_settings_popup::core_settings_tab_strip(
+            self.core_settings_tab,
+            p,
+            &view,
+            window,
+            cx,
+        );
         core_settings_popup::core_settings_content(
             &ctx,
             self.core_settings_tab,
@@ -287,6 +296,7 @@ impl Shell {
             self.core_settings_bl_expanded,
             self.core_settings_cancel_confirm,
             &view,
+            tab_strip,
             cx,
             move |app| cancel_view.update(app, |this, cx| this.core_settings_cancel_all_click(cx)),
             move |window, app| {

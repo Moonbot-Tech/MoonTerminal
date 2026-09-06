@@ -254,6 +254,7 @@ pub(super) fn core_status_table(
         .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
+        .style(design::table_style(p))
         .on_right_click_row(move |ix, window, app| {
             let core = match menu_lines.get(ix) {
                 Some(FlatLine::Core(row)) => menu_rows.get(*row),

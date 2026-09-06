@@ -78,7 +78,8 @@ pub(super) fn updates_table(
         .columns(columns())
         .state(state)
         .header_height(design::TABLE_HEAD_H)
-        .row_height(design::TABLE_ROW_H),
+        .row_height(design::TABLE_ROW_H)
+        .style(design::table_style(p)),
     )
 }
 

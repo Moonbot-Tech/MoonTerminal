@@ -34,6 +34,10 @@ impl Render for CoreExpertView {
         // built below in this same frame.
         self.build_editors(window, cx);
         let p = MoonPalette::active(cx);
+        // Built before the tree: it needs `window` and `&mut cx`, which the builder chain below
+        // cannot lend it while it is also reading `cx` for its own scaled metrics.
+        let tab_strip = self.tab_strip(window, cx);
+        let body = self.body(p, window, cx).into_any_element();
         let chrome_width = crate::window::windowing::responsive_width(window);
         v_flex()
             .size_full()
@@ -50,8 +54,8 @@ impl Render for CoreExpertView {
             .track_focus(&self.focus)
             .child(title_bar(p, cx))
             .child(self.switch_row(p, cx))
-            .child(self.tab_strip(cx))
-            .child(self.body(p, cx))
+            .child(tab_strip)
+            .child(body)
             .child(self.footer(p, cx))
             .child(
                 MoonWindowFrame::tool("core-expert-frame-hit", chrome_width)
@@ -137,30 +141,85 @@ impl CoreExpertView {
     }
 
     /// Moonbot's tab strip, in Moonbot's order.
-    fn tab_strip(&self, cx: &Context<Self>) -> impl IntoElement {
+    ///
+    /// Takes `window` because the strip is rendered through a lifted palette rather than the
+    /// active one: MoonUI keys an inactive tab label off `text_muted`, which sits under the body
+    /// contrast floor in both stock themes, and `render_with_theme` is the only way to hand it a
+    /// different palette. `AnyElement` for the same reason the chart strip boxes its own — the
+    /// returned element would otherwise hold the `&mut cx` borrow the caller still needs.
+    ///
+    /// Args:
+    ///     window: Window that owns the strip's persistent overflow state.
+    ///     cx: View context used to read the selected tab and render the themed strip.
+    ///
+    /// Returns:
+    ///     The expert-tab strip in its fixed-height wrapper.
+    fn tab_strip(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         let selected = self.tab;
         let items: Vec<MoonTabItem> = ExpertTab::ALL
             .iter()
             .map(|tab| MoonTabItem::new(tab.title()).selected(*tab == selected))
             .collect();
+        let strip_h = design::tab_strip_h(cx);
+        let p = MoonPalette::active(cx);
+        let strip = MoonTabStrip::new("core-expert-tabs")
+            .gap(4.0)
+            .overflow_menu(true)
+            .items(items)
+            .on_click(move |ix, _event, _window, app| {
+                let Some(next) = ExpertTab::at(ix) else {
+                    return;
+                };
+                view.update(app, |this, cx| this.set_tab(next, cx));
+            });
+        let strip = design::chrome_tab_strip(strip, p, window, cx);
         div()
             .w_full()
             .flex_none()
-            .h(design::fit_h_px(cx, 28.0, 13.0, 7.5))
-            .child(
-                MoonTabStrip::new("core-expert-tabs")
-                    .gap(4.0)
-                    .overflow_menu(true)
-                    .items(items)
-                    .on_click(move |ix, _event, _window, app| {
-                        let Some(next) = ExpertTab::at(ix) else {
-                            return;
-                        };
-                        view.update(app, |this, cx| this.set_tab(next, cx));
-                    })
-                    .render(),
-            )
+            .h(strip_h)
+            .child(strip)
+            .into_any_element()
+    }
+
+    /// The Hotkeys page's own sub-tab strip, lifted out of [`Self::body`]'s builder chain.
+    ///
+    /// It lives in its own method for the same reason [`Self::tab_strip`] takes `window`: the
+    /// strip is rendered through a lifted palette, which needs `window` and `&mut cx`, and the
+    /// `.children(...)` closure it used to sit inside can capture neither.
+    ///
+    /// Args:
+    ///     window: Window that owns the strip's persistent overflow state.
+    ///     cx: View context used to read the selected sub-tab and render the themed strip.
+    ///
+    /// Returns:
+    ///     The Hotkeys sub-tab strip in its fixed-height wrapper.
+    fn hotkeys_sub_strip(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        let selected = self.hotkeys_sub;
+        let items: Vec<MoonTabItem> = pages::HotkeysSub::ALL
+            .iter()
+            .map(|sub| MoonTabItem::new(sub.title()).selected(*sub == selected))
+            .collect();
+        let strip_h = design::fit_h_px(cx, 26.0, 13.0, 7.5);
+        let p = MoonPalette::active(cx);
+        let strip = MoonTabStrip::new("core-expert-hotkeys-tabs")
+            .gap(4.0)
+            .overflow_menu(true)
+            .items(items)
+            .on_click(move |ix, _event, _window, app| {
+                let Some(next) = pages::HotkeysSub::at(ix) else {
+                    return;
+                };
+                view.update(app, |this, cx| this.set_hotkeys_sub(next, cx));
+            });
+        let strip = design::chrome_tab_strip(strip, p, window, cx);
+        div()
+            .w_full()
+            .flex_none()
+            .h(strip_h)
+            .child(strip)
+            .into_any_element()
     }
 
     /// Body of the selected page.
@@ -170,7 +229,20 @@ impl CoreExpertView {
     /// rather than by closing. With a page staged, a PORTED tab draws its rows. A tab that is not
     /// ported yet says so, and says separately when the reason is that nothing can ever arrive for
     /// it.
-    fn body(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+    ///
+    /// Args:
+    ///     p: Active palette used by the page body and its notices.
+    ///     window: Window forwarded to the Hotkeys sub-tab strip when that page is selected.
+    ///     cx: View context used to read state and build the selected page.
+    ///
+    /// Returns:
+    ///     The scrollable body for the selected expert page.
+    fn body(
+        &self,
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let view = cx.entity();
         // Read here, from the window's own `&self`: a page is built inside this render, where
         // reading the view back would panic.
@@ -222,6 +294,11 @@ impl CoreExpertView {
         // A warning, through the shared component: a page whose values cannot arrive at all is not
         // the same news as one merely awaiting its port.
         let warn = self.state.can_send() && self.tab.source() != TabSource::Projected;
+        // Moonbot's Hotkeys page carries a strip of its own, above its body. Built HERE rather
+        // than inside the `.children(...)` closure below: it renders through a lifted palette, so
+        // it needs `window` and `&mut cx`, and a closure cannot capture either.
+        let hotkeys_strip = (self.tab == ExpertTab::Hotkeys && page.is_some())
+            .then(|| self.hotkeys_sub_strip(window, cx));
         v_flex()
             .id(self.tab.element_id())
             .flex_1()
@@ -250,32 +327,7 @@ impl CoreExpertView {
                     .into_any_element()
                 }
             }))
-            // Moonbot's Hotkeys page carries a strip of its own, above its body.
-            .children((self.tab == ExpertTab::Hotkeys && page.is_some()).then(|| {
-                let view = cx.entity();
-                let selected = self.hotkeys_sub;
-                let items: Vec<MoonTabItem> = pages::HotkeysSub::ALL
-                    .iter()
-                    .map(|sub| MoonTabItem::new(sub.title()).selected(*sub == selected))
-                    .collect();
-                div()
-                    .w_full()
-                    .flex_none()
-                    .h(design::fit_h_px(cx, 26.0, 13.0, 7.5))
-                    .child(
-                        MoonTabStrip::new("core-expert-hotkeys-tabs")
-                            .gap(4.0)
-                            .overflow_menu(true)
-                            .items(items)
-                            .on_click(move |ix, _event, _window, app| {
-                                let Some(next) = pages::HotkeysSub::at(ix) else {
-                                    return;
-                                };
-                                view.update(app, |this, cx| this.set_hotkeys_sub(next, cx));
-                            })
-                            .render(),
-                    )
-            }))
+            .children(hotkeys_strip)
             .children(page)
     }
 

@@ -89,6 +89,7 @@ impl ReportPanel {
             .controlled_row_selection(true)
             .header_height(design::TABLE_HEAD_H)
             .row_height(design::TABLE_ROW_H)
+            .style(design::table_style(p))
             .on_select_row(move |row, window, app| {
                 let modifiers = window.modifiers();
                 view_click.update(app, |this, cx| this.select_report_row(row, modifiers, cx));

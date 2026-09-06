@@ -192,6 +192,11 @@ impl Render for ChartTabs {
         // The active tab's layout control and adjacent scale dropdown are both per-tab.
         let popup_open = self.popup_shows(ChartPopup::Layout);
         let p_strip = MoonPalette::active(cx);
+        // MoonUI keys an inactive tab label off `text_muted` and exposes no per-tab colour prop,
+        // so the lift is handed in as a palette. `render_with_theme`, never `render_with_palette`:
+        // the latter substitutes default tokens and would silently drop the user's font delta and
+        // UI scale, shrinking the labels and pulling the strip off `chart_tab_strip_h`.
+        let strip = design::chrome_tab_strip(strip, p_strip, window, cx);
         let scale_dropdown = crate::controls::scale_dropdown_for_tabs(
             cx,
             self.active_scale_value(cx),

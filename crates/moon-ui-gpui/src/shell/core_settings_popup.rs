@@ -142,6 +142,49 @@ pub(crate) fn slider_specs(
     specs
 }
 
+/// The popup's tab strip, built by the CALLER and handed in.
+///
+/// It is not built inside [`core_settings_content`] because it is rendered through a lifted
+/// palette: MoonUI keys an inactive tab label off `text_muted`, which sits under the body contrast
+/// floor in both stock themes, and `render_with_theme` is the only way to hand it a different
+/// palette — and that needs `&mut Window` and `&mut App`, which the content builder does not hold.
+/// Reuses the main window's chart-tab control, as the Settings window's hotkey groups do.
+///
+/// Args:
+///     tab: Core-settings tab that the strip marks as selected.
+///     p: Active palette whose muted label tone is lifted for the strip.
+///     view: Shell entity updated when the user selects another tab.
+///     window: Window that owns the strip's persistent overflow state.
+///     cx: Application context used to render the themed strip.
+///
+/// Returns:
+///     The core-settings tab strip in its fixed-height wrapper.
+pub(crate) fn core_settings_tab_strip(
+    tab: CoreSettingsTab,
+    p: MoonPalette,
+    view: &Entity<Shell>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let view = view.clone();
+    let items: Vec<MoonTabItem> = CoreSettingsTab::ALL
+        .iter()
+        .map(|t| MoonTabItem::new(t.title()).selected(tab == *t))
+        .collect();
+    let strip_h = design::tab_strip_h(cx);
+    let strip = MoonTabStrip::new("core-settings-tabs")
+        .gap(4.0)
+        .items(items)
+        .on_click(move |ix, _event, _window, app| {
+            let Some(next) = CoreSettingsTab::ALL.get(ix).copied() else {
+                return;
+            };
+            view.update(app, |this, cx| this.set_core_settings_tab(next, cx));
+        });
+    let strip = design::chrome_tab_strip(strip, p, window, cx);
+    div().w_full().h(strip_h).child(strip).into_any_element()
+}
+
 /// Builds core-settings popover content.
 ///
 /// Args:
@@ -153,6 +196,7 @@ pub(crate) fn slider_specs(
 ///     blacklist_expanded: Whether to render the multiline blacklist editor.
 ///     cancel_confirm: Whether Cancel All Orders is awaiting confirmation.
 ///     view: Shell entity used by tab switching, staging, OK, and Cancel.
+///     tab_strip: Pre-rendered contrast-safe tab strip, built where a mutable window is available.
 ///     cx: Application context used to read state and render controls.
 ///     on_cancel_all: Callback for the staged Cancel All Orders action.
 ///     on_toggle_blacklist: Callback that toggles the blacklist editor mode.
@@ -169,6 +213,7 @@ pub(crate) fn core_settings_content(
     blacklist_expanded: bool,
     cancel_confirm: bool,
     view: &Entity<Shell>,
+    tab_strip: AnyElement,
     cx: &App,
     on_cancel_all: impl Fn(&mut App) + 'static,
     on_toggle_blacklist: impl Fn(&mut Window, &mut App) + 'static,
@@ -217,30 +262,6 @@ pub(crate) fn core_settings_content(
 
     let actions = action_row(&cs, cancel_confirm, ctx, cx, on_cancel_all);
 
-    // Reuse the main window's chart-tab control, as the Settings window's hotkey groups do.
-    let strip = {
-        let view = view.clone();
-        let items: Vec<MoonTabItem> = CoreSettingsTab::ALL
-            .iter()
-            .map(|t| MoonTabItem::new(t.title()).selected(tab == *t))
-            .collect();
-        div()
-            .w_full()
-            .h(design::fit_h_px(cx, 28.0, 13.0, 7.5))
-            .child(
-                MoonTabStrip::new("core-settings-tabs")
-                    .gap(4.0)
-                    .items(items)
-                    .on_click(move |ix, _event, _window, app| {
-                        let Some(next) = CoreSettingsTab::ALL.get(ix).copied() else {
-                            return;
-                        };
-                        view.update(app, |this, cx| this.set_core_settings_tab(next, cx));
-                    })
-                    .render(),
-            )
-    };
-
     let body = match draft {
         Some(draft) => match tab {
             CoreSettingsTab::General => general::general_tab(
@@ -266,7 +287,7 @@ pub(crate) fn core_settings_content(
     };
 
     root.child(actions)
-        .child(strip)
+        .child(tab_strip)
         .child(body)
         .when(draft.is_some(), |r| r.child(footer(view, cx)))
         .into_any_element()
