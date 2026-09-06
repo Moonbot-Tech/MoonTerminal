@@ -1525,6 +1525,37 @@ pub(super) fn run(
                 break;
             }
         }
+        // The core's own confirmed diagnostics. Read from the RETAINED snapshot rather than from
+        // the event payload, and on BOTH of its events: `ProblemsUpdated` carries a replacement
+        // list, while `ProblemConfirmed` carries one row that moonproto has ALREADY folded into
+        // that same retained state. Rebuilding from the snapshot on either one means the two paths
+        // cannot disagree, and it is what makes removals work at all — a row that vanished from a
+        // full list has no event of its own.
+        //
+        // Nothing is ever requested here: the core sends its list unprompted on connection, and a
+        // core too old for the extension simply never sends one. That is the whole compatibility
+        // story — see `CoreProblems::supported`.
+        let problems = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| {
+                matches!(
+                    ev,
+                    &Event::Settings(
+                        SettingsEvent::ProblemsUpdated | SettingsEvent::ProblemConfirmed { .. }
+                    )
+                )
+            },
+            // Wrapped in `Some` because an EMPTY list is a real answer — the core looked and found
+            // nothing — and the helper would otherwise drop it as "nothing to report", which is the
+            // one reading this feature must never produce.
+            |state| Some(convert::problems_from_proto(&state.settings().problems)),
+        );
+        if let Some(problems) = problems {
+            if tx.send(FeedMsg::Problems(problems)).is_err() {
+                break;
+            }
+        }
         // Remaining exchange API request quota (HyperLiquid `THLRequestLimitStateCommand`). Read
         // from the RETAINED snapshot on its own event, like every settings value above: the core
         // republishes it every few minutes, so an event-driven read costs nothing between them.

@@ -968,3 +968,80 @@ fn a_different_edit_does_not_inherit_the_previous_rejection() {
         "a fresh edit starts without a verdict"
     );
 }
+
+/// One core problem, with only the fields the store's rules actually read varied by the caller.
+fn problem(kind: u8, kind_name: &str) -> crate::feed::CoreProblem {
+    crate::feed::CoreProblem {
+        kind,
+        kind_name: kind_name.to_string(),
+        category: crate::feed::CoreProblemCategory::Machine,
+        title: "t".to_string(),
+        message: "m".to_string(),
+        technical_details: String::new(),
+        first_seen_ms: Some(1_000),
+        confirmed_ms: Some(2_000),
+        confirmations: 1,
+    }
+}
+
+/// A replacement connection returns the core to "nothing known", never to "clean".
+///
+/// The store already decided this question for every other per-core fact: `api_expiry`, `api_quota`
+/// and the clock-skew estimate are all cleared by `begin_connection_attempt` because a replacement
+/// feed may point at a DIFFERENT MoonBot. Diagnostics are no different, and carrying `supported`
+/// forward would be worse than carrying a stale row: a core downgraded below the extension could
+/// never go back to unknown, so its silence would read as health for the rest of the session.
+#[test]
+fn a_replacement_connection_returns_problems_to_nothing_known() {
+    let mut core = CoreData::new();
+    assert!(!core.problems.supported, "nothing known before any list");
+
+    core.apply(FeedMsg::Problems(crate::feed::CoreProblems {
+        supported: true,
+        items: vec![problem(1, "paging")],
+    }));
+    assert!(core.problems.supported);
+    assert_eq!(core.problems_rev, 1);
+    let rev = core.problems_rev;
+
+    core.begin_connection_attempt();
+
+    assert!(
+        !core.problems.supported,
+        "the replaced MoonBot's capability says nothing about the new one"
+    );
+    assert!(core.problems.items.is_empty());
+    assert_ne!(core.problems_rev, rev, "clearing is a change consumers see");
+}
+
+/// The list is REPLACED, never merged, and the revision moves only on a real change.
+///
+/// Merging by kind would keep a resolved finding on screen forever: the protocol has no per-row
+/// "resolved" — a row simply stops appearing. The revision gate matters because the core
+/// republishes the identical list on reconnect and on every newly confirmed row.
+#[test]
+fn a_new_problem_list_replaces_the_old_one_and_gates_the_revision() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Problems(crate::feed::CoreProblems {
+        supported: true,
+        items: vec![problem(1, "paging"), problem(2, "region-blocked")],
+    }));
+    assert_eq!(core.problems.items.len(), 2);
+    let after_first = core.problems_rev;
+
+    // Identical republication: no repaint.
+    core.apply(FeedMsg::Problems(crate::feed::CoreProblems {
+        supported: true,
+        items: vec![problem(1, "paging"), problem(2, "region-blocked")],
+    }));
+    assert_eq!(core.problems_rev, after_first);
+
+    // The core dropped one finding; it must leave the panel.
+    core.apply(FeedMsg::Problems(crate::feed::CoreProblems {
+        supported: true,
+        items: vec![problem(2, "region-blocked")],
+    }));
+    assert_eq!(core.problems.items.len(), 1);
+    assert_eq!(core.problems.items[0].kind, 2);
+    assert_eq!(core.problems_rev, after_first + 1);
+}

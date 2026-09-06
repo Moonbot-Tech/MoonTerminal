@@ -128,6 +128,9 @@ impl CoreStatusView {
     ///     Nothing; all render caches are replaced atomically.
     pub(super) fn rebuild_cache(&mut self, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
+        // Recounted with the rest of the cache, not inside `title_suffix`: the dock asks that on a
+        // per-frame path, and it must read a field rather than walk the fleet's findings.
+        self.unseen_problems = self.count_unseen_problems(backend.read(cx));
         let (mut groups, rows) = {
             let b = backend.read(cx);
             // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset

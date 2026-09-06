@@ -16,6 +16,13 @@ use crate::venue::CoreVenue;
 
 use super::{CoreId, CoreSession, CoreStore, SessionManager};
 
+/// Longest test-diagnostic text the core will keep.
+///
+/// The core's signal buffer retains at most 200 characters in a legacy encoding — a protocol fact,
+/// stated once here rather than trusted to each caller. Text past it is dropped by the core, so a
+/// silent clamp on this side is the honest translation of a limit we do not own.
+const TEST_PROBLEM_MAX_CHARS: usize = 200;
+
 impl SessionManager {
     fn send_core_cmd(&self, core: CoreId, cmd: CoreCmd, action: &str) -> Result<()> {
         let Some(s) = self.sessions.iter().find(|s| s.id == core) else {
@@ -755,6 +762,52 @@ impl SessionManager {
     /// function's `Ok`.
     pub fn update_core_version(&self, core: CoreId, target: UpdateTarget) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::UpdateVersion { target }, "update version")
+    }
+
+    /// Ask one core to publish a TEST diagnostic, proving the confirmed-diagnostics channel works.
+    ///
+    /// The text is clamped HERE rather than at the call site: the core's signal buffer keeps at
+    /// most 200 characters in a legacy encoding, and that is a fact about the protocol, not about
+    /// whichever button happens to send it. Non-ASCII is rejected for the same reason — the buffer
+    /// is not UTF-8, so a Cyrillic caption would arrive as mojibake and the row would look like a
+    /// bug in this terminal.
+    ///
+    /// The test LEAVES A ROW on the core until [`Self::clear_core_problems`] removes it. Callers
+    /// that offer one button must offer the other.
+    ///
+    /// Args:
+    ///     core: Core to command.
+    ///     text: Short ASCII label identifying who asked.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel; `Err` for text the wire cannot carry.
+    pub fn test_core_problem(&self, core: CoreId, text: &str) -> Result<()> {
+        // Printable ASCII only. `is_ascii()` alone admits NUL, ESC and CR/LF, which land in a
+        // legacy-encoded buffer on the core and come back as a row nobody can read — the same class
+        // of defect the INBOUND projection filters, applied on the way out.
+        let text = text.trim();
+        if text.is_empty() || !text.chars().all(|c| c.is_ascii() && !c.is_control()) {
+            return Err(anyhow!(
+                "тестовая диагностика ядра {core}: нужен непустой печатный ASCII-текст"
+            ));
+        }
+        let text: String = text.chars().take(TEST_PROBLEM_MAX_CHARS).collect();
+        self.send_core_cmd(core, CoreCmd::TestProblem { text }, "test problem")
+    }
+
+    /// Clear every confirmed diagnostic and pending hypothesis on one core.
+    ///
+    /// IRREVERSIBLE and fleet-visible: the facts are dropped for every terminal watching that core,
+    /// and no cause is fixed by dropping them. A caller must confirm with the operator first, and
+    /// must not clear its own rows optimistically — the core's next full list is the answer.
+    ///
+    /// Args:
+    ///     core: Core whose diagnostics are dropped.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel.
+    pub fn clear_core_problems(&self, core: CoreId) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::ClearProblems, "clear problems")
     }
 
     /// Turn one core's AutoDetect on or off — Moonbot's passive mode, inverted.

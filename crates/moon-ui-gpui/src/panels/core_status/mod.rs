@@ -1,13 +1,15 @@
 //! Core Status panel: connection state and typed protocol-v4 resource telemetry
 //! (`Event::KernelHealth`) for every core in scope.
 //!
-//! `CoreData::sys` holds the latest sample, while `sys_rev` invalidates the panel
-//! when metric values or the decoded endpoint change.
+//! `CoreData::sys` holds the latest sample, and `sys_rev` marks when metric values or the decoded
+//! endpoint changed. The panel itself rebuilds on its own 1 s gate over backend notifications
+//! rather than by polling that counter; the counters gate the NOTIFY, upstream in the session.
 //!
 //! Like the Assets panel, it is scoped to a window group and can live in a dock
 //! tab or a detached window. [`crate::persistence::table_persist`] stores separate column
 //! widths and a separate remembered mode choice for `:dock` and `:win`. This module owns data and
-//! lifecycle; [`server_view`] and [`table`] own the two presentations.
+//! lifecycle; [`server_view`], [`table`], [`problems`], [`warnings`] and [`updates_list`] own the
+//! five presentations.
 
 mod by_ip_header;
 mod by_ip_widths;
@@ -19,6 +21,7 @@ mod ip_cell;
 mod model;
 mod ordering;
 mod presentation;
+mod problems;
 mod server_view;
 mod startup;
 mod table;
@@ -94,6 +97,8 @@ enum CoreStatusMode {
     ByIp,
     /// Existing one-row-per-core telemetry table.
     Flat,
+    /// What the cores themselves currently report as confirmed problems.
+    Problems,
     /// Recorded warning episodes from the database, newest first.
     Warnings,
     /// The update-history log, merged with attempts still in flight.
@@ -103,12 +108,12 @@ enum CoreStatusMode {
 /// How many recent warning episodes the Warnings list shows.
 const WARN_LIST_LIMIT: usize = 500;
 
-/// Position of the dead separator cell in the mode strip: after the two LIVE views (By-IP, Flat)
-/// and before the two HISTORY views (Warnings, Updates).
+/// Position of the dead separator cell in the mode strip: after the three LIVE views (By-IP, Flat,
+/// Problems) and before the two HISTORY views (Warnings, Updates).
 ///
 /// Named because it is load-bearing in two places that must agree — the item list and the
 /// click-index match. A literal in both is how a separator quietly becomes a mode.
-const MODE_DIVIDER_INDEX: usize = 2;
+const MODE_DIVIDER_INDEX: usize = 3;
 
 /// Unscaled width of that separator cell. Wide enough to read as a gap with a rule in it, narrow
 /// enough not to read as a missing button.
@@ -140,6 +145,7 @@ impl CoreStatusMode {
         match self {
             Self::ByIp => "by-ip",
             Self::Flat => "flat",
+            Self::Problems => "problems",
             Self::Warnings => "warnings",
             Self::Updates => "updates",
         }
@@ -159,6 +165,7 @@ impl CoreStatusMode {
     fn from_code(code: &str) -> Self {
         match code.trim() {
             "flat" => Self::Flat,
+            "problems" => Self::Problems,
             "warnings" => Self::Warnings,
             "updates" => Self::Updates,
             _ => Self::default(),
@@ -246,8 +253,24 @@ pub struct CoreStatusView {
     /// Column state for the Updates list table (separate widths from every other table/tree here,
     /// the same way `warn_table_state` never folds into the Flat table's own state).
     updates_table_state: Entity<MoonDataTableState>,
+    /// Column state for the Problems list table, independent for the same reason the two above
+    /// are: it is its own grid, and folding it in would reset a hidden one.
+    problems_table_state: Entity<MoonDataTableState>,
     /// Whether the alert-axis toggle popover (the gear beside the mode control) is open.
     warn_cfg_open: bool,
+    /// Findings in scope this operator has not looked at. Drives the dock-tab badge and the count
+    /// on the Problems tab.
+    ///
+    /// Cached rather than recomputed in `title_suffix`: the dock asks that on a per-frame path.
+    unseen_problems: usize,
+    /// Signature of the rows the read-mark last consumed, so a repeat frame does no work.
+    ///
+    /// NOT a "nothing unseen" test, which is what it started as and which was wrong: marking also
+    /// PRUNES kinds a core has stopped reporting, and a zero count skipped that prune — so a
+    /// finding that went away and came back stayed silent forever, the one property the identity
+    /// set exists to provide. A signature is the honest early-out: it skips only frames where what
+    /// is on screen has not moved.
+    problems_mark_sig: u64,
     /// Last measured width of the By IP list, in pixels; `0` until the first frame measures it.
     ///
     /// The By IP view draws its own fixed columns (it is a tree, not a data table), so it needs the
@@ -433,6 +456,7 @@ impl CoreStatusView {
         })
         .detach();
         let warn_table_state = cx.new(|_| MoonDataTableState::new());
+        let problems_table_state = cx.new(|_| MoonDataTableState::new());
         let updates_table_state = cx.new(|_| MoonDataTableState::new());
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         let focus = cx.focus_handle();
@@ -461,8 +485,11 @@ impl CoreStatusView {
             tree_state,
             table_state,
             warn_table_state,
+            problems_table_state,
             updates_table_state,
             warn_cfg_open: false,
+            unseen_problems: 0,
+            problems_mark_sig: 0,
             by_ip_width: 0.0,
             widths_id,
             by_ip_col_widths,
@@ -543,6 +570,119 @@ impl CoreStatusView {
         b.effective_workspace_scope(&self.group, retained)
     }
 
+    /// Recount the findings this operator has not looked at yet.
+    ///
+    /// A finding counts as unseen while its KIND is missing from that core's seen set — see
+    /// `TabBadgeSettings::seen_kinds` for why identity rather than a timestamp.
+    ///
+    /// Args:
+    ///     b: Backend snapshot holding the store and the persisted sets.
+    ///
+    /// Returns:
+    ///     How many findings in scope have not been looked at.
+    fn count_unseen_problems(&self, b: &Backend) -> usize {
+        if !b.tab_badges.counters_visible(self.panel_name()) {
+            return 0;
+        }
+        // Walked with the SAME budget the render arm truncates to, in the same order. Counting the
+        // uncapped store instead would light a badge whose tail cores are never drawn, and which
+        // could therefore never reach zero.
+        let mut budget = problems::PROBLEM_LIST_LIMIT;
+        let mut unseen = 0usize;
+        for core in self.effective_scope(b).ids().iter().copied() {
+            if budget == 0 {
+                break;
+            }
+            let Some(data) = b.session.store().core(core) else {
+                continue;
+            };
+            if !data.problems.supported {
+                continue;
+            }
+            for problem in data.problems.items.iter().take(budget) {
+                budget -= 1;
+                if !b
+                    .tab_badges
+                    .core_kind_seen(self.panel_name(), &self.group, core, problem.kind)
+                {
+                    unseen += 1;
+                }
+            }
+        }
+        unseen
+    }
+
+    /// Record the findings on screen as looked at.
+    ///
+    /// Driven by the ROWS being drawn rather than by the store, so the list cap cannot consume a
+    /// finding the surface never showed. Called from the Problems arm under a window-active guard —
+    /// the News panel's rule, and for its reason: drawing the list IS reading it, while "the tab was
+    /// in front while you worked in another app" is not.
+    ///
+    /// KNOWN LIMIT, shared with News: scrolling is not tracked. Opening the mode marks everything
+    /// the merged list holds, including rows below the fold. The alternative — consuming only what
+    /// the virtual list built this frame — would leave a badge lit for rows the operator has no way
+    /// to know about, which is worse than the reverse.
+    ///
+    /// Args:
+    ///     rows: The findings being rendered, already scoped and capped.
+    ///     cx: View context used to mutate the backend and repaint.
+    ///
+    /// Returns:
+    ///     Nothing; a no-op when every core's set already matches what is shown.
+    fn mark_problems_seen(&mut self, rows: &[problems::ProblemRow], cx: &mut Context<Self>) {
+        // Skips only a REPEAT of the same rows. See `problems_mark_sig` for why a "nothing unseen"
+        // test cannot stand in for this.
+        let sig = problems::mark_signature(rows);
+        if sig == self.problems_mark_sig {
+            return;
+        }
+        self.problems_mark_sig = sig;
+        let panel = self.panel_name();
+        let group = self.group.clone();
+        let marks: Vec<(CoreId, Vec<u8>)> = {
+            let b = self.backend.read(cx);
+            self.effective_scope(b)
+                .ids()
+                .iter()
+                .copied()
+                // A core that has NOT answered is skipped entirely rather than marked empty. The
+                // store clears `problems` on a replacement connection, so a core caught mid-
+                // reconnect shows nothing — and since marking REPLACES the set, marking it here
+                // would forget what was already read and let the identical re-sent list light the
+                // badge again. `supported` is precisely "this core has answered on this
+                // connection".
+                .filter(|core| {
+                    b.session
+                        .store()
+                        .core(*core)
+                        .is_some_and(|data| data.problems.supported)
+                })
+                .map(|core| (core, problems::drawn_kinds(rows, core)))
+                .collect()
+        };
+        let mut changed = false;
+        self.backend.update(cx, |b, bcx| {
+            for (core, kinds) in marks {
+                changed |= b
+                    .tab_badges
+                    .mark_core_kinds_seen(panel, &group, core, &kinds);
+            }
+            if changed {
+                b.tab_badges_dirty = true;
+                bcx.notify();
+            }
+        });
+        if changed {
+            let b = self.backend.clone();
+            self.unseen_problems = self.count_unseen_problems(b.read(cx));
+            // The backend notify above is raised mid-draw, where the window suppresses it for the
+            // entity it is already drawing — so this view has to ask for its own next frame or the
+            // dock tab keeps the count just consumed. News draws the same line for the same reason.
+            cx.notify();
+        }
+    }
+
     /// Build this panel's scope marker for the footer and empty-state text.
     ///
     /// Args:
@@ -601,16 +741,36 @@ impl Panel for CoreStatusView {
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         crate::persistence::panel_meta::panel_title(self.panel_name())
     }
-    /// Draw a warning triangle on the dock tab (right of the label) while any server warns, like
-    /// the News tab's unread badge. It clears itself when every warning resolves.
+    /// Draw what the tab has to announce while it is hidden behind a sibling: a warning triangle
+    /// while any server warns, and a count of core findings nobody has looked at.
+    ///
+    /// TWO markers, not one merged glyph. They mean different things — the triangle is this
+    /// terminal measuring a threshold, the count is the cores' own confirmed conclusions — and a
+    /// reader who cannot tell them apart cannot tell whether to look at our numbers or at the
+    /// core's words.
     fn title_suffix(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = MoonPalette::active(cx);
-        self.has_warn.then(|| {
-            svg()
-                .path("icons/triangle-alert.svg")
-                .size(px(13.0))
-                .flex_none()
-                .text_color(rgb(p.amber))
+        let warn = self.has_warn;
+        let unseen = self.unseen_problems;
+        (warn || unseen > 0).then(|| {
+            h_flex()
+                .gap(design::ui_px(cx, 3.0))
+                .items_center()
+                .when(warn, |row| {
+                    row.child(
+                        svg()
+                            .path("icons/triangle-alert.svg")
+                            .size(px(13.0))
+                            .flex_none()
+                            .text_color(rgb(p.amber)),
+                    )
+                })
+                .when(unseen > 0, |row| {
+                    row.child(crate::panels::common::count_badge(
+                        unseen,
+                        design::danger_color(p),
+                    ))
+                })
                 .into_any_element()
         })
     }
@@ -649,6 +809,8 @@ impl Panel for CoreStatusView {
             CoreStatusMode::Warnings => &self.warn_table_state,
             // Same reasoning as Warnings: Updates is its own table with its own widths.
             CoreStatusMode::Updates => &self.updates_table_state,
+            // And again for Problems, which is a third independent grid.
+            CoreStatusMode::Problems => &self.problems_table_state,
         };
         Some(vec![crate::persistence::table_persist::reset_button(
             "core-status-reset-widths",
@@ -661,7 +823,8 @@ impl Render for CoreStatusView {
     /// Render the active presentation with shared filters and counters.
     ///
     /// Args:
-    ///     _window: Host window reserved for renderer symmetry.
+    ///     window: Host window; its ACTIVE state gates the Problems read-mark, so a tab left in
+    ///         front while the operator works in another app does not consume the badge.
     ///     cx: View context used for backend reads, palette, and callbacks.
     ///
     /// Returns:
@@ -679,8 +842,11 @@ impl Render for CoreStatusView {
         let total_cores = rows.len();
 
         let marker = self.cached_scope_marker;
-        let core_bar = self.core_bar(&cores, cx);
-        let footer = self.footer(&groups, total_cores, &marker, cx);
+        // Built AFTER the mode content, not before: the Problems arm needs `&mut self` to record
+        // what it just drew as looked at, and these two hold a borrow of `self` that would outlive
+        // the match. The order is not merely free — it is better: the mode strip reads
+        // `unseen_problems`, so building it after the mark shows the count the operator has just
+        // consumed rather than the one from before they looked.
         let content = match self.mode {
             CoreStatusMode::ByIp => server_view::grouped_server_view(
                 groups.clone(),
@@ -741,6 +907,126 @@ impl Render for CoreStatusView {
                     // Same reason as the By-IP arm above: the callee must not read this view.
                     &self.backend,
                     &marker,
+                    cx,
+                )
+                .into_any_element()
+            }
+            CoreStatusMode::Problems => {
+                // Everything the arm needs is collected inside this block so the backend borrow
+                // ENDS before the read-mark, which needs `&mut self`. The alternative — marking up
+                // in `render` — is what let the cap consume rows the surface never drew.
+                let (rows, silent, truncated, core_names, cores, gate, answered, zone) = {
+                    let b = self.backend.read(cx);
+                    let scope = self.effective_scope(b);
+                    // Scope order, then the core's own listing order inside each core. Neither is
+                    // re-sorted: the core chose the order of its findings, and inventing another one
+                    // here would present a ranking the core never made.
+                    let scope_ids = scope.ids();
+                    // Exactly one EXPLICITLY selected core, and only if the resolved scope still holds
+                    // it — a stale selection must not address a core this panel no longer covers.
+                    let chosen = match self.sel_cores.len() {
+                        1 => self
+                            .sel_cores
+                            .iter()
+                            .copied()
+                            .next()
+                            .filter(|core| scope_ids.contains(core)),
+                        _ => None,
+                    };
+                    let ready = |core: CoreId| {
+                        matches!(
+                            b.session.store().core(core).map(|data| data.status.clone()),
+                            Some(moon_core::feed::ConnStatus::Ready)
+                        )
+                    };
+                    let core_names: HashMap<CoreId, String> = b
+                        .config
+                        .servers
+                        .iter()
+                        .map(|server| (server.id, server.name.clone()))
+                        .collect();
+                    let mut rows: Vec<problems::ProblemRow> = Vec::new();
+                    let mut silent: Vec<String> = Vec::new();
+                    for core in scope_ids.iter().copied() {
+                        // A core with no retained state at all has said nothing, which is the same
+                        // "not known" case as one that answered without support: named, never clean.
+                        let supported = b
+                            .session
+                            .store()
+                            .core(core)
+                            .is_some_and(|data| data.problems.supported);
+                        if !supported {
+                            // The same dash the table uses for an unnamed core, so one core cannot
+                            // appear under two different spellings on the one surface.
+                            silent.push(
+                                core_names
+                                    .get(&core)
+                                    .cloned()
+                                    .unwrap_or_else(|| "—".to_string()),
+                            );
+                            continue;
+                        }
+                        // Not looked up twice: `supported` above proves the entry exists, and this is
+                        // the same borrow rather than a second search.
+                        let Some(data) = b.session.store().core(core) else {
+                            continue;
+                        };
+                        rows.extend(data.problems.items.iter().map(|problem| {
+                            problems::ProblemRow {
+                                core,
+                                problem: problem.clone(),
+                            }
+                        }));
+                    }
+                    // Capped like the sibling lists: the per-core row count is wire-controlled, and
+                    // this arm clones every string it shows. A cut list is STATED in the notice rather
+                    // than silently shortened, for the same reason a silent core is.
+                    let truncated = rows.len() > problems::PROBLEM_LIST_LIMIT;
+                    rows.truncate(problems::PROBLEM_LIST_LIMIT);
+                    (
+                        rows,
+                        silent,
+                        truncated,
+                        core_names,
+                        scope_ids.len(),
+                        // The gate reads the operator's OWN selection, not the resolved scope: a
+                        // one-core group under "All", or a pinned Auto workspace, both resolve to a
+                        // single id nobody picked, and an irreversible action must not ride on that
+                        // coincidence. `sel_cores` is the explicit Classic pick and nothing else.
+                        match chosen {
+                            None => problems::ActionGate::NoSingleChoice,
+                            Some(core) if !ready(core) => problems::ActionGate::NotConnected,
+                            Some(core) => problems::ActionGate::Ready(core),
+                        },
+                        chosen.is_some_and(|core| {
+                            b.session
+                                .store()
+                                .core(core)
+                                .is_some_and(|data| data.problems.supported)
+                        }),
+                        crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
+                    )
+                };
+                // Drawing the findings IS looking at them — the News panel's rule, and for its
+                // reason. The window-active guard is what stops the badge being consumed unseen: an
+                // inactive window still repaints on the shell's clock tick, and "the tab was in
+                // front while you worked elsewhere" is not "you looked".
+                if window.is_window_active() {
+                    self.mark_problems_seen(&rows, cx);
+                }
+                problems::problems_view(
+                    "core-status-problems",
+                    Rc::new(rows),
+                    Rc::new(core_names),
+                    &problems::ProblemsScope {
+                        cores,
+                        silent,
+                        truncated,
+                        actions: gate,
+                        answered,
+                    },
+                    &self.problems_table_state,
+                    zone,
                     cx,
                 )
                 .into_any_element()
@@ -868,6 +1154,8 @@ impl Render for CoreStatusView {
                 .into_any_element()
             }
         };
+        let core_bar = self.core_bar(&cores, cx);
+        let footer = self.footer(&groups, total_cores, &marker, cx);
 
         // A detached window gets a live CPU/memory chart for ONE subject: a clicked core, else the
         // clicked (or first) server's machine aggregate — never per-core overlays. The dock tab builds
@@ -1060,9 +1348,11 @@ impl CoreStatusView {
         };
         let weak_view = cx.entity().downgrade();
         let mode_palette = MoonPalette::active(cx);
-        // The four modes are two different KINDS of surface: By-IP and Flat are live views of the
-        // fleet as it stands, while Warnings and Updates are history — records of what already
-        // happened. `MODE_DIVIDER_INDEX` is a dead cell that draws the boundary between them.
+        // The five modes are two different KINDS of surface: By-IP, Flat and Problems are live
+        // views of the fleet as it stands, while Warnings and Updates are history — records of what
+        // already happened. Problems sits on the LIVE side because it is present tense: it lists
+        // what the cores confirm right now, and a finding leaves it when a later list omits it.
+        // `MODE_DIVIDER_INDEX` is a dead cell that draws the boundary between them.
         //
         // One control rather than two, deliberately: the selection is one value, so two controls
         // would each need to render "nothing selected" while the other holds it, and any drift
@@ -1079,6 +1369,25 @@ impl CoreStatusView {
                 MoonSegmentItem::new("", t!("core_status.mode.flat").to_string())
                     .fit_width(cx, 54.0, 88.0)
                     .selected(self.mode == CoreStatusMode::Flat),
+                // The count rides in the LABEL because `MoonSegmentItem` carries no badge slot, and
+                // it has to be here as well as on the dock tab: the dock asks a hidden tab only, so
+                // a Core Status sitting in front on another mode would announce nothing at all.
+                MoonSegmentItem::new(
+                    "",
+                    match self.unseen_problems {
+                        0 => t!("core_status.mode.problems").to_string(),
+                        n => format!(
+                            "{} {}",
+                            t!("core_status.mode.problems"),
+                            crate::panels::common::count_text(
+                                n,
+                                crate::panels::common::COUNT_BADGE_MAX
+                            )
+                        ),
+                    },
+                )
+                .fit_width(cx, 54.0, 104.0)
+                .selected(self.mode == CoreStatusMode::Problems),
                 // Narrow by explicit width, not `fit_width`: a separator sized like a label cell
                 // would open a 54-88px hole in the strip, which reads as a missing button rather
                 // than a boundary.
@@ -1108,8 +1417,9 @@ impl CoreStatusView {
                 let mode = match index {
                     0 => CoreStatusMode::ByIp,
                     1 => CoreStatusMode::Flat,
-                    // 2 is the separator and never reports a click.
-                    3 => CoreStatusMode::Warnings,
+                    2 => CoreStatusMode::Problems,
+                    // 3 is the separator and never reports a click.
+                    4 => CoreStatusMode::Warnings,
                     _ => CoreStatusMode::Updates,
                 };
                 view.update(app, |this, cx| this.set_mode(mode, cx));

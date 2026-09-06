@@ -33,6 +33,10 @@ core_status.mode.flat:
   ru: "Плоско"
   en: "Flat"
   es: "Plano"
+core_status.mode.problems:
+  ru: "Проблемы"
+  en: "Problems"
+  es: "Problemas"
 core_status.mode.warnings:
   ru: "Тревоги"
   en: "Alerts"
@@ -828,3 +832,127 @@ core_status.fault.f.core:
   ru: "Ядро"
   en: "Core"
   es: "Nucleo"
+
+# --- Problems mode: the cores' OWN confirmed diagnostics (moonproto ProblemsState) ---
+# Distinct from the Warnings list, which holds THIS terminal's measured episodes. The wording
+# keeps that difference visible: these rows are the core's conclusions, not our thresholds.
+core_status.col.problem_category:
+  ru: "Категория"
+  en: "Category"
+  es: "Categoría"
+core_status.col.problem_kind:
+  ru: "Признак"
+  en: "Kind"
+  es: "Tipo"
+core_status.col.problem_title:
+  ru: "Проблема"
+  en: "Problem"
+  es: "Problema"
+# Shown only when EVERY core in scope delivered a list and all of them were empty.
+core_status.problems_empty:
+  ru: "Ядра не сообщают проблем"
+  en: "The cores report no problems"
+  es: "Los núcleos no informan de problemas"
+# Shown when at least one core has never delivered a list — it is older than the extension, or its
+# list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
+# that a core is healthy.
+core_status.problems_unknown:
+  ru: "Без отчёта: %{n} — старая версия ядра или список ещё не пришёл"
+  en: "Not reported: %{n} — an older core, or the list has not arrived yet"
+  es: "Sin informe: %{n} — núcleo antiguo, o la lista aún no ha llegado"
+# Shown when the row list hit its cap, so a shortened view never reads as the complete picture.
+core_status.problems_truncated:
+  ru: "Показаны первые %{n}"
+  en: "Showing the first %{n}"
+  es: "Mostrando los primeros %{n}"
+# Shown above the table when the panel's scope covers no cores at all: an empty table then says
+# nothing about anyone's health.
+core_status.problems_no_cores:
+  ru: "В области нет ядер"
+  en: "No cores in scope"
+  es: "No hay núcleos en el ámbito"
+# Neutral empty state used whenever the notice above the table already explains the gap. It must not
+# contradict that notice by claiming a clean bill.
+core_status.problems_nothing_listed:
+  ru: "Ничего не сообщено"
+  en: "Nothing reported"
+  es: "Nada informado"
+core_status.problem_cat.machine:
+  ru: "Машина"
+  en: "Machine"
+  es: "Máquina"
+core_status.problem_cat.exchange:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Bolsa"
+core_status.problem_cat.network:
+  ru: "Сеть"
+  en: "Network"
+  es: "Red"
+core_status.problem_cat.other:
+  ru: "Прочее"
+  en: "Other"
+  es: "Otro"
+
+# --- Problems mode: the two per-core diagnostic actions ---
+# A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
+# channel end to end. It leaves a row behind that only "clear" removes, which is why the pair ships
+# together.
+core_status.problems_test:
+  ru: "Проверить канал"
+  en: "Test the channel"
+  es: "Probar el canal"
+core_status.problems_clear:
+  ru: "Очистить"
+  en: "Clear"
+  es: "Borrar"
+# Both actions are per-core on the wire and neither has a sane fleet-wide form, so they need one
+# core chosen in the panel's own selector.
+core_status.problems_pick_core:
+  ru: "Выбери ровно одно ядро в селекторе панели (в режиме Авто он закреплён — переключись на Классику)"
+  en: "Select exactly one core in the panel's selector (it is pinned in Auto mode — switch to Classic)"
+  es: "Selecciona exactamente un núcleo en el selector del panel (está fijado en modo Auto — cambia a Clásico)"
+# The command channel outlives the connection: a command queued for a core that is down waits there
+# and fires on the next reconnect, which for the clear means destroying findings from the outage.
+core_status.problems_core_offline:
+  ru: "Ядро не на связи — команда дождалась бы переподключения и стёрла бы то, что накопилось за простой"
+  en: "The core is offline — the command would wait for its reconnect and wipe what accumulated during the outage"
+  es: "El núcleo está desconectado — el comando esperaría su reconexión y borraría lo acumulado durante la caída"
+core_status.problems_clear_nothing:
+  ru: "Это ядро ещё не присылало список — очищать нечего"
+  en: "This core has not delivered a list yet — nothing to clear"
+  es: "Este núcleo aún no ha enviado una lista — nada que borrar"
+core_status.problems_test_title:
+  ru: "Отправить тестовую диагностику?"
+  en: "Send a test diagnostic?"
+  es: "¿Enviar un diagnóstico de prueba?"
+# The consequence is the whole reason this action is confirmed at all.
+core_status.problems_test_q:
+  ru: "Ядро %{core} опубликует тестовый факт через свой обычный детектор — примерно две секунды. Строка останется на ядре, и убрать её можно ТОЛЬКО полной очисткой, которая заодно снесёт настоящие находки этого ядра."
+  en: "Core %{core} will publish a test fact through its own detector — about two seconds. The row stays on the core, and the ONLY way to remove it is the full clear, which also destroys that core's real findings."
+  es: "El núcleo %{core} publicará un hecho de prueba mediante su propio detector — unos dos segundos. La fila permanece en el núcleo y la ÚNICA forma de quitarla es el borrado completo, que también destruye los hallazgos reales de ese núcleo."
+core_status.problems_test_sent:
+  ru: "Тест отправлен на %{core} — строка появится через пару секунд"
+  en: "Test sent to %{core} — the row appears in a couple of seconds"
+  es: "Prueba enviada a %{core} — la fila aparece en un par de segundos"
+core_status.problems_clear_sent:
+  ru: "Очистка отправлена на %{core} — строки уйдут, когда ядро пришлёт новый список"
+  en: "Clear sent to %{core} — the rows go when the core sends its next list"
+  es: "Borrado enviado a %{core} — las filas se irán cuando el núcleo envíe su próxima lista"
+core_status.problems_not_sent:
+  ru: "Не отправлено: канал команд ядра закрыт"
+  en: "Not sent: the core's command channel is closed"
+  es: "No enviado: el canal de comandos del núcleo está cerrado"
+core_status.problems_not_sent_offline:
+  ru: "Не отправлено: ядро не на связи"
+  en: "Not sent: the core is offline"
+  es: "No enviado: el núcleo está desconectado"
+core_status.problems_clear_title:
+  ru: "Очистить диагностики ядра?"
+  en: "Clear the core's diagnostics?"
+  es: "¿Borrar los diagnósticos del núcleo?"
+# Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
+core_status.problems_clear_q:
+  ru: "Ядро %{core} сбросит все подтверждённые проблемы и неподтверждённые гипотезы — для всех терминалов, без возможности вернуть. Причину это не лечит: если она осталась, ядро подтвердит проблему заново."
+  en: "Core %{core} will drop every confirmed problem and pending hypothesis — for all terminals, with no way back. It fixes no cause: if one remains, the core will confirm the problem again."
+  es: "El núcleo %{core} descartará todos los problemas confirmados y las hipótesis pendientes — para todos los terminales, sin vuelta atrás. No corrige ninguna causa: si persiste, el núcleo confirmará el problema de nuevo."

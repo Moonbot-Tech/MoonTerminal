@@ -7,8 +7,8 @@ use std::net::IpAddr;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputEvent, MoonInputState, MoonPalette,
-    MoonWindowExt as _, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputEvent, MoonInputState,
+    MoonNotification, MoonPalette, MoonWindowExt as _, h_flex,
 };
 
 use super::by_ip_header::ByIpDragAnchor;
@@ -516,6 +516,205 @@ impl CoreStatusView {
         (count, lanes.len())
     }
 
+    /// Whether a core is connected right now.
+    ///
+    /// Asked again at the moment of sending, not only when the button was drawn: the command
+    /// channel outlives the connection, so a command queued while a core is down waits there and
+    /// fires on the next reconnect. For the clear that means destroying findings gathered during
+    /// the very outage the operator was looking at.
+    ///
+    /// Args:
+    ///     core: Core to check.
+    ///     cx: App context.
+    ///
+    /// Returns:
+    ///     `true` only for a core whose session reports `Ready`.
+    fn core_is_ready(&self, core: CoreId, cx: &App) -> bool {
+        matches!(
+            self.backend
+                .read(cx)
+                .session
+                .store()
+                .core(core)
+                .map(|data| data.status.clone()),
+            Some(ConnStatus::Ready)
+        )
+    }
+
+    /// A core's configured display name, or its id when the config no longer holds it.
+    fn core_display_name(&self, core: CoreId, cx: &App) -> String {
+        self.backend
+            .read(cx)
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core)
+            .map(|server| server.name.clone())
+            .unwrap_or_else(|| core.to_string())
+    }
+
+    /// Open the confirm a TEST diagnostic gets.
+    ///
+    /// Confirmed even though it looks harmless, and that is exactly why: the `test` fact it
+    /// publishes stays on the core until something clears it, and the only thing that does is the
+    /// irreversible, fleet-visible clear. An unconfirmed press can therefore force an operator to
+    /// destroy a core's real findings just to tidy up after a test. The dialog says so.
+    ///
+    /// Args:
+    ///     core: Core to test.
+    ///     window: Window that owns the unique dialog.
+    ///     cx: View context used to build the dialog.
+    ///
+    /// Returns:
+    ///     Nothing; only Yes sends anything, and it closes the dialog either way.
+    pub(super) fn confirm_problem_test(
+        &mut self,
+        core: CoreId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let question = t!(
+            "core_status.problems_test_q",
+            core = self.core_display_name(core, cx)
+        )
+        .to_string();
+        let view = cx.entity().downgrade();
+        window.open_unique_moon_dialog(
+            "core-status-problem-test-confirm",
+            cx,
+            move |dialog, _window, cx| {
+                let view = view.clone();
+                problem_confirm_dialog(
+                    dialog,
+                    t!("core_status.problems_test_title").to_string(),
+                    question.clone(),
+                    "core-status-problem-test",
+                    MoonButtonVariant::Blue,
+                    cx,
+                    move |window, cx| {
+                        if let Some(view) = view.upgrade() {
+                            view.update(cx, |this, cx| this.send_problem_test(core, window, cx));
+                        }
+                    },
+                )
+            },
+        );
+    }
+
+    /// Open the ONE confirm clearing a core's diagnostics gets.
+    ///
+    /// The core drops every confirmed finding AND every pending hypothesis, for every terminal
+    /// watching it, with no way back, and it fixes nothing — a cause that persists produces a new
+    /// fact later.
+    ///
+    /// Local rows are deliberately NOT cleared on confirmation: the core's next full list is the
+    /// answer, and clearing optimistically would show a clean bill for a core that may have
+    /// rejected the command.
+    ///
+    /// Args:
+    ///     core: Core whose diagnostics would be dropped.
+    ///     window: Window that owns the unique dialog.
+    ///     cx: View context used to build the dialog.
+    ///
+    /// Returns:
+    ///     Nothing; only Yes sends anything, and it closes the dialog either way.
+    pub(super) fn confirm_clear_problems(
+        &mut self,
+        core: CoreId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let question = t!(
+            "core_status.problems_clear_q",
+            core = self.core_display_name(core, cx)
+        )
+        .to_string();
+        let view = cx.entity().downgrade();
+        window.open_unique_moon_dialog(
+            "core-status-clear-problems-confirm",
+            cx,
+            move |dialog, _window, cx| {
+                let view = view.clone();
+                problem_confirm_dialog(
+                    dialog,
+                    t!("core_status.problems_clear_title").to_string(),
+                    question.clone(),
+                    "core-status-clear-problems",
+                    MoonButtonVariant::Danger,
+                    cx,
+                    move |window, cx| {
+                        if let Some(view) = view.upgrade() {
+                            view.update(cx, |this, cx| this.send_clear_problems(core, window, cx));
+                        }
+                    },
+                )
+            },
+        );
+    }
+
+    /// Send the test, or say why it did not go.
+    fn send_problem_test(&mut self, core: CoreId, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.core_display_name(core, cx);
+        if !self.core_is_ready(core, cx) {
+            window.push_notification(
+                MoonNotification::warning(t!("core_status.problems_not_sent_offline").to_string()),
+                cx,
+            );
+            return;
+        }
+        match self
+            .backend
+            .read(cx)
+            .session
+            .test_core_problem(core, "MoonTerminal channel check")
+        {
+            Ok(()) => window.push_notification(
+                MoonNotification::success(
+                    t!("core_status.problems_test_sent", core = name).to_string(),
+                ),
+                cx,
+            ),
+            Err(error) => {
+                log::warn!("core status: test problem for core {core} not sent: {error:#}");
+                window.push_notification(
+                    MoonNotification::warning(t!("core_status.problems_not_sent").to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Send the clear, or say why it did not go.
+    ///
+    /// The readiness check is repeated HERE rather than trusted from the button that opened the
+    /// dialog: that dialog can sit open while the core drops, and a queued clear would then fire on
+    /// reconnect against findings the operator never saw.
+    fn send_clear_problems(&mut self, core: CoreId, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.core_display_name(core, cx);
+        if !self.core_is_ready(core, cx) {
+            window.push_notification(
+                MoonNotification::warning(t!("core_status.problems_not_sent_offline").to_string()),
+                cx,
+            );
+            return;
+        }
+        match self.backend.read(cx).session.clear_core_problems(core) {
+            Ok(()) => window.push_notification(
+                MoonNotification::success(
+                    t!("core_status.problems_clear_sent", core = name).to_string(),
+                ),
+                cx,
+            ),
+            Err(error) => {
+                log::warn!("core status: clear problems for core {core} not sent: {error:#}");
+                window.push_notification(
+                    MoonNotification::warning(t!("core_status.problems_not_sent").to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
     /// Open the ONE confirm a fleet-wide bulk update gets, naming the core and lane counts before
     /// the press that fills the whole per-IP queue.
     ///
@@ -609,4 +808,89 @@ impl CoreStatusView {
             },
         );
     }
+}
+
+/// The chrome both diagnostic confirms share: title, question, No, and a coloured Yes.
+///
+/// One builder rather than two copies of forty lines, because the two dialogs differ in exactly
+/// three things — their words, their button colour, and what Yes does — and a second copy is how
+/// only one of them gets a fix.
+///
+/// Args:
+///     dialog: The dialog under construction, from `open_unique_moon_dialog`.
+///     title: Header text.
+///     question: Body text, which must already name the core it addresses.
+///     id_prefix: Element-id stem for the two footer buttons.
+///     confirm: Variant for the Yes button — `Danger` for anything destructive.
+///     cx: App context, for the palette and type scale.
+///     on_yes: Runs before the dialog closes; closing is handled here so no caller can forget it.
+///
+/// Returns:
+///     The built dialog.
+#[allow(clippy::too_many_arguments)]
+fn problem_confirm_dialog(
+    dialog: moon_ui::MoonDialog,
+    title: String,
+    question: String,
+    id_prefix: &'static str,
+    confirm: MoonButtonVariant,
+    cx: &App,
+    on_yes: impl Fn(&mut Window, &mut App) + Clone + 'static,
+) -> moon_ui::MoonDialog {
+    let p = MoonPalette::active(cx);
+    dialog
+        .w(px(380.0))
+        .close_button(true)
+        .overlay(true)
+        .overlay_closable(true)
+        .bg(rgb(p.shell_high))
+        .border_color(rgb(p.border))
+        .rounded(design::r_container(cx))
+        .text_color(rgb(p.text))
+        .header(
+            div()
+                .w_full()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(p.border))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .content(move |content, _window, cx| {
+            let p = MoonPalette::active(cx);
+            content.child(
+                div()
+                    .font_family(design::mono())
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text))
+                    .child(question.clone()),
+            )
+        })
+        .footer(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .justify_end()
+                .child(
+                    MoonButton::new(SharedString::from(format!("{id_prefix}-no")))
+                        .outline()
+                        .size(MoonButtonSize::Action)
+                        .label(format!("  {}  ", t!("dialogs.no")))
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                        })
+                        .render(),
+                )
+                .child(
+                    MoonButton::new(SharedString::from(format!("{id_prefix}-yes")))
+                        .size(MoonButtonSize::Action)
+                        .variant(confirm)
+                        .label(format!("  {}  ", t!("dialogs.yes")))
+                        .on_click(move |_, window, cx| {
+                            on_yes(window, cx);
+                            window.close_dialog(cx);
+                        })
+                        .render(),
+                ),
+        )
 }
