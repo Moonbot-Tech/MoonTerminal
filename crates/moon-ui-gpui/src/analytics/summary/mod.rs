@@ -89,7 +89,21 @@ pub(super) fn sign_color(p: MoonPalette, v: f64) -> u32 {
 
 impl AnalyticsView {
     /// Render summary data or the placeholder dictated by its exhaustive load state.
-    pub(super) fn summary_tab(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     chrome_width: Window's responsive width. The cumulative legend needs it to decide how
+    ///         many core names fit before rendering because GPUI exposes no measured width then.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Summary surface or the placeholder for its current load state.
+    pub(super) fn summary_tab(
+        &self,
+        p: MoonPalette,
+        chrome_width: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let data = match self.data.view(|d| d.cur.n == 0) {
             Ok(d) => d.clone(),
             // An empty query result under a scope the viewing preset or the Auto rail narrowed
@@ -124,30 +138,28 @@ impl AnalyticsView {
             }
             Err(note) => return super::note_el("an-summary-note", note, 18.0, p, cx),
         };
-        // Core series colors come from the server's SETTINGS (ServerConfig.color,
-        // as in the core selector); the fallback palette is only for cores with
-        // no config entry.
+        // Core series colors come from the server's SETTINGS (ServerConfig.color, as in the core
+        // selector), and stay there unless two of them would draw as one line — a whole exchange
+        // given one colour is exactly what made the cumulative chart's twelve per-core curves
+        // indistinguishable. ONE source for every consumer: the legend, the hover-popup dots and
+        // the daily/kind bars all read this vector, so they cannot disagree.
         let core_colors: Vec<Hsla> = {
             let b = self.backend.read(cx);
-            data.core_days
+            let configured: Vec<(u64, Option<[u8; 3]>)> = data
+                .core_days
                 .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    b.config
-                        .servers
-                        .iter()
-                        .find(|s| s.id == c.uid)
-                        .map(|s| {
-                            Hsla::from(gpui::Rgba {
-                                r: s.color[0] as f32 / 255.0,
-                                g: s.color[1] as f32 / 255.0,
-                                b: s.color[2] as f32 / 255.0,
-                                a: 1.0,
-                            })
-                        })
-                        .unwrap_or_else(|| moon(charts::fallback_core_color(p, i)))
+                .map(|c| {
+                    (
+                        c.uid,
+                        b.config
+                            .servers
+                            .iter()
+                            .find(|s| s.id == c.uid)
+                            .map(|s| s.color),
+                    )
                 })
-                .collect()
+                .collect();
+            charts::distinct_core_colors(&configured, p)
         };
         // The top part (KPI/charts/tops) scrolls on its own; the "Profit by
         // core" chart is PINNED to the bottom edge of the window (like the
@@ -234,16 +246,35 @@ impl AnalyticsView {
                                 .to_string()
                             },
                             Some(head),
-                            cumulative::cumulative_area(
-                                &data.days,
-                                &data.core_days,
-                                &core_colors,
-                                self.hover_cum_bucket,
-                                data.bucket_secs,
-                                self.bound_zone(),
-                                p,
-                                cx,
-                            ),
+                            v_flex()
+                                .w_full()
+                                .gap(design::ui_px(cx, 4.0))
+                                .children(cumulative::core_legend(
+                                    &data.core_days,
+                                    &core_colors,
+                                    // The two chart cards split the row evenly inside the tab's
+                                    // own padding; an ESTIMATE, exactly as `period_bar` measures
+                                    // its own budget, because no measured width exists yet.
+                                    ((chrome_width
+                                        - design::ui_value(cx, 10.0) * 2.0
+                                        - design::ui_value(cx, 8.0))
+                                        / 2.0
+                                        - design::ui_value(cx, 12.0) * 2.0)
+                                        .max(0.0),
+                                    p,
+                                    cx,
+                                ))
+                                .child(cumulative::cumulative_area(
+                                    &data.days,
+                                    &data.core_days,
+                                    &core_colors,
+                                    self.hover_cum_bucket,
+                                    data.bucket_secs,
+                                    self.bound_zone(),
+                                    p,
+                                    cx,
+                                ))
+                                .into_any_element(),
                             p,
                             cx,
                         )
@@ -301,6 +332,7 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .items_stretch()
                     .child(top_card(
+                        "an-top-best",
                         t!("analytics.best_trades").to_string(),
                         &data.best,
                         self.bound_zone(),
@@ -308,6 +340,7 @@ impl AnalyticsView {
                         cx,
                     ))
                     .child(top_card(
+                        "an-top-worst",
                         t!("analytics.worst_trades").to_string(),
                         &data.worst,
                         self.bound_zone(),
@@ -722,6 +755,8 @@ fn chart_card_ex(
 /// Render a card of ranked trades.
 ///
 /// Args:
+///     key: Which of the two ranked-trade cards this is. It only DISCRIMINATES: the element
+///         id the strategy cell actually takes is named inside this function, beside the cell.
 ///     title: Localized card heading.
 ///     trades: Ranked trade rows.
 ///     zone: Zone the REPORT AXIS renders in. A top trade's `closedate` is a replicated value on
@@ -732,12 +767,16 @@ fn chart_card_ex(
 /// Returns:
 ///     Complete ranked-trades card.
 fn top_card(
+    key: &'static str,
     title: String,
     trades: &[TopTrade],
     zone: chrono_tz::Tz,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> impl IntoElement {
+    // The strategy cell's identity is named HERE, where the cell is built, and carries the
+    // card discriminator so the two cards cannot collide on one row index.
+    let cell_id: SharedString = format!("an-top-strat-{key}").into();
     let mut list = v_flex().w_full().gap_0();
     // Header.
     list = list.child(
@@ -768,8 +807,29 @@ fn top_card(
             )
             .child(div().child(t!("analytics.col.profit").to_string())),
     );
-    for tr in trades {
+    for (ix, tr) in trades.iter().enumerate() {
         let profit_col = sign_color(p, tr.profit);
+        let strategy = strat_display_ex(
+            &tr.strategy,
+            &tr.strategy_id,
+            tr.strategy_is_id,
+            tr.strategy_alive,
+        );
+        // The cell is the direct child of the width-owning row below: an intermediate flex
+        // around truncating text collapses the whole line to an ellipsis.
+        let mut strategy_cell = div()
+            .id((cell_id.clone(), ix))
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_color(moon(if strategy.muted {
+                p.text_muted
+            } else {
+                p.text_soft
+            }));
+        if let Some(id) = strategy.full_id {
+            strategy_cell = strategy_cell.tooltip(crate::panels::common::text_tooltip(id));
+        }
         list = list.child(
             h_flex()
                 .w_full()
@@ -794,14 +854,7 @@ fn top_card(
                         .child(div().min_w_0().truncate().child(tr.coin.clone()))
                         .child(crate::panels::common::side_badge(tr.is_short, p)),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(moon(p.text_soft))
-                        .child(strat_display(&tr.strategy)),
-                )
+                .child(strategy_cell.child(strategy.text))
                 .child(
                     div()
                         .text_color(moon(profit_col))
@@ -865,18 +918,27 @@ fn insight_rows(d: &Summary, p: MoonPalette) -> [InsightRow; 5] {
         .first()
         .filter(|group| group.profit > 0.0)
         .map(|best| {
-            let name = strat_display(&best.name);
+            // The group key is `strategyid@core_uid`; the id half is the identity a nameless
+            // strategy is labelled by.
+            let id = best.key.rsplit_once('@').map_or("", |(id, _)| id);
+            let label = strat_display_ex(&best.name, id, best.name_is_id, best.alive);
             let profit = fmt_signed_unit(best.profit);
             let wr = format!("{:.1}", best.winrate());
+            // The row is one line and already truncates, so the FULL id rides in the sentence
+            // the row's own tooltip prints — the compact cell keeps the shortened form.
+            let spelled = label
+                .full_id
+                .as_ref()
+                .map_or_else(|| label.text.clone(), |id| format!("{} ({id})", label.text));
             InsightRow {
                 label: t!("analytics.ins.label.strategy").to_string(),
-                main: name.clone(),
+                main: label.text,
                 metric: t!("analytics.ins.metric.strategy", profit = profit, wr = wr).to_string(),
                 metric_color: p.green,
                 tooltip: Some(
                     t!(
                         "analytics.ins.best_strategy",
-                        name = name,
+                        name = spelled,
                         profit = profit,
                         wr = wr
                     )
@@ -1119,12 +1181,99 @@ pub(super) fn fmt_dm_hm(secs: i64, zone: chrono_tz::Tz) -> String {
 
 /// Display name of a strategy: `strategyid = 0` means manual orders (no
 /// strategy), so the bare "0" is replaced with a human-readable label.
+///
+/// The short form for callers that hold no identity to fall back on — the Tuner's three. A
+/// caller that DOES know the row's strategy id takes [`strat_display_ex`] instead, which is the
+/// only way a row with no resolved name gets a label rather than a raw 19-digit hash.
 pub(super) fn strat_display(name: &str) -> String {
+    // The "0" rule stays HERE, not in `strat_display_ex`. This form's callers hand it text that
+    // may be an id, so "0" means the manual-orders identity; `strat_display_ex`'s callers say
+    // whether their text is an id, and there a strategy a user NAMED "0" must keep that name.
     if name == "0" {
-        t!("analytics.manual_orders").to_string()
-    } else {
-        name.to_string()
+        return t!("analytics.manual_orders").to_string();
     }
+    name.to_string()
+}
+
+/// A strategy cell: what to print, whether it is the app speaking rather than the user, and the
+/// full identity behind a shortened one.
+struct StratLabel {
+    /// Text rendered in the Summary cell.
+    pub text: String,
+    /// The label is OURS, not a name the user gave — render it muted so the two never look alike.
+    pub muted: bool,
+    /// Present only when [`Self::text`] shortened an identity, so a tooltip can show all of it.
+    pub full_id: Option<String>,
+}
+
+/// Turn one strategy identity into the cell the Summary renders.
+///
+/// The unresolved case is REPORTED by the database layer (`GroupStat::name_is_id`,
+/// `TopTrade::strategy_is_id`), never guessed from the text: a strategy a user named "12345" is
+/// indistinguishable from an id fallback by comparison, and guessing would relabel it.
+///
+/// Args:
+///     name: Display text as the database layer produced it.
+///     id: The row's own `strategyid` text, used only when `is_id` says `name` IS that text.
+///     is_id: Whether `name` is the id fallback rather than a name.
+///     alive: Head status with `GroupStat::alive`'s encoding: `None` when status is unavailable,
+///         `0` when the database lacks the pair, and `1` or `2` when it has the pair. Only `0`
+///         produces the deleted-strategy label.
+///
+/// Returns:
+///     The cell's text, whether it is muted, and the full identity when the text shortened one.
+fn strat_display_ex(name: &str, id: &str, is_id: bool, alive: Option<i64>) -> StratLabel {
+    // A RESOLVED name is printed as it is, before any rule keyed on text: a strategy a user
+    // named "0" is not the manual-orders identity, and relabelling it would be exactly the
+    // guessing this signature exists to remove.
+    if !is_id {
+        return StratLabel {
+            text: name.to_string(),
+            muted: false,
+            full_id: None,
+        };
+    }
+    // `strategyid = 0` is manual orders — a real identity with its own label that no strategy
+    // database will ever name, so it reaches here as an unresolved id and stops here.
+    if name == "0" {
+        return StratLabel {
+            text: t!("analytics.manual_orders").to_string(),
+            muted: false,
+            full_id: None,
+        };
+    }
+    // `alive == Some(0)` is the database saying it does not have this pair — deleted. Anything
+    // else (a live head whose name is blank, or no strategy database at all) is NOT a deletion,
+    // and saying so would be a claim nobody checked.
+    let key = if alive == Some(0) {
+        "analytics.strategy_deleted"
+    } else {
+        "analytics.strategy_unnamed"
+    };
+    StratLabel {
+        text: t!(key, id = short_id(id)).to_string(),
+        muted: true,
+        full_id: Some(id.to_string()),
+    }
+}
+
+/// Tail of a strategy id, for a label that must fit a table cell.
+///
+/// Moonbot writes `strategyid` as a 19-digit signed hash, which is both unreadable and wider
+/// than the column. The tail is what a human compares against the tooltip's full id, and it is
+/// DECIMAL because every other place this app prints a strategy id is (`analytics.purge.*`).
+///
+/// Args:
+///     id: Full id text as the report row stored it.
+///
+/// Returns:
+///     The id itself when it is already short, else an ellipsis and its last six characters.
+fn short_id(id: &str) -> String {
+    let n = id.chars().count();
+    if n <= 8 {
+        return id.to_string();
+    }
+    format!("…{}", id.chars().skip(n - 6).collect::<String>())
 }
 
 #[cfg(test)]

@@ -130,6 +130,133 @@ pub(super) fn fallback_core_color(p: MoonPalette, i: usize) -> u32 {
     ][i % 8]
 }
 
+/// Minimum hue separation, as a fraction of the wheel, before two core colours read as one.
+///
+/// `picker_palette` steps a full twelfth (0.083) between hues, so this admits every one of its
+/// own swatches while rejecting a pair a user picked a few degrees apart.
+const MIN_HUE_SEP: f32 = 0.04;
+/// Minimum lightness separation that rescues an otherwise too-close hue pair. A dark blue beside
+/// a pale blue IS two lines a reader can follow; two mid blues are not.
+const MIN_L_SEP: f32 = 0.14;
+/// Below this saturation a colour reads as grey and its hue carries no information, so greys are
+/// separated by lightness alone.
+const GREY_S: f32 = 0.15;
+/// Saturation gap that separates two colours on its own. HSL puts a neutral grey and a saturated
+/// red at the SAME hue (zero), so a hue test alone calls them identical when they are the easiest
+/// pair on the chart to tell apart.
+const MIN_S_SEP: f32 = 0.35;
+
+/// Whether two core colours are too close to tell apart on a one-pixel line.
+///
+/// Deliberately a COARSE rule, not a perceptual distance: it decides only whether to keep a
+/// user's own configured colour or to substitute a palette swatch, and a threshold nobody can
+/// state is worse than one that is occasionally generous.
+///
+/// Args:
+///     a: One already-taken colour.
+///     b: The candidate colour.
+///
+/// Returns:
+///     `true` when a reader would see one line where there are two.
+fn too_close(a: Hsla, b: Hsla) -> bool {
+    if (b.l - a.l).abs() >= MIN_L_SEP {
+        return false;
+    }
+    if (b.s - a.s).abs() >= MIN_S_SEP {
+        return false;
+    }
+    if a.s < GREY_S && b.s < GREY_S {
+        return true;
+    }
+    let d = (a.h - b.h).abs();
+    d.min(1.0 - d) < MIN_HUE_SEP
+}
+
+/// Give every drawn core a colour a reader can actually tell from its neighbours.
+///
+/// The cumulative chart draws up to twelve thin per-core lines inside the total's area, and they
+/// were all one blue: a core's colour comes from its own `ServerConfig.color`, and a user who
+/// gives a whole exchange one colour gets one colour on the chart. So a configured colour is
+/// KEPT — it is the identity the core selector and every popup dot already use — unless it
+/// collides with one already taken, and only then is it replaced from `design::picker_palette`,
+/// the very palette that colour was chosen from.
+///
+/// Walked in ascending `uid` order rather than in the caller's order, which is by PROFIT: a core
+/// must not change colour because it had a better week.
+///
+/// Args:
+///     configured: One entry per drawn core, in the caller's order — its uid and the RGB its
+///         server config carries, or `None` when no config names it.
+///     p: Active palette, for the last-resort cycle when the picker palette runs out.
+///
+/// Returns:
+///     One colour per input entry in INPUT order. Colours stay distinguishable until the
+///     separated picker swatches run out, then repeat deterministically by uid rank.
+pub(super) fn distinct_core_colors(
+    configured: &[(u64, Option<[u8; 3]>)],
+    p: MoonPalette,
+) -> Vec<Hsla> {
+    let rgb = |c: [u8; 3]| {
+        Hsla::from(Rgba {
+            r: f32::from(c[0]) / 255.0,
+            g: f32::from(c[1]) / 255.0,
+            b: f32::from(c[2]) / 255.0,
+            a: 1.0,
+        })
+    };
+    let mut order: Vec<usize> = (0..configured.len()).collect();
+    order.sort_by_key(|&i| configured[i].0);
+    let mut out = vec![None; configured.len()];
+    let mut taken: Vec<Hsla> = Vec::with_capacity(configured.len());
+    for &i in &order {
+        if let Some(c) = configured[i].1.map(rgb) {
+            if !taken.iter().any(|&t| too_close(t, c)) {
+                taken.push(c);
+                out[i] = Some(c);
+            }
+        }
+    }
+    // Mid-shade first (index 2 of `SHADES`, the saturated one the picker leads with), then the
+    // LIGHTEST and the DARKEST — never the neighbours. `SHADES` steps lightness by 0.12 between
+    // adjacent entries, which is below `MIN_L_SEP`, so shades 1 and 3 would offer swatches
+    // `too_close` rejects on sight and the usable pool would be twelve. 2 -> 0 -> 4 keeps every
+    // step at 0.22 or more and gives thirty-six.
+    let palette = design::picker_palette();
+    let spare: Vec<Hsla> = [2usize, 0, 4]
+        .into_iter()
+        .flat_map(|shade| (0..12).map(move |hue| hue * 5 + shade))
+        .filter_map(|ix| palette.get(ix).copied())
+        .collect();
+    let mut cursor = 0usize;
+    for (rank, &i) in order.iter().enumerate() {
+        if out[i].is_some() {
+            continue;
+        }
+        let mut pick = None;
+        while cursor < spare.len() {
+            let candidate = spare[cursor];
+            cursor += 1;
+            if !taken.iter().any(|&t| too_close(t, candidate)) {
+                pick = Some(candidate);
+                break;
+            }
+        }
+        let pick = pick.unwrap_or_else(|| {
+            // Every separated swatch is spent — more than thirty-six cores need one. Colours
+            // repeat from here, but by the core's RANK IN UID ORDER, so a core still keeps the
+            // same colour between reloads; keying the repeat on the caller's profit-ordered
+            // index would reshuffle the whole chart whenever the ranking moved.
+            spare
+                .get(rank % spare.len().max(1))
+                .copied()
+                .unwrap_or_else(|| moon(fallback_core_color(p, rank)))
+        });
+        taken.push(pick);
+        out[i] = Some(pick);
+    }
+    out.into_iter().flatten().collect()
+}
+
 /// Label of one bucket: the HOUR when the grid is finer than a day (a single-day period),
 /// the date otherwise. Without this every hourly bucket would be titled with the same date.
 ///

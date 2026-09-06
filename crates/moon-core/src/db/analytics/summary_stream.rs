@@ -636,18 +636,22 @@ fn read_with_window(
         .values()
         .filter_map(|group| group.strategy_id.zip(group.strategy_core))
         .collect::<HashSet<_>>();
-    let metadata = if has_names {
+    // `names_read` is NOT `has_names`: an attached database whose head query FAILED leaves an
+    // EMPTY heads map, and handing that to `finish_top` as `Some` would turn "nobody could look"
+    // into "the database does not know this strategy" — which the UI renders as a deleted
+    // strategy. A status nobody could read is reported as absent, not as a deletion.
+    let (metadata, names_read) = if has_names {
         match read_metadata(conn, &pairs) {
-            Ok(metadata) => metadata,
+            Ok(metadata) => (metadata, true),
             Err(error) => {
                 log::warn!(
                     "analytics: strategy names unavailable, using bare ids for current stream: {error}"
                 );
-                SummaryMetadata::default()
+                (SummaryMetadata::default(), false)
             }
         }
     } else {
-        SummaryMetadata::default()
+        (SummaryMetadata::default(), false)
     };
 
     let best_hour = accumulator
@@ -678,7 +682,7 @@ fn read_with_window(
     let (best, worst) = finish_top(
         accumulator.best_rows,
         accumulator.worst_rows,
-        Some(&metadata.heads),
+        names_read.then_some(&metadata.heads),
         axis,
     )?;
     Ok(SummaryParts {
@@ -809,15 +813,22 @@ fn finish_groups(
             let strategy_id = display_key
                 .rsplit_once('@')
                 .map_or_else(String::new, |(strategy_id, _)| strategy_id.to_string());
+            // A blank head name degrades to the bare id exactly like an absent head: the gate is
+            // `StrategyMetadata::display_name`, so this caller and `groups::enrich` cannot drift
+            // on it. `name` is therefore never empty, and the fallback is REPORTED rather than
+            // left for a consumer to infer by comparing it back to the id.
+            let resolved = by_strategy
+                .then(|| details.and_then(StrategyMetadata::display_name))
+                .flatten();
+            let name_is_id = by_strategy && resolved.is_none();
             GroupStat {
                 key: display_key.clone(),
                 name: if by_strategy {
-                    details
-                        .and_then(|item| item.name.clone())
-                        .unwrap_or(strategy_id)
+                    resolved.unwrap_or(strategy_id)
                 } else {
                     display_key
                 },
+                name_is_id,
                 kind: details.map(|item| item.kind.clone()).unwrap_or_default(),
                 core: group.core_name.unwrap_or_default(),
                 cores_n: group.cores.len() as i64,
@@ -892,13 +903,21 @@ fn finish_top(
             )
         })?;
         let pair = row.strategy_id.map(|strategy_id| (strategy_id, core_uid));
+        let details = pair.and_then(|pair| metadata.and_then(|all| all.get(&pair)));
+        let resolved = details.and_then(StrategyMetadata::display_name);
         Ok(TopTrade {
             closedate: axis.to_utc(row.closedate, core_uid as u64),
             coin: row.coin.clone(),
-            strategy: pair
-                .and_then(|pair| metadata.and_then(|all| all.get(&pair)))
-                .and_then(|item| item.name.clone())
-                .unwrap_or(strategy_text),
+            // A blank head name degrades to the bare id like an absent head, per
+            // `StrategyMetadata::display_name`; the fallback is REPORTED in `strategy_is_id`
+            // so the UI never has to sniff the text to recognize it.
+            strategy_is_id: resolved.is_none(),
+            strategy: resolved.unwrap_or_else(|| strategy_text.clone()),
+            strategy_id: strategy_text,
+            // Mirrors `finish_groups`' `alive`: `None` without a strategy database, 0 for a pair
+            // it does not know, else the head's own status. Gated on `pair` because a
+            // non-integer `strategyid` has nothing to look up and is not a deleted strategy.
+            strategy_alive: pair.and_then(|_| metadata.map(|_| details.map_or(0, |m| m.alive))),
             core_name: row.core_name.clone().ok_or_else(|| {
                 rusqlite::Error::InvalidColumnType(
                     4,

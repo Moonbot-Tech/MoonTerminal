@@ -642,6 +642,83 @@ fn textual_strategy_storage_keeps_group_and_top_fallbacks() {
     assert_eq!(result.strategies.len(), 1);
     assert_eq!(result.strategies[0].key, "odd-id@1");
     assert_eq!(result.strategies[0].name, "odd-id");
-    assert_eq!(result.best[0].strategy, "odd-id");
-    assert_eq!(result.worst[0].strategy, "odd-id");
+    for row in [&result.best[0], &result.worst[0]] {
+        assert_eq!(row.strategy, "odd-id");
+        assert_eq!(row.strategy_id, "odd-id");
+        assert_eq!(
+            row.strategy_alive, None,
+            "a non-numeric legacy id never had a metadata pair, so it is not a deleted strategy"
+        );
+    }
+}
+
+/// `strategy_meta.rs:StrategyMetadata::display_name` and `summary_stream.rs:finish_top` must
+/// preserve raw id text for absent or blank heads while retaining an actual head name. Returning a
+/// blank name makes a Summary strategy cell empty, and deriving `strategy_id` from the resolved
+/// name makes the UI call every named strategy deleted or unnamed.
+#[test]
+fn summary_strategy_rows_keep_identity_when_head_names_are_missing_or_blank() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE current_rows(
+            closedate INTEGER, buydate INTEGER, pnl REAL, core_uid INTEGER,
+            core_name TEXT, coin TEXT, strategyid INTEGER, isshort INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER
+         );
+         INSERT INTO current_rows VALUES
+            (100, 90, 3.0, 1, 'alpha', 'none', 10, 0, 3.0, 20.0, 1),
+            (101, 90, 2.0, 1, 'alpha', 'blank', 11, 0, 2.0, 20.0, 1),
+            (102, 90, 1.0, 1, 'alpha', 'named', 12, 0, 1.0, 20.0, 1);
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(
+            core_uid INTEGER, strategy_id INTEGER, name TEXT, deleted INTEGER, checked INTEGER
+         );
+         CREATE TABLE strat.strategy_versions(
+            core_uid INTEGER, strategy_id INTEGER, valid_to INTEGER, raw_json TEXT
+         );
+         INSERT INTO strat.strategies VALUES
+            (1, 11, '', 0, 1),
+            (1, 12, 'Named head', 0, 1);",
+    )
+    .expect("strategy-name fixture");
+    let query = Query {
+        from: 1,
+        to: 300,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let result = read(&conn, source, None, &query, &query.axis, 3_600, true, true)
+        .expect("strategy-name summary");
+
+    let row = |coin: &str| {
+        result
+            .best
+            .iter()
+            .find(|row| row.coin == coin)
+            .expect("fixture top row")
+    };
+    assert_eq!(
+        (
+            row("none").strategy.as_str(),
+            row("none").strategy_id.as_str()
+        ),
+        ("10", "10")
+    );
+    assert_eq!(row("none").strategy_alive, Some(0));
+    assert_eq!(
+        (
+            row("blank").strategy.as_str(),
+            row("blank").strategy_id.as_str()
+        ),
+        ("11", "11")
+    );
+    assert_eq!(row("blank").strategy_alive, Some(2));
+    assert_eq!(
+        (
+            row("named").strategy.as_str(),
+            row("named").strategy_id.as_str()
+        ),
+        ("Named head", "12")
+    );
+    assert_eq!(row("named").strategy_alive, Some(2));
 }

@@ -543,7 +543,7 @@ fn summary_triptych_and_insight_rows_keep_their_visual_contract() {
 
     assert!(
         tab.contains(
-            ".items_stretch()\n                    .child(top_card(\n                        t!(\"analytics.best_trades\")"
+            ".items_stretch()\n                    .child(top_card(\n                        \"an-top-best\",\n                        t!(\"analytics.best_trades\")"
         ) && tab.contains(".child(insights_card(&data, p, cx))"),
         "the trade/insight triptych must stretch all three cards to one height"
     );
@@ -2810,4 +2810,66 @@ fn kpi_row_keeps_its_non_up_metric_policies() {
             "{label} must be followed by {policy} so {consequence}"
         );
     }
+}
+
+/// `analytics/toolbar.rs:notice_strip` and `period_bar` must keep the expanded undated message
+/// informational and place its collapsed text directly in the width-owning tail. Restoring a
+/// warning makes a permanent alarm band, while wrapping the yielding text in another flex row
+/// turns the whole tail into a single ellipsis at narrow widths.
+#[test]
+fn undated_notice_uses_an_info_alert_and_a_direct_period_bar_tail() {
+    let toolbar = read_src("analytics/toolbar.rs");
+    let notice = code_only(braced_body(&toolbar, "pub(super) fn notice_strip("));
+    assert!(
+        notice.contains("MoonAlert::info(\"an-undated-banner\"")
+            && !notice.contains("MoonAlert::warning(\"an-undated-banner\""),
+        "the expanded undated notice must be informational rather than a warning"
+    );
+
+    let period = code_only(braced_body(&toolbar, "pub(super) fn period_bar("));
+    for needle in [
+        "UNDATED_TAIL_RESERVED_W",
+        "an-undated-note",
+        ".min_w_0()",
+        ".truncate()",
+        "text_tooltip(line.clone())",
+        "MoonButton::new(\"an-undated-show\")",
+    ] {
+        assert!(
+            period.contains(needle),
+            "period-bar tail must retain {needle:?}"
+        );
+    }
+    let note = chain_between(
+        &period,
+        "an-undated-note",
+        "MoonButton::new(\"an-undated-show\")",
+        "undated note tail",
+    );
+    assert!(
+        !note.contains("h_flex()"),
+        "the yielding undated text must not be wrapped in a nested flex row"
+    );
+}
+
+/// `analytics/summary/mod.rs:summary_tab` and `top_card` must consume the one resolved color set
+/// and expose an unresolved strategy's full id through the standard tooltip. Bypassing either path
+/// lets chart surfaces disagree on a core color or leaves a shortened deleted-strategy id without
+/// a way for the user to recover its complete value.
+#[test]
+fn summary_uses_resolved_core_colors_and_tooltips_unresolved_top_strategies() {
+    let summary = read_src("analytics/summary/mod.rs");
+    let tab = code_only(braced_body(&summary, "pub(super) fn summary_tab("));
+    let top = code_only(braced_body(&summary, "fn top_card("));
+
+    assert!(
+        tab.contains("charts::distinct_core_colors"),
+        "Summary must build one distinct per-core color set before chart children render"
+    );
+    assert!(
+        top.contains("strat_display_ex(")
+            && top.contains("text_tooltip(id)")
+            && top.contains("an-top-strat"),
+        "an unresolved top strategy must use the extended label and expose its full id by tooltip"
+    );
 }

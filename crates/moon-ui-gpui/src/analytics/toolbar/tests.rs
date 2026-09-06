@@ -12,8 +12,8 @@ use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
 use super::super::AnalyticsSessionState;
 use super::{
-    CoreSelectionCaption, UndatedBanner, analytics_core_filter_ids, presets_row_fits,
-    sole_core_name, undated_banner_state,
+    CoreSelectionCaption, KIND_TRIGGER_W, METRIC_TRIGGER_W, SIDE_TRIGGER_W, UndatedBanner,
+    analytics_core_filter_ids, presets_row_fits, sole_core_name, undated_banner_state,
 };
 
 /// `analytics/toolbar.rs:presets_row_fits` must keep the inline presets at the exact available
@@ -80,6 +80,62 @@ fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::Tes
                 "{title:?} natural width {natural} does not fit under the {ceiling}px fitted-cell \
                  ceiling at font delta {delta} and would render truncated with an ellipsis"
             );
+        }
+    }
+    rust_i18n::set_locale("en");
+}
+
+/// `analytics/toolbar.rs:SIDE_TRIGGER_W`, `KIND_TRIGGER_W`, and `METRIC_TRIGGER_W` must leave
+/// their new captions whole at every supported font delta. Restoring an old compact width elides
+/// the captioned trigger, so the filter reads as a misleading fragment rather than a named choice.
+#[gpui::test]
+fn captioned_filter_labels_fit_without_ellipsis_in_every_locale(cx: &mut gpui::TestAppContext) {
+    for (locale, labels) in [
+        (
+            "en",
+            [
+                ("Side: Short", SIDE_TRIGGER_W),
+                ("Mode: Emulated", KIND_TRIGGER_W),
+                ("Currency: USDC", METRIC_TRIGGER_W),
+            ],
+        ),
+        (
+            "es",
+            [
+                ("Lado: Corto", SIDE_TRIGGER_W),
+                ("Modo: Emulado", KIND_TRIGGER_W),
+                ("Moneda: USDC", METRIC_TRIGGER_W),
+            ],
+        ),
+        (
+            "ru",
+            [
+                ("Сторона: Шорт", SIDE_TRIGGER_W),
+                ("Режим: Эмуляторные", KIND_TRIGGER_W),
+                ("Валюта: USDC", METRIC_TRIGGER_W),
+            ],
+        ),
+    ] {
+        rust_i18n::set_locale(locale);
+        for delta in UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX {
+            cx.update(|cx| moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta as f32);
+            for (label, width) in labels {
+                let fitted = cx.update(|cx| {
+                    moon_ui::MoonDropdown::fitted_trigger_label(
+                        cx,
+                        label,
+                        moon_ui::MoonButtonSize::Action,
+                        width,
+                        width,
+                    )
+                    .0
+                    .to_string()
+                });
+                assert!(
+                    fitted.starts_with(label) && !fitted.contains('…'),
+                    "{locale} {label:?} was truncated at font delta {delta}: {fitted:?}"
+                );
+            }
         }
     }
     rust_i18n::set_locale("en");

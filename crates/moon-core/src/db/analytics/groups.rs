@@ -20,6 +20,12 @@ pub struct GroupStat {
     pub key: String,
     /// Display name, read from strategies.sqlite for strategies or falling back to the id.
     pub name: String,
+    /// Whether [`Self::name`] is that fallback — the bare `strategyid` text — rather than a name.
+    ///
+    /// Stated rather than inferred: a name is free text a user typed, so a strategy legitimately
+    /// CALLED "12345" is indistinguishable from the id fallback by comparison, and a consumer
+    /// that compared would relabel it. Always `false` for a coin group, whose key IS its label.
+    pub name_is_id: bool,
     /// Strategy type (`SignalType` of the current version); empty for coins or without the DB.
     pub kind: String,
     /// One core name from the group and the number of distinct cores (`Core` column).
@@ -262,11 +268,15 @@ pub(super) fn raw_source(conn: &Connection, q: &Query) -> ReadResult<Option<Stri
 ///
 /// Args:
 ///     r: SQLite row matching the aggregate SELECT layout.
+///     by_strategy: Whether the row represents a strategy, whose initial name is its id fallback.
 ///
 /// Returns:
 ///     Group aggregate paired with a numeric identity for later enrichment, or a SQLite
 ///     conversion error.
-fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<(GroupStat, Option<(i64, i64)>)> {
+fn group_from_row(
+    r: &rusqlite::Row,
+    by_strategy: bool,
+) -> rusqlite::Result<(GroupStat, Option<(i64, i64)>)> {
     let wsum: f64 = r.get(7)?;
     let lsum: f64 = r.get(8)?;
     let quote = group_quote_scope(r.get(13)?, r.get(14)?, r.get(15)?, r.get(16)?);
@@ -286,6 +296,12 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<(GroupStat, Option<(i64
         // Every field below that the strategy database owns is filled by `enrich`; the bare id
         // (or the coin) stands in until then, and stays if no head names this pair.
         name: r.get(1)?,
+        // Every STRATEGY group starts out holding its own id text in `name`; a coin group's key
+        // IS its label and is never a fallback. Read off `by_strategy`, never off `pair`: the
+        // pair is NULL for a strategy whose `strategyid` failed the integer gate above, and that
+        // row's `name` is the bare text id exactly like any other unresolved one. `enrich` clears
+        // this the moment a real name arrives.
+        name_is_id: by_strategy,
         kind: String::new(),
         core: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
         cores_n: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
@@ -496,7 +512,9 @@ pub(super) fn groups(
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], group_from_row)
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            group_from_row(r, by_strategy)
+        })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut out = Vec::new();
     for row in rows {
@@ -555,8 +573,9 @@ fn enrich(conn: &Connection, groups: &mut [(GroupStat, Option<(i64, i64)>)], has
         let details = by_pair.get(pair);
         // A present but nameless head, and a pair with no head at all, both keep the bare id
         // already sitting in `name` — never an empty label.
-        if let Some(name) = details.and_then(|item| item.name.clone()) {
+        if let Some(name) = details.and_then(super::strategy_meta::StrategyMetadata::display_name) {
             group.name = name;
+            group.name_is_id = false;
         }
         group.kind = details.map(|item| item.kind.clone()).unwrap_or_default();
         // An absent head reads as 0 ("deleted"), matching what the status lookup returned for a
@@ -578,7 +597,20 @@ fn enrich(conn: &Connection, groups: &mut [(GroupStat, Option<(i64, i64)>)], has
 pub struct TopTrade {
     pub closedate: i64,
     pub coin: String,
+    /// Display name of the strategy, or the bare `strategyid` text when none resolved.
     pub strategy: String,
+    /// Whether [`Self::strategy`] is that fallback rather than a name — see
+    /// [`GroupStat::name_is_id`], which this mirrors, for why it is stated and not compared.
+    pub strategy_is_id: bool,
+    /// The row's own `strategyid`, exactly as SQLite stored it (`CAST(... AS TEXT)`).
+    ///
+    /// Carried beside the name so a consumer rendering its own label for an unresolved strategy
+    /// has the identity to put in it without re-deriving one it does not have.
+    pub strategy_id: String,
+    /// Head status for this strategy, with [`GroupStat::alive`]'s encoding: `None` when no
+    /// strategy database was attached OR the id is not numeric, `0` when the database does not
+    /// know the pair, `1` present but disabled, `2` present and enabled.
+    pub strategy_alive: Option<i64>,
     pub core_name: String,
     pub profit: f64,
     pub is_short: bool,

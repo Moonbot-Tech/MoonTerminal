@@ -62,11 +62,16 @@ impl MetricChoice {
 }
 
 /// Unscaled width of the Analytics side-selector trigger.
-const SIDE_TRIGGER_W: f32 = 69.0;
-/// Unscaled width of the Analytics trade-kind-selector trigger.
-const KIND_TRIGGER_W: f32 = 102.0;
-/// Unscaled width of the Analytics profit-metric-selector trigger.
-const METRIC_TRIGGER_W: f32 = 116.0;
+///
+/// Sized for the widest CAPTIONED label its own locale can produce, caret included — the caption
+/// is part of the label string, so a width kept at the bare value would ellipsise the very word
+/// that was added to explain the filter. `toolbar/tests.rs` measures all three against MoonUI's
+/// own fitter rather than against an estimate.
+const SIDE_TRIGGER_W: f32 = 124.0;
+/// Unscaled width of the Analytics trade-kind-selector trigger. See [`SIDE_TRIGGER_W`].
+const KIND_TRIGGER_W: f32 = 156.0;
+/// Unscaled width of the Analytics profit-metric-selector trigger. See [`SIDE_TRIGGER_W`].
+const METRIC_TRIGGER_W: f32 = 152.0;
 /// Unscaled horizontal spacing between neighboring toolbar controls.
 const TOOLBAR_GAP: f32 = 6.0;
 
@@ -95,6 +100,12 @@ const SEGMENT_ELISION_TOLERANCE: f32 = 0.5;
 /// any realistic count, and undercounting here would let the collapse decision keep the preset row
 /// inline for a beat after the counter has already started to clip.
 const PERIOD_COUNTER_RESERVED_W: f32 = 90.0;
+/// Unscaled width the undated-close note reserves in the period bar's tail when it is showing.
+///
+/// Covers its Show button, the divider before the counter, and a floor wide enough that the
+/// note degrades to a shortened sentence rather than to a lone ellipsis. Only the note yields on
+/// this bar; the counter and the custom-range group still never do.
+const UNDATED_TAIL_RESERVED_W: f32 = 120.0;
 
 #[cfg(test)]
 mod tests;
@@ -614,15 +625,23 @@ impl AnalyticsView {
         // The trigger shows the unit the data ACTUALLY came back in, so a USDT choice that could
         // not be valued reads as the native quote rather than claiming a conversion that did not
         // happen.
-        let cur = match self.metric {
-            ProfitMetric::Quote => match active_unit {
-                Some(moon_core::db::ProfitUnit::Quote(currency)) => currency.ticker().to_string(),
-                Some(moon_core::db::ProfitUnit::Percent) | None => {
-                    t!("analytics.metric.quote").to_string()
-                }
-            },
-            ProfitMetric::Percent => t!("analytics.metric.pct").to_string(),
-        };
+        // This is a metric caption, not a currency caption: the trigger also reads "Profit %",
+        // and captioning only money states would leave the percent state as unlabelled as the
+        // whole filter was before.
+        let cur = t!(
+            "analytics.filter.metric_v",
+            v = match self.metric {
+                ProfitMetric::Quote => match active_unit {
+                    Some(moon_core::db::ProfitUnit::Quote(currency)) =>
+                        currency.ticker().to_string(),
+                    Some(moon_core::db::ProfitUnit::Percent) | None => {
+                        t!("analytics.metric.quote").to_string()
+                    }
+                },
+                ProfitMetric::Percent => t!("analytics.metric.pct").to_string(),
+            }
+        )
+        .to_string();
         let view = cx.entity();
         let choice = MetricChoice::of(self.metric, self.prefer_usdt);
         let items = crate::panels::radio_items(
@@ -733,7 +752,14 @@ impl AnalyticsView {
     /// Side combo (All/Long/Short). Analytics keeps it a field of its own; the Report folds the
     /// same choice into its merged scope field.
     fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = crate::panels::side_label(self.side);
+        // The caption rides INSIDE the label, exactly as the core selector's "Cores: N" does
+        // (`report.cores_n` below): MoonUI's trigger has no caption slot, and its segment API
+        // drops the caret, the mono family and the label fitting all at once.
+        let cur = t!(
+            "analytics.filter.side_v",
+            v = crate::panels::side_label(self.side)
+        )
+        .to_string();
         let view = cx.entity();
         let items = crate::panels::radio_items(
             [
@@ -772,11 +798,15 @@ impl AnalyticsView {
 
     /// Order kind combo (All / Real / Emulated) — as in the Report.
     fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = match self.emu {
-            None => t!("report.kind.all"),
-            Some(false) => t!("report.kind.real"),
-            Some(true) => t!("report.kind.emu"),
-        };
+        let cur = t!(
+            "analytics.filter.kind_v",
+            v = match self.emu {
+                None => t!("report.kind.all"),
+                Some(false) => t!("report.kind.real"),
+                Some(true) => t!("report.kind.emu"),
+            }
+        )
+        .to_string();
         let view = cx.entity();
         let items = crate::panels::radio_items(
             [
@@ -935,8 +965,10 @@ impl AnalyticsView {
         }
     }
 
-    /// The strip under the period bar: the "closed trades the core never dated" notice, or
-    /// nothing at all.
+    /// Render the "closed trades the core never dated" notice, or nothing at all.
+    ///
+    /// Summary and Strategies put its collapsed form in the period bar, so only Calendar uses a
+    /// collapsed strip because it has no period bar.
     ///
     /// Silent unless there is something to say — a database with no undated trades gets no
     /// empty band under its period bar. The count and the money are already scoped by the
@@ -948,7 +980,8 @@ impl AnalyticsView {
     ///     cx: Analytics view context.
     ///
     /// Returns:
-    ///     Notice strip only when a count or read failure exists.
+    ///     Full or failed notice strip when one exists; the collapsed notice only on Calendar,
+    ///     because Summary and Strategies render it in their period bar.
     pub(super) fn notice_strip(
         &self,
         p: MoonPalette,
@@ -972,7 +1005,7 @@ impl AnalyticsView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(MoonAlert::warning("an-undated-banner", detail).title(title)),
+                        .child(MoonAlert::info("an-undated-banner", detail).title(title)),
                 )
                 .child(
                     MoonButton::new("an-undated-hide")
@@ -982,8 +1015,16 @@ impl AnalyticsView {
                         .on_click(cx.listener(|this, _, _, cx| this.undated_hide(cx)))
                         .render(),
                 ),
-            UndatedBanner::Collapsed(line) => row
-                .child(
+            // The collapsed one-liner rides the PERIOD BAR's tail instead of taking a
+            // full-width row of its own: it is information, and a band across every tab reads
+            // as an alarm whatever colour it is. The Calendar tab has no period bar
+            // (`render.rs`), so there it keeps the strip — losing the count outright would be
+            // worse than one quiet row.
+            UndatedBanner::Collapsed(line) => {
+                if self.tab != Tab::Calendar {
+                    return None;
+                }
+                row.child(
                     div()
                         .flex_1()
                         .min_w_0()
@@ -999,7 +1040,8 @@ impl AnalyticsView {
                         .label(t!("analytics.undated_show").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.undated_show(cx)))
                         .render(),
-                ),
+                )
+            }
             UndatedBanner::Failed(title, detail) => row.child(
                 div()
                     .flex_1()
@@ -1211,9 +1253,25 @@ impl AnalyticsView {
             + date_captions_w
             + date_field_gaps_w
             + design::ui_value(cx, design::CHROME_GAP) * 3.0;
+        // The undated-close note lives in this bar's tail, so its reserved width is part of what
+        // the presets must fit around — same budget, one more atom.
+        let note = match undated_banner_state(
+            self.undated_error.as_ref(),
+            self.undated.clone(),
+            self.undated_expanded,
+        ) {
+            UndatedBanner::Collapsed(line) => Some(line),
+            _ => None,
+        };
+        let has_note = note.is_some();
         let fixed_w = design::ui_value(cx, 10.0) * 2.0
             + custom_group_w
             + design::ui_value(cx, PERIOD_COUNTER_RESERVED_W)
+            + if note.is_some() {
+                design::ui_value(cx, UNDATED_TAIL_RESERVED_W)
+            } else {
+                0.0
+            }
             + design::ui_value(cx, design::CHROME_GAP) * 2.0;
         let available_for_presets = (chrome_width - fixed_w).max(0.0);
         let fitted_presets = self.fitted_preset_items(cx);
@@ -1271,6 +1329,21 @@ impl AnalyticsView {
                 },
             }
         };
+        // The note is the ONLY atom that yields on this bar. With one beside it the counter must
+        // stop being shrinkable, or two `min_w_0` siblings split the free space and the counter
+        // clips — which this bar's contract forbids. Its automatic margin goes with it: two of
+        // them would centre the note instead of pushing it to the tail.
+        let counter_cell = if has_note {
+            div().flex_none()
+        } else {
+            div().ml_auto().min_w_0().truncate()
+        }
+        .text_size(design::t_body(cx))
+        .text_color(moon(if counter_failed {
+            p.orange
+        } else {
+            p.text_muted
+        }));
         h_flex()
             .flex_none()
             .w_full()
@@ -1282,23 +1355,34 @@ impl AnalyticsView {
             .py(design::ui_px(cx, 8.0))
             .gap_x(design::ui_px(cx, design::CHROME_GAP))
             .items_center()
-            // The bottom rule separates the controls from the muted notice below.
+            // The bottom rule closes the chrome off from the tab body below it.
             .border_b_1()
             .border_color(moon(p.border))
             .child(presets)
             .child(custom)
-            .child(
+            // The note and its button are appended DIRECTLY to this row, never wrapped in an
+            // inner flex: an intermediate flex around truncating text renders the whole line as
+            // a single ellipsis.
+            .children(note.map(|line| {
                 div()
+                    .id("an-undated-note")
                     .ml_auto()
                     .min_w_0()
                     .truncate()
-                    .text_size(design::t_body(cx))
-                    .text_color(moon(if counter_failed {
-                        p.orange
-                    } else {
-                        p.text_muted
-                    }))
-                    .child(counter),
-            )
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .tooltip(crate::panels::common::text_tooltip(line.clone()))
+                    .child(line)
+            }))
+            .children(has_note.then(|| {
+                MoonButton::new("an-undated-show")
+                    .variant(MoonButtonVariant::Ghost)
+                    .size(MoonButtonSize::Micro)
+                    .label(t!("analytics.undated_show").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.undated_show(cx)))
+                    .render()
+            }))
+            .children(has_note.then(|| design::chrome_divider(cx, p)))
+            .child(counter_cell.child(counter))
     }
 }
