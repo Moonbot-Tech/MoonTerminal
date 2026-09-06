@@ -9,11 +9,12 @@ use super::field_keys;
 fn field_labels_are_exact_and_fail_closed() {
     assert_eq!(
         field_keys("AutoBuy"),
-        Some(("strat.field.AutoBuy", Some("strat.label.AutoBuy")))
+        Some((Some("strat.field.AutoBuy"), Some("strat.label.AutoBuy")))
     );
     assert_eq!(field_keys("autobuy"), None);
     assert_eq!(
-        field_keys("AutoCancelLowerBuy"),
-        Some(("strat.field.AutoCancelLowerBuy", None))
+        field_keys("SilentNoCharts"),
+        Some((None, Some("strat.label.SilentNoCharts")))
     );
+    assert_eq!(field_keys("silentnocharts"), None);
 }

@@ -1382,16 +1382,17 @@ fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
     let params = read_src("strategies/params.rs");
     let lookup = braced_body(&params, "fn field_keys(");
     let returned: BTreeSet<String> = lookup
-        .lines()
-        .filter_map(|line| line.split_once("Some(\"").map(|(_, rest)| rest))
-        .filter_map(|rest| rest.split_once("\")").map(|(key, _)| key))
-        .filter(|key| key.starts_with("strat.label."))
-        .map(str::to_string)
+        .match_indices("\"strat.label.")
+        .filter_map(|(at, _)| {
+            lookup[at + 1..]
+                .split_once('"')
+                .map(|(key, _)| key.to_string())
+        })
         .collect();
     assert_eq!(
         returned.len(),
-        194,
-        "the contract labels exactly 194 schema fields; an absent arm silently falls back to raw text"
+        414,
+        "the contract labels exactly 414 schema fields; an absent arm silently falls back to raw text"
     );
 
     let locales = fs::read_to_string(

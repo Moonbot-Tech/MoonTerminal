@@ -216,10 +216,6 @@ strat.section.UserInterface:
   en: "User interface"
   es: "Interfaz"
 # Prefix of a compact-mode field tooltip, where the raw identifier has no line of its own.
-strat.field_raw_tip:
-  ru: "Внутреннее имя поля: %{name}"
-  en: "Internal field name: %{name}"
-  es: "Nombre interno del campo: %{name}"
 strat.fields_count:
   ru: "полей: %{n}"
   en: "fields: %{n}"
@@ -2233,6 +2229,886 @@ strat.label.WorkingWeekTime:
   ru: "Рабочие дни недели"
   en: "Weekly working time"
   es: "Horario semanal"
+strat.label.ActiveTrigger:
+  ru: "Активный триггер"
+  en: "Active trigger"
+  es: "Disparador activo"
+strat.label.Add15minDelta:
+  ru: "Добавка дельты 15м"
+  en: "Add 15m delta"
+  es: "Añadir delta 15m"
+strat.label.Add1minDelta:
+  ru: "Добавка дельты 1м"
+  en: "Add 1m delta"
+  es: "Añadir delta 1m"
+strat.label.Add3hDelta:
+  ru: "Добавка дельты 3ч"
+  en: "Add 3h delta"
+  es: "Añadir delta 3h"
+strat.label.Add5minDelta:
+  ru: "Добавка дельты 5м"
+  en: "Add 5m delta"
+  es: "Añadir delta 5m"
+strat.label.AddBTC1mDelta:
+  ru: "Добавка дельты BTC 1м"
+  en: "Add BTC 1m delta"
+  es: "Añadir delta BTC 1m"
+strat.label.AddBTC5mDelta:
+  ru: "Добавка дельты BTC 5м"
+  en: "Add BTC 5m delta"
+  es: "Añadir delta BTC 5m"
+strat.label.AddBTCDelta:
+  ru: "Добавка дельты BTC"
+  en: "Add BTC delta"
+  es: "Añadir delta BTC"
+strat.label.AddDump1h:
+  ru: "Добавка дампа 1ч"
+  en: "Add 1h dump"
+  es: "Añadir dump 1h"
+strat.label.AddHourlyDelta:
+  ru: "Добавка часовой дельты"
+  en: "Add hourly delta"
+  es: "Añadir delta horaria"
+strat.label.AddMarketDelta:
+  ru: "Добавка рыночной дельты"
+  en: "Add market delta"
+  es: "Añadir delta de mercado"
+strat.label.AddPriceBug:
+  ru: "Добавка ценового бага"
+  en: "Add price bug"
+  es: "Añadir bug de precio"
+strat.label.AddPump1h:
+  ru: "Добавка пампа 1ч"
+  en: "Add 1h pump"
+  es: "Añadir pump 1h"
+strat.label.AutoCancelLowerBuy:
+  ru: "Отменять покупку ниже"
+  en: "Cancel lower buy"
+  es: "Cancelar compra inferior"
+strat.label.BV_SV_Kind:
+  ru: "Тип стопа BV/SV"
+  en: "BV/SV stop kind"
+  es: "Tipo de stop BV/SV"
+strat.label.BinancePriceBugMin:
+  ru: "Мин. ценовой баг Binance"
+  en: "Binance price bug min"
+  es: "Bug de precio Binance mín."
+strat.label.BuyModifier:
+  ru: "Модификатор покупки"
+  en: "Buy modifier"
+  es: "Modificador de compra"
+strat.label.BuyOrderReduce:
+  ru: "Уменьшение ордера покупки"
+  en: "Buy order reduce"
+  es: "Reducción de orden de compra"
+strat.label.BuyPriceInSpread:
+  ru: "Цена покупки в спреде"
+  en: "Buy price in spread"
+  es: "Precio de compra en el spread"
+strat.label.CheckAfterBuy:
+  ru: "Проверка после покупки"
+  en: "Check after buy"
+  es: "Comprobar tras la compra"
+strat.label.CoinsBlackList:
+  ru: "Чёрный список монет"
+  en: "Coins black list"
+  es: "Lista negra de monedas"
+strat.label.CoinsWhiteList:
+  ru: "Белый список монет"
+  en: "Coins white list"
+  es: "Lista blanca de monedas"
+strat.label.DeltaInterval:
+  ru: "Интервал дельты"
+  en: "Delta interval"
+  es: "Intervalo de delta"
+strat.label.DeltaLastPrice:
+  ru: "Дельта по последней цене"
+  en: "Delta by last price"
+  es: "Delta por último precio"
+strat.label.DeltaMin:
+  ru: "Мин. дельта"
+  en: "Min delta"
+  es: "Delta mín."
+strat.label.DeltaPrice:
+  ru: "Дельта цены"
+  en: "Price delta"
+  es: "Delta de precio"
+strat.label.DeltaShortInterval:
+  ru: "Короткий интервал дельты"
+  en: "Delta short interval"
+  es: "Intervalo corto de delta"
+strat.label.DeltaSwitch:
+  ru: "Переключатель дельты"
+  en: "Delta switch"
+  es: "Conmutador de delta"
+strat.label.DeltaVol:
+  ru: "Дельта объёма"
+  en: "Volume delta"
+  es: "Delta de volumen"
+strat.label.DeltaVolRaise:
+  ru: "Рост дельты объёма"
+  en: "Volume delta raise"
+  es: "Subida de delta de volumen"
+strat.label.DeltaVolSec:
+  ru: "Дельта объёма, сек"
+  en: "Volume delta, sec"
+  es: "Delta de volumen, s"
+strat.label.DetectModifier:
+  ru: "Модификатор детекта"
+  en: "Detect modifier"
+  es: "Modificador de detección"
+strat.label.DontTradeListing:
+  ru: "Не торговать листинги"
+  en: "Don't trade listings"
+  es: "No operar listados"
+strat.label.DropsLastPriceMA:
+  ru: "Drops: MA последней цены"
+  en: "Drops: last price MA"
+  es: "Drops: MA del último precio"
+strat.label.DropsMaxTime:
+  ru: "Drops: макс. время"
+  en: "Drops: max time"
+  es: "Drops: tiempo máx."
+strat.label.DropsPriceDelta:
+  ru: "Drops: дельта цены"
+  en: "Drops: price delta"
+  es: "Drops: delta de precio"
+strat.label.DropsPriceIsLow:
+  ru: "Drops: цена на минимуме"
+  en: "Drops: price is low"
+  es: "Drops: precio en mínimo"
+strat.label.DropsPriceMA:
+  ru: "Drops: MA цены"
+  en: "Drops: price MA"
+  es: "Drops: MA de precio"
+strat.label.DropsUseLastPrice:
+  ru: "Drops: по последней цене"
+  en: "Drops: use last price"
+  es: "Drops: usar último precio"
+strat.label.DynBL_SortBy:
+  ru: "Дин. ЧС: сортировка"
+  en: "Dyn. BL: sort by"
+  es: "LN din.: ordenar por"
+strat.label.DynBL_SortDesc:
+  ru: "Дин. ЧС: по убыванию"
+  en: "Dyn. BL: descending"
+  es: "LN din.: descendente"
+strat.label.DynWL_Count:
+  ru: "Дин. БС: количество"
+  en: "Dyn. WL: count"
+  es: "LB din.: cantidad"
+strat.label.DynWL_SortBy:
+  ru: "Дин. БС: сортировка"
+  en: "Dyn. WL: sort by"
+  es: "LB din.: ordenar por"
+strat.label.DynWL_SortDesc:
+  ru: "Дин. БС: по убыванию"
+  en: "Dyn. WL: descending"
+  es: "LB din.: descendente"
+strat.label.Dyn_Refresh:
+  ru: "Дин. списки: обновление"
+  en: "Dyn. lists: refresh"
+  es: "Listas din.: actualización"
+strat.label.FastShotAlgo:
+  ru: "Алгоритм FastShot"
+  en: "FastShot algorithm"
+  es: "Algoritmo FastShot"
+strat.label.GlobalDetectPenalty:
+  ru: "Общий штраф детекта"
+  en: "Global detect penalty"
+  es: "Penalización global de detección"
+strat.label.GlobalFilterPenalty:
+  ru: "Общий штраф фильтра"
+  en: "Global filter penalty"
+  es: "Penalización global de filtro"
+strat.label.HFT:
+  ru: "Режим HFT"
+  en: "HFT mode"
+  es: "Modo HFT"
+strat.label.HookAntiPump:
+  ru: "Hook: антипамп"
+  en: "Hook: anti-pump"
+  es: "Hook: anti-pump"
+strat.label.HookDetectDepth:
+  ru: "Hook: глубина детекта"
+  en: "Hook: detect depth"
+  es: "Hook: profundidad de detección"
+strat.label.HookDetectDepthMax:
+  ru: "Hook: макс. глубина детекта"
+  en: "Hook: max detect depth"
+  es: "Hook: profundidad máx. de detección"
+strat.label.HookDetectMinVolume:
+  ru: "Hook: мин. объём детекта"
+  en: "Hook: detect min volume"
+  es: "Hook: volumen mín. de detección"
+strat.label.HookDirection:
+  ru: "Hook: направление"
+  en: "Hook: direction"
+  es: "Hook: dirección"
+strat.label.HookDropMax:
+  ru: "Hook: макс. падение"
+  en: "Hook: max drop"
+  es: "Hook: caída máx."
+strat.label.HookDropMin:
+  ru: "Hook: мин. падение"
+  en: "Hook: min drop"
+  es: "Hook: caída mín."
+strat.label.HookInitialPrice:
+  ru: "Hook: начальная цена"
+  en: "Hook: initial price"
+  es: "Hook: precio inicial"
+strat.label.HookInterpolate:
+  ru: "Hook: интерполяция"
+  en: "Hook: interpolate"
+  es: "Hook: interpolar"
+strat.label.HookOppositeOrder:
+  ru: "Hook: встречный ордер"
+  en: "Hook: opposite order"
+  es: "Hook: orden opuesta"
+strat.label.HookPartFilledDelay:
+  ru: "Hook: задержка при частичном исполнении"
+  en: "Hook: part-filled delay"
+  es: "Hook: retardo por ejecución parcial"
+strat.label.HookPriceDistance:
+  ru: "Hook: дистанция цены"
+  en: "Hook: price distance"
+  es: "Hook: distancia de precio"
+strat.label.HookPriceRollBack:
+  ru: "Hook: откат цены"
+  en: "Hook: price rollback"
+  es: "Hook: retroceso de precio"
+strat.label.HookPriceRollBackMax:
+  ru: "Hook: макс. откат цены"
+  en: "Hook: max price rollback"
+  es: "Hook: retroceso máx. de precio"
+strat.label.HookRaiseWait:
+  ru: "Hook: ждать рост"
+  en: "Hook: raise wait"
+  es: "Hook: esperar subida"
+strat.label.HookRepeatAfterSell:
+  ru: "Hook: повтор после продажи"
+  en: "Hook: repeat after sell"
+  es: "Hook: repetir tras la venta"
+strat.label.HookRepeatIfProfit:
+  ru: "Hook: повтор при прибыли"
+  en: "Hook: repeat if profit"
+  es: "Hook: repetir si hay ganancia"
+strat.label.HookReplaceDelay:
+  ru: "Hook: задержка перестановки"
+  en: "Hook: replace delay"
+  es: "Hook: retardo de reemplazo"
+strat.label.HookRollBackWait:
+  ru: "Hook: ждать отката"
+  en: "Hook: rollback wait"
+  es: "Hook: esperar retroceso"
+strat.label.HookSellFixed:
+  ru: "Hook: фикс. продажа"
+  en: "Hook: fixed sell"
+  es: "Hook: venta fija"
+strat.label.HookSellLevel:
+  ru: "Hook: уровень продажи"
+  en: "Hook: sell level"
+  es: "Hook: nivel de venta"
+strat.label.HookTimeFrame:
+  ru: "Hook: таймфрейм"
+  en: "Hook: time frame"
+  es: "Hook: marco temporal"
+strat.label.IndependentSignals:
+  ru: "Независимые сигналы"
+  en: "Independent signals"
+  es: "Señales independientes"
+strat.label.IntervalsForBuySpread:
+  ru: "Интервалы для спреда покупки"
+  en: "Intervals for buy spread"
+  es: "Intervalos para spread de compra"
+strat.label.JoinPriceFixed:
+  ru: "Фикс. цена объединения"
+  en: "Fixed join price"
+  es: "Precio fijo de unión"
+strat.label.JoinSellKey:
+  ru: "Ключ объединения продаж"
+  en: "Join sell key"
+  es: "Clave de unión de ventas"
+strat.label.LiqCount:
+  ru: "Liq: количество"
+  en: "Liq: count"
+  es: "Liq: cantidad"
+strat.label.LiqDirection:
+  ru: "Liq: направление"
+  en: "Liq: direction"
+  es: "Liq: dirección"
+strat.label.LiqSameDirection:
+  ru: "Liq: то же направление"
+  en: "Liq: same direction"
+  es: "Liq: misma dirección"
+strat.label.LiqTime:
+  ru: "Liq: время"
+  en: "Liq: time"
+  es: "Liq: tiempo"
+strat.label.LiqVolumeMax:
+  ru: "Liq: макс. объём"
+  en: "Liq: max volume"
+  es: "Liq: volumen máx."
+strat.label.LiqVolumeMin:
+  ru: "Liq: мин. объём"
+  en: "Liq: min volume"
+  es: "Liq: volumen mín."
+strat.label.LiqWaitTime:
+  ru: "Liq: время ожидания"
+  en: "Liq: wait time"
+  es: "Liq: tiempo de espera"
+strat.label.LiqWithinTime:
+  ru: "Liq: в пределах времени"
+  en: "Liq: within time"
+  es: "Liq: dentro del tiempo"
+strat.label.Liq_BV_SV_Filter:
+  ru: "Liq: фильтр BV/SV"
+  en: "Liq: BV/SV filter"
+  es: "Liq: filtro BV/SV"
+strat.label.Liq_BV_SV_Time:
+  ru: "Liq: время BV/SV"
+  en: "Liq: BV/SV time"
+  es: "Liq: tiempo BV/SV"
+strat.label.ListedType:
+  ru: "Тип листинга"
+  en: "Listed type"
+  es: "Tipo de listado"
+strat.label.MShotAdd15minDelta:
+  ru: "MShot: добавка дельты 15м"
+  en: "MShot: add 15m delta"
+  es: "MShot: añadir delta 15m"
+strat.label.MShotAdd1minDelta:
+  ru: "MShot: добавка дельты 1м"
+  en: "MShot: add 1m delta"
+  es: "MShot: añadir delta 1m"
+strat.label.MShotAdd24hDelta:
+  ru: "MShot: добавка дельты 24ч"
+  en: "MShot: add 24h delta"
+  es: "MShot: añadir delta 24h"
+strat.label.MShotAdd3hDelta:
+  ru: "MShot: добавка дельты 3ч"
+  en: "MShot: add 3h delta"
+  es: "MShot: añadir delta 3h"
+strat.label.MShotAdd5minDelta:
+  ru: "MShot: добавка дельты 5м"
+  en: "MShot: add 5m delta"
+  es: "MShot: añadir delta 5m"
+strat.label.MShotAddBTC5mDelta:
+  ru: "MShot: добавка дельты BTC 5м"
+  en: "MShot: add BTC 5m delta"
+  es: "MShot: añadir delta BTC 5m"
+strat.label.MShotAddBTCDelta:
+  ru: "MShot: добавка дельты BTC"
+  en: "MShot: add BTC delta"
+  es: "MShot: añadir delta BTC"
+strat.label.MShotAddDistance:
+  ru: "MShot: добавка дистанции"
+  en: "MShot: add distance"
+  es: "MShot: añadir distancia"
+strat.label.MShotAddHourlyDelta:
+  ru: "MShot: добавка часовой дельты"
+  en: "MShot: add hourly delta"
+  es: "MShot: añadir delta horaria"
+strat.label.MShotAddMarkDelta:
+  ru: "MShot: добавка дельты марк-цены"
+  en: "MShot: add mark delta"
+  es: "MShot: añadir delta de mark"
+strat.label.MShotAddMarketDelta:
+  ru: "MShot: добавка рыночной дельты"
+  en: "MShot: add market delta"
+  es: "MShot: añadir delta de mercado"
+strat.label.MShotAddPriceBug:
+  ru: "MShot: добавка ценового бага"
+  en: "MShot: add price bug"
+  es: "MShot: añadir bug de precio"
+strat.label.MShotMinusSatoshi:
+  ru: "MShot: минус сатоши"
+  en: "MShot: minus satoshi"
+  es: "MShot: menos satoshi"
+strat.label.MShotPrice:
+  ru: "MShot: цена"
+  en: "MShot: price"
+  es: "MShot: precio"
+strat.label.MShotPriceMin:
+  ru: "MShot: мин. цена"
+  en: "MShot: min price"
+  es: "MShot: precio mín."
+strat.label.MShotRaiseWait:
+  ru: "MShot: ждать рост"
+  en: "MShot: raise wait"
+  es: "MShot: esperar subida"
+strat.label.MShotRepeatAfterBuy:
+  ru: "MShot: повтор после покупки"
+  en: "MShot: repeat after buy"
+  es: "MShot: repetir tras la compra"
+strat.label.MShotRepeatIfProfit:
+  ru: "MShot: повтор при прибыли"
+  en: "MShot: repeat if profit"
+  es: "MShot: repetir si hay ganancia"
+strat.label.MShotRepeatWait:
+  ru: "MShot: пауза перед повтором"
+  en: "MShot: repeat wait"
+  es: "MShot: espera antes de repetir"
+strat.label.MShotReplaceDelay:
+  ru: "MShot: задержка перестановки"
+  en: "MShot: replace delay"
+  es: "MShot: retardo de reemplazo"
+strat.label.MShotSellAtLastPrice:
+  ru: "MShot: продавать по последней цене"
+  en: "MShot: sell at last price"
+  es: "MShot: vender al último precio"
+strat.label.MShotSellPriceAdjust:
+  ru: "MShot: коррекция цены продажи"
+  en: "MShot: sell price adjust"
+  es: "MShot: ajuste del precio de venta"
+strat.label.MShotSortBy:
+  ru: "MShot: сортировка"
+  en: "MShot: sort by"
+  es: "MShot: ordenar por"
+strat.label.MShotSortDesc:
+  ru: "MShot: по убыванию"
+  en: "MShot: descending"
+  es: "MShot: descendente"
+strat.label.MShotUsePrice:
+  ru: "MShot: какую цену брать"
+  en: "MShot: use price"
+  es: "MShot: precio a usar"
+strat.label.MStrikeAdd15minDelta:
+  ru: "MStrike: добавка дельты 15м"
+  en: "MStrike: add 15m delta"
+  es: "MStrike: añadir delta 15m"
+strat.label.MStrikeAddBTCDelta:
+  ru: "MStrike: добавка дельты BTC"
+  en: "MStrike: add BTC delta"
+  es: "MStrike: añadir delta BTC"
+strat.label.MStrikeAddHourlyDelta:
+  ru: "MStrike: добавка часовой дельты"
+  en: "MStrike: add hourly delta"
+  es: "MStrike: añadir delta horaria"
+strat.label.MStrikeAddMarketDelta:
+  ru: "MStrike: добавка рыночной дельты"
+  en: "MStrike: add market delta"
+  es: "MStrike: añadir delta de mercado"
+strat.label.MStrikeBuyDelay:
+  ru: "MStrike: задержка покупки"
+  en: "MStrike: buy delay"
+  es: "MStrike: retardo de compra"
+strat.label.MStrikeBuyLevel:
+  ru: "MStrike: уровень покупки"
+  en: "MStrike: buy level"
+  es: "MStrike: nivel de compra"
+strat.label.MStrikeBuyRelative:
+  ru: "MStrike: покупка относительно"
+  en: "MStrike: buy relative"
+  es: "MStrike: compra relativa"
+strat.label.MStrikeDepth:
+  ru: "MStrike: глубина"
+  en: "MStrike: depth"
+  es: "MStrike: profundidad"
+strat.label.MStrikeDirection:
+  ru: "MStrike: направление"
+  en: "MStrike: direction"
+  es: "MStrike: dirección"
+strat.label.MStrikeSellAdjust:
+  ru: "MStrike: коррекция продажи"
+  en: "MStrike: sell adjust"
+  es: "MStrike: ajuste de venta"
+strat.label.MStrikeSellLevel:
+  ru: "MStrike: уровень продажи"
+  en: "MStrike: sell level"
+  es: "MStrike: nivel de venta"
+strat.label.MStrikeVolume:
+  ru: "MStrike: объём"
+  en: "MStrike: volume"
+  es: "MStrike: volumen"
+strat.label.MStrikeWaitDip:
+  ru: "MStrike: ждать просадку"
+  en: "MStrike: wait dip"
+  es: "MStrike: esperar caída"
+strat.label.MaxHourlyVolFast:
+  ru: "Макс. часовой объём (быстрый)"
+  en: "Max hourly volume (fast)"
+  es: "Volumen horario máx. (rápido)"
+strat.label.MaxModifier:
+  ru: "Макс. модификатор"
+  en: "Max modifier"
+  es: "Modificador máx."
+strat.label.MinHourlyVolFast:
+  ru: "Мин. часовой объём (быстрый)"
+  en: "Min hourly volume (fast)"
+  es: "Volumen horario mín. (rápido)"
+strat.label.MinReducedSize:
+  ru: "Мин. уменьшенный размер"
+  en: "Min reduced size"
+  es: "Tamaño reducido mín."
+strat.label.MoonIntRiskLevel:
+  ru: "Уровень риска MoonInt"
+  en: "MoonInt risk level"
+  es: "Nivel de riesgo MoonInt"
+strat.label.MoonIntStopLevel:
+  ru: "Уровень стопа MoonInt"
+  en: "MoonInt stop level"
+  es: "Nivel de stop MoonInt"
+strat.label.NextDetectPenalty:
+  ru: "Штраф следующего детекта"
+  en: "Next detect penalty"
+  es: "Penalización del siguiente detect"
+strat.label.PendingOrderSpread:
+  ru: "Спред отложенного ордера"
+  en: "Pending order spread"
+  es: "Spread de orden pendiente"
+strat.label.PriceDownAllowedDrop:
+  ru: "Price Down: допустимое падение"
+  en: "Price Down: allowed drop"
+  es: "Price Down: caída permitida"
+strat.label.PriceDownRelative:
+  ru: "Price Down: относительно"
+  en: "Price Down: relative"
+  es: "Price Down: relativo"
+strat.label.PriceIntervalShift:
+  ru: "Сдвиг ценового интервала"
+  en: "Price interval shift"
+  es: "Desplazamiento del intervalo de precio"
+strat.label.PriceIntervals:
+  ru: "Ценовые интервалы"
+  en: "Price intervals"
+  es: "Intervalos de precio"
+strat.label.PriceSpread:
+  ru: "Спред цены"
+  en: "Price spread"
+  es: "Spread de precio"
+strat.label.PriceSpreadMax:
+  ru: "Макс. спред цены"
+  en: "Max price spread"
+  es: "Spread de precio máx."
+strat.label.ReportToTelegram:
+  ru: "Отчёт в Telegram"
+  en: "Report to Telegram"
+  es: "Informe a Telegram"
+strat.label.ReportTradesToTelegram:
+  ru: "Сделки в Telegram"
+  en: "Report trades to Telegram"
+  es: "Operaciones a Telegram"
+strat.label.SamePosition:
+  ru: "Та же позиция"
+  en: "Same position"
+  es: "Misma posición"
+strat.label.SellEMACheckEnter:
+  ru: "Проверять EMA продажи на входе"
+  en: "Check sell EMA on entry"
+  es: "Comprobar EMA de venta al entrar"
+strat.label.SellLevelRelative:
+  ru: "Уровень продажи относительно"
+  en: "Sell level relative"
+  es: "Nivel de venta relativo"
+strat.label.SellModifier:
+  ru: "Модификатор продажи"
+  en: "Sell modifier"
+  es: "Modificador de venta"
+strat.label.SellPriceInSpread:
+  ru: "Цена продажи в спреде"
+  en: "Sell price in spread"
+  es: "Precio de venta en el spread"
+strat.label.SessionStratIncreaseMax:
+  ru: "Макс. увеличение за сессию"
+  en: "Max session increase"
+  es: "Aumento máx. por sesión"
+strat.label.SessionStratReduceMin:
+  ru: "Мин. снижение за сессию"
+  en: "Min session reduce"
+  es: "Reducción mín. por sesión"
+strat.label.SilentNoCharts:
+  ru: "Тихо, без графиков"
+  en: "Silent, no charts"
+  es: "Silencioso, sin gráficos"
+strat.label.SplitPiece:
+  ru: "Часть при дроблении"
+  en: "Split piece"
+  es: "Parte al dividir"
+strat.label.SpreadFlat:
+  ru: "Spread: флэт"
+  en: "Spread: flat"
+  es: "Spread: plano"
+strat.label.SpreadPolarityMax:
+  ru: "Spread: макс. полярность"
+  en: "Spread: max polarity"
+  es: "Spread: polaridad máx."
+strat.label.SpreadPolarityMin:
+  ru: "Spread: мин. полярность"
+  en: "Spread: min polarity"
+  es: "Spread: polaridad mín."
+strat.label.SpreadRepeatIfProfit:
+  ru: "Spread: повтор при прибыли"
+  en: "Spread: repeat if profit"
+  es: "Spread: repetir si hay ganancia"
+strat.label.Spread_BV_SV_Max:
+  ru: "Spread: макс. BV/SV"
+  en: "Spread: BV/SV max"
+  es: "Spread: BV/SV máx."
+strat.label.Spread_BV_SV_Min:
+  ru: "Spread: мин. BV/SV"
+  en: "Spread: BV/SV min"
+  es: "Spread: BV/SV mín."
+strat.label.Spread_BV_SV_Time:
+  ru: "Spread: время BV/SV"
+  en: "Spread: BV/SV time"
+  es: "Spread: tiempo BV/SV"
+strat.label.StopSpreadAdd1mDelta:
+  ru: "Стоп-спред: добавка дельты 1м"
+  en: "Stop spread: add 1m delta"
+  es: "Spread del stop: añadir delta 1m"
+strat.label.StrategyPenalty:
+  ru: "Штраф стратегии"
+  en: "Strategy penalty"
+  es: "Penalización de estrategia"
+strat.label.TMSameDirection:
+  ru: "TM: то же направление"
+  en: "TM: same direction"
+  es: "TM: misma dirección"
+strat.label.TimeInterval:
+  ru: "Интервал времени"
+  en: "Time interval"
+  es: "Intervalo de tiempo"
+strat.label.TradesCountMin:
+  ru: "Мин. число сделок"
+  en: "Min trades count"
+  es: "Número mín. de operaciones"
+strat.label.TradesDensity:
+  ru: "Плотность сделок"
+  en: "Trades density"
+  es: "Densidad de operaciones"
+strat.label.TradesDensityPrev:
+  ru: "Плотность сделок ранее"
+  en: "Previous trades density"
+  es: "Densidad de operaciones previa"
+strat.label.TriggerAllMarkets:
+  ru: "Триггер на все рынки"
+  en: "Trigger all markets"
+  es: "Disparar en todos los mercados"
+strat.label.TriggerByKey:
+  ru: "Триггер по ключу"
+  en: "Trigger by key"
+  es: "Disparar por clave"
+strat.label.TriggerKey:
+  ru: "Ключ триггера"
+  en: "Trigger key"
+  es: "Clave del disparador"
+strat.label.TriggerKeyBuy:
+  ru: "Ключ триггера покупки"
+  en: "Trigger key: buy"
+  es: "Clave del disparador de compra"
+strat.label.TriggerKeysBL:
+  ru: "Ключи триггера: ЧС"
+  en: "Trigger keys: black list"
+  es: "Claves del disparador: lista negra"
+strat.label.TriggerSeconds:
+  ru: "Триггер: секунды"
+  en: "Trigger: seconds"
+  es: "Disparador: segundos"
+strat.label.TriggerSecondsBL:
+  ru: "Триггер: секунды ЧС"
+  en: "Trigger: black-list seconds"
+  es: "Disparador: segundos de lista negra"
+strat.label.VLiteDelta0:
+  ru: "VLite: дельта 0"
+  en: "VLite: delta 0"
+  es: "VLite: delta 0"
+strat.label.VLiteMaxP:
+  ru: "VLite: макс. P"
+  en: "VLite: max P"
+  es: "VLite: P máx."
+strat.label.VLiteMaxSpike:
+  ru: "VLite: макс. спайк"
+  en: "VLite: max spike"
+  es: "VLite: pico máx."
+strat.label.VLiteP1:
+  ru: "VLite: P1"
+  en: "VLite: P1"
+  es: "VLite: P1"
+strat.label.VLiteP2:
+  ru: "VLite: P2"
+  en: "VLite: P2"
+  es: "VLite: P2"
+strat.label.VLiteP3:
+  ru: "VLite: P3"
+  en: "VLite: P3"
+  es: "VLite: P3"
+strat.label.VLitePDelta2:
+  ru: "VLite: дельта P2"
+  en: "VLite: P delta 2"
+  es: "VLite: delta P2"
+strat.label.VLiteReducedVolumes:
+  ru: "VLite: сниженные объёмы"
+  en: "VLite: reduced volumes"
+  es: "VLite: volúmenes reducidos"
+strat.label.VLiteT0:
+  ru: "VLite: T0"
+  en: "VLite: T0"
+  es: "VLite: T0"
+strat.label.VLiteT1:
+  ru: "VLite: T1"
+  en: "VLite: T1"
+  es: "VLite: T1"
+strat.label.VLiteT2:
+  ru: "VLite: T2"
+  en: "VLite: T2"
+  es: "VLite: T2"
+strat.label.VLiteT3:
+  ru: "VLite: T3"
+  en: "VLite: T3"
+  es: "VLite: T3"
+strat.label.VLiteV1:
+  ru: "VLite: V1"
+  en: "VLite: V1"
+  es: "VLite: V1"
+strat.label.VLiteV2:
+  ru: "VLite: V2"
+  en: "VLite: V2"
+  es: "VLite: V2"
+strat.label.VLiteV3:
+  ru: "VLite: V3"
+  en: "VLite: V3"
+  es: "VLite: V3"
+strat.label.VLiteWeightedAvg:
+  ru: "VLite: взвешенное среднее"
+  en: "VLite: weighted average"
+  es: "VLite: media ponderada"
+strat.label.VolAtMaxP:
+  ru: "Объём на макс. цене"
+  en: "Volume at max price"
+  es: "Volumen en precio máx."
+strat.label.VolAtMinP:
+  ru: "Объём на мин. цене"
+  en: "Volume at min price"
+  es: "Volumen en precio mín."
+strat.label.VolBvLongToDailyMax:
+  ru: "Vol: BV long к дневному, макс."
+  en: "Vol: BV long to daily, max"
+  es: "Vol: BV long vs diario, máx."
+strat.label.VolBvLongToDailyMin:
+  ru: "Vol: BV long к дневному, мин."
+  en: "Vol: BV long to daily, min"
+  es: "Vol: BV long vs diario, mín."
+strat.label.VolBvLongToHourlyMax:
+  ru: "Vol: BV long к часовому, макс."
+  en: "Vol: BV long to hourly, max"
+  es: "Vol: BV long vs horario, máx."
+strat.label.VolBvLongToHourlyMin:
+  ru: "Vol: BV long к часовому, мин."
+  en: "Vol: BV long to hourly, min"
+  es: "Vol: BV long vs horario, mín."
+strat.label.VolBvShort:
+  ru: "Vol: BV short"
+  en: "Vol: BV short"
+  es: "Vol: BV short"
+strat.label.VolBvShortToLong:
+  ru: "Vol: BV short к long"
+  en: "Vol: BV short to long"
+  es: "Vol: BV short vs long"
+strat.label.VolBvToSvShort:
+  ru: "Vol: BV к SV short"
+  en: "Vol: BV to SV short"
+  es: "Vol: BV vs SV short"
+strat.label.VolDeltaAtMaxP:
+  ru: "Дельта объёма на макс. цене"
+  en: "Volume delta at max price"
+  es: "Delta de volumen en precio máx."
+strat.label.VolDeltaAtMinP:
+  ru: "Дельта объёма на мин. цене"
+  en: "Volume delta at min price"
+  es: "Delta de volumen en precio mín."
+strat.label.VolLongInterval:
+  ru: "Vol: длинный интервал"
+  en: "Vol: long interval"
+  es: "Vol: intervalo largo"
+strat.label.VolShortInterval:
+  ru: "Vol: короткий интервал"
+  en: "Vol: short interval"
+  es: "Vol: intervalo corto"
+strat.label.VolShortPriseRaise:
+  ru: "Vol: рост цены за короткий интервал"
+  en: "Vol: short-interval price raise"
+  es: "Vol: subida de precio en intervalo corto"
+strat.label.VolSvLong:
+  ru: "Vol: SV long"
+  en: "Vol: SV long"
+  es: "Vol: SV long"
+strat.label.VolTakeLongMaxP:
+  ru: "Vol: брать макс. цену за long"
+  en: "Vol: take long max price"
+  es: "Vol: tomar precio máx. de long"
+strat.label.WavesDelta0:
+  ru: "Waves: дельта 0"
+  en: "Waves: delta 0"
+  es: "Waves: delta 0"
+strat.label.WavesMaxSpike:
+  ru: "Waves: макс. спайк"
+  en: "Waves: max spike"
+  es: "Waves: pico máx."
+strat.label.WavesP1:
+  ru: "Waves: P1"
+  en: "Waves: P1"
+  es: "Waves: P1"
+strat.label.WavesP2:
+  ru: "Waves: P2"
+  en: "Waves: P2"
+  es: "Waves: P2"
+strat.label.WavesP3:
+  ru: "Waves: P3"
+  en: "Waves: P3"
+  es: "Waves: P3"
+strat.label.WavesReducedVolumes:
+  ru: "Waves: сниженные объёмы"
+  en: "Waves: reduced volumes"
+  es: "Waves: volúmenes reducidos"
+strat.label.WavesT0:
+  ru: "Waves: T0"
+  en: "Waves: T0"
+  es: "Waves: T0"
+strat.label.WavesT1:
+  ru: "Waves: T1"
+  en: "Waves: T1"
+  es: "Waves: T1"
+strat.label.WavesT2:
+  ru: "Waves: T2"
+  en: "Waves: T2"
+  es: "Waves: T2"
+strat.label.WavesT3:
+  ru: "Waves: T3"
+  en: "Waves: T3"
+  es: "Waves: T3"
+strat.label.WavesV1:
+  ru: "Waves: V1"
+  en: "Waves: V1"
+  es: "Waves: V1"
+strat.label.WavesV2:
+  ru: "Waves: V2"
+  en: "Waves: V2"
+  es: "Waves: V2"
+strat.label.WavesV3:
+  ru: "Waves: V3"
+  en: "Waves: V3"
+  es: "Waves: V3"
+strat.label.WavesWeightedAvg:
+  ru: "Waves: взвешенное среднее"
+  en: "Waves: weighted average"
+  es: "Waves: media ponderada"
+strat.label.volAsksDeep:
+  ru: "Объём asks в глубине"
+  en: "Deep asks volume"
+  es: "Volumen de asks en profundidad"
+strat.label.volBids:
+  ru: "Объём bids"
+  en: "Bids volume"
+  es: "Volumen de bids"
+strat.label.volBidsDeep:
+  ru: "Объём bids в глубине"
+  en: "Deep bids volume"
+  es: "Volumen de bids en profundidad"
+strat.label.volBidsToAsks:
+  ru: "Объём bids к asks"
+  en: "Bids to asks volume"
+  es: "Volumen bids/asks"
 strat.sections_all_tip:
   ru: "Всего изменённых полей в этой версии: %{n}. Часть из них может отсутствовать в схеме текущего ядра, поэтому счётчики разделов не обязаны давать в сумме это число."
   en: "Total fields changed in this version: %{n}. Some may be absent from the current core's schema, so the section counters need not add up to it."
