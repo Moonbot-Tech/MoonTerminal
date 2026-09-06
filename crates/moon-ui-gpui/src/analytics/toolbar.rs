@@ -452,74 +452,79 @@ impl AnalyticsView {
             }
             // MoonButton's custom size has no horizontal padding, so give each localized title
             // measured breathing room while retaining a useful click target for short labels.
-            let tab_width = (design::ui_text_width(cx, &title, 10.5, 400.0, true)
+            let tab_width = (design::ui_text_width(cx, &title, 10.5, 400.0, false)
                 + design::ui_value(cx, 20.0))
             .max(design::ui_value(cx, 72.0));
+            // Wrapped in its own font_family: the tab title is a label, while the toolbar row it
+            // sits in (the analytics root stays mono) later carries the core NAME, which is data.
             row = row.child(
-                MoonButton::new(t.id())
-                    .variant(if on {
-                        MoonButtonVariant::Blue
-                    } else {
-                        MoonButtonVariant::Ghost
-                    })
-                    .size(MoonButtonSize::Custom {
-                        height: 24.0,
-                        radius: design::R_BUTTON_BASE,
-                        font_size: 10.5,
-                        line_height: 13.0,
-                        gap: 5.0,
-                    })
-                    .width(tab_width)
-                    .selected(on)
-                    .label(title)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.tab != t {
-                            this.tab = t;
-                            this.backend.update(cx, |b, _| {
-                                b.ui_session.analytics.tab = t;
-                            });
-                            // Each tab remembers its OWN time window: re-sync the
-                            // period bar and the "from"/"to" fields to the active tab.
-                            this.sync_period_pickers(window, cx);
-                            // The new tab's time window differs from the one `data`
-                            // was built for → reload, or the strategy list and the
-                            // summary would show another tab's period. reload() also
-                            // pulls the active tab's secondary data (tuner/profile).
-                            let period_changed = match t {
-                                Tab::Summary => this.active_period() != this.data_period,
-                                Tab::Strategies => {
-                                    this.active_period() != this.strategy_data_period
-                                }
-                                Tab::Calendar => false,
-                            };
-                            let base_dirty = match t {
-                                Tab::Summary => this.data_dirty,
-                                Tab::Strategies => this.strategy_dirty,
-                                Tab::Calendar => false,
-                            };
-                            if period_changed {
-                                this.reload(cx);
-                            } else if matches!(t, Tab::Summary | Tab::Strategies) && base_dirty {
-                                // A hidden base view can lag a generation while Calendar alone
-                                // refreshes. Catch it up on entry without destructive scope
-                                // invalidation, which would erase tuner drafts.
-                                this.request_report_refresh(RefreshUrgency::User, true, cx);
-                            } else {
-                                // Tab-entry catch-up uses the report gate so it cannot overlap
-                                // an automatic full-period scan already in flight.
-                                if t == Tab::Strategies {
-                                    this.request_axis_if_stale(this.strat_mode, cx);
-                                }
-                                if t == Tab::Calendar
-                                    && (this.cal_days.data().is_none() || this.cal_dirty)
+                div().font_family(design::ui_font()).child(
+                    MoonButton::new(t.id())
+                        .variant(if on {
+                            MoonButtonVariant::Blue
+                        } else {
+                            MoonButtonVariant::Ghost
+                        })
+                        .size(MoonButtonSize::Custom {
+                            height: 24.0,
+                            radius: design::R_BUTTON_BASE,
+                            font_size: 10.5,
+                            line_height: 13.0,
+                            gap: 5.0,
+                        })
+                        .width(tab_width)
+                        .selected(on)
+                        .label(title)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.tab != t {
+                                this.tab = t;
+                                this.backend.update(cx, |b, _| {
+                                    b.ui_session.analytics.tab = t;
+                                });
+                                // Each tab remembers its OWN time window: re-sync the
+                                // period bar and the "from"/"to" fields to the active tab.
+                                this.sync_period_pickers(window, cx);
+                                // The new tab's time window differs from the one `data`
+                                // was built for → reload, or the strategy list and the
+                                // summary would show another tab's period. reload() also
+                                // pulls the active tab's secondary data (tuner/profile).
+                                let period_changed = match t {
+                                    Tab::Summary => this.active_period() != this.data_period,
+                                    Tab::Strategies => {
+                                        this.active_period() != this.strategy_data_period
+                                    }
+                                    Tab::Calendar => false,
+                                };
+                                let base_dirty = match t {
+                                    Tab::Summary => this.data_dirty,
+                                    Tab::Strategies => this.strategy_dirty,
+                                    Tab::Calendar => false,
+                                };
+                                if period_changed {
+                                    this.reload(cx);
+                                } else if matches!(t, Tab::Summary | Tab::Strategies) && base_dirty
                                 {
+                                    // A hidden base view can lag a generation while Calendar alone
+                                    // refreshes. Catch it up on entry without destructive scope
+                                    // invalidation, which would erase tuner drafts.
                                     this.request_report_refresh(RefreshUrgency::User, true, cx);
+                                } else {
+                                    // Tab-entry catch-up uses the report gate so it cannot overlap
+                                    // an automatic full-period scan already in flight.
+                                    if t == Tab::Strategies {
+                                        this.request_axis_if_stale(this.strat_mode, cx);
+                                    }
+                                    if t == Tab::Calendar
+                                        && (this.cal_days.data().is_none() || this.cal_dirty)
+                                    {
+                                        this.request_report_refresh(RefreshUrgency::User, true, cx);
+                                    }
                                 }
+                                cx.notify();
                             }
-                            cx.notify();
-                        }
-                    }))
-                    .render(),
+                        }))
+                        .render(),
+                ),
             );
         }
         // Keep the selector widths and their internal gaps together. One additional gap belongs to
@@ -863,6 +868,7 @@ impl AnalyticsView {
             .whitespace_nowrap()
             .child(
                 div()
+                    .font_family(design::ui_font())
                     .text_size(design::t_body(cx))
                     .text_color(moon(p.text_soft))
                     .child(lbl.to_string()),
@@ -1225,6 +1231,7 @@ impl AnalyticsView {
             .child(
                 div()
                     .flex_none()
+                    .font_family(design::ui_font())
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
                     .child(custom_label.clone()),
@@ -1241,14 +1248,14 @@ impl AnalyticsView {
         // Each `date_field` draws its caption at `design::t_body(cx)`, so measure at the same
         // unscaled base rather than a second guessed size.
         let date_captions_w =
-            design::ui_text_width(cx, &from_lbl, design::base_text(cx), 400.0, true)
-                + design::ui_text_width(cx, &to_lbl, design::base_text(cx), 400.0, true);
+            design::ui_text_width(cx, &from_lbl, design::base_text(cx), 400.0, false)
+                + design::ui_text_width(cx, &to_lbl, design::base_text(cx), 400.0, false);
         // `date_field`'s own `h_flex().gap_1()` between its caption and picker — GPUI's
         // `rems(0.25)`, at the window's rem size, which this app never overrides from GPUI's
         // default `px(16.)`. One gap per field, not scaled by the Font slider.
         let date_field_gaps_w = f32::from(rems(0.25).to_pixels(px(16.0))) * 2.0;
         let custom_group_w = 1.0
-            + design::ui_text_width(cx, &custom_label, 10.5, 400.0, true)
+            + design::ui_text_width(cx, &custom_label, 10.5, 400.0, false)
             + field_w * 2.0
             + date_captions_w
             + date_field_gaps_w

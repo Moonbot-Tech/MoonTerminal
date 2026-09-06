@@ -275,6 +275,7 @@ impl StrategiesView {
                 div()
                     .id("strategies-active-only-label")
                     .cursor_pointer()
+                    .font_family(design::ui_font())
                     .text_size(design::t_caption(cx))
                     .text_color(moon(palette.text_soft))
                     .child(t!("strat.active_only").to_string())
@@ -384,7 +385,12 @@ fn settings_content_width(cx: &App) -> f32 {
     let title = t!("strat.settings.title");
     let group = t!(DISPLAY_GROUP);
     let title_width = popup_text_width(cx, &title, tokens.typography.mono_font_size, 400.0);
-    let group_width = popup_text_width(cx, &group, POPUP_GROUP_CAPTION_FONT, 600.0);
+    // Measured MONO on purpose, unlike every other run in this function. This caption is rendered
+    // by `popup_group` -> `MoonGroupBox::title()`, which MoonUI builds as `MoonText.mono(true)`
+    // (`moon/group_box.rs:98-104`) with no builder override -- so the popup's own `ui_font()` root
+    // never reaches it. Measure it proportionally and the width would describe a caption that is
+    // not the one drawn.
+    let group_width = design::ui_text_width(cx, &group, POPUP_GROUP_CAPTION_FONT, 600.0, true);
     let checkbox_label_width = POPUP_ROWS
         .iter()
         .map(|row| popup_text_width(cx, &t!(row.label), COMPACT_CHECKBOX_FONT, 400.0))
@@ -418,13 +424,13 @@ fn settings_content_width(cx: &App) -> f32 {
 
 /// Measure one popup text run in the family this popup actually renders in.
 ///
-/// The Strategies window root applies `.font_family(design::mono())`, and the popup never sets a
-/// family of its own, so every measurement here must use
-/// the same monospaced family the renderer will use — this is the only [`design::ui_text_width`]
+/// The tree pane root stays `.font_family(design::mono())`, but `settings_content`'s own root now
+/// applies `.font_family(design::ui_font())` on top of it, so every measurement here must use
+/// the same proportional family the renderer will use — this is the only [`design::ui_text_width`]
 /// call left in this file, so the family cannot diverge per call site again. It resolves through
-/// the theme's mono TOKEN (`mono = true` -> `MoonTheme::active_tokens(cx).font_family(true)`,
-/// `design::measure_font`), not the [`design::mono`] literal the window root reaches for: if the
-/// token ever stops being Geist Mono, this measurement follows it, and the root's literal becomes
+/// the theme's UI TOKEN (`mono = false` -> `MoonTheme::active_tokens(cx).font_family(false)`,
+/// `design::measure_font`), not the [`design::ui_font`] literal the popup root reaches for: if the
+/// token ever stops being Inter, this measurement follows it, and the root's literal becomes
 /// the thing to report.
 ///
 /// Args:
@@ -436,7 +442,7 @@ fn settings_content_width(cx: &App) -> f32 {
 /// Returns:
 ///     The summed glyph-advance estimate in pixels.
 fn popup_text_width(cx: &App, text: &str, base_size: f32, weight: f32) -> f32 {
-    design::ui_text_width(cx, text, base_size, weight, true)
+    design::ui_text_width(cx, text, base_size, weight, false)
 }
 
 /// Pure arithmetic core of [`settings_content_width`], free of `cx` and the GPUI text system.
@@ -550,10 +556,13 @@ fn settings_content(
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // MoonPopover owns the surface chrome; this root supplies only content and spacing.
+    // MoonPopover owns the surface chrome; this root supplies only content and spacing. Every
+    // title, caption, and checkbox label here is prose, so the popup flips to the UI face on
+    // its own root rather than inheriting the tree pane's mono.
     v_flex()
         .id("strategies-settings-popup")
         .w_full()
+        .font_family(design::ui_font())
         .gap(design::ui_px(cx, 8.0))
         .child(
             h_flex()

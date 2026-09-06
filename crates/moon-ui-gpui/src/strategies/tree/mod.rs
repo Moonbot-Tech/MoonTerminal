@@ -640,6 +640,10 @@ impl StrategiesView {
             .min_w_0()
             .truncate()
             .text_center()
+            // MIXED NODE: `strat.staged` welds its label to the COUNT in one locale string, so it
+            // keeps mono while the rest of the footer reads in the UI face. Half a node cannot be
+            // styled, and the figure is the half that has to stay legible.
+            .font_family(design::mono())
             .text_size(design::t_body(cx))
             .text_color(rgb(MoonPalette::active(cx).amber))
             .child(staged_label.unwrap_or_default());
@@ -650,6 +654,9 @@ impl StrategiesView {
             .py(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, group_gap))
             .items_center()
+            // The footer's leading icons carry no text of their own; its action labels are prose.
+            // `staged_slot` pins its mixed caption/count node back to mono above.
+            .font_family(design::ui_font())
             .child(self.selection_toolbar(store, show_labels, !cores.is_empty(), cx))
             .child(design::chrome_divider(cx, MoonPalette::active(cx)))
             .child(staged_slot)

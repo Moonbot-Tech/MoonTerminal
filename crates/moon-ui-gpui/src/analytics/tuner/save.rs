@@ -819,6 +819,7 @@ impl AnalyticsView {
                         .child(
                             div()
                                 .flex_none()
+                                .font_family(design::ui_font())
                                 .text_size(design::t_caption(cx))
                                 .text_color(moon(p.text_muted))
                                 .child(t!("analytics.tuner.copy_name_lbl").to_string()),
@@ -892,6 +893,7 @@ impl AnalyticsView {
                     div()
                         .flex_1()
                         .min_w_0()
+                        .font_family(design::ui_font())
                         .text_color(moon(p.amber))
                         .child(note),
                 );
@@ -938,6 +940,7 @@ impl AnalyticsView {
                     .border_t_1()
                     .border_color(moon_alpha(p.border, 0.5))
                     .text_size(design::t_caption(cx))
+                    .font_family(design::ui_font())
                     .text_color(moon(p.orange))
                     .child(w.clone()),
             );
@@ -973,6 +976,10 @@ impl AnalyticsView {
                                 .items_center()
                                 .gap(design::ui_px(cx, 8.0))
                                 .child(
+                                    // NOT flipped to `ui_font()`: `title` always interpolates a
+                                    // raw target name or a strategy count into the caption text
+                                    // (`copy_title`/`save_title`/`save_title_bulk`), so this box
+                                    // would sometimes render a VALUE. Left mono.
                                     div()
                                         .flex_1()
                                         .min_w_0()
@@ -985,6 +992,7 @@ impl AnalyticsView {
                                 .children((!bulk).then(|| {
                                     div()
                                         .flex_none()
+                                        .font_family(design::ui_font())
                                         .text_size(design::t_caption(cx))
                                         .text_color(moon(p.text_muted))
                                         .child(t!("analytics.tuner.save_now_next").to_string())
@@ -1008,6 +1016,7 @@ impl AnalyticsView {
                                 .justify_end()
                                 .border_t_1()
                                 .border_color(moon_alpha(p.border, 0.6))
+                                .font_family(design::ui_font())
                                 .child(
                                     MoonButton::new("an-save-no")
                                         .variant(MoonButtonVariant::Ghost)

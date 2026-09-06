@@ -61,6 +61,7 @@ pub(super) fn centered_message(message: String, palette: MoonPalette, cx: &App) 
         .flex()
         .items_center()
         .justify_center()
+        .font_family(design::ui_font())
         .text_color(moon(palette.text_muted))
         .text_size(design::t_body(cx))
         .child(message)
@@ -84,6 +85,7 @@ pub(super) fn centered_alert(title: String, detail: String, cx: &App) -> AnyElem
         .items_center()
         .justify_center()
         .px(design::ui_px(cx, 20.0))
+        .font_family(design::ui_font())
         .child(MoonAlert::error("profit-monitor-error", detail).title(title))
         .into_any_element()
 }
@@ -151,12 +153,14 @@ pub(super) fn split_body(
         .text_align(TextAlign::Center)
         .child(
             div()
+                .font_family(design::ui_font())
                 .text_color(moon(palette.text))
                 .child(t!("profit_monitor.split_title").to_string()),
         )
         .child(
             div()
                 .max_w(design::ui_px(cx, 560.0))
+                .font_family(design::ui_font())
                 .text_color(moon(palette.text_muted))
                 .child(t!("profit_monitor.split_detail").to_string()),
         )

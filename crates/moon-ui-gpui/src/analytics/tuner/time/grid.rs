@@ -303,6 +303,7 @@ impl AnalyticsView {
             .flex_none()
             .px(design::ui_px(cx, 12.0))
             .py(design::ui_px(cx, 3.0))
+            .font_family(design::ui_font())
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .child(t!("analytics.tuner.time.core_clock_note").to_string())

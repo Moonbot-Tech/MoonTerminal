@@ -125,6 +125,9 @@ impl AnalyticsView {
             .py(design::ui_px(cx, 8.0))
             .items_center()
             .gap(design::ui_px(cx, 6.0))
+            // Title, round-label and the copy/save buttons are all prose; this toolbar carries
+            // no data value of its own.
+            .font_family(design::ui_font())
             // Let the title yield before the hosting card clips the trailing controls.
             .child(
                 div()
@@ -257,6 +260,10 @@ impl AnalyticsView {
     }
 
     /// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
+    ///
+    /// The caption, status text and buttons it hosts are prose, so the frame carries
+    /// `ui_font()` for the whole row; the restart/min-trades input boxes are parameter values
+    /// and force `mono()` back on themselves individually.
     fn config_row_frame(&self, cx: &Context<Self>) -> Div {
         h_flex()
             .w_full()
@@ -267,6 +274,7 @@ impl AnalyticsView {
             .items_center()
             .gap(design::ui_px(cx, 6.0))
             .text_size(design::t_caption(cx))
+            .font_family(design::ui_font())
     }
 
     /// The "By filter" suggestion row: restarts, the settings gear, live status, Stop, Search.
@@ -298,11 +306,15 @@ impl AnalyticsView {
         self.config_row_frame(cx)
             .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
             .child(
-                div().w(design::font_w_px(cx, 46.0)).flex_none().child(
-                    MoonInput::new(SharedString::from("tun-cfg-it-f"))
-                        .state(&it_input)
-                        .small(),
-                ),
+                div()
+                    .w(design::font_w_px(cx, 46.0))
+                    .flex_none()
+                    .font_family(design::mono())
+                    .child(
+                        MoonInput::new(SharedString::from("tun-cfg-it-f"))
+                            .state(&it_input)
+                            .small(),
+                    ),
             )
             .child(settings)
             // The status takes the free space and truncates, so a long failure message cannot
@@ -643,6 +655,9 @@ impl AnalyticsView {
             .overflow_y_scroll()
             .gap(gap)
             .text_size(design::t_caption(cx))
+            // Title, section headers, row captions and buttons are prose; the min-trades/seed
+            // input boxes and the last-seed value force `mono()` back on themselves below.
+            .font_family(design::ui_font())
             .child(head)
             .child(section_title(
                 t!("analytics.tuner.cfg_search_section").to_string(),
@@ -652,6 +667,7 @@ impl AnalyticsView {
                 div()
                     .w(design::font_w_px(cx, 76.0))
                     .flex_none()
+                    .font_family(design::mono())
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-mn-f"))
                             .state(&mn_input)
@@ -756,6 +772,7 @@ impl AnalyticsView {
                 div()
                     .w(design::font_w_px(cx, 126.0))
                     .flex_none()
+                    .font_family(design::mono())
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-seed-f"))
                             .state(&seed_input)
@@ -778,6 +795,7 @@ impl AnalyticsView {
                             .flex_1()
                             .min_w_0()
                             .truncate()
+                            .font_family(design::mono())
                             .text_color(moon(p.text_soft))
                             .tooltip(move |_w, cx| {
                                 cx.new(|_| MoonTooltipView::new(full.clone())).into()
@@ -816,11 +834,15 @@ impl AnalyticsView {
         self.config_row_frame(cx)
             .child(cfg_label(t!("analytics.tuner.min_trades").to_string(), p))
             .child(
-                div().w(design::font_w_px(cx, 52.0)).flex_none().child(
-                    MoonInput::new(SharedString::from("tun-cfg-mn-t"))
-                        .state(&mn_input)
-                        .small(),
-                ),
+                div()
+                    .w(design::font_w_px(cx, 52.0))
+                    .flex_none()
+                    .font_family(design::mono())
+                    .child(
+                        MoonInput::new(SharedString::from("tun-cfg-mn-t"))
+                            .state(&mn_input)
+                            .small(),
+                    ),
             )
             .child(div().flex_1())
             .child(

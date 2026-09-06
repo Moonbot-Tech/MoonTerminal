@@ -563,7 +563,9 @@ pub(crate) fn data_table_host(
                     .h(px(design::table_row_h(cx)))
                     .flex()
                     .items_center()
-                    .font_family(design::mono())
+                    // An empty state is a sentence, not a row: it reads as prose even though it
+                    // sits where data would. One hunk covers every table panel that hosts here.
+                    .font_family(design::ui_font())
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_muted))
                     .child(empty_msg),

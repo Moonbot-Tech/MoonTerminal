@@ -44,6 +44,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                     p,
                     t!("orders.edit.coin").to_string(),
                     div()
+                        .font_family(design::mono())
                         .text_color(moon(p.accent))
                         .font_weight(FontWeight::SEMIBOLD)
                         // Coin and quote as the CORE names them, resolved by the feed; matches the
@@ -63,6 +64,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                     p,
                     t!("orders.edit.side").to_string(),
                     div()
+                        .font_family(design::mono())
                         .text_color(moon(side_tone.color(p)))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(side_text),
@@ -70,7 +72,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                 .child(info_kv(
                     p,
                     t!("orders.edit.status").to_string(),
-                    div().child(status),
+                    div().font_family(design::mono()).child(status),
                 )),
         )
         .child(
@@ -80,7 +82,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                 .child(info_kv(
                     p,
                     t!("orders.edit.size").to_string(),
-                    div().child(format!(
+                    div().font_family(design::mono()).child(format!(
                         "{} ({:.0}%)",
                         crate::panels::num(r.size),
                         r.fill_pct
@@ -89,19 +91,22 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                 .child(info_kv(
                     p,
                     t!("orders.edit.strategy").to_string(),
-                    div().child(strat),
+                    div().font_family(design::mono()).child(strat),
                 ))
                 .child(info_kv(
                     p,
                     t!("orders.edit.core").to_string(),
-                    div().child(s.core_name.clone()),
+                    div().font_family(design::mono()).child(s.core_name.clone()),
                 )),
         );
 
     // Show the pending entry condition as read-only protocol data when present.
+    // MIXED NODE: `orders.edit.cond` combines the localized condition sentence with the price
+    // figure in one text node (locales/orders.yml:175-178) — stays mono.
     let cond = r.pending_cond.map(|c| {
         div()
             .w_full()
+            .font_family(design::mono())
             .text_color(moon(p.text_muted))
             .child(t!("orders.edit.cond", p = crate::panels::num(c)).to_string())
     });
@@ -125,17 +130,24 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                     div().w(px(150.0)).child(
                         MoonInput::new("oe-price-input")
                             .state(&s.price_input)
-                            .small(),
+                            .small()
+                            .mono(true),
                     ),
                 )
                 .child(
-                    div().text_color(moon(p.text_muted)).child(
-                        t!(
-                            "orders.edit.current",
-                            p = crate::panels::num(r.price as f64)
-                        )
-                        .to_string(),
-                    ),
+                    // MIXED NODE: `orders.edit.current` combines the localized "Current:" label
+                    // with the price figure in one text node (locales/orders.yml:187-190) — stays
+                    // mono.
+                    div()
+                        .font_family(design::mono())
+                        .text_color(moon(p.text_muted))
+                        .child(
+                            t!(
+                                "orders.edit.current",
+                                p = crate::panels::num(r.price as f64)
+                            )
+                            .to_string(),
+                        ),
                 ),
         );
 
@@ -172,8 +184,14 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
         } else {
             div().flex_1().min_w(px(70.0))
         };
-        host.child(MoonInput::new(id).state(input).small().disabled(!enabled))
-            .into_any_element()
+        host.child(
+            MoonInput::new(id)
+                .state(input)
+                .small()
+                .disabled(!enabled)
+                .mono(true),
+        )
+        .into_any_element()
     };
     let fixed_label = t!("orders.edit.fixed").to_string();
 
@@ -265,7 +283,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
     let mut body = v_flex()
         .w_full()
         .gap_2()
-        .font_family(design::mono())
+        .font_family(design::ui_font())
         .text_size(design::t_body(cx))
         .text_color(moon(p.text))
         .child(info);

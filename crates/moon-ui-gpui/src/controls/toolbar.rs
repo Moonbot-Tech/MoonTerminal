@@ -151,8 +151,11 @@ const SIZE_UNIT: &str = "USDT eq.";
 
 /// Measure one complete localized launcher button at ToolbarCompact geometry.
 ///
-/// The Shell root supplies the monospaced family inherited by the text segment. MoonUI gives this
-/// size zero native padding so icon-only targets stay square; labeled launchers add
+/// The label is measured AND rendered in [`design::ui_font`]: it is a control caption, and the two
+/// sections that host labeled launchers set that family so `MoonButton`'s text segment inherits it
+/// (the segment pins a family only when its own `mono` flag is set). Measuring in the other family
+/// would budget the whole trailing cluster wrongly at every `row_fit` shedding threshold. MoonUI
+/// gives this size zero native padding so icon-only targets stay square; labeled launchers add
 /// [`TOOLBAR_LAUNCHER_PAD_X`] on each side via `MoonButton::padding_x`. The reserved width is the
 /// leading icon, its UI-scaled gap, both insets, and the two border pixels. The button is never
 /// allowed to become narrower than its stable icon-only target.
@@ -164,12 +167,16 @@ const SIZE_UNIT: &str = "USDT eq.";
 /// Returns:
 ///     Full icon-plus-label width in logical pixels.
 fn launcher_label_width(cx: &App, label: &str) -> f32 {
+    // The UI family, not the monospaced one: a launcher label is a control caption and its
+    // buttons render it in `design::ui_font()` (the two sections that host them set it). This
+    // measurement sizes the button the label is drawn in, so the two must name the same family --
+    // measure mono, draw proportional, and the whole trailing cluster is budgeted too wide.
     let text = design::ui_text_width(
         cx,
         label,
         TOOLBAR_LAUNCHER_TEXT_SIZE,
         TOOLBAR_LAUNCHER_TEXT_WEIGHT,
-        true,
+        false,
     );
     let icon = (design::font_value(cx, TOOLBAR_LAUNCHER_ICON_FONT_SIZE) + 1.0).clamp(10.0, 14.0);
     let chrome = icon
@@ -1166,6 +1173,11 @@ pub fn toolbar(
         .child(design::chrome_divider(cx, p))
         .child(
             section()
+                // Launcher captions are control captions, so they read in the UI face. It is set
+                // on the section rather than per button because `MoonButton` can only force
+                // MONO on its own segments -- it has no proportional prop, and inherits
+                // otherwise. Paired with `launcher_label_width`, which measures the same family.
+                .font_family(design::ui_font())
                 .child(open_window_button(
                     "toolbar-strategies",
                     strategies_label,
@@ -1197,6 +1209,8 @@ pub fn toolbar(
                 // the user is still typing into is not a configured core.
                 div()
                     .relative()
+                    // The UI face, as for the other labeled launchers above.
+                    .font_family(design::ui_font())
                     .child(open_window_button(
                         "toolbar-settings",
                         settings_label,

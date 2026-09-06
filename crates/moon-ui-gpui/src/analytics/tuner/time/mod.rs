@@ -282,6 +282,7 @@ impl AnalyticsView {
                 .size_full()
                 .items_center()
                 .justify_center()
+                .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_muted))
                 .child(t!("analytics.time.no_data").to_string())
@@ -316,12 +317,15 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .child(
                         div()
+                            .font_family(design::ui_font())
                             .text_size(design::t_title(cx))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!("analytics.time.by_hour").to_string()),
                     )
                     .child(div().flex_1())
                     .child(
+                        // NOT flipped: `scope` (`scope_label()`) is sometimes a raw strategy
+                        // name, which stays mono for legibility.
                         div()
                             .min_w_0()
                             .truncate()

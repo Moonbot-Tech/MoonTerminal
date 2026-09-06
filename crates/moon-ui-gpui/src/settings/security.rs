@@ -261,6 +261,11 @@ fn password_row(
                     .state(state)
                     .small()
                     .disabled(!enabled)
+                    // The Settings root renders prose in the UI face and `MoonInput` inherits it.
+                    // A secret must not: the eye below reveals it, and a key is read character by
+                    // character, where a proportional face merges 0 with O and l with 1. Same pin
+                    // as `window/login.rs`'s password field, for the same reason.
+                    .mono(true)
                     // The eye is what makes a masked field usable; without it the only way to
                     // check a long password is to retype it.
                     .mask_toggle(),
@@ -409,6 +414,9 @@ impl SettingsView {
             .items_center()
             .child(
                 div()
+                    // MIXED NODE: the locale string welds the prose label to the used/max slot
+                    // FIGURES, and half a node cannot be styled. The figure wins.
+                    .font_family(design::mono())
                     .text_color(rgba_from(p.text_soft, 1.0))
                     .child(text.to_string()),
             )
@@ -614,6 +622,8 @@ fn strength_meter(password: &str, p: MoonPalette, cx: &App) -> impl IntoElement 
                 )
                 .child(
                     div()
+                        // MIXED NODE: an entropy FIGURE welded to its unit in one locale string.
+                        .font_family(design::mono())
                         .text_color(rgba_from(p.text_muted, 1.0))
                         .text_size(design::t_caption(cx))
                         .child(t!("security.bits", bits = verdict.bits.round() as i32).to_string()),

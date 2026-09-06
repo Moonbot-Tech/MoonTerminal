@@ -1278,7 +1278,13 @@ impl StrategiesView {
                 ParamsPanelModel::Content { .. } => unreachable!(),
             };
             return col
-                .child(div().mt_2().text_color(moon(p.text_muted)).child(text))
+                .child(
+                    div()
+                        .mt_2()
+                        .font_family(design::ui_font())
+                        .text_color(moon(p.text_muted))
+                        .child(text),
+                )
                 .into_any_element();
         };
         let keys: Vec<Key> = row_pairs.iter().map(|(key, _)| *key).collect();

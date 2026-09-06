@@ -1070,7 +1070,6 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     let body = braced_body(&toolbar, "pub(super) fn tabs_bar(");
     for needle in [
         "let title = t.title();",
-        "design::ui_text_width(cx, &title, 10.5, 400.0, true)",
         "design::ui_value(cx, 20.0)",
         ".max(design::ui_value(cx, 72.0))",
         ".width(tab_width)",
@@ -1081,6 +1080,11 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
             "`tabs_bar` must contain {needle:?} so every localized tab keeps measured padding"
         );
     }
+    assert!(
+        body.contains("design::ui_text_width(cx, &title, 10.5, 400.0, false)")
+            && body.contains("div().font_family(design::ui_font()).child("),
+        "Analytics tab widths must measure UI-family captions and host each tab button in that same UI family"
+    );
     assert!(
         !body.contains(".width(112.0)"),
         "the old fixed width must not override content-driven tab sizing"

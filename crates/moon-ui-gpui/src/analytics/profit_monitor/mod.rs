@@ -1537,6 +1537,7 @@ fn auto_status(
         .id("profit-monitor-auto-status")
         .flex_none()
         .gap(design::ui_px(cx, 6.0))
+        .font_family(design::ui_font())
         .text_size(design::t_caption(cx))
         .text_color(moon(palette.text_muted))
         .tooltip(crate::panels::common::text_tooltip(label.clone()))

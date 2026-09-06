@@ -372,6 +372,9 @@ impl SettingsView {
             for item in &state.plan.core_commands {
                 group = group.child(
                     div()
+                        // `label: new` is a config key beside the value it will take -- the same
+                        // data `value_el` pins below, just rendered through a bare `format!`.
+                        .font_family(design::mono())
                         .text_color(rgba_from(p.text_soft, 1.0))
                         .child(format!("{}: {}", item.label, item.new)),
                 );
@@ -392,6 +395,10 @@ impl SettingsView {
             for u in &state.plan.unsupported {
                 group = group.child(
                     div()
+                        // `u.name` is a raw config key or path (`[buy] color = ...`), a value the
+                        // user matches against their own file, so this line keeps the data face
+                        // even though the reason after it reads as prose.
+                        .font_family(design::mono())
                         .text_size(design::t_caption(cx))
                         .text_color(rgba_from(p.text_muted, 1.0))
                         .child(format!("{} — {}", u.name, u.reason)),
@@ -589,6 +596,11 @@ fn value_el(item: &SettingChange, p: MoonPalette, cx: &Context<SettingsView>) ->
     use moon_core::config::moonbot_import::plan::PlannedValue;
     let muted = |s: String| {
         div()
+            // These are the OLD and NEW values of one setting, drawn side by side with an arrow
+            // between them so the user can compare them before overwriting a config. That is the
+            // definition of data here, so they keep the mono face the flipped Settings root would
+            // otherwise take away.
+            .font_family(design::mono())
             .text_size(design::t_caption(cx))
             .text_color(rgba_from(p.text_muted, 1.0))
             .child(s)

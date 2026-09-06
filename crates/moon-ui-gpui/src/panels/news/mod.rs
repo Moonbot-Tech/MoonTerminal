@@ -774,7 +774,7 @@ impl NewsView {
             .id("news-tags-content")
             .w_full()
             .gap(design::ui_px(cx, 4.0))
-            .font_family(design::mono())
+            .font_family(design::ui_font())
             .child(head)
             .child(untagged)
             .when(empty, |this| {
@@ -899,9 +899,12 @@ impl NewsView {
             .py(design::ui_px(cx, 2.0))
             .child(checkbox)
             .child(
+                // AMBIGUOUS: a user-defined tag identifier, not a sentence — treated as a value
+                // like a badge or strategy name and left mono.
                 div()
                     .flex_1()
                     .min_w(px(0.0))
+                    .font_family(design::mono())
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text))
                     .child(format!("#{label}")),

@@ -172,6 +172,7 @@ impl SettingsView {
             .child(
                 div()
                     .w(design::font_w_px(cx, 72.0))
+                    .font_family(design::mono())
                     .text_center()
                     .text_color(color)
                     .child(value_text),
@@ -227,7 +228,8 @@ impl SettingsView {
                 div().w(design::font_w_px(cx, 56.0)).child(
                     MoonInput::new("ui-font-delta")
                         .state(&self.ui_font_input)
-                        .small(),
+                        .small()
+                        .mono(true),
                 ),
             )
     }
@@ -551,6 +553,10 @@ fn font_delta_marks(cx: &App, track_w: f32) -> impl IntoElement {
                     .top(px(tick_h + design::ui_value(cx, 1.0)))
                     .w(px(label_w))
                     .text_center()
+                    // Scale marks are figures read against each other along the slider. The
+                    // current-value cell and the input beside them are already pinned; without
+                    // this the marks would be the one part of the control left proportional.
+                    .font_family(design::mono())
                     .text_size(design::t_caption(cx))
                     .text_color(label)
                     .child(m.to_string()),

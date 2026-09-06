@@ -385,6 +385,7 @@ fn notice(
             .py(design::ui_px(cx, 4.0))
             .items_center()
             .bg(rgb(p.table_head))
+            // MIXED NODE: `notice_text` welds the unknown/truncated COUNTS into the sentence.
             .font_family(design::mono())
             .text_size(design::t_caption(cx))
             .text_color(rgb(p.text_muted))

@@ -103,6 +103,9 @@ pub(super) fn card(
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
     // One clipping box keeps the accessory outside the width that may yield.
+    // NOT flipped to `ui_font()`: callers interpolate a raw strategy name, a field name, or
+    // `scope_label()`'s bare name arm into `title`/`sub` alongside the caption text, so this
+    // box would sometimes render a VALUE. It stays mono for that raw-name case.
     let mut text = h_flex()
         .flex_1()
         .min_w_0()

@@ -679,6 +679,7 @@ fn kpi(
         .border_color(moon(p.border))
         .child(
             div()
+                .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_soft))
                 .child(label.to_string()),
@@ -721,6 +722,7 @@ fn chart_card_ex(
                 .flex_1()
                 .min_w_0()
                 .truncate()
+                .font_family(design::ui_font())
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
@@ -744,6 +746,7 @@ fn chart_card_ex(
         .child(head)
         .child(
             div()
+                .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_muted))
                 .mb(design::ui_px(cx, 6.0))
@@ -874,6 +877,7 @@ fn top_card(
             div()
                 .px(design::ui_px(cx, 12.0))
                 .py(design::ui_px(cx, 8.0))
+                .font_family(design::ui_font())
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
@@ -1153,6 +1157,7 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
             div()
                 .px(design::ui_px(cx, 12.0))
                 .py(design::ui_px(cx, 8.0))
+                .font_family(design::ui_font())
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(t!("analytics.insights").to_string()),

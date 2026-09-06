@@ -66,7 +66,7 @@ impl SettingsView {
             .child(
                 MoonText::new(t!("hotkeys.group.builtin").to_string())
                     .uppercase(false)
-                    .mono(true)
+                    .mono(false)
                     .font_size(11.0)
                     .line_height(14.0)
                     .color(p.text)
@@ -75,7 +75,7 @@ impl SettingsView {
             .child(
                 MoonText::new(t!("hotkeys.group.builtin_hint").to_string())
                     .uppercase(false)
-                    .mono(true)
+                    .mono(false)
                     .wrap()
                     .line_height(12.0)
                     .color(p.text_muted)
@@ -121,7 +121,7 @@ impl SettingsView {
             .child(
                 MoonText::new(self.hotkeys_group.hint())
                     .uppercase(false)
-                    .mono(true)
+                    .mono(false)
                     .wrap()
                     .line_height(12.0)
                     .color(p.text_muted)
@@ -488,7 +488,7 @@ impl SettingsView {
             .child(
                 MoonText::new(line.into())
                     .uppercase(false)
-                    .mono(true)
+                    .mono(false)
                     .wrap()
                     .font_size(11.0)
                     .line_height(14.0)
@@ -518,6 +518,13 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
+        // Most rows title themselves with a localized phrase, but the preset slots title
+        // themselves with their own IDENTITY -- `F3`, `S2` -- which is a value, and `core_pull_row`
+        // pins that same string mono. Read it off the slot the row already carries rather than
+        // asking every call site to declare it: the two that pass an identity are exactly the two
+        // preset variants.
+        let title_is_identity =
+            matches!(slot, HotkeySlot::OrderSize(_) | HotkeySlot::SellPreset(_));
         let raw = slot_value(hotkeys, slot);
         let parsed = parse_hotkey(raw);
         let invalid = !raw.trim().is_empty() && parsed.is_none();
@@ -544,7 +551,7 @@ impl SettingsView {
                     .child(
                         MoonText::new(title.into())
                             .uppercase(false)
-                            .mono(true)
+                            .mono(title_is_identity)
                             .wrap()
                             .font_size(11.0)
                             .line_height(14.0)
@@ -561,7 +568,7 @@ impl SettingsView {
                     .child(
                         MoonText::new(desc.into())
                             .uppercase(false)
-                            .mono(true)
+                            .mono(false)
                             .wrap()
                             .font_size(11.0)
                             .line_height(14.0)
@@ -700,7 +707,7 @@ impl SettingsView {
             let p = MoonPalette::active(cx);
             MoonText::new(t!("hotkeys.move_kind.title").to_string())
                 .uppercase(false)
-                .mono(true)
+                .mono(false)
                 .font_size(9.0)
                 .line_height(12.0)
                 .color(p.text_muted)
@@ -752,7 +759,7 @@ impl SettingsView {
                     .child(
                         MoonText::new(title)
                             .uppercase(false)
-                            .mono(true)
+                            .mono(false)
                             .wrap()
                             .font_size(11.0)
                             .line_height(14.0)
@@ -769,7 +776,7 @@ impl SettingsView {
                     .child(
                         MoonText::new(desc)
                             .uppercase(false)
-                            .mono(true)
+                            .mono(false)
                             .wrap()
                             .font_size(11.0)
                             .line_height(14.0)
@@ -881,7 +888,7 @@ impl SettingsView {
     fn wip_tag(&self, p: &MoonPalette, _cx: &Context<Self>) -> AnyElement {
         MoonText::new(t!("hotkeys.todo").to_string())
             .uppercase(false)
-            .mono(true)
+            .mono(false)
             .line_height(12.0)
             .color(p.amber)
             .render()
@@ -1036,6 +1043,11 @@ impl SettingsView {
                 div()
                     .flex_none()
                     .w(design::ui_px(cx, 96.0))
+                    // A slot identity (F1, S1) is a value, and the key columns it is compared
+                    // against on this same row -- MoonHotkeyInput, the arrow, MoonKbd -- all stay
+                    // mono. Without this pin it would be the only column of the comparison that
+                    // changed face.
+                    .font_family(design::mono())
                     .text_size(design::t_caption(cx))
                     .text_color(rgba_from(p.text, 1.0))
                     .child(slot_label(row.slot)),
@@ -1090,7 +1102,7 @@ impl SettingsView {
                 .into_any_element(),
             MoonText::new(t!("hotkeys.pull.title").to_string())
                 .uppercase(false)
-                .mono(true)
+                .mono(false)
                 .font_size(11.0)
                 .line_height(14.0)
                 .color(p.text)

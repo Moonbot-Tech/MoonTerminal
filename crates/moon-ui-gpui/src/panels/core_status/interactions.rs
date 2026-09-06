@@ -768,6 +768,8 @@ impl CoreStatusView {
                         let p = MoonPalette::active(cx);
                         content.child(
                             div()
+                                // MIXED NODE: `core_update.confirm.q` welds the core and server
+                                // COUNTS into the question. Half a node cannot be styled.
                                 .font_family(design::mono())
                                 .text_size(design::t_body(cx))
                                 .text_color(rgb(p.text))
@@ -860,6 +862,8 @@ fn problem_confirm_dialog(
             let p = MoonPalette::active(cx);
             content.child(
                 div()
+                    // MIXED NODE: both questions that reach this dialog weld a CORE NAME into the
+                    // sentence, and a core name is shown verbatim and identically everywhere.
                     .font_family(design::mono())
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text))

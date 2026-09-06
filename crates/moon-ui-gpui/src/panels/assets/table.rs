@@ -1403,6 +1403,9 @@ fn open_market_sell_confirm(
                     let p = MoonPalette::active(cx);
                     content.child(
                         div()
+                            // MIXED NODE: `assets.market_sell_q` welds the COIN TICKER into the
+                            // question, and a ticker must read the same here as in the table the
+                            // user just came from. Half a node cannot be styled, so the value wins.
                             .font_family(design::mono())
                             .text_size(design::t_body(cx))
                             .text_color(rgb(p.text))

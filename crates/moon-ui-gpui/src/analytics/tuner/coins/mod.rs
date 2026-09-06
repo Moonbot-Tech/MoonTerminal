@@ -136,21 +136,25 @@ impl AnalyticsView {
         let chip = |id: &'static str, f: CoinFilter, label: String| {
             let on = cur == f;
             let enabled = self.coins.filter_available(f);
-            MoonButton::new(id)
-                .variant(if on {
-                    MoonButtonVariant::Amber
-                } else {
-                    MoonButtonVariant::Soft
-                })
-                .size(MoonButtonSize::Micro)
-                .selected(on)
-                .disabled(!enabled)
-                .label(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.coins.filter = f;
-                    cx.notify();
-                }))
-                .render()
+            // The button carries a caption plus a count ("Blacklist 5/12"); buttons are prose
+            // controls regardless of the number they display.
+            div().font_family(design::ui_font()).child(
+                MoonButton::new(id)
+                    .variant(if on {
+                        MoonButtonVariant::Amber
+                    } else {
+                        MoonButtonVariant::Soft
+                    })
+                    .size(MoonButtonSize::Micro)
+                    .selected(on)
+                    .disabled(!enabled)
+                    .label(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.coins.filter = f;
+                        cx.notify();
+                    }))
+                    .render(),
+            )
         };
         let (bl_n, wl_n) = (self.coins.work.black.len(), self.coins.work.white.len());
         h_flex()
@@ -376,6 +380,7 @@ impl AnalyticsView {
                     let note = div()
                         .w_full()
                         .p(design::ui_px(cx, 18.0))
+                        .font_family(design::ui_font())
                         .text_center()
                         .text_color(moon(p.text_muted))
                         .child(t!("analytics.strat.no_match").to_string())
@@ -447,11 +452,15 @@ impl AnalyticsView {
                     .child(
                         div()
                             .flex_none()
+                            .font_family(design::ui_font())
                             .text_size(design::t_title(cx))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!("analytics.tab.coins").to_string()),
                     )
                     .child(
+                        // NOT flipped: `scope` (`scope_label()`) is sometimes the raw name of
+                        // the single selected strategy, sometimes a caption ("all strategies" /
+                        // "N selected") — it stays mono so the raw-name case remains legible.
                         div()
                             .flex_1()
                             .min_w_0()
@@ -464,6 +473,7 @@ impl AnalyticsView {
                         el.child(
                             div()
                                 .flex_none()
+                                .font_family(design::ui_font())
                                 .text_size(design::t_caption(cx))
                                 .text_color(moon(p.amber))
                                 .child(
@@ -472,25 +482,28 @@ impl AnalyticsView {
                                 ),
                         )
                         .child(
-                            MoonButton::new("an-coin-revert")
-                                .variant(MoonButtonVariant::Soft)
-                                .size(MoonButtonSize::Micro)
-                                .label(t!("analytics.coins.revert").to_string())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.coins.revert();
-                                    this.coins.settle_filter();
-                                    // Through the SAME debounced path as a tick: reverting
-                                    // is one more edit of the same lists.
-                                    this.arm_coin_kpi(cx);
-                                    cx.notify();
-                                }))
-                                .render(),
+                            div().font_family(design::ui_font()).child(
+                                MoonButton::new("an-coin-revert")
+                                    .variant(MoonButtonVariant::Soft)
+                                    .size(MoonButtonSize::Micro)
+                                    .label(t!("analytics.coins.revert").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.coins.revert();
+                                        this.coins.settle_filter();
+                                        // Through the SAME debounced path as a tick: reverting
+                                        // is one more edit of the same lists.
+                                        this.arm_coin_kpi(cx);
+                                        cx.notify();
+                                    }))
+                                    .render(),
+                            ),
                         )
                     })
                     .when(total > shown, |el| {
                         el.child(
                             div()
                                 .flex_none()
+                                .font_family(design::ui_font())
                                 .text_size(design::t_caption(cx))
                                 .text_color(moon(p.text_muted))
                                 .child(

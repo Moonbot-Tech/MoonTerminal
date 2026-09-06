@@ -53,7 +53,10 @@ fn toggle_label() -> String {
 /// Returns:
 ///     Toggle (label + gap + track), the chrome gap, and the square gear button.
 pub(crate) fn header_quiet_width(cx: &App) -> f32 {
-    let label = design::mono_caption_text_width(cx, &toggle_label(), TOGGLE_LABEL_WEIGHT);
+    // The UI family, matching the caption's own `font_family` below: the toggle label is a control
+    // caption. `shell::ticker` offsets its popup BY this width, so a measurement in the other
+    // family would move the popup as well as the cluster.
+    let label = design::ui_caption_text_width(cx, &toggle_label(), TOGGLE_LABEL_WEIGHT);
     label
         + design::ui_value(cx, TOGGLE_GAP)
         + design::ui_value(cx, TOGGLE_TRACK_W)
@@ -106,7 +109,9 @@ pub(crate) fn header_quiet_cluster(
                 .child(
                     div()
                         .flex_none()
-                        .font_family(design::mono())
+                        // A control caption, measured in the same family by
+                        // `header_quiet_width` above.
+                        .font_family(design::ui_font())
                         .text_size(design::t_caption(cx))
                         .text_color(rgb(design::chrome_toggle_label_color(p, sleeping, true)))
                         .child(toggle_label()),

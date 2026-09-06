@@ -284,6 +284,11 @@ impl LoginView {
                     .placeholder(t!("login.placeholder").to_string())
                     .disabled(busy)
                     .loading(busy)
+                    // The window root renders prose in the UI face, and `MoonInput` inherits it.
+                    // The secret must not: `mask_toggle` reveals it on demand, and a key is read
+                    // character by character, where a proportional face merges 0 with O and l
+                    // with 1.
+                    .mono(true)
                     .mask_toggle(),
             )
             .when_some(self.error, |this, key| {
@@ -404,7 +409,9 @@ impl Render for LoginView {
             .size_full()
             .relative()
             .bg(rgba_from(p.shell, 1.0))
-            .font_family(design::mono())
+            // Prose window: a caption, an error line and a throttle notice, all sentences. The one
+            // value it holds is the secret itself, pinned back to mono at its own input.
+            .font_family(design::ui_font())
             .text_size(design::t_body(cx))
             .line_height(design::line_px(cx, 14.0))
             .text_color(rgba_from(p.text, 1.0))

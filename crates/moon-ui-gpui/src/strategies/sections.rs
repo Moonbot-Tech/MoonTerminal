@@ -101,25 +101,66 @@ pub(super) fn section_label_key(raw_title: &str) -> Option<&'static str> {
         .map(|(_, key)| *key)
 }
 
-/// Human name for a runtime section title, or the raw title when there is no label for it.
+/// Heading text for a runtime section: Moonbot's own title first, the human name after it.
+///
+/// The schema title leads because it is what the Moonbot manual, a forum post and the strategy
+/// file all call the section; the localized name follows as a gloss, so a heading reads
+/// `Main · Основные` and stays findable by either word.
 ///
 /// Args:
 ///     raw_title: Section title exactly as the streamed schema produced it.
 ///
 /// Returns:
-///     The localized section name, or `raw_title` unchanged.
+///     `"<raw> · <localized>"` when a label exists, or `raw_title` unchanged.
 pub(super) fn section_display_title(raw_title: &str) -> String {
     match section_label_key(raw_title) {
-        Some(key) => t!(key).to_string(),
+        Some(key) => format!("{raw_title} · {}", t!(key)),
         None => raw_title.to_string(),
     }
+}
+
+/// Two-line caption for a table-of-contents row: the schema title, then its human name under it.
+///
+/// A section with no label keeps one line, so an unrecognised section looks exactly as it did.
+///
+/// Args:
+///     raw_title: Section title exactly as the streamed schema produced it.
+///     muted: Colour of the localized second line.
+///     cx: Application context providing active text metrics.
+///
+/// Returns:
+///     A width-owning column that truncates each line on its own.
+fn section_caption(raw_title: &str, muted: Hsla, cx: &App) -> impl IntoElement {
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .w_full()
+                .min_w_0()
+                .truncate()
+                .child(raw_title.to_string()),
+        )
+        .when_some(section_label_key(raw_title), |col, key| {
+            col.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .line_height(design::line_px(cx, 12.0))
+                    .text_color(muted)
+                    .child(t!(key).to_string()),
+            )
+        })
 }
 
 impl StrategiesView {
     /// Measure the longest selected runtime section title for responsive first-run layout.
     ///
     /// The localized panel heading is the fallback when no selected runtime schema is available.
-    /// Measurement matches the monospaced body text inherited by section rows.
+    /// Section titles render as the clickable caption of a table-of-contents row, so this measures
+    /// them in the UI face they actually render in.
     ///
     /// Args:
     ///     store: Live core store containing the selected strategy schema.
@@ -133,16 +174,16 @@ impl StrategiesView {
                 sections
                     .iter()
                     .map(|section| {
-                        design::mono_body_text_width(
-                            cx,
-                            &section_display_title(&section.title),
-                            400.0,
-                        )
+                        let raw = design::ui_body_text_width(cx, &section.title, 400.0);
+                        let label = section_label_key(&section.title).map_or(0.0, |key| {
+                            design::ui_caption_text_width(cx, &t!(key).to_string(), 400.0)
+                        });
+                        raw.max(label)
                     })
                     .reduce(f32::max)
             })
             .unwrap_or_else(|| {
-                design::mono_body_text_width(cx, &t!("strat.sections").to_string(), 600.0)
+                design::ui_body_text_width(cx, &t!("strat.sections").to_string(), 600.0)
             })
     }
 
@@ -174,6 +215,7 @@ impl StrategiesView {
             .gap(design::ui_px(cx, 7.0))
             .child(
                 div()
+                    .font_family(design::ui_font())
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("strat.sections").to_string()),
             )
@@ -190,6 +232,7 @@ impl StrategiesView {
                 .child(
                     div()
                         .mt_2()
+                        .font_family(design::ui_font())
                         .text_color(moon(p.text_muted))
                         .child(t!("strat.no_schema").to_string()),
                 )
@@ -205,7 +248,8 @@ impl StrategiesView {
                 div()
                     .id(id)
                     .w_full()
-                    .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+                    .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+                    .py(design::ui_px(cx, 3.0))
                     .px(design::ui_px(cx, 6.0))
                     .rounded(design::ui_px(cx, 3.0))
                     .border_1()
@@ -216,6 +260,7 @@ impl StrategiesView {
             };
             let on_all = self.versions.section.is_none();
             let mut all_row = row_base("sec-ver-all".into(), cx)
+                .font_family(design::ui_font())
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(moon(p.text))
                 .child(t!("strat.sections_all").to_string())
@@ -257,17 +302,11 @@ impl StrategiesView {
                 }
                 let on = self.versions.section == Some(i);
                 let mut row = row_base(SharedString::from(format!("sec-ver-{i}")), cx)
+                    .font_family(design::ui_font())
                     .text_color(moon(p.text))
-                    // The count badge beside it cannot shrink, and a Russian section name is
-                    // half again as long as the schema's own: without this the title paints
-                    // over the badge instead of degrading to an ellipsis.
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(section_display_title(&sec.title)),
-                    )
+                    // The count badge beside it cannot shrink, so the caption owns the width
+                    // and degrades to an ellipsis instead of painting over the badge.
+                    .child(section_caption(&sec.title, moon(p.text_muted), cx))
                     .child(
                         h_flex().ml_auto().flex_none().child(
                             MoonBadge::new(n.to_string())
@@ -321,13 +360,11 @@ impl StrategiesView {
             let sec = &sections[i];
             let on = self.selected_section == i;
             let tcol = if !active { p.text_muted } else { p.text };
-            // Resolved once: the caption and the raw-title tooltip ask the same question of the
-            // same string, and this row is rebuilt on every repaint.
-            let label_key = section_label_key(&sec.title);
             let mut row = div()
                 .id(SharedString::from(format!("sec-{i}")))
                 .w_full()
-                .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+                .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+                .py(design::ui_px(cx, 3.0))
                 .px(design::ui_px(cx, 6.0))
                 .rounded(design::ui_px(cx, 3.0))
                 .border_1()
@@ -335,18 +372,11 @@ impl StrategiesView {
                 .flex()
                 .items_center()
                 .cursor_pointer()
+                .font_family(design::ui_font())
                 .text_color(moon(tcol))
-                // The pane is user-resizable down to a width no Russian section name fits, so the
-                // caption degrades to an ellipsis rather than spilling into the splitter.
-                .child(div().flex_1().min_w_0().truncate().child(match label_key {
-                    Some(key) => t!(key).to_string(),
-                    None => sec.title.clone(),
-                }))
-                // The raw schema title stays one hover away wherever a human name replaced it, so
-                // a trader who knows Moonbot's own wording can still find the section by it.
-                .when_some(label_key.map(|_| sec.title.clone()), |row, raw| {
-                    row.tooltip(crate::panels::common::text_tooltip(raw))
-                })
+                // The pane is user-resizable down to a width no section name fits, so each line
+                // of the caption degrades to an ellipsis rather than spilling into the splitter.
+                .child(section_caption(&sec.title, moon(p.text_muted), cx))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.selected_section != i {
                         this.selected_section = i;

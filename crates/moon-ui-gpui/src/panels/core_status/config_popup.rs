@@ -571,7 +571,7 @@ impl CoreStatusView {
                     .justify_center()
                     .text_size(design::t_caption(cx))
                     .text_color(rgb(p.text_muted))
-                    .font_family(design::mono())
+                    .font_family(design::ui_font())
                     .whitespace_nowrap()
                     .child(caption),
             )

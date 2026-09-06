@@ -827,6 +827,22 @@ pub fn mono_title_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width(cx, text, base_text(cx) + 3.0, weight, true)
 }
 
+/// Width of UI-face text drawn at the terminal's body size — the [`ui_font`] partner of
+/// [`mono_body_text_width`], filling in the same body base.
+///
+/// A layout that sizes itself from a measured label must measure in the family that label is
+/// RENDERED in: prose reads in [`ui_font`], so measuring it with the mono trio above overstates
+/// every proportional string and drifts the column it sizes.
+pub fn ui_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
+    ui_text_width(cx, text, base_text(cx), weight, false)
+}
+
+/// Width of UI-face text drawn at the terminal's caption size — the [`t_caption`] partner of
+/// [`ui_body_text_width`], and the [`ui_font`] partner of [`mono_caption_text_width`].
+pub fn ui_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
+    ui_text_width(cx, text, base_text(cx) - 2.0, weight, false)
+}
+
 /// Cache key for one glyph advance under an exact resolved font and requested weight.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct MonoGlyphKey {

@@ -755,6 +755,7 @@ impl AnalyticsView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .font_family(design::ui_font())
                     .text_size(design::t_caption(cx))
                     .text_color(moon_alpha(p.text_muted, 0.7))
                     .child(t!("analytics.tuner.no_param").to_string())
@@ -868,6 +869,7 @@ impl AnalyticsView {
                         .w(design::font_w_px(cx, 74.0))
                         .flex_none()
                         .truncate()
+                        .font_family(design::ui_font())
                         .text_color(moon(p.text_muted))
                         .child(caption),
                 )
@@ -953,6 +955,7 @@ impl AnalyticsView {
                                     .w(design::font_w_px(cx, 74.0))
                                     .flex_none()
                                     .truncate()
+                                    .font_family(design::ui_font())
                                     .text_color(moon(p.text_muted))
                                     .child(t!("analytics.tuner.compose_result").to_string()),
                             )
@@ -961,6 +964,7 @@ impl AnalyticsView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
+                                    .font_family(design::ui_font())
                                     .text_color(moon(p.text_soft))
                                     .child(decision.to_string()),
                             ),
@@ -989,6 +993,7 @@ impl AnalyticsView {
                                         .w(design::font_w_px(cx, 74.0))
                                         .flex_none()
                                         .truncate()
+                                        .font_family(design::ui_font())
                                         .text_color(moon(p.text_muted))
                                         .child(t!("analytics.tuner.compose_set").to_string()),
                                 )
@@ -1032,6 +1037,7 @@ impl AnalyticsView {
                                                 .w(design::font_w_px(cx, 74.0))
                                                 .flex_none()
                                                 .truncate()
+                                                .font_family(design::ui_font())
                                                 .text_color(moon(p.text_muted))
                                                 .child(
                                                     t!("analytics.tuner.compose_rejected")
@@ -1081,6 +1087,7 @@ impl AnalyticsView {
                                     .w(design::font_w_px(cx, 74.0))
                                     .flex_none()
                                     .truncate()
+                                    .font_family(design::ui_font())
                                     .text_color(moon(p.text_muted))
                                     .child(t!("analytics.tuner.compose_result").to_string()),
                             )
@@ -1089,6 +1096,7 @@ impl AnalyticsView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
+                                    .font_family(design::ui_font())
                                     .text_color(moon(p.text_soft))
                                     .child(
                                         t!("analytics.tuner.compose_decision_all_direct")
@@ -1100,6 +1108,7 @@ impl AnalyticsView {
                         div()
                             .w_full()
                             .truncate()
+                            .font_family(design::ui_font())
                             .text_color(moon(p.orange))
                             .child(text.to_string()),
                     )
@@ -1131,6 +1140,7 @@ impl AnalyticsView {
                         div()
                             .w_full()
                             .truncate()
+                            .font_family(design::ui_font())
                             .text_color(moon(p.orange))
                             .child(t!("analytics.tuner.compose_no_split").to_string()),
                     )
@@ -1175,7 +1185,12 @@ impl AnalyticsView {
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.7))
             .text_size(design::t_caption(cx))
-            .child(div().text_color(moon(p.text_soft)).child(label));
+            .child(
+                div()
+                    .font_family(design::ui_font())
+                    .text_color(moon(p.text_soft))
+                    .child(label),
+            );
         if strat.found && !(sub && class != FieldClass::BvSv) {
             let (flag, cur_ignore) = flag_of(class, strat);
             let staged = self.tuner.staged_ignore.get(flag).copied();

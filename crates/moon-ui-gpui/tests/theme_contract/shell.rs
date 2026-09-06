@@ -1256,8 +1256,21 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_SIZE"));
     assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_WEIGHT"));
     assert!(
-        measure.contains("true,"),
-        "launcher widths must use the monospaced family inherited from the Shell root"
+        measure.contains("false,"),
+        "launcher widths must measure the UI family their labeled controls render in, or narrow-header shedding clips captions or hides them too early"
+    );
+    let labeled_launchers = chain_between(
+        toolbar,
+        "toolbar-screener",
+        "settings_hint_at",
+        "labeled launcher containers",
+    );
+    assert_eq!(
+        labeled_launchers
+            .matches(".font_family(design::ui_font())")
+            .count(),
+        2,
+        "the Strategies/Analytics section and Settings hosting div must both render control captions in the UI family measured by launcher_label_width"
     );
     assert!(measure.contains(".max(ICON_BTN_W)"));
     for (label, width) in [
