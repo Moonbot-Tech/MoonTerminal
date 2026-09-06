@@ -154,16 +154,16 @@ fn revision_zero_customised_palette_is_stamped_once() {
 #[test]
 fn migrating_defaults_stay_pinned_to_the_reviewed_palette() {
     let dark = ChartTheme::default();
-    assert_eq!(dark.candle_up, [38, 166, 154]);
-    assert_eq!(dark.candle_down, [239, 83, 80]);
-    assert_eq!(dark.book_bid, [33, 84, 80]);
-    assert_eq!(dark.book_ask, [114, 51, 50]);
+    assert_eq!(dark.candle_up, [26, 158, 92]);
+    assert_eq!(dark.candle_down, [230, 59, 59]);
+    assert_eq!(dark.book_bid, [28, 100, 64]);
+    assert_eq!(dark.book_ask, [140, 46, 46]);
 
     let light = ChartTheme::default_light();
-    assert_eq!(light.candle_up, [38, 166, 154]);
-    assert_eq!(light.candle_down, [239, 83, 80]);
-    assert_eq!(light.book_bid, [179, 224, 220]);
-    assert_eq!(light.book_ask, [249, 195, 194]);
+    assert_eq!(light.candle_up, [26, 158, 92]);
+    assert_eq!(light.candle_down, [230, 59, 59]);
+    assert_eq!(light.book_bid, [118, 197, 157]);
+    assert_eq!(light.book_ask, [240, 137, 137]);
 }
 
 /// `theme.rs:retire_theme` must leave untargeted fields byte-for-byte intact while migrating

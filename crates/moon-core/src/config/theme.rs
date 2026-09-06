@@ -146,10 +146,10 @@ impl Default for ChartTheme {
             book_bg_ask: [42, 30, 27],
             book_bg_bid: [30, 36, 26],
             // The depth wall is drawn at a fixed alpha of 1.0 by the book shaders, so its weight
-            // is set here, in the colour: each side is its candle tone composited at ~40% over
-            // `book_bg`, which reads as a side panel rather than a wall.
-            book_bid: [33, 84, 80],
-            book_ask: [114, 51, 50],
+            // is set here, in the colour: each side is its candle tone composited at ~55% over
+            // `book_bg`, strong enough to read as depth without out-shouting the candles.
+            book_bid: [28, 100, 64],
+            book_ask: [140, 46, 46],
             book_level_alpha: 0.5,
             book_level_width: 1.5,
             label_positive: palette::GREEN,
@@ -207,11 +207,11 @@ impl ChartTheme {
         self.book_bg = [255, 255, 255];
         self.book_bg_ask = [255, 244, 242];
         self.book_bg_bid = [243, 250, 242];
-        // Each candle tone composited at ~35% over white. Not paler: the book shaders brighten a
+        // Each candle tone composited at ~60% over white. Not paler: the book shaders brighten a
         // level line to `min(rgb * 1.25, 1)`, and a paler wall clamps those stripes into the
         // background until the individual levels stop reading at all.
-        self.book_bid = [179, 224, 220];
-        self.book_ask = [249, 195, 194];
+        self.book_bid = [118, 197, 157];
+        self.book_ask = [240, 137, 137];
         self.book_level_alpha = 0.5;
         self.book_level_width = 1.5;
         self.label_positive = [0, 128, 0];
@@ -233,7 +233,7 @@ impl ChartTheme {
 /// Bumped together with an appended entry in [`RETIRED_DARK`] / [`RETIRED_LIGHT`] whenever a
 /// shipped default colour is retired. A file below this number is carried across once and stamped;
 /// a file at or above it is never touched again.
-const CURRENT_PALETTE_REV: u32 = 1;
+const CURRENT_PALETTE_REV: u32 = 2;
 
 /// The palette generation of a `theme.toml` written BEFORE that field existed.
 ///
@@ -262,20 +262,38 @@ struct RetiredColors {
 
 /// Dark-set defaults this file no longer ships, oldest generation first. APPEND-ONLY: a later
 /// palette change adds an entry whose values are today's defaults.
-const RETIRED_DARK: &[RetiredColors] = &[RetiredColors {
-    candle_up: [47, 168, 92],
-    candle_down: [255, 142, 90],
-    book_bid: [75, 86, 48],
-    book_ask: [170, 73, 39],
-}];
+const RETIRED_DARK: &[RetiredColors] = &[
+    RetiredColors {
+        candle_up: [47, 168, 92],
+        candle_down: [255, 142, 90],
+        book_bid: [75, 86, 48],
+        book_ask: [170, 73, 39],
+    },
+    // Generation 1: the desaturated teal/coral pair and a ~40% book wall, retired as too dim.
+    RetiredColors {
+        candle_up: [38, 166, 154],
+        candle_down: [239, 83, 80],
+        book_bid: [33, 84, 80],
+        book_ask: [114, 51, 50],
+    },
+];
 
 /// Light-set defaults this file no longer ships. See [`RETIRED_DARK`].
-const RETIRED_LIGHT: &[RetiredColors] = &[RetiredColors {
-    candle_up: [0, 128, 0],
-    candle_down: [255, 0, 0],
-    book_bid: [0, 128, 0],
-    book_ask: [255, 0, 0],
-}];
+const RETIRED_LIGHT: &[RetiredColors] = &[
+    RetiredColors {
+        candle_up: [0, 128, 0],
+        candle_down: [255, 0, 0],
+        book_bid: [0, 128, 0],
+        book_ask: [255, 0, 0],
+    },
+    // Generation 1: the same teal/coral pair over a ~35% book wall, retired as too dim.
+    RetiredColors {
+        candle_up: [38, 166, 154],
+        candle_down: [239, 83, 80],
+        book_bid: [179, 224, 220],
+        book_ask: [249, 195, 194],
+    },
+];
 
 /// Replace every colour in `theme` that still equals a retired default with the current one.
 ///
