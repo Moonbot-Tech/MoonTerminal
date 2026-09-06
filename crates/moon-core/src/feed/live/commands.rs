@@ -1007,6 +1007,38 @@ pub(super) fn drain_commands(
                     );
                 }
             }
+            Ok(CoreCmd::TestProblem { text }) => {
+                // The reply is a diagnostic row arriving through the normal problems events, not a
+                // response to this call — the library promises no request-specific answer. So the
+                // log names only that it was sent, and the panel is where success is read.
+                if let Err(error) = client.settings().test_problem(text.as_str()) {
+                    log::warn!(
+                        "core {} test_problem failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                } else {
+                    log::info!(
+                        "core {} test_problem sent: {text:?}",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
+            Ok(CoreCmd::ClearProblems) => {
+                // Logged at WARN even when it succeeds, unlike its neighbours: this drops confirmed
+                // findings for every terminal watching the core and they cannot be restored, so the
+                // log has to carry a trace of who asked for it.
+                match client.settings().clear_problems() {
+                    Err(error) => log::warn!(
+                        "core {} clear_problems failed: {error}",
+                        crate::feed::core_label(server.id)
+                    ),
+                    Ok(()) => log::warn!(
+                        "core {} clear_problems sent — every confirmed diagnostic on this core is \
+                         dropped for all terminals",
+                        crate::feed::core_label(server.id)
+                    ),
+                }
+            }
             Ok(CoreCmd::SetAutoDetect(on)) => {
                 // Passive mode off/on; the new value reaches the store via RuntimeStateUpdated,
                 // the same command that carries `is_started`.

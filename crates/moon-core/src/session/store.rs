@@ -249,6 +249,20 @@ pub struct CoreData {
     /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// The Core Status panel observes it through `sys_rev`.
     pub sys: crate::feed::CoreSysStatus,
+    /// The core's OWN confirmed diagnostics, observed through `problems_rev`.
+    ///
+    /// Distinct from this terminal's warning episodes in every way that matters — who measured,
+    /// against which threshold, and whether an interval is even known. See
+    /// [`crate::feed::CoreProblems`], and note that its default is "nothing known", never "clean".
+    ///
+    /// CLEARED by a replacement connection, under the same rule as `api_expiry` and `api_quota`:
+    /// a finding belongs to the MoonBot behind the endpoint, and a replacement feed may point at a
+    /// different one — or at the same host downgraded below the extension. Keeping the previous
+    /// host's findings would attribute them to a core that never reported them, and keeping
+    /// `supported` would report a capable core forever. The core re-sends its list unprompted on
+    /// connection, so the cost of clearing is the seconds until it arrives, stated honestly as
+    /// "not known" rather than as a clean bill.
+    pub problems: crate::feed::CoreProblems,
     /// Latest startup progress and channel measurements polled from the moonproto client.
     /// The Core Status panel observes it through `startup_rev`. It FREEZES once the core settles,
     /// so after a successful startup `elapsed_ms` is how long that core took to come up, not a
@@ -348,6 +362,12 @@ pub struct CoreData {
     /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
     /// Core Status without repainting for receipt-time-only updates.
     pub sys_rev: u64,
+    /// Advances only when the core's confirmed-diagnostics projection actually differs.
+    ///
+    /// The gate earns its keep here rather than being ceremony: the core republishes its complete
+    /// list on every reconnect and again for each newly confirmed row, so an ungated counter would
+    /// repaint the panel for a list that has not changed at all.
+    pub problems_rev: u64,
     /// Advances when the polled startup snapshot reports different PROGRESS, per
     /// `CoreStartupStatus::progress_eq`. Deliberately separate from `sys_rev`: that counter is
     /// documented as covering `KernelHealth` metrics and the decoded endpoint, its field is CLEARED
@@ -442,6 +462,8 @@ impl CoreData {
             log_seq: 0,
             chart_alerts_rev: 0,
             sys_rev: 0,
+            problems: crate::feed::CoreProblems::default(),
+            problems_rev: 0,
             startup_rev: 0,
             news_rev: 0,
             time_offset: crate::feed::CoreTimeOffsetStatus::default(),
@@ -578,6 +600,13 @@ impl CoreData {
         // not survive into a connection that may trade a different address.
         if self.api_quota.take().is_some() {
             self.api_quota_rev = self.api_quota_rev.wrapping_add(1);
+        }
+        // Confirmed diagnostics belong to the replaced MoonBot for the same reason, and clearing
+        // `supported` with them is the point rather than a side effect: a core downgraded below the
+        // extension must be able to go back to "not known", which a retained flag makes impossible.
+        if self.problems != crate::feed::CoreProblems::default() {
+            self.problems = crate::feed::CoreProblems::default();
+            self.problems_rev = self.problems_rev.wrapping_add(1);
         }
         // A replacement feed may point at a different MoonBot on a different clock, so last
         // connection's estimate carries no evidence about this one.
@@ -957,6 +986,23 @@ impl CoreData {
                 self.sys = sys;
                 if metrics_changed {
                     self.sys_rev = self.sys_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::Problems(problems) => {
+                // A full replace, matching what the protocol delivers: the new list IS the truth,
+                // and a row missing from it is a row the core no longer confirms. Merging by kind
+                // instead would keep resolved findings on screen forever, because nothing ever
+                // announces a removal.
+                //
+                // Taken as sent, with no latch across connections. An earlier version carried
+                // `supported` forward on the theory that a capability cannot lapse; the store's own
+                // rule for every other per-core fact says otherwise, because a replacement feed can
+                // point at a DIFFERENT MoonBot. Within one connection the projection already
+                // latches where it should — see `problems_from_proto`, which reads a delivered
+                // finding as proof of support even before the first full list.
+                if self.problems != problems {
+                    self.problems = problems;
+                    self.problems_rev = self.problems_rev.wrapping_add(1);
                 }
             }
             FeedMsg::ConnFault(fault) => {

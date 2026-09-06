@@ -31,7 +31,9 @@ fn core_status_mode_codes_round_trip_and_unknown_codes_fall_back() {
     for (mode, code) in [
         (CoreStatusMode::ByIp, "by-ip"),
         (CoreStatusMode::Flat, "flat"),
+        (CoreStatusMode::Problems, "problems"),
         (CoreStatusMode::Warnings, "warnings"),
+        (CoreStatusMode::Updates, "updates"),
     ] {
         assert_eq!(mode.code(), code);
         assert_eq!(CoreStatusMode::from_code(code), mode);

@@ -579,6 +579,30 @@ pub enum CoreCmd {
     },
     /// Disarm and delete a chart alert by `obj_uid` through moonproto `chart_alerts().delete`.
     ChartAlertDelete { market: String, obj_uid: u64 },
+    /// Publish a TEST diagnostic through the core's own detector worker, to prove the channel.
+    ///
+    /// The only way to see the confirmed-diagnostics path work without waiting for a real fault:
+    /// it travels the normal detector route rather than short-circuiting it, so a row appearing in
+    /// the panel proves detector, wire, projection, store and view together. Usually about two
+    /// seconds.
+    ///
+    /// `text` must be SHORT ASCII — the core's signal buffer keeps at most 200 characters in a
+    /// legacy encoding — and the caller owns that limit.
+    ///
+    /// It LEAVES A ROW behind: the first test raises a notification, later ones silently update the
+    /// same row, and nothing removes it but [`CoreCmd::ClearProblems`]. That is why the two ship
+    /// together; a test button on its own only litters the core.
+    TestProblem { text: String },
+    /// Clear every confirmed diagnostic and pending hypothesis on one core.
+    ///
+    /// IRREVERSIBLE, and not scoped to this terminal: the core drops the facts for everyone
+    /// watching it, and cleared real diagnostics cannot be restored. It does not fix any cause —
+    /// a cause that persists simply produces a new fact later. MoonProto's own FireTest hides this
+    /// behind a separate opt-in and warns to use it only on an isolated test core.
+    ///
+    /// The UI must therefore confirm before sending, and must NOT clear its local rows
+    /// optimistically: the answer is the core's next full list.
+    ClearProblems,
 }
 
 /// Complete market-role assignment published independently of the bounded command backlog.

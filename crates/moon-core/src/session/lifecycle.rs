@@ -365,6 +365,18 @@ impl SessionManager {
                             stats.ui_state |= changed;
                         }
                     }
+                    FeedMsg::Problems(problems) => {
+                        // Gated like `OrderLines` rather than falling into the catch-all below:
+                        // the core republishes its complete diagnostics list on every reconnect and
+                        // again for each newly confirmed row, so an unconditional wake would repaint
+                        // for a list that did not change. This is also what makes `problems_rev` a
+                        // real gate rather than a counter nobody consults.
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            let before = core.problems_rev;
+                            core.apply(FeedMsg::Problems(problems));
+                            stats.ui_state |= core.problems_rev != before;
+                        }
+                    }
                     other => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(other);

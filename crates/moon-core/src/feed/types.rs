@@ -1,9 +1,11 @@
 //! Domain types sent from the backend to the UI. They are independent of moonproto so the UI and
 //! rendering layer do not need to know about the transport.
 
+mod core_problem;
 mod core_settings;
 mod core_status;
 
+pub use core_problem::{CoreProblem, CoreProblemCategory, CoreProblems};
 pub use core_settings::{
     AutoBuySettings, AutoStartSettings, BtcBlinkSettings, CORE_HOTKEY_ACTION_COUNT, CoreConfig,
     CoreConfigArea, CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult,
@@ -1277,6 +1279,15 @@ pub enum FeedMsg {
     /// Emitted for every health event; the store gates the Core Status panel with
     /// `sys_rev` only when metric values change.
     SysStatus(CoreSysStatus),
+    /// The core's own confirmed diagnostics, rebuilt from the retained snapshot whenever the core
+    /// republishes them.
+    ///
+    /// A FULL replace, never a delta, because that is what the protocol delivers: a new list
+    /// removes rows it no longer contains, and there is no per-row "resolved". `problems_rev` moves
+    /// only when the projection actually differs, and `session::lifecycle` wakes the UI on that
+    /// counter rather than on arrival — the core republishes the same list on reconnect and on
+    /// every newly confirmed row alike.
+    Problems(CoreProblems),
     /// Core startup progress and channel measurements, POLLED from the moonproto client rather
     /// than pushed by an event — MoonProto publishes it as a passive snapshot at its own bounded
     /// rate. Sent only while the core is starting, plus once when it settles, so an already-started

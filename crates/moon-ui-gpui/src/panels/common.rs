@@ -110,6 +110,49 @@ pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
         .text_color(c)
 }
 
+/// Highest count a tab badge prints before it becomes `99+`.
+///
+/// Named once because two surfaces show the same number — the dock badge and the Core Status mode
+/// strip — and a count clamped on one while it overflows the other is how a tab gets stretched by
+/// a fleet-sized figure.
+pub(crate) const COUNT_BADGE_MAX: usize = 99;
+
+/// A count as a tab badge prints it, clamped to `<max>+`.
+///
+/// Exposed beside [`count_badge`] for surfaces that need the TEXT rather than the pill — a segmented
+/// control carries no badge slot, so its label has to say the same thing in the same shape.
+pub(crate) fn count_text(n: usize, max: usize) -> String {
+    match n > max {
+        true => format!("{max}+"),
+        false => n.to_string(),
+    }
+}
+
+/// The house count badge for a dock tab, tinted by one palette token.
+///
+/// Shared rather than re-inlined per panel, on the reasoning `theme_contract/report.rs` already
+/// applies to [`side_badge`] — that two copies of a badge drift apart. That test constrains only
+/// the two files it names; nothing yet guards THIS helper, so the argument for using it is the
+/// argument itself rather than a failing build.
+///
+/// Args:
+///     n: The count; clamped by the component itself so a large one cannot stretch the tab.
+///     color: Palette token tinting both fill and text — pass it through `design::danger_color`
+///         where the meaning is a fault, so a light theme gets its readable red.
+///
+/// Returns:
+///     The rendered badge.
+pub(crate) fn count_badge(n: usize, color: u32) -> impl IntoElement {
+    MoonBadge::new("")
+        .count_max(n, COUNT_BADGE_MAX)
+        .variant(MoonBadgeVariant::Soft)
+        .size(MoonBadgeSize::Tiny)
+        .bg_color(color)
+        .text_color(color)
+        .mono(true)
+        .render()
+}
+
 /// The square ▶ that plays whatever a sound picker currently holds.
 ///
 /// Shared rather than redrawn per surface: it appeared beside the core-warning sound picker first,

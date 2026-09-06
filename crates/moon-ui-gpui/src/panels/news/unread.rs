@@ -133,7 +133,7 @@ pub(super) fn badges(
 /// Rendered through the shared News badge helper, so a tab counter and the card chips that explain
 /// it read as the same object; the component clamps a long count to `99+` itself.
 fn pill(n: usize, color: u32) -> impl IntoElement {
-    super::render::count_badge(n, color)
+    crate::panels::common::count_badge(n, color)
 }
 
 #[cfg(test)]

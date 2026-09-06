@@ -374,3 +374,50 @@ fn a_rejected_count_does_not_become_unlimited() {
         "and it is not evidence of an unlimited key either"
     );
 }
+
+/// Wire text is stripped of what would let a core draw outside its own row, and bounded.
+///
+/// Regression target: the first version of the core-diagnostics projection kept these strings
+/// verbatim. `venue::is_invisible_format` is public precisely so every display path filters the
+/// same set — a bidi override inside a message reverses the text drawn after it, including text the
+/// row never supplied — and the wire allows 65535 bytes per string on a value retained per core.
+#[test]
+fn wire_text_strips_invisible_marks_and_bounds_length() {
+    // U+202E RIGHT-TO-LEFT OVERRIDE and U+200B ZERO WIDTH SPACE must not survive.
+    assert_eq!(super::wire_text("a\u{202e}b\u{200b}c", 64), "abc");
+    // Newlines and tabs would break a fixed-height table cell.
+    assert_eq!(super::wire_text("one\ntwo\tthree", 64), "onetwothree");
+    // Surrounding whitespace is not content.
+    assert_eq!(super::wire_text("  padded  ", 64), "padded");
+
+    // The clamp counts CHARACTERS, not bytes: a byte clamp would split a multi-byte character.
+    assert_eq!(super::wire_text("привет", 3), "при");
+    assert_eq!(
+        super::wire_text(&"x".repeat(5_000), 2_000).chars().count(),
+        2_000
+    );
+
+    // Nothing printable leaves nothing, rather than whitespace pretending to be a value.
+    assert_eq!(super::wire_text("\u{200b}\u{feff}", 64), "");
+}
+
+/// A delivered finding proves the core can report, even before its first complete list.
+///
+/// Regression target: reading only `snapshot_received` counted a core as silent while its own row
+/// was on screen. MoonProto's `apply_notification` pushes an item WITHOUT setting that flag, so the
+/// case is reachable rather than hypothetical.
+#[test]
+fn a_delivered_finding_counts_as_support_before_the_first_list() {
+    assert!(
+        !super::problems_supported(false, 0),
+        "nothing delivered yet"
+    );
+    assert!(
+        super::problems_supported(false, 1),
+        "a core that delivered a finding is not silent"
+    );
+    assert!(
+        super::problems_supported(true, 0),
+        "an answered core with no findings is not silent either"
+    );
+}

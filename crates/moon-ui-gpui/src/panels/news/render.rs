@@ -35,19 +35,6 @@ pub(crate) fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoEleme
         .render()
 }
 
-/// The same badge carrying a COUNT, clamped by the component to `99+` so a long count cannot
-/// stretch the surface it sits on (a dock tab).
-pub(super) fn count_badge(n: usize, color: u32) -> impl IntoElement {
-    MoonBadge::new("")
-        .count_max(n, 99)
-        .variant(MoonBadgeVariant::Soft)
-        .size(MoonBadgeSize::Tiny)
-        .bg_color(color)
-        .text_color(color)
-        .mono(true)
-        .render()
-}
-
 /// Format Unix milliseconds as selected-zone `HH:MM:SS.mmm` time-of-day.
 ///
 /// Args:

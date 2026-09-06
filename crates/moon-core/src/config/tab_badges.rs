@@ -42,6 +42,21 @@ pub struct TabBadgeSettings {
     /// it knows whether it counts milliseconds or rows.
     #[serde(default)]
     seen: HashMap<String, i64>,
+    /// `<panel>/<group>/<core>` → the kinds of that core's rows already looked at.
+    ///
+    /// IDENTITIES, not a watermark, and the difference is the whole reason this map exists rather
+    /// than a second `seen`. A timestamp watermark assumes one trustworthy monotonic clock; these
+    /// rows are stamped by each CORE's own clock, this app carries a clock-skew module because
+    /// those clocks disagree, and the stamp arrives off the wire with no upper bound. A single
+    /// far-future value would have raised a monotonic watermark past every real finding and
+    /// silenced that core's badge permanently, with no reset path in the app at all.
+    ///
+    /// Comparing identities cannot fail that way: a kind is either in the set or it is not. The set
+    /// is REPLACED by what is on screen when the panel is looked at, so it prunes itself — a kind
+    /// that goes away leaves the set and lights the badge again if it ever returns, which is the
+    /// right answer, because a finding that came back IS news.
+    #[serde(default)]
+    seen_kinds: HashMap<String, Vec<u8>>,
     /// Runtime change counter (not persisted). Panels fold it into their repaint signature so a
     /// switch flipped on one tab refreshes every view that reads it.
     #[serde(skip)]
@@ -139,9 +154,59 @@ impl TabBadgeSettings {
         self.bump(changed)
     }
 
+    /// Whether one of a core's row kinds has already been looked at.
+    pub fn core_kind_seen(&self, panel: &str, group: &str, core: u64, kind: u8) -> bool {
+        self.seen_kinds
+            .get(&Self::core_key(panel, group, core))
+            .is_some_and(|kinds| kinds.contains(&kind))
+    }
+
+    /// Record exactly which of a core's kinds are now looked at. Returns whether anything changed.
+    ///
+    /// A REPLACE, not a union, and that is what keeps the map both correct and bounded: `kinds` is
+    /// what the surface actually showed, so a kind the core has stopped reporting drops out and
+    /// will light the badge again if it comes back. A union would remember every kind a core ever
+    /// had, and a returning finding would stay silent forever.
+    ///
+    /// Passing an EMPTY set therefore forgets that core, rather than being a no-op: a core with
+    /// nothing on screen has nothing that has been looked at.
+    pub fn mark_core_kinds_seen(
+        &mut self,
+        panel: &str,
+        group: &str,
+        core: u64,
+        kinds: &[u8],
+    ) -> bool {
+        let key = Self::core_key(panel, group, core);
+        let mut next: Vec<u8> = kinds.to_vec();
+        next.sort_unstable();
+        next.dedup();
+        let changed = match (self.seen_kinds.get(&key), next.is_empty()) {
+            (None, true) => false,
+            (None, false) => true,
+            (Some(current), _) => current != &next,
+        };
+        if changed {
+            match next.is_empty() {
+                true => {
+                    self.seen_kinds.remove(&key);
+                }
+                false => {
+                    self.seen_kinds.insert(key, next);
+                }
+            }
+        }
+        self.bump(changed)
+    }
+
     /// Compose the `<panel>/<group>` storage key.
     fn key(panel: &str, group: &str) -> String {
         format!("{panel}/{group}")
+    }
+
+    /// Compose the `<panel>/<group>/<core>` storage key.
+    fn core_key(panel: &str, group: &str, core: u64) -> String {
+        format!("{panel}/{group}/{core}")
     }
 
     /// Bump the revision on a real change and pass `changed` through.

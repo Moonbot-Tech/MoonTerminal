@@ -44,20 +44,22 @@ pub(crate) fn open(
 
 /// The switches `panel` offers, or nothing when its tab carries no counters.
 fn items(panel: &str, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
-    if !registry::find(panel).is_some_and(|kind| kind.tab_colour_counters) {
+    let Some(kind) = registry::find(panel).filter(|kind| kind.tab_counters) else {
         return Vec::new();
-    }
-    vec![
-        switch_item(
-            panel,
-            backend,
-            cx,
-            "counters",
-            t!("dock.tab_menu.counters").to_string(),
-            TabBadgeSettings::counters_visible,
-            TabBadgeSettings::set_counters_visible,
-        ),
-        switch_item(
+    };
+    let mut items = vec![switch_item(
+        panel,
+        backend,
+        cx,
+        "counters",
+        t!("dock.tab_menu.counters").to_string(),
+        TabBadgeSettings::counters_visible,
+        TabBadgeSettings::set_counters_visible,
+    )];
+    // Offered only where the counter HAS colours. A panel with one number would otherwise be shown
+    // a switch that names a choice it does not have.
+    if kind.tab_colour_split {
+        items.push(switch_item(
             panel,
             backend,
             cx,
@@ -65,8 +67,9 @@ fn items(panel: &str, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> 
             t!("dock.tab_menu.no_colour_split").to_string(),
             TabBadgeSettings::counters_merged,
             TabBadgeSettings::set_counters_merged,
-        ),
-    ]
+        ));
+    }
+    items
 }
 
 /// One checkable switch over a `TabBadgeSettings` flag.
