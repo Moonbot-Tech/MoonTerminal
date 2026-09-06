@@ -4,7 +4,7 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use moonproto::state::StratsState;
-use moonproto::{MoonClient, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot};
+use moonproto::{MoonClient, StrategyKind, StrategySchema, StrategySnapshot};
 
 use super::account_reconciliation::BALANCE_TRACE_LEVEL;
 use super::client_settings::{ClientSettingsSequence, ManualOrder};
@@ -12,7 +12,7 @@ use super::market_role::MarketRoleState;
 use super::shared_config::SharedConfigSequence;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
-use crate::feed::strategies::{fv_from_str, strat_kind_name};
+use crate::feed::strategies::{fields_from_text, fv_from_str, strat_kind_name};
 use crate::feed::{
     CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment, UpdateTarget, order_edit,
     trade,
@@ -333,13 +333,17 @@ fn overlay_pending_edits(strats: &StratsState) -> Vec<StrategySnapshot> {
 /// change paths, or add entries), and send ONE `sync_local_strategies` plus a log entry if
 /// anything changed. `build` returns the number of affected entries and increments `last_date`
 /// (the Delphi rollback guard) on changed snapshots itself.
+/// Returns whether the sync was actually ACCEPTED by the client queue: a caller that records the
+/// change somewhere else — `local_strat_edits`, say — must not claim it happened when the send
+/// failed or when `build` changed nothing.
+#[must_use]
 fn rebuild_sync(
     client: &MoonClient,
     server_id: u64,
     action: &str,
     strategy_placements: &mut StrategyPlacementGuard,
     build: impl FnOnce(&mut Vec<StrategySnapshot>, Option<&StrategySchema>, u64) -> usize,
-) {
+) -> bool {
     if let Some(snap) = client.snapshot() {
         let strats = snap.strats();
         let schema = strats.strategy_schema();
@@ -358,6 +362,7 @@ fn rebuild_sync(
                         "core {} {action} {changed} strategies",
                         crate::feed::core_label(server_id)
                     );
+                    return true;
                 }
                 Err(error) => log::warn!(
                     "core {} {action} strategies failed: {error}",
@@ -366,6 +371,7 @@ fn rebuild_sync(
             }
         }
     }
+    false
 }
 
 /// Drains one bounded coordinator-command batch while applying the latest market role separately.
@@ -448,14 +454,15 @@ pub(super) fn drain_commands(
                 );
             }
             Ok(CoreCmd::EditStrategyFields { edits }) => {
-                for (id, _) in &edits {
-                    local_strat_edits.mark(*id);
-                }
+                // Which strategies this command actually changed, filled inside the rebuild below.
+                // Claiming an id as locally edited before knowing that would hand `strat_db` a
+                // 30 s window in which a genuinely EXTERNAL change is stamped `origin = "local"`.
+                let mut edited_ids: Vec<u64> = Vec::new();
                 // `sync_local_strategies` SYNCHRONIZES THE ENTIRE local set (moonproto calls
                 // replace_with_snapshots). Patch EVERY entry listed in `edits` in one pass and
                 // issue one sync; separate commands for one core's strategies would overwrite
                 // each other.
-                rebuild_sync(
+                let queued = rebuild_sync(
                     client,
                     server.id,
                     "edit",
@@ -468,14 +475,30 @@ pub(super) fn drain_commands(
                             else {
                                 continue;
                             };
+                            let mut applied = 0usize;
                             for (name, val) in changes {
                                 let existing = sc.fields.get(name).cloned();
                                 let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
-                                sc.fields.insert(
-                                    name.as_str(),
-                                    fv_from_str(existing.as_ref(), stype, val),
-                                );
+                                let Some(value) = fv_from_str(existing.as_ref(), stype, val) else {
+                                    // Leave the field at its current value. Inserting a fallback
+                                    // here would send a number the user never typed, and the core
+                                    // would answer with its own default for it.
+                                    log::warn!(
+                                        "core {} edit strategy {}: field {name} kept, {val:?} is not a value of its type",
+                                        crate::feed::core_label(server.id),
+                                        sc.strategy_id
+                                    );
+                                    continue;
+                                };
+                                sc.fields.insert(name.as_str(), value);
+                                applied += 1;
                             }
+                            // Every field was rejected: this strategy is untouched, so it must not
+                            // claim a new `last_date` and must not make the batch look changed.
+                            if applied == 0 {
+                                continue;
+                            }
+                            edited_ids.push(sc.strategy_id);
                             // Changing SignalType changes the strategy kind. The snapshot stores the
                             // kind in a separate `pub(crate)` byte rather than a field, so rebuild it
                             // with the new `kind`; otherwise the tree's kind badge stays stale.
@@ -513,6 +536,11 @@ pub(super) fn drain_commands(
                         edited
                     },
                 );
+                if queued {
+                    for id in edited_ids {
+                        local_strat_edits.mark(id);
+                    }
+                }
             }
             Ok(CoreCmd::DeleteStrategy { id }) => {
                 // `TStratDelete(strategy_id=id, folder_path="")` deletes one strategy.
@@ -596,7 +624,10 @@ pub(super) fn drain_commands(
                 // Add new snapshots to the complete set. The id is max + 1 for the TARGET core,
                 // which is safe for cross-core paste. Parse fields from strings according to the
                 // schema type, as `fv_from_str` does for edits, with `existing=None`.
-                rebuild_sync(
+                //
+                // The answer is ignored deliberately: `mark_all` above cannot be narrowed to ids
+                // that do not exist yet, so there is nothing here to withhold on a failed send.
+                let _ = rebuild_sync(
                     client,
                     server.id,
                     "create",
@@ -616,11 +647,12 @@ pub(super) fn drain_commands(
                         for (spec, at) in specs.iter().zip(positions) {
                             let id = next_id;
                             next_id += 1;
-                            let mut fields = StrategyFields::new();
-                            for (name, val) in &spec.fields {
-                                let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
-                                fields.insert(name.as_str(), fv_from_str(None, stype, val));
-                            }
+                            let fields = fields_from_text(
+                                schema,
+                                &spec.fields,
+                                server.id,
+                                &format!("create strategy {id}"),
+                            );
                             full.insert(
                                 at,
                                 StrategySnapshot::new(
@@ -644,8 +676,7 @@ pub(super) fn drain_commands(
                 folder_path,
                 fields,
             }) => {
-                local_strat_edits.mark(id);
-                rebuild_sync(
+                let queued = rebuild_sync(
                     client,
                     server.id,
                     "restore",
@@ -655,11 +686,12 @@ pub(super) fn drain_commands(
                         if full.iter().any(|s| s.strategy_id == id) {
                             return 0;
                         }
-                        let mut f = StrategyFields::new();
-                        for (name, val) in &fields {
-                            let stype = schema.and_then(|s| s.field(name)).map(|x| x.type_id);
-                            f.insert(name.as_str(), fv_from_str(None, stype, val));
-                        }
+                        let f = fields_from_text(
+                            schema,
+                            &fields,
+                            server.id,
+                            &format!("restore strategy {id}"),
+                        );
                         full.push(StrategySnapshot::new(
                             id,
                             0,
@@ -672,10 +704,14 @@ pub(super) fn drain_commands(
                         1
                     },
                 );
+                if queued {
+                    local_strat_edits.mark(id);
+                }
             }
             Ok(CoreCmd::MoveStrategies { moves }) => {
                 // Change `path` and increment `last_date` for the selected strategies in one sync.
-                rebuild_sync(
+                // Nothing is recorded on the strength of this send, so its answer is not needed.
+                let _ = rebuild_sync(
                     client,
                     server.id,
                     "move",

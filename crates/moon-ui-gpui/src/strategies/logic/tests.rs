@@ -458,3 +458,53 @@ fn a_mixed_folder_displays_unchecked() {
         "a staged-off child must uncheck the folder even when the server flags are all on"
     );
 }
+
+/// A schema field of the given type, rendered as a text entry.
+fn edit_field(type_name: &str) -> moon_core::feed::SchemaField {
+    moon_core::feed::SchemaField {
+        name: "MShotPrice".to_string(),
+        type_name: type_name.to_string(),
+        ui: moon_core::feed::SchemaFieldUi::Edit,
+        picklist: Vec::new(),
+        default: None,
+    }
+}
+
+/// The row has to mark what the sender will refuse, or pressing Apply looks like it worked and the
+/// old value comes back unexplained. A decimal comma is NOT refused — it is the separator a Russian
+/// keyboard produces, and rejecting it here would fail the very input this marker exists for.
+#[test]
+fn a_rejected_draft_is_the_one_the_core_would_refuse() {
+    assert!(!super::draft_rejected(&edit_field("Double"), "0,5"));
+    assert!(!super::draft_rejected(&edit_field("Double"), "0.5"));
+    assert!(super::draft_rejected(&edit_field("Double"), "0,5%"));
+    assert!(super::draft_rejected(&edit_field("Int32"), "2.5"));
+    // Clearing a numeric field is not an edit the core can carry out: for one strategy the field
+    // always resolves to a value, so an empty control means the text was deleted.
+    assert!(super::draft_rejected(&edit_field("Double"), ""));
+}
+
+/// The gate follows the CONTROL the row draws, not the schema's UI kind. A combo whose picklist
+/// the schema left empty is drawn as a plain text input by `params.rs`, so exempting it by its kind
+/// alone would leave the one control that can hold bad text unmarked.
+#[test]
+fn a_combo_without_a_picklist_is_free_text_and_can_be_rejected() {
+    let mut combo = edit_field("Double");
+    combo.ui = moon_core::feed::SchemaFieldUi::Combo;
+    assert!(super::draft_rejected(&combo, "0,5%"));
+    combo.picklist = vec!["1".to_string(), "2".to_string()];
+    assert!(!super::draft_rejected(&combo, "0,5%"));
+}
+
+/// A checkbox has two states and a combo hands back an entry from its own list, so neither can
+/// carry text the sender refuses; a color field is a string and takes anything.
+#[test]
+fn a_checkbox_a_colour_or_a_string_is_never_rejected() {
+    let mut checkbox = edit_field("Bool");
+    checkbox.ui = moon_core::feed::SchemaFieldUi::Checkbox;
+    assert!(!super::draft_rejected(&checkbox, ""));
+    let mut color = edit_field("String");
+    color.ui = moon_core::feed::SchemaFieldUi::Color;
+    assert!(!super::draft_rejected(&color, "FF00AA"));
+    assert!(!super::draft_rejected(&edit_field("String"), ""));
+}

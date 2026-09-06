@@ -19,6 +19,7 @@ pub use core_label::{clear_core_name, core_label, set_core_name};
 pub use live::FieldMask;
 pub use mode_advice::{SiblingOutcome, suggest_alternate_mode};
 pub use news::{NewsItem, NewsSnapshot};
+pub use strategies::field_text_is_valid;
 pub use types::*;
 
 use std::sync::mpsc::{Receiver, SendError, Sender};

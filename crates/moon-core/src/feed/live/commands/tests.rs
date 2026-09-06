@@ -222,3 +222,56 @@ fn conditional_folder_handler_requires_a_snapshot_and_unchanged_placements() {
 
     assert_shadow_guarded_delete(arm, "client.strategies().delete(0, path.as_str())");
 }
+
+/// A field the conversion refused must leave the strategy alone, and a strategy that kept every
+/// one of its old values must not re-enter the batch.
+///
+/// Plausible edit this catches: restoring the old `sc.fields.insert(name, fv_from_str(..))` shape
+/// with any fallback value — the whole point of `fv_from_str` returning an `Option` is that there
+/// is no honest value to insert, and a fallback is what sent a silent zero to the core. And
+/// without the `applied == 0` guard a fully refused edit still stamps a new `last_date` and
+/// re-syncs every strategy of the core for nothing.
+#[test]
+fn a_refused_field_leaves_the_strategy_untouched() {
+    let arm = command_arm(
+        SRC,
+        "CoreCmd::EditStrategyFields",
+        "CoreCmd::DeleteStrategy",
+    );
+    assert!(
+        arm.contains("let Some(value) = fv_from_str(existing.as_ref(), stype, val) else"),
+        "a refused conversion must skip the field, not substitute one"
+    );
+    assert!(
+        arm.contains("if applied == 0 {"),
+        "a strategy whose every field was refused must not claim a new revision"
+    );
+    assert!(
+        !arm.contains("fv_from_str(existing.as_ref(), stype, val).unwrap"),
+        "no fallback value may be substituted for a refused conversion"
+    );
+}
+
+/// Only strategies this command actually changed may be claimed as locally edited.
+///
+/// Plausible edit this catches: marking up front "because we are about to edit them" — a refused
+/// edit changes nothing, while `strat_db` spends the next 30 s attributing any genuinely external
+/// change to this terminal.
+#[test]
+fn only_an_applied_edit_claims_local_origin() {
+    let arm = command_arm(
+        SRC,
+        "CoreCmd::EditStrategyFields",
+        "CoreCmd::DeleteStrategy",
+    );
+    let mark = arm
+        .find("local_strat_edits.mark(")
+        .expect("the arm must still claim local origin for what it edits");
+    let rebuild = arm
+        .find("rebuild_sync(")
+        .expect("the arm rebuilds the full set");
+    assert!(
+        mark > rebuild,
+        "the claim must follow the rebuild that decides what was actually edited"
+    );
+}

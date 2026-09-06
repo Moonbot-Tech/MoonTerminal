@@ -2,7 +2,8 @@
 //! field-value formatting/parsing, and kind names.
 
 use moonproto::{
-    FieldValue, StrategyFieldType, StrategyFieldUiKind, StrategySchema, StrategySnapshot,
+    FieldValue, StrategyFieldType, StrategyFieldUiKind, StrategyFields, StrategySchema,
+    StrategySnapshot,
 };
 
 use super::{SchemaField, SchemaFieldUi, SchemaKind, SchemaSection, StrategySchemaModel};
@@ -237,50 +238,174 @@ pub(super) fn fmt_field(v: &FieldValue) -> String {
     }
 }
 
-/// Builds a `FieldValue` from a UI string according to the field TYPE, prioritizing the existing
-/// snapshot value's type, then the schema type, then string. An invalid number becomes 0.
+/// Whether `text` typed into a field of schema type `type_name` is a value the core can be sent.
+///
+/// Answers THROUGH [`fv_from_str`] on purpose, so the panel marks a field rejected by the same
+/// rule the sender applies instead of a copy of it that can drift. `type_name` is the name
+/// [`SchemaField::type_name`](crate::feed::SchemaField) carries, so the UI needs no protocol type
+/// of its own. An unknown type name, like `String`, accepts anything.
+///
+/// One case still parts them: the sender prefers the type of the value the CORE last sent for that
+/// field, while this knows only the schema's type. Where a core disagrees with its own schema the
+/// panel can accept text the sender then refuses — the field keeps its value and the log says so,
+/// which is why the sender warns rather than trusting this check.
+///
+/// Empty text counts as rejected: for a single strategy a numeric field always resolves to a value
+/// (the schema default, or `0`), so an empty control means the user cleared it, and clearing a
+/// number is not an edit the core can carry out. The empty control a MIXED selection renders is the
+/// caller's business, not this rule's.
+pub fn field_text_is_valid(type_name: &str, text: &str) -> bool {
+    // Looked up through `name()` rather than spelled out here: `type_name` was produced by that
+    // very function, and a hand-written inverse of it in this repository would answer `true` for
+    // every field of a type moonproto renamed — silently turning the check off.
+    let Some(stype) = FIELD_TYPES.iter().copied().find(|t| t.name() == type_name) else {
+        return true;
+    };
+    fv_from_str(None, Some(stype), text).is_some()
+}
+
+/// Every typed schema field a strategy can carry. `Unknown` is deliberately absent: it names a wire
+/// type this build cannot judge, and both this module's callers treat it as free text.
+const FIELD_TYPES: [StrategyFieldType; 9] = [
+    StrategyFieldType::Bool,
+    StrategyFieldType::Int32,
+    StrategyFieldType::Int64,
+    StrategyFieldType::UInt32,
+    StrategyFieldType::UInt64,
+    StrategyFieldType::Byte,
+    StrategyFieldType::Word,
+    StrategyFieldType::Double,
+    StrategyFieldType::Single,
+];
+
+/// The numeric text behind a UI field: trimmed, with a decimal COMMA rewritten as a dot.
+///
+/// A Russian keyboard produces "0,5" for half a percent, and `parse` accepts only the dot. This
+/// follows the rule every other typed-number path in the terminal already uses
+/// (`order_edit::parse_num`, `analytics::tuner::parse_num`, `settings::general`,
+/// `shell::core_settings::draft`), deliberately: the same text must not mean one number in the
+/// order dialog and another here. A comma reads as the DECIMAL separator, so "1,000" is one, not a
+/// thousand — the forms where that is genuinely ambiguous ("1,000.5", "1,2,3") end up unparsable
+/// and are refused.
+fn num_text(s: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = s.trim();
+    if trimmed.contains(',') {
+        std::borrow::Cow::Owned(trimmed.replace(',', "."))
+    } else {
+        std::borrow::Cow::Borrowed(trimmed)
+    }
+}
+
+/// The schema type that matches a value the core already sent, so both sources of type information
+/// can be answered by ONE dispatch below.
+fn field_type_of(v: &FieldValue) -> StrategyFieldType {
+    match v {
+        FieldValue::Bool(_) => StrategyFieldType::Bool,
+        FieldValue::Int32(_) => StrategyFieldType::Int32,
+        FieldValue::Int64(_) => StrategyFieldType::Int64,
+        FieldValue::UInt32(_) => StrategyFieldType::UInt32,
+        FieldValue::UInt64(_) => StrategyFieldType::UInt64,
+        FieldValue::Byte(_) => StrategyFieldType::Byte,
+        FieldValue::Word(_) => StrategyFieldType::Word,
+        FieldValue::Double(_) => StrategyFieldType::Double,
+        FieldValue::Single(_) => StrategyFieldType::Single,
+        FieldValue::String(_) => StrategyFieldType::String,
+    }
+}
+
+/// Builds a `FieldValue` from a UI string according to the field TYPE, preferring the type of the
+/// value the core last sent, then the schema type, then string.
+///
+/// `None` means the text is NOT a value of that type — the caller must then leave the field alone
+/// rather than send something the user never typed. This function used to answer `0` for anything
+/// unparsable, and that zero went to the core as a real edit: a comma, a stray `%`, a fraction in
+/// an integer field all silently became "no distance", "no stop", "no size", and the core answered
+/// with its own default. Out of range is rejected for the same reason, instead of the `as` casts
+/// that wrapped 300 into a byte field as 44.
+///
+/// Bool and String stay total: a checkbox has only two states, and any text is a valid string.
 pub(super) fn fv_from_str(
     existing: Option<&FieldValue>,
     stype: Option<StrategyFieldType>,
     s: &str,
-) -> FieldValue {
+) -> Option<FieldValue> {
     let b = || {
         matches!(
             s.trim().to_ascii_lowercase().as_str(),
             "yes" | "true" | "1" | "on"
         )
     };
-    let i = |def: i64| s.trim().parse::<i64>().unwrap_or(def);
-    let u = || s.trim().parse::<u64>().unwrap_or(0);
-    let f = || s.trim().parse::<f64>().unwrap_or(0.0);
-    // Follow the existing value's type.
-    if let Some(ev) = existing {
-        return match ev {
-            FieldValue::Bool(_) => FieldValue::Bool(b()),
-            FieldValue::Int32(_) => FieldValue::Int32(i(0) as i32),
-            FieldValue::Int64(_) => FieldValue::Int64(i(0)),
-            FieldValue::UInt32(_) => FieldValue::UInt32(u() as u32),
-            FieldValue::UInt64(_) => FieldValue::UInt64(u()),
-            FieldValue::Byte(_) => FieldValue::Byte(u() as u8),
-            FieldValue::Word(_) => FieldValue::Word(u() as u16),
-            FieldValue::Double(_) => FieldValue::Double(f()),
-            FieldValue::Single(_) => FieldValue::Single(f() as f32),
-            FieldValue::String(_) => FieldValue::String(s.to_string()),
-        };
+    let i = || num_text(s).parse::<i64>().ok();
+    let u = || num_text(s).parse::<u64>().ok();
+    // Two ways a float parse produces a number nobody typed, and both end in the silent zero this
+    // function exists to stop: `1e400` becomes `inf` and `1e-400` becomes `0.0`, neither of them an
+    // error. So a result of zero is only accepted from text that actually spells zero.
+    let f = || {
+        num_text(s)
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .filter(|v| *v != 0.0 || !s.bytes().any(|c| c.is_ascii_digit() && c != b'0'))
+    };
+    // `as f32` underflows a small but perfectly good f64 straight to zero — the same defect one
+    // type down, so the cast is checked rather than trusted.
+    let single = || {
+        f().and_then(|v| {
+            let narrowed = v as f32;
+            (narrowed.is_finite() && (narrowed != 0.0 || v == 0.0)).then_some(narrowed)
+        })
+    };
+    match existing.map(field_type_of).or(stype) {
+        Some(StrategyFieldType::Bool) => Some(FieldValue::Bool(b())),
+        Some(StrategyFieldType::Int32) => i()
+            .and_then(|v| i32::try_from(v).ok())
+            .map(FieldValue::Int32),
+        Some(StrategyFieldType::Int64) => i().map(FieldValue::Int64),
+        Some(StrategyFieldType::UInt32) => u()
+            .and_then(|v| u32::try_from(v).ok())
+            .map(FieldValue::UInt32),
+        Some(StrategyFieldType::UInt64) => u().map(FieldValue::UInt64),
+        Some(StrategyFieldType::Byte) => {
+            u().and_then(|v| u8::try_from(v).ok()).map(FieldValue::Byte)
+        }
+        Some(StrategyFieldType::Word) => u()
+            .and_then(|v| u16::try_from(v).ok())
+            .map(FieldValue::Word),
+        Some(StrategyFieldType::Double) => f().map(FieldValue::Double),
+        Some(StrategyFieldType::Single) => single().map(FieldValue::Single),
+        _ => Some(FieldValue::String(s.to_string())),
     }
-    // Follow the schema type.
-    match stype {
-        Some(StrategyFieldType::Bool) => FieldValue::Bool(b()),
-        Some(StrategyFieldType::Int32) => FieldValue::Int32(i(0) as i32),
-        Some(StrategyFieldType::Int64) => FieldValue::Int64(i(0)),
-        Some(StrategyFieldType::UInt32) => FieldValue::UInt32(u() as u32),
-        Some(StrategyFieldType::UInt64) => FieldValue::UInt64(u()),
-        Some(StrategyFieldType::Byte) => FieldValue::Byte(u() as u8),
-        Some(StrategyFieldType::Word) => FieldValue::Word(u() as u16),
-        Some(StrategyFieldType::Double) => FieldValue::Double(f()),
-        Some(StrategyFieldType::Single) => FieldValue::Single(f() as f32),
-        _ => FieldValue::String(s.to_string()),
+}
+
+/// Convert `(name, text)` pairs into strategy fields, dropping any the core could not be sent.
+///
+/// Shared by the create and restore paths, which differ only in what they call the strategy in the
+/// log. An unparsable field is OMITTED rather than zeroed: the core then gives it the default it
+/// stands behind, which for a field whose schema carries no non-zero default is the same zero the
+/// writer would have skipped anyway. Empty text is that very case rather than a defect —
+/// `ops::default_fields` spells "no schema default" as an empty string — so it passes silently,
+/// while text that means something and cannot be read does say so.
+pub(super) fn fields_from_text(
+    schema: Option<&StrategySchema>,
+    pairs: &[(String, String)],
+    server_id: u64,
+    what: &str,
+) -> StrategyFields {
+    let mut fields = StrategyFields::new();
+    for (name, val) in pairs {
+        let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
+        match fv_from_str(None, stype, val) {
+            Some(value) => {
+                fields.insert(name.as_str(), value);
+            }
+            None if !val.trim().is_empty() => log::warn!(
+                "core {} {what}: field {name} omitted, {val:?} is not a value of its type",
+                super::core_label(server_id)
+            ),
+            None => {}
+        }
     }
+    fields
 }
 
 /// Builds a decoupled model from moonproto `StrategySchema`: each kind contains its editor

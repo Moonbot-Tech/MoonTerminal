@@ -143,14 +143,23 @@ pub(super) fn kinds_differ(st: &StrategiesView, store: &CoreStore) -> bool {
     false
 }
 
+/// Return one kind's editor sections from a core's schema.
+pub(super) fn kind_sections(store: &CoreStore, core: CoreId, ord: u8) -> Option<&[SchemaSection]> {
+    let kind = store
+        .core(core)?
+        .schema
+        .as_ref()?
+        .kinds
+        .iter()
+        .find(|k| k.ordinal == ord)?;
+    Some(&kind.sections)
+}
+
 /// Return lowercase field names from core `core`'s schema for kind ordinal `ord`.
 pub(super) fn kind_field_set(store: &CoreStore, core: CoreId, ord: u8) -> HashSet<String> {
-    store
-        .core(core)
-        .and_then(|cd| cd.schema.as_ref())
-        .and_then(|sch| sch.kinds.iter().find(|k| k.ordinal == ord))
-        .map(|k| {
-            k.sections
+    kind_sections(store, core, ord)
+        .map(|sections| {
+            sections
                 .iter()
                 .flat_map(|s| &s.fields)
                 .map(|f| f.name.to_lowercase())
@@ -390,6 +399,91 @@ pub(super) fn values_equal(a: &str, b: &str) -> bool {
         _ => None,
     };
     matches!((boolish(a), boolish(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// The control `field_row` draws for a schema field.
+///
+/// ONE table, consulted both by the renderer and by [`draft_rejected`]: while the two matched on
+/// `SchemaFieldUi` separately, a new control — or a change to the picklist condition — could be
+/// added to the renderer while the rejection marker went on believing the old shape.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FieldControl {
+    Checkbox,
+    Color,
+    /// A dropdown over the schema's own list of values.
+    Picklist,
+    /// A plain text input: everything else, including a `Combo` whose picklist the core leaves
+    /// empty to fill at runtime.
+    FreeText,
+}
+
+pub(super) fn field_control(f: &SchemaField) -> FieldControl {
+    match f.ui {
+        SchemaFieldUi::Checkbox => FieldControl::Checkbox,
+        SchemaFieldUi::Color => FieldControl::Color,
+        SchemaFieldUi::Combo if !f.picklist.is_empty() => FieldControl::Picklist,
+        _ => FieldControl::FreeText,
+    }
+}
+
+/// Whether the text a field currently shows is one the core would refuse to store.
+///
+/// `moon_core::feed::strategies::fv_from_str` leaves a field untouched when its text is not a value
+/// of that field's type — a decimal comma is accepted, but a stray letter, an out-of-range number
+/// or a fraction in an integer field are not. Without this marker the edit would look applied,
+/// quietly do nothing, and the old value would come back with no explanation, which is the same
+/// confusion the silent zero used to cause (it sent a number the user never typed instead).
+///
+/// Only free text can hold something the sender refuses: a checkbox has two states, a picklist
+/// hands back its own entry, and a colour is the `AARRGGBB` text the picker produced. The caller
+/// excludes the empty control a MIXED selection renders, which is not a draft at all.
+pub(super) fn draft_rejected(f: &SchemaField, value: &str) -> bool {
+    field_control(f) == FieldControl::FreeText
+        && !moon_core::feed::field_text_is_valid(&f.type_name, value)
+}
+
+/// The schema field behind a named strategy field of one KIND.
+///
+/// Takes the kind rather than the strategy so a caller judging many drafts at once resolves each
+/// strategy's kind once (see `sendable_field_edits`) instead of scanning the core's strategy list
+/// per draft. The comparison is case-sensitive because a draft is keyed by the exact `name` its
+/// schema field carries.
+pub(super) fn schema_field_in_kind<'a>(
+    store: &'a CoreStore,
+    core: CoreId,
+    ord: u8,
+    name: &str,
+) -> Option<&'a SchemaField> {
+    kind_sections(store, core, ord)?
+        .iter()
+        .flat_map(|s| &s.fields)
+        .find(|f| f.name == name)
+}
+
+/// Kind ordinals for the given strategies, resolved with ONE pass over each core's list.
+///
+/// `row` is a linear find, and a folder-wide edit stages one draft per selected strategy, so the
+/// obvious per-draft lookup would cost O(drafts × strategies) on a panel that repaints on hover.
+pub(super) fn kind_ordinals(
+    store: &CoreStore,
+    keys: impl Iterator<Item = Key>,
+) -> HashMap<Key, u8> {
+    let mut wanted: HashMap<CoreId, HashSet<u64>> = HashMap::new();
+    for (core, id) in keys {
+        wanted.entry(core).or_default().insert(id);
+    }
+    let mut out = HashMap::new();
+    for (core, ids) in wanted {
+        let Some(cd) = store.core(core) else { continue };
+        for r in &cd.strategies {
+            if ids.contains(&r.id) {
+                // First match wins, as `row` resolves it, so a core listing an id twice cannot
+                // make these two disagree about the kind.
+                out.entry((core, r.id)).or_insert(r.kind_ordinal);
+            }
+        }
+    }
+    out
 }
 
 pub(super) fn is_on(v: &str) -> bool {
