@@ -2422,9 +2422,9 @@ strat.label.GlobalFilterPenalty:
   en: "Global filter penalty"
   es: "Penalización global de filtro"
 strat.label.HFT:
-  ru: "Режим HFT"
-  en: "HFT mode"
-  es: "Modo HFT"
+  ru: "Порог HFT"
+  en: "HFT threshold"
+  es: "Umbral HFT"
 strat.label.HookAntiPump:
   ru: "Hook: антипамп"
   en: "Hook: anti-pump"
