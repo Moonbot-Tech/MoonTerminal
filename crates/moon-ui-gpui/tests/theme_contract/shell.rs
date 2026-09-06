@@ -1425,7 +1425,7 @@ fn market_popups_occlude_the_wheel_from_the_surface_behind() {
     let coin_search = read_src("controls/coin_search.rs");
     let ticker = read_src("shell/ticker.rs");
 
-    let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H>(");
+    let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H, E>(");
     assert!(
         popup.contains(".occlude()"),
         "the coin-search popup must occlude, or the wheel over its results rescales the chart \
@@ -1651,7 +1651,7 @@ fn every_main_chart_removal_goes_through_the_shared_teardown() {
 #[test]
 fn the_multi_select_hint_clips_instead_of_wrapping() {
     let coin_search = read_src("controls/coin_search.rs");
-    let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H>(");
+    let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H, E>(");
     let hint = chain_between(
         &popup,
         "if multi_select {",
@@ -1686,7 +1686,7 @@ fn single_server_auto_search_names_the_server_once() {
 
     let popup = code_only(braced_body(
         &coin_search,
-        "pub(crate) fn render_popup<F, G, H>(",
+        "pub(crate) fn render_popup<F, G, H, E>(",
     ));
     assert!(
         popup.contains("let show_server_per_row = server_context.is_none()")
@@ -1704,14 +1704,20 @@ fn single_server_auto_search_names_the_server_once() {
             && popup_server_context.contains(".child(context)"),
         "the single-server popup must visibly name its server above the result rows"
     );
-    let rows = code_only(braced_body(&coin_search, "fn push_section<F, G>("));
+    let rows = code_only(braced_body(&coin_search, "fn push_section<F, G, E>("));
     assert!(
         rows.contains(".when(show_server_per_row, |row|"),
         "single-server Auto rows must omit the repeated visible @server suffix"
     );
+    let result_row = code_only(chain_between(
+        &rows,
+        "let on_pick_row = on_pick.clone();",
+        "if !open || members <= 1 {",
+        "the grouped coin result row",
+    ));
     assert!(
-        !rows.contains(".tooltip(") && !rows.contains("text_tooltip("),
-        "result rows must not attach a tooltip that can cover the row"
+        !result_row.contains(".tooltip(") && !result_row.contains("text_tooltip("),
+        "the grouped coin result row must not attach a tooltip that can cover it"
     );
 
     let strip = code_only(braced_body(

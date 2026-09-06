@@ -586,6 +586,7 @@ impl Shell {
             quiet_to_input,
             quiet_charts_input,
             ticker_popup_open: false,
+            ticker_expanded: std::collections::HashSet::new(),
             ticker_popup_hovered: false,
             ticker_input,
         };

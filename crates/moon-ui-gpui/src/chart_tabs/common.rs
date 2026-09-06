@@ -1153,6 +1153,93 @@ pub(super) trait CoinPopupHost: Sized + 'static {
     fn coin_field(&self) -> &Entity<MoonInputState>;
     /// The backend this host reads and writes, so shared plumbing can reach persisted state.
     fn coin_backend(&self) -> Entity<crate::Backend>;
+    /// What the dropdown is showing right now.
+    ///
+    /// On the trait because the KEYBOARD path needs it and both hosts already build it for their
+    /// renderer; each impl delegates to its own inherent builder so the two lists can never
+    /// disagree about what Enter would open versus what the user is looking at.
+    fn coin_popup_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults;
+    /// Keeps row picks aligned with the host's trading focus, or leaves an unscoped host to use
+    /// the first matching core.
+    fn coin_active_core(&self, cx: &App) -> Option<CoreId>;
+}
+
+/// Routes `Enter` through the ordinary pick funnel after resolving the first typed match.
+///
+/// The fast path beside the multi-select one: ticking boxes and pressing "Open in new tab" still
+/// builds a SET, while `Enter` opens the one coin the user just typed. Both end in the same funnel
+/// ([`coin_pick_handler`]), so the recents list, the field, the popup and the keyboard are settled
+/// identically however the market was chosen.
+///
+/// An EMPTY field opens nothing: the list is then Recent and Top movers, two suggestions the user
+/// did not ask for. A query matching nothing opens nothing either, leaving the "no matches" note
+/// standing rather than closing the list under the user.
+///
+/// The pick is DEFERRED, and that is load-bearing rather than tidy: this runs inside the field's
+/// subscription, where the host is already borrowed as `&mut self`, and [`coin_pick_handler`]
+/// re-enters it through `view.update`. Called inline it panics with "cannot read ... while it is
+/// already being updated" — the same hazard the handler's own comment names.
+///
+/// Args:
+///     this: The coin field's host.
+///     input: The field itself, passed while the caller still holds `&self`.
+///     window: Window the press arrived on, used to defer and to release focus.
+///     cx: Host context.
+///
+/// Returns:
+///     Nothing; an empty field, an empty query and a suggestion list all leave the list standing.
+pub(super) fn coin_enter_handler<T: CoinPopupHost>(
+    this: &T,
+    input: Entity<MoonInputState>,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let active = this.coin_active_core(cx);
+    let Some((core, market)) =
+        crate::controls::coin_search::enter_target(this.coin_popup_results(cx), active)
+    else {
+        return;
+    };
+    let pick = coin_pick_handler(cx, input);
+    window.defer(cx, move |window, app| pick(core, market, window, app));
+}
+
+/// End an open market search on `Escape`, and report whether it did.
+///
+/// Without this the key is not merely inert — it CLOSES THE ACTIVE CHART. `MoonInputState::escape`
+/// propagates when the field is not `clean_on_escape`, and Escape carries no `key_char`, so
+/// `hotkeys::belongs_to_the_field` lets it through to the window's binding, which resolves to
+/// `CloseActiveChart`. The list stays up and the chart under it disappears.
+///
+/// Modelled on [`crate::hotkeys::escape_leaves_sells_zone`]: matched on the raw key BEFORE the
+/// hotkey table is consulted, consuming the press, so the NEXT Escape behaves exactly as it always
+/// did. Gated on the popup actually being open for the same reason — Escape keeps every other
+/// meaning it has.
+///
+/// Args:
+///     this: The coin field's host.
+///     ev: The key press, before hotkey resolution.
+///     window: Window the press arrived on, used to release the field's keyboard.
+///     cx: Host context.
+///
+/// Returns:
+///     Whether the press was consumed and must not reach the hotkey table.
+pub(super) fn coin_escape_ends_search<T: CoinPopupHost + LayoutPopupHost>(
+    this: &mut T,
+    ev: &KeyDownEvent,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> bool {
+    if ev.keystroke.key != "escape" || ev.keystroke.modifiers.modified() {
+        return false;
+    }
+    if !this.popup_shows(ChartPopup::Coin) {
+        return false;
+    }
+    this.clear_coin_search(cx);
+    let field = this.coin_field().clone();
+    crate::controls::coin_search::release_focus(&field, window, cx);
+    true
 }
 
 /// Handle a coin-list selection by opening it, clearing the field, and closing the popup.

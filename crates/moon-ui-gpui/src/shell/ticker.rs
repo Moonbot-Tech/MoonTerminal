@@ -22,6 +22,9 @@ impl Shell {
         } else {
             self.ticker_popup_open = true;
             self.ticker_popup_hovered = false;
+            // Defaults on open: the popup is closed from several places that never pass
+            // `close_ticker_popup`, so opening is the only reliable reset point.
+            self.ticker_expanded.clear();
             self.ticker_input
                 .update(cx, |st, c| st.set_value(String::new(), window, c));
         }
@@ -31,8 +34,22 @@ impl Shell {
     pub(super) fn close_ticker_popup(&mut self, cx: &mut Context<Self>) {
         if self.ticker_popup_open {
             self.ticker_popup_open = false;
+            // The next open starts from the defaults, like the query does.
+            self.ticker_expanded.clear();
             cx.notify();
         }
+    }
+
+    /// Records an explicit expansion override so the shared size-based defaults need no seeding.
+    fn toggle_ticker_expanded(
+        &mut self,
+        key: crate::controls::coin_search::CoinGroupKey,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.ticker_expanded.remove(&key) {
+            self.ticker_expanded.insert(key);
+        }
+        cx.notify();
     }
 
     /// Build the right-anchored ticker popup and its full-window dismiss layer.
@@ -64,13 +81,18 @@ impl Shell {
         let backend = self.backend.clone();
         let view = cx.entity();
         let ticker_field = self.ticker_input.clone();
+        let view_expand = cx.entity();
         // Always a query list: this field picks a RATE to display in the header, so "recently
         // opened chart" and "biggest mover" would be the wrong universe to offer.
         let list = coin_search::render_popup(
             "header-ticker-search",
             crate::controls::coin_search::CoinResults::Query(results),
             &Default::default(),
+            &self.ticker_expanded,
             false,
+            // The header ticker is not scoped to a core: its rows open on the first core that
+            // carries the instrument, exactly the row it showed first before grouping.
+            None,
             None,
             p,
             cx,
@@ -85,6 +107,9 @@ impl Shell {
                 crate::controls::coin_search::release_focus(&ticker_field, window, app);
             },
             |_, _, _| {},
+            move |key, app| {
+                view_expand.update(app, |this, cx| this.toggle_ticker_expanded(key, cx));
+            },
             |_, _| {},
         );
 

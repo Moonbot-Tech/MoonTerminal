@@ -297,20 +297,28 @@ impl Render for ChartTabs {
                     .map(|name| crate::display_text::flatten_lines(&name))
             };
             let results = self.coin_results(cx);
+            // The core a COIN row opens on, resolved by the same rule the trading controls use.
+            let active_core = common::CoinPopupHost::coin_active_core(self, cx);
             let view_toggle = cx.entity();
+            let view_expand = cx.entity();
             let view_open = cx.entity();
             let input_open = self.coin_input.clone();
             coin_search::render_popup(
                 "tabs-coin",
                 results,
                 &self.coin_selected,
+                &self.coin_expanded,
                 true,
+                active_core,
                 server_context,
                 p_strip,
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),
                 move |core, market, app| {
                     view_toggle.update(app, |this, cx| this.toggle_coin_selected(core, market, cx));
+                },
+                move |key, app| {
+                    view_expand.update(app, |this, cx| this.toggle_coin_expanded(key, cx));
                 },
                 move |window, app| {
                     view_open.update(app, |this, cx| this.open_selected_in_new_tab(cx));
@@ -419,6 +427,23 @@ impl Render for ChartTabs {
         v_flex()
             .size_full()
             .relative()
+            // Escape ends an open market search HERE, on an ancestor of the field, so it is
+            // consumed before the Shell root resolves it to CloseActiveChart -- which is what it
+            // does today, closing the chart with the list still up.
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                // The SAME first rule as `Shell::on_hotkey` and `DetachedChartHost::on_hotkey`,
+                // and it has to be repeated here rather than left to the Shell root: gpui
+                // dispatches bubbled key listeners from the focused descendant OUTWARD, so this
+                // listener — an ancestor of the field, but a descendant of the root — runs first
+                // and a `stop_propagation` here would never let the root's safety rule run at all.
+                if crate::hotkeys::escape_leaves_sells_zone(ev, &this.backend, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                if common::coin_escape_ends_search(this, ev, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .child(
                 // Tabs yield (`flex_1 min_w_0`); the right chrome cluster is a real flex sibling,
                 // not an overlay. This row does not clip: hanging coin/figstyle layers are lifted.

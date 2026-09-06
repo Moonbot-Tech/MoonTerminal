@@ -626,6 +626,11 @@ pub struct ReportPanel {
     coin_query: String,
     /// Whether the shared `controls::coin_search` match popup is open.
     coin_popup_open: bool,
+    /// Coin rows of that popup whose core list the user has flipped open or shut.
+    ///
+    /// Holds what was TOGGLED away from the default, not what is open; see
+    /// `controls::coin_search::group_is_open`.
+    coin_expanded: HashSet<crate::controls::coin_search::CoinGroupKey>,
     from: Entity<MoonDateTimePickerState>,
     /// Mirror of the From field in UTC unix seconds, used to suppress duplicate scoped-update
     /// queries. The field picks whole minutes, so this is the first second of the picked minute.

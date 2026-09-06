@@ -241,6 +241,7 @@ impl Render for ReportPanel {
                 )
             };
             let view = cx.entity();
+            let view_expand = cx.entity();
             let coin_input = self.coin.clone();
             let backend_pick = self.backend.clone();
             // Always a query list: this field filters a report COLUMN, not a set of charts.
@@ -248,7 +249,12 @@ impl Render for ReportPanel {
                 "rep-coin-search",
                 crate::controls::coin_search::CoinResults::Query(results),
                 &HashSet::new(),
+                &self.coin_expanded,
                 false,
+                // This field filters a report COLUMN rather than opening a chart, so it is scoped
+                // to no core: a row resolves to the first core carrying the instrument, which is
+                // the row this list showed first before grouping.
+                None,
                 None,
                 p,
                 cx,
@@ -281,6 +287,9 @@ impl Render for ReportPanel {
                     crate::controls::coin_search::release_focus(&coin_input, window, app);
                 },
                 |_core, _market, _app| {},
+                move |key, app| {
+                    view_expand.update(app, |this, cx| this.toggle_coin_expanded(key, cx));
+                },
                 |_window, _app| {},
             )
             .absolute()

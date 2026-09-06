@@ -1016,3 +1016,118 @@ fn chart_hit_testing_reads_the_engines_own_pane_layout() {
         );
     }
 }
+
+/// Chart-tab Enter subscriptions must defer the common opening funnel until their host borrow
+/// ends.
+///
+/// Breakage this pins: removing `window.defer` from `chart_tabs/common.rs::coin_enter_handler`.
+/// Enter would update the borrowed host and panic instead of opening the selected market.
+#[test]
+fn enter_subscriptions_defer_the_common_coin_opening_funnel() {
+    for path in ["chart_tabs/mod.rs", "chart_tabs/detached_host/mod.rs"] {
+        let source = code_only(&read_src(path));
+        assert!(
+            source.contains("MoonInputEvent::PressEnter") && source.contains("coin_enter_handler("),
+            "{path} must route PressEnter through coin_enter_handler"
+        );
+    }
+
+    let common = code_only(&read_src("chart_tabs/common.rs"));
+    let handler = braced_body(
+        &common,
+        "pub(super) fn coin_enter_handler<T: CoinPopupHost>(",
+    );
+    assert!(
+        handler.contains("coin_pick_handler(") && handler.contains("window.defer("),
+        "coin_enter_handler must defer coin_pick_handler until the subscription releases its host borrow"
+    );
+}
+
+/// Escape must close coin search before detached-host hotkey resolution and from the strip root.
+///
+/// Breakage this pins: dropping `coin_escape_ends_search` from either route. Escape would close
+/// the active chart while the search list remained open.
+#[test]
+fn escape_closes_coin_search_before_chart_hotkeys() {
+    let strip_source = code_only(&read_src("chart_tabs/strip.rs"));
+    let strip = braced_body(&strip_source, "fn render(&mut self, window: &mut Window");
+    assert!(
+        strip.contains(".on_key_down(") && strip.contains("coin_escape_ends_search("),
+        "the chart-tab strip root must handle Escape while coin search is visible"
+    );
+
+    let detached = code_only(&read_src("chart_tabs/detached_host/mod.rs"));
+    let on_hotkey = braced_body(&detached, "fn on_hotkey(");
+    let escape = on_hotkey
+        .find("coin_escape_ends_search")
+        .expect("detached on_hotkey must end visible coin search");
+    let resolve = on_hotkey
+        .find("hotkeys::resolve(")
+        .expect("detached on_hotkey must resolve ordinary hotkeys");
+    assert!(
+        escape < resolve,
+        "detached Escape must end coin search before hotkeys::resolve can close the active chart"
+    );
+}
+
+/// An empty chart stack must retain its muted localized hint inside the size-probed render path.
+///
+/// Breakage this pins: removing the empty-state hint or its size probe while restyling Main. A
+/// newly opened workspace would render a blank, unmeasured chart area.
+#[test]
+fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
+    let main_stack = read_src("chart_tabs/main_stack.rs");
+    let render = braced_body(
+        &main_stack,
+        "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement",
+    );
+    let empty = braced_body(&render, "if self.charts.is_empty() {");
+    assert!(
+        empty.contains("chart.empty.hint") && empty.contains("text_muted"),
+        "the empty Main stack branch must show chart.empty.hint in muted text"
+    );
+    assert!(
+        empty.contains("with_size_probe("),
+        "the empty Main stack must remain inside the size-probed render path"
+    );
+
+    let locale = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("locales")
+            .join("shell.yml"),
+    )
+    .expect("shell locale must be readable");
+    for (key, next) in [
+        ("chart.coin.cores:", "chart.empty.hint:"),
+        ("chart.empty.hint:", "# --- Stack orientation"),
+    ] {
+        let entry = chain_between(&locale, key, next, "localized chart text");
+        assert!(
+            entry.contains("ru:") && entry.contains("en:") && entry.contains("es:"),
+            "{key} must carry ru, en, and es translations"
+        );
+    }
+}
+
+/// Coin-search rendering must resolve its narrowed bucket before rendering, never post-filter a
+/// wide result set by core.
+///
+/// Breakage this pins: adding `cores_for` or `retain(|hit| hit.core` after a wide cache lookup.
+/// The suggestion cache would keep serving the previous core's markets for its full lifetime.
+#[test]
+fn coin_search_never_post_filters_a_wide_result_set() {
+    let coin_search = read_src("controls/coin_search.rs");
+    let popup = code_only(braced_body(
+        &coin_search,
+        "pub(crate) fn render_popup<F, G, H, E>(",
+    ));
+    let rows = code_only(braced_body(&coin_search, "fn push_section<F, G, E>("));
+    for (name, body) in [("render_popup", popup), ("push_section", rows)] {
+        assert!(
+            !body.contains("cores_for(") && !body.contains(".retain(|hit| hit.core"),
+            "{name} must receive a narrowed bucket result, never post-filter a wide cached result"
+        );
+    }
+}

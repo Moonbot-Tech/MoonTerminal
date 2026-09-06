@@ -887,10 +887,9 @@ fn every_coin_search_exit_releases_the_keyboard() {
         (
             "chart tab strip and detached window",
             "chart_tabs/common.rs",
-            // Pick, and the shared end-of-search funnel — the dismiss layer and a press on a
-            // neighbouring toolbar control both run through `coin_toolbar_press_handler`, so they
-            // are two exits behind one call. A third exit added here needs its own.
-            2,
+            // Pick, the shared end-of-search funnel, and coin_escape_ends_search each need a
+            // focus release.
+            3,
         ),
         ("open selection in a new tab", "chart_tabs/strip.rs", 1),
         ("report coin filter", "panels/report/render.rs", 2), // pick, dismiss

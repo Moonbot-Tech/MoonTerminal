@@ -328,8 +328,22 @@ impl ReportPanel {
     pub(super) fn close_coin_popup(&mut self, cx: &mut Context<Self>) {
         if self.coin_popup_open {
             self.coin_popup_open = false;
+            // The next open starts from the defaults; only the TEXT survives a dismissal here.
+            self.coin_expanded.clear();
             cx.notify();
         }
+    }
+
+    /// Records an explicit expansion override so the shared size-based defaults need no seeding.
+    pub(super) fn toggle_coin_expanded(
+        &mut self,
+        key: crate::controls::coin_search::CoinGroupKey,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.coin_expanded.remove(&key) {
+            self.coin_expanded.insert(key);
+        }
+        cx.notify();
     }
 
     /// Select an order-kind filter, persist the changed set, and request fresh rows.

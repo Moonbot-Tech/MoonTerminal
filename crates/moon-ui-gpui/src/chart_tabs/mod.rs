@@ -283,6 +283,11 @@ pub struct ChartTabs {
     next_custom_num: u32,
     /// Markets checked in the search dropdown for Open in New Tab.
     coin_selected: std::collections::HashSet<(CoreId, String)>,
+    /// Coin rows of the search dropdown whose core list the user has flipped open or shut.
+    ///
+    /// Holds what was TOGGLED away from the default, not what is open, so a freshly opened list
+    /// needs no seeding; see `controls::coin_search::group_is_open`.
+    coin_expanded: std::collections::HashSet<crate::controls::coin_search::CoinGroupKey>,
     /// Order-book gate generation by custom-tab number, invalidating stale five-second suspend
     /// timers so only the latest leave/return/leave cycle applies.
     custom_gate_gen: HashMap<u32, u64>,
@@ -647,6 +652,12 @@ impl ChartTabs {
                     this.open_coin_popup(cx);
                     return;
                 }
+                // Enter opens the first match on the active core -- the fast path beside the
+                // multi-select one. See `common::coin_enter_handler`.
+                if matches!(ev, MoonInputEvent::PressEnter { .. }) {
+                    common::coin_enter_handler(this, input.clone(), window, cx);
+                    return;
+                }
                 if matches!(ev, MoonInputEvent::Change) {
                     let value = input.read(cx).value().to_string();
                     if let std::borrow::Cow::Owned(en) =
@@ -658,6 +669,13 @@ impl ChartTabs {
                     if this.coin_query != value {
                         // Clearing the text does not close the list; it falls back to suggestions.
                         this.coin_query = value;
+                        // This branch REOPENS a closed list without passing `open_coin_popup`, so
+                        // it owes that funnel's reset: an Auto rail move closes the popup from
+                        // `sync_auto_workspace_chart`, and the next keystroke would otherwise bring
+                        // it back carrying the previous scope's expanded rows.
+                        if !this.popup_shows(ChartPopup::Coin) {
+                            this.coin_expanded.clear();
+                        }
                         this.open_chart_popup(ChartPopup::Coin, cx);
                     }
                 }
@@ -731,6 +749,7 @@ impl ChartTabs {
             custom_labels: HashMap::new(),
             next_custom_num: CUSTOM_NUM_BASE,
             coin_selected: std::collections::HashSet::new(),
+            coin_expanded: std::collections::HashSet::new(),
             custom_gate_gen: HashMap::new(),
             detached: Vec::new(),
             active: Tab::Main,

@@ -672,6 +672,9 @@ impl ReportPanel {
                 if t.coin_query != value {
                     t.coin_query = value;
                     t.coin_popup_open = !t.coin_query.trim().is_empty();
+                    // Defaults whenever the match list comes back up; several paths close it
+                    // without passing `close_coin_popup`.
+                    t.coin_expanded.clear();
                     t.request_requery(cx);
                 }
             }
@@ -866,6 +869,7 @@ impl ReportPanel {
             coin,
             coin_query,
             coin_popup_open: false,
+            coin_expanded: HashSet::new(),
             from,
             from_query,
             to,
