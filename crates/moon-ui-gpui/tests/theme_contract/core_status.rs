@@ -2,6 +2,32 @@
 
 use super::support::{braced_body, code_only, read_src};
 
+/// `table.rs:core_status_row` must route every explicitly classified Flat cell through
+/// `level_color`. Mutation: delete one arm's `.text_color(level_color(...))`; that column would
+/// silently return to full-strength text and the Flat table would lose the visual contrast that
+/// surfaces troubled cores.
+#[test]
+fn core_status_flat_cells_apply_the_shared_level_colour() {
+    let table = read_src("panels/core_status/table.rs");
+    let row = code_only(braced_body(&table, "fn core_status_row("));
+    let classified_arms = [
+        "\"status\" => MoonDataCell::element(status_cell(r, diag.as_ref()))\n            .text_color(level_color(status_level(&r.status), p)),",
+        "\"cpu_proc\" => MoonDataCell::text(percent(sys.process_cpu_percent))\n            .text_color(level_color(cpu_level(sys.process_cpu_percent), p)),",
+        "\"cpu_sys\" => MoonDataCell::text(percent(sys.system_cpu_percent))\n            .text_color(level_color(cpu_level(sys.system_cpu_percent), p)),",
+        "\"free_phys\" => MoonDataCell::text(memory_u16(sys.free_physical_memory_mb))\n            .text_color(level_color(free_mem_level(sys.free_physical_memory_mb), p)),",
+        "\"ping\" => MoonDataCell::text(ping(sys.round_trip_ms))\n            .text_color(level_color(lat_level(r.ping_sev), p)),",
+        "\"ping_exch\" => MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from)))\n            .text_color(level_color(lat_level(r.exch_sev), p)),",
+        "\"api_quota\" => MoonDataCell::text(api_quota_text(r.api_quota)).text_color(level_color(\n            api_quota_level(r.api_quota, r.api_quota_warn),\n            p,\n        )),",
+    ];
+
+    for arm in classified_arms {
+        assert!(
+            row.contains(arm),
+            "every classified Flat cell must use level_color; missing arm:\n{arm}"
+        );
+    }
+}
+
 /// `table.rs:core_status_table` must derive `section_column_count` from the shared `column_keys`
 /// projection, and `table.rs:section_row` must create one cell per declared table column.
 ///

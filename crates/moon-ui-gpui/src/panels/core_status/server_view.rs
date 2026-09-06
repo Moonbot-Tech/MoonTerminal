@@ -419,10 +419,7 @@ fn server_row(
                     memory_free(group.process_memory_mb, group.free_physical_memory_mb),
                     w.mem,
                     w.icon,
-                    level_color(
-                        free_mem_level(group.process_memory_mb, group.free_physical_memory_mb),
-                        p,
-                    ),
+                    level_color(free_mem_level(group.free_physical_memory_mb), p),
                     group.mem_warn,
                     p,
                 ))

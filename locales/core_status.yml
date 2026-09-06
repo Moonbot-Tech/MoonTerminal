@@ -221,6 +221,30 @@ core_status.col.api_key:
   ru: "АПИ (дн)"
   en: "API (d)"
   es: "API (d)"
+# Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
+# lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
+# the only place the reader can learn what it claims.
+core_status.api_perpetual:
+  ru: "Ключ без срока действия"
+  en: "Key with no expiry date"
+  es: "Clave sin fecha de caducidad"
+
+# --- Flat column header hovers ------------------------------------------------------------------
+# Three Flat headings are abbreviated past the point of being readable on their own, because the
+# column is narrower than the phrase. The heading keeps the abbreviation (widening the column would
+# cost the metrics their room); the hover carries the full phrase.
+core_status.col_tip.cpus:
+  ru: "Логических процессоров на машине"
+  en: "Logical CPUs on the machine"
+  es: "CPU lógicos en la máquina"
+core_status.col_tip.tz_off:
+  ru: "Смещение часов ядра относительно UTC"
+  en: "Core clock offset from UTC"
+  es: "Desfase del reloj del núcleo respecto a UTC"
+core_status.col_tip.api_key:
+  ru: "Дней до истечения ключа API биржи"
+  en: "Days until the exchange API key expires"
+  es: "Días hasta que caduque la clave API de la bolsa"
 # Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
 # a dash. Named for the budget rather than the exchange, so the column still reads right the day a
 # second venue starts publishing a quota.

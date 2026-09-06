@@ -1482,6 +1482,25 @@ impl CoreStatusView {
         // Empty here means every core already agrees with the fleet's newest build, never that no
         // release exists, so the button explains that in its tooltip instead of just going gray.
         let behind_empty = self.backend.read(cx).session.cores_behind().is_empty();
+        // TINT, not a second affordance: both buttons keep their handlers, their size and their
+        // place. Amber is the tone this row ALREADY uses for "an update campaign wants attention"
+        // (the counter above), so a fleet with something to update lights the control that acts on
+        // it, and a fleet that is fully current leaves it as ordinary panel chrome.
+        //
+        // ONLY the BEHIND button is tinted, and that asymmetry is the point. These two controls
+        // command LIVE cores and sit side by side: "update behind" is scoped to the cores that are
+        // actually stale, while "update all" pushes to every eligible core in the fleet. Lighting
+        // both under one predicate would put the attention cue on the broader, more destructive
+        // action at the exact moment a user is scanning for "the lit-up button" -- so the tint
+        // follows the action that RESOLVES the condition it signals, and the wider one stays
+        // deliberately quiet. Tinting "update all" on its own offerability was rejected for a
+        // second reason too: it is offerable on a healthy fleet at all times, so it would be a
+        // permanent amber fixture, which this footer's own comment above forbids.
+        let behind_variant = if behind_empty {
+            MoonButtonVariant::Panel
+        } else {
+            MoonButtonVariant::Amber
+        };
         let update_all_view = cx.entity();
         let update_behind_view = update_all_view.clone();
         // Frozen render idiom (`workspace/scope_marker.rs`): head and tail are DIRECT children of
@@ -1566,7 +1585,7 @@ impl CoreStatusView {
                         let behind_button = MoonButton::new("core-status-update-behind")
                             .label(t!("core_update.fleet.behind").to_string())
                             .size(MoonButtonSize::Micro)
-                            .variant(MoonButtonVariant::Panel)
+                            .variant(behind_variant)
                             .disabled(behind_empty)
                             .on_click(move |_, window, cx| {
                                 update_behind_view.update(cx, |this, cx| {
