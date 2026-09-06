@@ -1,6 +1,11 @@
-//! Stable Report row selection, range arithmetic, mutation targets, and clipboard projection.
+//! Stable Report row identity, mutation targets, and clipboard projection.
+//!
+//! The click and range arithmetic used to live here; it is `controls::row_selection` now, shared
+//! with Core Status. `ReportSelection` is that helper keyed by [`ReportRowKey`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::HashSet;
 
 use chrono_tz::Tz;
 use moon_core::db::ReportAxis;
@@ -9,6 +14,7 @@ use rusqlite::types::Value;
 
 use super::query::ReportData;
 use super::{columns, export};
+use crate::controls::row_selection::RowSelection;
 
 /// Stable identity of one displayed report row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -20,172 +26,19 @@ pub(super) enum ReportRowKey {
 }
 
 /// Controlled Report multi-selection with one stable Shift-range anchor.
-#[derive(Clone, Default)]
-pub(super) struct ReportSelection {
-    selected: HashSet<ReportRowKey>,
-    anchor: Option<ReportRowKey>,
-    /// Row of the LAST click in any mode, which the comment pane describes.
-    ///
-    /// Distinct from `anchor`: a Shift range deliberately keeps its anchor at the range base so the
-    /// next Shift click re-measures from there, but the row the user just pointed at is the far end.
-    last_clicked: Option<ReportRowKey>,
-}
+///
+/// The click algorithm itself is [`RowSelection`], lifted into `controls::row_selection` and
+/// shared with Core Status. What stays here is what only a REPORT row means: which selections
+/// MoonProto command 48 can actually address.
+pub(super) type ReportSelection = RowSelection<ReportRowKey>;
 
 impl ReportSelection {
-    /// Select every valid row identity in the current table without changing the Shift anchor.
-    ///
-    /// Args:
-    ///     order: Current filtered and sorted row identities, including read-only legacy rows.
-    ///
-    /// Returns:
-    ///     Nothing. Malformed rows without a stable identity are excluded.
-    pub(super) fn select_all(&mut self, order: &[Option<ReportRowKey>]) {
-        self.selected = order.iter().filter_map(|key| *key).collect();
-    }
-
-    /// Apply one row click using platform-independent modifier meaning.
-    ///
-    /// Args:
-    ///     clicked: Stable identity of the clicked row, or `None` for an invalid legacy row.
-    ///     order: Current rendered row identities in visual order.
-    ///     shift: Whether Shift was held.
-    ///     secondary: Whether Ctrl on Windows/Linux or Command on macOS was held.
-    ///
-    /// Returns:
-    ///     Nothing. Shift takes precedence over the secondary modifier, and a plain click that
-    ///     lands on the sole selected row clears the selection instead of re-selecting it.
-    pub(super) fn click(
-        &mut self,
-        clicked: Option<ReportRowKey>,
-        order: &[Option<ReportRowKey>],
-        shift: bool,
-        secondary: bool,
-    ) {
-        let Some(clicked) = clicked else {
-            return;
-        };
-        self.last_clicked = Some(clicked);
-        if shift {
-            let span = self.anchor.and_then(|anchor| {
-                let from = order.iter().position(|key| *key == Some(anchor))?;
-                let to = order.iter().position(|key| *key == Some(clicked))?;
-                Some(if from <= to { from..=to } else { to..=from })
-            });
-            self.selected.clear();
-            if let Some(span) = span {
-                self.selected
-                    .extend(order[span].iter().filter_map(|key| *key));
-            } else {
-                self.selected.insert(clicked);
-                self.anchor = Some(clicked);
-            }
-            return;
-        }
-        self.anchor = Some(clicked);
-        if secondary {
-            if !self.selected.insert(clicked) {
-                self.selected.remove(&clicked);
-            }
-            return;
-        }
-        // A plain click on the row that IS the entire selection clears it: clicking the same row
-        // twice reads as undoing that selection. With anything else selected the click still
-        // collapses the set to the clicked row — that is the standard table behaviour and the only
-        // way back from a Shift range to a single row. The anchor is NOT cleared with the set — it
-        // was just moved to this row above — so a following Shift click still measures from here.
-        let only_this = self.selected.len() == 1 && self.selected.contains(&clicked);
-        self.selected.clear();
-        if !only_this {
-            self.selected.insert(clicked);
-        }
-    }
-
-    /// Select exactly one row, whatever was selected before.
-    ///
-    /// Unlike a plain [`Self::click`], this never clears: it exists for the second half of a
-    /// physical double-click. MoonDataTable invokes the row-select callback on BOTH clicks and
-    /// gives it no click count, so the deselecting second click has to be undone from the table's
-    /// own authoritative double-click callback rather than guessed at from timing.
-    ///
-    /// Args:
-    ///     clicked: Stable identity of the double-clicked row, or `None` for an invalid row.
-    ///
-    /// Returns:
-    ///     Nothing. The anchor follows the row, as it does for a plain click.
-    pub(super) fn select_only(&mut self, clicked: Option<ReportRowKey>) {
-        let Some(clicked) = clicked else {
-            return;
-        };
-        self.anchor = Some(clicked);
-        self.last_clicked = Some(clicked);
-        self.selected.clear();
-        self.selected.insert(clicked);
-    }
-
-    /// Remove selections no longer present in a newly published query result.
-    ///
-    /// Args:
-    ///     visible: Stable row identities in the new result.
-    ///
-    /// Returns:
-    ///     Nothing. A missing anchor is cleared with its vanished row.
-    pub(super) fn retain_visible(&mut self, visible: &[Option<ReportRowKey>]) {
-        let visible: HashSet<ReportRowKey> = visible.iter().filter_map(|key| *key).collect();
-        self.selected.retain(|key| visible.contains(key));
-        if self.anchor.is_some_and(|key| !visible.contains(&key)) {
-            self.anchor = None;
-        }
-        if self.last_clicked.is_some_and(|key| !visible.contains(&key)) {
-            self.last_clicked = None;
-        }
-    }
-
-    /// Clear every selected row and the Shift anchor.
-    ///
-    /// Returns:
-    ///     Nothing after selection state becomes empty.
-    pub(super) fn clear(&mut self) {
-        self.selected.clear();
-        self.anchor = None;
-        self.last_clicked = None;
-    }
-
-    /// Return whether one stable row is selected.
-    ///
-    /// Args:
-    ///     key: Stable row identity, or `None` for an unselectable malformed row.
-    ///
-    /// Returns:
-    ///     `true` only when a concrete identity belongs to the controlled set.
-    pub(super) fn contains(&self, key: Option<ReportRowKey>) -> bool {
-        key.is_some_and(|key| self.selected.contains(&key))
-    }
-
-    /// Return the row the user last clicked, while it is still selected.
-    ///
-    /// Returns:
-    ///     The last-clicked identity, or `None` once it has been deselected or has left the result.
-    ///     The membership check matters for Ctrl-click: it clears the row but keeps it as the
-    ///     anchor for a following Shift range.
-    pub(super) fn current(&self) -> Option<ReportRowKey> {
-        self.last_clicked.filter(|key| self.selected.contains(key))
-    }
-
-    /// Return the number of selected rows.
-    ///
-    /// Returns:
-    ///     Current controlled selection size.
-    pub(super) fn len(&self) -> usize {
-        self.selected.len()
-    }
-
     /// Count selected rows addressable by MoonProto command 48.
     ///
     /// Returns:
     ///     Replicated selections with a protocol `newRecID`; legacy identities are excluded.
     pub(super) fn mutable_count(&self) -> usize {
-        self.selected
-            .iter()
+        self.iter()
             .filter(|key| matches!(key, ReportRowKey::Replicated { .. }))
             .count()
     }

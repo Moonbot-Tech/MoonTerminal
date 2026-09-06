@@ -26,6 +26,8 @@
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
+//! - [`row_selection`] holds the controlled multi-row click algorithm — plain, Ctrl, Shift and
+//!   select-all over a keyed row order — shared by Report and Core Status;
 //! - [`strips`] provides size and sell preset strips with native MoonUI interaction;
 //! - [`scale`] provides price-scale dropdowns for tabs, AddToChart stacks, and trade windows;
 //! - [`wrap_fit`] lets a wrapping panel row shrink its selectors before it takes a second line;
@@ -47,6 +49,7 @@ mod fmt;
 mod label_fields;
 mod manual_strat;
 mod metric;
+pub(crate) mod row_selection;
 mod scale;
 mod strips;
 pub(crate) mod toolbar;

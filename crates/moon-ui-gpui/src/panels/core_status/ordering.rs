@@ -5,6 +5,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::rc::Rc;
 
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
@@ -562,6 +563,63 @@ fn stable_section_label(
         .map(|venue| crate::controls::venue_section_label(Some(venue)))
         .min()
         .unwrap_or(label)
+}
+
+/// Project the flat table's LINES onto the cores they draw.
+///
+/// `MoonDataTable` addresses every line it draws by index, exchange headings included, so a line
+/// index is NOT a core index. This is the translation the selection needs: a heading becomes
+/// `None`, which the click algorithm treats as "not a selectable row" and ignores, and a member
+/// becomes its core's stable id. Selection identity is the CORE, never the line -- a sort or a
+/// re-group moves every line index and would silently retarget a selection built from them.
+///
+/// Args:
+///     lines: Headings and member rows in render order, as [`flat_lines`] laid them out.
+///     rows: The already-sorted rows those lines address.
+///
+/// Returns:
+///     One entry per line, parallel to `lines`.
+pub(super) fn flat_order(lines: &[FlatLine], rows: &[CoreStatusRow]) -> Vec<Option<CoreId>> {
+    lines
+        .iter()
+        .map(|line| match line {
+            FlatLine::Section(_) => None,
+            FlatLine::Core(row) => rows.get(*row).map(|row| row.id),
+        })
+        .collect()
+}
+
+/// Collect the cores one exchange heading introduces.
+///
+/// Reads the layout invariant [`flat_lines`] builds: a heading is followed by exactly its own
+/// members, and the next heading ends the run. Walking the lines is what keeps this honest -- the
+/// heading's own `members` count says how many there are but not WHICH, and the two must never be
+/// able to disagree about a scope that reaches live cores.
+///
+/// Args:
+///     lines: Headings and member rows in render order.
+///     heading: Index of the heading line the user acted on.
+///     rows: The rows those lines address.
+///
+/// Returns:
+///     The section's cores in render order. Empty when `heading` does not address a heading.
+pub(super) fn section_cores(
+    lines: &[FlatLine],
+    heading: usize,
+    rows: &[CoreStatusRow],
+) -> Rc<[CoreId]> {
+    if !matches!(lines.get(heading), Some(FlatLine::Section(_))) {
+        return Rc::from(Vec::new());
+    }
+    let cores: Vec<CoreId> = lines[heading + 1..]
+        .iter()
+        .map_while(|line| match line {
+            FlatLine::Core(row) => Some(rows.get(*row).map(|row| row.id)),
+            FlatLine::Section(_) => None,
+        })
+        .flatten()
+        .collect();
+    Rc::from(cores)
 }
 
 #[cfg(test)]

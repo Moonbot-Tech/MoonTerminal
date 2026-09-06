@@ -18,11 +18,59 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::conn_diag::fault_short;
 use crate::controls::core_update::{self, OfferCounts};
+use crate::controls::row_selection::RowSelection;
 
 use crate::design;
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
+
+/// What a core row needs to answer a click: where it sits, and what is already selected.
+///
+/// Bundled rather than passed as three parallel parameters, because they are only ever correct
+/// TOGETHER -- all three are derived from one frame's expansion, and a row handed a mismatched
+/// pair would resolve a scope the tree is not drawing.
+pub(super) struct TreeSelection<'a> {
+    /// Visible line-to-core projection, for a Shift range.
+    pub(super) order: &'a Rc<[Option<CoreId>]>,
+    /// The same order without the server rows, for scope resolution.
+    pub(super) cores: &'a Rc<[CoreId]>,
+    /// The panel's controlled selection, shared by REFCOUNT: a row only needs to clone a
+    /// handle into its click closures, and cloning the set itself once per drawn row cost
+    /// O(rows x selection) hash-set copies on every repaint of an expanded fleet.
+    pub(super) selection: &'a Rc<RowSelection<CoreId>>,
+}
+/// Project the By-IP tree's VISIBLE rows onto the cores they draw.
+///
+/// The tree's counterpart of `ordering::flat_order`, and it exists for the same reason: a
+/// selection is keyed by core, while the thing the user clicks is a row whose position moves. A
+/// server row is `None` (it is not a selectable core), and a COLLAPSED group contributes nothing
+/// at all -- its cores are not on screen, so a Shift range must not span them and a bulk action
+/// must not reach them.
+///
+/// Args:
+///     groups: The panel's cached servers, already in display order.
+///     expanded: `MoonTreeState::expanded_ids`, keyed by [`ServerKey::tree_id`]. Taken as a
+///         SLICE because that is what the state hands back and a fleet is ten servers, not ten
+///         thousand -- building a set to look each one up once would cost more than the scan.
+///
+/// Returns:
+///     One entry per rendered row, in on-screen order.
+pub(super) fn visible_tree_order(
+    groups: &[ServerStatusGroup],
+    expanded: &[SharedString],
+) -> Vec<Option<CoreId>> {
+    let mut order = Vec::new();
+    for group in groups {
+        order.push(None);
+        let id = SharedString::from(group.key.tree_id());
+        if !expanded.contains(&id) {
+            continue;
+        }
+        order.extend(group.cores.iter().map(|core| Some(core.id)));
+    }
+    order
+}
 
 use super::CoreStatusView;
 use super::by_ip_widths::{ByIpWidths, CELL_GAP_W, CHEVRON_W, ROW_GAP_W, TREE_SCROLLBAR_W};
@@ -92,7 +140,7 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 ///     editing: The server whose name is being renamed inline, if any.
 ///     edit_input: Shared input state backing the inline rename field.
 ///     chart_selected: The server highlighted by a body click (the chart target), if any.
-///     chart_core: The core highlighted by a core-row click (charts that core), if any.
+///     selection: Snapshot of the panel's controlled core-row selection.
 ///     sort: The active By-IP column sort, for the header arrows.
 ///     measured_width: Width the width probe recorded on the previous frame; `0` before the first.
 ///     rem_size: The window's rem size, which sets the row insets.
@@ -115,7 +163,7 @@ pub(super) fn grouped_server_view(
     editing: Option<ServerKey>,
     edit_input: Option<Entity<MoonInputState>>,
     chart_selected: Option<ServerKey>,
-    chart_core: Option<CoreId>,
+    selection: RowSelection<CoreId>,
     sort: (GroupSortField, bool),
     measured_width: f32,
     rem_size: f32,
@@ -139,6 +187,13 @@ pub(super) fn grouped_server_view(
     // the tree's render closure below: the update buttons it hosts command the backend directly,
     // never through the view.
     let backend = backend.clone();
+    // The tree's line-to-core projection, from the SAME expansion the tree is about to draw.
+    // Every click handler below resolves against this one list, so a Shift range, a Ctrl toggle
+    // and a right-click menu can never disagree about what is on screen.
+    let order: Rc<[Option<CoreId>]> =
+        Rc::from(visible_tree_order(&groups, &state.read(cx).expanded_ids()));
+    let order_cores: Rc<[CoreId]> = order.iter().flatten().copied().collect();
+    let selection = Rc::new(selection);
     let server_positions = Rc::new(
         groups
             .iter()
@@ -214,10 +269,24 @@ pub(super) fn grouped_server_view(
                 .get(server_index)
                 .and_then(|group| group.cores.get(core_index))
             {
-                // A core row highlights when it is the charted core, and clicking it charts that core.
+                // The highlight follows the SELECTION now, not the chart: a plain click still
+                // charts the core and selects it alone, so the single-click case looks exactly as
+                // it did, while a Ctrl or Shift click builds a set the chart has no opinion about.
                 return MoonListItem::new(meta.index)
-                    .selected(chart_core == Some(core.id))
-                    .child(core_row(core, widths, &weak_view, &backend, p, app));
+                    .selected(selection.contains(Some(core.id)))
+                    .child(core_row(
+                        core,
+                        widths,
+                        TreeSelection {
+                            order: &order,
+                            cores: &order_cores,
+                            selection: &selection,
+                        },
+                        &weak_view,
+                        &backend,
+                        p,
+                        app,
+                    ));
             }
         }
         MoonListItem::new(meta.index)
@@ -338,6 +407,10 @@ fn server_row(
     // single enqueue would, never a burst of commands. No retry affordance at this scope: retry
     // is a one-core action, offered on the core row it belongs to.
     let group_update_cores: Rc<[CoreId]> = group.cores.iter().map(|core| core.id).collect();
+    // One handle, two consumers: the hover button below takes it by value and the right-click
+    // menu further down needs the same ids. A second collect over `group.cores` would be
+    // identical content re-allocated on every repaint of every server row.
+    let menu_cores = group_update_cores.clone();
     let mut group_update_counts = OfferCounts::default();
     for core in &group.cores {
         group_update_counts.add(core_update::offer_state(
@@ -364,6 +437,32 @@ fn server_row(
         .items_center()
         .gap(px(ROW_GAP_W))
         .overflow_hidden()
+        // Right-click updates every core on this server. The hover arrow beside it stays a plain
+        // RELEASE update; the menu is where a named build becomes reachable at server scope. Like
+        // every other right-click here it leaves the selection alone.
+        .on_mouse_down(MouseButton::Right, {
+            let weak_view = weak_view.clone();
+            // The SAME handle the hover button was built from, not a second collect over the
+            // group: identical content, and a server row repaints on every hover.
+            let cores = menu_cores.clone();
+            move |e: &MouseDownEvent, window, app| {
+                app.stop_propagation();
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                let (backend, scope) = {
+                    let this = view.read(app);
+                    (
+                        this.backend.clone(),
+                        update_menu::UpdateScope::from_cores(&cores, &this.cached_rows),
+                    )
+                };
+                if scope.is_empty() {
+                    return;
+                }
+                update_menu::open_update_row_menu(&backend, scope, e.position, window, app);
+            }
+        })
         // The chevron is the ONLY expand trigger and toggles expansion directly (headless tree).
         .child({
             let weak_view = weak_view.clone();
@@ -547,7 +646,9 @@ fn server_row(
 /// Args:
 ///     core: Per-process snapshot.
 ///     w: Shared column widths for this frame, matching the server row above it.
-///     weak_view: Non-owning panel handle for the chart-this-core click.
+///     sel: Where this row sits in the frame, and what is already selected.
+///     weak_view: Non-owning panel handle for the click handlers.
+///     backend: Shared terminal state used by the hover-revealed update control.
 ///     p: Active Moon palette.
 ///     app: Application context, for the font-scaled dot-column width.
 ///
@@ -556,6 +657,7 @@ fn server_row(
 fn core_row(
     core: &CoreStatusRow,
     w: ByIpWidths,
+    sel: TreeSelection<'_>,
     weak_view: &WeakEntity<CoreStatusView>,
     backend: &Entity<Backend>,
     p: MoonPalette,
@@ -606,44 +708,52 @@ fn core_row(
         .gap(px(ROW_GAP_W))
         .overflow_hidden()
         .cursor_pointer()
-        // Clicking a core row charts that core; the detached window reads `chart_core`.
+        // A PLAIN click selects this core alone AND charts it -- the gesture this row always had,
+        // now backed by the real selection. Ctrl and Shift build a set instead and deliberately
+        // leave the chart alone: a chart shows ONE subject, and a multi-selection has none.
         .on_mouse_down(MouseButton::Left, {
             let weak_view = weak_view.clone();
+            let order = sel.order.clone();
             let id = core.id;
-            move |_, _, app| {
+            move |_, window, app| {
+                let modifiers = window.modifiers();
+                let order = order.clone();
                 if let Some(view) = weak_view.upgrade() {
-                    view.update(app, |this, cx| this.select_chart_core(id, cx));
+                    view.update(app, |this, cx| {
+                        this.select_core_row(Some(id), &order, modifiers, cx);
+                        if !modifiers.shift && !modifiers.secondary() {
+                            this.select_chart_core(id, cx);
+                        }
+                    });
                 }
             }
         })
-        // Right-click opens the row's update menu. Deliberately does NOT touch selection --
-        // opening a menu must not change which core is charted, so the core and its name are
-        // named explicitly here rather than read back from panel state at click time.
+        // Right-click opens the update menu for the SCOPE this row stands for, and deliberately
+        // does NOT touch the selection -- opening a menu must not change what it is about to act
+        // on. A row inside the selection stands for the whole selection; a row outside it stands
+        // for itself. `resolve_menu_scope` owns that rule for both presentations.
         .on_mouse_down(MouseButton::Right, {
             let weak_view = weak_view.clone();
+            let order_cores = sel.cores.clone();
+            let selection = sel.selection.clone();
             let id = core.id;
-            let name = core.name.clone();
-            let updatable = update_menu::core_updatable(
-                &core.status,
-                core.server_version,
-                core.endpoint.is_some(),
-                core.update.as_ref(),
-            );
             move |e: &MouseDownEvent, window, app| {
                 app.stop_propagation();
                 let Some(view) = weak_view.upgrade() else {
                     return;
                 };
-                let backend = view.read(app).backend.clone();
-                update_menu::open_update_row_menu(
-                    &backend,
-                    id,
-                    name.clone(),
-                    updatable,
-                    e.position,
-                    window,
-                    app,
-                );
+                let cores = core_update::resolve_menu_scope(id, &order_cores, &selection);
+                let (backend, scope) = {
+                    let this = view.read(app);
+                    (
+                        this.backend.clone(),
+                        update_menu::UpdateScope::from_cores(&cores, &this.cached_rows),
+                    )
+                };
+                if scope.is_empty() {
+                    return;
+                }
+                update_menu::open_update_row_menu(&backend, scope, e.position, window, app);
             }
         })
         // Empty chevron gutter, matching the server row's 12 px expand column so the body aligns.

@@ -48,6 +48,7 @@ use moon_ui::{
 };
 
 use crate::Backend;
+use crate::controls::row_selection::RowSelection;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::workspace::scope_marker::{self, ScopeMarker};
@@ -301,6 +302,14 @@ pub struct CoreStatusView {
     /// Unlike Assets, this panel has no group-less variant to fall back on — every instance is
     /// scoped to a window group, so this is never `Option`.
     cached_scope_marker: ScopeMarker,
+    /// Which CORE ROWS the user has selected, in either presentation.
+    ///
+    /// NOT [`Self::sel_cores`], which is the retained Classic core FILTER deciding what this
+    /// panel SHOWS. This is the transient on-screen selection a bulk action addresses, and it is
+    /// keyed by [`CoreId`] rather than by a line index because the flat table draws exchange
+    /// headings as lines of their own and both presentations re-sort under the user.
+    /// Pruned against the visible rows on every cache rebuild (`cache::rebuild_cache`).
+    core_selection: RowSelection<CoreId>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -465,6 +474,7 @@ impl CoreStatusView {
             backend,
             group,
             sel_cores: HashSet::new(),
+            core_selection: RowSelection::default(),
             last_repaint_ms: 0,
             last_update_rev: 0,
             last_history_rev: 0,
@@ -854,7 +864,7 @@ impl Render for CoreStatusView {
                 self.editing,
                 self.edit_input.clone(),
                 self.chart_server,
-                self.chart_core,
+                self.core_selection.clone(),
                 self.group_sort,
                 self.by_ip_width,
                 // Row insets are `rems`, so the By-IP width budget needs the window's rem size —
@@ -907,6 +917,7 @@ impl Render for CoreStatusView {
                     // Same reason as the By-IP arm above: the callee must not read this view.
                     &self.backend,
                     &marker,
+                    self.core_selection.clone(),
                     cx,
                 )
                 .into_any_element()
@@ -1236,6 +1247,12 @@ impl Render for CoreStatusView {
             .min_h(px(0.0))
             .overflow_hidden()
             .track_focus(&self.focus)
+            // Ctrl+A / Escape for the core-row selection. The Flat grid intercepts the same
+            // select-all chord itself when IT holds focus; this route is what gives the By-IP
+            // tree, which is not a `MoonDataTable`, the identical gesture.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.on_selection_key(event, window, cx);
+            }))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .bg(rgb(p.table_body))
@@ -1481,7 +1498,18 @@ impl CoreStatusView {
         // Fleet-relative, not release-relative -- see `session::core_update`'s own doc comment.
         // Empty here means every core already agrees with the fleet's newest build, never that no
         // release exists, so the button explains that in its tooltip instead of just going gray.
-        let behind_empty = self.backend.read(cx).session.cores_behind().is_empty();
+        // Read off the PANEL's own plan, not off the fleet. Both of these used to ask the store
+        // directly, so a panel scoped to one group lit a button that reached every core in the
+        // fleet -- the state a control shows and the set it acts on have to be the same set.
+        // Resolved ONCE: `visible_order` re-sorts the flat rows and re-groups the exchange
+        // sections on every call, and this footer used to ask for it twice per repaint.
+        let visible = self.visible_cores(cx);
+        // The VISIBLE part of the selection, not the raw set: collapsing a By-IP group hides
+        // its cores without rebuilding the cache, and a button that says 'update selected (5)'
+        // while its own confirm would name none is worse than one that says nothing.
+        let selected = self.visible_selected(&visible);
+        let all_empty = self.fleet_update_plan(false, &visible, cx).cores.is_empty();
+        let behind_empty = self.fleet_update_plan(true, &visible, cx).cores.is_empty();
         // TINT, not a second affordance: both buttons keep their handlers, their size and their
         // place. Amber is the tone this row ALREADY uses for "an update campaign wants attention"
         // (the counter above), so a fleet with something to update lights the control that acts on
@@ -1503,6 +1531,7 @@ impl CoreStatusView {
         };
         let update_all_view = cx.entity();
         let update_behind_view = update_all_view.clone();
+        let update_named_view = update_all_view.clone();
         // Frozen render idiom (`workspace/scope_marker.rs`): head and tail are DIRECT children of
         // the row, never nested in a shared box, and the tail is the ONE part of this row allowed
         // to clip.
@@ -1571,12 +1600,25 @@ impl CoreStatusView {
                     })
                     .child(
                         MoonButton::new("core-status-update-all")
-                            .label(t!("core_update.fleet.all").to_string())
+                            // ONE button that RENAMES, never a fourth beside the other three:
+                            // with a selection on screen the wide action IS the selection, and
+                            // saying so on the control the operator is about to press beats
+                            // adding a second control that means almost the same thing.
+                            .label(if selected > 0 {
+                                t!("core_update.fleet.selected", n = selected).to_string()
+                            } else {
+                                t!("core_update.fleet.all").to_string()
+                            })
                             .size(MoonButtonSize::Micro)
                             .variant(MoonButtonVariant::Panel)
+                            .disabled(all_empty)
                             .on_click(move |_, window, cx| {
                                 update_all_view.update(cx, |this, cx| {
-                                    this.confirm_fleet_update(false, window, cx);
+                                    this.confirm_fleet_update(
+                                        interactions::FleetUpdateKind::All,
+                                        window,
+                                        cx,
+                                    );
                                 });
                             })
                             .render(),
@@ -1589,7 +1631,11 @@ impl CoreStatusView {
                             .disabled(behind_empty)
                             .on_click(move |_, window, cx| {
                                 update_behind_view.update(cx, |this, cx| {
-                                    this.confirm_fleet_update(true, window, cx);
+                                    this.confirm_fleet_update(
+                                        interactions::FleetUpdateKind::Behind,
+                                        window,
+                                        cx,
+                                    );
                                 });
                             });
                         if behind_empty {
@@ -1598,7 +1644,27 @@ impl CoreStatusView {
                             behind_button
                         }
                         .render()
-                    }),
+                    })
+                    .child(
+                        // The named build at panel scope. It reuses the SAME confirm the two
+                        // buttons beside it open, with the build-name field inside it -- a
+                        // prompt and then a confirm would be two gates on one action.
+                        MoonButton::new("core-status-update-named")
+                            .label(t!("core_update.fleet.named").to_string())
+                            .size(MoonButtonSize::Micro)
+                            .variant(MoonButtonVariant::Panel)
+                            .disabled(all_empty)
+                            .on_click(move |_, window, cx| {
+                                update_named_view.update(cx, |this, cx| {
+                                    this.confirm_fleet_update(
+                                        interactions::FleetUpdateKind::Named,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            })
+                            .render(),
+                    ),
             )
     }
 }

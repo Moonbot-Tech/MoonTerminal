@@ -1,6 +1,32 @@
 //! Source-level Core Status table contracts for the binary-only GPUI crate.
 
-use super::support::{braced_body, code_only, read_src};
+use super::support::{braced_body, code_only, read_module, read_src};
+
+/// `panels/core_status/**` must route update requests through `controls::core_update` and
+/// `update_menu.rs` must not call `select_core_row`. Mutation: call an enqueue method directly
+/// or select the right-clicked row; either bypasses the per-IP queue or changes the update scope
+/// the menu is meant to preserve. `code_only` strips every line and doc comment before the bans,
+/// so the module documentation may explain these names without satisfying or tripping this test.
+#[test]
+fn core_status_bulk_updates_stay_queued_and_right_click_preserves_selection() {
+    let panel = code_only(&read_module("panels/core_status"));
+    for forbidden in [
+        "enqueue_core_update",
+        "enqueue_core_updates",
+        "update_core_version",
+    ] {
+        assert!(
+            !panel.contains(forbidden),
+            "Core Status must route updates through controls::core_update, not `{forbidden}`"
+        );
+    }
+
+    let menu = code_only(&read_src("panels/core_status/update_menu.rs"));
+    assert!(
+        !menu.contains("select_core_row("),
+        "opening a Core Status update menu must not move the existing selection"
+    );
+}
 
 /// `table.rs:core_status_row` must route every explicitly classified Flat cell through
 /// `level_color`. Mutation: delete one arm's `.text_color(level_color(...))`; that column would

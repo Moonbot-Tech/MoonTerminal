@@ -20,6 +20,7 @@ use super::update_menu;
 use super::*;
 use crate::conn_diag::{fault_facts, fault_tooltip};
 use crate::controls::core_update::{self, OfferCounts};
+use crate::controls::row_selection::RowSelection;
 use gpui::prelude::FluentBuilder;
 use moon_core::feed::{Diagnosis, diagnose};
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
@@ -181,6 +182,8 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
 ///     sorted: Whether a column sort is active, which the headings explain.
 ///     state: Persisted table interaction state.
 ///     backend: Shared terminal backend, handed to row builders that must not read this view.
+///     selection: Snapshot of the panel's controlled row selection, drawn per row and resolved
+///         into a scope by the right-click handler.
 ///     marker: This panel's scope marker, which swaps the empty-state sentence when the active
 ///         preset hid every configured core.
 ///     cx: Panel context used for palette, empty-state localization, and the sort callback.
@@ -199,6 +202,7 @@ pub(super) fn core_status_table(
     state: &Entity<MoonDataTableState>,
     backend: &Entity<Backend>,
     marker: &ScopeMarker,
+    selection: RowSelection<CoreId>,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
     // Keyed on the CORES, not the lines: a table holding nothing but headings is not representable
@@ -227,6 +231,18 @@ pub(super) fn core_status_table(
     let menu_lines = lines.clone();
     let menu_rows = rows.clone();
     let menu_view = view.clone();
+    // Computed ONCE and shared by every closure below: the line-to-core projection is what
+    // makes a `MoonDataTable` row index addressable as a selection, and all four handlers
+    // must agree about it or a click, a range and a menu would each resolve a different set.
+    let order: Rc<[Option<CoreId>]> = Rc::from(ordering::flat_order(&lines, &rows));
+    // The same order with the headings dropped -- what `resolve_menu_scope` filters against.
+    let order_cores: Rc<[CoreId]> = order.iter().flatten().copied().collect();
+    let row_order = order.clone();
+    let click_order = order.clone();
+    let all_order = order.clone();
+    let click_view = view.clone();
+    let all_view = view.clone();
+    let row_selection = selection.clone();
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
@@ -246,6 +262,7 @@ pub(super) fn core_status_table(
                 &row_column_keys,
                 &server_names,
                 &backend,
+                row_selection.contains(row_order.get(ix).copied().flatten()),
                 p,
                 app,
             ),
@@ -255,26 +272,47 @@ pub(super) fn core_status_table(
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
         .style(design::table_style(p))
+        // Controlled: the highlight is whatever the rendered rows say it is, so the panel's
+        // own `CoreId`-keyed selection is the single source of truth and the widget's internal
+        // `selected_row` (a LINE index, which a re-sort invalidates) never competes with it.
+        .controlled_row_selection(true)
+        .on_select_row(move |ix, window, app| {
+            let clicked = click_order.get(ix).copied().flatten();
+            let order = click_order.clone();
+            let modifiers = window.modifiers();
+            click_view.update(app, |this, cx| {
+                this.select_core_row(clicked, &order, modifiers, cx);
+            });
+        })
+        .on_select_all_rows(move |_window, app| {
+            let order = all_order.clone();
+            all_view.update(app, |this, cx| this.select_all_visible_cores(&order, cx));
+        })
+        // A right-click resolves a SCOPE and never moves the selection: a core row inside the
+        // selection stands for the whole selection, a core row outside it stands for itself, and
+        // an exchange heading stands for its own section. `resolve_menu_scope` owns that rule.
         .on_right_click_row(move |ix, window, app| {
-            let core = match menu_lines.get(ix) {
-                Some(FlatLine::Core(row)) => menu_rows.get(*row),
-                _ => None,
+            let scope = match menu_lines.get(ix) {
+                Some(FlatLine::Core(row)) => {
+                    let Some(core) = menu_rows.get(*row) else {
+                        return;
+                    };
+                    let cores = core_update::resolve_menu_scope(core.id, &order_cores, &selection);
+                    update_menu::UpdateScope::from_cores(&cores, &menu_rows)
+                }
+                Some(FlatLine::Section(_)) => {
+                    let cores = ordering::section_cores(&menu_lines, ix, &menu_rows);
+                    update_menu::UpdateScope::from_cores(&cores, &menu_rows)
+                }
+                None => return,
             };
-            let Some(core) = core else {
+            if scope.is_empty() {
                 return;
-            };
+            }
             let backend = menu_view.read(app).backend.clone();
-            let updatable = update_menu::core_updatable(
-                &core.status,
-                core.server_version,
-                core.endpoint.is_some(),
-                core.update.as_ref(),
-            );
             update_menu::open_update_row_menu(
                 &backend,
-                core.id,
-                core.name.clone(),
-                updatable,
+                scope,
                 window.mouse_position(),
                 window,
                 app,
@@ -327,6 +365,8 @@ pub(super) fn core_status_table(
 ///     column_keys: Exact ordered keys used to build the table descriptors.
 ///     server_names: Server display name per server key.
 ///     backend: Shared terminal state the hover-revealed update button commands.
+///     selected: Whether this core belongs to the panel's controlled selection. Applied to the
+///         built row rather than inside the pinned constructor below.
 ///     p: Active Moon palette, for the API and MoonBot cells' colour.
 ///     app: Application context used to scale the update button's geometry.
 ///
@@ -337,6 +377,7 @@ fn core_status_row(
     column_keys: &[&str],
     server_names: &HashMap<ServerKey, String>,
     backend: &Entity<Backend>,
+    selected: bool,
     p: MoonPalette,
     app: &App,
 ) -> MoonDataRow {
@@ -380,7 +421,11 @@ fn core_status_row(
             .text_color(level_color(LoadLevel::Normal, p)),
         _ => unreachable!("canonical Flat column key"),
     }));
-    row
+    // Applied HERE, not inside the match above: `tests/theme_contract/core_status.rs` pins that
+    // constructor's opening line as source TEXT, and rustfmt rewrites the closure into block form
+    // the moment its shape changes -- which breaks the contract with no compile error and no fmt
+    // complaint. The `#[rustfmt::skip]` binding stays exactly as it was.
+    row.selected(selected)
 }
 
 /// The API-key cell: a bare day count, or the infinity glyph with the phrase behind it.

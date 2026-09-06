@@ -175,6 +175,15 @@ impl CoreStatusView {
         self.has_warn = groups.iter().any(|group| group.has_warn());
         self.cached_groups = Rc::new(groups);
         self.cached_rows = Rc::new(rows);
+        // Prune the row selection against the rows that now EXIST. This is the one call that
+        // keeps a bulk update honest: a preset change, a group switch or a core simply leaving
+        // the scope removes a row from the screen, and a core the user can no longer see must
+        // never stay in a set the update menu and the footer are about to enqueue. Placed here,
+        // beside the rows themselves, because every path that changes what is displayed ends up
+        // in this function.
+        let visible: Vec<Option<CoreId>> =
+            self.cached_rows.iter().map(|row| Some(row.id)).collect();
+        self.core_selection.retain_visible(&visible);
         // `workspace_revision`'s observer (`mod.rs::new`) calls this unconditionally on every
         // change, with no signature gate ahead of it -- unlike the backend observer's 1 s/rev
         // gate above -- so recomputing the marker here keeps it exactly as fresh as the rows and
