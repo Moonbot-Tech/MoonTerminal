@@ -63,6 +63,8 @@ pub(in crate::strategies) struct LeftPaneFrame {
     pub(super) footer_label_width: f32,
     /// Staged checkbox count the footer both measures against and renders.
     pub(super) staged: usize,
+    /// Whether the footer's two move buttons have anything to do, as `(up, down)`.
+    pub(super) moves: (bool, bool),
 }
 
 /// Everything the Start/Stop plan reads, as one comparable key.
@@ -95,6 +97,24 @@ pub(in crate::strategies) struct PaneCache {
     exchanges: Option<(u64, SharedString, ExchangeList)>,
     plan: Option<(PlanKey, Arc<StartStopPlan>)>,
     labels: Option<(LabelKey, f32)>,
+    moves: Option<(MoveKey, (bool, bool))>,
+}
+
+/// Everything the move buttons' enablement reads, as one comparable key.
+///
+/// Both halves of the tree signature, because the answer depends on the core's strategy list AND on
+/// the window: the selection, the filter that decides which rows are drawn, and any unconfirmed
+/// order overlaying them. All three live in the view half already.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MoveKey {
+    /// Cores and their strategy snapshots.
+    store: u64,
+    /// Selection, filter, expansion, and the unconfirmed-order overlay.
+    view: u64,
+    /// The workspace scope itself, which neither half of the tree signature carries: a preset can
+    /// change which cores the plan admits while naming exactly the cores already listed, moving
+    /// nothing the other two hash.
+    workspace: u64,
 }
 
 impl StrategiesView {
@@ -121,7 +141,42 @@ impl StrategiesView {
             plan: self.pane_plan(sig, cores, cx),
             footer_label_width: self.pane_footer_label_width(staged, cx),
             staged,
+            moves: self.pane_moves(sig, cx),
         }
+    }
+
+    /// Enablement of the two move buttons, recomputed only when its inputs moved.
+    ///
+    /// Retained for the same reason as everything else here: answering it walks every strategy of
+    /// every core the selection touches and allocates a canonical folder path per row, and this row
+    /// is rebuilt on every hover repaint. Asked once per button, per frame, it was the largest new
+    /// per-frame cost in the pane.
+    ///
+    /// Args:
+    ///     sig: Tree signature already computed for this frame.
+    ///     cx: Application context used to read the store.
+    ///
+    /// Returns:
+    ///     Whether a move up, and a move down, would rearrange anything.
+    fn pane_moves(&mut self, sig: TreeSig, cx: &App) -> (bool, bool) {
+        let key = MoveKey {
+            store: sig.store,
+            view: sig.view,
+            workspace: workspace_digest(self.workspace_cores.as_deref()),
+        };
+        if let Some((cached, moves)) = &self.pane_cache.moves
+            && *cached == key
+        {
+            return *moves;
+        }
+        crate::diag::bump(&crate::diag::STRAT_PANE_BUILD);
+        let built = {
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            self.move_availability(store, backend.session.core_venues())
+        };
+        self.pane_cache.moves = Some((key, built));
+        built
     }
 
     /// Strategy kinds across the visible cores, rebuilt only when the store moved.
@@ -351,4 +406,23 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
         );
     }
     width
+}
+
+/// Fold the effective workspace scope into one comparable number.
+///
+/// Ordered, because the scope IS an ordered list of ids and two different scopes must not collide;
+/// `None` — unscoped Classic — is distinct from an empty scope, which admits no core at all.
+///
+/// Args:
+///     cores: Concrete scoped core ids, or `None` when the window is unscoped.
+///
+/// Returns:
+///     A digest that changes whenever the scope does.
+fn workspace_digest(cores: Option<&[CoreId]>) -> u64 {
+    match cores {
+        None => 0,
+        Some(cores) => cores
+            .iter()
+            .fold(1u64, |acc, core| acc.wrapping_mul(31).wrapping_add(*core)),
+    }
 }

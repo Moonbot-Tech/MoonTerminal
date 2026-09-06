@@ -421,3 +421,34 @@ fn a_delivered_finding_counts_as_support_before_the_first_list() {
         "an answered core with no findings is not silent either"
     );
 }
+
+/// The publish gate is the ONLY way a reorder echo reaches the window: the tree draws a sent
+/// arrangement until the core answers, and it recognises the answer by the strategy set arriving
+/// again. A commutative fold here — the shape a sibling signature in `tree::cache` uses on purpose
+/// — would make an order-only change invisible and strand that overlay for its whole window.
+#[test]
+fn a_reordered_set_is_a_different_signature() {
+    let rows = [(1u64, 1i32, 100u64, true), (2, 1, 200, false)];
+    let forward = super::strategies_publish_sig(rows.iter().copied());
+    let reversed = super::strategies_publish_sig(rows.iter().rev().copied());
+    assert_ne!(forward, reversed);
+    // ... while the same set in the same order still says nothing changed.
+    assert_eq!(forward, super::strategies_publish_sig(rows.iter().copied()));
+}
+
+/// The contents still matter as much as the sequence: one flag or one edit date moving on its own
+/// must republish, which is what every non-order change relies on. Only that — the fold sums its
+/// four per-row fields, so two changes that cancel out numerically are not separated, which is the
+/// ordinary trade of a cheap signature and not something this asserts otherwise.
+#[test]
+fn a_changed_field_is_a_different_signature() {
+    let base = [(1u64, 1i32, 100u64, true)];
+    let checked_off = [(1u64, 1i32, 100u64, false)];
+    let edited = [(1u64, 1i32, 101u64, true)];
+    let sig = super::strategies_publish_sig(base.iter().copied());
+    assert_ne!(
+        sig,
+        super::strategies_publish_sig(checked_off.iter().copied())
+    );
+    assert_ne!(sig, super::strategies_publish_sig(edited.iter().copied()));
+}

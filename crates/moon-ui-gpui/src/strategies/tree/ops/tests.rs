@@ -359,3 +359,90 @@ fn move_to_flattens_to_target() {
     assert!(edits.contains(&(1, "dest".to_string())));
     assert!(edits.contains(&(2, "dest".to_string())));
 }
+
+// --- reorder_step ---------------------------------------------------------
+
+/// Runs one step over a core list, with every row visible unless `hidden` names it.
+fn step(rows: &[StrategyRow], selected: &[u64], hidden: &[u64], dir: MoveStep) -> Option<Vec<u64>> {
+    let refs: Vec<&StrategyRow> = rows.iter().collect();
+    let picked: HashSet<u64> = selected.iter().copied().collect();
+    reorder_step(&refs, &picked, |row| !hidden.contains(&row.id), dir)
+}
+
+/// The whole core list comes back, not just the moved pair: the sequence IS the payload the core
+/// is sent, so a partial list would tell it to rearrange everything else too.
+#[test]
+fn one_step_swaps_with_the_neighbour_and_returns_the_whole_list() {
+    let rows = vec![
+        row(1, "a", "f", false),
+        row(2, "b", "f", false),
+        row(3, "c", "f", false),
+    ];
+    assert_eq!(step(&rows, &[3], &[], MoveStep::Up), Some(vec![1, 3, 2]));
+    assert_eq!(step(&rows, &[1], &[], MoveStep::Down), Some(vec![2, 1, 3]));
+}
+
+/// A row at the edge of its folder has nowhere to go, and `None` is what disables the button rather
+/// than sending the core an order identical to the one it holds.
+#[test]
+fn a_row_against_the_edge_of_its_folder_reports_nothing_to_do() {
+    let rows = vec![row(1, "a", "f", false), row(2, "b", "f", false)];
+    assert_eq!(step(&rows, &[1], &[], MoveStep::Up), None);
+    assert_eq!(step(&rows, &[2], &[], MoveStep::Down), None);
+    assert_eq!(step(&rows, &[], &[], MoveStep::Up), None);
+}
+
+/// Folders are independent lists. A row must not walk out of the top of its own folder into the one
+/// drawn above it — that would change what folder it is in, silently, through a button whose whole
+/// promise is that it only moves things around.
+#[test]
+fn a_row_never_leaves_its_own_folder() {
+    let rows = vec![
+        row(1, "a", "one", false),
+        row(2, "b", "two", false),
+        row(3, "c", "two", false),
+    ];
+    assert_eq!(step(&rows, &[2], &[], MoveStep::Up), None);
+    // ... and moving inside the second folder leaves the first one's row exactly where it sits.
+    assert_eq!(step(&rows, &[3], &[], MoveStep::Up), Some(vec![1, 3, 2]));
+}
+
+/// The same folder spelled two ways is ONE folder in the tree, so it has to be one list here too.
+#[test]
+fn folder_identity_follows_the_trees_own_path_split() {
+    let rows = vec![
+        row(1, "a", "deep/inner", false),
+        row(2, "b", "deep\\inner", false),
+    ];
+    assert_eq!(step(&rows, &[2], &[], MoveStep::Up), Some(vec![2, 1]));
+}
+
+/// A selected block moves as a block and stops at the edge together, instead of collapsing onto
+/// itself when its members swap through each other.
+#[test]
+fn a_block_moves_together_and_stops_at_the_edge() {
+    let rows = vec![
+        row(1, "a", "f", false),
+        row(2, "b", "f", false),
+        row(3, "c", "f", false),
+        row(4, "d", "f", false),
+    ];
+    assert_eq!(
+        step(&rows, &[3, 4], &[], MoveStep::Up),
+        Some(vec![1, 3, 4, 2])
+    );
+    assert_eq!(step(&rows, &[1, 2], &[], MoveStep::Up), None);
+}
+
+/// With a filter on, "up" means above the row visibly above it. A hidden strategy keeps the slot it
+/// holds in the core's list — the press moves the selection past it, not into its place.
+#[test]
+fn a_hidden_row_keeps_its_slot_while_the_visible_ones_move_around_it() {
+    let rows = vec![
+        row(1, "a", "f", false),
+        row(2, "hidden", "f", false),
+        row(3, "c", "f", false),
+    ];
+    // Slots 0 and 2 are the drawn ones; they exchange, and slot 1 still holds the hidden row.
+    assert_eq!(step(&rows, &[3], &[2], MoveStep::Up), Some(vec![3, 2, 1]));
+}

@@ -369,6 +369,14 @@ strat.menu_delete_strategy:
   ru: "Удалить…"
   en: "Delete…"
   es: "Eliminar…"
+strat.menu_move_up:
+  ru: "Переместить выше"
+  en: "Move up"
+  es: "Mover arriba"
+strat.menu_move_down:
+  ru: "Переместить ниже"
+  en: "Move down"
+  es: "Mover abajo"
 strat.action_copy:
   ru: "копировать"
   en: "copy"
@@ -381,6 +389,33 @@ strat.action_delete:
   ru: "удалить"
   en: "delete"
   es: "eliminar"
+
+strat.folder_empty_tip:
+  ru: "Пустая папка"
+  en: "Empty folder"
+  es: "Carpeta vacía"
+strat.folder_empty_local_tip:
+  ru: "Пустая папка, известная только этому окну: ядро её не хранит и после перезапуска её не будет"
+  en: "Empty folder, known only to this window: the core does not keep it, and a restart loses it"
+  es: "Carpeta vacía, conocida solo por esta ventana: el núcleo no la guarda y se pierde al reiniciar"
+strat.action_move_up:
+  ru: "выше в папке"
+  en: "move up in folder"
+  es: "subir en la carpeta"
+strat.action_move_down:
+  ru: "ниже в папке"
+  en: "move down in folder"
+  es: "bajar en la carpeta"
+# The chord itself, in one place: the footer tooltips and the context-menu hints both read it, and
+# a keystroke spelled two ways is a keystroke the reader stops trusting.
+strat.move_up_chord:
+  ru: "Ctrl+Shift+↑"
+  en: "Ctrl+Shift+↑"
+  es: "Ctrl+Shift+↑"
+strat.move_down_chord:
+  ru: "Ctrl+Shift+↓"
+  en: "Ctrl+Shift+↓"
+  es: "Ctrl+Shift+↓"
 
 # --- Versions pane (strategy version history and statistics) ---
 strat.versions:

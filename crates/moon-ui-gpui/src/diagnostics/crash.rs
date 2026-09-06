@@ -81,16 +81,20 @@ unsafe extern "system" fn native_exception_filter(
         body.push_str("<no exception pointers>");
     }
 
+    // WHAT faulted, written before the backtrace is attempted. Symbolizing goes through
+    // `dbghelp`, which is not thread-safe and can fault while handling a fault — and a second
+    // access violation inside this handler takes the process down with nothing recorded at all.
+    // Written first, the crash's own code and address survive that.
+    //
+    // Writes the file directly, without the global logger: the faulting thread may already hold its
+    // lock. Same sink as the Rust panic hook, which is why it lives in `applog`.
+    moon_core::applog::panic_log(&format!("NATIVE CRASH: {body}"));
+
     // The filter runs on the thread that faulted, and `force_capture` walks its current stack while
     // the handler is executing. It does not unwind from the saved `ContextRecord`; available PDBs
     // symbolize the captured frames in the same way as the panic hook.
     let bt = std::backtrace::Backtrace::force_capture();
-
-    // Writes the file directly, without the global logger: the faulting thread may already hold its
-    // lock. Same sink as the Rust panic hook, which is why it lives in `applog`.
-    moon_core::applog::panic_log(&format!(
-        "NATIVE CRASH: {body}\n--- backtrace ---\n{bt}\n--- end ---"
-    ));
+    moon_core::applog::panic_log(&format!("--- backtrace ---\n{bt}\n--- end ---"));
 
     EXCEPTION_CONTINUE_SEARCH
 }

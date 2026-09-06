@@ -402,15 +402,20 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
                 .copied()
                 .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
                 .unwrap_or("<non-string>");
-            // Force a backtrace without RUST_BACKTRACE: clamp panics report a location inside core,
-            // while we need the CALLING frame in our code.
-            let bt = std::backtrace::Backtrace::force_capture();
+            // WHAT panicked, written before anything else is attempted. Capturing a backtrace
+            // means symbolizing through `dbghelp`, which is not thread-safe and can fault on its
+            // own — and when it does, the process dies inside the handler with an access violation
+            // in `dbghelp.dll` and NOTHING is recorded: no location, no message, an empty log. This
+            // ordering means the worst such a failure can cost is the backtrace.
+            //
             // Both sinks redact on their own: `panic_log` owns the file, `TeeLogger` the log.
             // A panic message can quote foreign text carrying an endpoint.
-            moon_core::applog::panic_log(&format!(
-                "PANIC at {loc}: {payload}\n--- backtrace ---\n{bt}\n--- end ---"
-            ));
+            moon_core::applog::panic_log(&format!("PANIC at {loc}: {payload}"));
             log::error!("PANIC at {loc}: {payload}");
+            // Forced rather than left to RUST_BACKTRACE: clamp panics report a location inside
+            // core, while we need the CALLING frame in our code.
+            let bt = std::backtrace::Backtrace::force_capture();
+            moon_core::applog::panic_log(&format!("--- backtrace ---\n{bt}\n--- end ---"));
             default_hook(info);
         }));
     }

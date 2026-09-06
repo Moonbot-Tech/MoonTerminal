@@ -95,7 +95,8 @@ impl TreeCache {
 /// The two halves are the store and the window's own state:
 ///
 ///   * per core, in the order the window lists them: its id, its display name, venue presence and
-///     identity/caption fields, `strategies_rev` (the strategy snapshot), and the rendered
+///     identity/caption fields, `strategies_rev` (the strategy snapshot), `folders_rev` (the
+///     core's own folder tree, which carries the folders no strategy implies), and the rendered
 ///     open-order digest. A core appearing, disappearing or being renamed moves the list itself.
 ///   * per window field: venue grouping, the filter — search, kind, direction, EXCHANGE and
 ///     active-only — the three expansion sets plus the Auto rail overlay, the UI-only
@@ -136,6 +137,10 @@ pub(crate) fn data_sig(
             continue;
         };
         cd.strategies_rev.hash(&mut h);
+        // The folder tree, which the build reads for the folders holding no strategy. Its own
+        // counter rather than `strategies_rev`: an empty folder created or deleted moves nothing
+        // about the strategies, and that folder is exactly what this input contributes.
+        cd.folders_rev.hash(&mut h);
         open_orders_digest(cd).hash(&mut h);
     }
     let store_sig = h.finish();
@@ -158,6 +163,16 @@ pub(crate) fn data_sig(
     unordered(view.expanded_folders.iter()).hash(&mut h);
     unordered(view.expanded_deleted.iter()).hash(&mut h);
     unordered(view.ui_folders.iter()).hash(&mut h);
+    // The unconfirmed orders themselves, each folded over its own SEQUENCE. A cheaper key — which
+    // cores carry one, or how long each is — would collide on the case this exists for: a second
+    // move pressed before the core answered replaces one overlay with another of the same length on
+    // the same core, and the tree would then keep drawing the arrangement from the press before.
+    unordered(
+        view.pending_order
+            .iter()
+            .map(|(core, pending)| (*core, pending.ids())),
+    )
+    .hash(&mut h);
     unordered(view.sel.iter()).hash(&mut h);
     let staged = unordered(view.staged.iter());
     staged.hash(&mut h);

@@ -23,6 +23,7 @@ use super::super::logic::{
 };
 use super::super::{Key, StrategiesView, moon_alpha};
 use super::checks;
+use super::ops;
 use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
 use moon_core::feed::StrategyRow;
@@ -195,6 +196,8 @@ pub(crate) enum NodeData {
         checked: bool,
     },
     Folder {
+        /// What the folder holds, which decides whether its caret and checkbox are drawn at all.
+        fill: FolderFill,
         core: CoreId,
         path: Vec<String>,
         label: String,
@@ -404,8 +407,8 @@ fn build_core_root(
     };
     let mut matched: Vec<&StrategyRow> = Vec::new();
     let mut any_matched = false;
-    for row in &cd.strategies {
-        counts.add(row, filter);
+    for (at, row) in cd.strategies.iter().enumerate() {
+        counts.add(row, filter, at);
         if filter.matches(row) {
             any_matched = true;
             if core_open {
@@ -413,8 +416,29 @@ fn build_core_root(
             }
         }
     }
-    if !any_matched {
+    // A core with no matching strategy is still worth a row when it holds folders that hold
+    // none: on an account whose folders were prepared before its strategies, that is everything
+    // there is to show. Asked of the folders that would actually be DRAWN — a core whose every
+    // folder is occupied by strategies the filter removed has nothing to show and stays hidden.
+    let empty_folders = empty_folder_paths(view, cd, core, searching);
+    if !any_matched && empty_folders.is_empty() {
         return None;
+    }
+    // Only for a core whose rows are actually built: `matched` is filled solely when the core is
+    // open, so resequencing it for a collapsed one is a whole-list walk nothing reads.
+    if let Some(pending) = core_open.then(|| view.pending_order.get(&core)).flatten() {
+        // A reorder this core has not echoed yet. Drawn instead of its own sequence because the
+        // library keeps the confirmed order until the core answers, and the operator would
+        // otherwise watch their own press do nothing for a whole round trip — see `tree::reorder`.
+        //
+        // Applied to the WHOLE list and filtered afterwards, not to the rows that survived the
+        // filter. The rule places a strategy the sent sequence never named directly after the row
+        // it follows, and "the row it follows" is a different row once a filter has removed its
+        // neighbours — so ordering the filtered list would draw an arrangement the planner, which
+        // reads the whole one, does not agree with.
+        let mut all: Vec<&StrategyRow> = cd.strategies.iter().collect();
+        moon_core::feed::strategy_order::resequence(&mut all, |row| pending.rank(row.id));
+        matched = all.into_iter().filter(|row| filter.matches(row)).collect();
     }
     let (active, total) = counts.root();
     let open_orders_total = cd.orders.iter().filter(|order| !order.job_is_done).count();
@@ -431,6 +455,7 @@ fn build_core_root(
             searching,
             &counts,
             &matched,
+            &empty_folders,
             &mut children,
             data,
             flat,
@@ -465,6 +490,89 @@ fn build_core_root(
     )
 }
 
+/// Folders of one core that hold no strategy, in the order the tree appends them.
+///
+/// Two sources, and which one a core uses is the core's own answer: one that keeps a folder tree
+/// reports its empty folders itself, and the local marks are what a core that cannot keep them —
+/// or has not confirmed one yet — leaves the window to draw.
+///
+/// Answered once per build and used twice: it decides both what to append and whether a core with
+/// no matching strategy is worth a row at all.
+///
+/// Occupancy is derived from the strategies HERE rather than read from [`FolderCounts`], and that
+/// is not duplication: a collapsed core's counts are totals-only and hold no folder at all, so
+/// asking them would call every folder of every collapsed core empty. The walk costs nothing on
+/// the ordinary core, which reports no folders and holds no marks and returns below immediately.
+///
+/// Args:
+///     view: Window holding the local marks.
+///     cd: The core's live data, including the tree it reports.
+///     core: Core being built.
+///     searching: Whether a text query is narrowing the tree.
+///
+/// Returns:
+///     Segment paths of the folders to draw as empty; always empty while searching, since an empty
+///     folder matches no query and cannot contain a match.
+fn empty_folder_paths(
+    view: &StrategiesView,
+    cd: &moon_core::session::store::CoreData,
+    core: CoreId,
+    searching: bool,
+) -> Vec<Vec<String>> {
+    if searching {
+        return Vec::new();
+    }
+    let marks = view.ui_folder_paths(core);
+    let reported: Vec<Vec<String>> = match cd.folders.supported {
+        false => Vec::new(),
+        true => cd
+            .folders
+            .paths
+            .iter()
+            // Paths MoonProto itself would refuse are skipped, and that is not a formality: for a
+            // strategy in MoonBot's `"EMA / ORGANIC"` — one folder there — moonproto's own state
+            // adds the split halves as parent folders, so the tree reports `"EMA "`. Drawn, that is
+            // a folder which exists on no core and which no edit could ever name.
+            .filter(|path| moon_core::feed::folder_tree::sendable([path.as_str()].into_iter()))
+            .map(|path| ops::split_path(path))
+            .collect(),
+    };
+    if marks.is_empty() && reported.is_empty() {
+        return Vec::new();
+    }
+
+    // Every folder the strategies occupy, folded as the core folds them when deciding whether two
+    // spellings are one folder.
+    let mut occupied: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for row in &cd.strategies {
+        let mut key = String::new();
+        for segment in ops::path_segments(&row.folder_path) {
+            if !key.is_empty() {
+                key.push('/');
+            }
+            key.push_str(segment);
+            occupied.insert(key.to_lowercase());
+        }
+    }
+
+    let mut empty: Vec<Vec<String>> = marks
+        .into_iter()
+        .chain(reported)
+        .filter(|parts| !parts.is_empty() && !occupied.contains(&parts.join("/").to_lowercase()))
+        .collect();
+    // One order over both sources: the core lists its folders in an order the protocol calls
+    // meaningless, and the local marks come out of a set, so without this two frames drawing
+    // identical data would place the same folders differently. Folded first so that a mark and a
+    // reported path differing only in case land together — and are then deduped as the one folder
+    // they are.
+    empty.sort_by_cached_key(|parts| {
+        let joined = parts.join("/");
+        (joined.to_lowercase(), joined)
+    });
+    empty.dedup_by(|a, b| a.join("/").to_lowercase() == b.join("/").to_lowercase());
+    empty
+}
+
 /// Builds the folder and strategy rows of one open core, followed by its Deleted folder.
 #[allow(clippy::too_many_arguments)]
 fn build_core_subtree(
@@ -475,6 +583,7 @@ fn build_core_subtree(
     searching: bool,
     counts: &FolderCounts,
     matched: &[&StrategyRow],
+    empty_folders: &[Vec<String>],
     children: &mut Vec<MoonTreeItem>,
     data: &mut HashMap<SharedString, NodeData>,
     flat: &mut Vec<Key>,
@@ -491,17 +600,33 @@ fn build_core_subtree(
         open: core_paths(&view.expanded_folders, core),
     };
 
-    // Build the folder tree from visible strategies plus empty UI-only folders.
+    // Build the folder tree from visible strategies plus empty UI-only folders. `matched` holds
+    // the core's own strategy order, which is what places the folders that hold strategies.
     let mut root = build_node(matched.iter().copied());
-    for parts in view.ui_folder_paths(core) {
-        ensure_folder(&mut root, &parts);
+    for parts in empty_folders {
+        ensure_folder(&mut root, parts);
     }
 
+    // Folders the core keeps in its own tree, folded for the case-insensitive compare it uses. An
+    // empty folder outside that set exists only in this window, which is what its row says. Asked
+    // of `supported` and NOT of `editable`: a core whose tree cannot be edited still KEEPS the
+    // folders it reports, and calling one of those local would tell the operator it disappears on
+    // restart when it does not.
+    let confirmed_folders: std::collections::HashSet<String> = match cd.folders.supported {
+        false => std::collections::HashSet::new(),
+        true => cd
+            .folders
+            .paths
+            .iter()
+            .map(|path| ops::join_path(&ops::split_path(path)).to_lowercase())
+            .collect(),
+    };
     let mut prefix: Vec<String> = Vec::new();
     convert_node(
         &root,
         core,
         counts,
+        &confirmed_folders,
         &order_counts,
         &selected_ids,
         &folders,
@@ -627,6 +752,7 @@ fn convert_node(
     node: &super::super::logic::FolderNode,
     core: CoreId,
     counts: &FolderCounts,
+    confirmed_folders: &std::collections::HashSet<String>,
     order_counts: &HashMap<u64, usize>,
     selected_ids: &Rc<[u64]>,
     folders: &FolderSets<'_>,
@@ -640,11 +766,33 @@ fn convert_node(
     flat: &mut Vec<Key>,
     expanded: &mut Vec<SharedString>,
 ) {
-    for (name, child) in &node.children {
-        prefix.push(name.clone());
-        // One joined path keeps the node id, expansion probe, selection comparison, and count
-        // lookup on the same folder identity without repeated allocation.
-        let path = prefix.join("/");
+    // Ordered by where each folder's first strategy sits in the core's OWN list — not by where its
+    // first visible one sits, which is what the child order alone would say and which would let a
+    // search box rearrange the tree. An empty folder has no such place and keeps the order it was
+    // appended in, after every folder that does. One allocation per child per level, inside a build
+    // the frame cache already skips on an unchanged signature.
+    let parent = prefix.join("/");
+    let mut children: Vec<(usize, String, &str, &super::super::logic::FolderNode)> = node
+        .children()
+        .map(|(name, child)| {
+            // One joined path per child for the whole level. It decides the order here and is then
+            // handed to the loop, which needs the same string for this node's id, its expansion
+            // probe, its selection comparison and its count lookup.
+            let path = match parent.is_empty() {
+                true => name.to_string(),
+                false => format!("{parent}/{name}"),
+            };
+            (
+                counts.order_of(&path).unwrap_or(usize::MAX),
+                path,
+                name,
+                child,
+            )
+        })
+        .collect();
+    children.sort_by_key(|(at, _, _, _)| *at);
+    for (_, path, name, child) in children {
+        prefix.push(name.to_string());
         let fid = id_folder(core, &path);
         let fopen = searching || folders.open.contains(path.as_str());
         // Read before `path` is moved into the selection comparison below.
@@ -654,6 +802,16 @@ fn convert_node(
             core,
         );
         let (active, total) = counts.for_path(&path);
+        // Asked of the COUNTS, not of `total`, which the kind and direction filters narrow: a
+        // folder whose strategies are all filtered away is not an empty folder, and drawing it as
+        // one would take its caret away while its contents are one filter click from returning.
+        let fill = match counts.knows(&path) {
+            true => FolderFill::Populated,
+            false => match confirmed_folders.contains(&path.to_lowercase()) {
+                true => FolderFill::EmptyOnCore,
+                false => FolderFill::EmptyLocal,
+            },
+        };
         let mut fchildren = Vec::new();
         if fopen {
             expanded.push(fid.clone());
@@ -661,6 +819,7 @@ fn convert_node(
                 child,
                 core,
                 counts,
+                confirmed_folders,
                 order_counts,
                 selected_ids,
                 folders,
@@ -680,15 +839,16 @@ fn convert_node(
             NodeData::Folder {
                 core,
                 path: prefix.clone(),
-                label: name.clone(),
+                label: name.to_string(),
                 active,
                 total,
                 selected: view.selected_folder.as_ref() == Some(&(core, path)),
                 checked: fchecked,
+                fill,
             },
         );
         out.push(
-            MoonTreeItem::new(fid, name.clone())
+            MoonTreeItem::new(fid, name.to_string())
                 .folder(true)
                 .children(fchildren),
         );
@@ -935,11 +1095,15 @@ fn render_row(
                 p.blue,
                 600.0,
                 ToggleTarget::Core(core),
+                // A core root is a heading, not a folder: it keeps its caret and its bulk box even
+                // with nothing under it, because what it covers is the whole core.
+                FolderFill::Populated,
                 step,
                 app,
             )
         }
         NodeData::Folder {
+            fill,
             core,
             path,
             label,
@@ -959,10 +1123,22 @@ fn render_row(
                 indent,
                 label.clone(),
                 // A folder carries no order count of its own; the core root above it owns that.
-                RowCounts::subtree(*active, *total, 0),
-                p.text_soft,
+                // An empty one shows no numbers at all rather than `0/0`: there is nothing to
+                // count, and the slot's tooltip says what the row is instead.
+                match fill.has_contents() {
+                    true => RowCounts::subtree(*active, *total, 0),
+                    false => RowCounts::empty_folder(fill.empty_tip()),
+                },
+                // An empty folder reads as quieter than one with strategies in it, which is the
+                // whole of what its emptiness looks like — nothing is hidden and no glyph is
+                // invented for it.
+                match fill.has_contents() {
+                    true => p.text_soft,
+                    false => p.text_muted,
+                },
                 400.0,
                 ToggleTarget::Folder(core, path),
+                *fill,
                 step,
                 app,
             )
@@ -1008,6 +1184,8 @@ fn render_row(
                 p.text_muted,
                 400.0,
                 ToggleTarget::Deleted(core),
+                // Deleted is only ever drawn when it holds rows.
+                FolderFill::Populated,
                 step,
                 app,
             )
@@ -1133,6 +1311,24 @@ impl RowCounts {
         }
     }
 
+    /// Counters for a folder holding nothing: no numbers, and a tooltip that says why.
+    ///
+    /// Both slots stay reserved by the row itself, so an empty folder's caption keeps the column
+    /// its siblings' captions sit on.
+    ///
+    /// Args:
+    ///     tip: What this row is, from [`FolderFill::empty_tip`].
+    ///
+    /// Returns:
+    ///     Empty counters carrying that tooltip.
+    fn empty_folder(tip: Option<String>) -> Self {
+        Self {
+            primary: String::new(),
+            orders: String::new(),
+            tip: SharedString::from(tip.unwrap_or_default()),
+        }
+    }
+
     /// Counters for a core's Deleted heading, which carries one number and no orders.
     fn deleted(count: usize) -> Self {
         Self {
@@ -1170,6 +1366,39 @@ fn counts_slot(text: String, width: f32, color: u32, step: f32, app: &App) -> im
         )
 }
 
+/// What a folder row has inside it, which decides how much of a row it draws.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FolderFill {
+    /// Holds at least one strategy, filtered away or not.
+    Populated,
+    /// Holds nothing, and the CORE says so — it keeps this folder in its own tree.
+    EmptyOnCore,
+    /// Holds nothing and exists only in this window: either the core cannot keep empty folders, or
+    /// it has not confirmed this one yet.
+    EmptyLocal,
+}
+
+impl FolderFill {
+    /// Whether this row has anything to expand or to check.
+    ///
+    /// Both controls are omitted when it does not, because both would otherwise be live controls
+    /// that cannot do anything: a caret that opens onto nothing, and a box whose "check every
+    /// strategy below" covers no strategy. Their space is still reserved, so the caption of an
+    /// empty folder stays on the same column as its siblings'.
+    fn has_contents(self) -> bool {
+        matches!(self, Self::Populated)
+    }
+
+    /// The tooltip an empty folder's counter carries, or `None` for a populated one.
+    fn empty_tip(self) -> Option<String> {
+        match self {
+            Self::Populated => None,
+            Self::EmptyOnCore => Some(rust_i18n::t!("strat.folder_empty_tip").to_string()),
+            Self::EmptyLocal => Some(rust_i18n::t!("strat.folder_empty_local_tip").to_string()),
+        }
+    }
+}
+
 enum ToggleTarget {
     Core(CoreId),
     Folder(CoreId, Vec<String>),
@@ -1191,7 +1420,6 @@ impl ToggleTarget {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Render a clickable core, folder, or Deleted heading in the strategy tree.
 ///
 /// Actual folders also receive the context menu assembled inside this function. The disclosure
@@ -1214,6 +1442,7 @@ impl ToggleTarget {
 ///
 /// Returns:
 ///     The complete interactive tree row.
+#[allow(clippy::too_many_arguments)]
 fn core_folder_row(
     view: &Entity<StrategiesView>,
     row_id: SharedString,
@@ -1226,6 +1455,7 @@ fn core_folder_row(
     color: u32,
     weight: f32,
     target: ToggleTarget,
+    fill: FolderFill,
     step: f32,
     app: &App,
 ) -> AnyElement {
@@ -1235,6 +1465,7 @@ fn core_folder_row(
     // The bulk checkbox stages this row's own subtree, which the core root spells as the empty
     // path. Deleted holds no live strategy, so it addresses no folder and carries no checkbox.
     // Resolved once: the row renders on every repaint, and each resolve deep-clones the path.
+    let expandable = fill.has_contents();
     let folder_key = target.folder_key();
     let check_target = folder_key.clone().map(|(core, path)| (core, path, checked));
     let menu = match &target {
@@ -1273,12 +1504,19 @@ fn core_folder_row(
         // The unscaled base rides the pane's local text step so the caret stays proportional to
         // the row it marks; `MoonDisclosure` still applies the UI scale on top of it internally,
         // so the value passed here must stay unscaled.
-        .child(
-            MoonDisclosure::glyph(expanded)
+        .child(match fill.has_contents() {
+            true => MoonDisclosure::glyph(expanded)
                 .size(design::DISCLOSURE_GLYPH_MARKER + step)
-                .box_size(design::DISCLOSURE_BOX + step),
-        )
-        .child(match check_target {
+                .box_size(design::DISCLOSURE_BOX + step)
+                .into_any_element(),
+            // Reserved, not omitted: the caption of an empty folder belongs on the same column as
+            // every sibling's, and a caret that opens onto nothing is a control that lies.
+            false => div()
+                .flex_none()
+                .w(design::ui_px(app, design::DISCLOSURE_BOX + step))
+                .into_any_element(),
+        })
+        .child(match check_target.filter(|_| fill.has_contents()) {
             Some((core, path, checked)) => {
                 checks::bulk_check(view, &check_row_id, core, path, checked)
             }
@@ -1338,7 +1576,13 @@ fn core_folder_row(
                         this.selected_folder = Some((*c, String::new()));
                     }
                     ToggleTarget::Folder(c, path) => {
-                        toggle(&mut this.expanded_folders, (*c, path.join("/")));
+                        // Nothing to open, so nothing is toggled: the caret is not drawn for an
+                        // empty folder, and flipping hidden expansion state would still churn the
+                        // hashed set the whole tree is cached on. Selecting it below is what a
+                        // click on it is for.
+                        if expandable {
+                            toggle(&mut this.expanded_folders, (*c, path.join("/")));
+                        }
                         // Match Moonbot by selecting the clicked folder for highlighting and Ctrl+C.
                         this.selected_folder = Some((*c, path.join("/")));
                     }

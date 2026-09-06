@@ -189,6 +189,11 @@ pub struct StrategiesView {
     selected_folder: Option<(CoreId, String)>,
     /// Empty UI folders before their first strategy is added, keyed by core and slash-separated path.
     ui_folders: HashSet<(CoreId, String)>,
+    /// Strategy orders sent to a core and not yet echoed back by it, keyed by core.
+    ///
+    /// The tree draws these instead of the core's own sequence until it answers — see
+    /// [`tree::reorder`] for why the answer cannot simply be waited for.
+    pending_order: HashMap<CoreId, tree::reorder::PendingOrder>,
     /// Active create, rename, or confirmation modal for a tree operation.
     op: Option<tree::ui::TreeOp>,
     /// Create/rename modal input, recreated on each opening to use the current initial value.
@@ -265,6 +270,15 @@ impl Render for StrategiesView {
         // rate, and rebuilding the whole adapter for it measured 1.0-1.3 ms per frame on a live
         // account. `tree::cache` owns the signature and the argument for why it is complete.
         let tree_timer = crate::diag::timer();
+        // Before the signature, because the signature covers the overlay this may drop, and a frame
+        // that hashed an overlay it then stopped drawing would cache the wrong tree under it.
+        //
+        // Here as well as in the backend observer: an unconfirmed order's deadline has to elapse for
+        // a core that has gone quiet, and a quiet core is exactly the one that raises no notify.
+        if !self.pending_order.is_empty() {
+            let backend = self.backend.clone();
+            self.reconcile_pending_order(backend.read(cx).session.store());
+        }
         let sig = {
             let backend = self.backend.read(cx);
             let store = backend.session.store();

@@ -135,3 +135,131 @@ fn the_selection_toolbar_takes_core_visibility_from_its_caller() {
     );
     assert!(can_paste.contains("has_visible_cores"));
 }
+
+/// The same demand as the plan key, for the move buttons' enablement: every piece of WINDOW state
+/// the planner touches must be covered by a named component of `MoveKey`.
+///
+/// Two functions are scanned, not one. `movable_selection` reads most of it, but it reaches the
+/// unconfirmed-order overlay through `displayed_rows`; whitelisting that name as if it were a field
+/// would put everything behind it — today `pending_order`, tomorrow whatever is added — outside the
+/// scan this test is named for.
+///
+/// And covering the view HALF is only half an argument, since that half is built elsewhere. So the
+/// second block below checks the other end: that `data_sig` still folds each of these fields into
+/// it. Without that pair, `MoveKey` could name a component that no longer carries what it claims.
+///
+/// One input the scan cannot see either way: `workspace_cores`, which the planner reads through
+/// `selected_keys` and which NEITHER half of the tree signature hashes — a preset naming exactly
+/// the connected cores moves no signature at all. It gets its own component, asserted at the end.
+#[test]
+fn the_move_key_covers_every_field_the_enablement_reads() {
+    /// Window state the planner reads directly, all of it inside the signature's view half.
+    const VIEW_FIELDS: [&str; 4] = [
+        "filter",
+        "expanded_cores",
+        "rail_expanded_core",
+        // Read by `displayed_rows`, which is scanned alongside the planner for exactly this reason.
+        "pending_order",
+    ];
+
+    let reorder = include_str!("../reorder.rs");
+    let body = |marker: &str| {
+        reorder
+            .split(marker)
+            .nth(1)
+            .and_then(|tail| tail.split("\n    }").next())
+            .expect("the scanned function must exist")
+            .to_string()
+    };
+    let scanned = format!(
+        "{}{}",
+        body("fn movable_selection<"),
+        body("fn displayed_rows<")
+    );
+    let packed: String = scanned.chars().filter(|c| !c.is_whitespace()).collect();
+    let cache: String = include_str!("../pane_cache.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let signature = include_str!("../cache.rs");
+
+    let mut missing = Vec::new();
+    let mut checked = 0;
+    for chunk in packed.split("self.").skip(1) {
+        let field: String = chunk
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        // `displayed_rows` is the scanned callee itself, not an input of its own.
+        if field.is_empty() || field == "displayed_rows" {
+            continue;
+        }
+        checked += 1;
+        if !VIEW_FIELDS.contains(&field.as_str()) {
+            missing.push(field);
+        }
+    }
+    assert!(
+        checked >= 5,
+        "the scan found only {checked} field reads — a read moved into a helper and left this \
+         test guarding less than it claims"
+    );
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "these inputs decide the move buttons but are absent from MoveKey, so their enablement \
+         would go stale:\n{}",
+        missing.join("\n")
+    );
+
+    // The key names the view half...
+    assert!(
+        cache.contains("view:sig.view"),
+        "the view half must be a component of MoveKey, since every field above lives in it"
+    );
+    // ... and the view half still carries each of those fields.
+    for field in VIEW_FIELDS {
+        assert!(
+            signature.contains(&format!("view.{field}")),
+            "data_sig no longer folds `{field}` into the view half, so MoveKey's claim to cover it \
+             through `sig.view` is empty"
+        );
+    }
+
+    // The one input neither scan nor signature can account for.
+    assert!(
+        packed.contains("selected_keys(self)"),
+        "the selection must come from the canonical resolver, which is what applies the workspace \
+         scope the component below stands for"
+    );
+    assert!(
+        cache.contains("workspace:workspace_digest(self.workspace_cores"),
+        "the workspace scope is hashed by neither half of the tree signature, so MoveKey must \
+         carry it directly"
+    );
+}
+
+/// The enablement walks every strategy of every selected core and allocates a canonical folder path
+/// per row. It belongs behind the pane cache, and every render path must take the answer from its
+/// caller — the same rule `the_plan_key_covers_every_field_the_plan_reads` enforces for the
+/// Start/Stop plan.
+///
+/// The context menu is exempt and named here so the exemption is deliberate: it is built on a
+/// right-click, not on a frame.
+#[test]
+fn the_move_buttons_take_their_enablement_from_the_pane_cache() {
+    for (name, source) in [
+        ("tree/ui.rs", include_str!("../ui.rs")),
+        ("tree/mod.rs", include_str!("../mod.rs")),
+        ("tree/moon.rs", include_str!("../moon.rs")),
+        ("tree/cache.rs", include_str!("../cache.rs")),
+        ("strategies/mod.rs", include_str!("../../mod.rs")),
+    ] {
+        assert!(
+            !source.contains("move_availability("),
+            "{name} must render the cached answer, not re-derive it per frame"
+        );
+    }
+    assert!(include_str!("../pane_cache.rs").contains("self.move_availability("));
+}

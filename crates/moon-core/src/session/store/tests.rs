@@ -1045,3 +1045,51 @@ fn a_new_problem_list_replaces_the_old_one_and_gates_the_revision() {
     assert_eq!(core.problems.items[0].kind, 2);
     assert_eq!(core.problems_rev, after_first + 1);
 }
+
+/// The folder tree follows the same rule as the diagnostics beside it, and for the same reason: a
+/// replacement feed may point at a MoonBot that cannot hold an empty folder at all. Carrying
+/// `supported` forward would leave the window promising a persistence the new core does not offer.
+#[test]
+fn a_replacement_connection_returns_folders_to_nothing_known() {
+    let mut core = CoreData::new();
+    assert!(!core.folders.supported, "nothing known before any tree");
+
+    core.apply(FeedMsg::Folders(crate::feed::CoreFolders {
+        supported: true,
+        editable: true,
+        paths: vec!["Research".to_string()],
+    }));
+    assert!(core.folders.supported);
+    assert_eq!(core.folders_rev, 1);
+
+    core.begin_connection_attempt();
+
+    assert!(!core.folders.supported);
+    assert!(core.folders.paths.is_empty());
+    assert_eq!(core.folders_rev, 2, "clearing is a change consumers see");
+}
+
+/// The tree is republished whenever the strategies move, which on a busy account is constantly.
+/// Only a real difference may advance the revision — `session::lifecycle` wakes the window on that
+/// counter, and the whole strategy tree is rebuilt behind it.
+#[test]
+fn an_unchanged_folder_tree_does_not_advance_its_revision() {
+    let mut core = CoreData::new();
+    let tree = crate::feed::CoreFolders {
+        supported: true,
+        editable: true,
+        paths: vec!["Research".to_string(), "Research/Deep".to_string()],
+    };
+
+    core.apply(FeedMsg::Folders(tree.clone()));
+    let after_first = core.folders_rev;
+    core.apply(FeedMsg::Folders(tree));
+    assert_eq!(after_first, core.folders_rev, "the same tree said twice");
+
+    core.apply(FeedMsg::Folders(crate::feed::CoreFolders {
+        supported: true,
+        editable: true,
+        paths: vec!["Research".to_string()],
+    }));
+    assert_ne!(after_first, core.folders_rev, "a folder that went away");
+}

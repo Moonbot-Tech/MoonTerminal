@@ -511,5 +511,104 @@ pub fn move_to(rows: &[&StrategyRow], target: &[String]) -> Vec<(u64, String)> {
     rows.iter().map(|r| (r.id, path.clone())).collect()
 }
 
+// --- Reordering inside a folder -------------------------------------------
+
+/// Which way one reorder step moves the selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveStep {
+    /// One place towards the start of the folder.
+    Up,
+    /// One place towards its end.
+    Down,
+}
+
+/// Move every selected strategy one place inside its own folder, and return the core's new order.
+///
+/// A core's strategy list is an ORDER the operator arranged in MoonBot, and moonproto synchronizes
+/// it as the row sequence of a Full snapshot (`docs/strats.md`, "Strategy Order"). So a reorder is
+/// not a local view preference: the whole list goes back to the core in its new sequence.
+///
+/// Two rules keep it behaving like every other list reorder:
+///
+///   * A row moves only inside its own folder. The protocol asks that one folder's strategies stay
+///     a contiguous group, and a row that could walk out the top of its folder would silently
+///     change what folder it is in — that is what dragging is for.
+///   * Only rows the tree currently DRAWS take part. With a filter on, "up" therefore means above
+///     the row visibly above it, while a hidden strategy keeps the slot it holds in the core's own
+///     list. Moving against invisible neighbours instead would spend a press on nothing.
+///
+/// A block of adjacent selected rows moves together and stops at its folder's edge, one row at a
+/// time, which is the usual behaviour of such a control.
+///
+/// Args:
+///     rows: The core's complete strategy list, in the order the tree currently shows it.
+///     selected: Strategy ids the operator is moving.
+///     visible: Whether one row is drawn under the active filter.
+///     step: Direction to move the selection.
+///
+/// Returns:
+///     The core's complete new id sequence, or `None` when nothing in the selection can move —
+///     an empty selection, or a block already sitting against the edge of its folder.
+pub fn reorder_step(
+    rows: &[&StrategyRow],
+    selected: &HashSet<u64>,
+    visible: impl Fn(&StrategyRow) -> bool,
+    step: MoveStep,
+) -> Option<Vec<u64>> {
+    // Per folder, the INDEXES of the rows that folder draws. Indexes rather than ids because the
+    // permutation is written back into exactly these slots, which leaves every hidden row and every
+    // other folder's row untouched wherever it sits.
+    let mut slots_by_folder: Vec<Vec<usize>> = Vec::new();
+    let mut folder_at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (at, row) in rows.iter().enumerate() {
+        if !visible(row) {
+            continue;
+        }
+        // The tree's own folder identity, so a row groups with the folder it is drawn under even
+        // when the wire spelled the path with a backslash or a doubled separator.
+        let folder = join_path(&split_path(&row.folder_path));
+        let group = match folder_at.get(&folder) {
+            Some(&group) => group,
+            None => {
+                folder_at.insert(folder, slots_by_folder.len());
+                slots_by_folder.push(Vec::new());
+                slots_by_folder.len() - 1
+            }
+        };
+        slots_by_folder[group].push(at);
+    }
+
+    let mut order: Vec<u64> = rows.iter().map(|row| row.id).collect();
+    let mut moved = false;
+    for slots in &slots_by_folder {
+        let mut ids: Vec<u64> = slots.iter().map(|&at| order[at]).collect();
+        match step {
+            // Front to back going up, back to front going down: each selected row is swapped with
+            // the neighbour beyond it only when that neighbour is NOT itself selected, so a block
+            // shifts by one and cannot pass through its own members.
+            MoveStep::Up => {
+                for at in 1..ids.len() {
+                    if selected.contains(&ids[at]) && !selected.contains(&ids[at - 1]) {
+                        ids.swap(at - 1, at);
+                        moved = true;
+                    }
+                }
+            }
+            MoveStep::Down => {
+                for at in (0..ids.len().saturating_sub(1)).rev() {
+                    if selected.contains(&ids[at]) && !selected.contains(&ids[at + 1]) {
+                        ids.swap(at, at + 1);
+                        moved = true;
+                    }
+                }
+            }
+        }
+        for (&at, id) in slots.iter().zip(ids) {
+            order[at] = id;
+        }
+    }
+    moved.then_some(order)
+}
+
 #[cfg(test)]
 mod tests;

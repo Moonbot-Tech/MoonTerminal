@@ -107,17 +107,128 @@ fn strategy_placements_unchanged(
 /// changes: a conditional delete is allowed only when both views match the caller's evidence.
 pub(super) struct StrategyPlacementGuard {
     queued_sync: Option<Vec<(u64, String)>>,
+    queued_order: Option<QueuedOrder>,
+    queued_folders: Option<QueuedFolders>,
+}
+
+/// The strategy sequence the last accepted sync carried, and the confirmed order it was built on.
+///
+/// Kept because `strats.snapshots()` is the CORE-CONFIRMED order and moonproto rewrites it only
+/// from the core's own Full echo. Between a reorder and that echo, every other strategy command —
+/// a checkbox, a field edit, a move — rebuilds the outgoing list from the confirmed order and would
+/// hand the core back the arrangement the operator had just replaced. So the queued sequence is
+/// applied to every outgoing list until the core has answered.
+/// The folder tree the last accepted folder edit carried, and the confirmed tree it was built on.
+///
+/// The same shape as [`QueuedOrder`] and for the same reason: `folder_paths()` is what the CORE has
+/// confirmed, and between an edit and its echo a second edit built on that list would drop the
+/// first. The version is the folder tree's own — moonproto advances it only when the core publishes
+/// one — so once it moves, the core has spoken and this is retired.
+struct QueuedFolders {
+    /// Paths in the tree last sent.
+    paths: Vec<String>,
+    /// `StratsState::folders_last_modified` at that moment.
+    base_modified: i64,
+}
+
+struct QueuedOrder {
+    /// Strategy ids in the order last sent.
+    ids: Vec<u64>,
+    /// `StratsState::last_modified` at that moment: the version moonproto advances ONLY in
+    /// `apply_server_order` — that is, only when the core publishes a full snapshot. Once it moves,
+    /// the core has ruled, whether it accepted this order or overruled it, and re-asserting ours
+    /// past that point would be an argument with no end.
+    ///
+    /// KNOWN LIMIT: that version belongs to the snapshot, not to the order, and moonproto exposes
+    /// no order-specific one. So an unrelated full snapshot racing the send retires the sequence
+    /// before the core has applied it, and the reorder is lost — the window goes on drawing it
+    /// until its own confirmation window closes. The alternative, ignoring the version, is the
+    /// endless argument above.
+    base_modified: u64,
 }
 
 impl StrategyPlacementGuard {
     /// Create an empty guard before the feed thread has queued any full-list synchronization.
     pub(super) fn new() -> Self {
-        Self { queued_sync: None }
+        Self {
+            queued_sync: None,
+            queued_order: None,
+            queued_folders: None,
+        }
     }
 
-    /// Remember the placements in a full-list synchronization accepted by MoonProto's queue.
-    fn note_queued_sync(&mut self, placements: Vec<(u64, String)>) {
+    /// The newest folder tree this terminal knows: the one it last sent, or the core's own.
+    ///
+    /// Args:
+    ///     confirmed: The core's confirmed tree.
+    ///     last_modified: That tree's version.
+    ///
+    /// Returns:
+    ///     The base a folder edit must be applied to.
+    fn folder_base(&mut self, confirmed: Vec<String>, last_modified: i64) -> Vec<String> {
+        if self
+            .queued_folders
+            .as_ref()
+            .is_some_and(|queued| queued.base_modified != last_modified)
+        {
+            self.queued_folders = None;
+        }
+        match &self.queued_folders {
+            Some(queued) => queued.paths.clone(),
+            None => confirmed,
+        }
+    }
+
+    /// Remember a folder tree accepted by MoonProto's queue.
+    fn note_queued_folders(&mut self, paths: Vec<String>, base_modified: i64) {
+        self.queued_folders = Some(QueuedFolders {
+            paths,
+            base_modified,
+        });
+    }
+
+    /// Remember what a full-list synchronization accepted by MoonProto's queue carried.
+    ///
+    /// Args:
+    ///     placements: `(strategy id, raw folder path)` for every row in that list.
+    ///     order: The same rows' ids, in the sequence they were sent.
+    ///     base_modified: The confirmed order's version at the moment of sending.
+    fn note_queued_sync(
+        &mut self,
+        placements: Vec<(u64, String)>,
+        order: Vec<u64>,
+        base_modified: u64,
+    ) {
         self.queued_sync = Some(placements);
+        self.queued_order = Some(QueuedOrder {
+            ids: order,
+            base_modified,
+        });
+    }
+
+    /// The sequence still owed to the core, or `None` once the core has published its own.
+    ///
+    /// Args:
+    ///     last_modified: The confirmed order's current version.
+    ///
+    /// Returns:
+    ///     Ids in the order last sent, while that send is still the newest word on the subject.
+    fn pending_order(&mut self, last_modified: u64) -> Option<&[u64]> {
+        if self
+            .queued_order
+            .as_ref()
+            .is_some_and(|queued| queued.base_modified != last_modified)
+        {
+            self.queued_order = None;
+        }
+        self.queued_order
+            .as_ref()
+            .map(|queued| queued.ids.as_slice())
+    }
+
+    /// Drop the queued sequence, once something has established that the core no longer owes it.
+    fn retire_order(&mut self) {
+        self.queued_order = None;
     }
 
     /// Return whether live and still-pending placement views both match the caller's snapshot.
@@ -300,6 +411,9 @@ impl LocalStratEdits {
 /// dropping a timed-out desired value here would convert a lost echo into a real revert or a
 /// real disappearance.
 ///
+/// Returns the list, and whether the queued order it was given has been satisfied and can be
+/// retired.
+///
 /// Appended entries are sorted by `(submitted_at, strategy_id)` because `strategy_edits()` is a
 /// `HashMap` iterator with no stable order — an unsorted append would make the outgoing list
 /// order vary between runs.
@@ -307,7 +421,10 @@ impl LocalStratEdits {
 /// One accepted side effect: re-staging resets `submitted_at` and `deadline` for every still-
 /// open edit, so an unrelated edit EXTENDS another's 45 s confirmation window. It can only ever
 /// extend, never cause a false `TimedOut`. It is not fixed here — the fix belongs upstream.
-fn overlay_pending_edits(strats: &StratsState) -> Vec<StrategySnapshot> {
+fn overlay_pending_edits(
+    strats: &StratsState,
+    order: Option<&[u64]>,
+) -> (Vec<StrategySnapshot>, bool) {
     let mut full: Vec<StrategySnapshot> = strats
         .snapshots()
         .map(
@@ -326,7 +443,185 @@ fn overlay_pending_edits(strats: &StratsState) -> Vec<StrategySnapshot> {
     unconfirmed.sort_by_key(|(submitted_at, snapshot)| (*submitted_at, snapshot.strategy_id));
     full.extend(unconfirmed.into_iter().map(|(_, snapshot)| snapshot));
 
-    full
+    // The order this terminal last sent and the core has not answered yet. Without it every command
+    // here would rebuild the list in the CONFIRMED order and quietly undo a reorder still in
+    // flight — see [`QueuedOrder`].
+    if let Some(order) = order {
+        let ranks: std::collections::HashMap<u64, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(rank, id)| (*id, rank))
+            .collect();
+        if crate::feed::strategy_order::resequence(&mut full, |sc| {
+            ranks.get(&sc.strategy_id).copied()
+        }) == 0
+        {
+            // The confirmed list already holds this sequence, so there is nothing left to owe. The
+            // second retirement rule, and the one that covers a core whose Full carries no order
+            // version at all: `last_modified` then never moves, and the version test alone would
+            // keep re-asserting a sequence the core had already applied.
+            return (full, true);
+        }
+    }
+
+    (full, false)
+}
+
+/// Apply one folder-tree edit and send it, choosing the base and refusing what cannot be sent.
+///
+/// The base is the newest tree this terminal knows: the one it last sent while the core has not
+/// answered, otherwise the core's confirmed one. That is the whole reason folder edits arrive here
+/// as intents — a tree assembled upstream is assembled from a snapshot that may already be stale,
+/// and the wire form deletes every folder it omits.
+///
+/// Refuses to send a tree moonproto would reject rather than discovering it as an error: some real
+/// MoonBot folder names cannot survive its validator at all (see [`crate::feed::CoreFolders`]), and
+/// on such a core a submission would be refused whole.
+///
+/// Args:
+///     client: The core's client.
+///     server_id: Core id, for the log.
+///     action: Log label.
+///     strategy_placements: Guard holding the tree this terminal last sent.
+///     edit: Rewrites the base into the desired tree.
+///
+/// Returns:
+///     Nothing; every refusal is logged where it happens.
+fn folder_edit(
+    client: &MoonClient,
+    server_id: u64,
+    action: &str,
+    subject: &str,
+    strategy_placements: &mut StrategyPlacementGuard,
+    edit: impl FnOnce(&[String]) -> Vec<String>,
+) {
+    let Some(snap) = client.snapshot() else {
+        log::warn!(
+            "core {} {action} folder {subject:?} skipped: strategy state is not ready",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    };
+    let strats = snap.strats();
+    let last_modified = strats.folders_last_modified();
+    if last_modified == 0 {
+        log::info!(
+            "core {} {action} folder {subject:?} skipped: this core keeps no folder tree",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    }
+    let confirmed: Vec<String> = strats.folder_paths().map(str::to_string).collect();
+    let base = strategy_placements.folder_base(confirmed, last_modified);
+    let desired = edit(&base);
+    // Validated the way moonproto validates it: a folder submission carries the tree, and the
+    // library checks every current strategy path alongside it.
+    let rows = strats.snapshots().map(|sc| sc.path.as_ref());
+    if !crate::feed::folder_tree::sendable(desired.iter().map(String::as_str).chain(rows)) {
+        log::warn!(
+            "core {} {action} folder {subject:?} skipped: this core's tree holds a path              MoonProto refuses",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    }
+    let count = desired.len();
+    match client.strategies().sync_local_folders(desired.clone()) {
+        Ok(()) => {
+            strategy_placements.note_queued_folders(desired, last_modified);
+            log::info!(
+                "core {} {action} folder {subject:?}, {count} in the tree",
+                crate::feed::core_label(server_id)
+            );
+        }
+        Err(error) => log::warn!(
+            "core {} {action} folder {subject:?} failed: {error}",
+            crate::feed::core_label(server_id)
+        ),
+    }
+}
+
+/// Join every relocated row to the run its destination folder ALREADY occupies.
+///
+/// Called after a move has rewritten `path`, so a folder the operator dropped rows into stays one
+/// contiguous group rather than two — the core asks for that (moonproto `docs/strats.md`, "Strategy
+/// Order"), and the tree places a folder where its first strategy appears, so a row left at its old
+/// index can drag a whole folder to a new place from a gesture that named neither.
+///
+/// Three rules keep it from moving anything it was not asked to:
+///
+///   * Only rows whose path actually CHANGED are considered. A drag that includes rows already in
+///     the destination leaves those exactly where they are.
+///   * The anchor is a row that was NOT part of this move. So a folder RENAME — where every row
+///     carrying the new name is one of the renamed ones — relocates nothing at all, and neither
+///     does a move into a folder that does not exist yet.
+///   * Rows joining the same run are placed in the order they were given, one after another.
+///
+/// Built as one rebuilding pass rather than a sequence of `remove`/`insert` calls. That is not a
+/// matter of cost: every removal shifts every later index, so a plan expressed in positions goes
+/// stale the moment two destinations interleave — which `ops::move_folder` and `ops::rename_folder`
+/// both produce — and the rows then land one slot early, splitting the very runs this repairs.
+/// Positions here are only ever read from the ORIGINAL list, and each row is emitted exactly once.
+///
+/// Args:
+///     full: The complete strategy set, already carrying the new paths.
+///     relocated: `(strategy id, new folder path)` for the rows whose folder actually changed.
+///
+/// Returns:
+///     Nothing; a row with no existing destination run to join is left untouched.
+fn regroup_moved(full: &mut Vec<StrategySnapshot>, relocated: &[(u64, String)]) {
+    let moved: std::collections::HashSet<u64> = relocated.iter().map(|(id, _)| *id).collect();
+    let index_of: std::collections::HashMap<u64, usize> = full
+        .iter()
+        .enumerate()
+        .map(|(at, sc)| (sc.strategy_id, at))
+        .collect();
+
+    // Per anchor row, the ids that follow it. The anchor is the LAST row of that destination this
+    // move did not touch; without one there is no run to join and the row is left alone.
+    let mut following: std::collections::HashMap<usize, Vec<u64>> =
+        std::collections::HashMap::new();
+    let mut joining: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for (id, path) in relocated {
+        if !index_of.contains_key(id) {
+            continue;
+        }
+        let anchor = full
+            .iter()
+            .rposition(|sc| sc.path.as_ref() == path && !moved.contains(&sc.strategy_id));
+        if let Some(anchor) = anchor {
+            following.entry(anchor).or_default().push(*id);
+            joining.insert(*id);
+        }
+    }
+    if joining.is_empty() {
+        return;
+    }
+
+    let mut slots: Vec<Option<StrategySnapshot>> =
+        std::mem::take(full).into_iter().map(Some).collect();
+    let mut rebuilt: Vec<StrategySnapshot> = Vec::with_capacity(slots.len());
+    for at in 0..slots.len() {
+        let Some(id) = slots[at].as_ref().map(|sc| sc.strategy_id) else {
+            continue;
+        };
+        if joining.contains(&id) {
+            // Emitted behind its anchor instead, wherever that sits.
+            continue;
+        }
+        let Some(row) = slots[at].take() else {
+            continue;
+        };
+        rebuilt.push(row);
+        let Some(ids) = following.get(&at) else {
+            continue;
+        };
+        for id in ids {
+            if let Some(row) = index_of.get(id).and_then(|from| slots[*from].take()) {
+                rebuilt.push(row);
+            }
+        }
+    }
+    *full = rebuilt;
 }
 
 /// Shared strategy-sync path: load the COMPLETE current set, let `build` edit it (patch fields,
@@ -342,22 +637,43 @@ fn rebuild_sync(
     server_id: u64,
     action: &str,
     strategy_placements: &mut StrategyPlacementGuard,
+    folders: Option<Vec<String>>,
     build: impl FnOnce(&mut Vec<StrategySnapshot>, Option<&StrategySchema>, u64) -> usize,
 ) -> bool {
     if let Some(snap) = client.snapshot() {
         let strats = snap.strats();
         let schema = strats.strategy_schema();
         let now = now_ms() as u64;
-        let mut full: Vec<StrategySnapshot> = overlay_pending_edits(strats);
+        // Read before the list is built: it is both the baseline the queued order is judged against
+        // and the one recorded with the next send.
+        let last_modified = strats.last_modified();
+        let (mut full, order_satisfied) =
+            overlay_pending_edits(strats, strategy_placements.pending_order(last_modified));
+        if order_satisfied {
+            strategy_placements.retire_order();
+        }
         let changed = build(&mut full, schema, now);
-        if changed > 0 {
+        // A folder tree is worth a snapshot on its own: a rename whose rows all vanished between
+        // queueing and here still has to take the emptied folder with it.
+        if changed > 0 || folders.is_some() {
             let placements = full
                 .iter()
                 .map(|strategy| (strategy.strategy_id, strategy.path.to_string()))
                 .collect();
-            match client.strategies().sync_local_strategies(full) {
+            let sequence: Vec<u64> = full.iter().map(|strategy| strategy.strategy_id).collect();
+            // One snapshot for both when a folder tree comes along: the core applies the
+            // strategy changes first and the newer tree second, which is what removes a folder the
+            // strategies have just left. Sent as two commands they could arrive the other way
+            // round, and the core would then refuse to drop a folder that still held rows.
+            let queued = match folders {
+                Some(paths) => client
+                    .strategies()
+                    .sync_local_strategies_with_folders(full, paths),
+                None => client.strategies().sync_local_strategies(full),
+            };
+            match queued {
                 Ok(()) => {
-                    strategy_placements.note_queued_sync(placements);
+                    strategy_placements.note_queued_sync(placements, sequence, last_modified);
                     log::info!(
                         "core {} {action} {changed} strategies",
                         crate::feed::core_label(server_id)
@@ -467,6 +783,8 @@ pub(super) fn drain_commands(
                     server.id,
                     "edit",
                     strategy_placements,
+                    // No folder tree: these edit rows, never the set of folders.
+                    None,
                     |full, schema, now| {
                         let mut edited = 0usize;
                         for sc in full.iter_mut() {
@@ -632,6 +950,8 @@ pub(super) fn drain_commands(
                     server.id,
                     "create",
                     strategy_placements,
+                    // No folder tree: these edit rows, never the set of folders.
+                    None,
                     |full, schema, now| {
                         let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
                         // Plan the whole batch before insertion because each insertion shifts every
@@ -681,6 +1001,8 @@ pub(super) fn drain_commands(
                     server.id,
                     "restore",
                     strategy_placements,
+                    // No folder tree: these edit rows, never the set of folders.
+                    None,
                     |full, schema, now| {
                         // It is already live (double-click in the menu or an echo), so do not duplicate it.
                         if full.iter().any(|s| s.strategy_id == id) {
@@ -708,26 +1030,120 @@ pub(super) fn drain_commands(
                     local_strat_edits.mark(id);
                 }
             }
-            Ok(CoreCmd::MoveStrategies { moves }) => {
+            Ok(CoreCmd::MoveStrategies { moves, rebase }) => {
+                // The folder half, built HERE from the newest tree this terminal knows. Declined
+                // whole — leaving the strategies to travel alone — when the result is something
+                // MoonProto would refuse, because it validates the bundle as one: a tree it will
+                // not take would otherwise turn a working rename into a refusal that moves nothing.
+                let planned = rebase.and_then(|(old_key, new_key)| {
+                    let snap = client.snapshot()?;
+                    let strats = snap.strats();
+                    let last_modified = strats.folders_last_modified();
+                    if last_modified == 0 {
+                        return None;
+                    }
+                    let confirmed: Vec<String> =
+                        strats.folder_paths().map(str::to_string).collect();
+                    let base = strategy_placements.folder_base(confirmed, last_modified);
+                    let desired = crate::feed::folder_tree::rebase(&base, &old_key, &new_key);
+                    // Every path the submission carries goes through the same validator as the
+                    // tree — the folders, the rows as they stand, and the paths this move is about
+                    // to give them, which is where a name the operator just typed shows up.
+                    let rows = strats.snapshots().map(|sc| sc.path.as_ref());
+                    let targets = moves.iter().map(|(_, path)| path.as_str());
+                    let sendable = crate::feed::folder_tree::sendable(
+                        desired
+                            .iter()
+                            .map(String::as_str)
+                            .chain(rows)
+                            .chain(targets),
+                    );
+                    if !sendable {
+                        log::warn!(
+                            "core {} move {old_key:?} -> {new_key:?}: folder tree left out, a                              path MoonProto refuses",
+                            crate::feed::core_label(server.id)
+                        );
+                        return None;
+                    }
+                    Some((desired, last_modified))
+                });
+                let folders = planned.as_ref().map(|(desired, _)| desired.clone());
                 // Change `path` and increment `last_date` for the selected strategies in one sync.
-                // Nothing is recorded on the strength of this send, so its answer is not needed.
-                let _ = rebuild_sync(
+                let queued = rebuild_sync(
                     client,
                     server.id,
                     "move",
                     strategy_placements,
+                    folders,
                     |full, _schema, now| {
                         let mut changed = 0usize;
+                        let mut relocated: Vec<(u64, String)> = Vec::new();
                         for sc in full.iter_mut() {
                             if let Some((_, new_path)) =
                                 moves.iter().find(|(id, _)| *id == sc.strategy_id)
                             {
+                                if sc.path.as_ref() != new_path.as_str() {
+                                    relocated.push((sc.strategy_id, new_path.clone()));
+                                }
                                 sc.path = new_path.as_str().into();
                                 sc.last_date = now.max(sc.last_date + 1);
                                 changed += 1;
                             }
                         }
+                        regroup_moved(full, &relocated);
                         changed
+                    },
+                );
+                // Recorded only once the queue has taken it. A tree noted before the send would
+                // become the base of the NEXT folder edit while the core never received it.
+                if let (true, Some((desired, base))) = (queued, planned) {
+                    strategy_placements.note_queued_folders(desired, base);
+                }
+            }
+            Ok(CoreCmd::AddFolder { path }) => {
+                folder_edit(
+                    client,
+                    server.id,
+                    "add",
+                    &path,
+                    strategy_placements,
+                    |base| crate::feed::folder_tree::with_added(base, &path),
+                );
+            }
+            Ok(CoreCmd::RemoveFolder { path }) => {
+                folder_edit(
+                    client,
+                    server.id,
+                    "remove",
+                    &path,
+                    strategy_placements,
+                    |base| crate::feed::folder_tree::without(base, &path),
+                );
+            }
+            Ok(CoreCmd::ReorderStrategies { order }) => {
+                // The new SEQUENCE is the whole edit: no field is patched and no `last_date` moves,
+                // because moonproto versions strategy order separately from per-strategy edit
+                // dates and reads the order off the row sequence of the Full snapshot this sends.
+                let _ = rebuild_sync(
+                    client,
+                    server.id,
+                    "reorder",
+                    strategy_placements,
+                    None,
+                    |full, _schema, _now| {
+                        let ranks: std::collections::HashMap<u64, usize> = order
+                            .iter()
+                            .enumerate()
+                            .map(|(rank, id)| (*id, rank))
+                            .collect();
+                        // Counted against the list as this terminal last left it — `full`
+                        // arrives already carrying any order still owed to the core — so pressing
+                        // Down and then Up inside one round trip is seen for what it is: a real
+                        // change back, rather than a no-op against a confirmed order the core is
+                        // no longer holding.
+                        crate::feed::strategy_order::resequence(full, |sc| {
+                            ranks.get(&sc.strategy_id).copied()
+                        })
                     },
                 );
             }

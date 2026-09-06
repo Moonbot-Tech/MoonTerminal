@@ -640,6 +640,18 @@ struct CoreFilterRevision;
 /// Returns:
 ///     Success after the selected process role exits.
 fn main() -> anyhow::Result<()> {
+    // FIRST, and at the base of the stack on purpose. `rust_i18n` builds its translation backend
+    // once, lazily, on the first `t!()` — and its generated initializer materialises all ~2600 keys
+    // in ONE stack frame, large enough that the `__chkstk` probe entering it faults outright when
+    // the first lookup happens deep inside window construction. That is not hypothetical: it is a
+    // 0xC00000FD stack overflow at startup, and because the stack was already exhausted the crash
+    // handler could not even capture a backtrace — the process died inside `dbghelp` instead,
+    // leaving an empty log and a crash that named the wrong module.
+    //
+    // Touched here, the frame is built where there is room, and every later `t!()` is a map lookup
+    // costing nothing. The key is arbitrary; only the initialization it forces matters.
+    let _ = rust_i18n::t!("common.loading");
+
     // Before the updater, before the configuration, before a window: the UI-atlas tools that work
     // on a file the crawl already wrote need none of it, and running them through a normal launch
     // would put a six-minute walk between a rule and its result.

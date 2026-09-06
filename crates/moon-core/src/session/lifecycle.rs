@@ -377,6 +377,16 @@ impl SessionManager {
                             stats.ui_state |= core.problems_rev != before;
                         }
                     }
+                    FeedMsg::Folders(folders) => {
+                        // Gated for the same reason as `Problems`: the tree is republished whenever
+                        // the strategies move, which on a busy account is constantly, and only an
+                        // actual difference is worth a repaint.
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            let before = core.folders_rev;
+                            core.apply(FeedMsg::Folders(folders));
+                            stats.ui_state |= core.folders_rev != before;
+                        }
+                    }
                     other => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(other);

@@ -71,6 +71,7 @@ fn core_node(core: CoreId) -> NodeData {
 /// Folder row with the given path segments; must remain a live drop destination.
 fn folder_node(core: CoreId, path: &[&str]) -> NodeData {
     NodeData::Folder {
+        fill: super::FolderFill::Populated,
         core,
         path: path.iter().map(|p| (*p).to_string()).collect(),
         label: "folder".into(),

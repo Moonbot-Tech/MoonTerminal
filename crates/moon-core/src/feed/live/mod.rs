@@ -574,6 +574,13 @@ pub(super) fn run(
     // changes because strategy fields are expensive and need not be sent every second.
     let mut last_schema_rev: u64 = u64::MAX;
     let mut last_strat_sig: u64 = u64::MAX;
+    // Folder-tree cursors. Two of them because the tree moves for two independent reasons: the core
+    // versions it whenever a folder is created or deleted, and the folders the STRATEGIES imply
+    // change whenever a strategy's path does — which the version does not see.
+    let mut last_folders_version: i64 = i64::MIN;
+    // Seeded with the digest of an EMPTY tree, which is what a core reports before it has said
+    // anything: `u64::MAX` would make the first pass publish that nothing-yet as a change.
+    let mut last_folders_digest: u64 = 0;
     // Strategy-edit publish cadence, independent of the 1 Hz strategies gate below. The retained
     // latch is set on ANY edit event and cleared only once a publish actually goes out, so a
     // resolution arriving inside the 250 ms shadow of the previous publish is delayed, never
@@ -2200,15 +2207,11 @@ pub(super) fn run(
                 }
 
                 // Publish contents/values when the signature changes (id/ver/last_date/checked).
-                let mut sig = 0u64;
-                for s in strats.snapshots() {
-                    sig = sig
-                        .wrapping_mul(1099511628211)
-                        .wrapping_add(s.strategy_id)
-                        .wrapping_add((s.strategy_ver as u32 as u64).wrapping_shl(1))
-                        .wrapping_add(s.last_date)
-                        .wrapping_add(s.checked as u64);
-                }
+                let sig = convert::strategies_publish_sig(
+                    strats
+                        .snapshots()
+                        .map(|s| (s.strategy_id, s.strategy_ver, s.last_date, s.checked)),
+                );
                 let delivery_result =
                     pending_strat_db_delivery
                         .as_ref()
@@ -2227,7 +2230,8 @@ pub(super) fn run(
                         &mut strat_db_initial,
                     );
                 }
-                if sig != last_strat_sig {
+                let strategies_changed = sig != last_strat_sig;
+                if strategies_changed {
                     last_strat_sig = sig;
                     // The order table's Strat column resolves strat_id to kind through this same
                     // registry in `build_order_row`. The registry is populated AFTER orders, while
@@ -2261,6 +2265,34 @@ pub(super) fn run(
                         .collect();
                     if tx.send(FeedMsg::Strategies(strategies)).is_err() {
                         break;
+                    }
+                }
+
+                // The core's folder tree, empty folders included. Read on its own cursor rather
+                // than inside the block above: a folder created or deleted with no strategy in it
+                // moves nothing the strategy signature covers, and that folder is exactly the one
+                // this list exists to carry.
+                let folders_version = strats.folders_last_modified();
+                if folders_version != last_folders_version || strategies_changed {
+                    last_folders_version = folders_version;
+                    let folders = convert::folders_from_proto(strats);
+                    // Digested rather than compared: the tree is republished on every strategy
+                    // change, and holding a second copy of every path per core to answer "did it
+                    // move" costs more than the fold does.
+                    let digest = folders.paths.iter().fold(
+                        u64::from(folders.supported) | (u64::from(folders.editable) << 1),
+                        |acc, path| {
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            std::hash::Hash::hash(path, &mut hasher);
+                            acc.wrapping_mul(1099511628211)
+                                .wrapping_add(std::hash::Hasher::finish(&hasher))
+                        },
+                    );
+                    if digest != last_folders_digest {
+                        last_folders_digest = digest;
+                        if tx.send(FeedMsg::Folders(folders)).is_err() {
+                            break;
+                        }
                     }
                 }
                 // The database cursor is separate from the UI cursor: schema defaults can arrive
