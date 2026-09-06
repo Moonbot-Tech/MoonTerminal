@@ -33,6 +33,9 @@ pub(super) enum ParamEntry {
 pub(super) struct ParamLabels<'a> {
     /// Caption for the trailing group of changed fields absent from the current kind's schema.
     pub(super) orphans: &'a str,
+    /// Display name for one runtime section title. The caller owns the locale lookup so this module
+    /// stays pure; a test passes identity and reads the raw titles back.
+    pub(super) section_title: &'a dyn Fn(&str) -> String,
 }
 
 #[cfg(test)]
@@ -116,7 +119,7 @@ pub(super) fn flatten_params(
         field_count += fields.len();
         entries.push(ParamEntry::SectionHeader {
             section: Some(i),
-            title: sec.title.clone(),
+            title: (labels.section_title)(&sec.title),
             field_count: fields.len(),
         });
         entries.extend(fields.into_iter().map(|field| ParamEntry::Field {

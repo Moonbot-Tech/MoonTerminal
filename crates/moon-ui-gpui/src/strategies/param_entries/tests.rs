@@ -77,6 +77,7 @@ fn version_full_mode_keeps_only_changed_fields_and_groups_orphans() {
         false,
         ParamLabels {
             orphans: "Other fields",
+            section_title: &|title| title.to_string(),
         },
     );
 
@@ -92,4 +93,37 @@ fn version_full_mode_keeps_only_changed_fields_and_groups_orphans() {
     assert_eq!(flat.heading_at.get(&0), Some(&0));
     assert_eq!(flat.heading_at.get(&1), Some(&2));
     assert_eq!(flat.field_count, changed.len());
+}
+
+/// `param_entries.rs::flatten_params`: bypassing `ParamLabels::section_title` for full-mode
+/// headings would expose raw schema titles there while the per-section pane remains translated.
+#[test]
+fn full_mode_section_headers_use_the_section_title_seam() {
+    let sections = vec![SchemaSection {
+        title: "Main".to_string(),
+        fields: vec![field("AutoBuy")],
+    }];
+
+    let flat = flatten_params(
+        &sections,
+        None,
+        false,
+        None,
+        false,
+        ParamLabels {
+            orphans: "Other fields",
+            section_title: &|title| format!("<{title}>"),
+        },
+    );
+
+    assert!(matches!(
+        flat.entries.first(),
+        Some(ParamEntry::SectionHeader {
+            section: Some(0),
+            title,
+            field_count: 1,
+        }) if title == "<Main>"
+    ));
+    assert_eq!(flat.heading_at, HashMap::from([(0, 0)]));
+    assert_eq!(flat.field_count, 1);
 }

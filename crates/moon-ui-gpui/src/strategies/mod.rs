@@ -30,6 +30,7 @@ mod version_facts;
 mod versions;
 mod window;
 
+use sections::section_display_title;
 use split::{PanelResizeDrag, PanelSplit};
 use tree::pane_cache::{LeftPaneFrame, PaneCache};
 pub(crate) use window::StrategyRevealRequest;

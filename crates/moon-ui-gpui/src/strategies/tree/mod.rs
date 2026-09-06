@@ -561,6 +561,10 @@ impl StrategiesView {
     ) -> AnyElement {
         let start_label = t!("strat.start_checked").to_string();
         let stop_label = t!("strat.stop_checked").to_string();
+        // The button says the verb; the tooltip says what it acts on. Deriving the tooltip from the
+        // caption instead would drop the object the moment the caption is shortened to fit.
+        let start_tip = t!("strat.start_checked_tip").to_string();
+        let stop_tip = t!("strat.stop_checked_tip").to_string();
         // The same count the cached width was measured against, so the rendered label and the
         // density decision cannot describe different states.
         let staged = pane.staged;
@@ -593,7 +597,7 @@ impl StrategiesView {
             .primary()
             .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/play.svg"))
-            .tooltip(format!("▶ {start_label}"))
+            .tooltip(format!("▶ {start_tip}"))
             .on_click({
                 let plan = plan.clone();
                 cx.listener(move |this, _, _, cx| {
@@ -604,7 +608,7 @@ impl StrategiesView {
             .outline()
             .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/pause.svg"))
-            .tooltip(format!("■ {stop_label}"))
+            .tooltip(format!("■ {stop_tip}"))
             .on_click({
                 let plan = plan.clone();
                 cx.listener(move |this, _, _, cx| {

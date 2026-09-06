@@ -10,234 +10,598 @@ use super::versions::StagedOutcome;
 use super::*;
 use rust_i18n::t;
 
-/// Return the locale key for repository-known help attached to an exact raw field name.
+/// Return the locale keys attached to an exact raw strategy field name.
+///
+/// ONE registry rather than a help table beside a label table: both answer the same question about
+/// the same identity, and two of them would have to be corrected in step forever. The tuple is
+/// `(help key, label key)`, and the label is optional because a field whose meaning the repository
+/// cannot state honestly gets none -- 22 of the 216 today. A wrong label on a trading field is
+/// worse than no label, so those keep the raw identifier and nothing else changes for them.
+///
+/// This is an INDEX of what the repository has evidence for, never a catalogue of what can arrive:
+/// the schema streams at runtime, so an unknown name yields `None` and the row renders exactly as
+/// it did before this table existed.
 ///
 /// Args:
 ///     raw_name: Case-sensitive strategy field name supplied by the runtime schema.
 ///
 /// Returns:
-///     A static locale key when repository evidence establishes useful help, otherwise `None`.
-fn field_tooltip_key(raw_name: &str) -> Option<&'static str> {
+///     `(help key, optional label key)` when repository evidence establishes the field, else `None`.
+fn field_keys(raw_name: &str) -> Option<(&'static str, Option<&'static str>)> {
     match raw_name {
-        "AddToChart" => Some("strat.field.AddToChart"),
-        "AllowedDrop" => Some("strat.field.AllowedDrop"),
-        "AllowedDrop3" => Some("strat.field.AllowedDrop3"),
-        "AutoBuy" => Some("strat.field.AutoBuy"),
-        "AutoCancelBuy" => Some("strat.field.AutoCancelBuy"),
-        "AutoCancelLowerBuy" => Some("strat.field.AutoCancelLowerBuy"),
-        "AutoSell" => Some("strat.field.AutoSell"),
-        "BinancePriceBug" => Some("strat.field.BinancePriceBug"),
-        "BinancePriceBugMin" => Some("strat.field.BinancePriceBugMin"),
-        "BinanceTokenTags" => Some("strat.field.BinanceTokenTags"),
-        "BuyDelay" => Some("strat.field.BuyDelay"),
-        "BuyOrderColor" => Some("strat.field.BuyOrderColor"),
-        "buyPrice" => Some("strat.field.buyPrice"),
-        "buyPriceAbsolute" => Some("strat.field.buyPriceAbsolute"),
-        "BuyPriceStep" => Some("strat.field.BuyPriceStep"),
-        "BuyStepKind" => Some("strat.field.BuyStepKind"),
-        "BuyType" => Some("strat.field.BuyType"),
-        "BV_SV_FilterRatio" => Some("strat.field.BV_SV_FilterRatio"),
-        "BV_SV_FilterRatioMax" => Some("strat.field.BV_SV_FilterRatioMax"),
-        "BV_SV_Kind" => Some("strat.field.BV_SV_Kind"),
-        "BV_SV_Ratio" => Some("strat.field.BV_SV_Ratio"),
-        "BV_SV_Reverse" => Some("strat.field.BV_SV_Reverse"),
-        "BV_SV_TakeProfit" => Some("strat.field.BV_SV_TakeProfit"),
-        "BV_SV_TradesN" => Some("strat.field.BV_SV_TradesN"),
-        "CancelBuyAfterSell" => Some("strat.field.CancelBuyAfterSell"),
-        "CancelBuyStep" => Some("strat.field.CancelBuyStep"),
-        "CheckFreeBalance" => Some("strat.field.CheckFreeBalance"),
-        "Comment" => Some("strat.field.Comment"),
-        "CustomEMA" => Some("strat.field.CustomEMA"),
-        "Delta_24h_Max" => Some("strat.field.Delta_24h_Max"),
-        "Delta_24h_Min" => Some("strat.field.Delta_24h_Min"),
-        "Delta_3h_Max" => Some("strat.field.Delta_3h_Max"),
-        "Delta_3h_Min" => Some("strat.field.Delta_3h_Min"),
-        "Delta_BTC_1m_Max" => Some("strat.field.Delta_BTC_1m_Max"),
-        "Delta_BTC_1m_Min" => Some("strat.field.Delta_BTC_1m_Min"),
-        "Delta_BTC_24_Max" => Some("strat.field.Delta_BTC_24_Max"),
-        "Delta_BTC_24_Min" => Some("strat.field.Delta_BTC_24_Min"),
-        "Delta_BTC_5m_Max" => Some("strat.field.Delta_BTC_5m_Max"),
-        "Delta_BTC_5m_Min" => Some("strat.field.Delta_BTC_5m_Min"),
-        "Delta_BTC_Max" => Some("strat.field.Delta_BTC_Max"),
-        "Delta_BTC_Min" => Some("strat.field.Delta_BTC_Min"),
-        "Delta_Market_24_Max" => Some("strat.field.Delta_Market_24_Max"),
-        "Delta_Market_24_Min" => Some("strat.field.Delta_Market_24_Min"),
-        "Delta_Market_Max" => Some("strat.field.Delta_Market_Max"),
-        "Delta_Market_Min" => Some("strat.field.Delta_Market_Min"),
-        "Delta2_Max" => Some("strat.field.Delta2_Max"),
-        "Delta2_Min" => Some("strat.field.Delta2_Min"),
-        "Delta2_Type" => Some("strat.field.Delta2_Type"),
-        "Delta3_Max" => Some("strat.field.Delta3_Max"),
-        "Delta3_Min" => Some("strat.field.Delta3_Min"),
-        "Delta3_Type" => Some("strat.field.Delta3_Type"),
-        "DeltaSwitch" => Some("strat.field.DeltaSwitch"),
-        "DontKeepOrdersOnChart" => Some("strat.field.DontKeepOrdersOnChart"),
-        "DontSellBelowLiq" => Some("strat.field.DontSellBelowLiq"),
-        "DontWriteLog" => Some("strat.field.DontWriteLog"),
-        "EmulatorMode" => Some("strat.field.EmulatorMode"),
-        "FastStopLoss" => Some("strat.field.FastStopLoss"),
-        "FilterBy" => Some("strat.field.FilterBy"),
-        "FilterMax" => Some("strat.field.FilterMax"),
-        "FilterMin" => Some("strat.field.FilterMin"),
-        "FundingAfter" => Some("strat.field.FundingAfter"),
-        "FundingBefore" => Some("strat.field.FundingBefore"),
-        "GlobalDetectPenalty" => Some("strat.field.GlobalDetectPenalty"),
-        "GlobalFilterPenalty" => Some("strat.field.GlobalFilterPenalty"),
-        "HFT" => Some("strat.field.HFT"),
-        "HODLmode" => Some("strat.field.HODLmode"),
-        "IgnoreBase" => Some("strat.field.IgnoreBase"),
-        "IgnoreCancelBuy" => Some("strat.field.IgnoreCancelBuy"),
-        "IgnoreDelta" => Some("strat.field.IgnoreDelta"),
-        "IgnoreFilters" => Some("strat.field.IgnoreFilters"),
-        "IgnorePing" => Some("strat.field.IgnorePing"),
-        "IgnorePrice" => Some("strat.field.IgnorePrice"),
-        "IgnoreSellShot" => Some("strat.field.IgnoreSellShot"),
-        "IgnoreSellSpread" => Some("strat.field.IgnoreSellSpread"),
-        "IgnoreSession" => Some("strat.field.IgnoreSession"),
-        "IgnoreTime" => Some("strat.field.IgnoreTime"),
-        "IgnoreVolume" => Some("strat.field.IgnoreVolume"),
-        "JoinPriceFixed" => Some("strat.field.JoinPriceFixed"),
-        "JoinSellKey" => Some("strat.field.JoinSellKey"),
-        "KeepAlert" => Some("strat.field.KeepAlert"),
-        "KeepInChart" => Some("strat.field.KeepInChart"),
-        "LastEditDate" => Some("strat.field.LastEditDate"),
-        "MarketStopLevel" => Some("strat.field.MarketStopLevel"),
-        "MarkPriceMax" => Some("strat.field.MarkPriceMax"),
-        "MarkPriceMin" => Some("strat.field.MarkPriceMin"),
-        "MaxActiveOrders" => Some("strat.field.MaxActiveOrders"),
-        "MaxBalance" => Some("strat.field.MaxBalance"),
-        "MaxHourlyVolFast" => Some("strat.field.MaxHourlyVolFast"),
-        "MaxHourlyVolume" => Some("strat.field.MaxHourlyVolume"),
-        "MaxLatency" => Some("strat.field.MaxLatency"),
-        "MaxLeverage" => Some("strat.field.MaxLeverage"),
-        "MaxMarkets" => Some("strat.field.MaxMarkets"),
-        "MaxOrdersPerMarket" => Some("strat.field.MaxOrdersPerMarket"),
-        "MaxPing" => Some("strat.field.MaxPing"),
-        "MaxPosition" => Some("strat.field.MaxPosition"),
-        "MaxVolume" => Some("strat.field.MaxVolume"),
-        "MinFreeBalance" => Some("strat.field.MinFreeBalance"),
-        "MinHourlyVolFast" => Some("strat.field.MinHourlyVolFast"),
-        "MinHourlyVolume" => Some("strat.field.MinHourlyVolume"),
-        "MinLeverage" => Some("strat.field.MinLeverage"),
-        "MinPing" => Some("strat.field.MinPing"),
-        "MinuteVolDeltaMax" => Some("strat.field.MinuteVolDeltaMax"),
-        "MinuteVolDeltaMin" => Some("strat.field.MinuteVolDeltaMin"),
-        "MinVolume" => Some("strat.field.MinVolume"),
-        "MoonIntRiskLevel" => Some("strat.field.MoonIntRiskLevel"),
-        "MoonIntStopLevel" => Some("strat.field.MoonIntStopLevel"),
-        "OrderLineKind" => Some("strat.field.OrderLineKind"),
-        "OrdersCount" => Some("strat.field.OrdersCount"),
-        "OrderSize" => Some("strat.field.OrderSize"),
-        "OrderSizeKind" => Some("strat.field.OrderSizeKind"),
-        "OrderSizeStep" => Some("strat.field.OrderSizeStep"),
-        "PenaltyTime" => Some("strat.field.PenaltyTime"),
-        "PriceDownAllowedDrop" => Some("strat.field.PriceDownAllowedDrop"),
-        "PriceDownDelay" => Some("strat.field.PriceDownDelay"),
-        "PriceDownPercent" => Some("strat.field.PriceDownPercent"),
-        "PriceDownRelative" => Some("strat.field.PriceDownRelative"),
-        "PriceDownTimer" => Some("strat.field.PriceDownTimer"),
-        "PriceStepMax" => Some("strat.field.PriceStepMax"),
-        "PriceStepMin" => Some("strat.field.PriceStepMin"),
-        "PriceToSwitch2Stop" => Some("strat.field.PriceToSwitch2Stop"),
-        "PriceToSwitchStop3" => Some("strat.field.PriceToSwitchStop3"),
-        "SamePosition" => Some("strat.field.SamePosition"),
-        "SecondStopLoss" => Some("strat.field.SecondStopLoss"),
-        "SellByCustomEMA" => Some("strat.field.SellByCustomEMA"),
-        "SellByFilters" => Some("strat.field.SellByFilters"),
-        "SellDelay" => Some("strat.field.SellDelay"),
-        "SellEMACheckEnter" => Some("strat.field.SellEMACheckEnter"),
-        "SellEMADelay" => Some("strat.field.SellEMADelay"),
-        "SellFromAssets" => Some("strat.field.SellFromAssets"),
-        "SellLevelAdjust" => Some("strat.field.SellLevelAdjust"),
-        "SellLevelAllowedDrop" => Some("strat.field.SellLevelAllowedDrop"),
-        "SellLevelCount" => Some("strat.field.SellLevelCount"),
-        "SellLevelDelay" => Some("strat.field.SellLevelDelay"),
-        "SellLevelDelayNext" => Some("strat.field.SellLevelDelayNext"),
-        "SellLevelRelative" => Some("strat.field.SellLevelRelative"),
-        "SellLevelTime" => Some("strat.field.SellLevelTime"),
-        "SellLevelWorkTime" => Some("strat.field.SellLevelWorkTime"),
-        "SellOrderColor" => Some("strat.field.SellOrderColor"),
-        "SellPrice" => Some("strat.field.SellPrice"),
-        "SellPriceAbsolute" => Some("strat.field.SellPriceAbsolute"),
-        "SellQuantity" => Some("strat.field.SellQuantity"),
-        "SellShotAllowedDown" => Some("strat.field.SellShotAllowedDown"),
-        "SellShotAllowedUp" => Some("strat.field.SellShotAllowedUp"),
-        "SellShotCalcInterval" => Some("strat.field.SellShotCalcInterval"),
-        "SellShotCorridor" => Some("strat.field.SellShotCorridor"),
-        "SellShotDelay" => Some("strat.field.SellShotDelay"),
-        "SellShotDistance" => Some("strat.field.SellShotDistance"),
-        "SellShotPriceDown" => Some("strat.field.SellShotPriceDown"),
-        "SellShotPriceDownDelay" => Some("strat.field.SellShotPriceDownDelay"),
-        "SellShotRaiseWait" => Some("strat.field.SellShotRaiseWait"),
-        "SellShotReplaceDelay" => Some("strat.field.SellShotReplaceDelay"),
-        "SellSpreadAllowedDrop" => Some("strat.field.SellSpreadAllowedDrop"),
-        "SellSpreadCalcInterval" => Some("strat.field.SellSpreadCalcInterval"),
-        "SellSpreadDelay" => Some("strat.field.SellSpreadDelay"),
-        "SellSpreadDistance" => Some("strat.field.SellSpreadDistance"),
-        "SellSpreadMinSpread" => Some("strat.field.SellSpreadMinSpread"),
-        "SellSpreadReplaceCount" => Some("strat.field.SellSpreadReplaceCount"),
-        "SessionIncreaseOrder" => Some("strat.field.SessionIncreaseOrder"),
-        "SessionIncreaseOrderMax" => Some("strat.field.SessionIncreaseOrderMax"),
-        "SessionLevelsUSDT" => Some("strat.field.SessionLevelsUSDT"),
-        "SessionMinusCount" => Some("strat.field.SessionMinusCount"),
-        "SessionPenaltyTime" => Some("strat.field.SessionPenaltyTime"),
-        "SessionPlusCount" => Some("strat.field.SessionPlusCount"),
-        "SessionProfitMax" => Some("strat.field.SessionProfitMax"),
-        "SessionProfitMin" => Some("strat.field.SessionProfitMin"),
-        "SessionReduceOrder" => Some("strat.field.SessionReduceOrder"),
-        "SessionReduceOrderMin" => Some("strat.field.SessionReduceOrderMin"),
-        "SessionResetOnMinus" => Some("strat.field.SessionResetOnMinus"),
-        "SessionResetTime" => Some("strat.field.SessionResetTime"),
-        "SessionStratIncreaseMax" => Some("strat.field.SessionStratIncreaseMax"),
-        "SessionStratMax" => Some("strat.field.SessionStratMax"),
-        "SessionStratMin" => Some("strat.field.SessionStratMin"),
-        "SessionStratReduceMin" => Some("strat.field.SessionStratReduceMin"),
-        "Short" => Some("strat.field.Short"),
-        "SignalType" => Some("strat.field.SignalType"),
-        "SoundAlert" => Some("strat.field.SoundAlert"),
-        "SoundKind" => Some("strat.field.SoundKind"),
-        "SplitPiece" => Some("strat.field.SplitPiece"),
-        "StopAboveLiq" => Some("strat.field.StopAboveLiq"),
-        "StopLoss" => Some("strat.field.StopLoss"),
-        "StopLoss3" => Some("strat.field.StopLoss3"),
-        "StopLossDelay" => Some("strat.field.StopLossDelay"),
-        "StopLossEMA" => Some("strat.field.StopLossEMA"),
-        "StopLossFixed" => Some("strat.field.StopLossFixed"),
-        "StopLossModifier" => Some("strat.field.StopLossModifier"),
-        "StopLossSpread" => Some("strat.field.StopLossSpread"),
-        "StopSpreadAdd1mDelta" => Some("strat.field.StopSpreadAdd1mDelta"),
-        "StrategyName" => Some("strat.field.StrategyName"),
-        "TakeProfit" => Some("strat.field.TakeProfit"),
-        "TimeToSwitch2Stop" => Some("strat.field.TimeToSwitch2Stop"),
-        "TimeToSwitchStop3" => Some("strat.field.TimeToSwitchStop3"),
-        "TlgBuyDipPrice" => Some("strat.field.TlgBuyDipPrice"),
-        "TlgUseBuyDipWords" => Some("strat.field.TlgUseBuyDipWords"),
-        "TotalLoss" => Some("strat.field.TotalLoss"),
-        "TradePenaltyTime" => Some("strat.field.TradePenaltyTime"),
-        "TrailingEMA" => Some("strat.field.TrailingEMA"),
-        "TrailingPercent" => Some("strat.field.TrailingPercent"),
-        "TrailingSpread" => Some("strat.field.TrailingSpread"),
-        "Use30SecOldASK" => Some("strat.field.Use30SecOldASK"),
-        "UseBTCPriceStep" => Some("strat.field.UseBTCPriceStep"),
-        "UseBV_SV_Filter" => Some("strat.field.UseBV_SV_Filter"),
-        "UseBV_SV_Stop" => Some("strat.field.UseBV_SV_Stop"),
-        "UseCustomColors" => Some("strat.field.UseCustomColors"),
-        "UseMarketStop" => Some("strat.field.UseMarketStop"),
-        "UseOldPrice" => Some("strat.field.UseOldPrice"),
-        "UsePostOnly" => Some("strat.field.UsePostOnly"),
-        "UseScalpingMode" => Some("strat.field.UseScalpingMode"),
-        "UseSecondStop" => Some("strat.field.UseSecondStop"),
-        "UseStopLoss" => Some("strat.field.UseStopLoss"),
-        "UseStopLoss3" => Some("strat.field.UseStopLoss3"),
-        "UseTakeProfit" => Some("strat.field.UseTakeProfit"),
-        "UseTrailing" => Some("strat.field.UseTrailing"),
-        "WorkingPriceMax" => Some("strat.field.WorkingPriceMax"),
-        "WorkingPriceMin" => Some("strat.field.WorkingPriceMin"),
-        "WorkingTime" => Some("strat.field.WorkingTime"),
-        "WorkingWeekTime" => Some("strat.field.WorkingWeekTime"),
+        "AddToChart" => Some(("strat.field.AddToChart", Some("strat.label.AddToChart"))),
+        "AllowedDrop" => Some(("strat.field.AllowedDrop", Some("strat.label.AllowedDrop"))),
+        "AllowedDrop3" => Some(("strat.field.AllowedDrop3", Some("strat.label.AllowedDrop3"))),
+        "AutoBuy" => Some(("strat.field.AutoBuy", Some("strat.label.AutoBuy"))),
+        "AutoCancelBuy" => Some((
+            "strat.field.AutoCancelBuy",
+            Some("strat.label.AutoCancelBuy"),
+        )),
+        "AutoCancelLowerBuy" => Some(("strat.field.AutoCancelLowerBuy", None)),
+        "AutoSell" => Some(("strat.field.AutoSell", Some("strat.label.AutoSell"))),
+        "BinancePriceBug" => Some((
+            "strat.field.BinancePriceBug",
+            Some("strat.label.BinancePriceBug"),
+        )),
+        "BinancePriceBugMin" => Some(("strat.field.BinancePriceBugMin", None)),
+        "BinanceTokenTags" => Some((
+            "strat.field.BinanceTokenTags",
+            Some("strat.label.BinanceTokenTags"),
+        )),
+        "BuyDelay" => Some(("strat.field.BuyDelay", Some("strat.label.BuyDelay"))),
+        "BuyOrderColor" => Some((
+            "strat.field.BuyOrderColor",
+            Some("strat.label.BuyOrderColor"),
+        )),
+        "buyPrice" => Some(("strat.field.buyPrice", Some("strat.label.buyPrice"))),
+        "buyPriceAbsolute" => Some((
+            "strat.field.buyPriceAbsolute",
+            Some("strat.label.buyPriceAbsolute"),
+        )),
+        "BuyPriceStep" => Some(("strat.field.BuyPriceStep", Some("strat.label.BuyPriceStep"))),
+        "BuyStepKind" => Some(("strat.field.BuyStepKind", Some("strat.label.BuyStepKind"))),
+        "BuyType" => Some(("strat.field.BuyType", Some("strat.label.BuyType"))),
+        "BV_SV_FilterRatio" => Some((
+            "strat.field.BV_SV_FilterRatio",
+            Some("strat.label.BV_SV_FilterRatio"),
+        )),
+        "BV_SV_FilterRatioMax" => Some((
+            "strat.field.BV_SV_FilterRatioMax",
+            Some("strat.label.BV_SV_FilterRatioMax"),
+        )),
+        "BV_SV_Kind" => Some(("strat.field.BV_SV_Kind", None)),
+        "BV_SV_Ratio" => Some(("strat.field.BV_SV_Ratio", Some("strat.label.BV_SV_Ratio"))),
+        "BV_SV_Reverse" => Some((
+            "strat.field.BV_SV_Reverse",
+            Some("strat.label.BV_SV_Reverse"),
+        )),
+        "BV_SV_TakeProfit" => Some((
+            "strat.field.BV_SV_TakeProfit",
+            Some("strat.label.BV_SV_TakeProfit"),
+        )),
+        "BV_SV_TradesN" => Some((
+            "strat.field.BV_SV_TradesN",
+            Some("strat.label.BV_SV_TradesN"),
+        )),
+        "CancelBuyAfterSell" => Some((
+            "strat.field.CancelBuyAfterSell",
+            Some("strat.label.CancelBuyAfterSell"),
+        )),
+        "CancelBuyStep" => Some((
+            "strat.field.CancelBuyStep",
+            Some("strat.label.CancelBuyStep"),
+        )),
+        "CheckFreeBalance" => Some((
+            "strat.field.CheckFreeBalance",
+            Some("strat.label.CheckFreeBalance"),
+        )),
+        "Comment" => Some(("strat.field.Comment", Some("strat.label.Comment"))),
+        "CustomEMA" => Some(("strat.field.CustomEMA", Some("strat.label.CustomEMA"))),
+        "Delta_24h_Max" => Some((
+            "strat.field.Delta_24h_Max",
+            Some("strat.label.Delta_24h_Max"),
+        )),
+        "Delta_24h_Min" => Some((
+            "strat.field.Delta_24h_Min",
+            Some("strat.label.Delta_24h_Min"),
+        )),
+        "Delta_3h_Max" => Some(("strat.field.Delta_3h_Max", Some("strat.label.Delta_3h_Max"))),
+        "Delta_3h_Min" => Some(("strat.field.Delta_3h_Min", Some("strat.label.Delta_3h_Min"))),
+        "Delta_BTC_1m_Max" => Some((
+            "strat.field.Delta_BTC_1m_Max",
+            Some("strat.label.Delta_BTC_1m_Max"),
+        )),
+        "Delta_BTC_1m_Min" => Some((
+            "strat.field.Delta_BTC_1m_Min",
+            Some("strat.label.Delta_BTC_1m_Min"),
+        )),
+        "Delta_BTC_24_Max" => Some((
+            "strat.field.Delta_BTC_24_Max",
+            Some("strat.label.Delta_BTC_24_Max"),
+        )),
+        "Delta_BTC_24_Min" => Some((
+            "strat.field.Delta_BTC_24_Min",
+            Some("strat.label.Delta_BTC_24_Min"),
+        )),
+        "Delta_BTC_5m_Max" => Some((
+            "strat.field.Delta_BTC_5m_Max",
+            Some("strat.label.Delta_BTC_5m_Max"),
+        )),
+        "Delta_BTC_5m_Min" => Some((
+            "strat.field.Delta_BTC_5m_Min",
+            Some("strat.label.Delta_BTC_5m_Min"),
+        )),
+        "Delta_BTC_Max" => Some((
+            "strat.field.Delta_BTC_Max",
+            Some("strat.label.Delta_BTC_Max"),
+        )),
+        "Delta_BTC_Min" => Some((
+            "strat.field.Delta_BTC_Min",
+            Some("strat.label.Delta_BTC_Min"),
+        )),
+        "Delta_Market_24_Max" => Some((
+            "strat.field.Delta_Market_24_Max",
+            Some("strat.label.Delta_Market_24_Max"),
+        )),
+        "Delta_Market_24_Min" => Some((
+            "strat.field.Delta_Market_24_Min",
+            Some("strat.label.Delta_Market_24_Min"),
+        )),
+        "Delta_Market_Max" => Some((
+            "strat.field.Delta_Market_Max",
+            Some("strat.label.Delta_Market_Max"),
+        )),
+        "Delta_Market_Min" => Some((
+            "strat.field.Delta_Market_Min",
+            Some("strat.label.Delta_Market_Min"),
+        )),
+        "Delta2_Max" => Some(("strat.field.Delta2_Max", Some("strat.label.Delta2_Max"))),
+        "Delta2_Min" => Some(("strat.field.Delta2_Min", Some("strat.label.Delta2_Min"))),
+        "Delta2_Type" => Some(("strat.field.Delta2_Type", Some("strat.label.Delta2_Type"))),
+        "Delta3_Max" => Some(("strat.field.Delta3_Max", Some("strat.label.Delta3_Max"))),
+        "Delta3_Min" => Some(("strat.field.Delta3_Min", Some("strat.label.Delta3_Min"))),
+        "Delta3_Type" => Some(("strat.field.Delta3_Type", Some("strat.label.Delta3_Type"))),
+        "DeltaSwitch" => Some(("strat.field.DeltaSwitch", None)),
+        "DontKeepOrdersOnChart" => Some((
+            "strat.field.DontKeepOrdersOnChart",
+            Some("strat.label.DontKeepOrdersOnChart"),
+        )),
+        "DontSellBelowLiq" => Some((
+            "strat.field.DontSellBelowLiq",
+            Some("strat.label.DontSellBelowLiq"),
+        )),
+        "DontWriteLog" => Some(("strat.field.DontWriteLog", Some("strat.label.DontWriteLog"))),
+        "EmulatorMode" => Some(("strat.field.EmulatorMode", Some("strat.label.EmulatorMode"))),
+        "FastStopLoss" => Some(("strat.field.FastStopLoss", Some("strat.label.FastStopLoss"))),
+        "FilterBy" => Some(("strat.field.FilterBy", Some("strat.label.FilterBy"))),
+        "FilterMax" => Some(("strat.field.FilterMax", Some("strat.label.FilterMax"))),
+        "FilterMin" => Some(("strat.field.FilterMin", Some("strat.label.FilterMin"))),
+        "FundingAfter" => Some(("strat.field.FundingAfter", Some("strat.label.FundingAfter"))),
+        "FundingBefore" => Some((
+            "strat.field.FundingBefore",
+            Some("strat.label.FundingBefore"),
+        )),
+        "GlobalDetectPenalty" => Some(("strat.field.GlobalDetectPenalty", None)),
+        "GlobalFilterPenalty" => Some(("strat.field.GlobalFilterPenalty", None)),
+        "HFT" => Some(("strat.field.HFT", None)),
+        "HODLmode" => Some(("strat.field.HODLmode", Some("strat.label.HODLmode"))),
+        "IgnoreBase" => Some(("strat.field.IgnoreBase", Some("strat.label.IgnoreBase"))),
+        "IgnoreCancelBuy" => Some((
+            "strat.field.IgnoreCancelBuy",
+            Some("strat.label.IgnoreCancelBuy"),
+        )),
+        "IgnoreDelta" => Some(("strat.field.IgnoreDelta", Some("strat.label.IgnoreDelta"))),
+        "IgnoreFilters" => Some((
+            "strat.field.IgnoreFilters",
+            Some("strat.label.IgnoreFilters"),
+        )),
+        "IgnorePing" => Some(("strat.field.IgnorePing", Some("strat.label.IgnorePing"))),
+        "IgnorePrice" => Some(("strat.field.IgnorePrice", Some("strat.label.IgnorePrice"))),
+        "IgnoreSellShot" => Some((
+            "strat.field.IgnoreSellShot",
+            Some("strat.label.IgnoreSellShot"),
+        )),
+        "IgnoreSellSpread" => Some((
+            "strat.field.IgnoreSellSpread",
+            Some("strat.label.IgnoreSellSpread"),
+        )),
+        "IgnoreSession" => Some((
+            "strat.field.IgnoreSession",
+            Some("strat.label.IgnoreSession"),
+        )),
+        "IgnoreTime" => Some(("strat.field.IgnoreTime", Some("strat.label.IgnoreTime"))),
+        "IgnoreVolume" => Some(("strat.field.IgnoreVolume", Some("strat.label.IgnoreVolume"))),
+        "JoinPriceFixed" => Some(("strat.field.JoinPriceFixed", None)),
+        "JoinSellKey" => Some(("strat.field.JoinSellKey", None)),
+        "KeepAlert" => Some(("strat.field.KeepAlert", Some("strat.label.KeepAlert"))),
+        "KeepInChart" => Some(("strat.field.KeepInChart", Some("strat.label.KeepInChart"))),
+        "LastEditDate" => Some(("strat.field.LastEditDate", Some("strat.label.LastEditDate"))),
+        "MarketStopLevel" => Some((
+            "strat.field.MarketStopLevel",
+            Some("strat.label.MarketStopLevel"),
+        )),
+        "MarkPriceMax" => Some(("strat.field.MarkPriceMax", Some("strat.label.MarkPriceMax"))),
+        "MarkPriceMin" => Some(("strat.field.MarkPriceMin", Some("strat.label.MarkPriceMin"))),
+        "MaxActiveOrders" => Some((
+            "strat.field.MaxActiveOrders",
+            Some("strat.label.MaxActiveOrders"),
+        )),
+        "MaxBalance" => Some(("strat.field.MaxBalance", Some("strat.label.MaxBalance"))),
+        "MaxHourlyVolFast" => Some(("strat.field.MaxHourlyVolFast", None)),
+        "MaxHourlyVolume" => Some((
+            "strat.field.MaxHourlyVolume",
+            Some("strat.label.MaxHourlyVolume"),
+        )),
+        "MaxLatency" => Some(("strat.field.MaxLatency", Some("strat.label.MaxLatency"))),
+        "MaxLeverage" => Some(("strat.field.MaxLeverage", Some("strat.label.MaxLeverage"))),
+        "MaxMarkets" => Some(("strat.field.MaxMarkets", Some("strat.label.MaxMarkets"))),
+        "MaxOrdersPerMarket" => Some((
+            "strat.field.MaxOrdersPerMarket",
+            Some("strat.label.MaxOrdersPerMarket"),
+        )),
+        "MaxPing" => Some(("strat.field.MaxPing", Some("strat.label.MaxPing"))),
+        "MaxPosition" => Some(("strat.field.MaxPosition", Some("strat.label.MaxPosition"))),
+        "MaxVolume" => Some(("strat.field.MaxVolume", Some("strat.label.MaxVolume"))),
+        "MinFreeBalance" => Some((
+            "strat.field.MinFreeBalance",
+            Some("strat.label.MinFreeBalance"),
+        )),
+        "MinHourlyVolFast" => Some(("strat.field.MinHourlyVolFast", None)),
+        "MinHourlyVolume" => Some((
+            "strat.field.MinHourlyVolume",
+            Some("strat.label.MinHourlyVolume"),
+        )),
+        "MinLeverage" => Some(("strat.field.MinLeverage", Some("strat.label.MinLeverage"))),
+        "MinPing" => Some(("strat.field.MinPing", Some("strat.label.MinPing"))),
+        "MinuteVolDeltaMax" => Some((
+            "strat.field.MinuteVolDeltaMax",
+            Some("strat.label.MinuteVolDeltaMax"),
+        )),
+        "MinuteVolDeltaMin" => Some((
+            "strat.field.MinuteVolDeltaMin",
+            Some("strat.label.MinuteVolDeltaMin"),
+        )),
+        "MinVolume" => Some(("strat.field.MinVolume", Some("strat.label.MinVolume"))),
+        "MoonIntRiskLevel" => Some(("strat.field.MoonIntRiskLevel", None)),
+        "MoonIntStopLevel" => Some(("strat.field.MoonIntStopLevel", None)),
+        "OrderLineKind" => Some((
+            "strat.field.OrderLineKind",
+            Some("strat.label.OrderLineKind"),
+        )),
+        "OrdersCount" => Some(("strat.field.OrdersCount", Some("strat.label.OrdersCount"))),
+        "OrderSize" => Some(("strat.field.OrderSize", Some("strat.label.OrderSize"))),
+        "OrderSizeKind" => Some((
+            "strat.field.OrderSizeKind",
+            Some("strat.label.OrderSizeKind"),
+        )),
+        "OrderSizeStep" => Some((
+            "strat.field.OrderSizeStep",
+            Some("strat.label.OrderSizeStep"),
+        )),
+        "PenaltyTime" => Some(("strat.field.PenaltyTime", Some("strat.label.PenaltyTime"))),
+        "PriceDownAllowedDrop" => Some(("strat.field.PriceDownAllowedDrop", None)),
+        "PriceDownDelay" => Some((
+            "strat.field.PriceDownDelay",
+            Some("strat.label.PriceDownDelay"),
+        )),
+        "PriceDownPercent" => Some((
+            "strat.field.PriceDownPercent",
+            Some("strat.label.PriceDownPercent"),
+        )),
+        "PriceDownRelative" => Some(("strat.field.PriceDownRelative", None)),
+        "PriceDownTimer" => Some((
+            "strat.field.PriceDownTimer",
+            Some("strat.label.PriceDownTimer"),
+        )),
+        "PriceStepMax" => Some(("strat.field.PriceStepMax", Some("strat.label.PriceStepMax"))),
+        "PriceStepMin" => Some(("strat.field.PriceStepMin", Some("strat.label.PriceStepMin"))),
+        "PriceToSwitch2Stop" => Some((
+            "strat.field.PriceToSwitch2Stop",
+            Some("strat.label.PriceToSwitch2Stop"),
+        )),
+        "PriceToSwitchStop3" => Some((
+            "strat.field.PriceToSwitchStop3",
+            Some("strat.label.PriceToSwitchStop3"),
+        )),
+        "SamePosition" => Some(("strat.field.SamePosition", None)),
+        "SecondStopLoss" => Some((
+            "strat.field.SecondStopLoss",
+            Some("strat.label.SecondStopLoss"),
+        )),
+        "SellByCustomEMA" => Some((
+            "strat.field.SellByCustomEMA",
+            Some("strat.label.SellByCustomEMA"),
+        )),
+        "SellByFilters" => Some((
+            "strat.field.SellByFilters",
+            Some("strat.label.SellByFilters"),
+        )),
+        "SellDelay" => Some(("strat.field.SellDelay", Some("strat.label.SellDelay"))),
+        "SellEMACheckEnter" => Some(("strat.field.SellEMACheckEnter", None)),
+        "SellEMADelay" => Some(("strat.field.SellEMADelay", Some("strat.label.SellEMADelay"))),
+        "SellFromAssets" => Some((
+            "strat.field.SellFromAssets",
+            Some("strat.label.SellFromAssets"),
+        )),
+        "SellLevelAdjust" => Some((
+            "strat.field.SellLevelAdjust",
+            Some("strat.label.SellLevelAdjust"),
+        )),
+        "SellLevelAllowedDrop" => Some((
+            "strat.field.SellLevelAllowedDrop",
+            Some("strat.label.SellLevelAllowedDrop"),
+        )),
+        "SellLevelCount" => Some((
+            "strat.field.SellLevelCount",
+            Some("strat.label.SellLevelCount"),
+        )),
+        "SellLevelDelay" => Some((
+            "strat.field.SellLevelDelay",
+            Some("strat.label.SellLevelDelay"),
+        )),
+        "SellLevelDelayNext" => Some((
+            "strat.field.SellLevelDelayNext",
+            Some("strat.label.SellLevelDelayNext"),
+        )),
+        "SellLevelRelative" => Some(("strat.field.SellLevelRelative", None)),
+        "SellLevelTime" => Some((
+            "strat.field.SellLevelTime",
+            Some("strat.label.SellLevelTime"),
+        )),
+        "SellLevelWorkTime" => Some((
+            "strat.field.SellLevelWorkTime",
+            Some("strat.label.SellLevelWorkTime"),
+        )),
+        "SellOrderColor" => Some((
+            "strat.field.SellOrderColor",
+            Some("strat.label.SellOrderColor"),
+        )),
+        "SellPrice" => Some(("strat.field.SellPrice", Some("strat.label.SellPrice"))),
+        "SellPriceAbsolute" => Some((
+            "strat.field.SellPriceAbsolute",
+            Some("strat.label.SellPriceAbsolute"),
+        )),
+        "SellQuantity" => Some(("strat.field.SellQuantity", Some("strat.label.SellQuantity"))),
+        "SellShotAllowedDown" => Some((
+            "strat.field.SellShotAllowedDown",
+            Some("strat.label.SellShotAllowedDown"),
+        )),
+        "SellShotAllowedUp" => Some((
+            "strat.field.SellShotAllowedUp",
+            Some("strat.label.SellShotAllowedUp"),
+        )),
+        "SellShotCalcInterval" => Some((
+            "strat.field.SellShotCalcInterval",
+            Some("strat.label.SellShotCalcInterval"),
+        )),
+        "SellShotCorridor" => Some((
+            "strat.field.SellShotCorridor",
+            Some("strat.label.SellShotCorridor"),
+        )),
+        "SellShotDelay" => Some((
+            "strat.field.SellShotDelay",
+            Some("strat.label.SellShotDelay"),
+        )),
+        "SellShotDistance" => Some((
+            "strat.field.SellShotDistance",
+            Some("strat.label.SellShotDistance"),
+        )),
+        "SellShotPriceDown" => Some((
+            "strat.field.SellShotPriceDown",
+            Some("strat.label.SellShotPriceDown"),
+        )),
+        "SellShotPriceDownDelay" => Some((
+            "strat.field.SellShotPriceDownDelay",
+            Some("strat.label.SellShotPriceDownDelay"),
+        )),
+        "SellShotRaiseWait" => Some((
+            "strat.field.SellShotRaiseWait",
+            Some("strat.label.SellShotRaiseWait"),
+        )),
+        "SellShotReplaceDelay" => Some((
+            "strat.field.SellShotReplaceDelay",
+            Some("strat.label.SellShotReplaceDelay"),
+        )),
+        "SellSpreadAllowedDrop" => Some((
+            "strat.field.SellSpreadAllowedDrop",
+            Some("strat.label.SellSpreadAllowedDrop"),
+        )),
+        "SellSpreadCalcInterval" => Some((
+            "strat.field.SellSpreadCalcInterval",
+            Some("strat.label.SellSpreadCalcInterval"),
+        )),
+        "SellSpreadDelay" => Some((
+            "strat.field.SellSpreadDelay",
+            Some("strat.label.SellSpreadDelay"),
+        )),
+        "SellSpreadDistance" => Some((
+            "strat.field.SellSpreadDistance",
+            Some("strat.label.SellSpreadDistance"),
+        )),
+        "SellSpreadMinSpread" => Some((
+            "strat.field.SellSpreadMinSpread",
+            Some("strat.label.SellSpreadMinSpread"),
+        )),
+        "SellSpreadReplaceCount" => Some((
+            "strat.field.SellSpreadReplaceCount",
+            Some("strat.label.SellSpreadReplaceCount"),
+        )),
+        "SessionIncreaseOrder" => Some((
+            "strat.field.SessionIncreaseOrder",
+            Some("strat.label.SessionIncreaseOrder"),
+        )),
+        "SessionIncreaseOrderMax" => Some((
+            "strat.field.SessionIncreaseOrderMax",
+            Some("strat.label.SessionIncreaseOrderMax"),
+        )),
+        "SessionLevelsUSDT" => Some((
+            "strat.field.SessionLevelsUSDT",
+            Some("strat.label.SessionLevelsUSDT"),
+        )),
+        "SessionMinusCount" => Some((
+            "strat.field.SessionMinusCount",
+            Some("strat.label.SessionMinusCount"),
+        )),
+        "SessionPenaltyTime" => Some((
+            "strat.field.SessionPenaltyTime",
+            Some("strat.label.SessionPenaltyTime"),
+        )),
+        "SessionPlusCount" => Some((
+            "strat.field.SessionPlusCount",
+            Some("strat.label.SessionPlusCount"),
+        )),
+        "SessionProfitMax" => Some((
+            "strat.field.SessionProfitMax",
+            Some("strat.label.SessionProfitMax"),
+        )),
+        "SessionProfitMin" => Some((
+            "strat.field.SessionProfitMin",
+            Some("strat.label.SessionProfitMin"),
+        )),
+        "SessionReduceOrder" => Some((
+            "strat.field.SessionReduceOrder",
+            Some("strat.label.SessionReduceOrder"),
+        )),
+        "SessionReduceOrderMin" => Some((
+            "strat.field.SessionReduceOrderMin",
+            Some("strat.label.SessionReduceOrderMin"),
+        )),
+        "SessionResetOnMinus" => Some((
+            "strat.field.SessionResetOnMinus",
+            Some("strat.label.SessionResetOnMinus"),
+        )),
+        "SessionResetTime" => Some((
+            "strat.field.SessionResetTime",
+            Some("strat.label.SessionResetTime"),
+        )),
+        "SessionStratIncreaseMax" => Some(("strat.field.SessionStratIncreaseMax", None)),
+        "SessionStratMax" => Some((
+            "strat.field.SessionStratMax",
+            Some("strat.label.SessionStratMax"),
+        )),
+        "SessionStratMin" => Some((
+            "strat.field.SessionStratMin",
+            Some("strat.label.SessionStratMin"),
+        )),
+        "SessionStratReduceMin" => Some(("strat.field.SessionStratReduceMin", None)),
+        "Short" => Some(("strat.field.Short", Some("strat.label.Short"))),
+        "SignalType" => Some(("strat.field.SignalType", Some("strat.label.SignalType"))),
+        "SoundAlert" => Some(("strat.field.SoundAlert", Some("strat.label.SoundAlert"))),
+        "SoundKind" => Some(("strat.field.SoundKind", Some("strat.label.SoundKind"))),
+        "SplitPiece" => Some(("strat.field.SplitPiece", None)),
+        "StopAboveLiq" => Some(("strat.field.StopAboveLiq", Some("strat.label.StopAboveLiq"))),
+        "StopLoss" => Some(("strat.field.StopLoss", Some("strat.label.StopLoss"))),
+        "StopLoss3" => Some(("strat.field.StopLoss3", Some("strat.label.StopLoss3"))),
+        "StopLossDelay" => Some((
+            "strat.field.StopLossDelay",
+            Some("strat.label.StopLossDelay"),
+        )),
+        "StopLossEMA" => Some(("strat.field.StopLossEMA", Some("strat.label.StopLossEMA"))),
+        "StopLossFixed" => Some((
+            "strat.field.StopLossFixed",
+            Some("strat.label.StopLossFixed"),
+        )),
+        "StopLossModifier" => Some((
+            "strat.field.StopLossModifier",
+            Some("strat.label.StopLossModifier"),
+        )),
+        "StopLossSpread" => Some((
+            "strat.field.StopLossSpread",
+            Some("strat.label.StopLossSpread"),
+        )),
+        "StopSpreadAdd1mDelta" => Some(("strat.field.StopSpreadAdd1mDelta", None)),
+        "StrategyName" => Some(("strat.field.StrategyName", Some("strat.label.StrategyName"))),
+        "TakeProfit" => Some(("strat.field.TakeProfit", Some("strat.label.TakeProfit"))),
+        "TimeToSwitch2Stop" => Some((
+            "strat.field.TimeToSwitch2Stop",
+            Some("strat.label.TimeToSwitch2Stop"),
+        )),
+        "TimeToSwitchStop3" => Some((
+            "strat.field.TimeToSwitchStop3",
+            Some("strat.label.TimeToSwitchStop3"),
+        )),
+        "TlgBuyDipPrice" => Some((
+            "strat.field.TlgBuyDipPrice",
+            Some("strat.label.TlgBuyDipPrice"),
+        )),
+        "TlgUseBuyDipWords" => Some((
+            "strat.field.TlgUseBuyDipWords",
+            Some("strat.label.TlgUseBuyDipWords"),
+        )),
+        "TotalLoss" => Some(("strat.field.TotalLoss", Some("strat.label.TotalLoss"))),
+        "TradePenaltyTime" => Some((
+            "strat.field.TradePenaltyTime",
+            Some("strat.label.TradePenaltyTime"),
+        )),
+        "TrailingEMA" => Some(("strat.field.TrailingEMA", Some("strat.label.TrailingEMA"))),
+        "TrailingPercent" => Some((
+            "strat.field.TrailingPercent",
+            Some("strat.label.TrailingPercent"),
+        )),
+        "TrailingSpread" => Some((
+            "strat.field.TrailingSpread",
+            Some("strat.label.TrailingSpread"),
+        )),
+        "Use30SecOldASK" => Some((
+            "strat.field.Use30SecOldASK",
+            Some("strat.label.Use30SecOldASK"),
+        )),
+        "UseBTCPriceStep" => Some((
+            "strat.field.UseBTCPriceStep",
+            Some("strat.label.UseBTCPriceStep"),
+        )),
+        "UseBV_SV_Filter" => Some((
+            "strat.field.UseBV_SV_Filter",
+            Some("strat.label.UseBV_SV_Filter"),
+        )),
+        "UseBV_SV_Stop" => Some((
+            "strat.field.UseBV_SV_Stop",
+            Some("strat.label.UseBV_SV_Stop"),
+        )),
+        "UseCustomColors" => Some((
+            "strat.field.UseCustomColors",
+            Some("strat.label.UseCustomColors"),
+        )),
+        "UseMarketStop" => Some((
+            "strat.field.UseMarketStop",
+            Some("strat.label.UseMarketStop"),
+        )),
+        "UseOldPrice" => Some(("strat.field.UseOldPrice", Some("strat.label.UseOldPrice"))),
+        "UsePostOnly" => Some(("strat.field.UsePostOnly", Some("strat.label.UsePostOnly"))),
+        "UseScalpingMode" => Some((
+            "strat.field.UseScalpingMode",
+            Some("strat.label.UseScalpingMode"),
+        )),
+        "UseSecondStop" => Some((
+            "strat.field.UseSecondStop",
+            Some("strat.label.UseSecondStop"),
+        )),
+        "UseStopLoss" => Some(("strat.field.UseStopLoss", Some("strat.label.UseStopLoss"))),
+        "UseStopLoss3" => Some(("strat.field.UseStopLoss3", Some("strat.label.UseStopLoss3"))),
+        "UseTakeProfit" => Some((
+            "strat.field.UseTakeProfit",
+            Some("strat.label.UseTakeProfit"),
+        )),
+        "UseTrailing" => Some(("strat.field.UseTrailing", Some("strat.label.UseTrailing"))),
+        "WorkingPriceMax" => Some((
+            "strat.field.WorkingPriceMax",
+            Some("strat.label.WorkingPriceMax"),
+        )),
+        "WorkingPriceMin" => Some((
+            "strat.field.WorkingPriceMin",
+            Some("strat.label.WorkingPriceMin"),
+        )),
+        "WorkingTime" => Some(("strat.field.WorkingTime", Some("strat.label.WorkingTime"))),
+        "WorkingWeekTime" => Some((
+            "strat.field.WorkingWeekTime",
+            Some("strat.label.WorkingWeekTime"),
+        )),
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// The parameter pane's body content: one schema section or every surviving section in full mode.
 ///
@@ -340,7 +704,10 @@ impl StrategiesView {
                 multi,
                 common.as_ref(),
                 differ,
-                param_entries::ParamLabels { orphans: &orphans },
+                param_entries::ParamLabels {
+                    orphans: &orphans,
+                    section_title: &|raw| section_display_title(raw),
+                },
             );
             ParamsBody::Full(Rc::new(flat))
         } else if let Some(ch) = self.version_changed_filter() {
@@ -498,7 +865,7 @@ impl StrategiesView {
         // Title and field total come from the body; the multi selection-count branch keeps
         // priority exactly as before the body could also be a full-mode list.
         let (title, field_total) = match &body {
-            ParamsBody::Section(s) => (s.title.clone(), s.fields.len()),
+            ParamsBody::Section(s) => (section_display_title(&s.title), s.fields.len()),
             ParamsBody::Full(f) => (t!("strat.params_full_title").to_string(), f.field_count),
         };
         let count = if multi {
@@ -900,7 +1267,13 @@ impl StrategiesView {
             .any(|(core, id)| self.field_edits.contains_key(&(*core, *id, f.name.clone())));
         let field_name = f.name.clone();
         let row_id = editor_state_id(keys, &field_name);
-        let field_tooltip = field_tooltip_key(&field_name).map(|key| t!(key).to_string());
+        let (field_tooltip, field_label) = match field_keys(&field_name) {
+            Some((help, label)) => (
+                Some(t!(help).to_string()),
+                label.map(|key| t!(key).to_string()),
+            ),
+            None => (None, None),
+        };
         let view = cx.entity();
 
         // `merged == None` leaves the row editable with a `≠` marker and highlight;
@@ -1280,6 +1653,20 @@ impl StrategiesView {
         };
 
         let field_for_focus = field_name.clone();
+        // Line 1 is the human name when there is one, the raw identifier otherwise; line 2 exists
+        // only in the second case's mirror image, so a field with no label looks exactly as it did
+        // before. Full mode's row pitch is fixed (`full_params::full_row_h_value`) and would clip a
+        // second line, so a compact row keeps one line and moves the identifier into its tooltip.
+        let compact_row = compact.is_some();
+        let has_label = field_label.is_some();
+        let subtitle = (!compact_row && has_label).then(|| f.name.clone());
+        let headline = field_label.unwrap_or_else(|| f.name.clone());
+        let raw_tip = || t!("strat.field_raw_tip", name = f.name.clone()).to_string();
+        let name_tooltip = match (compact_row && has_label, field_tooltip) {
+            (true, Some(help)) => Some(format!("{} - {help}", raw_tip())),
+            (true, None) => Some(raw_tip()),
+            (false, help) => help,
+        };
         h_flex()
             .id(SharedString::from(format!("field-row-{row_id}")))
             .w_full()
@@ -1295,32 +1682,58 @@ impl StrategiesView {
             .when(dirty, |s| s.bg(moon_alpha(p.amber, 0.06)))
             .hover(move |s| s.bg(moon_alpha(p.panel, 0.46)))
             .child(
-                h_flex()
+                // The width owner is this column, and every box between it and a `.truncate()`
+                // leaf carries a definite width of its own: an intermediate flex sized by its
+                // content collapses the whole line to a bare ellipsis, which is exactly what a
+                // one-line-per-segment label cell invites.
+                v_flex()
+                    .id(SharedString::from(format!("field-label-{row_id}")))
                     .w(design::font_w_px(cx, 180.0))
                     .flex_none()
+                    .min_w_0()
                     .pt(px(5.0))
                     .items_start()
-                    .gap_1()
+                    .when_some(name_tooltip, |cell, tooltip| {
+                        cell.tooltip(crate::panels::common::text_tooltip(tooltip))
+                    })
                     .child(
-                        div()
-                            .id(SharedString::from(format!("field-label-{row_id}")))
+                        h_flex()
+                            .w_full()
                             .min_w_0()
-                            .truncate()
-                            .text_color(moon(name_col))
-                            .when_some(field_tooltip, |label, tooltip| {
-                                label.tooltip(crate::panels::common::text_tooltip(tooltip))
-                            })
-                            .child(f.name.clone()),
+                            .items_start()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(moon(name_col))
+                                    .child(headline),
+                            )
+                            // Mark edits that have not been applied so changed fields remain
+                            // visible in a long parameter list before the user presses "apply".
+                            .when(dirty, |row| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(moon(p.red))
+                                        .child("**"),
+                                )
+                            }),
                     )
-                    // Mark edits that have not been applied so changed fields remain visible in a
-                    // long parameter list before the user presses "apply".
-                    .when(dirty, |row| {
-                        row.child(
+                    // The identifier the core actually speaks, kept under the human name rather
+                    // than hidden in a tooltip: it is what a Moonbot manual, a forum post and the
+                    // strategy file all call this field.
+                    .when_some(subtitle, |cell, raw| {
+                        cell.child(
                             div()
-                                .flex_none()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(moon(p.red))
-                                .child("**"),
+                                .w_full()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(design::t_caption(cx))
+                                .line_height(design::line_px(cx, 12.0))
+                                .text_color(moon(p.text_muted))
+                                .child(raw),
                         )
                     }),
             )
