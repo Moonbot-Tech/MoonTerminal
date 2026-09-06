@@ -102,12 +102,33 @@ pub(crate) fn side_word(is_short: bool) -> &'static str {
 ///     Unrendered `MoonBadge`, colored red for short / green for long — the same colors the Report
 ///     table's `isshort` cell has always used.
 pub(crate) fn side_badge(is_short: bool, p: MoonPalette) -> MoonBadge {
-    let c = if is_short { p.red } else { p.green };
-    MoonBadge::new(side_word(is_short))
+    tag_badge(side_word(is_short), if is_short { p.red } else { p.green })
+}
+
+/// Builder for a short all-caps tag painted in one semantic colour: a soft fill of that colour
+/// under text in the same colour.
+///
+/// The shape [`side_badge`] introduced, with the direction knowledge taken out, so any surface that
+/// needs "one word standing for a state" draws the same pill instead of inventing another. The Log
+/// panel's severity and category tags are the second caller; a third must reuse this rather than
+/// spell `Soft` + `Tiny` again, or the two drift apart the moment either is retuned.
+///
+/// Returns the BUILDER rather than a rendered element for [`side_badge`]'s reason: rendered as a
+/// plain child, its `RenderOnce` impl reads the window's live theme tokens — font scale included —
+/// while `render_with_palette` would freeze the defaults.
+///
+/// Args:
+///     text: Tag word, already in the casing it should read in.
+///     color: Semantic colour, used for both the fill and the text.
+///
+/// Returns:
+///     Unrendered `MoonBadge`.
+pub(crate) fn tag_badge(text: impl Into<SharedString>, color: u32) -> MoonBadge {
+    MoonBadge::new(text)
         .variant(MoonBadgeVariant::Soft)
         .size(MoonBadgeSize::Tiny)
-        .bg_color(c)
-        .text_color(c)
+        .bg_color(color)
+        .text_color(color)
 }
 
 /// Highest count a tab badge prints before it becomes `99+`.

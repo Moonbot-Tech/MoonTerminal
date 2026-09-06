@@ -11,6 +11,21 @@ use crate::panels::line_list::{self, Cat, Sev};
 use gpui::prelude::FluentBuilder;
 use std::ops::Range;
 
+/// Monospace advances a badge pill spends on its own horizontal padding, on top of its word.
+///
+/// `MoonBadge` pads a `Tiny` pill by 4 design units on each side; two body advances is what that
+/// comes to at the sizes this row is read at, and it is what keeps the character budget below from
+/// under-measuring a row that now carries pills instead of bare words.
+const BADGE_PAD_CHARS: usize = 2;
+
+/// Width reserved for the severity badge, in monospace advances, on every row.
+///
+/// FIXED, and reserved even on a row that has no badge, so the core name and the message start at
+/// the same x whether the line is an `ERR`, a `WARN` or neither — a column that moved by one
+/// character between severities is what made a screen of mixed rows read as ragged. Sized for the
+/// longer of the two words.
+const SEV_SLOT_CHARS: usize = 4 + BADGE_PAD_CHARS;
+
 /// Return the severity badge text for `Error` or `Warn`.
 fn badge_tag(sev: Sev) -> Option<&'static str> {
     match sev {
@@ -68,6 +83,10 @@ fn seg_at(idx: usize, coin: &Option<Range<usize>>, matches: &[Range<usize>]) -> 
 /// accent text. An empty query with no coin takes the single-span fast path.
 fn message_spans(
     flat: &str,
+    // Byte offset the RENDERED message starts at: past the core's own repeated clock, which the row
+    // shows in its tooltip instead. Segment ranges stay absolute into `flat`, so this only moves
+    // where the walk begins.
+    from: usize,
     // Lowercase `flat`, precomputed on the row. Building it here instead cost one allocation per
     // visible row per frame for as long as a search query was active.
     lower: &str,
@@ -80,11 +99,16 @@ fn message_spans(
 ) -> Vec<AnyElement> {
     let mut matches: Vec<Range<usize>> = Vec::new();
     if !query.is_empty() {
-        let mut from = 0;
-        while let Some(pos) = lower[from..].find(query) {
-            let s = from + pos;
+        // From ZERO, not from `from`: a hit that STRADDLES the hidden head — `06 uai` against
+        // `09:25:06 UAI: ...` — starts inside it and ends in the drawn text, and a scan beginning
+        // at `from` finds no hit at all, so the visible half of the match would go unpainted. The
+        // walk below still starts at `from`, and `seg_at` is range containment, so a hit lying
+        // WHOLLY inside the head simply paints nothing.
+        let mut at = 0;
+        while let Some(pos) = lower[at..].find(query) {
+            let s = at + pos;
             matches.push(s..s + query.len());
-            from = s + query.len();
+            at = s + query.len();
         }
     }
     if coin.is_none() && matches.is_empty() {
@@ -92,7 +116,7 @@ fn message_spans(
             div()
                 .flex_none()
                 .text_color(rgb(base))
-                .child(flat.to_string())
+                .child(flat[from..].to_string())
                 .into_any_element(),
         ];
     }
@@ -150,7 +174,8 @@ fn message_spans(
     let mut out: Vec<AnyElement> = Vec::new();
     let mut cur: Option<Seg> = None;
     let mut buf = String::new();
-    for (idx, ch) in flat.char_indices() {
+    for (offset, ch) in flat[from..].char_indices() {
+        let idx = from + offset;
         let seg = seg_at(idx, coin, &matches);
         if Some(seg) != cur {
             if let Some(prev) = cur {
@@ -186,8 +211,11 @@ pub(super) fn row_copy_text(v: &LineView) -> String {
 /// The panel multiplies the widest row by one monospace advance to size its horizontal scroll area.
 /// Counting characters here — rather than measuring the string — keeps the per-frame cost at one
 /// glyph measurement instead of one per row, which matters at the 5000-row view limit.
+///
+/// The severity slot is counted at its full [`SEV_SLOT_CHARS`] on EVERY row, badge or not, because
+/// that is what the row reserves; the category badge is counted only when it is drawn, and at the
+/// pill's own budget rather than its bare word.
 pub(super) fn row_width_chars(v: &LineView) -> usize {
-    let badge_w = |tag: Option<&str>| tag.map_or(0, |tag| tag.chars().count() + 1);
     let target_w = if v.target.is_empty() {
         0
     } else {
@@ -195,10 +223,10 @@ pub(super) fn row_width_chars(v: &LineView) -> usize {
     };
     v.time().chars().count()
         + 1
-        + badge_w(badge_tag(v.sev))
-        + badge_w(cat_tag(v.cat))
+        + SEV_SLOT_CHARS
+        + cat_tag(v.cat).map_or(0, |tag| tag.chars().count() + BADGE_PAD_CHARS + 1)
         + target_w
-        + v.flat.chars().count()
+        + v.flat[v.msg_start()..].chars().count()
 }
 
 /// What the panel knows about a row that the row cannot work out for itself.
@@ -233,12 +261,30 @@ pub(super) fn log_row(v: &LineView, ctx: &RowCtx, p: MoonPalette, cx: &App) -> A
         panel: weak,
     } = *ctx;
     let base = line_list::sev_color(v.sev, p);
+    // The core's own clock, which the line no longer draws, reachable by hovering the row it
+    // belongs to. Owned here because the tooltip factory must outlive `v`; the `t!` lookup and its
+    // interpolation stay INSIDE that factory, or they would run for every visible row on every
+    // frame to build a string only the one hovered row ever reads.
+    let core_time = v.core_time().map(SharedString::from);
     let mut row = h_flex()
+        // Identity, because a tooltip needs one. Keyed by the row's index in the filtered list, the
+        // same handle its selection is addressed by.
+        .id(("log-row", ix))
         .w_full()
         .gap_1()
         .items_baseline()
         .text_size(crate::design::t_body(cx))
         .px_1()
+        .when_some(core_time, |row, clock| {
+            row.tooltip(move |_window, cx| {
+                cx.new(|_| {
+                    moon_ui::MoonTooltipView::new(
+                        t!("log.core_time", time = clock.as_ref()).to_string(),
+                    )
+                })
+                .into()
+            })
+        })
         .when(selected, |row| row.bg(line_list::selected_row_bg(p)));
     row = row.child(
         div()
@@ -246,34 +292,35 @@ pub(super) fn log_row(v: &LineView, ctx: &RowCtx, p: MoonPalette, cx: &App) -> A
             .text_color(rgb(p.text_muted))
             .child(v.time().to_string()),
     );
-    if let Some((tag, col)) = badge(v.sev, p) {
-        row = row.child(
-            div()
-                .flex_none()
-                .font_bold()
-                .text_color(rgb(col))
-                .child(tag),
-        );
-    }
+    // A fixed slot, filled or empty: see `SEV_SLOT_CHARS`. `items_center` inside it, because the
+    // row aligns its text on a baseline and a pill has none to offer.
+    row = row.child(
+        div()
+            .flex_none()
+            .w(px(line_list::chars_width(SEV_SLOT_CHARS, cx)))
+            .flex()
+            .items_center()
+            .children(badge(v.sev, p).map(|(tag, col)| crate::panels::common::tag_badge(tag, col))),
+    );
     if let Some((tag, col)) = cat_badge(v.cat, p) {
         row = row.child(
             div()
                 .flex_none()
-                .font_bold()
-                .text_color(rgb(col))
-                .child(tag),
+                .flex()
+                .items_center()
+                .child(crate::panels::common::tag_badge(tag, col)),
         );
     }
     if !v.target.is_empty() {
-        // Green, and only green: the row already spends blue on the coin, amber on WARN, orange and
-        // yellow on the badges, and in the dark theme `accent` IS `amber` — a source name painted
-        // with it read as one more warning.
-        // Bold as well as green: on a selected row the accent tint sits under it, where a regular
-        // weight in this green loses too much contrast.
+        // Plain `text`, at the row's own weight, and the reason is what the row is FOR. The name is
+        // the longest thing on the line and the least often read — the message is what the eye is
+        // after — so it was drawn bold and green while the message beside it was neither, and the
+        // line read from the wrong end. It stays complete and unchanged (never shortened, never
+        // elided); only its VOLUME comes down. What carries the eye instead is position and the
+        // coin highlight the message already owns.
         let mut source = div()
             .flex_none()
-            .font_bold()
-            .text_color(rgb(p.green_text))
+            .text_color(rgb(p.text))
             .child(v.target.clone());
         if source_is_core {
             // Clicking the name selects that core in the panel's source list, the way clicking a
@@ -318,6 +365,7 @@ pub(super) fn log_row(v: &LineView, ctx: &RowCtx, p: MoonPalette, cx: &App) -> A
         // scrolls over.
         h_flex().flex_none().children(message_spans(
             &v.flat,
+            v.msg_start(),
             &v.lower,
             base,
             &coin_range,
@@ -351,3 +399,7 @@ pub(super) fn log_row(v: &LineView, ctx: &RowCtx, p: MoonPalette, cx: &App) -> A
     })
     .into_any_element()
 }
+
+#[cfg(test)]
+/// Tests for Log row badge mappings and message presentation helpers.
+mod tests;
