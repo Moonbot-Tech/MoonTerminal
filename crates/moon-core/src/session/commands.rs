@@ -890,6 +890,51 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::ClearProblems, "clear problems")
     }
 
+    /// Clear the diagnostics of a whole scope — every core a panel currently covers.
+    ///
+    /// One command per core, like [`Self::set_auto_detect_many`], because that is what the protocol
+    /// offers. Far more destructive than the single-core form by exactly the number of cores given,
+    /// so a caller must state that number to the operator before asking.
+    ///
+    /// Args:
+    ///     cores: Cores whose diagnostics are dropped.
+    ///
+    /// Returns:
+    ///     The cores whose command channel accepted the intent, in the order given.
+    pub fn clear_core_problems_many(&self, cores: &[CoreId]) -> Vec<CoreId> {
+        self.send_many(cores, "clear problems", |core| {
+            self.clear_core_problems(core)
+        })
+    }
+
+    /// Re-read one core's diagnostics from the library's retained snapshot.
+    ///
+    /// Nothing is sent to the core and nothing on the core changes: the protocol has no request for
+    /// a diagnostics list at all, so this only re-publishes what already arrived. See
+    /// [`CoreCmd::RefreshProblems`] for the whole reasoning.
+    ///
+    /// Args:
+    ///     core: Core whose retained list is re-published.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel.
+    pub fn refresh_core_problems(&self, core: CoreId) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::RefreshProblems, "refresh problems")
+    }
+
+    /// Re-read the diagnostics of a whole scope. See [`Self::refresh_core_problems`].
+    ///
+    /// Args:
+    ///     cores: Cores whose retained lists are re-published.
+    ///
+    /// Returns:
+    ///     The cores whose command channel accepted the intent, in the order given.
+    pub fn refresh_core_problems_many(&self, cores: &[CoreId]) -> Vec<CoreId> {
+        self.send_many(cores, "refresh problems", |core| {
+            self.refresh_core_problems(core)
+        })
+    }
+
     /// Turn one core's AutoDetect on or off — Moonbot's passive mode, inverted.
     ///
     /// The command is an intent: the core answers with a new runtime state, which is what any
