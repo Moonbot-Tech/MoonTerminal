@@ -5,10 +5,10 @@
 use super::super::actions::strategy_action_authorized;
 use super::super::*;
 use super::ops;
-use super::ui::TreeOp;
+use super::ui::{TreeNote, TreeOp};
 use anyhow::Result;
 use moon_core::feed::NewStrategySpec;
-use moon_ui::{MoonNotification, MoonWindowExt as _};
+use moon_ui::{MoonListItem, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
 
 #[cfg(test)]
@@ -79,9 +79,12 @@ fn op_title(op: &TreeOp) -> String {
         TreeOp::CreateStrategy { .. } => t!("dialogs.new_strategy").to_string(),
         TreeOp::CreateFolder { .. } => t!("dialogs.new_folder").to_string(),
         TreeOp::RenameFolder { .. } => t!("dialogs.rename_folder").to_string(),
+        TreeOp::RenameStrategy { .. } => t!("strat.rename_strategy_title").to_string(),
+        TreeOp::MoveToFolder { .. } => t!("strat.move_to_title").to_string(),
         TreeOp::ConfirmDeleteStrategies { .. } | TreeOp::ConfirmDeleteFolder { .. } => {
             t!("dialogs.delete_q").to_string()
         }
+        TreeOp::ConfirmForget { .. } => t!("strat.forget_title").to_string(),
     }
 }
 
@@ -90,17 +93,37 @@ fn op_ok_label(op: &TreeOp) -> String {
         TreeOp::CreateStrategy { .. } | TreeOp::CreateFolder { .. } => {
             t!("dialogs.create").to_string()
         }
-        TreeOp::RenameFolder { .. } => t!("dialogs.rename").to_string(),
+        TreeOp::RenameFolder { .. } | TreeOp::RenameStrategy { .. } => {
+            t!("dialogs.rename").to_string()
+        }
         TreeOp::ConfirmDeleteStrategies { .. } | TreeOp::ConfirmDeleteFolder { .. } => {
             t!("dialogs.yes").to_string()
         }
+        TreeOp::ConfirmForget { .. } => t!("strat.forget_ok").to_string(),
+        // Picked by clicking a destination, so the footer carries Cancel alone.
+        TreeOp::MoveToFolder { .. } => t!("dialogs.cancel").to_string(),
     }
 }
 
 fn op_has_close_button(op: &TreeOp) -> bool {
     !matches!(
         op,
-        TreeOp::ConfirmDeleteStrategies { .. } | TreeOp::ConfirmDeleteFolder { .. }
+        TreeOp::ConfirmDeleteStrategies { .. }
+            | TreeOp::ConfirmDeleteFolder { .. }
+            | TreeOp::ConfirmForget { .. }
+    )
+}
+
+/// Whether this operation's OK button is the destructive one.
+///
+/// Asked of the OPERATION rather than inferred from the button's caption: the label test only ever
+/// worked because every destructive op happened to say "Yes", and Forget says something else.
+fn op_ok_is_danger(op: &TreeOp) -> bool {
+    matches!(
+        op,
+        TreeOp::ConfirmDeleteStrategies { .. }
+            | TreeOp::ConfirmDeleteFolder { .. }
+            | TreeOp::ConfirmForget { .. }
     )
 }
 
@@ -355,7 +378,7 @@ fn op_dialog_body(
             }
             Some(body.into_any_element())
         }
-        TreeOp::RenameFolder { .. } => {
+        TreeOp::RenameFolder { .. } | TreeOp::RenameStrategy { .. } => {
             let mut body = v_flex().w_full().min_w_0().gap_2();
             if let Some(input) = input {
                 body = body.child(tree_op_name_input("rename-name", &input));
@@ -370,6 +393,95 @@ fn op_dialog_body(
                 .child(t!("dialogs.delete_confirm", what = label).to_string())
                 .into_any_element(),
         ),
+        TreeOp::MoveToFolder { core, sources, .. } => {
+            let destinations = {
+                let backend = backend.read(cx);
+                let store = backend.session.store();
+                let rows = store
+                    .core(core)
+                    .map(|cd| cd.strategies.clone())
+                    .unwrap_or_default();
+                let reported = store
+                    .core(core)
+                    .map(|cd| {
+                        cd.folders
+                            .paths
+                            .iter()
+                            .map(|path| ops::split_path(path))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let local = view.read(cx).ui_folder_paths(core);
+                // A folder cannot move into itself or its own subtree; strategies exclude nothing.
+                let exclude = match &sources {
+                    ops::MoveSources::Folders(folders) => folders.clone(),
+                    ops::MoveSources::Strategies(_) => Vec::new(),
+                };
+                ops::move_destinations(&rows, &reported, &local, &exclude)
+            };
+            let what = match &sources {
+                ops::MoveSources::Strategies(ids) => {
+                    t!("strat.count_strategies", n = ids.len()).to_string()
+                }
+                ops::MoveSources::Folders(folders) => {
+                    t!("strat.count_folders", n = folders.len()).to_string()
+                }
+            };
+            let mut body = v_flex().w_full().min_w_0().gap_2().child(
+                MoonText::new(t!("strat.move_to_hint", what = what).to_string())
+                    .mono(false)
+                    .uppercase(false)
+                    .color(p.text_soft)
+                    .render(),
+            );
+            let mut list = v_flex()
+                .id("move-to-list")
+                .w_full()
+                .min_w_0()
+                .max_h(design::ui_px(cx, 240.0))
+                .overflow_y_scroll();
+            for parts in destinations {
+                let depth = parts.len();
+                let label = match parts.last() {
+                    Some(leaf) => leaf.clone(),
+                    None => t!("strat.root").to_string(),
+                };
+                let target = parts.clone();
+                let pick_view = view.clone();
+                list = list.child(
+                    MoonListItem::new(SharedString::from(format!(
+                        "mv-{depth}-{}",
+                        ops::join_path(&parts)
+                    )))
+                    .on_click(move |_, window: &mut Window, app: &mut App| {
+                        let target = target.clone();
+                        pick_view.update(app, |this, cx| this.confirm_move_to_folder(&target, cx));
+                        window.close_dialog(app);
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .pl(design::ui_px(cx, 12.0 * depth as f32))
+                            .child(
+                                MoonText::new(label)
+                                    .mono(true)
+                                    .uppercase(false)
+                                    .color(p.text)
+                                    .render(),
+                            ),
+                    ),
+                );
+            }
+            body = body.child(list);
+            Some(body.into_any_element())
+        }
+        TreeOp::ConfirmForget { label, .. } => Some(
+            div()
+                .w_full()
+                .text_color(moon(p.text))
+                .child(t!("strat.forget_confirm", what = label).to_string())
+                .into_any_element(),
+        ),
     }
 }
 
@@ -377,9 +489,10 @@ fn op_dialog_footer(
     view: Entity<StrategiesView>,
     p: MoonPalette,
     ok_label: impl Into<SharedString>,
+    danger: bool,
 ) -> AnyElement {
     let ok_label = ok_label.into();
-    let ok_variant = if ok_label == SharedString::from(t!("dialogs.yes").to_string()) {
+    let ok_variant = if danger {
         MoonButtonVariant::Danger
     } else {
         MoonButtonVariant::Blue
@@ -493,6 +606,179 @@ impl StrategiesView {
         self.op = Some(TreeOp::CreateFolder {
             core,
             target,
+            workspace_generation: self.action_workspace_generation(cx),
+        });
+        self.open_op_dialog(window, cx);
+        cx.notify();
+    }
+
+    /// Open the destination picker for the tree's current target.
+    ///
+    /// The folder set takes precedence over the strategy selection. A move cannot span cores:
+    /// moving within a core rewrites `folder_path`, while a cross-core move must use Cut and Paste
+    /// so the destination echo can protect the source from premature deletion.
+    ///
+    /// Args:
+    ///     core: Core addressed by the menu or keyboard action.
+    ///     window: Window used to show the picker or a refusal notice.
+    ///     cx: View context used to resolve the current selection.
+    ///
+    /// Returns:
+    ///     Nothing; an empty or cross-core selection leaves no operation staged.
+    pub(super) fn open_move_for_target(
+        &mut self,
+        core: CoreId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let folders = selected_folders(self);
+        if !folders.is_empty() {
+            if folders.iter().any(|(c, _)| *c != core) {
+                TreeNote::MoveNeedsOneCore.say(window, cx);
+                return;
+            }
+            let paths: Vec<Vec<String>> = folders
+                .iter()
+                .filter(|(_, path)| !path.is_empty())
+                .map(|(_, path)| ops::split_path(path))
+                .collect();
+            if paths.is_empty() {
+                // Only core roots were selected, and a core root has no parent to move into.
+                TreeNote::CoreNotCut.say(window, cx);
+                return;
+            }
+            self.open_move_to_folder(core, ops::MoveSources::Folders(paths), window, cx);
+            return;
+        }
+        let keys = selected_keys(self);
+        if keys.is_empty() {
+            return;
+        }
+        if keys.iter().any(|(c, _)| *c != core) {
+            TreeNote::MoveNeedsOneCore.say(window, cx);
+            return;
+        }
+        let ids: Vec<u64> = keys.iter().map(|(_, id)| *id).collect();
+        self.open_move_to_folder(core, ops::MoveSources::Strategies(ids), window, cx);
+    }
+
+    /// Open the destination picker for a move.
+    ///
+    /// Args:
+    ///     core: Core the sources belong to; a move never crosses cores.
+    ///     sources: The strategies or folders being moved.
+    ///     window: Window used to present the dialog.
+    ///     cx: View context used to stage the operation.
+    ///
+    /// Returns:
+    ///     Nothing; confirmation revalidates workspace authority before dispatch.
+    pub(super) fn open_move_to_folder(
+        &mut self,
+        core: CoreId,
+        sources: ops::MoveSources,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.op = Some(TreeOp::MoveToFolder {
+            core,
+            sources,
+            workspace_generation: self.action_workspace_generation(cx),
+        });
+        self.open_op_dialog(window, cx);
+        cx.notify();
+    }
+
+    /// Dispatch the chosen destination and close the picker.
+    ///
+    /// Args:
+    ///     target: Destination path selected from the picker; an empty path is the core root.
+    ///     cx: View context used to revalidate authority and dispatch the planned moves.
+    ///
+    /// Returns:
+    ///     Nothing; an operation whose workspace authority changed is discarded without dispatch.
+    pub(super) fn confirm_move_to_folder(&mut self, target: &[String], cx: &mut Context<Self>) {
+        let Some(TreeOp::MoveToFolder {
+            core,
+            sources,
+            workspace_generation,
+        }) = self.op.clone()
+        else {
+            return;
+        };
+        if !tree_op_authorized(
+            workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            core,
+        ) {
+            self.close_op_dialog(cx);
+            return;
+        }
+        let intents = {
+            let store = self.backend.read(cx).session.store();
+            store
+                .core(core)
+                .map(|cd| ops::move_to_folder_plan(&cd.strategies, &sources, target))
+                .unwrap_or_default()
+        };
+        let mut moved = 0usize;
+        for intent in intents {
+            moved += intent.moves.len();
+            if let Some((old_key, new_key)) = intent.rebase.clone() {
+                self.rebase_ui_folder(core, &old_key, &new_key);
+            }
+            if let Err(error) =
+                self.backend
+                    .read(cx)
+                    .session
+                    .move_strategies(core, intent.moves, intent.rebase)
+            {
+                log::warn!("move to folder failed: {error}");
+            }
+        }
+        // The destination is opened so the rows are visible where they landed.
+        self.expanded_cores.insert(core);
+        self.expand_path(core, target.iter().map(String::as_str));
+        let folder = match target.last() {
+            Some(leaf) => leaf.clone(),
+            None => t!("strat.root").to_string(),
+        };
+        self.pending_notes.push(TreeNote::MoveSent {
+            strategies: moved,
+            folder,
+        });
+        self.close_op_dialog(cx);
+        self.persist_session(cx);
+        cx.notify();
+    }
+
+    /// Open a strategy-rename dialog prefilled with the row's current name.
+    ///
+    /// Args:
+    ///     core: Core that owns the strategy.
+    ///     id: Strategy to rename.
+    ///     window: Window used to present the dialog.
+    ///     cx: View context used to read the current name and stage the operation.
+    ///
+    /// Returns:
+    ///     Nothing; a row absent from the current store opens no dialog.
+    pub(super) fn open_rename_strategy(
+        &mut self,
+        core: CoreId,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cur = {
+            let store = self.backend.read(cx).session.store();
+            row(store, core, id).map(|r| r.name.clone())
+        };
+        let Some(cur) = cur else { return };
+        self.op_input_init = cur;
+        self.op_input = None;
+        self.op = Some(TreeOp::RenameStrategy {
+            core,
+            id,
             workspace_generation: self.action_workspace_generation(cx),
         });
         self.open_op_dialog(window, cx);
@@ -644,6 +930,29 @@ impl StrategiesView {
             } => {
                 self.delete_folder(core, &path, &targets, workspace_generation, cx)?;
             }
+            TreeOp::RenameStrategy {
+                core,
+                id,
+                workspace_generation,
+            } => {
+                let name = self
+                    .op_input
+                    .as_ref()
+                    .map(|i| i.read(cx).value().to_string())
+                    .unwrap_or_default();
+                if name.trim().is_empty() {
+                    return Ok(false);
+                }
+                return self.confirm_rename_strategy(core, id, name, workspace_generation, cx);
+            }
+            // Confirmed by clicking a destination in the body, not by an OK button.
+            TreeOp::MoveToFolder { .. } => {}
+            TreeOp::ConfirmForget { core, ids, .. } => {
+                // No workspace re-validation here: this touches the LOCAL history database, never
+                // the core, so a core going out of scope between the dialog opening and its OK
+                // changes nothing about what is being purged.
+                self.forget_deleted(core, ids, cx);
+            }
         }
 
         self.close_op_dialog(cx);
@@ -693,6 +1002,7 @@ impl StrategiesView {
                     .as_ref()
                     .map(op_has_close_button)
                     .unwrap_or(true);
+                let ok_danger = view.read(cx).op.as_ref().is_some_and(op_ok_is_danger);
 
                 dialog
                     .w(px(tree_op_dialog_width(window, cx)))
@@ -724,20 +1034,62 @@ impl StrategiesView {
                             .unwrap_or_else(|| div().into_any_element());
                         content.child(body)
                     })
-                    .footer(op_dialog_footer(footer_view, p, ok_label))
+                    .footer(op_dialog_footer(footer_view, p, ok_label, ok_danger))
             },
         );
     }
 
     /// Requests deletion of the selected strategies after checking that all are disabled.
+    /// Delete whatever the tree currently addresses: the folder set if there is one, else the
+    /// strategy selection.
+    ///
+    /// One entry point so the Delete key, the menu and the toolbar cannot disagree about what
+    /// "delete" means once folders and cores can be multi-selected.
+    pub(super) fn request_delete_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let folders = selected_folders(self);
+        if folders.is_empty() {
+            self.request_delete_selection(window, cx);
+            return;
+        }
+        // A core root is not something this tree can delete; say so instead of silently acting on
+        // the rest of the set, which would look like the core had been deleted too.
+        if folders.iter().any(|(_, path)| path.is_empty()) {
+            TreeNote::CoreNotDeletable.say(window, cx);
+            return;
+        }
+        // One folder is the ordinary case and keeps the existing confirmation verbatim. Several
+        // are refused for now rather than half-handled: each needs its own authorized snapshot,
+        // and a partial delete across folders is exactly the outcome that must not be possible.
+        let Some((core, path)) = folders.first().cloned() else {
+            return;
+        };
+        if folders.len() > 1 {
+            TreeNote::DeleteNeedsOneFolder {
+                selected: folders.len(),
+            }
+            .say(window, cx);
+            return;
+        }
+        self.request_delete_folder(core, ops::split_path(&path), window, cx);
+    }
+
     pub(super) fn request_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.backend.read(cx).session.store();
         let rows = self.selection_rows(store);
         if rows.is_empty() {
             return;
         }
-        // Deletion is allowed only when every selected strategy is disabled.
-        if rows.iter().any(|(_, r)| r.checked) {
+        // Deletion is allowed only when every selected strategy is disabled — and a refusal is
+        // SAID. Returning quietly here was the defect: the menu entry was never disabled and the
+        // Delete key ran this same path, so pressing either on a running strategy did nothing at
+        // all, with nothing on screen to explain why.
+        let refs: Vec<&StrategyRow> = rows.iter().map(|(_, r)| r).collect();
+        if let Some(block) = ops::delete_block(&refs) {
+            TreeNote::DeleteBlocked {
+                enabled: block.enabled,
+                total: block.total,
+            }
+            .say(window, cx);
             return;
         }
         // A selection may span cores. Keep its complete identity in the confirmation so a later
@@ -748,6 +1100,30 @@ impl StrategiesView {
             targets,
             workspace_generation: self.action_workspace_generation(cx),
         });
+        self.open_op_dialog(window, cx);
+        cx.notify();
+    }
+
+    /// Open the ONE confirmation this window adds: an irreversible purge of local history.
+    ///
+    /// Args:
+    ///     core: Core that owns the deleted strategies.
+    ///     ids: Strategy ids to forget; an empty list opens nothing.
+    ///     label: What the confirmation names — one strategy's name, or a count.
+    ///     window: Window used to present the dialog.
+    ///     cx: View context used to stage the operation.
+    pub(super) fn request_forget(
+        &mut self,
+        core: CoreId,
+        ids: Vec<u64>,
+        label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if ids.is_empty() {
+            return;
+        }
+        self.op = Some(TreeOp::ConfirmForget { core, ids, label });
         self.open_op_dialog(window, cx);
         cx.notify();
     }
@@ -763,8 +1139,14 @@ impl StrategiesView {
         let store = self.backend.read(cx).session.store();
         let Some(cd) = store.core(core) else { return };
         let under = ops::rows_under(&cd.strategies, &path);
-        if !ops::all_off(&under) {
-            return; // Running strategies prevent deletion.
+        if let Some(block) = ops::delete_block(&under) {
+            // Same rule as a strategy selection, and said out loud for the same reason.
+            TreeNote::DeleteBlocked {
+                enabled: block.enabled,
+                total: block.total,
+            }
+            .say(window, cx);
+            return;
         }
         let label = t!(
             "strat.folder_named",
@@ -852,6 +1234,66 @@ impl StrategiesView {
     ///
     /// Returns:
     ///     Success for a dispatched rename or a stale-scope no-op, otherwise a session error.
+    /// Send a strategy rename to the core as an edit of its `StrategyName` field.
+    ///
+    /// Never a local rename: the name is the core's own, and it is what every other surface keys
+    /// on. So this goes through `edit_strategies` and takes the existing Pending/TimedOut phase
+    /// like any other field edit.
+    ///
+    /// A name already used on this core is REFUSED here, inside the dialog: names are global per
+    /// core, and the returned error keeps the dialog open with the reason on screen rather than
+    /// letting the core reject it silently a round trip later.
+    ///
+    /// Returns:
+    ///     `Ok(false)` to keep the dialog open, `Ok(true)` once the edit is away.
+    fn confirm_rename_strategy(
+        &mut self,
+        core: CoreId,
+        id: u64,
+        name: String,
+        workspace_generation: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> Result<bool> {
+        if !tree_op_authorized(
+            workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            core,
+        ) {
+            return Ok(true);
+        }
+        let name = name.trim().to_string();
+        let old = {
+            let store = self.backend.read(cx).session.store();
+            let Some(cd) = store.core(core) else {
+                return Ok(true);
+            };
+            if ops::name_taken(&cd.strategies, id, &name) {
+                return Err(anyhow::anyhow!(
+                    t!("strat.rename_taken", name = name).to_string()
+                ));
+            }
+            row(store, core, id)
+                .map(|r| r.name.clone())
+                .unwrap_or_default()
+        };
+        // Nothing to send, and nothing to report: the operator confirmed the name it already had.
+        if old == name {
+            return Ok(true);
+        }
+        self.backend.read(cx).session.edit_strategies(
+            core,
+            vec![(
+                id,
+                vec![(ops::STRATEGY_NAME_FIELD.to_string(), name.clone())],
+            )],
+        )?;
+        self.pending_notes
+            .push(TreeNote::RenameSent { old, new: name });
+        cx.notify();
+        Ok(true)
+    }
+
     fn confirm_rename_folder(
         &mut self,
         core: CoreId,

@@ -62,11 +62,46 @@ pub(super) fn visible_strategy_cores(
         })
 }
 
-/// Return the retained folder only while its core is visible in the effective singleton scope.
+/// Return the folder CURSOR — the node last clicked or keyed to — while its core is visible.
+///
+/// This is what a paste or a create targets, so it stays a single node even though the selection
+/// is now a set: "put it where I last pointed" has exactly one answer.
 pub(super) fn selected_folder(st: &StrategiesView) -> Option<(CoreId, String)> {
-    st.selected_folder
+    st.folder_anchor
         .clone()
         .filter(|(core, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
+}
+
+/// Return every selected folder whose core is visible, in the order the tree DRAWS them.
+///
+/// Ordered off `nav_order` rather than by `CoreId`, because a raw id order is not the order the
+/// operator sees: `CoreOrder` ranks cores by the configured sort mode, and clipboard content and
+/// multi-core dispatch both have to follow the visible tree. A node the current frame did not draw
+/// keeps its selection but sorts last, so it can still be acted on without inventing a position
+/// for it.
+pub(super) fn selected_folders(st: &StrategiesView) -> Vec<(CoreId, String)> {
+    let mut out: Vec<(CoreId, String)> = st
+        .folder_sel
+        .iter()
+        .filter(|(core, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
+        .cloned()
+        .collect();
+    let drawn_at = |key: &(CoreId, String)| {
+        st.nav_order.iter().position(|node| match node {
+            super::tree::ops::NavNode::Core(core) => *core == key.0 && key.1.is_empty(),
+            super::tree::ops::NavNode::Folder(core, path) => *core == key.0 && *path == key.1,
+            _ => false,
+        })
+    };
+    out.sort_by_cached_key(|key| {
+        (
+            drawn_at(key).unwrap_or(usize::MAX),
+            key.0,
+            key.1.to_lowercase(),
+            key.1.clone(),
+        )
+    });
+    out
 }
 
 /// Count staged checkbox changes that the current workspace may display and apply.

@@ -58,6 +58,15 @@ pub struct StratDump {
     pub local_edit: bool,
 }
 
+/// How much one [`StratMsg::Forget`] actually destroyed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ForgetOutcome {
+    /// Head rows removed. Lower than the ids asked for when one was unknown or still live.
+    pub heads: usize,
+    /// Version rows removed with them.
+    pub versions: usize,
+}
+
 /// Message sent to the writer.
 pub enum StratMsg {
     /// Complete set of strategies from the core (the entire moonproto registry), allowing
@@ -70,6 +79,18 @@ pub enum StratMsg {
         strategies: Vec<StratDump>,
         /// One-shot durable-commit result consumed by the originating feed.
         ack: SyncSender<bool>,
+    },
+    /// Purge deleted strategies and their version history for good.
+    ///
+    /// Handled on the writer thread rather than through a second connection because only the
+    /// writer can evict its own head cache; see [`write::forget`] for what a purge behind that
+    /// cache's back does to the next full set.
+    Forget {
+        core_uid: u64,
+        strategy_ids: Vec<i64>,
+        /// One-shot result, `None` when the purge failed. The receiver may be dropped before this
+        /// is sent: the queue is serial, so a caller that stopped waiting does NOT cancel the work.
+        done: SyncSender<Option<ForgetOutcome>>,
     },
 }
 
@@ -88,14 +109,47 @@ impl StratSink {
     pub fn send(&self, msg: StratMsg) -> bool {
         match self.tx.try_send(msg) {
             Ok(()) => true,
-            Err(TrySendError::Full(_)) => {
-                log::warn!(
-                    "стратегии(db): очередь writer'а полна — набор пропущен (догонит следующий)"
-                );
+            Err(TrySendError::Full(msg)) => {
+                // A dropped FullSet is harmless — the next snapshot carries the same state. A
+                // dropped Forget is not: nothing retries a purge, so it must not be logged as
+                // something that will catch up.
+                match msg {
+                    StratMsg::FullSet { .. } => log::warn!(
+                        "стратегии(db): очередь writer'а полна — набор пропущен (догонит следующий)"
+                    ),
+                    StratMsg::Forget { .. } => log::warn!(
+                        "стратегии(db): очередь writer'а полна — забывание НЕ выполнено и не будет повторено"
+                    ),
+                }
                 false
             }
             Err(TrySendError::Disconnected(_)) => false,
         }
+    }
+
+    /// Queue an irreversible purge of deleted strategies and their history.
+    ///
+    /// Args:
+    ///     core_uid: Core that owns them.
+    ///     strategy_ids: Ids to forget; a live or unknown one is skipped by the writer.
+    ///
+    /// Returns:
+    ///     A receiver for the one-shot result, or `None` when the writer's queue refused the
+    ///     message outright. A receiver that TIMES OUT means the answer is not known yet — the
+    ///     queue is serial and the purge may still be pending, so a timeout must never be reported
+    ///     as failure. [`Self::generation`] is what tells a reader the store actually moved.
+    pub fn forget(
+        &self,
+        core_uid: u64,
+        strategy_ids: Vec<i64>,
+    ) -> Option<Receiver<Option<ForgetOutcome>>> {
+        let (done, rx) = std::sync::mpsc::sync_channel(1);
+        self.send(StratMsg::Forget {
+            core_uid,
+            strategy_ids,
+            done,
+        })
+        .then_some(rx)
     }
 
     /// Increases after each write that changes rows, allowing version-history readers to
@@ -227,6 +281,33 @@ fn spawn_writer() -> Option<StratSink> {
                             }
                         };
                         let _ = ack.try_send(committed);
+                    }
+                    StratMsg::Forget {
+                        core_uid,
+                        strategy_ids,
+                        done,
+                    } => {
+                        let outcome =
+                            match write::forget(&conn, &mut state, core_uid, &strategy_ids) {
+                                Ok(outcome) => {
+                                    if outcome.heads > 0 {
+                                        gen_writer.fetch_add(1, Ordering::Relaxed);
+                                        log::info!(
+                                            "стратегии(db): ядро {core_uid} — забыто голов {}, версий {}",
+                                            outcome.heads,
+                                            outcome.versions
+                                        );
+                                    }
+                                    Some(outcome)
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "стратегии(db): забывание ядра {core_uid} не удалось: {e:#}"
+                                    );
+                                    None
+                                }
+                            };
+                        let _ = done.try_send(outcome);
                     }
                 }
             }

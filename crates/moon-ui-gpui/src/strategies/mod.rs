@@ -52,7 +52,7 @@ use moon_ui::{
     MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonScrollbarVisibility,
     MoonSegmentItem, MoonSegmentedControl, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState,
     MoonTone, MoonTreeEvent, MoonTreeItem, MoonTreeState, MoonVirtualList,
-    MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonVirtualListScrollHandle, MoonWindowExt as _, MoonWindowFrame, Root, h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};
@@ -184,9 +184,36 @@ pub struct StrategiesView {
     /// Reserving them prevents rapid pastes from reading one store snapshot and generating the same
     /// name repeatedly. A reservation is cleared once the name appears in the store.
     pending_names: HashSet<(CoreId, String)>,
-    /// Click-selected folder or core root used for highlighting and subtree Ctrl+C copying.
-    /// An empty path identifies the selected core root without erasing a stale strategy selection.
-    selected_folder: Option<(CoreId, String)>,
+    /// Click-selected folders and core roots, for highlighting and every set action: copy, cut,
+    /// delete, move-to-folder, and paste-into-each. An empty path identifies a core root.
+    ///
+    /// A strategy selection empties this set; a folder selection deliberately does NOT clear the
+    /// strategy selection, which is the asymmetry `resolve_paste_target` reads as its precedence.
+    folder_sel: HashSet<(CoreId, String)>,
+    /// The folder node last clicked or keyed to: the Shift anchor for `folder_sel`, and the
+    /// keyboard cursor while it is `Some`.
+    folder_anchor: Option<(CoreId, String)>,
+    /// Rows marked by Cut and awaiting the paste that moves them, or `None`.
+    ///
+    /// Not carried in the session snapshot: a pending cut is a gesture in progress, and one
+    /// surviving a window close would let a paste days later move rows the operator forgot about.
+    cut: Option<tree::ops::CutOrigin>,
+    /// Previous frame's drawn row order, for keyboard navigation over cores and folders.
+    ///
+    /// Distinct from `flat_order`, which holds strategies alone because Shift ranges over
+    /// strategies are what it was built for. Same writer discipline: render owns it.
+    nav_order: Vec<tree::ops::NavNode>,
+    /// Cross-core cuts whose destination has not confirmed the copies yet.
+    ///
+    /// The source is retired only once every name comes back, so this is the queue that keeps a
+    /// move from becoming a deletion against an echo that never arrived.
+    cut_followups: Vec<tree::ui::CutFollowUp>,
+    /// Notices raised away from a `Window`, drained by the next render.
+    ///
+    /// A background echo or a task completion has no `Window` to push a notification through, and
+    /// dropping the notice there is exactly the silence this window is being taught not to answer
+    /// with.
+    pending_notes: Vec<tree::ui::TreeNote>,
     /// Empty UI folders before their first strategy is added, keyed by core and slash-separated path.
     ui_folders: HashSet<(CoreId, String)>,
     /// Strategy orders sent to a core and not yet echoed back by it, keyed by core.
@@ -248,6 +275,16 @@ impl Render for StrategiesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::STRAT_RENDER);
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
+        // A cross-core cut is settled HERE as well as from the store observer, so a destination
+        // core that goes quiet still lets the give-up window expire instead of leaving the source
+        // waiting forever.
+        self.reconcile_cut_followups(cx);
+        // Notices raised without a `Window` — a background echo, a finished purge — are delivered
+        // here. OUTSIDE the tree's shape guard on purpose: a notice must not depend on whether the
+        // forest happened to change this frame.
+        for note in std::mem::take(&mut self.pending_notes) {
+            window.push_notification(note.notification(), cx);
+        }
         // Drain navigation from an order-line context menu or Orders Strat click before building
         // the tree so filter, expansion, and selection changes appear in this frame.
         // A reveal by name may precede the core echo that assigns its id. Both immediate and
@@ -313,6 +350,7 @@ impl Render for StrategiesView {
                 crate::diag::bump_by(&crate::diag::STRAT_TREE_NODES, build.node_data.len() as u64);
                 let searching = build.searching;
                 self.flat_order = build.flat;
+                self.nav_order = build.nav;
                 // Push the forest into MoonTree only when its shape actually changed. A miss does
                 // not imply a new shape: staging a checkbox or selecting a row changes row CONTENT,
                 // which the signature must see and the forest must not be rebuilt for.

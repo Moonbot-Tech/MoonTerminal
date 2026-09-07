@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use super::super::*;
 use super::ops;
-use moon_ui::MoonButtonIconSlot;
+use moon_ui::{MoonButtonIconSlot, MoonNotification};
 use rust_i18n::t;
 
 #[cfg(test)]
@@ -106,6 +106,18 @@ pub(crate) enum TreeOp {
         target: String,
         workspace_generation: Option<u64>,
     },
+    /// Rename ONE strategy through a core-confirmed edit of its `StrategyName` field.
+    RenameStrategy {
+        core: CoreId,
+        id: u64,
+        workspace_generation: Option<u64>,
+    },
+    /// Choose a destination folder for the strategies or folders being moved.
+    MoveToFolder {
+        core: CoreId,
+        sources: ops::MoveSources,
+        workspace_generation: Option<u64>,
+    },
     /// Rename a folder identified by its core and path segments.
     RenameFolder {
         core: CoreId,
@@ -118,6 +130,16 @@ pub(crate) enum TreeOp {
         targets: Vec<Key>,
         workspace_generation: Option<u64>,
     },
+    /// Confirm an IRREVERSIBLE purge of deleted strategies and their whole version history.
+    ///
+    /// The one new confirmation in this window, and it earns it: every other action here either
+    /// asks the core, which can be undone, or moves rows about. This one destroys local history
+    /// that nothing else keeps a copy of.
+    ConfirmForget {
+        core: CoreId,
+        ids: Vec<u64>,
+        label: String,
+    },
     /// Confirm folder deletion using its core, path, and display label.
     ConfirmDeleteFolder {
         core: CoreId,
@@ -128,6 +150,38 @@ pub(crate) enum TreeOp {
     },
 }
 
+/// A cross-core cut waiting for the destination to confirm what it received.
+///
+/// Ids are per core, so a strategy cannot actually move between cores: it is CREATED at the
+/// destination and only then retired at the source. This record is what holds the two halves
+/// together across the round trip, and it is deliberately process-local - a cut in flight is a
+/// gesture, not state worth surviving a window close. If the window closes first the destination
+/// keeps its copy and the source keeps its rows, which is the safe direction to fail in.
+pub(crate) struct CutFollowUp {
+    /// Core the copies were sent to.
+    pub(crate) dst: CoreId,
+    /// Names the destination must echo back before anything is retired.
+    pub(crate) names: Vec<String>,
+    /// Core the rows came from.
+    pub(crate) src: CoreId,
+    /// EVERY row carried across, as it stood when it was copied. The identity travels, not just
+    /// the id, so retirement can refuse to delete a row the operator edited in the meantime.
+    pub(crate) rows: Vec<ops::CarriedRow>,
+    /// Folders carried across whole.
+    pub(crate) folders: Vec<Vec<String>>,
+    /// Workspace authority captured when the paste was dispatched.
+    pub(crate) workspace_generation: Option<u64>,
+    /// When the copies went out, for the give-up window.
+    pub(crate) sent: std::time::Instant,
+}
+
+/// How long a cross-core cut waits for its echo before giving up and keeping the source.
+///
+/// Giving up NEVER deletes anything: the destination keeps its copy, the source keeps its rows,
+/// and the operator is told. A cut that silently became a copy is recoverable; a source deleted
+/// against an echo that never came is not.
+pub(crate) const CUT_ECHO_WINDOW: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// Context-menu request containing its target and cursor position; MoonUI Root owns the open menu.
 pub(super) struct ContextMenu {
     pub(super) core: CoreId,
@@ -135,11 +189,198 @@ pub(super) struct ContextMenu {
     pub(super) pos: Point<Pixels>,
 }
 
+/// Cloned into the right-click closure, which is `Fn` and may run more than once.
+#[derive(Clone)]
 pub(super) enum MenuTarget {
+    /// A core root row.
+    Core,
     Folder(Vec<String>),
     Strategy(u64),
-    /// Server-deleted strategy from the Deleted folder, offering only Restore.
+    /// A core's Deleted heading, offering the bulk Forget.
+    DeletedFolder,
+    /// Server-deleted strategy from the Deleted folder, offering Restore and Forget.
     DeletedStrategy(u64),
+}
+
+/// One thing the window has to SAY about an action it just took, or refused to take.
+///
+/// A typed value rather than a formatted string, so what an action reported can be asserted
+/// without matching prose, and so the wording lives in one place next to the dictionary key. Every
+/// action in this window ends in exactly one of these — answering with silence is the defect this
+/// whole family exists to remove.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TreeNote {
+    /// A delete was refused because the core still runs some of the targets.
+    DeleteBlocked { enabled: usize, total: usize },
+    /// A core row cannot be deleted from the tree at all.
+    CoreNotDeletable,
+    /// Several folders are selected and deletion takes one at a time.
+    DeleteNeedsOneFolder { selected: usize },
+    /// A rename was requested with a selection that is not exactly one strategy.
+    RenameNeedsOne { selected: usize },
+    /// A core is renamed in Settings, not from this tree.
+    CoreRenamedInSettings,
+    /// A rename was sent to the core and awaits its confirmation.
+    RenameSent { old: String, new: String },
+    /// Rows are marked for a move and will travel on the next paste.
+    Cut { marked: usize },
+    /// A pending cut was abandoned.
+    CutCancelled,
+    /// A same-core paste moved rows rather than copying them.
+    Moved { strategies: usize },
+    /// Copies reached another core; the source waits for that core to confirm them.
+    CutWaiting,
+    /// A cross-core move finished. Rows stay behind when the core still runs them, or when they
+    /// were edited after the copy and the destination therefore holds a stale version.
+    CutDone {
+        moved: usize,
+        kept_enabled: usize,
+        kept_changed: usize,
+    },
+    /// Some source rows could not be retired, so they are now duplicated across both cores.
+    CutRetireFailed { moved: usize, failed: usize },
+    /// The source core disappeared before its rows could be retired.
+    CutSourceGone,
+    /// The destination confirmed, but the workspace scope moved before the source could be retired.
+    CutScopeMoved,
+    /// Every selected folder was empty, so there was nothing to put on the clipboard.
+    NothingToCopy,
+    /// The destination never confirmed, so the source was left exactly as it was.
+    CutTimedOut,
+    /// A core root cannot be cut - there is nothing above it to move it into.
+    CoreNotCut,
+    /// A move was dispatched to the core.
+    MoveSent { strategies: usize, folder: String },
+    /// Move-to-folder works within ONE core; the selection spans several.
+    MoveNeedsOneCore,
+    /// A purge finished and destroyed this much.
+    Forgotten { strategies: usize, versions: usize },
+    /// The strategy store is switched off, so there is nothing to purge from.
+    ForgetDisabled,
+    /// The purge was queued but has not answered yet.
+    ///
+    /// Deliberately NOT reported as a failure: the writer's queue is serial, so a purge the
+    /// window stopped waiting for may still be pending, and telling the operator that an
+    /// irreversible action failed when it is about to succeed is the worst answer available.
+    ForgetPending,
+    /// The purge was refused or errored outright.
+    ForgetFailed,
+    /// A paste landed.
+    Pasted { strategies: usize, cores: usize },
+    /// There was nothing on either clipboard to paste.
+    NothingToPaste,
+}
+
+impl TreeNote {
+    /// The notification to push, with its wording resolved from the active dictionary.
+    pub(crate) fn notification(&self) -> MoonNotification {
+        match self {
+            Self::DeleteBlocked { enabled, total } => MoonNotification::warning(
+                t!(
+                    "strat.note_delete_blocked",
+                    enabled = enabled,
+                    total = total
+                )
+                .to_string(),
+            ),
+            Self::CoreNotDeletable => {
+                MoonNotification::warning(t!("strat.note_core_delete").to_string())
+            }
+            Self::DeleteNeedsOneFolder { selected } => MoonNotification::warning(
+                t!("strat.note_delete_one_folder", n = selected).to_string(),
+            ),
+            Self::RenameNeedsOne { selected } => {
+                MoonNotification::warning(t!("strat.note_rename_one", n = selected).to_string())
+            }
+            Self::CoreRenamedInSettings => {
+                MoonNotification::info(t!("strat.note_core_rename").to_string())
+            }
+            Self::RenameSent { old, new } => MoonNotification::success(
+                t!("strat.note_rename_sent", old = old, new = new).to_string(),
+            ),
+            Self::Forgotten {
+                strategies,
+                versions,
+            } => MoonNotification::success(
+                t!("strat.note_forgotten", n = strategies, versions = versions).to_string(),
+            ),
+            Self::ForgetDisabled => {
+                MoonNotification::warning(t!("strat.note_forget_disabled").to_string())
+            }
+            Self::ForgetPending => {
+                MoonNotification::info(t!("strat.note_forget_pending").to_string())
+            }
+            Self::ForgetFailed => {
+                MoonNotification::error(t!("strat.note_forget_failed").to_string())
+            }
+            Self::Pasted { strategies, cores } => MoonNotification::success(
+                t!("strat.note_pasted", strategies = strategies, cores = cores).to_string(),
+            ),
+            Self::NothingToPaste => {
+                MoonNotification::info(t!("strat.note_nothing_to_paste").to_string())
+            }
+            Self::Cut { marked } => {
+                MoonNotification::info(t!("strat.note_cut", n = marked).to_string())
+            }
+            Self::CutCancelled => {
+                MoonNotification::info(t!("strat.note_cut_cancelled").to_string())
+            }
+            Self::Moved { strategies } => {
+                MoonNotification::success(t!("strat.note_moved", n = strategies).to_string())
+            }
+            Self::CutWaiting => MoonNotification::info(t!("strat.note_cut_waiting").to_string()),
+            Self::CutDone {
+                moved,
+                kept_enabled,
+                kept_changed,
+            } => match kept_enabled + kept_changed {
+                0 => MoonNotification::success(t!("strat.note_moved", n = moved).to_string()),
+                _ => MoonNotification::warning(
+                    t!(
+                        "strat.note_cut_done",
+                        moved = moved,
+                        kept = kept_enabled,
+                        changed = kept_changed
+                    )
+                    .to_string(),
+                ),
+            },
+            Self::CutRetireFailed { moved, failed } => MoonNotification::error(
+                t!(
+                    "strat.note_cut_retire_failed",
+                    moved = moved,
+                    failed = failed
+                )
+                .to_string(),
+            ),
+            Self::CutSourceGone => {
+                MoonNotification::error(t!("strat.note_cut_source_gone").to_string())
+            }
+            Self::CutScopeMoved => {
+                MoonNotification::warning(t!("strat.note_cut_scope_moved").to_string())
+            }
+            Self::NothingToCopy => {
+                MoonNotification::info(t!("strat.note_nothing_to_copy").to_string())
+            }
+            Self::CutTimedOut => {
+                MoonNotification::warning(t!("strat.note_cut_timeout").to_string())
+            }
+            Self::CoreNotCut => {
+                MoonNotification::warning(t!("strat.note_core_not_cut").to_string())
+            }
+            Self::MoveSent { strategies, folder } => MoonNotification::success(
+                t!("strat.note_move_sent", n = strategies, folder = folder).to_string(),
+            ),
+            Self::MoveNeedsOneCore => {
+                MoonNotification::warning(t!("strat.note_move_one_core").to_string())
+            }
+        }
+    }
+
+    /// Push this note through a window that is already in hand.
+    pub(crate) fn say(self, window: &mut Window, cx: &mut App) {
+        window.push_notification(self.notification(), cx);
+    }
 }
 
 /// Drag-and-drop payload for strategies, containing the source core, IDs, and originating window.
@@ -407,19 +648,38 @@ impl StrategiesView {
         if old_path.is_empty() {
             return;
         }
-        let old_key = ops::join_path(old_path);
         let mut np = old_path.to_vec();
         *np.last_mut().unwrap() = new_name.to_string();
-        let new_key = ops::join_path(&np);
+        self.rebase_ui_folder(core, &ops::join_path(old_path), &ops::join_path(&np));
+    }
+
+    /// Move every UI-only folder at or below `old_key` to sit under `new_key` instead.
+    ///
+    /// A rename is one case of this and a move to another parent is the other; both rewrite the
+    /// same prefix, so they share the walk rather than keeping two copies of it. Empty folders
+    /// live only here until their first strategy arrives, so a move that skipped them would leave
+    /// the folder behind at its old place.
+    ///
+    /// Args:
+    ///     core: Core whose local folder markers are rebased.
+    ///     old_key: Canonical prefix being replaced.
+    ///     new_key: Canonical prefix that replaces it.
+    ///
+    /// Returns:
+    ///     Nothing; an empty or unchanged source prefix has no local folders to rebase.
+    pub(super) fn rebase_ui_folder(&mut self, core: CoreId, old_key: &str, new_key: &str) {
+        if old_key.is_empty() || old_key == new_key {
+            return;
+        }
         let affected: Vec<String> = self
             .ui_folders
             .iter()
-            .filter(|(c, p)| *c == core && (p == &old_key || p.starts_with(&format!("{old_key}/"))))
+            .filter(|(c, p)| *c == core && (p == old_key || p.starts_with(&format!("{old_key}/"))))
             .map(|(_, p)| p.clone())
             .collect();
         for p in affected {
             self.ui_folders.remove(&(core, p.clone()));
-            let rebased = p.replacen(&old_key, &new_key, 1);
+            let rebased = p.replacen(old_key, new_key, 1);
             self.ui_folders.insert((core, rebased));
         }
     }
@@ -476,11 +736,91 @@ impl StrategiesView {
     ///
     /// Args:
     ///     cx: View context used by the existing folder and strategy clipboard writers.
-    fn copy_tree_target(&mut self, cx: &mut Context<Self>) {
-        if let Some((core, path)) = selected_folder(self) {
-            self.copy_folder(core, ops::split_path(&path), cx);
-        } else {
+    ///
+    /// Returns:
+    ///     Nothing; folders take precedence, otherwise the current strategy selection is copied.
+    pub(super) fn copy_tree_target(&mut self, cx: &mut Context<Self>) {
+        let folders = selected_folders(self);
+        if folders.is_empty() {
             self.copy_selection(cx);
+        } else {
+            self.copy_folders(&folders, cx);
+        }
+    }
+
+    /// Where a Ctrl+V should land: every selected folder or core root, else the single default.
+    ///
+    /// A pending CUT collapses this to ONE destination. A cut is consumed by the paste that
+    /// spends it, so fanning it over several targets would move the rows into the first and copy
+    /// them into the rest - an order-dependent mixture that is neither a move nor a copy.
+    ///
+    /// Args:
+    ///     cx: View context used to resolve the visible default core when no folder target applies.
+    ///
+    /// Returns:
+    ///     Selected folder targets, or one visible default target for an ordinary paste or a cut.
+    pub(super) fn paste_targets(&self, cx: &Context<Self>) -> Vec<(CoreId, String)> {
+        let folders = selected_folders(self);
+        if self.cut.is_some() || folders.is_empty() {
+            let backend = self.backend.read(cx);
+            let cores = visible_strategy_cores(self, backend);
+            return vec![self.default_target(backend.session.store(), &cores)];
+        }
+        folders
+    }
+
+    /// Paste into every target the tree currently addresses, and report once.
+    ///
+    /// Args:
+    ///     window: Window used to show the aggregate paste or move result.
+    ///     cx: View context used to resolve targets and dispatch each paste.
+    ///
+    /// Returns:
+    ///     Nothing; cross-core cuts defer their final outcome until the destination echo arrives.
+    pub(super) fn paste_to_targets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let moving = self.cut.is_some();
+        let targets = self.paste_targets(cx);
+        let mut strategies = 0usize;
+        let mut reached = 0usize;
+        for (core, path) in targets {
+            let landed = self.paste_into(core, path, cx);
+            if landed > 0 {
+                strategies += landed;
+                reached += 1;
+            }
+        }
+        let note = match (strategies, moving) {
+            (0, _) => tree::ui::TreeNote::NothingToPaste,
+            // A cross-core cut reports through its own follow-up, so it is not double-announced.
+            (n, true) => tree::ui::TreeNote::Moved { strategies: n },
+            (n, false) => tree::ui::TreeNote::Pasted {
+                strategies: n,
+                cores: reached,
+            },
+        };
+        note.say(window, cx);
+    }
+
+    /// Mark whatever the tree addresses for a move: the folder set if there is one, else the
+    /// strategy selection.
+    ///
+    /// Same precedence as Copy, so the two gestures cannot disagree about what they act on.
+    ///
+    /// Args:
+    ///     window: Window used to show the pending-cut notice.
+    ///     cx: View context used to copy and mark the current target.
+    ///
+    /// Returns:
+    ///     Nothing; an empty target produces no cut and no notice.
+    pub(super) fn cut_tree_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let folders = selected_folders(self);
+        let note = if folders.is_empty() {
+            self.cut_selection(cx)
+        } else {
+            self.cut_folders(&folders, cx)
+        };
+        if let Some(note) = note {
+            note.say(window, cx);
         }
     }
 
@@ -509,15 +849,12 @@ impl StrategiesView {
         let key = ev.keystroke.key.as_str();
         if m.control && key == "c" {
             self.copy_tree_target(cx);
+        } else if m.control && key == "x" {
+            self.cut_tree_target(window, cx);
         } else if m.control && key == "v" {
-            let (core, target) = {
-                let b = self.backend.read(cx);
-                // Canonical order, so `default_target`'s "first core" means the first one the
-                // user actually sees rather than whichever session happens to lead the vec.
-                let cores = visible_strategy_cores(self, b);
-                self.default_target(b.session.store(), &cores)
-            };
-            self.paste_into(core, target, cx);
+            // Every selected folder or core root, or the single default when nothing is selected -
+            // `paste_targets` owns that, and collapses a pending cut to one destination.
+            self.paste_to_targets(window, cx);
         } else if reorder_chord(m, key) {
             // A HELD arrow is refused. OS auto-repeat fires this handler tens of times a second,
             // and each pass queues a whole-list reorder that the feed turns into a full snapshot to
@@ -530,8 +867,217 @@ impl StrategiesView {
                 };
                 self.move_selection(step, cx);
             }
+        } else if m.control && key == "a" {
+            // Every VISIBLE strategy: `flat_order` is what the tree drew this frame, so a filter
+            // narrows the reach of Select All exactly as it narrows the tree.
+            self.sel = self.flat_order.iter().copied().collect();
+            self.selected = self.flat_order.first().copied();
+            self.anchor = self.selected;
+            self.clear_folder_selection();
+            self.clamp_selected_section(cx);
+            self.persist_session(cx);
+            cx.notify();
+        } else if key == "f2" {
+            self.rename_cursor(window, cx);
+        } else if key == "escape" {
+            if self.cut.take().is_some() {
+                TreeNote::CutCancelled.say(window, cx);
+            }
+            self.sel.clear();
+            self.selected = None;
+            self.anchor = None;
+            self.clear_folder_selection();
+            self.persist_session(cx);
+            cx.notify();
+        } else if matches!(key, "up" | "down") {
+            // Auto-repeat is allowed here, unlike the reorder chord above: navigation is local to
+            // the window, so a held arrow costs nothing but a repaint, while each reorder press
+            // sends the core its whole list.
+            let step = match key == "up" {
+                true => ops::NavStep::Up,
+                false => ops::NavStep::Down,
+            };
+            self.move_cursor(step, m.shift, cx);
+        } else if matches!(key, "left" | "right") {
+            self.expand_cursor(key == "right", cx);
         } else if key == "delete" {
-            self.request_delete_selection(window, cx);
+            self.request_delete_target(window, cx);
+        }
+    }
+
+    /// The row the keyboard is currently on.
+    ///
+    /// The folder cursor OUTRANKS the strategy selection, the precedence `resolve_paste_target`
+    /// already applies: a folder selection does not clear the strategy one, so without a fixed
+    /// order the two could each claim the cursor.
+    ///
+    /// Returns:
+    ///     The selected visible node, or `None` when neither retained selection is drawn.
+    fn nav_cursor(&self) -> Option<ops::NavNode> {
+        if let Some((core, path)) = selected_folder(self) {
+            return Some(match path.is_empty() {
+                true => ops::NavNode::Core(core),
+                false => ops::NavNode::Folder(core, path),
+            });
+        }
+        let (core, id) = selected_key(self)?;
+        let live = ops::NavNode::Strategy(core, id);
+        // One key identifies a live row and a deleted one alike, so which node it is has to come
+        // from what the tree actually drew.
+        if self.nav_order.contains(&live) {
+            return Some(live);
+        }
+        let deleted = ops::NavNode::DeletedStrategy(core, id);
+        self.nav_order.contains(&deleted).then_some(deleted)
+    }
+
+    /// Move the selection one visible row, optionally extending a strategy range.
+    ///
+    /// Args:
+    ///     step: Direction through the currently drawn navigation order.
+    ///     shift: Whether a strategy row extends the existing strategy range.
+    ///     cx: View context used to update dependent selection and persisted state.
+    ///
+    /// Returns:
+    ///     Nothing; stepping beyond the visible order leaves selection unchanged.
+    fn move_cursor(&mut self, step: ops::NavStep, shift: bool, cx: &mut Context<Self>) {
+        let order = self.nav_order.clone();
+        let Some(next) = ops::nav_step(&order, self.nav_cursor().as_ref(), step) else {
+            return;
+        };
+        match next {
+            ops::NavNode::Strategy(core, id) => {
+                let key = (core, id);
+                match shift {
+                    // Ranges extend over `flat_order`, the same slice a Shift-CLICK ranges over,
+                    // so mouse and keyboard cannot disagree about what a range contains.
+                    true => {
+                        let flat = self.flat_order.clone();
+                        self.apply_click(key, &flat, true, false);
+                    }
+                    false => self.focus_strategy(key),
+                }
+                self.clamp_selected_section(cx);
+                self.pending_scroll = Some(key);
+            }
+            ops::NavNode::Core(core) => {
+                self.apply_folder_click((core, String::new()), &order, shift, false);
+            }
+            ops::NavNode::Folder(core, path) => {
+                self.apply_folder_click((core, path), &order, shift, false);
+            }
+            ops::NavNode::DeletedStrategy(core, id) => {
+                self.select_deleted_strategy((core, id), cx);
+            }
+            // `nav_step` never lands on one.
+            ops::NavNode::DeletedFolder(_) => return,
+        }
+        self.persist_session(cx);
+        cx.notify();
+    }
+
+    /// Right opens the row under the cursor; Left closes it, or steps out to its parent.
+    ///
+    /// Args:
+    ///     open: `true` for Right and `false` for Left.
+    ///     cx: View context used to persist expansion or the stepped-out cursor.
+    ///
+    /// Returns:
+    ///     Nothing; an absent cursor or an unopened row at its root is unchanged.
+    fn expand_cursor(&mut self, open: bool, cx: &mut Context<Self>) {
+        let Some(cursor) = self.nav_cursor() else {
+            return;
+        };
+        let (core, path) = match &cursor {
+            ops::NavNode::Core(core) => (*core, String::new()),
+            ops::NavNode::Folder(core, path) => (*core, path.clone()),
+            // A strategy has nothing to open: Right does nothing, Left steps out.
+            _ => {
+                if !open {
+                    self.step_out(&cursor, cx);
+                }
+                return;
+            }
+        };
+        let is_core = path.is_empty();
+        let was_open = match is_core {
+            true => self.expanded_cores.contains(&core) || self.rail_expanded_core == Some(core),
+            false => self.expanded_folders.contains(&(core, path.clone())),
+        };
+        if open == was_open {
+            // Already in the requested state, so Right stays put and Left steps out.
+            if !open {
+                self.step_out(&cursor, cx);
+            }
+            return;
+        }
+        match (is_core, open) {
+            (true, _) => self.toggle_core_expanded(core),
+            (false, true) => {
+                self.expanded_folders.insert((core, path));
+            }
+            (false, false) => {
+                self.expanded_folders.remove(&(core, path));
+            }
+        }
+        self.persist_session(cx);
+        cx.notify();
+    }
+
+    /// Move the cursor to whatever contains the row it is on.
+    ///
+    /// Args:
+    ///     cursor: Current navigation node whose parent is requested.
+    ///     cx: View context used to look up a strategy's live folder path and persist selection.
+    ///
+    /// Returns:
+    ///     Nothing; nodes without a navigable parent leave selection unchanged.
+    fn step_out(&mut self, cursor: &ops::NavNode, cx: &mut Context<Self>) {
+        let folder_path = match cursor {
+            ops::NavNode::Strategy(core, id) => {
+                let store = self.backend.read(cx).session.store();
+                row(store, *core, *id).map(|r| r.folder_path.clone())
+            }
+            _ => None,
+        };
+        let Some(parent) = ops::nav_parent(cursor, folder_path.as_deref()) else {
+            return;
+        };
+        let key = match parent {
+            ops::NavNode::Core(core) => (core, String::new()),
+            ops::NavNode::Folder(core, path) => (core, path),
+            _ => return,
+        };
+        let order = self.nav_order.clone();
+        self.apply_folder_click(key, &order, false, false);
+        self.persist_session(cx);
+        cx.notify();
+    }
+
+    /// F2: rename whatever the cursor is on.
+    ///
+    /// Args:
+    ///     window: Window used to show the rename dialog or an explanatory refusal.
+    ///     cx: View context used to resolve the current target.
+    ///
+    /// Returns:
+    ///     Nothing; a core root is directed to Settings and a non-single strategy selection is refused.
+    fn rename_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((core, path)) = selected_folder(self) {
+            match path.is_empty() {
+                // A core's name belongs to its connection settings, not to this tree.
+                true => TreeNote::CoreRenamedInSettings.say(window, cx),
+                false => self.open_rename_folder(core, ops::split_path(&path), window, cx),
+            }
+            return;
+        }
+        let keys = selected_keys(self);
+        match keys.len() {
+            1 => {
+                let (core, id) = keys[0];
+                self.open_rename_strategy(core, id, window, cx);
+            }
+            n => TreeNote::RenameNeedsOne { selected: n }.say(window, cx),
         }
     }
 
@@ -556,7 +1102,18 @@ impl StrategiesView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let (has_sel, all_off) = self.selection_summary(store);
-        let can_copy = has_sel || selected_folder(self).is_some();
+        let folders = selected_folders(self);
+        let can_copy = has_sel || !folders.is_empty();
+        // Delete resolves the SAME target the key and the menus do: the folder set outranks the
+        // strategy selection. Reading only `has_sel` here both hid the button for a folder-only
+        // selection AND, with a stale strategy selection beside a newer folder one, enabled it to
+        // delete the strategies instead of the folder in focus.
+        let can_delete = match folders.is_empty() {
+            true => has_sel && all_off,
+            // A core root is refused with a reason rather than greyed out, so the button stays
+            // live and the refusal explains itself.
+            false => true,
+        };
         // Enablement takes the caller's already-resolved list; the click handler below still
         // resolves its own target, because the workspace can move between frame and click.
         let can_paste = self.clipboard.is_some() && has_visible_cores;
@@ -581,21 +1138,14 @@ impl StrategiesView {
             .leading_icon(MoonButtonIconSlot::new("icons/inbox.svg"))
             .tooltip(paste_label.clone())
             .disabled(!can_paste)
-            .on_click(cx.listener(|this, _, _, cx| {
-                let (core, target) = {
-                    let backend = this.backend.read(cx);
-                    let cores = visible_strategy_cores(this, backend);
-                    this.default_target(backend.session.store(), &cores)
-                };
-                this.paste_into(core, target, cx);
-            }));
+            .on_click(cx.listener(|this, _, window, cx| this.paste_to_targets(window, cx)));
         let mut delete = MoonButton::new("sel-delete")
             .danger()
             .size(MoonButtonSize::Action)
             .leading_icon(MoonButtonIconSlot::new("icons/delete.svg"))
             .tooltip(delete_label.clone())
-            .disabled(!has_sel || !all_off)
-            .on_click(cx.listener(|this, _, window, cx| this.request_delete_selection(window, cx)));
+            .disabled(!can_delete)
+            .on_click(cx.listener(|this, _, window, cx| this.request_delete_target(window, cx)));
         if show_labels {
             copy = copy.padding_x(7.0).label(copy_label);
             paste = paste.padding_x(7.0).label(paste_label);

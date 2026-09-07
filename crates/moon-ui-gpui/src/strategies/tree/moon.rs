@@ -218,6 +218,8 @@ pub(crate) enum NodeData {
         staged: Option<bool>,
         highlighted: bool,
         is_short: bool,
+        /// Marked by Cut and waiting for the paste that moves it, so the row draws dimmed.
+        cut: bool,
         /// The whole selection of this core when the row belongs to it, else `None` — a row
         /// outside the selection drags only its own `id`.
         ///
@@ -244,6 +246,8 @@ pub(crate) struct MoonTreeBuild {
     pub(crate) node_data: HashMap<SharedString, NodeData>,
     pub(crate) expanded_ids: Vec<SharedString>,
     pub(crate) flat: Vec<Key>,
+    /// Every drawn row in draw order, cores and folders included, for keyboard navigation.
+    pub(crate) nav: Vec<ops::NavNode>,
     pub(crate) searching: bool,
 }
 
@@ -274,6 +278,7 @@ pub(crate) fn build(
     let mut data: HashMap<SharedString, NodeData> = HashMap::new();
     let mut expanded: Vec<SharedString> = Vec::new();
     let mut flat: Vec<Key> = Vec::new();
+    let mut nav: Vec<ops::NavNode> = Vec::new();
 
     if view.prefs.group_by_venue {
         let sections = crate::core_order::exchange_sections(
@@ -299,7 +304,7 @@ pub(crate) fn build(
                     core_name,
                     &filter,
                     searching,
-                    (&mut data, &mut flat, &mut expanded),
+                    (&mut data, &mut flat, &mut nav, &mut expanded),
                 ) {
                     section_children.push(root);
                 }
@@ -346,7 +351,7 @@ pub(crate) fn build(
                 core_name,
                 &filter,
                 searching,
-                (&mut data, &mut flat, &mut expanded),
+                (&mut data, &mut flat, &mut nav, &mut expanded),
             ) {
                 items.push(root);
             }
@@ -358,6 +363,7 @@ pub(crate) fn build(
         node_data: data,
         expanded_ids: expanded,
         flat,
+        nav,
         searching,
     }
 }
@@ -385,10 +391,11 @@ fn build_core_root(
     outputs: (
         &mut HashMap<SharedString, NodeData>,
         &mut Vec<Key>,
+        &mut Vec<ops::NavNode>,
         &mut Vec<SharedString>,
     ),
 ) -> Option<MoonTreeItem> {
-    let (data, flat, expanded) = outputs;
+    let (data, flat, nav, expanded) = outputs;
     let cd = store.core(core)?;
     // Nothing below a collapsed core can render, so it needs only the totals in its own caption.
     // Search and reveal paths force their required core/folder chain open before this build runs.
@@ -444,6 +451,9 @@ fn build_core_root(
     let open_orders_total = cd.orders.iter().filter(|order| !order.job_is_done).count();
 
     let cid = id_core(core);
+    // Before the subtree, because this row is drawn above it. Every push below follows the same
+    // rule, so `nav` ends up in exactly the order the operator sees.
+    nav.push(ops::NavNode::Core(core));
     let mut children = Vec::new();
     if core_open {
         expanded.push(cid.clone());
@@ -459,6 +469,7 @@ fn build_core_root(
             &mut children,
             data,
             flat,
+            nav,
             expanded,
         );
     }
@@ -471,10 +482,7 @@ fn build_core_root(
             active,
             total,
             open_orders: open_orders_total,
-            selected: view
-                .selected_folder
-                .as_ref()
-                .is_some_and(|(selected_core, path)| *selected_core == core && path.is_empty()),
+            selected: view.folder_sel.contains(&(core, String::new())),
             // Filter-aware coverage, including when this core is collapsed and `matched` is empty.
             checked: subtree_displayed_all_checked(
                 &subtree_check_targets(&cd.strategies, &[], filter),
@@ -587,6 +595,7 @@ fn build_core_subtree(
     children: &mut Vec<MoonTreeItem>,
     data: &mut HashMap<SharedString, NodeData>,
     flat: &mut Vec<Key>,
+    nav: &mut Vec<ops::NavNode>,
     expanded: &mut Vec<SharedString>,
 ) {
     let mut order_counts: HashMap<u64, usize> = HashMap::new();
@@ -638,6 +647,7 @@ fn build_core_subtree(
         children,
         data,
         flat,
+        nav,
         expanded,
     );
 
@@ -657,13 +667,21 @@ fn build_core_subtree(
         .unwrap_or_default();
     if !del.is_empty() {
         let did = id_del_folder(core);
-        if searching || view.expanded_deleted.contains(&core) {
+        // The heading is drawn whenever the core has deleted rows; its children only when it is
+        // open. `nav` follows the FOREST, not the data map, or the keyboard would step into rows
+        // the tree is not showing.
+        let deleted_open = searching || view.expanded_deleted.contains(&core);
+        if deleted_open {
             expanded.push(did.clone());
         }
+        nav.push(ops::NavNode::DeletedFolder(core));
         let mut dchildren = Vec::new();
         for h in &del {
             let sid_u = h.strategy_id as u64;
             let key: Key = (core, sid_u);
+            if deleted_open {
+                nav.push(ops::NavNode::DeletedStrategy(core, sid_u));
+            }
             let dsid = id_del_strat(core, sid_u);
             data.insert(
                 dsid.clone(),
@@ -764,6 +782,7 @@ fn convert_node(
     out: &mut Vec<MoonTreeItem>,
     data: &mut HashMap<SharedString, NodeData>,
     flat: &mut Vec<Key>,
+    nav: &mut Vec<ops::NavNode>,
     expanded: &mut Vec<SharedString>,
 ) {
     // Ordered by where each folder's first strategy sits in the core's OWN list — not by where its
@@ -812,6 +831,9 @@ fn convert_node(
                 false => FolderFill::EmptyLocal,
             },
         };
+        // The folder row itself, before whatever it contains. A CLOSED folder is still pushed —
+        // it is drawn — while its children are not, which is what keeps the order navigable.
+        nav.push(ops::NavNode::Folder(core, path.clone()));
         let mut fchildren = Vec::new();
         if fopen {
             expanded.push(fid.clone());
@@ -831,6 +853,7 @@ fn convert_node(
                 &mut fchildren,
                 data,
                 flat,
+                nav,
                 expanded,
             );
         }
@@ -842,7 +865,7 @@ fn convert_node(
                 label: name.to_string(),
                 active,
                 total,
-                selected: view.selected_folder.as_ref() == Some(&(core, path)),
+                selected: view.folder_sel.contains(&(core, path)),
                 checked: fchecked,
                 fill,
             },
@@ -859,6 +882,10 @@ fn convert_node(
         let key: Key = (core, r.id);
         let sid = id_strat(core, r.id);
         let staged = view.staged.get(&key).copied();
+        let cut = view
+            .cut
+            .as_ref()
+            .is_some_and(|cut| cut.dims(key, &r.folder_path));
         let in_sel = view.sel.contains(&key);
         let highlighted = if view.sel.is_empty() {
             view.selected == Some(key)
@@ -866,6 +893,7 @@ fn convert_node(
             in_sel
         };
         flat.push(key);
+        nav.push(ops::NavNode::Strategy(core, r.id));
         data.insert(
             sid.clone(),
             NodeData::Strategy {
@@ -878,6 +906,7 @@ fn convert_node(
                 staged,
                 highlighted,
                 is_short: r.is_short,
+                cut,
                 drag_ids: in_sel.then(|| selected_ids.clone()),
             },
         );
@@ -1030,6 +1059,20 @@ impl StrategiesView {
     }
 }
 
+/// The folder-set key a heading menu acts on, or `None` for a heading that addresses no folder.
+///
+/// The Deleted heading is the `None` case: it holds no live strategy, so it is not part of the
+/// folder selection and right-clicking it must not disturb one.
+fn menu_folder_key(target: &MenuTarget, core: CoreId) -> Option<(CoreId, String)> {
+    match target {
+        MenuTarget::Core => Some((core, String::new())),
+        MenuTarget::Folder(path) => Some((core, ops::join_path(path))),
+        MenuTarget::Strategy(_) | MenuTarget::DeletedFolder | MenuTarget::DeletedStrategy(_) => {
+            None
+        }
+    }
+}
+
 /// Resolves a core-root or folder drop target as `(target core, path)`.
 ///
 /// Args:
@@ -1153,6 +1196,7 @@ fn render_row(
             staged,
             highlighted,
             is_short,
+            cut,
             ..
         } => strategy_row(
             view,
@@ -1165,6 +1209,7 @@ fn render_row(
             *staged,
             *highlighted,
             *is_short,
+            *cut,
             indent,
             step,
             app,
@@ -1468,9 +1513,13 @@ fn core_folder_row(
     let expandable = fill.has_contents();
     let folder_key = target.folder_key();
     let check_target = folder_key.clone().map(|(core, path)| (core, path, checked));
+    // Every heading row carries a menu now. The core root and the Deleted heading each get their
+    // own target rather than an empty folder path, so the menu can offer what only they can do:
+    // paste into every visible core, and forget a whole Deleted folder.
     let menu = match &target {
-        ToggleTarget::Folder(..) => folder_key,
-        ToggleTarget::Core(_) | ToggleTarget::Deleted(_) => None,
+        ToggleTarget::Folder(core, path) => Some((*core, MenuTarget::Folder(path.clone()))),
+        ToggleTarget::Core(core) => Some((*core, MenuTarget::Core)),
+        ToggleTarget::Deleted(core) => Some((*core, MenuTarget::DeletedFolder)),
     };
     // Taken before the row consumes `row_id`: the checkbox derives its own element id from this
     // node's id for the same reason the row does — see the note on `.id(row_id)` below.
@@ -1567,51 +1616,62 @@ fn core_folder_row(
                 ))
                 .tooltip(crate::panels::common::text_tooltip(counts.tip)),
         )
-        .on_click(move |_e, window, app| {
+        .on_click(move |e: &ClickEvent, window, app| {
+            let m = e.modifiers();
+            let (shift, cmd) = (m.shift, m.secondary());
             view_click.update(app, |this, cx| {
                 window.focus(&this.focus, cx);
                 match &target {
                     ToggleTarget::Core(c) => {
-                        this.toggle_core_expanded(*c);
-                        this.selected_folder = Some((*c, String::new()));
+                        // A MODIFIED click is selecting, not navigating: Ctrl-clicking a core to
+                        // add it to the set must not also collapse the subtree the operator is
+                        // building that set from.
+                        if !shift && !cmd {
+                            this.toggle_core_expanded(*c);
+                        }
+                        let order = this.nav_order.clone();
+                        this.apply_folder_click((*c, String::new()), &order, shift, cmd);
                     }
                     ToggleTarget::Folder(c, path) => {
                         // Nothing to open, so nothing is toggled: the caret is not drawn for an
                         // empty folder, and flipping hidden expansion state would still churn the
                         // hashed set the whole tree is cached on. Selecting it below is what a
                         // click on it is for.
-                        if expandable {
+                        if expandable && !shift && !cmd {
                             toggle(&mut this.expanded_folders, (*c, path.join("/")));
                         }
                         // Match Moonbot by selecting the clicked folder for highlighting and Ctrl+C.
-                        this.selected_folder = Some((*c, path.join("/")));
+                        let order = this.nav_order.clone();
+                        this.apply_folder_click((*c, path.join("/")), &order, shift, cmd);
                     }
                     ToggleTarget::Deleted(c) => {
                         toggle(&mut this.expanded_deleted, *c);
-                        this.selected_folder = None;
+                        this.clear_folder_selection();
                     }
                 }
                 this.persist_session(cx);
                 cx.notify();
             });
         })
-        .when_some(menu, |row, (core, path)| {
+        .when_some(menu, |row, (core, target)| {
             row.on_mouse_down(
                 MouseButton::Right,
                 move |e: &MouseDownEvent, window, app| {
                     app.stop_propagation();
                     let pos = e.position;
-                    let path = path.clone();
+                    let target = target.clone();
                     view_menu.update(app, |this, cx| {
-                        this.open_menu(
-                            ContextMenu {
-                                core,
-                                target: MenuTarget::Folder(path),
-                                pos,
-                            },
-                            window,
-                            cx,
-                        );
+                        // Right-clicking OUTSIDE the current set acts on the clicked node alone,
+                        // the way `strategy_row` does: the menu must never act on something the
+                        // operator cannot see they selected.
+                        if let Some(key) = menu_folder_key(&target, core)
+                            && !this.folder_sel.contains(&key)
+                        {
+                            let order = this.nav_order.clone();
+                            this.apply_folder_click(key, &order, false, false);
+                            this.persist_session(cx);
+                        }
+                        this.open_menu(ContextMenu { core, target, pos }, window, cx);
                     });
                 },
             )
@@ -1757,6 +1817,7 @@ fn strategy_row(
     staged: Option<bool>,
     highlighted: bool,
     _is_short: bool,
+    cut: bool,
     indent: Pixels,
     step: f32,
     app: &App,
@@ -1796,7 +1857,10 @@ fn strategy_row(
                 MoonText::new(name.to_string())
                     .mono(true)
                     .uppercase(false)
-                    .color(p.text)
+                    // Cut rows read as "on their way out" until the paste lands or the clipboard
+                    // replaces them. A tone change rather than a badge: the row keeps its shape,
+                    // and the tree stays scannable while several rows are marked.
+                    .color(if cut { p.text_muted } else { p.text })
                     .font_size(design::moon_text_base(app, step))
                     .line_height(ROW_LINE_BASE + step)
                     .render(),

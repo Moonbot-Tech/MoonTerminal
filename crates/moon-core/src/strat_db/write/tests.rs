@@ -214,3 +214,55 @@ fn state_cache_survives_reload() {
         "эхо после рестарта не плодит версию"
     );
 }
+
+/// Dropping `write.rs:forget`'s `st.heads.remove(&(uid, id))` eviction lets a later FullSet
+/// resurrect a forgotten strategy as `restored`; removing `AND deleted=1` instead purges a live
+/// head. Either edit silently restores historyless data or destroys a live strategy.
+#[test]
+fn forget_evicts_deleted_heads_and_preserves_live_heads() {
+    let (conn, mut st) = setup();
+    apply_full_set(
+        &conn,
+        &mut st,
+        7,
+        "core",
+        true,
+        &[dump(1, "deleted", 5, "x")],
+    )
+    .unwrap();
+    apply_full_set(
+        &conn,
+        &mut st,
+        7,
+        "core",
+        false,
+        &[dump(2, "other", 3, "x")],
+    )
+    .unwrap();
+
+    forget(&conn, &mut st, 7, &[1]).unwrap();
+    apply_full_set(
+        &conn,
+        &mut st,
+        7,
+        "core",
+        false,
+        &[dump(1, "deleted", 5, "x")],
+    )
+    .unwrap();
+    assert_eq!(
+        versions(&conn, 1),
+        vec![("created".to_string(), 0, None)],
+        "a forgotten id must be a new created history, never a restored stale head"
+    );
+
+    forget(&conn, &mut st, 7, &[1]).unwrap();
+    let live: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM strategies WHERE core_uid=7 AND strategy_id=1 AND deleted=0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(live, 1, "forget must not purge a live head");
+}

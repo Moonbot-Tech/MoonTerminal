@@ -328,6 +328,210 @@ strat.folder_named:
   en: "folder “%{name}”"
   es: "carpeta «%{name}»"
 
+# --- Strategy tree: what an action says when it acts, or refuses to ---
+strat.note_delete_blocked:
+  ru: "Не удалено: включено %{enabled} из %{total} — сначала остановите"
+  en: "Not deleted: %{enabled} of %{total} are enabled — stop them first"
+  es: "No eliminado: %{enabled} de %{total} están activadas — deténgalas primero"
+strat.note_core_delete:
+  ru: "Ядро нельзя удалить из дерева — уберите его из выбора"
+  en: "A core cannot be deleted from the tree — drop it from the selection"
+  es: "Un núcleo no se puede eliminar desde el árbol — quítelo de la selección"
+strat.note_delete_one_folder:
+  ru: "Выбрано папок: %{n} — удаляйте по одной"
+  en: "%{n} folders selected — delete them one at a time"
+  es: "%{n} carpetas seleccionadas — elimínelas de una en una"
+strat.note_rename_one:
+  ru: "Выбрано стратегий: %{n} — переименование работает с одной"
+  en: "%{n} strategies selected — rename works on one"
+  es: "%{n} estrategias seleccionadas — renombrar funciona con una"
+strat.note_core_rename:
+  ru: "Ядро переименовывается в Настройках"
+  en: "A core is renamed in Settings"
+  es: "Un núcleo se renombra en Ajustes"
+strat.note_rename_sent:
+  ru: "Переименование отправлено: %{old} → %{new}"
+  en: "Rename sent: %{old} -> %{new}"
+  es: "Renombrado enviado: %{old} -> %{new}"
+strat.rename_taken:
+  ru: "Имя «%{name}» уже занято в этом ядре"
+  en: "The name \"%{name}\" is already taken on this core"
+  es: "El nombre «%{name}» ya está en uso en este núcleo"
+strat.rename_strategy_title:
+  ru: "Переименовать стратегию"
+  en: "Rename strategy"
+  es: "Renombrar estrategia"
+strat.rename_chord:
+  ru: "F2"
+  en: "F2"
+  es: "F2"
+strat.reason_multi:
+  ru: "выбрано %{n}"
+  en: "%{n} selected"
+  es: "%{n} seleccionadas"
+strat.note_cut:
+  ru: "Вырезано: %{n} — вставьте, чтобы переместить; Esc отменяет"
+  en: "Cut %{n} — paste to move; Esc cancels"
+  es: "Cortadas %{n} — pegue para mover; Esc cancela"
+strat.note_cut_cancelled:
+  ru: "Вырезание отменено"
+  en: "Cut cancelled"
+  es: "Corte cancelado"
+strat.note_moved:
+  ru: "Перемещено: %{n}"
+  en: "Moved %{n}"
+  es: "Movidas %{n}"
+strat.note_cut_waiting:
+  ru: "Скопировано; источник удалится, когда ядро подтвердит"
+  en: "Copied; the source is removed once the core confirms"
+  es: "Copiado; el origen se elimina cuando el núcleo confirme"
+strat.note_cut_done:
+  ru: "Перемещено: %{moved}; осталось включённых: %{kept}, изменённых: %{changed}"
+  en: "Moved %{moved}; %{kept} stayed enabled, %{changed} were edited after the copy"
+  es: "Movidas %{moved}; %{kept} activadas, %{changed} editadas tras la copia"
+strat.note_cut_retire_failed:
+  ru: "Перемещено %{moved}, но %{failed} не удалось убрать из источника — они есть в обоих ядрах"
+  en: "Moved %{moved}, but %{failed} could not be removed from the source — they exist on both cores"
+  es: "Movidas %{moved}, pero %{failed} no se pudieron quitar del origen — están en ambos núcleos"
+strat.note_cut_source_gone:
+  ru: "Ядро-источник исчезло — стратегии остались в обоих ядрах"
+  en: "The source core disappeared — the strategies remain on both cores"
+  es: "El núcleo de origen desapareció — las estrategias quedan en ambos núcleos"
+strat.note_cut_scope_moved:
+  ru: "Вставка подтверждена, но область видимости сменилась — источник сохранён"
+  en: "The paste was confirmed, but the workspace scope changed — the source is kept"
+  es: "El pegado se confirmó, pero el ámbito cambió — se conserva el origen"
+strat.note_nothing_to_copy:
+  ru: "Выбранные папки пусты — копировать нечего"
+  en: "The selected folders are empty — there is nothing to copy"
+  es: "Las carpetas seleccionadas están vacías — no hay nada que copiar"
+strat.note_cut_timeout:
+  ru: "Ядро не подтвердило вставку — источник сохранён"
+  en: "The core did not confirm the paste — the source is kept"
+  es: "El núcleo no confirmó el pegado — se conserva el origen"
+strat.note_core_not_cut:
+  ru: "Ядро нельзя вырезать — его некуда переместить"
+  en: "A core cannot be cut — there is nowhere to move it to"
+  es: "Un núcleo no se puede cortar — no hay adónde moverlo"
+strat.menu_cut:
+  ru: "Вырезать"
+  en: "Cut"
+  es: "Cortar"
+strat.cut_chord:
+  ru: "Ctrl+X"
+  en: "Ctrl+X"
+  es: "Ctrl+X"
+strat.copy_chord:
+  ru: "Ctrl+C"
+  en: "Ctrl+C"
+  es: "Ctrl+C"
+strat.menu_move_to_folder:
+  ru: "Переместить в папку…"
+  en: "Move to folder…"
+  es: "Mover a carpeta…"
+strat.reason_several_cores:
+  ru: "несколько ядер"
+  en: "several cores"
+  es: "varios núcleos"
+strat.move_to_title:
+  ru: "Переместить в папку"
+  en: "Move to folder"
+  es: "Mover a carpeta"
+strat.move_to_hint:
+  ru: "Куда переместить %{what}:"
+  en: "Where to move %{what}:"
+  es: "Adónde mover %{what}:"
+strat.count_folders:
+  ru: "папок: %{n}"
+  en: "%{n} folders"
+  es: "%{n} carpetas"
+strat.note_move_sent:
+  ru: "Перемещение отправлено: %{n} → %{folder}"
+  en: "Move sent: %{n} -> %{folder}"
+  es: "Movimiento enviado: %{n} -> %{folder}"
+strat.note_move_one_core:
+  ru: "Перемещение работает в пределах одного ядра — между ядрами используйте вырезать/вставить"
+  en: "Move works within one core — use cut and paste between cores"
+  es: "Mover funciona dentro de un núcleo — use cortar y pegar entre núcleos"
+strat.note_pasted:
+  ru: "Вставлено стратегий: %{strategies}, ядер: %{cores}"
+  en: "Pasted %{strategies} strategies into %{cores} cores"
+  es: "Pegadas %{strategies} estrategias en %{cores} núcleos"
+strat.note_nothing_to_paste:
+  ru: "Нечего вставлять"
+  en: "Nothing to paste"
+  es: "Nada que pegar"
+strat.note_forgotten:
+  ru: "Забыто навсегда: стратегий %{n}, версий %{versions}"
+  en: "Forgotten forever: %{n} strategies, %{versions} versions"
+  es: "Olvidadas para siempre: %{n} estrategias, %{versions} versiones"
+strat.note_forget_disabled:
+  ru: "Хранилище стратегий выключено: Настройки → Хранилище"
+  en: "Strategy storage is disabled: Settings -> Storage"
+  es: "El almacenamiento de estrategias está desactivado: Ajustes -> Almacenamiento"
+strat.note_forget_pending:
+  ru: "Хранилище ещё занято — результат появится сам"
+  en: "The store is still busy — the result will appear on its own"
+  es: "El almacén sigue ocupado — el resultado aparecerá solo"
+strat.note_forget_failed:
+  ru: "Не удалось забыть"
+  en: "Forget failed"
+  es: "No se pudo olvidar"
+
+# --- Strategy tree: why an action is unavailable (menu right labels) ---
+strat.reason_nothing_to_paste:
+  ru: "буфер пуст"
+  en: "clipboard empty"
+  es: "portapapeles vacío"
+strat.reason_empty:
+  ru: "пусто"
+  en: "empty"
+  es: "vacío"
+strat.reason_enabled:
+  ru: "включено %{n}"
+  en: "%{n} enabled"
+  es: "%{n} activadas"
+
+# --- Strategy tree: core row and Deleted folder menus ---
+strat.menu_paste_all_cores:
+  ru: "Вставить во все видимые ядра (%{n})"
+  en: "Paste into every visible core (%{n})"
+  es: "Pegar en todos los núcleos visibles (%{n})"
+strat.menu_copy_core:
+  ru: "Копировать все стратегии ядра"
+  en: "Copy all strategies of this core"
+  es: "Copiar todas las estrategias del núcleo"
+strat.menu_expand_core:
+  ru: "Развернуть ядро"
+  en: "Expand this core"
+  es: "Expandir el núcleo"
+strat.menu_collapse_core:
+  ru: "Свернуть ядро"
+  en: "Collapse this core"
+  es: "Contraer el núcleo"
+strat.menu_forget:
+  ru: "Забыть навсегда…"
+  en: "Forget forever…"
+  es: "Olvidar para siempre…"
+strat.menu_forget_all:
+  ru: "Забыть все навсегда (%{n})…"
+  en: "Forget all forever (%{n})…"
+  es: "Olvidar todas para siempre (%{n})…"
+
+# --- Strategy tree: the one irreversible confirmation ---
+strat.forget_title:
+  ru: "Забыть навсегда?"
+  en: "Forget forever?"
+  es: "¿Olvidar para siempre?"
+strat.forget_ok:
+  ru: "Забыть"
+  en: "Forget"
+  es: "Olvidar"
+strat.forget_confirm:
+  ru: "Забыть %{what} навсегда? История версий будет стёрта, восстановление станет невозможным."
+  en: "Forget %{what} forever? Version history is erased and restore becomes impossible."
+  es: "¿Olvidar %{what} para siempre? El historial de versiones se borra y no se podrá restaurar."
+
 # --- Strategy tree: context menu and toolbar ---
 strat.menu_create:
   ru: "Создать"
