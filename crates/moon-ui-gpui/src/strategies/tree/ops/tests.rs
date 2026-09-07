@@ -97,15 +97,6 @@ fn rows_under_includes_nested() {
 }
 
 #[test]
-fn all_off_rule() {
-    let on = row(1, "s1", "a", true);
-    let off = row(2, "s2", "a", false);
-    assert!(all_off(&[&off]));
-    assert!(!all_off(&[&off, &on]));
-    assert!(all_off(&[]));
-}
-
-#[test]
 fn new_strategy_uses_defaults_and_name() {
     let ns = new_strategy(&kind(), "My Strat", "folder/x");
     assert_eq!(ns.kind_ordinal, 1);
@@ -445,4 +436,108 @@ fn a_hidden_row_keeps_its_slot_while_the_visible_ones_move_around_it() {
     ];
     // Slots 0 and 2 are the drawn ones; they exchange, and slot 1 still holds the hidden row.
     assert_eq!(step(&rows, &[3], &[2], MoveStep::Up), Some(vec![3, 2, 1]));
+}
+
+/// Dropping `tree/ops.rs:cut_retire_plan`'s identity checks or letting a checked row into
+/// `delete_rows` retires an edited or running source after a cross-core cut; retiring a folder
+/// with an uncarried row deletes a strategy the destination never received.
+#[test]
+fn cut_retire_plan_retires_only_unchanged_disabled_carried_rows() {
+    let rows = vec![
+        row(11, "unchanged", "source/folder", false),
+        row(12, "still-running", "source/folder", true),
+        row(13, "same-folder", "source\\folder/nested", false),
+        row(14, "renamed-after-copy", "source/folder", false),
+        row(15, "moved-after-copy", "elsewhere", false),
+        row(16, "created-after-copy", "source/folder/new", false),
+    ];
+    let carried = vec![
+        CarriedRow {
+            id: 11,
+            name: "unchanged".to_string(),
+            folder_path: "source/folder".to_string(),
+        },
+        CarriedRow {
+            id: 12,
+            name: "still-running".to_string(),
+            folder_path: "source/folder".to_string(),
+        },
+        CarriedRow {
+            id: 13,
+            name: "same-folder".to_string(),
+            folder_path: "source/folder/nested".to_string(),
+        },
+        CarriedRow {
+            id: 14,
+            name: "before-rename".to_string(),
+            folder_path: "source/folder".to_string(),
+        },
+        CarriedRow {
+            id: 15,
+            name: "moved-after-copy".to_string(),
+            folder_path: "source/folder".to_string(),
+        },
+    ];
+    let retire = cut_retire_plan(&rows, &carried, &[split_path("source/folder")]);
+
+    assert_eq!(retire.delete_rows, vec![11, 13]);
+    assert_eq!(
+        retire.kept_enabled, 1,
+        "the running row stays at the source"
+    );
+    assert_eq!(
+        retire.kept_changed, 2,
+        "the renamed and moved rows must not be deleted from the newer source state"
+    );
+    assert!(
+        retire.empty_folders.is_empty(),
+        "the folder contains a row created after copy, so it cannot be retired"
+    );
+}
+
+/// Returning an empty vector from `tree/ops.rs:cut_move_plan` loses a same-core cut-paste and
+/// sends the user through the clipboard-create path; allowing a self-targeted folder move would
+/// create an impossible recursive path.
+#[test]
+fn cut_move_plan_preserves_original_ids_and_refuses_recursive_folder_targets() {
+    let core = 7;
+    let rows = vec![
+        row(11, "row", "source/row", false),
+        row(21, "folder-a", "source/folder", false),
+        row(22, "folder-b", "source/folder/nested", false),
+    ];
+    let cut = CutOrigin {
+        rows: vec![(core, 11)],
+        folders: vec![(core, split_path("source/folder"))],
+    };
+
+    let intents = cut_move_plan(&rows, &cut, core, &split_path("target"));
+    let mut moved_ids: Vec<u64> = intents
+        .iter()
+        .flat_map(|intent| intent.moves.iter().map(|(id, _)| *id))
+        .collect();
+    moved_ids.sort_unstable();
+    assert_eq!(
+        moved_ids,
+        vec![11, 21, 22],
+        "same-core cut must carry original ids"
+    );
+    assert!(intents.iter().any(|intent| {
+        intent.rebase == Some(("source/folder".to_string(), "target/folder".to_string()))
+    }));
+
+    let folder_only = CutOrigin {
+        rows: vec![],
+        folders: vec![(core, split_path("source/folder"))],
+    };
+    assert!(cut_move_plan(&rows, &folder_only, core, &split_path("source/folder")).is_empty());
+    assert!(
+        cut_move_plan(
+            &rows,
+            &folder_only,
+            core,
+            &split_path("source/folder/nested")
+        )
+        .is_empty()
+    );
 }

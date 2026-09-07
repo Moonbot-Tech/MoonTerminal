@@ -177,7 +177,10 @@ pub(crate) fn data_sig(
     let staged = unordered(view.staged.iter());
     staged.hash(&mut h);
     view.selected.hash(&mut h);
-    view.selected_folder.hash(&mut h);
+    unordered(view.folder_sel.iter()).hash(&mut h);
+    view.folder_anchor.hash(&mut h);
+    // The cut dims the rows it holds, so the tree draws differently while one is pending.
+    view.cut.hash(&mut h);
     view.deleted_rev.hash(&mut h);
 
     // The Deleted folder's caption comes from the dictionary, and a language switch reaches windows

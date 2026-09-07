@@ -16,7 +16,7 @@ impl StrategiesView {
         let before_selected = self.selected;
         let before_anchor = self.anchor;
         let before_sel = self.sel.clone();
-        let before_folder = self.selected_folder.clone();
+        let before_folder = (self.folder_sel.len(), self.folder_anchor.clone());
         if shift {
             if let Some(a) = self.anchor {
                 let ia = order.iter().position(|k| *k == a);
@@ -44,11 +44,72 @@ impl StrategiesView {
         // The clicked strategy always becomes the primary schema/section source; keep the section.
         self.selected = Some(key);
         // A strategy click clears folder selection so Ctrl+C copies the strategy selection again.
-        self.selected_folder = None;
+        self.clear_folder_selection();
         before_selected != self.selected
             || before_anchor != self.anchor
             || before_sel != self.sel
-            || before_folder != self.selected_folder
+            || before_folder != (self.folder_sel.len(), self.folder_anchor.clone())
+    }
+
+    /// Retire the whole folder selection, cursor included.
+    ///
+    /// One setter rather than two assignments at each site: the set and its anchor have to go
+    /// together, and a site that cleared only the set would leave a cursor pointing at a node that
+    /// is no longer selected — which is what the keyboard would then move from.
+    pub(super) fn clear_folder_selection(&mut self) {
+        self.folder_sel.clear();
+        self.folder_anchor = None;
+    }
+
+    /// Apply a folder or core click with selection modifiers.
+    ///
+    /// The same three gestures `apply_click` gives strategies — Shift ranges over the drawn node
+    /// order, Ctrl toggles one node, a plain click replaces — over the folder set instead.
+    ///
+    /// It deliberately does NOT touch `selected`/`sel`/`anchor`. A strategy selection retires the
+    /// folder selection, but not the reverse: `resolve_paste_target` reads that asymmetry as its
+    /// precedence, and `a_selected_folder_outranks_a_stale_strategy` pins it.
+    ///
+    /// Returns:
+    ///     Whether anything about the folder selection actually changed.
+    pub(super) fn apply_folder_click(
+        &mut self,
+        node: (CoreId, String),
+        order: &[tree::ops::NavNode],
+        shift: bool,
+        command: bool,
+    ) -> bool {
+        let before_sel = self.folder_sel.clone();
+        let before_anchor = self.folder_anchor.clone();
+        if shift {
+            match self.folder_anchor.clone() {
+                Some(anchor) => {
+                    let range = tree::ops::folder_range(order, &anchor, &node);
+                    // An anchor the current frame no longer draws cannot describe a range; fall
+                    // back to the single node rather than selecting nothing.
+                    match range.is_empty() {
+                        true => {
+                            self.folder_sel.clear();
+                            self.folder_sel.insert(node.clone());
+                        }
+                        false => self.folder_sel = range.into_iter().collect(),
+                    }
+                }
+                None => {
+                    self.folder_sel.clear();
+                    self.folder_sel.insert(node.clone());
+                }
+            }
+        } else if command {
+            if !self.folder_sel.remove(&node) {
+                self.folder_sel.insert(node.clone());
+            }
+        } else {
+            self.folder_sel.clear();
+            self.folder_sel.insert(node.clone());
+        }
+        self.folder_anchor = Some(node);
+        before_sel != self.folder_sel || before_anchor != self.folder_anchor
     }
 
     /// Make `key` the primary selection, replacing whatever was selected.
@@ -60,7 +121,7 @@ impl StrategiesView {
         self.sel.insert(key);
         self.anchor = Some(key);
         self.selected = Some(key);
-        self.selected_folder = None;
+        self.clear_folder_selection();
     }
 
     /// Resolve a pending create/paste/copy selection after the core echoes the named strategy.

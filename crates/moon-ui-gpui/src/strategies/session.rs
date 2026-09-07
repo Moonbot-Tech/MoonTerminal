@@ -22,8 +22,10 @@ pub(crate) struct StrategiesSessionState {
     pub(crate) selected: Option<Key>,
     /// Multi-selection set.
     pub(crate) sel: HashSet<Key>,
-    /// Selected folder or core root.
-    pub(crate) selected_folder: Option<(CoreId, String)>,
+    /// Selected folders and core roots.
+    pub(crate) folder_sel: HashSet<(CoreId, String)>,
+    /// The folder node last pointed at, which is the paste/create target and the keyboard cursor.
+    pub(crate) folder_anchor: Option<(CoreId, String)>,
     /// Selected schema section index.
     pub(crate) selected_section: usize,
     /// Shift-range selection anchor.
@@ -55,7 +57,8 @@ impl StrategiesSessionState {
             expanded_deleted: view.expanded_deleted.clone(),
             selected: view.selected,
             sel: view.sel.clone(),
-            selected_folder: view.selected_folder.clone(),
+            folder_sel: view.folder_sel.clone(),
+            folder_anchor: view.folder_anchor.clone(),
             selected_section: view.selected_section,
             anchor: view.anchor,
             search: view.filter.search.clone(),

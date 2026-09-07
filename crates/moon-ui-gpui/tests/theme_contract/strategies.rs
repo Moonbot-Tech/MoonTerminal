@@ -95,7 +95,7 @@ fn a_revealed_strategy_is_expanded_and_scrolled_into_view() {
     // One setter makes that structural instead of four copies a fifth site could omit.
     let focus = braced_body(&selection, "fn focus_strategy(");
     assert!(
-        focus.contains("self.selected_folder = None;"),
+        focus.contains("self.clear_folder_selection();"),
         "focusing a strategy must retire the folder selection"
     );
 }
@@ -544,12 +544,12 @@ fn strategy_tree_shortcuts_require_exact_focus_and_share_copy_dispatch() {
     assert!(copy.find("selected_folder(self)") < copy.find("copy_selection(cx)"));
     let toolbar = code_only(braced_body(&ui, "pub(super) fn selection_toolbar("));
     assert!(toolbar.contains("copy_tree_target(") && toolbar.contains("disabled(!can_copy)"));
-    assert!(toolbar.contains("default_target(") && toolbar.contains("paste_into("));
+    assert!(toolbar.contains("paste_to_targets("));
 
     let tree = read_src("strategies/tree/moon.rs");
     let core_folder = code_only(braced_body(&tree, "fn core_folder_row("));
     assert!(core_folder.contains("window.focus(&this.focus, cx)"));
-    assert!(core_folder.contains("Some((*c, String::new()))"));
+    assert!(core_folder.contains("(*c, String::new())"));
     let strategy = code_only(braced_body(&tree, "fn strategy_row("));
     assert!(strategy.contains("window.focus(&this.focus, cx)"));
 }
@@ -1256,7 +1256,7 @@ fn strategies_reopen_state_is_process_lifetime_only() {
     );
     assert!(
         selection.contains("self.persist_session(cx)")
-            && selection.contains("before_folder != self.selected_folder")
+            && selection.contains("before_folder != (self.folder_sel.len()")
             && tree_mod.contains("this.persist_session(cx)")
             && tree_mod.contains("this.persist_session(c)")
             && moon.contains("this.persist_session(cx)")

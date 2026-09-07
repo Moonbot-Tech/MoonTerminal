@@ -37,6 +37,87 @@ pub(super) struct State {
     heads: HashMap<(i64, i64), Head>,
 }
 
+/// Purge deleted strategies and their whole version history, irreversibly.
+///
+/// This is the ONE operation in the strategy store that destroys data instead of superseding it,
+/// and it runs HERE, on the writer thread, for a reason that a second connection cannot satisfy:
+/// [`State::heads`] is the writer's in-memory mirror of the head table, and a purge behind its back
+/// leaves that mirror claiming the row still exists. The next full set from the core would then
+/// take one of the two branches in [`apply_full_set`] that assume a head is present — reviving the
+/// row with `deleted=0` and NO history at all, or opening its history at `restored` — so the strategy
+/// would come back as a ghost. Evicting the cache is what makes the next set take the `created`
+/// branch instead, which is the only correct answer once the history is gone.
+///
+/// Only a head the core itself already deleted (`deleted=1`) can be purged; a LIVE strategy named
+/// here is left untouched, because the operator is asking to forget history, never to delete a
+/// strategy a core is still running.
+///
+/// The cache is evicted AFTER the commit, not during it. That deliberately departs from the
+/// pattern [`apply_full_set`] uses — it mutates `heads` as it goes — because here a rolled-back
+/// transaction with an already-evicted cache is precisely the divergence this function exists to
+/// prevent: the rows would survive on disk while the writer believed they were gone.
+///
+/// Args:
+///     conn: The writer's own connection.
+///     st: Writer state whose head cache is evicted once the purge is durable.
+///     core_uid: Core that owns the strategies.
+///     ids: Strategy ids to forget.
+///
+/// Returns:
+///     How many head rows and version rows were actually removed.
+pub(super) fn forget(
+    conn: &Connection,
+    st: &mut State,
+    core_uid: u64,
+    ids: &[i64],
+) -> rusqlite::Result<super::ForgetOutcome> {
+    let uid = core_uid as i64;
+    let tx = conn.unchecked_transaction()?;
+    let mut purged: Vec<i64> = Vec::new();
+    let mut versions = 0usize;
+
+    for id in ids {
+        let heads = tx.execute(
+            "DELETE FROM strategies WHERE core_uid=?1 AND strategy_id=?2 AND deleted=1",
+            rusqlite::params![uid, id],
+        )?;
+        if heads == 0 {
+            // Either unknown, or still live on the core. Nothing else is removed for this id, so a
+            // live strategy cannot lose its history through this path.
+            continue;
+        }
+        versions += tx.execute(
+            "DELETE FROM strategy_versions WHERE core_uid=?1 AND strategy_id=?2",
+            rusqlite::params![uid, id],
+        )?;
+        // `version_stats` is a CACHE the statistics reader creates lazily, on its own connection.
+        // Asking `sqlite_master` once before this loop was a TOCTOU: the reader can create the
+        // table between the probe and here, and the whole batch would then skip its cleanup. So the
+        // delete is unconditional and a missing table is simply nothing to purge — never created
+        // here, because a purge is not a schema migration.
+        match tx.execute(
+            "DELETE FROM version_stats WHERE core_uid=?1 AND strategy_id=?2",
+            rusqlite::params![uid, id],
+        ) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+                if msg.contains("no such table") => {}
+            Err(e) => return Err(e),
+        }
+        purged.push(*id);
+    }
+
+    tx.commit()?;
+    // Durable now, so the mirror may safely forget them too.
+    for id in &purged {
+        st.heads.remove(&(uid, *id));
+    }
+    Ok(super::ForgetOutcome {
+        heads: purged.len(),
+        versions,
+    })
+}
+
 pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Result<State> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;

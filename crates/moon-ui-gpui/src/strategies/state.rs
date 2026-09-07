@@ -350,6 +350,10 @@ impl StrategiesView {
             // its window with nothing to notice. Costs a walk of a map that is empty except in the
             // seconds after the operator pressed a move button.
             let order_dropped = this.reconcile_pending_order(b.session.store());
+            // Beside it for the same reason: a destination core that has gone quiet raises no
+            // notify of its own, and a cross-core cut waiting on its echo has a deadline that has
+            // to elapse. Render alone would leave it pending until something repainted the window.
+            let settle_cut = !this.cut_followups.is_empty();
             if strategies_changed || goto {
                 if strategies_changed {
                     this.reconcile_ui_folders(b.session.store());
@@ -366,6 +370,14 @@ impl StrategiesView {
                 // not budge; and an expired reorder overlay changes what the tree draws without
                 // any core having sent anything.
                 cx.notify();
+            }
+            // LAST, after the backend read above is released: this one takes `cx` mutably. Here
+            // for the same reason `reconcile_pending_order` is — a destination core that has gone
+            // quiet raises no notify of its own, and a cross-core cut waiting on its echo has a
+            // deadline that has to elapse. Render alone would leave it pending until something
+            // unrelated repainted the window.
+            if settle_cut {
+                this.reconcile_cut_followups(cx);
             }
         })
         .detach();
@@ -553,7 +565,17 @@ impl StrategiesView {
             rules: Rules::load(),
             clipboard: None,
             pending_names: HashSet::new(),
-            selected_folder: session.as_ref().and_then(|s| s.selected_folder.clone()),
+            folder_sel: session
+                .as_ref()
+                .map(|s| s.folder_sel.clone())
+                .unwrap_or_default(),
+            folder_anchor: session.as_ref().and_then(|s| s.folder_anchor.clone()),
+            // Deliberately not restored: a pending cut, the drawn order and undelivered notices
+            // all belong to the frame that produced them.
+            cut: None,
+            cut_followups: Vec::new(),
+            nav_order: Vec::new(),
+            pending_notes: Vec::new(),
             ui_folders: session
                 .as_ref()
                 .map(|s| s.ui_folders.clone())

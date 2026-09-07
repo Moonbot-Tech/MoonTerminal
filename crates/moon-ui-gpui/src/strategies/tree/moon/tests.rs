@@ -94,6 +94,7 @@ fn strategy_node(core: CoreId) -> NodeData {
         staged: None,
         highlighted: false,
         is_short: false,
+        cut: false,
         drag_ids: None,
     }
 }

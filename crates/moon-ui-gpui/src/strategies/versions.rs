@@ -359,6 +359,80 @@ impl StrategiesView {
         .detach();
     }
 
+    /// Forget deleted strategies for good: purge their heads and their whole version history.
+    ///
+    /// The only irreversible action in this window, which is why it is the only one behind a
+    /// confirmation. The purge itself runs on the strategy store's WRITER thread — see
+    /// `strat_db::write::forget` for why a second connection cannot do it — so this reports what
+    /// the writer answers rather than deciding anything itself.
+    ///
+    /// A timeout is NOT reported as failure. The writer drains one serial queue, so a purge this
+    /// window stopped waiting for may still be pending; calling an irreversible action failed when
+    /// it is about to succeed is the one answer that would make an operator act wrongly. The
+    /// store's own generation is what eventually tells the tree the truth.
+    ///
+    /// Args:
+    ///     core: Core that owns the deleted strategies.
+    ///     ids: Strategy ids to forget.
+    ///     cx: View context used to dispatch off-thread and report the outcome.
+    pub(super) fn forget_deleted(
+        &mut self,
+        core: moon_core::session::CoreId,
+        ids: Vec<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if ids.is_empty() {
+            return;
+        }
+        let wire: Vec<i64> = ids.iter().map(|id| *id as i64).collect();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let note = executor
+                .spawn(async move {
+                    let Some(sink) = moon_core::strat_db::sink() else {
+                        return super::tree::ui::TreeNote::ForgetDisabled;
+                    };
+                    let Some(rx) = sink.forget(core, wire) else {
+                        return super::tree::ui::TreeNote::ForgetFailed;
+                    };
+                    match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                        Ok(Some(outcome)) => super::tree::ui::TreeNote::Forgotten {
+                            strategies: outcome.heads,
+                            versions: outcome.versions,
+                        },
+                        Ok(None) => super::tree::ui::TreeNote::ForgetFailed,
+                        // Still queued, or the writer is busy. Indeterminate, never "failed".
+                        Err(_) => super::tree::ui::TreeNote::ForgetPending,
+                    }
+                })
+                .await;
+            let purged = matches!(note, super::tree::ui::TreeNote::Forgotten { .. });
+            let _ = this.update(cx, |this, cx| {
+                if purged {
+                    this.deleted
+                        .entry(core)
+                        .and_modify(|rows| rows.retain(|h| !ids.contains(&(h.strategy_id as u64))));
+                    // A forgotten row must not stay selected: its parameters and versions are gone.
+                    for id in &ids {
+                        let key = (core, *id);
+                        this.sel.remove(&key);
+                        if this.selected == Some(key) {
+                            this.selected = None;
+                            this.versions.clear_selection();
+                        }
+                    }
+                    this.deleted_rev = this.deleted_rev.wrapping_add(1);
+                }
+                // Reloaded whatever the answer was: a purge that landed after the wait expired
+                // still has to reach the tree, and this is the cheapest way to find out.
+                this.deleted_gen = u64::MAX;
+                this.pending_notes.push(note);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Restore a deleted strategy under its OLD id through the context-menu Restore action.
     ///
     /// The head and latest-version fields load in the background before `RestoreStrategy` is sent
