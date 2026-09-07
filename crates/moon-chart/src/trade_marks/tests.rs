@@ -129,3 +129,76 @@ fn the_shipped_graphics_survive_their_own_normalizer() {
         "a shipped graphics default sits outside the range its own normalizer accepts"
     );
 }
+
+fn mark_at(buy_ms: i64, buy_price: f64, close_ms: i64, sell_price: f64) -> TradeMark {
+    TradeMark {
+        buy_ms,
+        close_ms,
+        buy_price,
+        sell_price,
+        qty: 1.0,
+        is_short: false,
+    }
+}
+
+fn print_at(t_ms: i64, price: f64) -> TapePrint {
+    TapePrint { t_ms, price }
+}
+
+/// Empty tape, or every print outside the one-second window, must leave the report stamp alone.
+///
+/// Widening the window to "nearest print anywhere" would drag a scalp onto an unrelated later
+/// trade; refusing to snap when nothing is in range is the only safe fallback.
+#[test]
+fn snap_mark_to_tape_keeps_the_report_stamp_when_no_print_is_in_range() {
+    let mark = mark_at(10_000, 100.0, 20_000, 101.0);
+    assert_eq!(snap_mark_to_tape(mark, &[]), mark);
+    let too_far = [print_at(10_000 + TAPE_SNAP_WINDOW_MS + 1, 100.0)];
+    assert_eq!(snap_mark_to_tape(mark, &too_far), mark);
+}
+
+/// A fill 766 ms into a second is stored as that second's `.000`; snapping must land on the print.
+#[test]
+fn snap_mark_to_tape_moves_a_truncated_second_onto_the_print_in_that_second() {
+    let mark = mark_at(12_000, 0.22947, 44_000, 0.23368);
+    let tape = [
+        print_at(12_766, 0.22950),
+        print_at(44_120, 0.23370),
+        print_at(80_000, 0.24000),
+    ];
+    let snapped = snap_mark_to_tape(mark, &tape);
+    assert_eq!(snapped.buy_ms, 12_766);
+    assert_eq!(snapped.buy_price, 0.22950);
+    assert_eq!(snapped.close_ms, 44_120);
+    assert_eq!(snapped.sell_price, 0.23370);
+}
+
+/// Two prints in the same second: pick the closer PRICE, not the closer time.
+///
+/// The report price is the fill (or a few hundredths off it). The first print of the second is
+/// often the spike top, which is exactly the "triangle in the air" the snap exists to leave.
+#[test]
+fn snap_mark_to_tape_prefers_the_closer_price_inside_the_window() {
+    let mark = mark_at(1_000, 10.0, 2_000, 11.0);
+    let tape = [
+        print_at(1_100, 12.0),
+        print_at(1_800, 10.05),
+        print_at(2_050, 11.0),
+    ];
+    let snapped = snap_mark_to_tape(mark, &tape);
+    assert_eq!(snapped.buy_ms, 1_800);
+    assert_eq!(snapped.buy_price, 10.05);
+    assert_eq!(snapped.close_ms, 2_050);
+    assert_eq!(snapped.sell_price, 11.0);
+}
+
+/// Each end snaps on its own window. An entry candidate must not steal the exit, or a 32-second
+/// scalp would collapse onto one print.
+#[test]
+fn snap_mark_to_tape_snaps_each_end_independently() {
+    let mark = mark_at(1_000, 10.0, 33_000, 12.0);
+    let tape = [print_at(1_400, 10.0), print_at(32_500, 12.0)];
+    let snapped = snap_mark_to_tape(mark, &tape);
+    assert_eq!(snapped.buy_ms, 1_400);
+    assert_eq!(snapped.close_ms, 32_500);
+}

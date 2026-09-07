@@ -228,6 +228,23 @@ pub(crate) fn open_trade_window(
                 view.mode = moon_core::market::CandleViewCfg::default().mode;
             }
             panel.set_candle_view(Some(view), pcx);
+            // Frame the trade NOW, before the REST fetch answers. The pane used to stay live until
+            // `publish`, so a window opened with toolbar Live on sat on `now` for the whole load
+            // and the closed trade was off the left edge. The 1-minute pin above is the bar width
+            // this first frame uses; a later tick upgrade keeps it (`first_publish` is false).
+            let (buy_utc, close_utc) = super::utc_stamps(
+                &record,
+                &owner
+                    .read(pcx)
+                    .report_axis(crate::chartdx::axes::display_zone()),
+            );
+            if let Some((start_ms, end_ms)) = super::frame::trade_frame(
+                buy_utc.saturating_mul(1_000),
+                close_utc.saturating_mul(1_000),
+                60_000,
+            ) {
+                panel.show_time_range(start_ms, end_ms, 0.0);
+            }
             // THE TRADE'S OWN CAPTIONS, published before the first fetch answers like the
             // timeframe pin above: they come from the replica, not from the network, so the window
             // states what this trade WAS even while the picture behind it is still loading — and

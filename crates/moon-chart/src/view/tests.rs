@@ -205,6 +205,32 @@ fn pan_then_hold_auto_returns_to_live() {
     assert!(view.follow);
 }
 
+/// Persistent-manual (a framed trade window) must never auto-return to live after a pan.
+/// `resume_live` would yank the closed trade off-screen.
+#[test]
+fn tick_auto_live_does_not_resume_a_persistent_manual_view() {
+    let now = 100_000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(1000.0, 60.0, None);
+    view.set_manual_persistent();
+    view.pan_x_px(50.0, now, 1000.0);
+    assert!(!view.tick_auto_live(now + MANUAL_HOLD_MS + 1.0));
+    assert!(!view.follow);
+}
+
+/// A framed trade window is persistent-manual. Zooming out until `now` sits near the right
+/// edge must not rejoin live: that is how the window used to fly off the closed trade.
+#[test]
+fn snap_to_live_if_near_does_not_rejoin_a_persistent_manual_view() {
+    let now = 100_000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(1000.0, 60.0, None);
+    view.set_manual_persistent();
+    view.right_time_ms = now;
+    assert!(!view.snap_to_live_if_near(now, 1000.0));
+    assert!(!view.follow);
+}
+
 /// Wall-clock and plot width shared by the navigation cases below; neither is special.
 const NOW: f64 = 100_000_000.0;
 const WIDTH: f32 = 1000.0;

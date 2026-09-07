@@ -100,55 +100,89 @@ impl MarketRoleState {
         let applied_orderbooks = applied
             .map(|current| current.orderbook_markets.as_slice())
             .unwrap_or_default();
-        for market in &desired.orderbook_markets {
-            if !applied_orderbooks.iter().any(|current| current == market) {
-                match client.streams().subscribe_orderbook(market.clone()) {
-                    Ok(()) => {
-                        if diag_on {
-                            log::info!(
-                                "[market_diag] core {} subscribe_orderbook({market})",
-                                crate::feed::core_label(server_id)
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "core {} subscribe_orderbook({market}) failed: {error}",
+        let live = reconcile_orderbook_subs(
+            &desired.orderbook_markets,
+            applied_orderbooks,
+            |market| match client.streams().subscribe_orderbook(market.to_string()) {
+                Ok(()) => {
+                    if diag_on {
+                        log::info!(
+                            "[market_diag] core {} subscribe_orderbook({market})",
                             crate::feed::core_label(server_id)
-                        )
+                        );
                     }
+                    true
                 }
-            }
-        }
-        for market in applied_orderbooks {
-            if !desired
-                .orderbook_markets
-                .iter()
-                .any(|current| current == market)
-            {
-                match client.streams().unsubscribe_orderbook(market.clone()) {
-                    Ok(()) => {
-                        if diag_on {
-                            log::info!(
-                                "[market_diag] core {} unsubscribe_orderbook({market})",
-                                crate::feed::core_label(server_id)
-                            );
-                        }
+                Err(error) => {
+                    log::warn!(
+                        "core {} subscribe_orderbook({market}) failed: {error}",
+                        crate::feed::core_label(server_id)
+                    );
+                    false
+                }
+            },
+            |market| match client.streams().unsubscribe_orderbook(market.to_string()) {
+                Ok(()) => {
+                    if diag_on {
+                        log::info!(
+                            "[market_diag] core {} unsubscribe_orderbook({market})",
+                            crate::feed::core_label(server_id)
+                        );
                     }
-                    Err(error) => log::warn!(
+                    true
+                }
+                Err(error) => {
+                    log::warn!(
                         "core {} unsubscribe_orderbook({market}) failed: {error}",
                         crate::feed::core_label(server_id)
-                    ),
+                    );
+                    false
                 }
-            }
-        }
-        self.applied = Some(desired.clone());
+            },
+        );
+        // Record only subscriptions that actually took. Marking the full desired plan as applied
+        // after a failed subscribe left `needs_apply` false and never retried the book.
+        self.applied = Some(MarketPlan {
+            provider: desired.provider,
+            markets: desired.markets.clone(),
+            orderbook_markets: live,
+        });
     }
 
     /// Returns whether the current MoonClient has unapplied desired state.
     fn needs_apply(&self) -> bool {
         self.desired.is_some() && self.desired != self.applied
     }
+}
+
+/// Next applied order-book set after one subscribe/unsubscribe pass.
+///
+/// A failed subscribe is omitted so the next apply retries it; a failed unsubscribe is kept so
+/// the next apply retries the drop. The coordinator's desired list is not rewritten here.
+///
+/// Args:
+///     desired: Markets that should have a book.
+///     applied: Markets this client currently believes are subscribed.
+///     subscribe: Returns whether the subscribe call succeeded.
+///     unsubscribe: Returns whether the unsubscribe call succeeded.
+///
+/// Returns:
+///     Markets to record as applied.
+fn reconcile_orderbook_subs(
+    desired: &[String],
+    applied: &[String],
+    mut subscribe: impl FnMut(&str) -> bool,
+    mut unsubscribe: impl FnMut(&str) -> bool,
+) -> Vec<String> {
+    let mut live = applied.to_vec();
+    for market in desired {
+        if !live.iter().any(|current| current == market) && subscribe(market) {
+            live.push(market.clone());
+        }
+    }
+    live.retain(|market| desired.iter().any(|current| current == market) || !unsubscribe(market));
+    live.sort();
+    live
 }
 
 /// Applies one market-provider role to MoonProto.

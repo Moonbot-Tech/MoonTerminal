@@ -49,9 +49,9 @@ impl SessionManager {
                 desired_pm.entry(p).or_default().insert(market.clone());
             }
         }
-        // Aggregate markets requiring an order book per provider across all windows. Retain
-        // order-book subscriptions only for this set, with no linger, so demand changes take effect
-        // immediately.
+        // Aggregate markets requiring an order book per provider across all windows. The same
+        // linger as candles: dropping the book the instant the last chart leaves made a quick
+        // reopen wait on a cold subscribe while klines were still in the store.
         let mut orderbook_pm: HashMap<CoreId, HashSet<String>> = HashMap::new();
         for (core, market) in desired_orderbook {
             if let Some(&p) = self.core_provider.get(core) {
@@ -59,47 +59,28 @@ impl SessionManager {
             }
         }
 
-        // 2a. Add newly desired markets to `wanted` and reset their views so the provider rereads
-        //     retained history from the beginning. Cancel any pending drop.
-        for (p, mkts) in &desired_pm {
-            let w = self.wanted.entry(*p).or_default();
-            for m in mkts {
-                self.pending_drop.remove(&(*p, m.clone()));
-                if w.insert(m.clone()) {
-                    market_diag(format!("set_open reset provider={p} market={m}"));
-                    self.market_source.reset_market(*p, m);
-                }
-            }
+        let (inserted, expired) = reconcile_linger(
+            &mut self.wanted,
+            &mut self.pending_drop,
+            &desired_pm,
+            now,
+            UNSUB_DELAY,
+        );
+        for (p, m) in inserted {
+            market_diag(format!("set_open reset provider={p} market={m}"));
+            self.market_source.reset_market(p, &m);
         }
-
-        // 2b. Schedule a delayed drop for markets in `wanted` that no consumer still wants.
-        let mut to_schedule: Vec<(CoreId, String)> = Vec::new();
-        for (p, w) in &self.wanted {
-            for m in w {
-                let still = desired_pm.get(p).is_some_and(|s| s.contains(m));
-                if !still {
-                    to_schedule.push((*p, m.clone()));
-                }
-            }
-        }
-        for key in to_schedule {
-            self.pending_drop.entry(key).or_insert(now + UNSUB_DELAY);
-        }
-
-        // 2c. Remove expired delayed drops from `wanted` and release their views.
-        let expired: Vec<(CoreId, String)> = self
-            .pending_drop
-            .iter()
-            .filter(|(_, &t)| now >= t)
-            .map(|(k, _)| k.clone())
-            .collect();
         for (p, m) in expired {
-            self.pending_drop.remove(&(p, m.clone()));
-            if let Some(w) = self.wanted.get_mut(&p) {
-                w.remove(&m);
-            }
             self.market_source.drop_market(p, &m);
         }
+
+        let _ = reconcile_linger(
+            &mut self.wanted_orderbook,
+            &mut self.pending_ob_drop,
+            &orderbook_pm,
+            now,
+            UNSUB_DELAY,
+        );
 
         // 3. Distribute roles to cores. A provider named in `core_provider` receives `(true, its
         //    markets)`; all other cores receive `(false, [])`. Send only changed roles.
@@ -117,12 +98,13 @@ impl SessionManager {
                 Vec::new()
             };
             markets.sort(); // Stable ordering allows direct comparison with `last_cmd`.
-            // Order books are the subset of markets with current demand; removal is immediate.
+            // Order books stay a subset of `markets` (a book with no candle interest has nowhere
+            // to live). Linger is already folded into `wanted_orderbook`, matching `wanted`.
             let mut orderbook_markets: Vec<String> = if is_prov {
-                let obk = orderbook_pm.get(&id);
+                let lingering = self.wanted_orderbook.get(&id);
                 markets
                     .iter()
-                    .filter(|m| obk.is_some_and(|s| s.contains(*m)))
+                    .filter(|m| lingering.is_some_and(|s| s.contains(*m)))
                     .cloned()
                     .collect()
             } else {
@@ -247,8 +229,10 @@ impl SessionManager {
                         if let Some(old) = self.providers.get(k).copied() {
                             self.market_source.drop_provider(old);
                             self.wanted.remove(&old);
+                            self.wanted_orderbook.remove(&old);
                             self.last_cmd.remove(&old);
                             self.pending_drop.retain(|(pp, _), _| *pp != old);
+                            self.pending_ob_drop.retain(|(pp, _), _| *pp != old);
                         }
                     }
                 }
@@ -272,3 +256,68 @@ impl SessionManager {
         self.core_provider = new_core_provider;
     }
 }
+
+/// Insert newly desired markets, linger the rest, and drop those whose linger has expired.
+///
+/// The same 5-second linger candles already used: cancelling a pending drop when the market is
+/// wanted again is what makes a quick reopen free, and expiring on `now` rather than on the
+/// next consumer is what eventually releases the subscription.
+///
+/// Args:
+///     wanted: Markets currently served, including those still lingering.
+///     pending: Deadline per `(provider, market)` that no consumer still wants.
+///     desired: Markets with a live consumer, keyed by provider.
+///     now: Coordinator clock.
+///     delay: Linger after the last consumer leaves.
+///
+/// Returns:
+///     Newly inserted markets, then expired ones, each as `(provider, market)`.
+fn reconcile_linger(
+    wanted: &mut HashMap<CoreId, HashSet<String>>,
+    pending: &mut HashMap<(CoreId, String), Instant>,
+    desired: &HashMap<CoreId, HashSet<String>>,
+    now: Instant,
+    delay: Duration,
+) -> (Vec<(CoreId, String)>, Vec<(CoreId, String)>) {
+    let mut inserted = Vec::new();
+    for (provider, markets) in desired {
+        let served = wanted.entry(*provider).or_default();
+        for market in markets {
+            pending.remove(&(*provider, market.clone()));
+            if served.insert(market.clone()) {
+                inserted.push((*provider, market.clone()));
+            }
+        }
+    }
+
+    let mut to_schedule = Vec::new();
+    for (provider, markets) in wanted.iter() {
+        for market in markets {
+            let still = desired
+                .get(provider)
+                .is_some_and(|set| set.contains(market));
+            if !still {
+                to_schedule.push((*provider, market.clone()));
+            }
+        }
+    }
+    for key in to_schedule {
+        pending.entry(key).or_insert(now + delay);
+    }
+
+    let expired: Vec<(CoreId, String)> = pending
+        .iter()
+        .filter(|(_, &deadline)| now >= deadline)
+        .map(|(key, _)| key.clone())
+        .collect();
+    for (provider, market) in &expired {
+        pending.remove(&(*provider, market.clone()));
+        if let Some(served) = wanted.get_mut(provider) {
+            served.remove(market);
+        }
+    }
+    (inserted, expired)
+}
+
+#[cfg(test)]
+mod tests;

@@ -25,7 +25,10 @@ pub mod order_geometry;
 pub use order_geometry::build_order_geometry;
 pub mod paint;
 pub mod trade_marks;
-pub use trade_marks::{build_trade_geometry, normalize_chart_graphics};
+pub use trade_marks::{
+    TAPE_SNAP_WINDOW_MS, TapePrint, build_trade_geometry, normalize_chart_graphics,
+    snap_mark_to_tape,
+};
 pub mod view;
 pub mod volume_bars;
 pub use volume_bars::{VolumeSample, VolumeStats, collect_samples, visible_volume_stats};

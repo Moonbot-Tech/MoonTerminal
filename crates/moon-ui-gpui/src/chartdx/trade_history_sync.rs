@@ -12,9 +12,10 @@
 use std::rc::Rc;
 
 use moon_chart::layers::{MarkerInstance, SegInstance};
-use moon_chart::trade_marks::{self, TradeCluster, TradeMark};
+use moon_chart::trade_marks::{self, TapePrint, TradeCluster, TradeMark};
 use moon_chart::view::ChartView;
 use moon_core::db::ChartTradeRecord;
+use moon_core::market::trade_replay::TradeReplaySource;
 use moon_core::session::CoreId;
 
 use super::ChartDataState;
@@ -69,6 +70,63 @@ fn trade_mark(record: &ChartTradeRecord, axis: &moon_core::db::ReportAxis) -> Tr
         qty: record.quantity,
         is_short: record.is_short,
     }
+}
+
+/// Tape prints a replay series can snap arrows onto.
+///
+/// Kline-only series and an empty tick stage return nothing: snapping onto minute bars would
+/// move the arrow onto a candle close that is not a fill.
+pub(crate) fn replay_tape(
+    series: Option<&moon_core::market::trade_replay::TradeReplaySeries>,
+) -> Vec<TapePrint> {
+    let Some(series) = series else {
+        return Vec::new();
+    };
+    if series.source != TradeReplaySource::Ticks {
+        return Vec::new();
+    }
+    series
+        .ticks
+        .iter()
+        .filter_map(|tick| {
+            if !tick.time_ms.is_finite() || !tick.price.is_finite() || tick.price <= 0.0 {
+                return None;
+            }
+            Some(TapePrint {
+                t_ms: tick.time_ms.round() as i64,
+                price: f64::from(tick.price),
+            })
+        })
+        .collect()
+}
+
+/// Cheap identity of the tape currently attached to this engine.
+///
+/// Length plus the first and last stamps is enough: a tick upgrade changes all three, and a
+/// live chart holds no series so this stays zero.
+fn replay_tape_fingerprint(
+    series: Option<&moon_core::market::trade_replay::TradeReplaySeries>,
+) -> u64 {
+    let Some(series) = series else {
+        return 0;
+    };
+    let n = series.ticks.len() as u64;
+    let t0 = series
+        .ticks
+        .first()
+        .map(|tick| tick.time_ms.to_bits())
+        .unwrap_or(0);
+    let t1 = series
+        .ticks
+        .last()
+        .map(|tick| tick.time_ms.to_bits())
+        .unwrap_or(0);
+    series
+        .identity
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(n.wrapping_mul(0xBF58_476D_1CE4_E5B9))
+        .wrapping_add(t0)
+        .wrapping_add(t1.rotate_left(32))
 }
 
 /// Everything a pane must retain about the trade arrows it currently has on the GPU.
@@ -191,7 +249,11 @@ impl ChartDataState {
             // Clustering happens when this layer is rebuilt, so ZOOM has to invalidate it — but
             // through a quantized bucket, never the raw scale, or a smooth zoom would rebuild every
             // marker on every frame.
-            .wrapping_add(trade_marks::scale_bucket(view.px_per_ms, view.px_per_price));
+            .wrapping_add(trade_marks::scale_bucket(view.px_per_ms, view.px_per_price))
+            // Replay ticks land AFTER the record is published. Folding their identity in is what
+            // rebuilds the arrows onto the tape instead of leaving them on the second-aligned
+            // report stamps from the kline stage.
+            .wrapping_add(replay_tape_fingerprint(self.trade_replay.as_deref()));
         if sig == u64::MAX { 0 } else { sig }
     }
 
@@ -223,6 +285,7 @@ impl ChartDataState {
         let epoch_ms = view.epoch_ms;
         let mut sources = Vec::new();
         // The replica stores seconds; every other instance in this layer is relative milliseconds.
+        let tape = self.replay_tape.as_slice();
         let marks = self
             .trade_history
             .iter()
@@ -232,7 +295,11 @@ impl ChartDataState {
             .map(|(index, record)| {
                 // Built in the same pass as the marks, so the two lists cannot fall out of step.
                 sources.push(index);
-                trade_mark(record, &self.report_axis)
+                let mark = trade_mark(record, &self.report_axis);
+                match tape {
+                    [] => mark,
+                    prints => moon_chart::snap_mark_to_tape(mark, prints),
+                }
             })
             .collect::<Vec<_>>();
         let clusters = moon_chart::build_trade_geometry(

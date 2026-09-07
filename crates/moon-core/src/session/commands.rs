@@ -1067,6 +1067,8 @@ impl SessionManager {
         self.core_provider.clear();
         self.wanted.clear();
         self.pending_drop.clear();
+        self.wanted_orderbook.clear();
+        self.pending_ob_drop.clear();
         self.last_cmd.clear();
     }
 }

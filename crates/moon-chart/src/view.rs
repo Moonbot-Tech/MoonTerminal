@@ -549,6 +549,9 @@ impl ChartView {
     /// (see moon-ui-gpui/src/panels/chart/mod.rs).
     /// Returns true if live was resumed.
     pub fn tick_auto_live(&mut self, now_ms: f64) -> bool {
+        if self.manual_persistent {
+            return false;
+        }
         if !self.follow && self.manual_until > 0.0 && now_ms >= self.manual_until {
             self.resume_live(now_ms);
             true
@@ -572,7 +575,7 @@ impl ChartView {
     }
 
     pub fn snap_to_live_if_near(&mut self, now_ms: f64, area_w: f32) -> bool {
-        if self.follow {
+        if self.follow || self.manual_persistent {
             return false;
         }
         let tolerance_ms =
