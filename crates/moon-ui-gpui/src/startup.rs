@@ -242,16 +242,37 @@ fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     ]
 }
 
-pub(crate) fn moon_theme_config_for(cfg: &AppConfig) -> MoonThemeConfig {
-    let mut theme = match cfg.ui_theme_mode {
+/// The MoonUI theme for one interface mode, with `ThemeMode` already set on it.
+///
+/// The ONE place our three modes map onto MoonUI's bundled themes. It is a separate function
+/// because there are two callers that cannot share a `&AppConfig`: the shell below, and the login
+/// window, which is drawn before any configuration has been loaded. Each used to carry its own
+/// copy of this match, and a copy is exactly what silently keeps two arms while the other grows a
+/// third.
+///
+/// Args:
+///     mode: Interface theme the user chose.
+///
+/// Returns:
+///     The bundled MoonUI config for that mode. Font delta and UI scale are the caller's to
+///     apply — they come from different sources on the two paths.
+pub(crate) fn moon_theme_config_for_mode(mode: UiThemeMode) -> MoonThemeConfig {
+    let mut theme = match mode {
         UiThemeMode::Dark => MoonThemeConfig::moon_terminal(),
+        UiThemeMode::Graphite => MoonThemeConfig::moon_graphite(),
         UiThemeMode::Light => MoonThemeConfig::moon_light(),
     };
-    theme.mode = match cfg.ui_theme_mode {
-        UiThemeMode::Dark => ThemeMode::Dark,
+    // Graphite is a dark theme, just a softer one, so it takes MoonUI's dark side. Everything
+    // downstream that asks "is this light?" measures the palette rather than reading this field.
+    theme.mode = match mode {
+        UiThemeMode::Dark | UiThemeMode::Graphite => ThemeMode::Dark,
         UiThemeMode::Light => ThemeMode::Light,
     };
     theme
+}
+
+pub(crate) fn moon_theme_config_for(cfg: &AppConfig) -> MoonThemeConfig {
+    moon_theme_config_for_mode(cfg.ui_theme_mode)
         .with_font_delta(cfg.ui_font_delta)
         .with_ui_scale(cfg.ui_scale)
 }

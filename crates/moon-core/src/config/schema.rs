@@ -121,12 +121,37 @@ pub fn clamp_chart_stack_height(value: u16) -> u16 {
     value.clamp(120, 2000)
 }
 
+/// Interface theme the user picked on the General tab.
+///
+/// THREE modes, but only TWO colour sets. `Graphite` is a middle theme — mid-tone neutral
+/// surfaces between `Dark`'s near-black and `Light` — and it shares the DARK set for badges,
+/// order styles, lines and the chart theme. Nothing here is a third table.
+///
+/// [`Self::is_light`] is the only sanctioned way to ask which set a mode draws. A bare equality
+/// test against the `Light` variant reads correctly today and then silently answers "not light,
+/// therefore dark" for a fourth variant added later — which is exactly how Graphite would have
+/// been handed the light set at half of its call sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UiThemeMode {
     Light,
+    /// Mid-tone neutral surfaces with light text; draws the DARK colour set.
+    Graphite,
     #[default]
     Dark,
+}
+
+impl UiThemeMode {
+    /// Whether this mode draws the LIGHT colour set.
+    ///
+    /// `Graphite` is dark-leaning and answers `false`, so every per-mode colour table
+    /// (`badges`, `orders`, `lines`, the chart theme) keeps its two entries.
+    ///
+    /// Returns:
+    ///     `true` only for [`UiThemeMode::Light`].
+    pub const fn is_light(self) -> bool {
+        matches!(self, UiThemeMode::Light)
+    }
 }
 
 /// Interface theme a profile receives when `settings.toml` has never been written.
@@ -314,7 +339,7 @@ pub struct SettingsFile {
     /// into 13 px at 1x without zooming the whole interface.
     #[serde(default = "default_ui_font_delta")]
     pub ui_font_delta: f32,
-    /// Dark/light MoonUI theme. This plaintext setting is neither a secret nor the chart theme.
+    /// Interface theme mode. Graphite shares dark colour data; this plaintext setting is not secret.
     #[serde(default)]
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale. It currently has no public control but is stored beside

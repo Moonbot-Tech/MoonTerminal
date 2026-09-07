@@ -30,6 +30,7 @@ mod shot;
 mod startup;
 mod strategies;
 mod theme;
+mod theme_selector;
 mod tuner;
 mod update;
 mod windowing;

@@ -13,10 +13,7 @@ use rust_i18n::t;
 
 use super::{SettingsView, color_row, section, separator, slider_row};
 use crate::Backend;
-use moon_core::{
-    config::{ChartTheme, UiThemeMode},
-    util::fmt,
-};
+use moon_core::{config::ChartTheme, util::fmt};
 
 /// Theme editor state with one retained control entity per field.
 pub(super) struct Iface {
@@ -45,10 +42,10 @@ pub(super) struct Iface {
     panel_bg: Entity<MoonColorPickerState>,
 }
 
-/// Bind a color picker to one field of the UI mode selected when Settings opened.
+/// Bind a colour picker to one field of the colour set active when its editor was built.
 ///
 /// Initialize from the current config or draft and write changes to the matching
-/// `Backend.preview.theme` variant for live application and backend notification, as in Lines.
+/// `Backend.preview.theme` entry for live application and backend notification, as in Lines.
 fn color_field(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -58,11 +55,16 @@ fn color_field(
 ) -> Entity<MoonColorPickerState> {
     let cur = {
         let b = backend.read(cx);
-        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
+        let is_light = b
+            .preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .ui_theme_mode
+            .is_light();
         get(b.preview.as_ref().unwrap_or(&b.config).theme.get(is_light))
     };
     super::draft_color(window, cx, cur, move |p, c| {
-        let is_light = p.ui_theme_mode == UiThemeMode::Light;
+        let is_light = p.ui_theme_mode.is_light();
         if get(p.theme.get(is_light)) != c {
             set(p.theme.get_mut(is_light), c);
             true
@@ -72,7 +74,7 @@ fn color_field(
     })
 }
 
-/// Bind an `f32` slider to a field of the selected UI-mode theme for live preview.
+/// Bind an `f32` slider to a field of the active colour-set theme for live preview.
 #[allow(clippy::too_many_arguments)]
 fn num_field(
     backend: &Entity<Backend>,
@@ -85,11 +87,16 @@ fn num_field(
 ) -> Entity<MoonSliderState> {
     let cur = {
         let b = backend.read(cx);
-        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
+        let is_light = b
+            .preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .ui_theme_mode
+            .is_light();
         get(b.preview.as_ref().unwrap_or(&b.config).theme.get(is_light))
     };
     super::draft_slider(cx, min, max, step, cur, move |p, f, _bcx| {
-        let is_light = p.ui_theme_mode == UiThemeMode::Light;
+        let is_light = p.ui_theme_mode.is_light();
         if get(p.theme.get(is_light)) != f {
             set(p.theme.get_mut(is_light), f);
             true
@@ -105,8 +112,8 @@ pub(super) fn build(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> Iface {
-    // Bind controls to the saved UI mode that was active when Settings opened, as in Lines. Saving
-    // a mode change and reopening Settings builds controls for the other variant.
+    // Bind controls to the draft's active colour set. Changing the mode rebuilds these controls so
+    // their retained widget state cannot keep editing the previous set.
     Iface {
         label_font_delta: num_field(
             backend,
@@ -241,7 +248,7 @@ impl SettingsView {
     /// Render the Interface tab for the portable `theme.toml` chart theme variant.
     ///
     /// Sections cover chart-label font, chart background/grid, crosshair, candles, order book, and
-    /// panels. Personal light/dark mode and UI font settings belong to General in `settings.toml`.
+    /// panels. Personal interface mode and UI font settings belong to General in `settings.toml`.
     ///
     /// Args:
     ///     cx: Settings context that supplies the active palette and display scale.

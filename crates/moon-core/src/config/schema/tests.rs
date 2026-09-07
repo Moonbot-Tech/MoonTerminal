@@ -82,3 +82,32 @@ fn a_core_issued_strategy_id_cannot_break_the_whole_settings_file() {
         );
     }
 }
+
+/// Catches dropping `config/schema.rs:UiThemeMode`'s `serde(rename_all = "lowercase")`.
+/// Without it, Graphite persists as `"Graphite"`, which the same build cannot read from settings.
+#[test]
+fn graphite_theme_mode_round_trips_as_the_lowercase_settings_value() {
+    let stored = SettingsFile {
+        ui_theme_mode: UiThemeMode::Graphite,
+        ..SettingsFile::default()
+    };
+    let persisted = toml::to_string(&stored).expect("settings file must serialize");
+    assert!(
+        persisted
+            .lines()
+            .any(|line| line == "ui_theme_mode = \"graphite\""),
+        "settings.toml must persist the lowercase Graphite spelling"
+    );
+    let reread: SettingsFile =
+        toml::from_str("ui_theme_mode = \"graphite\"").expect("stored graphite must load");
+    assert_eq!(reread.ui_theme_mode, UiThemeMode::Graphite);
+}
+
+/// Catches changing `config/schema.rs:UiThemeMode::is_light` to include Graphite.
+/// That would route Graphite through every light color branch in badges, orders, lines, and charts.
+#[test]
+fn graphite_is_dark_while_light_remains_the_only_light_mode() {
+    assert!(UiThemeMode::Light.is_light());
+    assert!(!UiThemeMode::Graphite.is_light());
+    assert!(!UiThemeMode::Dark.is_light());
+}

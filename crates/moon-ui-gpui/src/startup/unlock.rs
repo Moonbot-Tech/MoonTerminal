@@ -15,8 +15,8 @@
 //! with "ask the user", and asking needs a window.
 
 use gpui::*;
+use moon_core::config::AppConfig;
 use moon_core::config::crypto::AccessError;
-use moon_core::config::{AppConfig, UiThemeMode};
 
 use super::boot::{self, BootInput};
 use crate::window::login::{self, LoginOutcome, LoginStep};
@@ -143,17 +143,11 @@ fn fail_to_start(error: anyhow::Error, cx: &mut App) {
 /// Install the interface theme for a window shown before the configuration is available.
 ///
 /// Reads the same plaintext `settings.toml` values the shell uses, so the login window matches the
-/// user's dark/light choice and font size instead of flashing defaults and then re-themeing.
+/// user's theme choice and font size instead of flashing defaults and then re-themeing.
 fn install_login_theme(cx: &mut App) {
     let prefs = moon_core::config::presentation_prefs();
-    let mut theme = match prefs.ui_theme_mode {
-        UiThemeMode::Dark => moon_ui::MoonThemeConfig::moon_terminal(),
-        UiThemeMode::Light => moon_ui::MoonThemeConfig::moon_light(),
-    };
-    theme.mode = match prefs.ui_theme_mode {
-        UiThemeMode::Dark => moon_ui::ThemeMode::Dark,
-        UiThemeMode::Light => moon_ui::ThemeMode::Light,
-    };
+    // The mapping itself lives once, beside the shell's own call site.
+    let theme = super::moon_theme_config_for_mode(prefs.ui_theme_mode);
     rust_i18n::set_locale(prefs.language.code());
     moon_ui::MoonTheme::install_config(
         theme

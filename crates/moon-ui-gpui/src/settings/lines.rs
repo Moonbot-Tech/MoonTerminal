@@ -11,10 +11,7 @@ use moon_ui::{
 
 use super::{SettingsView, separator, slider_row};
 use crate::Backend;
-use moon_core::{
-    config::{OrdersStyle, UiThemeMode},
-    util::fmt,
-};
+use moon_core::{config::OrdersStyle, util::fmt};
 use rust_i18n::t;
 
 /// Order-style checkbox descriptor: id, localized label, getter, and setter.
@@ -38,7 +35,7 @@ struct LineEd {
     pending_color: Entity<MoonColorPickerState>,
 }
 
-/// Build a color picker for a field in the active theme's draft `OrdersStyle`.
+/// Build a colour picker for a field in the active colour set's draft `OrdersStyle`.
 fn ord_color(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -48,11 +45,16 @@ fn ord_color(
 ) -> Entity<MoonColorPickerState> {
     let cur = {
         let b = backend.read(cx);
-        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
+        let is_light = b
+            .preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .ui_theme_mode
+            .is_light();
         get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
     };
     super::draft_color(window, cx, cur, move |p, c| {
-        let is_light = p.ui_theme_mode == UiThemeMode::Light;
+        let is_light = p.ui_theme_mode.is_light();
         if get(p.orders.get(is_light)) != c {
             set(p.orders.get_mut(is_light), c);
             true
@@ -62,7 +64,7 @@ fn ord_color(
     })
 }
 
-/// Build a slider for an `f32` field in the active theme's draft `OrdersStyle`.
+/// Build a slider for an `f32` field in the active colour set's draft `OrdersStyle`.
 #[allow(clippy::too_many_arguments)]
 fn ord_slider(
     backend: &Entity<Backend>,
@@ -75,11 +77,16 @@ fn ord_slider(
 ) -> Entity<MoonSliderState> {
     let cur = {
         let b = backend.read(cx);
-        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
+        let is_light = b
+            .preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .ui_theme_mode
+            .is_light();
         get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
     };
     super::draft_slider(cx, min, max, step, cur, move |p, f, _bcx| {
-        let is_light = p.ui_theme_mode == UiThemeMode::Light;
+        let is_light = p.ui_theme_mode.is_light();
         if get(p.orders.get(is_light)) != f {
             set(p.orders.get_mut(is_light), f);
             true
@@ -175,8 +182,8 @@ pub(super) fn build(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> Lines {
-    // Edit the line set for the application's saved UI mode when Settings opens. Saving a mode
-    // change from General makes the other theme's line set active the next time Settings opens.
+    // Edit the draft's active colour set. Changing the mode rebuilds these controls so their
+    // retained widget state cannot keep editing the previous set.
     Lines {
         buy: line_ed!(backend, window, cx, buy),
         buy_short: line_ed!(backend, window, cx, buy_short),
@@ -235,7 +242,7 @@ pub(super) fn build(
 }
 
 impl SettingsView {
-    /// Build a checkbox for a boolean `OrdersStyle` field in the active draft theme.
+    /// Build a checkbox for a boolean `OrdersStyle` field in the active draft colour set.
     fn ord_check(
         &self,
         cx: &Context<Self>,
@@ -246,12 +253,16 @@ impl SettingsView {
     ) -> impl IntoElement {
         let cur = {
             let b = self.backend.read(cx);
-            let is_light =
-                b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
+            let is_light = b
+                .preview
+                .as_ref()
+                .unwrap_or(&b.config)
+                .ui_theme_mode
+                .is_light();
             get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
         };
         self.draft_checkbox(cx, id, cur, move |p, v| {
-            let is_light = p.ui_theme_mode == UiThemeMode::Light;
+            let is_light = p.ui_theme_mode.is_light();
             if get(p.orders.get(is_light)) != v {
                 set(p.orders.get_mut(is_light), v);
                 true

@@ -59,11 +59,19 @@ pub fn apply_local(
 fn apply_item(cfg: &mut AppConfig, item: &SettingChange) -> bool {
     match (&item.value, item.id.as_str()) {
         (PlannedValue::UiThemeLight(light), "ui.theme_mode") => {
-            cfg.ui_theme_mode = if *light {
-                UiThemeMode::Light
-            } else {
-                UiThemeMode::Dark
-            };
+            // The plan carries a theme as ONE BOOLEAN, so "dark" cannot say WHICH dark theme it
+            // means. Writing `Dark` unconditionally would convert Graphite to Dark — and it would
+            // do it on a row the preview marks `same` (`plan.rs:145` compares the same boolean),
+            // so the user is told nothing changes and then loses their theme. Move the mode only
+            // when the colour SET actually differs; importing "dark" onto a mode that already
+            // draws the dark set is genuinely a no-op.
+            if *light != cfg.ui_theme_mode.is_light() {
+                cfg.ui_theme_mode = if *light {
+                    UiThemeMode::Light
+                } else {
+                    UiThemeMode::Dark
+                };
+            }
             true
         }
         (PlannedValue::SplitParts(parts), "hotkey.split_parts") => {
