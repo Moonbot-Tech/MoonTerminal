@@ -983,6 +983,21 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
     }
 
+    /// Edit the core's temporary blacklist as a delta: set `adds` to their durations, drop
+    /// `removes`. See [`CoreCmd::SetTempBlacklist`] for why this is not a whole-list write.
+    pub fn set_temp_blacklist(
+        &self,
+        core: CoreId,
+        adds: Vec<(String, std::time::Duration)>,
+        removes: Vec<String>,
+    ) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::SetTempBlacklist { adds, removes },
+            "set temp blacklist",
+        )
+    }
+
     /// Locally exclude blacklisted coins from the core's Active Lib market-delta calculation.
     pub fn set_exclude_blacklisted_delta(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(

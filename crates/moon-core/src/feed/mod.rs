@@ -599,6 +599,19 @@ pub enum CoreCmd {
     /// `use_coins_black_list`/`coins_black_list_text` in the retained settings snapshot and sends
     /// it in full.
     SetBlacklist { on: bool, text: String },
+    /// Edit the core's TEMPORARY blacklist (`TempBL`) as a DELTA, not as a list.
+    ///
+    /// The wire has no add-one command — the whole settings snapshot is replaced — but the list is
+    /// not this terminal's alone: the core adds rows itself, for a cloud signal or an exchange rate
+    /// limit. Sending a list assembled in the UI would therefore drop whatever the core wrote in
+    /// between; the feed merges these entries into the snapshot it is about to send instead.
+    ///
+    /// `adds` sets each symbol's remaining time to exactly the given duration, replacing whatever
+    /// it had; `removes` drops the symbol. Symbols are matched case-insensitively.
+    SetTempBlacklist {
+        adds: Vec<(String, std::time::Duration)>,
+        removes: Vec<String>,
+    },
     /// Locally exclude blacklisted coins from the Active Lib market-delta calculation. This is
     /// not a wire settings field; it uses moonproto
     /// `settings().set_exclude_blacklisted_markets_from_exchange_delta`.

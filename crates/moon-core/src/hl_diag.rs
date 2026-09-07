@@ -35,6 +35,5 @@ pub fn line(msg: &str) {
     if !enabled() {
         return;
     }
-    let (date, hms) = crate::applog::split_unix_ms(crate::util::time::now_unix_ms_i64());
-    crate::diagnostics::channel_line("hl_limit_diag.log", &format!("{date} {hms} {msg}"));
+    crate::diagnostics::stamped_line("hl_limit_diag.log", msg);
 }

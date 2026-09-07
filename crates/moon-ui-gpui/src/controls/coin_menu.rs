@@ -4,9 +4,12 @@
 //! strategy (`strat_id`), an order (`order_uid` and `side`), and the source panel filter's selected
 //! cores.
 //!
-//! Every blacklist action reads the current list, appends the token with deduplication, and sends
-//! the entire list. MoonProto has no add-one-token command for either the core-wide blacklist via
-//! `set_blacklist` or the strategy blacklist stored in `CoinsBlackList` via `edit_strategies`.
+//! MoonProto has no add-one-token command for any of these lists. The PERMANENT ones are therefore
+//! rewritten whole: each action reads the current list, appends the token with deduplication, and
+//! sends all of it, for the core-wide list via `set_blacklist` and for the strategy list stored in
+//! `CoinsBlackList` via `edit_strategies`. The TEMPORARY list cannot be written that way — the core
+//! adds rows to it itself — so it travels as a delta the feed merges at send time; see
+//! [`blacklist`] and `moon_core::feed::CoreCmd::SetTempBlacklist`.
 
 use gpui::*;
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowExt as _};
@@ -43,6 +46,9 @@ pub enum CoinMenuOrigin {
 
 /// Context for the clicked token. Each caller supplies the data available at its location, and the
 /// menu uses field presence to determine which entries to show.
+///
+/// `Clone` because opening a branch REBUILDS this menu — see [`open_coin_menu`].
+#[derive(Clone)]
 pub struct CoinMenuCtx {
     pub core: CoreId,
     /// Source core name used in labels and the core-blacklist entry.
@@ -79,6 +85,21 @@ pub struct CoinMenuCtx {
     pub trailing: Vec<MoonMenuItem>,
 }
 
+/// Which branch of this menu is currently expanded, if any.
+///
+/// MoonUI draws a nested level only beside a row the CALLER marked selected — the library keeps no
+/// hover or keyboard state of its own (`dropdown/popup.rs`: `if selected && has_submenu`), so a
+/// branch that nobody marks is a chevron that expands nothing. Expansion is therefore driven from
+/// here: clicking a branch row reopens this menu with that branch marked, and clicking it again
+/// folds it back. Logged in `docs-internal/FORK_BUGS.md`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoinMenuBranch {
+    /// The permanent core/strategy blacklists.
+    Blacklist,
+    /// The temporary, expiring blacklist.
+    TempBlacklist,
+}
+
 /// Opens the shared token context menu at window-coordinate `pos`, usually `event.position`.
 ///
 /// Opens nothing when the context yields no entry at all — an empty popup reads as a bug.
@@ -89,7 +110,19 @@ pub fn open_coin_menu(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let items = build_items(ctx, &backend, cx);
+    open_coin_menu_branch(ctx, backend, pos, None, window, cx);
+}
+
+/// The same menu with one branch expanded, which is how a branch row reopens it.
+pub(crate) fn open_coin_menu_branch(
+    ctx: CoinMenuCtx,
+    backend: Entity<Backend>,
+    pos: Point<Pixels>,
+    expanded: Option<CoinMenuBranch>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let items = build_items(ctx, &backend, pos, expanded, cx);
     if items.is_empty() {
         return;
     }
@@ -109,11 +142,19 @@ pub fn open_coin_menu(
 /// Args:
 ///     ctx: Captured row or chart context, including optional workspace mutation authority.
 ///     backend: Shared live terminal and workspace state.
+///     pos: Where this menu was opened, so an expanding branch can reopen it in the same place.
+///     expanded: Branch currently opened beside the menu, or `None` while it is folded.
 ///     cx: Application context used to read initial checked-state snapshots.
 ///
 /// Returns:
 ///     Navigation and currently applicable mutation entries for the clicked token or order.
-fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
+fn build_items(
+    ctx: CoinMenuCtx,
+    backend: &Entity<Backend>,
+    pos: Point<Pixels>,
+    expanded: Option<CoinMenuBranch>,
+    cx: &App,
+) -> Vec<MoonMenuItem> {
     let b = backend.read(cx);
     let core = ctx.core;
     let coin = ctx.coin.clone();
@@ -198,89 +239,11 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
             items.push(MoonMenuItem::separator());
         }
 
-        // Add to the current core's global blacklist.
-        let (_, cur_text) = core_blacklist(b, core);
-        let in_core = blacklist_contains(&cur_text, &coin);
-        {
-            let backend_bl = backend.clone();
-            let coin_c = coin.clone();
-            let workspace_group = ctx.workspace_group.clone();
-            items.push(
-                MoonMenuItem::with_key(
-                    "coin-bl-core",
-                    t!("coin_menu.bl_core", core = ctx.core_name.clone()).to_string(),
-                )
-                .checked(in_core)
-                .on_click(move |_, window, app| {
-                    window.close_context_menu(app);
-                    backend_bl.update(app, |b, _| {
-                        if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core]) {
-                            add_to_core_blacklist(b, core, &coin_c);
-                        }
-                    });
-                }),
-            );
-        }
-
-        // Add to every core selected in the panel filter, but only when more than one is selected.
-        if ctx.selected_cores.len() > 1 {
-            let cores = ctx.selected_cores.clone();
-            let all_in = cores
-                .iter()
-                .all(|&c| blacklist_contains(&core_blacklist(b, c).1, &coin));
-            let backend_m = backend.clone();
-            let coin_m = coin.clone();
-            let workspace_group = ctx.workspace_group.clone();
-            items.push(
-                MoonMenuItem::with_key(
-                    "coin-bl-cores",
-                    t!("coin_menu.bl_cores", n = cores.len()).to_string(),
-                )
-                .checked(all_in)
-                .on_click(move |_, window, app| {
-                    window.close_context_menu(app);
-                    backend_m.update(app, |b, _| {
-                        if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
-                            return;
-                        }
-                        for &c in &cores {
-                            add_to_core_blacklist(b, c, &coin_m);
-                        }
-                    });
-                }),
-            );
-        }
-
-        // Add to the order strategy's blacklist only when the strategy is known and its schema contains
-        // `CoinsBlackList`; otherwise the view editor would silently discard the field edit.
-        if let Some(sid) = ctx.strat_id {
-            if strategy_has_blacklist_field(b, core, sid) {
-                let in_strat = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
-                let label = match ctx.strat_name.as_deref().filter(|n| !n.is_empty()) {
-                    Some(name) => t!("coin_menu.bl_strategy", name = name.to_string()).to_string(),
-                    None => t!("coin_menu.bl_strategy", name = sid.to_string()).to_string(),
-                };
-                let backend_s = backend.clone();
-                let coin_s = coin.clone();
-                let workspace_group = ctx.workspace_group.clone();
-                items.push(
-                    MoonMenuItem::with_key("coin-bl-strat", label)
-                        .checked(in_strat)
-                        .on_click(move |_, window, app| {
-                            window.close_context_menu(app);
-                            backend_s.update(app, |b, _| {
-                                if workspace_action_allows_cores(
-                                    b,
-                                    workspace_group.as_deref(),
-                                    &[core],
-                                ) && strategy_has_blacklist_field(b, core, sid)
-                                {
-                                    add_to_strategy_blacklist(b, core, sid, &coin_s);
-                                }
-                            });
-                        }),
-                );
-            }
+        items.push(permanent_blacklist_item(
+            &ctx, b, backend, &coin, pos, expanded,
+        ));
+        if let Some(item) = temp_blacklist_item(&ctx, b, backend, pos, expanded) {
+            items.push(item);
         }
     } // end of the token-dependent blacklist actions
 
@@ -558,6 +521,10 @@ fn blacklist_add(text: &str, coin: &str) -> String {
         format!("{base},{coin}")
     }
 }
+
+mod blacklist;
+
+use blacklist::{permanent_blacklist_item, temp_blacklist_item};
 
 #[cfg(test)]
 mod tests;

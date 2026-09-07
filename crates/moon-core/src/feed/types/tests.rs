@@ -1,4 +1,7 @@
-use super::{ApiKeyExpiry, CoreStartupState, CoreStartupStatus, DetectRow};
+use super::{
+    ApiKeyExpiry, CoreStartupState, CoreStartupStatus, DetectRow, TEMP_BLACKLIST_MAX,
+    temp_blacklist_remaining,
+};
 
 /// Milliseconds in a day, for readable fixtures.
 const DAY_MS: i64 = 86_400_000;
@@ -342,4 +345,33 @@ fn zero_keep_in_chart_means_forever() {
 fn nonzero_keep_in_chart_is_seconds() {
     assert_eq!(detect_row(60).keep_in_chart_ttl_ms(), 60_000.0);
     assert_eq!(detect_row(1).keep_in_chart_ttl_ms(), 1_000.0);
+}
+
+/// Regression target: calling moonproto's own `remaining_duration()` instead of this conversion.
+/// `TempBLTimes` is decoded as a raw `f64::from_bits` of whatever the packet carried, and that
+/// method guards NaN and negatives but not overflow — so a corrupt value reaches
+/// `Duration::from_secs_f64` and panics on the per-core feed thread, on every settings echo.
+#[test]
+fn a_temp_blacklist_remainder_is_never_trusted() {
+    use std::time::Duration;
+
+    assert_eq!(
+        temp_blacklist_remaining(0.25),
+        Duration::from_secs(6 * 60 * 60),
+        "a day fraction is hours"
+    );
+    for unusable in [f64::NAN, f64::NEG_INFINITY, -1.0, 0.0] {
+        assert_eq!(
+            temp_blacklist_remaining(unusable),
+            Duration::ZERO,
+            "{unusable} is not a ban that is still running"
+        );
+    }
+    for absurd in [f64::INFINITY, 1e18, f64::MAX] {
+        assert_eq!(
+            temp_blacklist_remaining(absurd),
+            TEMP_BLACKLIST_MAX,
+            "{absurd} is a corrupt packet, and must not panic or overflow"
+        );
+    }
 }

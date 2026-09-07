@@ -33,9 +33,6 @@ fn dedup_case_insensitive() {
 fn shared_menu_mutations_revalidate_before_their_first_side_effect() {
     let source = include_str!("../coin_menu.rs");
     let cases = [
-        ("\"coin-bl-core\"", "add_to_core_blacklist(b, core"),
-        ("\"coin-bl-cores\"", "for &c in &cores"),
-        ("\"coin-bl-strat\"", "add_to_strategy_blacklist(b, core"),
         ("\"coin-order-edit\"", "crate::panels::open_order_edit("),
         ("\"coin-order-join\"", "b.session.join_sells("),
         ("\"coin-order-split\"", "b.session.split_order("),
@@ -65,26 +62,73 @@ fn shared_menu_mutations_revalidate_before_their_first_side_effect() {
     }
 }
 
-/// `coin_menu.rs:coin-bl-strat` must re-read the strategy and schema inside its callback; removing
-/// the dispatch-time check sends a stale empty blacklist edit after the strategy disappears.
+/// Every blacklist row — permanent or temporary — must revalidate the workspace inside its Backend
+/// update and BEFORE it writes anything.
+///
+/// The rows share two dispatchers rather than repeating the guard once per row, so this is where
+/// the ordering now lives: `target_row` for the permanent list, `hour_rows` and the lift row for
+/// the temporary one.
+///
+/// Mutation: move either guard after its write. A menu opened on core 7 could then ban a coin on
+/// core 9 after Auto switched the group under it.
 #[test]
-fn strategy_blacklist_callback_revalidates_live_identity_and_schema() {
-    let source = include_str!("../coin_menu.rs");
-    let callback = source
-        .split_once("\"coin-bl-strat\"")
-        .expect("strategy blacklist action must exist")
-        .1;
-    let update = callback
-        .find(".update(app, |b, _|")
-        .expect("callback must re-enter Backend");
-    let schema_guard = callback
-        .find("strategy_has_blacklist_field(b, core, sid)")
-        .expect("callback must revalidate the exact strategy schema");
-    let effect = callback
-        .find("add_to_strategy_blacklist(b, core, sid")
-        .expect("callback must retain its intended edit");
+fn blacklist_rows_revalidate_before_they_write() {
+    let source = include_str!("blacklist.rs");
+    let cases = [
+        ("fn target_row(", "write(b, &cores)"),
+        ("fn hour_rows(", "send_temp_ban("),
+        ("\"tbl-clear\"", "send_temp_ban("),
+    ];
 
-    assert!(update < schema_guard && schema_guard < effect);
+    for (anchor, side_effect) in cases {
+        let body = source
+            .split_once(anchor)
+            .unwrap_or_else(|| panic!("missing blacklist dispatcher {anchor}"))
+            .1;
+        let update = body
+            .find(".update(app, |b, _|")
+            .unwrap_or_else(|| panic!("{anchor} must re-read Backend authority"));
+        let guard = body
+            .find("workspace_action_allows_cores(")
+            .unwrap_or_else(|| panic!("{anchor} must validate its captured core targets"));
+        let effect = body
+            .find(side_effect)
+            .unwrap_or_else(|| panic!("{anchor} lost its expected side effect"));
+
+        assert!(
+            update < guard && guard < effect,
+            "stale-action guard moved in {anchor}"
+        );
+    }
+
+    // And every permanent-list row goes through that one dispatcher rather than writing directly.
+    let compact: String = source.chars().filter(|ch| !ch.is_whitespace()).collect();
+    for key in ["coin-bl-core", "coin-bl-cores", "coin-bl-strat"] {
+        assert!(
+            compact.contains(&format!("target_row(\"{key}\"")),
+            "{key} must be built by target_row, which is where the guard lives"
+        );
+    }
+}
+
+/// The strategy row must re-read the schema inside its own write, not only when the menu is built;
+/// removing that check sends a stale field edit after the strategy is gone, which the view editor
+/// discards without a word.
+#[test]
+fn strategy_blacklist_row_revalidates_live_identity_and_schema() {
+    let source = include_str!("blacklist.rs");
+    let row = source
+        .split_once("\"coin-bl-strat\"")
+        .expect("strategy blacklist row must exist")
+        .1;
+    let schema_guard = row
+        .find("strategy_has_blacklist_field(b, core, sid)")
+        .expect("the write must revalidate the exact strategy schema");
+    let effect = row
+        .find("add_to_strategy_blacklist(b, core, sid")
+        .expect("the write must retain its intended edit");
+
+    assert!(schema_guard < effect);
 }
 
 /// `CoinMenuCtx::workspace_group` must distinguish group-owned panels and charts from intentionally
