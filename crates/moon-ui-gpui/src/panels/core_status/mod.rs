@@ -310,6 +310,14 @@ pub struct CoreStatusView {
     /// headings as lines of their own and both presentations re-sort under the user.
     /// Pruned against the visible rows on every cache rebuild (`cache::rebuild_cache`).
     core_selection: RowSelection<CoreId>,
+    /// Core the three Problems actions are narrowed to, or `None` for the panel's whole scope.
+    ///
+    /// Written by the row click, which resolves its index against the list it was drawn from while
+    /// that list is still the one on screen. Held as a CORE for the same reason: the finding list
+    /// is rebuilt from live core data on every repaint, so a stored index outlives the row it
+    /// named — one finding appearing or clearing above it re-points it at a different core, and
+    /// the reset it narrows cannot be undone.
+    problems_picked: Option<CoreId>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -475,6 +483,7 @@ impl CoreStatusView {
             group,
             sel_cores: HashSet::new(),
             core_selection: RowSelection::default(),
+            problems_picked: None,
             last_repaint_ms: 0,
             last_update_rev: 0,
             last_history_rev: 0,
@@ -926,30 +935,13 @@ impl Render for CoreStatusView {
                 // Everything the arm needs is collected inside this block so the backend borrow
                 // ENDS before the read-mark, which needs `&mut self`. The alternative — marking up
                 // in `render` — is what let the cap consume rows the surface never drew.
-                let (rows, silent, truncated, core_names, cores, gate, answered, zone) = {
+                let (rows, core_names, scope, picked, zone) = {
                     let b = self.backend.read(cx);
-                    let scope = self.effective_scope(b);
+                    let effective = self.effective_scope(b);
                     // Scope order, then the core's own listing order inside each core. Neither is
                     // re-sorted: the core chose the order of its findings, and inventing another one
                     // here would present a ranking the core never made.
-                    let scope_ids = scope.ids();
-                    // Exactly one EXPLICITLY selected core, and only if the resolved scope still holds
-                    // it — a stale selection must not address a core this panel no longer covers.
-                    let chosen = match self.sel_cores.len() {
-                        1 => self
-                            .sel_cores
-                            .iter()
-                            .copied()
-                            .next()
-                            .filter(|core| scope_ids.contains(core)),
-                        _ => None,
-                    };
-                    let ready = |core: CoreId| {
-                        matches!(
-                            b.session.store().core(core).map(|data| data.status.clone()),
-                            Some(moon_core::feed::ConnStatus::Ready)
-                        )
-                    };
+                    let scope_ids = effective.ids();
                     let core_names: HashMap<CoreId, String> = b
                         .config
                         .servers
@@ -958,30 +950,48 @@ impl Render for CoreStatusView {
                         .collect();
                     let mut rows: Vec<problems::ProblemRow> = Vec::new();
                     let mut silent: Vec<String> = Vec::new();
+                    // `matched` counts the cores in scope whatever their connection, `targets` only
+                    // the reachable ones: the command channel outlives a disconnect, so a command
+                    // queued for a core that is down waits there and fires on reconnect — for the
+                    // reset, against findings gathered during the outage that nobody ever saw. The
+                    // difference is what lets a shut gate say "the core you picked is down" rather
+                    // than "pick one".
+                    let mut matched = 0usize;
+                    let mut matched_only = None;
+                    let mut targets = 0usize;
+                    // The same dash the table uses for an unnamed core, so one core cannot appear
+                    // under two different spellings on the one surface.
+                    let name_of = |core: CoreId| {
+                        core_names
+                            .get(&core)
+                            .cloned()
+                            .unwrap_or_else(|| "—".to_string())
+                    };
                     for core in scope_ids.iter().copied() {
-                        // A core with no retained state at all has said nothing, which is the same
-                        // "not known" case as one that answered without support: named, never clean.
-                        let supported = b
-                            .session
-                            .store()
-                            .core(core)
-                            .is_some_and(|data| data.problems.supported);
-                        if !supported {
-                            // The same dash the table uses for an unnamed core, so one core cannot
-                            // appear under two different spellings on the one surface.
-                            silent.push(
-                                core_names
-                                    .get(&core)
-                                    .cloned()
-                                    .unwrap_or_else(|| "—".to_string()),
-                            );
-                            continue;
-                        }
-                        // Not looked up twice: `supported` above proves the entry exists, and this is
-                        // the same borrow rather than a second search.
+                        // Counted for EVERY core in scope, before anything can skip the rest of the
+                        // body. A core with no store entry is still a core this panel covers, and
+                        // counting only the ones that have connected would let a twenty-six-core
+                        // scope report "exactly one core" and open the test on a core nobody chose.
+                        matched += 1;
+                        matched_only = (matched == 1).then_some(core);
+                        // ONE lookup per core: this loop runs on every repaint of the arm, and the
+                        // store search is the expensive half of it.
                         let Some(data) = b.session.store().core(core) else {
+                            // No retained state at all is the same "not known" case as an answer
+                            // without support: named, never read as clean.
+                            silent.push(name_of(core));
                             continue;
                         };
+                        // A core that has never delivered a list is still one all three actions
+                        // must reach — see `ProblemsScope::targets` for why `supported` does not
+                        // narrow this.
+                        if moon_core::session::CoreRunState::from_core(data).online {
+                            targets += 1;
+                        }
+                        if !data.problems.supported {
+                            silent.push(name_of(core));
+                            continue;
+                        }
                         rows.extend(data.problems.items.iter().map(|problem| {
                             problems::ProblemRow {
                                 core,
@@ -994,30 +1004,63 @@ impl Render for CoreStatusView {
                     // than silently shortened, for the same reason a silent core is.
                     let truncated = rows.len() > problems::PROBLEM_LIST_LIMIT;
                     rows.truncate(problems::PROBLEM_LIST_LIMIT);
-                    (
-                        rows,
+                    // A CLICKED FINDING narrows all three actions to its core, and that pick is
+                    // the operator's own — set by the click, held as a CORE, never re-derived from
+                    // a row index into a list this arm rebuilds every repaint. No pick keeps the
+                    // whole scope, which is this panel's own rule for a bulk command
+                    // (`selected_or_visible`).
+                    //
+                    // Dropped as soon as the surface can no longer SHOW it. Clicking a row of its
+                    // core is the only gesture that clears a pick, so a pick whose findings have
+                    // all gone — reset on the core, or its `supported` flipped back to unknown —
+                    // would sit there narrowing an irreversible action with nothing on screen
+                    // saying so and no way to undo it. Losing it widens the actions back to the
+                    // scope instead, which the tooltip counts and the confirm names core by core.
+                    // Checked against the DRAWN rows, so the cap cannot keep a pick alive that the
+                    // operator cannot reach either.
+                    let picked = self
+                        .problems_picked
+                        .filter(|core| rows.iter().any(|row| row.core == *core));
+                    // One store lookup, only on the frames where a pick is live.
+                    let (matched, matched_only, targets) = match picked {
+                        None => (matched, matched_only, targets),
+                        Some(core) => {
+                            let online = b.session.store().core(core).is_some_and(|d| {
+                                moon_core::session::CoreRunState::from_core(d).online
+                            });
+                            (1, Some(core), usize::from(online))
+                        }
+                    };
+                    let scope = problems::ProblemsScope {
+                        cores: scope_ids.len(),
                         silent,
                         truncated,
-                        core_names,
-                        scope_ids.len(),
-                        // The gate reads the operator's OWN selection, not the resolved scope: a
-                        // one-core group under "All", or a pinned Auto workspace, both resolve to a
-                        // single id nobody picked, and an irreversible action must not ride on that
-                        // coincidence. `sel_cores` is the explicit Classic pick and nothing else.
-                        match chosen {
-                            None => problems::ActionGate::NoSingleChoice,
-                            Some(core) if !ready(core) => problems::ActionGate::NotConnected,
-                            Some(core) => problems::ActionGate::Ready(core),
+                        // The test needs ONE core and says which reason it lacks: nothing narrowed
+                        // to one, or the one it has is down.
+                        actions: match (matched, matched_only, targets) {
+                            (1, Some(core), 1) => problems::ActionGate::Ready(core),
+                            (1, Some(_), _) => problems::ActionGate::NotConnected,
+                            _ => problems::ActionGate::NoSingleChoice,
                         },
-                        chosen.is_some_and(|core| {
-                            b.session
-                                .store()
-                                .core(core)
-                                .is_some_and(|data| data.problems.supported)
-                        }),
+                        // A live pick answers for ITSELF, so a scope that still holds connected
+                        // cores must not be reported as offline just because the picked one is —
+                        // that is the conflation the two refusals exist to keep apart.
+                        picked: picked.is_some(),
+                        targets,
+                    };
+                    (
+                        rows,
+                        core_names,
+                        scope,
+                        picked,
                         crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
                     )
                 };
+                // A pick whose core left the scope is dropped for good, not just for this frame:
+                // left behind, it would silently re-arm the moment that core came back.
+                if self.problems_picked != picked {
+                    self.problems_picked = picked;
+                }
                 // Drawing the findings IS looking at them — the News panel's rule, and for its
                 // reason. The window-active guard is what stops the badge being consumed unseen: an
                 // inactive window still repaints on the shell's clock tick, and "the tab was in
@@ -1029,13 +1072,8 @@ impl Render for CoreStatusView {
                     "core-status-problems",
                     Rc::new(rows),
                     Rc::new(core_names),
-                    &problems::ProblemsScope {
-                        cores,
-                        silent,
-                        truncated,
-                        actions: gate,
-                        answered,
-                    },
+                    &scope,
+                    picked,
                     &self.problems_table_state,
                     zone,
                     cx,

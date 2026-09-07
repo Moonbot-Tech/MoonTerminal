@@ -918,51 +918,115 @@ core_status.problem_cat.other:
   en: "Other"
   es: "Otro"
 
-# --- Problems mode: the two per-core diagnostic actions ---
+# --- Problems mode: the three diagnostic actions ---
+# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+#
 # A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
-# channel end to end. It leaves a row behind that only "clear" removes, which is why the pair ships
-# together.
+# channel end to end. It leaves a row behind that only the reset removes, which is why that pair
+# ships together.
 core_status.problems_test:
   ru: "Проверить канал"
   en: "Test the channel"
   es: "Probar el canal"
+# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# window belongs to one core, so "all" there means all of that core's findings; this panel spans a
+# fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
+# picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how
+# many cores that is.
 core_status.problems_clear:
-  ru: "Очистить"
-  en: "Clear"
-  es: "Borrar"
-# Both actions are per-core on the wire and neither has a sane fleet-wide form, so they need one
-# core chosen in the panel's own selector.
+  ru: "Сбросить"
+  en: "Reset"
+  es: "Restablecer"
+core_status.problems_test_tip:
+  ru: "Публикует тестовый факт через собственный детектор ядра — примерно две секунды. Доказывает весь путь: детектор, провод, проекция, панель."
+  en: "Publishes a test fact through the core's own detector — about two seconds. It proves the whole path: detector, wire, projection, panel."
+  es: "Publica un hecho de prueba mediante el propio detector del núcleo — unos dos segundos. Demuestra todo el recorrido: detector, cable, proyección, panel."
+core_status.problems_refresh:
+  ru: "Обновить"
+  en: "Refresh"
+  es: "Actualizar"
+# Said out loud because the label promises a round trip the protocol cannot make: a core pushes its
+# list, nothing can ask for one. Saying so here is cheaper than an operator concluding the button is
+# broken when a stale row does not move.
+core_status.problems_refresh_tip:
+  ru: "Перечитывает то, что успели прислать ядра на связи (%{cores}). Щёлкни строку, чтобы перечитать только её ядро. Запросить свежий список нельзя: в протоколе такой команды нет — ядро присылает его само, при подключении и когда его детекторы список меняют. Помогает после рестарта ядра, когда старые строки уже не про него."
+  en: "Re-reads whatever the connected cores (%{cores}) have sent so far. Click a row to re-read only that core. A fresh list cannot be requested: the protocol has no such command — a core sends one itself, on connection and whenever its detectors change it. Worth pressing after a core restart, when the old rows are no longer about it."
+  es: "Vuelve a leer lo que hayan enviado los núcleos conectados (%{cores}). Haz clic en una fila para releer solo ese núcleo. No se puede pedir una lista nueva: el protocolo no tiene ese comando — el núcleo la envía por sí mismo, al conectar y cuando sus detectores la cambian. Útil tras reiniciar un núcleo, cuando las filas antiguas ya no hablan de él."
+# The blast radius, stated BEFORE the dialog: an operator who picked no core is acting on the whole
+# scope, and that is the difference between a tidy-up and a fleet-wide loss.
+# The one-core forms, for when a clicked finding has narrowed the action. The scope-wide wording
+# would state a falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would
+# keep advising a click that, in this state, cancels the pick instead of making one.
+core_status.problems_clear_tip_one:
+  ru: "Сбросит диагностики выбранного ядра — необратимо и для всех терминалов. Щёлкни его строку ещё раз, чтобы вернуться ко всей области"
+  en: "Resets the selected core's diagnostics — irreversibly, and for every terminal. Click its row again to go back to the whole scope"
+  es: "Restablece los diagnósticos del núcleo seleccionado — de forma irreversible y para todos los terminales. Haz clic en su fila otra vez para volver a todo el ámbito"
+core_status.problems_refresh_tip_one:
+  ru: "Перечитывает то, что успело прислать выбранное ядро. Запросить свежий список нельзя: в протоколе такой команды нет. Щёлкни его строку ещё раз, чтобы вернуться ко всей области"
+  en: "Re-reads whatever the selected core has sent so far. A fresh list cannot be requested: the protocol has no such command. Click its row again to go back to the whole scope"
+  es: "Vuelve a leer lo que haya enviado el núcleo seleccionado. No se puede pedir una lista nueva: el protocolo no tiene ese comando. Haz clic en su fila otra vez para volver a todo el ámbito"
+core_status.problems_clear_tip:
+  ru: "Сбросит диагностики. Ядер на связи: %{cores}. Необратимо и для всех терминалов. Щёлкни строку, чтобы сбросить только её ядро"
+  en: "Resets the diagnostics. Connected cores: %{cores}. Irreversible, and for every terminal. Click a row to reset only that core"
+  es: "Restablece los diagnósticos. Núcleos conectados: %{cores}. Irreversible y para todos los terminales. Haz clic en una fila para restablecer solo ese núcleo"
+# The test is per-core on the wire and has no fleet-wide form worth having: publishing a test fact
+# on two hundred cores litters two hundred cores. So it alone needs one core named.
 core_status.problems_pick_core:
-  ru: "Выбери ровно одно ядро в селекторе панели (в режиме Авто он закреплён — переключись на Классику)"
-  en: "Select exactly one core in the panel's selector (it is pinned in Auto mode — switch to Classic)"
-  es: "Selecciona exactamente un núcleo en el selector del panel (está fijado en modo Auto — cambia a Clásico)"
-# The command channel outlives the connection: a command queued for a core that is down waits there
-# and fires on the next reconnect, which for the clear means destroying findings from the outage.
+  ru: "Тест шлётся на одно ядро: щёлкни строку его проблемы в таблице — или сузь область панели до одного ядра"
+  en: "The test goes to one core: click that core's finding in the table — or narrow the panel's scope to a single core"
+  es: "La prueba va a un solo núcleo: haz clic en su hallazgo en la tabla — o reduce el ámbito del panel a un único núcleo"
+core_status.problems_picked_offline:
+  ru: "Выбранное ядро не на связи — команда дождалась бы его возвращения"
+  en: "The selected core is offline — the command would wait for it to come back"
+  es: "El núcleo seleccionado está desconectado — el comando esperaría su regreso"
+core_status.problems_no_online:
+  ru: "В области панели нет ядер на связи"
+  en: "No core in the panel's scope is connected"
+  es: "Ningún núcleo del ámbito del panel está conectado"
+# Guards the TEST alone. The command channel outlives the connection, so a queued test would fire on
+# the next reconnect and publish its fact at some unannounced later moment, on a core the operator
+# stopped looking at hours ago.
 core_status.problems_core_offline:
-  ru: "Ядро не на связи — команда дождалась бы переподключения и стёрла бы то, что накопилось за простой"
-  en: "The core is offline — the command would wait for its reconnect and wipe what accumulated during the outage"
-  es: "El núcleo está desconectado — el comando esperaría su reconexión y borraría lo acumulado durante la caída"
-core_status.problems_clear_nothing:
-  ru: "Это ядро ещё не присылало список — очищать нечего"
-  en: "This core has not delivered a list yet — nothing to clear"
-  es: "Este núcleo aún no ha enviado una lista — nada que borrar"
+  ru: "Ядро не на связи — тест дождался бы переподключения и опубликовал бы факт неизвестно когда"
+  en: "The core is offline — the test would wait for its reconnect and publish its fact at some unannounced later moment"
+  es: "El núcleo está desconectado — la prueba esperaría su reconexión y publicaría su hecho en un momento posterior no anunciado"
 core_status.problems_test_title:
   ru: "Отправить тестовую диагностику?"
   en: "Send a test diagnostic?"
   es: "¿Enviar un diagnóstico de prueba?"
 # The consequence is the whole reason this action is confirmed at all.
 core_status.problems_test_q:
-  ru: "Ядро %{core} опубликует тестовый факт через свой обычный детектор — примерно две секунды. Строка останется на ядре, и убрать её можно ТОЛЬКО полной очисткой, которая заодно снесёт настоящие находки этого ядра."
-  en: "Core %{core} will publish a test fact through its own detector — about two seconds. The row stays on the core, and the ONLY way to remove it is the full clear, which also destroys that core's real findings."
-  es: "El núcleo %{core} publicará un hecho de prueba mediante su propio detector — unos dos segundos. La fila permanece en el núcleo y la ÚNICA forma de quitarla es el borrado completo, que también destruye los hallazgos reales de ese núcleo."
+  ru: "Ядро %{core} опубликует тестовый факт через свой обычный детектор — примерно две секунды. Строка останется на ядре, и убрать её можно ТОЛЬКО сбросом, который заодно снесёт настоящие находки этого ядра."
+  en: "Core %{core} will publish a test fact through its own detector — about two seconds. The row stays on the core, and the ONLY way to remove it is the reset, which also destroys that core's real findings."
+  es: "El núcleo %{core} publicará un hecho de prueba mediante su propio detector — unos dos segundos. La fila permanece en el núcleo y la ÚNICA forma de quitarla es el restablecimiento, que también destruye los hallazgos reales de ese núcleo."
 core_status.problems_test_sent:
   ru: "Тест отправлен на %{core} — строка появится через пару секунд"
   en: "Test sent to %{core} — the row appears in a couple of seconds"
   es: "Prueba enviada a %{core} — la fila aparece en un par de segundos"
 core_status.problems_clear_sent:
-  ru: "Очистка отправлена на %{core} — строки уйдут, когда ядро пришлёт новый список"
-  en: "Clear sent to %{core} — the rows go when the core sends its next list"
-  es: "Borrado enviado a %{core} — las filas se irán cuando el núcleo envíe su próxima lista"
+  ru: "Сброс отправлен на %{core} — строки уйдут, когда ядро пришлёт новый список"
+  en: "Reset sent to %{core} — the rows go when the core sends its next list"
+  es: "Restablecimiento enviado a %{core} — las filas se irán cuando el núcleo envíe su próxima lista"
+core_status.problems_clear_sent_many:
+  ru: "Сброс отправлен на %{cores} ядер — строки уйдут, когда ядра пришлют новые списки"
+  en: "Reset sent to %{cores} cores — the rows go when those cores send their next lists"
+  es: "Restablecimiento enviado a %{cores} núcleos — las filas se irán cuando esos núcleos envíen sus próximas listas"
+# Says what it re-read, not "done": the honest outcome of a re-read that found nothing new is an
+# unchanged table, and a message claiming more would make that look like a failure.
+core_status.problems_refreshed:
+  ru: "Перечитано ядер: %{cores}"
+  en: "Cores re-read: %{cores}"
+  es: "Núcleos releídos: %{cores}"
+# The shortfall, never a bare success: a fleet action that reached nine of twelve cores has failed
+# on three, and only the toast can say so.
+core_status.problems_fleet_none:
+  ru: "Не отправлено ни на одно из %{cores} ядер — не на связи или канал команд закрыт"
+  en: "Reached none of the %{cores} cores — offline, or their command channel is closed"
+  es: "No llegó a ninguno de los %{cores} núcleos — desconectados o con el canal de comandos cerrado"
+core_status.problems_fleet_partial:
+  ru: "Дошло до %{sent} из %{cores} ядер — остальные не на связи или их канал закрыт"
+  en: "Reached %{sent} of %{cores} cores — the rest are offline or their channel is closed"
+  es: "Llegó a %{sent} de %{cores} núcleos — el resto está desconectado o con el canal cerrado"
 core_status.problems_not_sent:
   ru: "Не отправлено: канал команд ядра закрыт"
   en: "Not sent: the core's command channel is closed"
@@ -972,11 +1036,21 @@ core_status.problems_not_sent_offline:
   en: "Not sent: the core is offline"
   es: "No enviado: el núcleo está desconectado"
 core_status.problems_clear_title:
-  ru: "Очистить диагностики ядра?"
-  en: "Clear the core's diagnostics?"
-  es: "¿Borrar los diagnósticos del núcleo?"
+  ru: "Сбросить диагностики ядра?"
+  en: "Reset the core's diagnostics?"
+  es: "¿Restablecer los diagnósticos del núcleo?"
 # Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
 core_status.problems_clear_q:
   ru: "Ядро %{core} сбросит все подтверждённые проблемы и неподтверждённые гипотезы — для всех терминалов, без возможности вернуть. Причину это не лечит: если она осталась, ядро подтвердит проблему заново."
   en: "Core %{core} will drop every confirmed problem and pending hypothesis — for all terminals, with no way back. It fixes no cause: if one remains, the core will confirm the problem again."
   es: "El núcleo %{core} descartará todos los problemas confirmados y las hipótesis pendientes — para todos los terminales, sin vuelta atrás. No corrige ninguna causa: si persiste, el núcleo confirmará el problema de nuevo."
+core_status.problems_clear_title_many:
+  ru: "Сбросить диагностики на нескольких ядрах?"
+  en: "Reset the diagnostics of several cores?"
+  es: "¿Restablecer los diagnósticos de varios núcleos?"
+# The core NAMES, not just how many: a count is nothing an operator can check, and this dialog is
+# the last place the mistake is still cheap.
+core_status.problems_clear_q_many:
+  ru: "Каждое из этих %{cores} ядер сбросит все подтверждённые проблемы и неподтверждённые гипотезы — для всех терминалов, без возможности вернуть. Причины это не лечит: если они остались, ядра подтвердят проблемы заново."
+  en: "Each of these %{cores} cores drops every confirmed problem and pending hypothesis — for all terminals, with no way back. It fixes no cause: those that remain will be confirmed again."
+  es: "Cada uno de estos %{cores} núcleos descartará todos los problemas confirmados y las hipótesis pendientes — para todos los terminales, sin vuelta atrás. No corrige ninguna causa: las que persistan se confirmarán de nuevo."
