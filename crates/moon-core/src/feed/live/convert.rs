@@ -269,12 +269,30 @@ pub(super) fn settings_event_snapshot<T>(
     matched: impl Fn(&Event) -> bool,
     extract: impl FnOnce(Arc<moonproto::MoonStateSnapshot>) -> Option<T>,
 ) -> Option<T> {
-    events
-        .iter()
-        .any(matched)
-        .then(|| client.snapshot())
-        .flatten()
-        .and_then(extract)
+    snapshot_when(events.iter().any(matched), client, extract)
+}
+
+/// Read the retained snapshot when `gate` says to, and project it.
+///
+/// The half of [`settings_event_snapshot`] that is not about events, split out for the one caller
+/// whose gate is not an event at all: an operator asking for a republish of something the wire will
+/// never announce again. Written as a helper rather than copied inline so the snapshot/flatten/
+/// project chain has one spelling — nine sibling publish blocks in the live loop reach it through
+/// [`settings_event_snapshot`], and a tenth on a hand-rolled copy is how the two drift.
+///
+/// Args:
+///     gate: Whether there is any reason to read the snapshot at all.
+///     client: Connected moonproto client holding the retained state.
+///     extract: Projects the retained snapshot into the terminal's own type.
+///
+/// Returns:
+///     The projection, or `None` when the gate is shut or no snapshot exists yet.
+pub(super) fn snapshot_when<T>(
+    gate: bool,
+    client: &MoonClient,
+    extract: impl FnOnce(Arc<moonproto::MoonStateSnapshot>) -> Option<T>,
+) -> Option<T> {
+    gate.then(|| client.snapshot()).flatten().and_then(extract)
 }
 
 /// Convert protocol-v4 `KernelHealth` into terminal telemetry and stamp its

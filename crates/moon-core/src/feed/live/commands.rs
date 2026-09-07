@@ -695,7 +695,9 @@ fn rebuild_sync(
 /// `SetMarket` queue entries are wake/order markers; their payloads can be stale behind an action
 /// backlog, so the shared authoritative snapshot is adopted before and after the batch. The return
 /// value tells the live loop whether it disconnected, emptied the queue, or must poll again without
-/// blocking. `core_config_events` collects any shared-config edit lifecycle events a queue-drain
+/// blocking. `problems_relist` is raised by an operator-requested diagnostics re-read and consumed
+/// by the caller's own publish block, so a burst of presses costs one snapshot read rather than
+/// one per press. `core_config_events` collects any shared-config edit lifecycle events a queue-drain
 /// send produced; the caller sends them as `FeedMsg::CoreConfigEdit` and stamps their clock, the
 /// same as the events an event-batch-driven `SharedConfigSequence::drive` produces.
 pub(super) fn drain_commands(
@@ -706,6 +708,7 @@ pub(super) fn drain_commands(
     market_role: &mut MarketRoleState,
     force_market_sample: &mut bool,
     orders_mutated: &mut bool,
+    problems_relist: &mut bool,
     local_strat_edits: &mut LocalStratEdits,
     strategy_placements: &mut StrategyPlacementGuard,
     client_settings_sequence: &mut ClientSettingsSequence,
@@ -1490,6 +1493,16 @@ pub(super) fn drain_commands(
                         crate::feed::core_label(server.id)
                     ),
                 }
+            }
+            Ok(CoreCmd::RefreshProblems) => {
+                // Deliberately sends NOTHING: see `CoreCmd::RefreshProblems` for why no request
+                // exists. The flag makes the live loop republish from the retained snapshot once
+                // this batch is drained.
+                *problems_relist = true;
+                log::debug!(
+                    "core {} problems re-read requested",
+                    crate::feed::core_label(server.id)
+                );
             }
             Ok(CoreCmd::SetAutoDetect(on)) => {
                 // Passive mode off/on; the new value reaches the store via RuntimeStateUpdated,

@@ -18,7 +18,7 @@ use super::model::ServerKey;
 use super::update_menu;
 use super::{ChartWindow, CoreStatusMode, CoreStatusView, ordering, server_view};
 use crate::design;
-use moon_core::feed::{ConnStatus, UpdateTarget};
+use moon_core::feed::UpdateTarget;
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
@@ -597,6 +597,10 @@ impl CoreStatusView {
             let order = self.visible_order(cx);
             self.select_all_visible_cores(&order, cx);
         } else if key == "escape" && self.core_selection.len() > 0 {
+            // Deliberately NOT extended to the Problems row selection. Escape already carries a
+            // window-level meaning here (it closes an open chart), and adding a second one to the
+            // same key risks swallowing that. The Problems selection is cleared by clicking its
+            // row again, which is the gesture that set it.
             self.clear_core_selection(cx);
         }
     }
@@ -733,15 +737,9 @@ impl CoreStatusView {
     /// Returns:
     ///     `true` only for a core whose session reports `Ready`.
     fn core_is_ready(&self, core: CoreId, cx: &App) -> bool {
-        matches!(
-            self.backend
-                .read(cx)
-                .session
-                .store()
-                .core(core)
-                .map(|data| data.status.clone()),
-            Some(ConnStatus::Ready)
-        )
+        // The app's own spelling of "reachable", shared with every other fleet action rather than
+        // hand-written a third time in this panel.
+        self.backend.read(cx).session.core_run_state(core).online
     }
 
     /// A core's configured display name, or its id when the config no longer holds it.
@@ -791,6 +789,8 @@ impl CoreStatusView {
                     dialog,
                     t!("core_status.problems_test_title").to_string(),
                     question.clone(),
+                    // The test names its one core inside the question, like the one-core reset.
+                    Rc::from([]),
                     "core-status-problem-test",
                     MoonButtonVariant::Blue,
                     cx,
@@ -804,55 +804,282 @@ impl CoreStatusView {
         );
     }
 
-    /// Open the ONE confirm clearing a core's diagnostics gets.
+    /// Open the ONE confirm a diagnostics reset gets, for one core or for a whole scope.
     ///
-    /// The core drops every confirmed finding AND every pending hypothesis, for every terminal
-    /// watching it, with no way back, and it fixes nothing — a cause that persists produces a new
-    /// fact later.
+    /// Every core listed drops every confirmed finding AND every pending hypothesis, for every
+    /// terminal watching it, with no way back, and it fixes nothing — a cause that persists produces
+    /// a new fact later.
     ///
-    /// Local rows are deliberately NOT cleared on confirmation: the core's next full list is the
-    /// answer, and clearing optimistically would show a clean bill for a core that may have
-    /// rejected the command.
+    /// The question names the BLAST RADIUS, which is the only thing that changed when this action
+    /// stopped needing a hand-picked core: one core is named, and a scope states how many cores and
+    /// which. An operator who never opened the panel's selector is the normal case, and their press
+    /// must not be quieter than a deliberate one.
+    ///
+    /// Local rows are deliberately NOT cleared on confirmation: each core's next full list is the
+    /// answer, and clearing optimistically would show a clean bill for a core that may have rejected
+    /// the command.
     ///
     /// Args:
-    ///     core: Core whose diagnostics would be dropped.
     ///     window: Window that owns the unique dialog.
     ///     cx: View context used to build the dialog.
     ///
     /// Returns:
     ///     Nothing; only Yes sends anything, and it closes the dialog either way.
-    pub(super) fn confirm_clear_problems(
-        &mut self,
-        core: CoreId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let question = t!(
-            "core_status.problems_clear_q",
-            core = self.core_display_name(core, cx)
-        )
-        .to_string();
+    pub(super) fn confirm_clear_problems(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cores = self.connected_in_scope(cx);
+        let names: Rc<[String]> = cores
+            .iter()
+            .map(|core| self.core_display_name(*core, cx))
+            .collect();
+        let (title, question) = match cores.as_slice() {
+            // Both fleet buttons are greyed with no targets, so this is the race where the last
+            // core dropped between the repaint and the press. It says so rather than swallowing
+            // the press, which is what the re-read does in the identical state.
+            [] => return self.no_fleet_targets(window, cx),
+            [core] => (
+                t!("core_status.problems_clear_title").to_string(),
+                t!(
+                    "core_status.problems_clear_q",
+                    core = self.core_display_name(*core, cx)
+                )
+                .to_string(),
+            ),
+            many => (
+                t!("core_status.problems_clear_title_many").to_string(),
+                t!("core_status.problems_clear_q_many", cores = many.len()).to_string(),
+            ),
+        };
+        let cores: Rc<[CoreId]> = cores.into();
         let view = cx.entity().downgrade();
         window.open_unique_moon_dialog(
             "core-status-clear-problems-confirm",
             cx,
             move |dialog, _window, cx| {
                 let view = view.clone();
+                // Refcount bumps, not copies: this builder is an `Fn` re-run on every frame the
+                // dialog is drawn, and the confirmed scope can be the whole fleet.
+                let cores = cores.clone();
                 problem_confirm_dialog(
                     dialog,
-                    t!("core_status.problems_clear_title").to_string(),
+                    title.clone(),
                     question.clone(),
+                    names.clone(),
                     "core-status-clear-problems",
                     MoonButtonVariant::Danger,
                     cx,
                     move |window, cx| {
                         if let Some(view) = view.upgrade() {
-                            view.update(cx, |this, cx| this.send_clear_problems(core, window, cx));
+                            let cores = cores.clone();
+                            view.update(cx, |this, cx| {
+                                this.send_clear_problems(&cores, window, cx)
+                            });
                         }
                     },
                 )
             },
         );
+    }
+
+    /// Re-read the retained diagnostics of every connected core in scope.
+    ///
+    /// Unconfirmed on purpose, and it is the only one of the three that can be: nothing leaves this
+    /// terminal and nothing on any core changes. See `CoreCmd::RefreshProblems` — the protocol has
+    /// no request for a diagnostics list, so this republishes what the library already holds.
+    ///
+    /// Args:
+    ///     window: Window that shows the outcome.
+    ///     cx: View context.
+    ///
+    /// Returns:
+    ///     Nothing; the outcome is a notification.
+    pub(super) fn refresh_problems(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cores = self.connected_in_scope(cx);
+        self.fleet_send(
+            &cores,
+            window,
+            cx,
+            |session, live| session.refresh_core_problems_many(live),
+            |sent| {
+                MoonNotification::success(
+                    t!("core_status.problems_refreshed", cores = sent).to_string(),
+                )
+            },
+        );
+    }
+
+    /// Send the reset to every core that is still up, or say why it did not go.
+    fn send_clear_problems(
+        &mut self,
+        cores: &[CoreId],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The one-core success still NAMES its core: that message is what an operator reads back
+        // when checking which core they just emptied, and a count cannot answer it.
+        let single = match cores {
+            [core] => Some(self.core_display_name(*core, cx)),
+            _ => None,
+        };
+        self.fleet_send(
+            cores,
+            window,
+            cx,
+            |session, live| session.clear_core_problems_many(live),
+            move |sent| match single {
+                Some(name) => MoonNotification::success(
+                    t!("core_status.problems_clear_sent", core = name).to_string(),
+                ),
+                None => MoonNotification::success(
+                    t!("core_status.problems_clear_sent_many", cores = sent).to_string(),
+                ),
+            },
+        );
+    }
+
+    /// Run one fleet diagnostics command and report what it actually reached.
+    ///
+    /// Both actions are the same four steps — drop the cores that went down, send one command per
+    /// core, count the acceptances, tell the operator — so they share them rather than each
+    /// spelling them out and drifting.
+    ///
+    /// Readiness is re-read HERE rather than trusted from the button or the confirm that started
+    /// the action: either can sit open while a core drops, and a command queued for a core that is
+    /// down waits on its channel and fires on reconnect.
+    ///
+    /// The shortfall is the point. A core that went down between the press and the send, and one
+    /// whose command channel is already gone, mean the same thing to the operator: the action did
+    /// NOT reach everything it named. Which of the two it was reaches the log. A bare success toast
+    /// over a partial result is precisely the "failure nobody sees" this surface's rule forbids.
+    ///
+    /// Args:
+    ///     cores: Cores the press addressed.
+    ///     window: Window that shows the outcome.
+    ///     cx: View context.
+    ///     send: Issues the command to the still-connected cores, returning those that accepted.
+    ///     whole: Builds this action's own success message when every named core accepted.
+    ///
+    /// Returns:
+    ///     Nothing; the outcome is a notification.
+    fn fleet_send(
+        &mut self,
+        cores: &[CoreId],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        send: impl FnOnce(&moon_core::session::SessionManager, &[CoreId]) -> Vec<CoreId>,
+        whole: impl FnOnce(usize) -> MoonNotification,
+    ) {
+        let asked = cores.len();
+        if asked == 0 {
+            return self.no_fleet_targets(window, cx);
+        }
+        let live = self.still_connected(cores, cx);
+        let sent = send(&self.backend.read(cx).session, &live).len();
+        // The two failure messages are shared and the success is the caller's: "it did not reach
+        // everything" means the same for either action, while "the reset went" and "the list was
+        // re-read" are different facts an operator acts on differently.
+        let note = if sent == 0 {
+            log::warn!("core status: a fleet diagnostics action reached none of {asked} cores");
+            MoonNotification::warning(
+                t!("core_status.problems_fleet_none", cores = asked).to_string(),
+            )
+        } else if sent < asked {
+            log::warn!("core status: a fleet diagnostics action reached {sent} of {asked} cores");
+            MoonNotification::warning(
+                t!(
+                    "core_status.problems_fleet_partial",
+                    sent = sent,
+                    cores = asked
+                )
+                .to_string(),
+            )
+        } else {
+            whole(sent)
+        };
+        window.push_notification(note, cx);
+    }
+
+    /// Say that a fleet action found nothing to act on, in the one wording both of them use.
+    ///
+    /// The greyed button already carries this reason as its tooltip; this is the same sentence for
+    /// the race where the last core drops between the repaint that enabled the button and the press.
+    fn no_fleet_targets(&self, window: &mut Window, cx: &mut Context<Self>) {
+        // Which emptiness it was: a scope full of live cores must not be reported as offline just
+        // because the ONE core the operator clicked is down. Same split as `fleet_refusal`'s, and
+        // for the same reason — the two have different remedies.
+        let key = match self.problems_picked {
+            Some(_) => "core_status.problems_picked_offline",
+            None => "core_status.problems_no_online",
+        };
+        window.push_notification(MoonNotification::warning(t!(key).to_string()), cx);
+    }
+
+    /// Narrow the three Problems actions to one core, or widen them back to the whole scope.
+    ///
+    /// A TOGGLE because the narrowing has to be reversible: a click that can reach "just this core"
+    /// and never get back would strand the operator on one core, and the table's own handling only
+    /// ever sets a row. Clicking any row of the already-picked core clears the pick — including a
+    /// different finding of the same core, which is the same answer to the same question.
+    ///
+    /// Stored as the CORE, never as the clicked row index. The finding list is rebuilt from live
+    /// core data on every repaint, so an index outlives the row it named: one finding appearing or
+    /// clearing above it re-points it at another core, and the action it narrows cannot be undone.
+    ///
+    /// Args:
+    ///     core: Core owning the clicked finding.
+    ///     cx: View context used to repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the next frame draws that core's rows selected.
+    pub(super) fn pick_problem_core(&mut self, core: CoreId, cx: &mut Context<Self>) {
+        self.problems_picked = (self.problems_picked != Some(core)).then_some(core);
+        // The table's own row and cell cursors are dropped on EVERY pick change, set or cleared, so
+        // the surface carries exactly one highlight. Left behind they draw a second one from a raw
+        // row INDEX (`data_table.rs:1231` ORs it into the row, and the cell background at :1262 is
+        // painted whether or not cells are selectable) — and an index is precisely what this pick
+        // exists to avoid, because the finding list is rebuilt every repaint and the index then
+        // marks a different core's row. `select_row(None)` alone is not enough: it leaves
+        // `selected_cell` behind (`data_table.rs:345`), which paints a ghost on the last clicked
+        // cell after the pick is gone.
+        self.problems_table_state.update(cx, |state, cx| {
+            state.selected_row = None;
+            state.selected_column = None;
+            state.selected_cell = None;
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// What a Problems-mode fleet action acts on: the clicked finding's core, else the whole scope.
+    ///
+    /// The panel's own rule for a bulk command — the selection when the operator has made one, the
+    /// displayed scope otherwise (`selected_or_visible`) — applied to the one gesture this mode
+    /// offers. Problems draws findings rather than cores, so `core_selection` can never be set
+    /// here; the table's own selected row is its equivalent, and the render arm resolves it to a
+    /// core in [`CoreStatusView::problems_picked`].
+    ///
+    /// The list is derived at PRESS time rather than carried on the rendered scope: the render arm
+    /// would otherwise build it on every repaint for something only a click reads, and the click
+    /// has to re-check reachability at send time regardless.
+    fn connected_in_scope(&self, cx: &App) -> Vec<CoreId> {
+        let scope = self.effective_scope(self.backend.read(cx)).ids().to_vec();
+        // The pick is intersected with the scope rather than trusted: the panel's selector or its
+        // workspace can drop a core out from under a pick that was made before either moved.
+        let ids = match self.problems_picked {
+            Some(core) if scope.contains(&core) => vec![core],
+            Some(_) => Vec::new(),
+            None => scope,
+        };
+        self.still_connected(&ids, cx)
+    }
+
+    /// Keep only the cores that are connected right now.
+    fn still_connected(&self, cores: &[CoreId], cx: &App) -> Vec<CoreId> {
+        let session = &self.backend.read(cx).session;
+        cores
+            .iter()
+            .copied()
+            .filter(|core| session.core_run_state(*core).online)
+            .collect()
     }
 
     /// Send the test, or say why it did not go.
@@ -879,37 +1106,6 @@ impl CoreStatusView {
             ),
             Err(error) => {
                 log::warn!("core status: test problem for core {core} not sent: {error:#}");
-                window.push_notification(
-                    MoonNotification::warning(t!("core_status.problems_not_sent").to_string()),
-                    cx,
-                );
-            }
-        }
-    }
-
-    /// Send the clear, or say why it did not go.
-    ///
-    /// The readiness check is repeated HERE rather than trusted from the button that opened the
-    /// dialog: that dialog can sit open while the core drops, and a queued clear would then fire on
-    /// reconnect against findings the operator never saw.
-    fn send_clear_problems(&mut self, core: CoreId, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.core_display_name(core, cx);
-        if !self.core_is_ready(core, cx) {
-            window.push_notification(
-                MoonNotification::warning(t!("core_status.problems_not_sent_offline").to_string()),
-                cx,
-            );
-            return;
-        }
-        match self.backend.read(cx).session.clear_core_problems(core) {
-            Ok(()) => window.push_notification(
-                MoonNotification::success(
-                    t!("core_status.problems_clear_sent", core = name).to_string(),
-                ),
-                cx,
-            ),
-            Err(error) => {
-                log::warn!("core status: clear problems for core {core} not sent: {error:#}");
                 window.push_notification(
                     MoonNotification::warning(t!("core_status.problems_not_sent").to_string()),
                     cx,
@@ -1150,6 +1346,7 @@ fn problem_confirm_dialog(
     dialog: moon_ui::MoonDialog,
     title: String,
     question: String,
+    names: Rc<[String]>,
     id_prefix: &'static str,
     confirm: MoonButtonVariant,
     cx: &App,
@@ -1177,13 +1374,24 @@ fn problem_confirm_dialog(
         .content(move |content, _window, cx| {
             let p = MoonPalette::active(cx);
             content.child(
-                div()
-                    // MIXED NODE: both questions that reach this dialog weld a CORE NAME into the
-                    // sentence, and a core name is shown verbatim and identically everywhere.
-                    .font_family(design::mono())
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text))
-                    .child(question.clone()),
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(
+                        div()
+                            // MIXED NODE: the one-core questions weld a CORE NAME into the
+                            // sentence, and a core name is shown verbatim and identically
+                            // everywhere.
+                            .font_family(design::mono())
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text))
+                            .child(question.clone()),
+                    )
+                    // The same non-truncating list the footer's fleet confirm and the row menu
+                    // draw, from the same helper: dialogs describing one scope must not be able to
+                    // word it differently, and a core name is never shortened. It renders nothing
+                    // for a single core, which the question above has already named.
+                    .children(update_menu::scope_name_list(&names, p, cx)),
             )
         })
         .footer(

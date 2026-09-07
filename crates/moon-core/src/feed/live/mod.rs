@@ -668,6 +668,7 @@ pub(super) fn run(
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
         let mut orders_mutated = false;
+        let mut problems_relist = false;
         let mut core_config_events = Vec::new();
         let command_drain = drain_commands(
             cmd_rx,
@@ -677,6 +678,7 @@ pub(super) fn run(
             market_role,
             &mut force_market_sample,
             &mut orders_mutated,
+            &mut problems_relist,
             &mut local_strat_edits,
             &mut strategy_placements,
             client_settings_sequence,
@@ -1542,22 +1544,27 @@ pub(super) fn run(
         // Nothing is ever requested here: the core sends its list unprompted on connection, and a
         // core too old for the extension simply never sends one. That is the whole compatibility
         // story — see `CoreProblems::supported`.
-        let problems = settings_event_snapshot(
-            &events,
-            &client,
-            |ev| {
+        //
+        // An operator-requested re-read is a SECOND reason to read the same retained state, so it
+        // joins the event gate rather than branching beside it. There is no event to wait for: the
+        // wire cannot be asked for a list, and moonproto empties this state without one when a
+        // ServerToken changes — see `CoreCmd::RefreshProblems`. Either reason reads the same
+        // snapshot through the same projection, so one gate is all the difference between them.
+        let want_problems = problems_relist
+            || events.iter().any(|ev| {
                 matches!(
                     ev,
                     &Event::Settings(
                         SettingsEvent::ProblemsUpdated | SettingsEvent::ProblemConfirmed { .. }
                     )
                 )
-            },
-            // Wrapped in `Some` because an EMPTY list is a real answer — the core looked and found
-            // nothing — and the helper would otherwise drop it as "nothing to report", which is the
-            // one reading this feature must never produce.
-            |state| Some(convert::problems_from_proto(&state.settings().problems)),
-        );
+            });
+        // Wrapped in `Some` because an EMPTY list is a real answer — the core looked and found
+        // nothing — and the helper would otherwise drop it as "nothing to report", which is the one
+        // reading this feature must never produce.
+        let problems = convert::snapshot_when(want_problems, &client, |state| {
+            Some(convert::problems_from_proto(&state.settings().problems))
+        });
         if let Some(problems) = problems {
             if tx.send(FeedMsg::Problems(problems)).is_err() {
                 break;

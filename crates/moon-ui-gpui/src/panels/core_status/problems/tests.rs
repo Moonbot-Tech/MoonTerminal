@@ -6,7 +6,7 @@ use rust_i18n::t;
 
 use super::{
     ActionGate, ProblemRow, ProblemsScope, category_label, details_text, drawn_kinds, empty_text,
-    mark_signature, notice_text,
+    fleet_refusal, mark_signature, notice_text,
 };
 
 /// A scope with nothing truncated, which is every case but the cap's own test.
@@ -16,7 +16,8 @@ fn scope(cores: usize, silent: usize) -> ProblemsScope {
         silent: (0..silent).map(|i| format!("core-{i}")).collect(),
         truncated: false,
         actions: ActionGate::NoSingleChoice,
-        answered: true,
+        picked: false,
+        targets: 0,
     }
 }
 
@@ -100,7 +101,8 @@ fn a_truncated_list_is_stated_even_when_every_core_answered() {
         silent: Vec::new(),
         truncated: true,
         actions: ActionGate::NoSingleChoice,
-        answered: true,
+        picked: false,
+        targets: 0,
     };
     let text = notice_text(&full).expect("a cut list is stated");
     assert!(
@@ -165,20 +167,20 @@ fn the_silent_core_hover_names_them_without_outgrowing_the_window() {
     );
 }
 
-/// An irreversible action must never ride on a coincidence of scope.
+/// The channel test addresses ONE core, and says which reason keeps it shut.
 ///
-/// Regression target: the gate started as "the scope resolved to one core", which is true for a
-/// one-core group under "All cores" and for a pinned Auto workspace — a core nobody picked. The
-/// clear destroys a core's confirmed findings for every terminal watching it, so the difference
-/// between "the operator chose this core" and "only one was left" is the whole safety margin.
+/// The gate guards the test alone. It used to guard the reset as well, on the argument that an
+/// irreversible action must not ride on a coincidence of scope — and that argument still holds; it
+/// simply moved. The reset no longer reads this gate at all: it carries its own list of targets and
+/// names them in its confirm, so nothing about it is decided by which core happened to be left.
 #[test]
-fn the_actions_open_only_for_an_explicitly_chosen_connected_core() {
+fn the_channel_test_opens_only_for_one_connected_core() {
     assert_eq!(ActionGate::Ready(7).core(), Some(7));
     assert_eq!(ActionGate::NoSingleChoice.core(), None);
     assert_eq!(
         ActionGate::NotConnected.core(),
         None,
-        "a queued command would fire on reconnect against findings from the outage"
+        "a queued test would fire on reconnect and publish its fact unannounced"
     );
 
     // Each refusal explains itself: one greyed button with one generic tooltip cannot say which of
@@ -193,6 +195,48 @@ fn the_actions_open_only_for_an_explicitly_chosen_connected_core() {
     assert_ne!(
         no_choice, offline,
         "picking a core and waiting for one are different problems"
+    );
+}
+
+/// The fleet actions refuse for their own reasons, and never quietly.
+///
+/// Regression target for the shape this replaced: one gate refused BOTH actions whenever the
+/// operator had not hand-picked a core, which in a workspace-owned panel is permanent — the
+/// selector is pinned there and the pick can never be made. A live button with no targets and a
+/// greyed button with no reason are the same defect from opposite sides.
+#[test]
+fn the_fleet_actions_state_their_own_refusals() {
+    let no_cores = fleet_refusal(0, false, 0).expect("an empty scope refuses");
+    assert_eq!(
+        no_cores,
+        t!("core_status.problems_no_cores").to_string(),
+        "an empty scope is explained the way the notice above the table already explains it"
+    );
+
+    let none_up = fleet_refusal(4, false, 0).expect("a scope with nothing connected refuses");
+    assert_ne!(
+        none_up, no_cores,
+        "covering no cores and covering four that are down are different facts"
+    );
+
+    // The regression this argument exists for: a scope of live cores must never be reported as
+    // offline because the ONE core the operator clicked happens to be down. Same numbers, and the
+    // two states must still not read alike.
+    let picked_down = fleet_refusal(4, true, 0).expect("a picked core that is down refuses");
+    assert_ne!(
+        picked_down, none_up,
+        "the core you clicked being down is not the scope having nothing up"
+    );
+
+    assert_eq!(
+        fleet_refusal(4, false, 1),
+        None,
+        "one connected core in scope opens both actions"
+    );
+    assert_eq!(
+        fleet_refusal(1, true, 1),
+        None,
+        "a core that has never delivered a list still holds pending hypotheses to drop"
     );
 }
 

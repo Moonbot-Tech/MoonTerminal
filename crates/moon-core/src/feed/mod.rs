@@ -644,6 +644,31 @@ pub enum CoreCmd {
     /// The UI must therefore confirm before sending, and must NOT clear its local rows
     /// optimistically: the answer is the core's next full list.
     ClearProblems,
+    /// Re-publish one core's diagnostics from the library's retained snapshot, without an event.
+    ///
+    /// NOT a wire request, because there is no such thing. The protocol has no way to ask a core
+    /// for its diagnostics list: the core pushes one on connection and again whenever its own
+    /// detectors change it, moonproto's `docs/problems.md` states outright that "there is no
+    /// periodic diagnostic-list refresh", and the only client command that produces a fresh list is
+    /// the destructive [`CoreCmd::ClearProblems`].
+    ///
+    /// It is nonetheless a real repair rather than a decorative button, and for one specific reason.
+    /// moonproto mutates its retained problems through exactly three paths, and only two of them
+    /// raise an event this feed can follow. The third is the hard-session reset: on a ServerToken or
+    /// peer-app-token CHANGE — a hard reconnect, or the MoonBot process restarting behind the same
+    /// endpoint — `events/active.rs` assigns `settings.problems = Default::default()` and publishes
+    /// NOTHING. Our own store is not rebuilt then either, because the terminal never respawned the
+    /// feed thread, so it keeps serving the findings of a core instance that no longer exists, with
+    /// `supported` still true. The restarted core normally pushes a list of its own and repairs
+    /// that within seconds; a core too old for the extension never does, and the stale rows then
+    /// stand forever.
+    ///
+    /// So this re-reads what moonproto holds NOW and publishes it. Usually that equals what the
+    /// store already has and the store drops it. After a silent reset it does not, and the honest
+    /// answer — "this core has not told this connection anything" — replaces the previous
+    /// instance's findings. That replacement is the point, not a hazard: it is the same rule
+    /// `CoreData::begin_connection_attempt` applies when the terminal itself reconnects a core.
+    RefreshProblems,
 }
 
 /// Complete market-role assignment published independently of the bounded command backlog.

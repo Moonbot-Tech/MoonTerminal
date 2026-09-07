@@ -43,27 +43,48 @@ pub(super) struct ProblemsScope {
     pub(super) silent: Vec<String>,
     /// Whether the row list was cut by [`PROBLEM_LIST_LIMIT`].
     pub(super) truncated: bool,
-    /// Why the per-core actions are or are not available.
+    /// Why the single-core channel test is or is not available.
     pub(super) actions: ActionGate,
-    /// Whether the chosen core has ever delivered a list — the clear has nothing to do otherwise.
-    pub(super) answered: bool,
+    /// Whether a clicked finding has narrowed the two fleet actions to its core.
+    ///
+    /// It changes what an empty `targets` MEANS, which is the whole reason it is carried: with no
+    /// pick it says the scope has nothing connected, with a pick it says the ONE core the operator
+    /// aimed at is down while the rest of the scope may be perfectly reachable.
+    pub(super) picked: bool,
+    /// How many cores in scope are connected — what both fleet actions would address.
+    ///
+    /// A COUNT, not the list: the tooltips are all this view needs it for, and the press re-derives
+    /// the cores from the panel's live scope through `CoreStatusView::connected_in_scope`. Carrying
+    /// the list here would allocate it on every repaint for something only a click reads, and the
+    /// click would then have to re-check it anyway.
+    ///
+    /// Deliberately NOT narrowed to the cores that have delivered a list. `supported == false` means
+    /// "this core has never demonstrably answered", which is not "this core holds nothing" — it
+    /// covers a core whose first list is still in flight, and clearing also drops PENDING
+    /// hypotheses the terminal has never seen. Greying the reset out there would claim knowledge
+    /// this surface does not have, which is the same conflation its notice exists to prevent.
+    pub(super) targets: usize,
 }
 
-/// Whether the two per-core diagnostic actions can be offered, and if not, why.
+/// Whether the channel test can be offered, and if not, why.
 ///
-/// A named reason rather than a bare `Option<CoreId>`, because an irreversible action must not be
-/// enabled by an ACCIDENT of scope. "The scope happens to hold one core" is not "the operator chose
-/// this core": a one-core group under Classic All, or a pinned Auto workspace, both resolve to a
-/// single id nobody picked. Each refusal also has its own remedy, and a single greyed button with
-/// one generic tooltip cannot say which one applies.
+/// It guards the TEST alone. The test is the one action with no fleet-wide form worth having —
+/// publishing a `test` fact on two hundred cores litters two hundred cores — so it needs one core
+/// named, while the reset and the re-read address the panel's whole scope and read no gate at all.
+///
+/// A named reason rather than a bare `Option<CoreId>`, because each refusal has its own remedy and
+/// a single greyed button with one generic tooltip cannot say which one applies.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ActionGate {
-    /// The operator explicitly selected exactly this core, and it is connected.
+    /// Exactly one core is in play and it is connected — either the operator clicked one of its
+    /// findings, or the panel's scope holds nothing else. Both are answers to "which core", and
+    /// both are named in the confirm the test opens before it publishes anything.
     Ready(CoreId),
-    /// The selection does not name exactly one core.
+    /// Nothing narrowed the surface to a single core.
     NoSingleChoice,
-    /// One core is chosen, but it is not connected: the command channel would accept the command
-    /// and hold it until the core returns — destroying findings gathered during the outage.
+    /// One core is chosen, but it is not connected: the command channel would accept the test and
+    /// hold it until the core returns, publishing the `test` fact at some unannounced later moment
+    /// on a core the operator has long stopped looking at.
     NotConnected,
 }
 
@@ -81,6 +102,9 @@ impl ActionGate {
         match self {
             Self::Ready(_) => None,
             Self::NoSingleChoice => Some(t!("core_status.problems_pick_core").to_string()),
+            // Deliberately NOT the fleet actions' offline string. That one reports a scope with
+            // nothing connected in it; this one reports that the one core the operator is pointing
+            // at is down, which is a different fact with a different remedy.
             Self::NotConnected => Some(t!("core_status.problems_core_offline").to_string()),
         }
     }
@@ -201,6 +225,7 @@ pub(super) const PROBLEM_LIST_LIMIT: usize = 500;
 ///     rows: Findings in display order, already scoped and capped by the caller.
 ///     core_names: Core display name per core id.
 ///     scope: What the scope could and could not report.
+///     picked: Core the three actions are narrowed to, whose every row is drawn selected.
 ///     state: Persisted table interaction state.
 ///     zone: User-selected display time zone.
 ///     cx: Panel context.
@@ -212,6 +237,7 @@ pub(super) fn problems_view(
     rows: Rc<Vec<ProblemRow>>,
     core_names: Rc<HashMap<CoreId, String>>,
     scope: &ProblemsScope,
+    picked: Option<CoreId>,
     state: &Entity<MoonDataTableState>,
     zone: chrono_tz::Tz,
     cx: &Context<CoreStatusView>,
@@ -230,33 +256,63 @@ pub(super) fn problems_view(
             empty_text(scope),
             p,
             cx,
-            MoonDataTable::new(id, row_count, move |ix, _window, _app| {
-                problem_row(ix, &rows[ix], &core_names, zone)
+            MoonDataTable::new(id, row_count, {
+                let rows = Rc::clone(&rows);
+                move |ix, _window, _app| problem_row(&rows[ix], &core_names, picked, zone)
             })
             .columns(columns())
+            // Deliberately NOT `controlled_row_selection`: that mode makes the table's own
+            // `selected_row` stop driving the highlight AND returns early from its whole keyboard
+            // block (`data_table.rs:1100`), so taking the click that way costs up/down/home/end
+            // navigation for a table that is read far more than it is clicked.
             .state(state)
+            // Which CORE the click narrowed to, resolved HERE from the list this frame drew — the
+            // handler must not hand a row INDEX to the panel. The list is rebuilt from live core
+            // data every repaint, so a finding appearing or clearing on an earlier core re-points
+            // any stored index at a different core, and the action it narrows is irreversible.
+            .on_select_row({
+                let view = cx.entity().downgrade();
+                let rows = Rc::clone(&rows);
+                move |ix, _window, cx| {
+                    let (Some(view), Some(row)) = (view.upgrade(), rows.get(ix)) else {
+                        return;
+                    };
+                    let core = row.core;
+                    view.update(cx, |this, cx| this.pick_problem_core(core, cx));
+                }
+            })
             .header_height(design::TABLE_HEAD_H)
             .row_height(design::TABLE_ROW_H)
             .style(design::table_style(p)),
         ))
 }
 
-/// The two per-core diagnostic actions, above the notice.
+/// The three diagnostic actions, above the notice — MoonBot's own row, plus the channel test.
 ///
-/// They ship as a PAIR because the protocol makes them one: a test publishes a `test` fact that
-/// stays on the core until something clears it, and clearing is the only thing that does.
+/// MoonBot's Problems window carries "reset all" and "refresh"; this row carries both, and the test
+/// beside them. The test and the reset ship as a PAIR because the protocol makes them one: a test
+/// publishes a `test` fact that stays on the core until something clears it, and the reset is the
+/// only thing that does.
 ///
-/// That is also why BOTH are confirmed, not just the destructive one. The test looks harmless and
-/// is not: the row it leaves can be removed only by the irreversible clear, so an unconfirmed test
-/// press can force an operator to destroy a core's real findings to tidy up after it. The dialog
-/// says that in as many words.
+/// That is also why BOTH of those are confirmed, not just the destructive one. The test looks
+/// harmless and is not: the row it leaves can be removed only by the irreversible reset, so an
+/// unconfirmed test press can force an operator to destroy a core's real findings to tidy up after
+/// it. The dialog says that in as many words.
+///
+/// The re-read is deliberately NOT confirmed, and cannot be: nothing leaves this terminal and
+/// nothing on any core changes — see `CoreCmd::RefreshProblems` for why the wire has no request to
+/// send. Its tooltip states that outright rather than letting the label imply a round trip.
+///
+/// SCOPE, not selection, for the two fleet actions: an operator who has picked no core sees the
+/// whole scope in the table, and a button above that table acts on what the table shows. Both name
+/// their blast radius before they fire — the reset in its dialog, the re-read in its tooltip.
 ///
 /// Feedback is a MoonUI notification raised by the action itself, not a line invented here: an
 /// action whose failure only reaches the log is an action whose failure nobody sees, and the stack
 /// already has the control for saying so.
 ///
 /// Args:
-///     scope: What the scope covers, including the gate for these actions.
+///     scope: What the scope covers, including each action's targets.
 ///     p: Active palette.
 ///     cx: Panel context.
 ///
@@ -267,43 +323,9 @@ fn actions(
     p: MoonPalette,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
-    let gate = scope.actions;
-    let refusal = gate.refusal();
-    // The clear is additionally pointless on a core that has never reported: there is nothing of
-    // ours to drop, and the press would still be irreversible on the core's own pending state.
-    let clear_off = gate.core().is_none() || !scope.answered;
-    let clear_refusal = match (&refusal, scope.answered) {
-        (Some(reason), _) => Some(reason.clone()),
-        (None, false) => Some(t!("core_status.problems_clear_nothing").to_string()),
-        (None, true) => None,
-    };
-    let test_view = cx.entity().downgrade();
-    let clear_view = cx.entity().downgrade();
-    let test_core = gate.core();
-    let clear_core = gate.core();
-
-    let test = MoonButton::new("core-status-problems-test")
-        .label(t!("core_status.problems_test").to_string())
-        .size(MoonButtonSize::Micro)
-        .variant(MoonButtonVariant::Panel)
-        .disabled(test_core.is_none())
-        .on_click(move |_, window, cx| {
-            let (Some(view), Some(core)) = (test_view.upgrade(), test_core) else {
-                return;
-            };
-            view.update(cx, |this, cx| this.confirm_problem_test(core, window, cx));
-        });
-    let clear = MoonButton::new("core-status-problems-clear")
-        .label(t!("core_status.problems_clear").to_string())
-        .size(MoonButtonSize::Micro)
-        .variant(MoonButtonVariant::Panel)
-        .disabled(clear_off)
-        .on_click(move |_, window, cx| {
-            let (Some(view), Some(core)) = (clear_view.upgrade(), clear_core) else {
-                return;
-            };
-            view.update(cx, |this, cx| this.confirm_clear_problems(core, window, cx));
-        });
+    let test_core = scope.actions.core();
+    let fleet = fleet_refusal(scope.cores, scope.picked, scope.targets);
+    let view = cx.entity().downgrade();
 
     h_flex()
         .w_full()
@@ -315,20 +337,145 @@ fn actions(
         .justify_end()
         .border_b_1()
         .border_color(rgb(p.border))
-        .child(match &refusal {
-            Some(reason) => test.tooltip(reason.clone()).render(),
-            None => test.render(),
+        .child(action_button(
+            "core-status-problems-test",
+            t!("core_status.problems_test").to_string(),
+            scope.actions.refusal(),
+            t!("core_status.problems_test_tip").to_string(),
+            view.clone(),
+            move |this, window, cx| {
+                if let Some(core) = test_core {
+                    this.confirm_problem_test(core, window, cx);
+                }
+            },
+        ))
+        // Tipped even when live, because the label promises a round trip the wire cannot make.
+        .child(action_button(
+            "core-status-problems-refresh",
+            t!("core_status.problems_refresh").to_string(),
+            fleet.clone(),
+            fleet_tip(
+                "core_status.problems_refresh_tip",
+                "core_status.problems_refresh_tip_one",
+                scope,
+            ),
+            view.clone(),
+            CoreStatusView::refresh_problems,
+        ))
+        // Tipped when live too: this one states its blast radius BEFORE the dialog, because the
+        // number of cores is the whole difference between a tidy-up and a fleet-wide loss.
+        .child(action_button(
+            "core-status-problems-clear",
+            t!("core_status.problems_clear").to_string(),
+            fleet,
+            fleet_tip(
+                "core_status.problems_clear_tip",
+                "core_status.problems_clear_tip_one",
+                scope,
+            ),
+            view,
+            CoreStatusView::confirm_clear_problems,
+        ))
+}
+
+/// One of the action row's three buttons: same metrics, same refusal-or-tip rule.
+///
+/// One builder rather than three chains, following `panels::common::micro_button`'s own note —
+/// two builders spelling the same metrics drift apart the moment either is touched. The tooltip is
+/// unconditional here because all three buttons say something worth reading when they are live:
+/// the refusal when there is one, otherwise what the press would actually do.
+///
+/// Args:
+///     id: Stable element identity.
+///     label: Button caption.
+///     refusal: Why the action is unavailable, which also disables the button.
+///     tip: What the live action would do, shown when there is no refusal.
+///     view: Panel to act on, dropped-safe.
+///     press: What the press runs on the panel.
+///
+/// Returns:
+///     The rendered button.
+fn action_button(
+    id: &'static str,
+    label: String,
+    refusal: Option<String>,
+    tip: String,
+    view: WeakEntity<CoreStatusView>,
+    press: impl Fn(&mut CoreStatusView, &mut Window, &mut Context<CoreStatusView>) + 'static,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .label(label)
+        .size(MoonButtonSize::Micro)
+        .variant(MoonButtonVariant::Panel)
+        .disabled(refusal.is_some())
+        .tooltip(refusal.unwrap_or(tip))
+        .on_click(move |_, window, cx| {
+            let Some(view) = view.upgrade() else {
+                return;
+            };
+            view.update(cx, |this, cx| press(this, window, cx));
         })
-        .child(match &clear_refusal {
-            Some(reason) => clear.tooltip(reason.clone()).render(),
-            None => clear.render(),
-        })
+        .render()
+}
+
+/// What a live fleet action would do, said in the form that matches what it is aimed at.
+///
+/// A pick makes `targets` the PICKED core's own 0-or-1, so the scope-wide wording would state a
+/// falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would go on
+/// advising a click that, in that state, cancels the pick rather than making one.
+///
+/// Args:
+///     scoped_key: Wording for the whole-scope form, taking the connected count.
+///     picked_key: Wording for the one-core form.
+///     scope: What the surface knows, including whether a pick is live.
+///
+/// Returns:
+///     The tooltip text for the live action.
+fn fleet_tip(scoped_key: &str, picked_key: &str, scope: &ProblemsScope) -> String {
+    match scope.picked {
+        true => t!(picked_key).to_string(),
+        false => t!(scoped_key, cores = scope.targets).to_string(),
+    }
+}
+
+/// Why the two fleet actions are refused, decided apart from how they are drawn.
+///
+/// Split from [`actions`] for the same reason [`notice_text`] is split from [`notice`]: a greyed
+/// button whose reason lives only in the render reads as a bug in the terminal.
+///
+/// The two refusals it answers are NOT the same fact, and the empty scope is the one the surface
+/// would otherwise contradict itself about: its notice already says the scope holds no cores, so a
+/// tooltip claiming "none is connected" would give the same emptiness two different explanations.
+///
+/// Args:
+///     cores: How many cores the panel's scope covers at all.
+///     targets: How many of those are connected.
+///
+/// Returns:
+///     The shared refusal, or `None` where both actions are live.
+fn fleet_refusal(cores: usize, picked: bool, targets: usize) -> Option<String> {
+    if cores == 0 {
+        return Some(t!("core_status.problems_no_cores").to_string());
+    }
+    if targets > 0 {
+        return None;
+    }
+    // ONE string per fact, shared by both actions: the reason is the connection rather than the
+    // action, and two spellings of one fact read as two different problems. But "the core you
+    // clicked is down" and "nothing in this scope is up" are two different facts with two
+    // different remedies, and a scope full of live cores must never be reported as offline
+    // because the one picked core is not.
+    Some(match picked {
+        true => t!("core_status.problems_picked_offline").to_string(),
+        false => t!("core_status.problems_no_online").to_string(),
+    })
 }
 
 /// What the notice must say, decided apart from how it is drawn.
 ///
-/// Split from [`notice`] so the rule can be asserted without a render context: this is the one
-/// decision on the surface that must never silently become "everything is fine".
+/// Split from [`notice`] so the rule can be asserted without a render context, like
+/// [`fleet_refusal`] beside it: a caveat that quietly becomes "everything is fine" is the one
+/// failure this whole surface exists to prevent.
 ///
 /// Args:
 ///     scope: What the scope could and could not report.
@@ -418,18 +565,23 @@ fn empty_text(scope: &ProblemsScope) -> String {
 /// established, and `first_seen` is when it began suspecting. Falling back to `first_seen` when the
 /// core sent no confirmation time keeps a row timed rather than blank.
 ///
+/// A row belonging to the PICKED core is drawn selected, and that highlight is the only thing on
+/// the surface saying which core the three actions were narrowed to. It is keyed on the core rather
+/// than on the table's own selected index because the finding list is rebuilt from live core data
+/// on every repaint: an index survives a list that moved, pointing at a different core.
+///
 /// Args:
-///     ix: Row index, for a stable element id on the tooltip host.
 ///     row: Finding and its reporting core.
 ///     core_names: Display names keyed by core id.
+///     picked: Core the three actions are narrowed to, if any.
 ///     zone: Selected IANA display zone.
 ///
 /// Returns:
 ///     Complete problems table row.
 fn problem_row(
-    ix: usize,
     row: &ProblemRow,
     core_names: &HashMap<CoreId, String>,
+    picked: Option<CoreId>,
     zone: chrono_tz::Tz,
 ) -> MoonDataRow {
     let core = core_names
@@ -455,7 +607,13 @@ fn problem_row(
         // tooltip repeats nothing and adds what the row could not fit.
         MoonDataCell::element(
             div()
-                .id(SharedString::from(format!("cs-problem-{ix}")))
+                // Identity from the FINDING rather than a row index. The enclosing cell's id
+                // already carries the index, so this never collided; keying it on the finding
+                // simply means the hover state follows the row's content when the list moves.
+                .id(SharedString::from(format!(
+                    "cs-problem-{}-{}",
+                    row.core, row.problem.kind_name
+                )))
                 // Fills the cell rather than the text: the column was widened so the hover could
                 // carry the body, and a content-sized host leaves most of that width dead.
                 .w_full()
@@ -465,6 +623,7 @@ fn problem_row(
                 }),
         ),
     ])
+    .selected(picked == Some(row.core))
 }
 
 /// A formatted civil minute, or `None` when the value is absent or outside the printable range.
