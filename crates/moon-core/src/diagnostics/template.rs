@@ -297,6 +297,23 @@ COST: negligible — HyperLiquid cores send this rarely, and other exchanges nev
 ENV: MOON_HL_LIMIT_DIAG=1",
     },
     KeyDoc {
+        section: "channels",
+        key: "settings",
+        default: "false",
+        doc: "\
+Core settings snapshot -> `logs/settings_diag.log`: the global coin blacklist flag and text, and
+every temporary-blacklist (TempBL) row the core holds, each with the remaining time as the wire
+carries it. Answers the two questions the source cannot: in WHAT SPELLING a core stores a temporary
+ban — the bare coin or the full market — and whether the remaining time ticks down between snapshots.
+
+Switching this on writes one line per connected core straight away, from the snapshot each core
+already holds; after that a line is written only when the blacklist state actually changes, so a
+ticking remainder alone does not fill the file.
+COST: low — one comparison per ClientSettings event, plus a copy of the blacklist text on the
+events that report a change. Nothing at all while the switch is off.
+ENV: MOON_SETTINGS_DIAG=1",
+    },
+    KeyDoc {
         section: "limits",
         key: "log_ring_lines",
         default: "5000",

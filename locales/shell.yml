@@ -873,18 +873,51 @@ coin_menu.compare:
   ru: "Сравнить"
   en: "Compare"
   es: "Comparar"
-coin_menu.bl_core:
-  ru: "В ЧС ядра «%{core}»"
-  en: "Add to core «%{core}» blacklist"
-  es: "Añadir a la lista negra del núcleo «%{core}»"
-coin_menu.bl_cores:
-  ru: "В ЧС выбранных ядер (%{n})"
-  en: "Add to blacklist of selected cores (%{n})"
-  es: "Añadir a la lista negra de núcleos seleccionados (%{n})"
-coin_menu.bl_strategy:
-  ru: "В ЧС стратегии «%{name}»"
-  en: "Add to strategy «%{name}» blacklist"
-  es: "Añadir a la lista negra de la estrategia «%{name}»"
+# The two blacklist submenus and the targets they share. The targets are named on their own — the
+# list they are added to is the parent row, so repeating it in every child would print it six times.
+coin_menu.bl_group:
+  ru: "В ЧС"
+  en: "Add to blacklist"
+  es: "Añadir a la lista negra"
+coin_menu.tbl_group:
+  ru: "Во временный ЧС"
+  en: "Add to temporary blacklist"
+  es: "Añadir a la lista negra temporal"
+coin_menu.target_core:
+  ru: "Ядро «%{core}»"
+  en: "Core «%{core}»"
+  es: "Núcleo «%{core}»"
+coin_menu.target_cores:
+  ru: "Выбранные ядра (%{n})"
+  en: "Selected cores (%{n})"
+  es: "Núcleos seleccionados (%{n})"
+coin_menu.target_strategy:
+  ru: "Стратегия «%{name}»"
+  en: "Strategy «%{name}»"
+  es: "Estrategia «%{name}»"
+# Ban lengths, matching the presets MoonBot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
+coin_menu.tbl_hours:
+  ru: "%{n} ч"
+  en: "%{n} h"
+  es: "%{n} h"
+coin_menu.tbl_days:
+  ru: "%{n} дн"
+  en: "%{n} d"
+  es: "%{n} d"
+coin_menu.tbl_left:
+  ru: "%{symbol}: осталось %{left}"
+  en: "%{symbol}: %{left} left"
+  es: "%{symbol}: quedan %{left}"
+# Shown when the core that holds the ban is not currently connected: the number is extrapolated
+# from the last snapshot before the outage, and a ban keeps expiring whether or not we can see it.
+coin_menu.tbl_left_stale:
+  ru: "%{symbol}: ~%{left} (нет связи)"
+  en: "%{symbol}: ~%{left} (offline)"
+  es: "%{symbol}: ~%{left} (sin conexión)"
+coin_menu.tbl_clear:
+  ru: "Снять"
+  en: "Lift the ban"
+  es: "Levantar la prohibición"
 coin_menu.strategy_goto:
   ru: "Перейти к стратегии"
   en: "Go to strategy"

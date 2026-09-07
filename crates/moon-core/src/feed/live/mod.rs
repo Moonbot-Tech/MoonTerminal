@@ -17,6 +17,7 @@ mod dirty;
 mod market_role;
 mod shared_config;
 mod startup_watchdog;
+mod temp_blacklist;
 #[cfg(test)]
 mod tests;
 
@@ -614,6 +615,9 @@ pub(super) fn run(
     // Last HyperLiquid quota written to `channels.hl_limit`, so the channel reports the value the
     // snapshot HOLDS and not only the moments it changes. `None` means nothing written yet.
     let mut hl_last_logged: Option<Option<u64>> = None;
+    // The core's temporary blacklist: what the UI was last told, what the diagnostic channel last
+    // wrote, and the test that tells an edit from a countdown.
+    let mut temp_blacklist = temp_blacklist::TempBlacklistPublisher::new();
     // The catch-up whose alive map this feed is waiting for, paired with its request ticket.
     // A `run()` local on purpose: a hard drop ends this loop and discards it, and the next `run()`
     // re-syncs from the writer's durable start state and reconciles again. Hoisting it into the
@@ -1427,10 +1431,19 @@ pub(super) fn run(
                     .map(client_settings_from_proto)
             },
         );
+        let client_settings_arrived = client_settings.is_some();
         if let Some(settings) = client_settings {
             client_settings_sequence.observe_update();
             client_settings_sequence.drive(&client, server.id);
             if tx.send(FeedMsg::ClientSettings(settings)).is_err() {
+                break;
+            }
+        }
+        // TempBL travels with the settings above but on its own terms — it is deliberately not a
+        // field of the projection they carry (`feed::TempBlacklistRow` says why) — and only what
+        // survives subtracting the expected countdown reaches the UI. See `temp_blacklist`.
+        if let Some(rows) = temp_blacklist.poll(&client, server.id, client_settings_arrived) {
+            if tx.send(FeedMsg::TempBlacklist(rows)).is_err() {
                 break;
             }
         }

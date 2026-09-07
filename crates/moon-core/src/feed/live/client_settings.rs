@@ -50,8 +50,63 @@ enum SettingsMutation {
     Edit(ClientSettingsEdit),
     /// Blacklist flag and text, formerly sent through an independent full-snapshot path.
     Blacklist { on: bool, text: String },
+    /// Temporary-blacklist rows to set and to drop, merged into the snapshot at SEND time.
+    ///
+    /// A delta rather than a list because the core writes this list too — a cloud signal or an
+    /// exchange rate limit adds its own rows — and a list captured in the UI would erase whatever
+    /// arrived in between.
+    TempBlacklist {
+        adds: Vec<(String, std::time::Duration)>,
+        removes: Vec<String>,
+    },
     /// Complete visible group exit state.
     GroupExit(GroupExitSettings),
+}
+
+/// What a sent packet asked of the temporary blacklist: per symbol, the remaining time it must
+/// hold, or `None` for a symbol it must no longer hold at all.
+///
+/// Only the symbols the packet TOUCHED. The rest of the list belongs to the core — it adds rows of
+/// its own for a cloud signal or an exchange rate limit — and demanding the whole list back
+/// unchanged would treat the core's own edit as a refusal of ours.
+type TempExpectation = Vec<(String, Option<std::time::Duration>)>;
+
+/// Fold one delta into the expectation, last demand per symbol winning.
+fn compose_temp_expectation(
+    expectation: &mut TempExpectation,
+    adds: &[(String, std::time::Duration)],
+    removes: &[String],
+) {
+    let mut set = |symbol: &str, want: Option<std::time::Duration>| match expectation
+        .iter_mut()
+        .find(|(held, _)| held.eq_ignore_ascii_case(symbol))
+    {
+        Some(entry) => entry.1 = want,
+        None => expectation.push((symbol.to_string(), want)),
+    };
+    for symbol in removes {
+        set(symbol, None);
+    }
+    for (symbol, remaining) in adds {
+        set(symbol, Some(*remaining));
+    }
+}
+
+/// Whether the core's snapshot shows what a sent packet's TempBL deltas asked for.
+fn temp_expectation_met(
+    settings: &moonproto::ClientSettingsCommand,
+    expectation: &TempExpectation,
+) -> bool {
+    expectation.iter().all(|(symbol, want)| {
+        let held = crate::feed::temp_blacklist_held(settings, symbol);
+        match (want, held) {
+            // A row the core keeps at an expired value is not a row it still holds: demanding it
+            // disappear entirely would leave a lift that can never be confirmed.
+            (None, held) => held.is_none_or(|held| held.is_zero()),
+            (Some(_), None) => false,
+            (Some(want), Some(held)) => temp_ban_matches(held, *want),
+        }
+    })
 }
 
 /// One queue operation; an order is a serialization barrier between settings generations.
@@ -71,6 +126,9 @@ enum SequenceAction {
     Send {
         settings: moonproto::ClientSettingsCommand,
         mutation_count: usize,
+        /// What this packet's TempBL deltas asked for, to be checked against the echo beside the
+        /// projection. Empty whenever the packet touched no temporary blacklist.
+        temp_expectation: TempExpectation,
     },
     /// Place one order, then continue planning against the same confirmed snapshot.
     Place(ManualOrder),
@@ -89,7 +147,7 @@ const MAX_EXIT_ATTEMPTS: u8 = 3;
 pub(in crate::feed) struct ClientSettingsSequence {
     queue: VecDeque<SequenceOp>,
     waiting_for_echo: bool,
-    pending_confirmation: Option<(crate::feed::ClientSettings, usize)>,
+    pending_confirmation: Option<(crate::feed::ClientSettings, TempExpectation, usize)>,
     /// Consecutive sends of the head mutation that came back unconfirmed; see
     /// [`MAX_EXIT_ATTEMPTS`]. Cleared whenever the queue actually advances.
     attempts: u8,
@@ -116,6 +174,19 @@ impl ClientSettingsSequence {
     pub(super) fn enqueue_edit(&mut self, edit: ClientSettingsEdit) {
         self.queue
             .push_back(SequenceOp::Mutation(SettingsMutation::Edit(edit)));
+    }
+
+    /// Queue a temporary-blacklist delta through the same full-snapshot serializer.
+    pub(super) fn enqueue_temp_blacklist(
+        &mut self,
+        adds: Vec<(String, std::time::Duration)>,
+        removes: Vec<String>,
+    ) {
+        self.queue
+            .push_back(SequenceOp::Mutation(SettingsMutation::TempBlacklist {
+                adds,
+                removes,
+            }));
     }
 
     /// Queue a blacklist edit through the same full-snapshot serializer.
@@ -151,9 +222,14 @@ impl ClientSettingsSequence {
         &mut self,
         settings: &moonproto::ClientSettingsCommand,
         mutation_count: usize,
+        temp_expectation: TempExpectation,
     ) {
         self.waiting_for_echo = true;
-        self.pending_confirmation = Some((client_settings_from_proto(settings), mutation_count));
+        self.pending_confirmation = Some((
+            client_settings_from_proto(settings),
+            temp_expectation,
+            mutation_count,
+        ));
         self.attempts = self.attempts.saturating_add(1);
     }
 
@@ -202,10 +278,11 @@ impl ClientSettingsSequence {
                 SequenceAction::Send {
                     settings: next,
                     mutation_count,
+                    temp_expectation,
                 } => {
                     match client.settings().send(next.clone()) {
                         Ok(()) => {
-                            self.observe_send_success(&next, mutation_count);
+                            self.observe_send_success(&next, mutation_count, temp_expectation);
                             log::info!(
                                 "core {} serialized client settings sent",
                                 crate::feed::core_label(server_id)
@@ -247,8 +324,14 @@ impl ClientSettingsSequence {
         if self.waiting_for_echo {
             return SequenceAction::Idle;
         }
-        if let Some((expected, mutation_count)) = self.pending_confirmation.take() {
-            if client_settings_from_proto(settings) == expected {
+        if let Some((expected, expected_temp, mutation_count)) = self.pending_confirmation.take() {
+            // Two halves, because the packet carries two kinds of state: everything the projection
+            // covers, compared as a whole, and the TempBL rows, which are deliberately outside it
+            // (`feed::TempBlacklistRow` says why) and would otherwise let an echo carrying none of
+            // them retire a ban the core never took.
+            if client_settings_from_proto(settings) == expected
+                && temp_expectation_met(settings, &expected_temp)
+            {
                 for _ in 0..mutation_count {
                     if !matches!(self.queue.front(), Some(SequenceOp::Mutation(_))) {
                         break;
@@ -265,17 +348,33 @@ impl ClientSettingsSequence {
                     self.attempts = 0;
                 }
                 Some(SequenceOp::Mutation(mutation)) if self.attempts >= MAX_EXIT_ATTEMPTS => {
-                    // Named in the log: from the outside an abandoned generation and a core that
-                    // simply agreed look identical, and the difference is whether the order that
-                    // follows carries the trader's exits or the core's.
-                    let wanted = match mutation {
-                        SettingsMutation::GroupExit(exit) => format!("{exit:?}"),
-                        other => format!("{other:?}"),
+                    // Named in the log, with the state that actually decides it: from the outside
+                    // an abandoned mutation and a core that simply agreed look identical. Which
+                    // state that is depends on the mutation — printing the exit generation under a
+                    // dropped temporary ban would describe a subsystem the ban never touched.
+                    let (wanted, holds) = match mutation {
+                        SettingsMutation::TempBlacklist { adds, removes } => (
+                            format!("temp blacklist adds {adds:?} removes {removes:?}"),
+                            format!("{:?}", crate::feed::temp_blacklist_rows(settings)),
+                        ),
+                        SettingsMutation::GroupExit(exit) => (
+                            format!("exit generation {exit:?}"),
+                            format!(
+                                "{:?}",
+                                client_settings_from_proto(settings).group_exit_settings()
+                            ),
+                        ),
+                        other => (
+                            format!("{other:?}"),
+                            format!(
+                                "{:?}",
+                                client_settings_from_proto(settings).group_exit_settings()
+                            ),
+                        ),
                     };
                     log::warn!(
-                        "core {} did not accept the exit generation after {MAX_EXIT_ATTEMPTS}                          attempts, dropping it: wanted {wanted}, core holds {:?}",
+                        "core {} did not accept a settings mutation after {MAX_EXIT_ATTEMPTS} attempts, dropping it: wanted {wanted}, core holds {holds}",
                         crate::feed::core_label(server_id),
-                        client_settings_from_proto(settings).group_exit_settings()
                     );
                     // This core will not hold the generation we asked for — it rewrites the field
                     // itself, which is what a manual strategy owning the sell price does. Drop the
@@ -288,16 +387,24 @@ impl ClientSettingsSequence {
                 Some(SequenceOp::Mutation(_)) => {
                     let mut next = settings.clone();
                     let mut mutation_count = 0;
+                    let mut temp_expectation = TempExpectation::new();
                     for op in &self.queue {
                         let SequenceOp::Mutation(mutation) = op else {
                             break;
                         };
                         apply_mutation(&mut next, mutation);
+                        // Composed the same way the snapshot is: two clicks on one coin leave the
+                        // LAST one's demand, and checking the first against the echo would fail on
+                        // a packet that was applied exactly as asked.
+                        if let SettingsMutation::TempBlacklist { adds, removes } = mutation {
+                            compose_temp_expectation(&mut temp_expectation, adds, removes);
+                        }
                         mutation_count += 1;
                     }
                     return SequenceAction::Send {
                         settings: next,
                         mutation_count,
+                        temp_expectation,
                     };
                 }
                 Some(SequenceOp::Order(order)) => {
@@ -305,12 +412,19 @@ impl ClientSettingsSequence {
                     // generation is still QUEUED: once that generation has been abandoned above,
                     // waiting for a match that will never come would hold the order for the rest of
                     // the session.
+                    let core_exit = client_settings_from_proto(settings).group_exit_settings();
                     if order.sync_exit
-                        && client_settings_from_proto(settings).group_exit_settings() != order.exit
-                        && self
-                            .queue
-                            .iter()
-                            .any(|op| matches!(op, SequenceOp::Mutation(_)))
+                        && core_exit != order.exit
+                        && self.queue.iter().any(|op| match op {
+                            // Only a mutation that can still MOVE the exit generation is worth
+                            // waiting for. A blacklist write — permanent or temporary — cannot,
+                            // and a coin banned while an order waits would otherwise hold that
+                            // order for the whole retry budget.
+                            SequenceOp::Mutation(mutation) => {
+                                mutation_touches_exit(settings, core_exit, mutation)
+                            }
+                            SequenceOp::Order(_) => false,
+                        })
                     {
                         return SequenceAction::Idle;
                     }
@@ -333,15 +447,114 @@ fn apply_mutation(settings: &mut moonproto::ClientSettingsCommand, mutation: &Se
             settings.use_coins_black_list = *on;
             settings.coins_black_list_text.clone_from(text);
         }
+        SettingsMutation::TempBlacklist { adds, removes } => {
+            apply_temp_blacklist(settings, adds, removes);
+        }
         SettingsMutation::GroupExit(exit) => apply_group_exit_settings(settings, *exit),
     }
 }
 
-/// Return whether applying a mutation would leave all projected settings unchanged.
+/// Merge a temporary-blacklist delta into the snapshot about to be sent.
+///
+/// Reads the rows out of THIS snapshot rather than from anything the caller captured, which is the
+/// whole point of carrying a delta: a row the core added while the click was travelling survives.
+/// An existing symbol keeps the CORE's spelling and only its remaining time is replaced, so a
+/// terminal that says `ada` cannot fork the core's own `ADAUSDT` row into a second one.
+fn apply_temp_blacklist(
+    settings: &mut moonproto::ClientSettingsCommand,
+    adds: &[(String, std::time::Duration)],
+    removes: &[String],
+) {
+    let mut rows = crate::feed::temp_blacklist_rows(settings);
+    rows.retain(|row| {
+        !removes
+            .iter()
+            .any(|drop| drop.eq_ignore_ascii_case(&row.symbol))
+    });
+    for (symbol, remaining) in adds {
+        match rows
+            .iter_mut()
+            .find(|row| row.symbol.eq_ignore_ascii_case(symbol))
+        {
+            Some(row) => row.remaining = *remaining,
+            None => rows.push(crate::feed::TempBlacklistRow {
+                symbol: symbol.clone(),
+                remaining: *remaining,
+            }),
+        }
+    }
+    settings.set_temp_blacklist_entries(rows.into_iter().map(|row| (row.symbol, row.remaining)));
+}
+
+/// How far BELOW the requested time the core's row may sit and still be the ban we asked for.
+///
+/// Only downward, and only by the drift between the send and the echo: the row starts counting the
+/// moment the core takes it, and a couple of round trips plus the core's own rounding is all that
+/// legitimately separates the two. A tolerance that also reached UPWARD — or one scaled to the
+/// request, which for a day-long ban is over an hour — would swallow the user's own gesture:
+/// clicking "24 h" on a ban with 23 h left is a refresh, and it must send.
+const TEMP_BLACKLIST_DRIFT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether a row the core holds is the ban that was asked for.
+fn temp_ban_matches(held: std::time::Duration, requested: std::time::Duration) -> bool {
+    // A hair ABOVE the request is the core rounding up, not a different ban; far above is the ban
+    // somebody else set, and re-asking for the shorter one is exactly what the user clicked.
+    held <= requested.saturating_add(std::time::Duration::from_secs(5))
+        && held.saturating_add(TEMP_BLACKLIST_DRIFT) >= requested
+}
+
+/// Whether the snapshot already holds exactly the temporary-blacklist state this delta asks for.
+///
+/// Expressed as the same expectation the echo is judged by, rather than as a second predicate over
+/// the same rows: the "already there, do not send" test and the "the core took it" test must agree
+/// about the tolerance, the case rule and what an expired row means, and two copies agree only
+/// until one is edited.
+fn temp_blacklist_satisfied(
+    settings: &moonproto::ClientSettingsCommand,
+    adds: &[(String, std::time::Duration)],
+    removes: &[String],
+) -> bool {
+    let mut expectation = TempExpectation::new();
+    compose_temp_expectation(&mut expectation, adds, removes);
+    temp_expectation_met(settings, &expectation)
+}
+
+/// Whether this mutation can change the visible exit generation a manual order synchronizes on.
+///
+/// Asked of the mutation rather than assumed from its kind: a targeted edit may or may not touch
+/// those fields, and the projection is what decides.
+fn mutation_touches_exit(
+    settings: &moonproto::ClientSettingsCommand,
+    core_exit: GroupExitSettings,
+    mutation: &SettingsMutation,
+) -> bool {
+    match mutation {
+        // Neither blacklist writes a field the exit generation is built from.
+        SettingsMutation::Blacklist { .. } | SettingsMutation::TempBlacklist { .. } => false,
+        SettingsMutation::GroupExit(_) => true,
+        // Judged against the CORE's current snapshot, not a default one: an edit that sets an exit
+        // field to its default value would look inert against a default probe, and the order behind
+        // it would go out carrying the exits the trader had just replaced. `core_exit` is that
+        // snapshot's projection, computed once by the caller rather than per queued mutation.
+        SettingsMutation::Edit(edit) => {
+            let mut after = settings.clone();
+            apply_client_settings_edit(&mut after, *edit);
+            client_settings_from_proto(&after).group_exit_settings() != core_exit
+        }
+    }
+}
+
+/// Return whether the core already holds what this mutation asks for.
 fn mutation_satisfied(
     settings: &moonproto::ClientSettingsCommand,
     mutation: &SettingsMutation,
 ) -> bool {
+    // TempBL rows are outside the projection every other mutation is judged by — see
+    // `feed::TempBlacklistRow` for why they must stay out of it — so comparing projections here
+    // would call this mutation satisfied the moment it was queued and drop it unsent.
+    if let SettingsMutation::TempBlacklist { adds, removes } = mutation {
+        return temp_blacklist_satisfied(settings, adds, removes);
+    }
     let before = client_settings_from_proto(settings);
     let mut after = settings.clone();
     apply_mutation(&mut after, mutation);

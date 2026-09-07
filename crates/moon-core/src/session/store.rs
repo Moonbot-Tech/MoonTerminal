@@ -13,7 +13,7 @@ use crate::feed::{
     CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigState, DetectRow,
     EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
     STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
-    StrategyEditRow, StrategyRow, StrategySchemaModel, TransferAssetsSnapshot,
+    StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -162,6 +162,16 @@ pub struct CoreData {
     /// same asymmetric clear-on-arrival rule as [`Self::assets_stale`]: reaching `Ready` alone does
     /// not clear it, only the next `FeedMsg::ClientSettings` does.
     pub client_settings_stale: bool,
+    /// The core's temporary-blacklist rows, as of the last snapshot that changed them. Empty both
+    /// before the first snapshot arrives and when the core holds no temporary ban.
+    ///
+    /// Each row's remaining time is the value the core reported THEN: the feed does not republish
+    /// a remainder merely for counting down, so a live countdown subtracts the time elapsed since
+    /// [`Self::temp_blacklist_at_ms`].
+    pub temp_blacklist: Vec<TempBlacklistRow>,
+    /// Wall clock at which [`Self::temp_blacklist`] was received, Unix ms, or `None` while no
+    /// snapshot has arrived.
+    pub temp_blacklist_at_ms: Option<i64>,
     /// Projection of the core's full safe-share configuration, or `None` until the background
     /// request answers. The gear popup's tabs read it; see `feed::live::shared_config`.
     pub core_config: Option<CoreConfig>,
@@ -420,6 +430,8 @@ impl CoreData {
             license: None,
             client_settings: None,
             client_settings_stale: false,
+            temp_blacklist: Vec::new(),
+            temp_blacklist_at_ms: None,
             core_config: None,
             core_config_stale: false,
             core_config_edit: None,
@@ -839,6 +851,17 @@ impl CoreData {
                     self.client_settings = Some(settings);
                     self.client_settings_rev = self.client_settings_rev.wrapping_add(1);
                 }
+            }
+            FeedMsg::TempBlacklist(rows) => {
+                // Stamped on ARRIVAL: the stamp is what a countdown counts from, and dating a
+                // fresh list by an older snapshot would show every ban as shorter than it is.
+                //
+                // Freshness is NOT tracked here. These rows ride the same `ClientSettingsUpdated`
+                // as the settings beside them, so `client_settings_stale` already answers "was
+                // there an outage since the last one" — and a flag of its own could never be
+                // cleared, because a reconnect that finds the bans unchanged publishes nothing.
+                self.temp_blacklist_at_ms = Some(crate::util::time::now_unix_ms_i64());
+                self.temp_blacklist = rows;
             }
             FeedMsg::CoreConfig {
                 config,

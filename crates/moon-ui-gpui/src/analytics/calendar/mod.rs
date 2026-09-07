@@ -365,43 +365,6 @@ pub(super) fn fmt_amount(v: f64, complete: bool) -> String {
     if complete { s } else { format!("~{s}") }
 }
 
-/// Format a short duration as at most two units: "45s", "1m 29s", "2h 15m", "3d 4h".
-///
-/// The card has one line for it, so the second unit is dropped when it is zero and never a third.
-///
-/// Args:
-///     secs: Duration in seconds; negative and non-finite inputs yield an em dash.
-///
-/// Returns:
-///     Localized compact duration.
-pub(super) fn fmt_duration_short(secs: f64) -> String {
-    if !secs.is_finite() || secs < 0.0 {
-        return "—".to_string();
-    }
-    let total = secs.round() as i64;
-    let (s, m, h, d) = (
-        t!("analytics.cal.dur_s"),
-        t!("analytics.cal.dur_m"),
-        t!("analytics.cal.dur_h"),
-        t!("analytics.cal.dur_d"),
-    );
-    // Each arm picks the largest unit that fits and one below it, so precision falls away with
-    // scale instead of printing "3d 4h 12m 6s" into a cell that has room for eight characters.
-    let pair = |big: i64, big_unit: &str, small: i64, small_unit: &str| {
-        if small > 0 {
-            format!("{big}{big_unit} {small}{small_unit}")
-        } else {
-            format!("{big}{big_unit}")
-        }
-    };
-    match total {
-        ..=59 => format!("{total}{s}"),
-        60..=3_599 => pair(total / 60, &m, total % 60, &s),
-        3_600..=86_399 => pair(total / 3_600, &h, total % 3_600 / 60, &m),
-        _ => pair(total / 86_400, &d, total % 86_400 / 3_600, &h),
-    }
-}
-
 impl AnalyticsView {
     /// Mode switch (+ persist) — the query range changes, so we refetch.
     ///

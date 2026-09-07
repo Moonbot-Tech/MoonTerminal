@@ -16,12 +16,10 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
-use super::{
-    date_of, days_in_month, fmt_amount, fmt_duration_short, fmt_volume, month_start, split_i18n,
-    today_start,
-};
+use super::{date_of, days_in_month, fmt_amount, fmt_volume, month_start, split_i18n, today_start};
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use crate::display_text::fmt_duration_short;
 use moon_core::db::analytics::{CellTotals, DayCell};
 
 impl AnalyticsView {

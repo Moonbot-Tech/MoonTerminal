@@ -41,6 +41,7 @@ static DETECT: AtomicBool = AtomicBool::new(false);
 static ASSETS: AtomicBool = AtomicBool::new(false);
 static MARKETS: AtomicBool = AtomicBool::new(false);
 static HL_LIMIT: AtomicBool = AtomicBool::new(false);
+static SETTINGS: AtomicBool = AtomicBool::new(false);
 /// Fast path for the order channel: the selector itself sits behind a lock, and reading that lock
 /// on every order of every core would be the one diagnostic that costs something while OFF.
 static ORDERS_ON: AtomicBool = AtomicBool::new(false);
@@ -95,6 +96,21 @@ pub fn markets() -> bool {
 #[inline]
 pub fn hl_limit() -> bool {
     HL_LIMIT.load(Ordering::Relaxed)
+}
+
+/// Append one wall-clock-stamped line to a channel's own file.
+///
+/// The stamp is what lines a channel up against the core's own log, so it is the shape every
+/// channel writes and belongs here rather than in each of them.
+pub fn stamped_line(file: &str, msg: &str) {
+    let (date, hms) = crate::applog::split_unix_ms(crate::util::time::now_unix_ms_i64());
+    channel_line(file, &format!("{date} {hms} {msg}"));
+}
+
+/// ClientSettings snapshot channel (`logs/settings_diag.log`).
+#[inline]
+pub fn settings() -> bool {
+    SETTINGS.load(Ordering::Relaxed)
 }
 
 /// Whether the order channel is following anything at all.
@@ -289,6 +305,7 @@ fn apply(cfg: &DiagCfg) {
     ASSETS.store(cfg.channels.assets, Ordering::Relaxed);
     MARKETS.store(cfg.channels.markets, Ordering::Relaxed);
     HL_LIMIT.store(cfg.channels.hl_limit, Ordering::Relaxed);
+    SETTINGS.store(cfg.channels.settings, Ordering::Relaxed);
     RING_LINES.store(cfg.limits.log_ring_lines, Ordering::Relaxed);
     BALANCE_WINDOW_SEC.store(cfg.limits.balance_repeat_window_sec, Ordering::Relaxed);
     MARKET_FLOOR_MS.store(cfg.limits.market_trace_min_interval_ms, Ordering::Relaxed);

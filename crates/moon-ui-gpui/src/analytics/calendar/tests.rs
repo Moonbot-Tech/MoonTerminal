@@ -6,8 +6,8 @@ use moon_core::db::analytics::DayCell;
 use moon_core::db::{FailKind, ReadFail};
 
 use super::{
-    DAY_ROWS, ProfitLoadState, apply_calendar_results, day_window, fmt_amount, fmt_duration_short,
-    fmt_volume, hour_start, next_day, previous_day, resolve_calendar_date,
+    DAY_ROWS, ProfitLoadState, apply_calendar_results, day_window, fmt_amount, fmt_volume,
+    hour_start, next_day, previous_day, resolve_calendar_date,
 };
 use crate::load_state::{LoadState, Note};
 
@@ -195,31 +195,6 @@ fn day_window_keeps_thirty_existing_rows_across_a_skipped_date() {
 
     assert_eq!(rows, DAY_ROWS);
     assert_eq!(day, bottom);
-}
-
-// ── Card formatting ─────────────────────────────────────────────────────────
-
-/// The card has one line for a holding time, so the formatter must fall back to coarser units
-/// instead of growing. A third unit, or a zero second unit, overflows the cell it renders into.
-#[test]
-fn duration_shows_at_most_two_units() {
-    assert_eq!(fmt_duration_short(45.0), "45s");
-    assert_eq!(fmt_duration_short(89.0), "1m 29s");
-    assert_eq!(fmt_duration_short(120.0), "2m");
-    assert_eq!(fmt_duration_short(8_100.0), "2h 15m");
-    assert_eq!(fmt_duration_short(7_200.0), "2h");
-    assert_eq!(fmt_duration_short(273_600.0), "3d 4h");
-    // Rounding happens before the split, so 59.6 s is a minute rather than "59s".
-    assert_eq!(fmt_duration_short(59.6), "1m");
-    assert_eq!(fmt_duration_short(0.0), "0s");
-}
-
-/// A duration that cannot exist must not render as a number.
-#[test]
-fn duration_rejects_impossible_input() {
-    assert_eq!(fmt_duration_short(-1.0), "—");
-    assert_eq!(fmt_duration_short(f64::NAN), "—");
-    assert_eq!(fmt_duration_short(f64::INFINITY), "—");
 }
 
 /// Turnover lands on round hundreds constantly, and the SI formatter used to eat their zeros.

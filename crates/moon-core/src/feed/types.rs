@@ -809,6 +809,101 @@ pub struct LicenseState {
     pub news_trial_used: bool,
 }
 
+/// One row of the core's TEMPORARY blacklist (`TempBL`), which bans new entries on a symbol until
+/// it expires. Selling and closing an existing position stay allowed, exactly as with the
+/// permanent list.
+///
+/// Deliberately NOT a field of [`ClientSettings`]: that whole struct is compared for equality to
+/// decide whether a queued settings write was accepted (`feed::live::client_settings`), and a
+/// remainder that counts down on every snapshot would make every such comparison fail — silently
+/// stalling every settings write, not just this one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TempBlacklistRow {
+    /// Symbol exactly as the core spells it. Whether that is the coin or the whole market is the
+    /// CORE's choice, not this terminal's — see `settings_diag`, the channel that reads it back.
+    pub symbol: String,
+    /// Remaining ban time. The wire carries a day fraction; this is the same value as a duration,
+    /// which is the unit every caller here works in.
+    pub remaining: std::time::Duration,
+}
+
+/// Longest temporary ban this terminal will represent, and the ceiling every wire value is clamped
+/// to.
+///
+/// MoonBot's own presets top out at a day and its rows expire; a year is far past anything a core
+/// legitimately holds, so a larger number is a corrupt packet rather than a very long ban.
+const TEMP_BLACKLIST_MAX: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
+
+/// Every temporary-blacklist row a settings snapshot holds, decoded.
+///
+/// The ONE place the wire rows are read. moonproto's own `remaining_duration()` must never be
+/// called instead — see [`temp_blacklist_remaining`] for what it does to a corrupt value — and a
+/// rule enforced by one function survives an edit that copies of the same expression do not.
+///
+/// Args:
+///     settings: Retained snapshot to read.
+///
+/// Returns:
+///     The rows in wire order, each symbol spelled as the core spells it.
+pub fn temp_blacklist_rows(settings: &moonproto::ClientSettingsCommand) -> Vec<TempBlacklistRow> {
+    settings
+        .temp_blacklist_entries()
+        .map(|row| TempBlacklistRow {
+            symbol: row.symbol.to_string(),
+            remaining: temp_blacklist_remaining(row.remaining_days()),
+        })
+        .collect()
+}
+
+/// The remaining ban this snapshot holds for one symbol, or `None` when it holds no row for it.
+///
+/// Symbols are matched case-insensitively, which is the rule every writer here uses too: a core
+/// that echoes a different case must not read as a different coin.
+pub fn temp_blacklist_held(
+    settings: &moonproto::ClientSettingsCommand,
+    symbol: &str,
+) -> Option<std::time::Duration> {
+    settings
+        .temp_blacklist_entries()
+        .find(|row| row.symbol.eq_ignore_ascii_case(symbol))
+        .map(|row| temp_blacklist_remaining(row.remaining_days()))
+}
+
+/// Turn one wire day-fraction into a remaining duration, without trusting it.
+///
+/// NOTE for the merge path: a row this sanitizes is also written back sanitized, because the wire
+/// setter takes durations and a snapshot is always sent whole. That only ever moves a value the
+/// core could not have meant — a NaN, a negative, or one past [`TEMP_BLACKLIST_MAX`] — and moving
+/// it is still better than the alternative, which is a panic on the feed thread.
+///
+/// `TempBLTimes` is decoded by moonproto as a raw `f64::from_bits` of whatever the packet carried,
+/// and its own `remaining_duration()` guards NaN and negatives but NOT overflow — so a corrupt or
+/// hostile value reaches `Duration::from_secs_f64` and PANICS, on the per-core feed thread, on
+/// every settings echo. This is the only conversion this crate performs.
+///
+/// Args:
+///     days: Remaining time as the wire spells it, a fraction of a day.
+///
+/// Returns:
+///     Zero for a row that has expired or carries no number at all; otherwise the duration, capped
+///     at [`TEMP_BLACKLIST_MAX`] — which is also where every absurd value lands, infinity
+///     included, so that a corrupt row is never mistaken for an expired one.
+pub fn temp_blacklist_remaining(days: f64) -> std::time::Duration {
+    // NaN is not a quantity at all, and anything at or below zero is a row the core has already
+    // let expire.
+    if days.is_nan() || days <= 0.0 {
+        return std::time::Duration::ZERO;
+    }
+    let secs = days * 86_400.0;
+    // Infinity lands here with every other absurd value, and on the SAME side: a corrupt row must
+    // not read as "expired", because the merge would then send that expiry back and lift a ban the
+    // core is holding.
+    if secs >= TEMP_BLACKLIST_MAX.as_secs_f64() {
+        return TEMP_BLACKLIST_MAX;
+    }
+    std::time::Duration::from_secs_f64(secs)
+}
+
 /// Core client-settings snapshot from moonproto `ClientSettings`, flattened for toolbar TP, SL,
 /// and sell presets. This is decoupled from moonproto: raw fields such as `s_price` and `sb_num`
 /// are `pub(crate)` in production and are read only through the command's public helpers.
@@ -1219,6 +1314,15 @@ pub enum FeedMsg {
     /// Core client-settings snapshot for TP, SL, sell, iceberg, and related settings, sent on
     /// `ClientSettingsUpdated`.
     ClientSettings(ClientSettings),
+    /// The core's temporary-blacklist rows, sent on `ClientSettingsUpdated` — but only when they
+    /// are NEWS: a row appearing, going away, being respelled, or being re-timed in either
+    /// direction.
+    ///
+    /// What is not news is a remainder counting down by roughly the time that passed, which is
+    /// what these rows do; publishing that would wake every reader once per snapshot to say the
+    /// same thing. A reader that wants a live countdown subtracts the elapsed time from what it
+    /// was handed. See `feed::live::temp_blacklist`.
+    TempBlacklist(Vec<TempBlacklistRow>),
     /// Core runtime and passive-mode state sent on `RuntimeStateUpdated`.
     RuntimeState(RuntimeState),
     /// Projection of the core's full safe-share configuration, sent on `SharedConfigUpdated`,

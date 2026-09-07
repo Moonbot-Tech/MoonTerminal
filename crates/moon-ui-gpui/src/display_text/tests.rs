@@ -1,4 +1,4 @@
-use super::flatten_lines;
+use super::{flatten_lines, fmt_duration_short};
 
 /// Single-line input is returned byte-for-byte.
 #[test]
@@ -75,4 +75,37 @@ fn result_never_contains_a_raw_break() {
 fn flattening_is_idempotent() {
     let once = flatten_lines("a\r\nb\r\nc");
     assert_eq!(flatten_lines(&once), once);
+}
+
+/// A caller has one line for a duration, so the formatter must fall back to coarser units instead
+/// of growing. A third unit, or a zero second unit, overflows the cell it renders into.
+///
+/// Built from the same keys the formatter reads rather than from English literals: the locale is a
+/// GLOBAL in `rust_i18n`, other tests in this binary switch it while these run, and a test that
+/// hard-coded "45s" would pass or fail depending on which one got there first.
+#[test]
+fn duration_shows_at_most_two_units() {
+    let (s, m, h, d) = (
+        rust_i18n::t!("analytics.cal.dur_s"),
+        rust_i18n::t!("analytics.cal.dur_m"),
+        rust_i18n::t!("analytics.cal.dur_h"),
+        rust_i18n::t!("analytics.cal.dur_d"),
+    );
+    assert_eq!(fmt_duration_short(45.0), format!("45{s}"));
+    assert_eq!(fmt_duration_short(89.0), format!("1{m} 29{s}"));
+    assert_eq!(fmt_duration_short(120.0), format!("2{m}"));
+    assert_eq!(fmt_duration_short(8_100.0), format!("2{h} 15{m}"));
+    assert_eq!(fmt_duration_short(7_200.0), format!("2{h}"));
+    assert_eq!(fmt_duration_short(273_600.0), format!("3{d} 4{h}"));
+    // Rounding happens before the split, so 59.6 s is a minute rather than "59s".
+    assert_eq!(fmt_duration_short(59.6), format!("1{m}"));
+    assert_eq!(fmt_duration_short(0.0), format!("0{s}"));
+}
+
+/// A duration that cannot exist must not render as a number.
+#[test]
+fn duration_rejects_impossible_input() {
+    assert_eq!(fmt_duration_short(-1.0), "—");
+    assert_eq!(fmt_duration_short(f64::NAN), "—");
+    assert_eq!(fmt_duration_short(f64::INFINITY), "—");
 }

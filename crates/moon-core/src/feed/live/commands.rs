@@ -1557,6 +1557,9 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::SetBlacklist { on, text }) => {
                 client_settings_sequence.enqueue_blacklist(on, text);
             }
+            Ok(CoreCmd::SetTempBlacklist { adds, removes }) => {
+                client_settings_sequence.enqueue_temp_blacklist(adds, removes);
+            }
             Ok(CoreCmd::SetDeltasByTrades(on)) => {
                 if let Err(error) = client.streams().set_deltas_by_trades(on) {
                     log::warn!(

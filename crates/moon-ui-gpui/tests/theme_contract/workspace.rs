@@ -855,9 +855,9 @@ fn delayed_workspace_actions_revalidate_inside_the_dispatch_path() {
         menu_builder
             .matches("workspace_action_allows_cores(")
             .count()
-            >= 7
+            >= 4
             && menu_guard.contains("backend.workspace_action_allows_core(group,*core)"),
-        "every shared coin-menu mutation must revalidate all captured cores atomically"
+        "every order action built here must revalidate all captured cores atomically"
     );
 
     let orders = read_src("panels/orders/table.rs");

@@ -28,6 +28,7 @@ pub mod metrics;
 pub mod order_diag;
 pub mod palette;
 pub mod session;
+pub mod settings_diag;
 pub mod strat_db;
 pub mod symbol;
 pub mod update;
