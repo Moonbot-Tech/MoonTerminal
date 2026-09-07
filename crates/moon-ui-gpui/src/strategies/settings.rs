@@ -60,6 +60,8 @@ pub(super) struct StrategiesPrefs {
     pub(super) tree_text_step: f32,
     /// Whether the parameters pane shows every section at once instead of one.
     pub(super) params_full: bool,
+    /// Whether section and field rows carry the localized human name under Moonbot's identifier.
+    pub(super) human_labels: bool,
 }
 
 impl Default for StrategiesPrefs {
@@ -69,13 +71,15 @@ impl Default for StrategiesPrefs {
     /// does not silently hide strategies that were visible before the preference existed, the tree
     /// text step ships at zero so the pane renders at exactly the theme base, and full mode stays
     /// off for the same reason as active-only: an upgrade must not silently change what the pane
-    /// shows.
+    /// shows. Human labels ship ON: they arrived on by construction, so keeping them is what
+    /// leaves the pane unchanged.
     fn default() -> Self {
         Self {
             group_by_venue: true,
             active_only: false,
             tree_text_step: STRATEGIES_TREE_TEXT_STEP_DEFAULT,
             params_full: false,
+            human_labels: true,
         }
     }
 }
@@ -161,12 +165,26 @@ const PARAMS_FULL: PrefRow = PrefRow {
     store: |layout, value| layout.strategies_params_full = Some(value),
 };
 
+/// Show the localized human name under Moonbot's own identifier on section and field rows.
+///
+/// Off, a section reads `Main` instead of `Main · Основные` and a field row keeps only the name
+/// the core speaks; the help tooltip stays either way.
+const HUMAN_LABELS: PrefRow = PrefRow {
+    id: "human-labels",
+    group: DISPLAY_GROUP,
+    label: "strat.settings.human_labels",
+    read: |prefs| prefs.human_labels,
+    set: |prefs, value| prefs.human_labels = value,
+    saved: |layout| layout.strategies_human_labels,
+    store: |layout, value| layout.strategies_human_labels = Some(value),
+};
+
 /// Every preference, in the order `restore` resolves them. Persistence covers all of them wherever
 /// their control lives.
-const PREF_ROWS: [&PrefRow; 3] = [&GROUP_BY_VENUE, &ACTIVE_ONLY, &PARAMS_FULL];
+const PREF_ROWS: [&PrefRow; 4] = [&GROUP_BY_VENUE, &ACTIVE_ONLY, &PARAMS_FULL, &HUMAN_LABELS];
 
 /// The subset the settings popup renders, in display order.
-const POPUP_ROWS: [&PrefRow; 1] = [&GROUP_BY_VENUE];
+const POPUP_ROWS: [&PrefRow; 2] = [&GROUP_BY_VENUE, &HUMAN_LABELS];
 
 impl StrategiesView {
     /// Apply and persist one Strategies display preference.

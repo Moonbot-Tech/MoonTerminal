@@ -49,6 +49,10 @@ strat.settings.params_full:
   ru: "Показывать все разделы параметров сразу"
   en: "Show every parameter section at once"
   es: "Mostrar todas las secciones de parámetros a la vez"
+strat.settings.human_labels:
+  ru: "Подписывать разделы и поля на моём языке"
+  en: "Caption sections and fields in my language"
+  es: "Rotular secciones y campos en mi idioma"
 strat.params_mode_sections:
   ru: "по разделам"
   en: "by section"

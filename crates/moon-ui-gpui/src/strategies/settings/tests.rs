@@ -106,6 +106,7 @@ fn saved_preferences_restore_independently() {
             active_only: true,
             tree_text_step: 0.0,
             params_full: false,
+            human_labels: true,
         }
     );
 }
