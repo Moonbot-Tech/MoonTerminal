@@ -39,7 +39,7 @@ fn presets_row_fits_only_when_available_width_reaches_the_row_width() {
 /// ceiling; widening it would elide the Russian Analytics period label with an ellipsis.
 #[gpui::test]
 fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::TestAppContext) {
-    rust_i18n::set_locale("ru");
+    let _locale = crate::test_locale::force("ru");
     // Every preset in the bar must fit at the default scale -- the task's baseline done-condition.
     for per in super::Period::ALL {
         let title = per.title(chrono_tz::Tz::UTC);
@@ -82,7 +82,6 @@ fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::Tes
             );
         }
     }
-    rust_i18n::set_locale("en");
 }
 
 /// `analytics/toolbar.rs:SIDE_TRIGGER_W`, `KIND_TRIGGER_W`, and `METRIC_TRIGGER_W` must leave
@@ -116,7 +115,7 @@ fn captioned_filter_labels_fit_without_ellipsis_in_every_locale(cx: &mut gpui::T
             ],
         ),
     ] {
-        rust_i18n::set_locale(locale);
+        let _locale = crate::test_locale::force(locale);
         for delta in UI_FONT_DELTA_MIN..=UI_FONT_DELTA_MAX {
             cx.update(|cx| moon_ui::MoonTheme::global_mut(cx).scale.font_delta = delta as f32);
             for (label, width) in labels {
@@ -138,7 +137,6 @@ fn captioned_filter_labels_fit_without_ellipsis_in_every_locale(cx: &mut gpui::T
             }
         }
     }
-    rust_i18n::set_locale("en");
 }
 
 /// Some undated trades, with money attached.

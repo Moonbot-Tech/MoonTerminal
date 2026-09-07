@@ -124,6 +124,9 @@ fn summary() -> ProfitMonitorSummary {
 /// its UID fallback makes this assertion red and causes rows to jump between refreshes.
 #[test]
 fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
+    // This test compares a rendered name against `t!(..)`, so both sides have to be read under one
+    // locale — and the locale is process-wide. See `crate::test_locale`.
+    let _locale = crate::test_locale::force("en");
     let mut summary = summary();
     summary.cores.push(ProfitMonitorCore {
         core_uid: 3,

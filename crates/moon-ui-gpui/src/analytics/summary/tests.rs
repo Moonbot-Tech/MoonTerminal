@@ -146,7 +146,9 @@ fn kpi_delta_tones_follow_each_metrics_good_direction() {
 /// full identity disagree with the muted Summary label a user can see.
 #[test]
 fn unresolved_strategy_labels_keep_their_status_and_readable_id_tail() {
-    rust_i18n::set_locale("en");
+    // Held, not merely set: the locale is process-wide and other tests in this binary switch it
+    // while this one runs. See `crate::test_locale`.
+    let _locale = crate::test_locale::force("en");
     let id = "-7653179346322682234";
 
     let deleted = strat_display_ex(id, id, true, Some(0));
