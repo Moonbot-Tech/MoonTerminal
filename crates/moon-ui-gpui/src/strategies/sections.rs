@@ -109,11 +109,12 @@ pub(super) fn section_label_key(raw_title: &str) -> Option<&'static str> {
 ///
 /// Args:
 ///     raw_title: Section title exactly as the streamed schema produced it.
+///     human_labels: The `StrategiesPrefs::human_labels` preference; off, the gloss is dropped.
 ///
 /// Returns:
-///     `"<raw> · <localized>"` when a label exists, or `raw_title` unchanged.
-pub(super) fn section_display_title(raw_title: &str) -> String {
-    match section_label_key(raw_title) {
+///     `"<raw> · <localized>"` when a label exists and labels are on, or `raw_title` unchanged.
+pub(super) fn section_display_title(raw_title: &str, human_labels: bool) -> String {
+    match section_label_key(raw_title).filter(|_| human_labels) {
         Some(key) => format!("{raw_title} · {}", t!(key)),
         None => raw_title.to_string(),
     }
@@ -121,16 +122,18 @@ pub(super) fn section_display_title(raw_title: &str) -> String {
 
 /// Two-line caption for a table-of-contents row: the schema title, then its human name under it.
 ///
-/// A section with no label keeps one line, so an unrecognised section looks exactly as it did.
+/// A section with no label keeps one line, so an unrecognised section looks exactly as it did —
+/// and so does every section once the human-labels preference is off.
 ///
 /// Args:
 ///     raw_title: Section title exactly as the streamed schema produced it.
+///     human_labels: The `StrategiesPrefs::human_labels` preference; off, no second line.
 ///     muted: Colour of the localized second line.
 ///     cx: Application context providing active text metrics.
 ///
 /// Returns:
 ///     A width-owning column that truncates each line on its own.
-fn section_caption(raw_title: &str, muted: Hsla, cx: &App) -> impl IntoElement {
+fn section_caption(raw_title: &str, human_labels: bool, muted: Hsla, cx: &App) -> impl IntoElement {
     v_flex()
         .flex_1()
         .min_w_0()
@@ -141,18 +144,21 @@ fn section_caption(raw_title: &str, muted: Hsla, cx: &App) -> impl IntoElement {
                 .truncate()
                 .child(raw_title.to_string()),
         )
-        .when_some(section_label_key(raw_title), |col, key| {
-            col.child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(design::t_caption(cx))
-                    .line_height(design::line_px(cx, 12.0))
-                    .text_color(muted)
-                    .child(t!(key).to_string()),
-            )
-        })
+        .when_some(
+            section_label_key(raw_title).filter(|_| human_labels),
+            |col, key| {
+                col.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(design::t_caption(cx))
+                        .line_height(design::line_px(cx, 12.0))
+                        .text_color(muted)
+                        .child(t!(key).to_string()),
+                )
+            },
+        )
 }
 
 impl StrategiesView {
@@ -175,9 +181,11 @@ impl StrategiesView {
                     .iter()
                     .map(|section| {
                         let raw = design::ui_body_text_width(cx, &section.title, 400.0);
-                        let label = section_label_key(&section.title).map_or(0.0, |key| {
-                            design::ui_caption_text_width(cx, &t!(key).to_string(), 400.0)
-                        });
+                        let label = section_label_key(&section.title)
+                            .filter(|_| self.prefs.human_labels)
+                            .map_or(0.0, |key| {
+                                design::ui_caption_text_width(cx, &t!(key).to_string(), 400.0)
+                            });
                         raw.max(label)
                     })
                     .reduce(f32::max)
@@ -306,7 +314,12 @@ impl StrategiesView {
                     .text_color(moon(p.text))
                     // The count badge beside it cannot shrink, so the caption owns the width
                     // and degrades to an ellipsis instead of painting over the badge.
-                    .child(section_caption(&sec.title, moon(p.text_muted), cx))
+                    .child(section_caption(
+                        &sec.title,
+                        self.prefs.human_labels,
+                        moon(p.text_muted),
+                        cx,
+                    ))
                     .child(
                         h_flex().ml_auto().flex_none().child(
                             MoonBadge::new(n.to_string())
@@ -376,7 +389,12 @@ impl StrategiesView {
                 .text_color(moon(tcol))
                 // The pane is user-resizable down to a width no section name fits, so each line
                 // of the caption degrades to an ellipsis rather than spilling into the splitter.
-                .child(section_caption(&sec.title, moon(p.text_muted), cx))
+                .child(section_caption(
+                    &sec.title,
+                    self.prefs.human_labels,
+                    moon(p.text_muted),
+                    cx,
+                ))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.selected_section != i {
                         this.selected_section = i;

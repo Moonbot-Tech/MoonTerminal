@@ -1127,7 +1127,7 @@ impl StrategiesView {
                 differ,
                 param_entries::ParamLabels {
                     orphans: &orphans,
-                    section_title: &|raw| section_display_title(raw),
+                    section_title: &|raw| section_display_title(raw, self.prefs.human_labels),
                 },
             );
             ParamsBody::Full(Rc::new(flat))
@@ -1292,7 +1292,10 @@ impl StrategiesView {
         // Title and field total come from the body; the multi selection-count branch keeps
         // priority exactly as before the body could also be a full-mode list.
         let (title, field_total) = match &body {
-            ParamsBody::Section(s) => (section_display_title(&s.title), s.fields.len()),
+            ParamsBody::Section(s) => (
+                section_display_title(&s.title, self.prefs.human_labels),
+                s.fields.len(),
+            ),
             ParamsBody::Full(f) => (t!("strat.params_full_title").to_string(), f.field_count),
         };
         let count = if multi {
@@ -1694,10 +1697,14 @@ impl StrategiesView {
             .any(|(core, id)| self.field_edits.contains_key(&(*core, *id, f.name.clone())));
         let field_name = f.name.clone();
         let row_id = editor_state_id(keys, &field_name);
+        // The human name is a preference (`StrategiesPrefs::human_labels`); off, the row keeps
+        // only the name the core speaks, while the help tooltip is unaffected.
         let (field_tooltip, field_label) = match field_keys(&field_name) {
             Some((help, label)) => (
                 help.map(|key| t!(key).to_string()),
-                label.map(|key| t!(key).to_string()),
+                label
+                    .filter(|_| self.prefs.human_labels)
+                    .map(|key| t!(key).to_string()),
             ),
             None => (None, None),
         };

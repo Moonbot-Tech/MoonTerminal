@@ -650,6 +650,13 @@ pub struct WindowLayout {
     /// discard the complete window layout.
     #[serde(default, deserialize_with = "de_lenient")]
     pub strategies_params_full: Option<bool>,
+    /// Strategies: whether section and field rows carry the localized human name under
+    /// Moonbot's own identifier.
+    ///
+    /// `None` keeps the Strategies-owned default. Read leniently so a malformed hand edit cannot
+    /// discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub strategies_human_labels: Option<bool>,
     /// Global "Assets" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub assets_window: Option<GeomRect>,
