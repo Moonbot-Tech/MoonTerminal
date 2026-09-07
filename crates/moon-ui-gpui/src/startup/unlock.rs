@@ -14,11 +14,15 @@
 //! The configuration is loaded here rather than in `run` because loading is exactly what can fail
 //! with "ask the user", and asking needs a window.
 
+use std::time::Duration;
+
 use gpui::*;
 use moon_core::config::AppConfig;
 use moon_core::config::crypto::AccessError;
+use moon_ui::Root;
 
 use super::boot::{self, BootInput};
+use super::instance::WakeWatch;
 use crate::window::login::{self, LoginOutcome, LoginStep};
 
 /// Load the configuration, run whatever prompts it requires, and boot the terminal.
@@ -55,8 +59,12 @@ pub(super) fn start(uid_floor: Option<u64>, input: BootInput, cx: &mut App) {
 /// vault told to forget it, because that seal is what protects a still-recoverable file from being
 /// replaced by an empty one.
 fn unopenable_file(uid_floor: Option<u64>, input: BootInput, cx: &mut App) {
+    let wake = input
+        .instance
+        .as_ref()
+        .map(super::instance::InstanceGuard::wake_watch);
     let mut carried = Some(input);
-    login::open(LoginStep::Locked, cx, move |outcome, cx| {
+    let handle = login::open(LoginStep::Locked, cx, move |outcome, cx| {
         let Some(input) = carried.take() else {
             return;
         };
@@ -72,6 +80,7 @@ fn unopenable_file(uid_floor: Option<u64>, input: BootInput, cx: &mut App) {
             LoginOutcome::Abandoned => cx.quit(),
         }
     });
+    arm_login_instance_wake(wake, handle, cx);
 }
 
 /// Ask for the encryption password, then continue the same startup.
@@ -81,8 +90,12 @@ fn unopenable_file(uid_floor: Option<u64>, input: BootInput, cx: &mut App) {
 /// performs uid assignment, schema migration and the write-back those depend on. Reproducing any
 /// of that here would be a second, quieter copy of the startup rules.
 fn ask_for_file_password(uid_floor: Option<u64>, input: BootInput, cx: &mut App) {
+    let wake = input
+        .instance
+        .as_ref()
+        .map(super::instance::InstanceGuard::wake_watch);
     let mut carried = Some(input);
-    login::open(LoginStep::FilePassword, cx, move |outcome, cx| {
+    let handle = login::open(LoginStep::FilePassword, cx, move |outcome, cx| {
         let Some(input) = carried.take() else {
             return;
         };
@@ -98,6 +111,7 @@ fn ask_for_file_password(uid_floor: Option<u64>, input: BootInput, cx: &mut App)
             LoginOutcome::Abandoned => cx.quit(),
         }
     });
+    arm_login_instance_wake(wake, handle, cx);
 }
 
 /// Run the launch-password gate, if one is configured, and boot afterwards.
@@ -119,8 +133,12 @@ fn launch_gate(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // The saved theme is known now, so the second prompt is not painted in default colours after
     // the first one used the user's.
     super::install_moon_theme_for_config(&cfg, cx);
+    let wake = input
+        .instance
+        .as_ref()
+        .map(super::instance::InstanceGuard::wake_watch);
     let mut carried = Some((cfg, input));
-    login::open(LoginStep::LaunchPassword, cx, move |outcome, cx| {
+    let handle = login::open(LoginStep::LaunchPassword, cx, move |outcome, cx| {
         let Some((cfg, input)) = carried.take() else {
             return;
         };
@@ -129,6 +147,43 @@ fn launch_gate(cfg: AppConfig, input: BootInput, cx: &mut App) {
             LoginOutcome::Abandoned => cx.quit(),
         }
     });
+    arm_login_instance_wake(wake, handle, cx);
+}
+
+/// Raise the login prompt when a second launch of this install directory arrives.
+///
+/// The coordination loop in `boot` does not run until the vault is open, so a click of the
+/// shortcut while this window is up would otherwise exit 0 and leave the prompt hidden.
+fn arm_login_instance_wake(
+    wake: Option<WakeWatch>,
+    handle: Option<WindowHandle<Root>>,
+    cx: &mut App,
+) {
+    let Some(watch) = wake else {
+        return;
+    };
+    let Some(handle) = handle else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        let executor = cx.update(|cx| cx.background_executor().clone());
+        loop {
+            executor.timer(Duration::from_millis(100)).await;
+            let keep = cx.update(|cx| {
+                if handle.update(cx, |_, _, _| ()).is_err() {
+                    return false;
+                }
+                if watch.poll() {
+                    let _ = handle.update(cx, |_, window, _| window.activate_window());
+                }
+                true
+            });
+            if !keep {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 /// Report a configuration failure that no password can fix, then stop.

@@ -400,6 +400,23 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
         diag::force_enable();
     }
 
+    // After the fixture (it can replace the data root) and still before any window: a second
+    // launch of this same install directory must activate the live process and exit 0, never open
+    // another UI. FireTest, `--fixture`, and the UI atlas skip the lock so those tools stay
+    // runnable. Updater helper modes never reach here.
+    let instance = if instance::lock_exempt(firetest_config.is_some()) {
+        log::info!("instance lock skipped for this launch");
+        None
+    } else {
+        match instance::acquire()? {
+            instance::Acquire::Primary(guard) => Some(guard),
+            instance::Acquire::AlreadyRunning => {
+                log::info!("MoonTerminal is already running for this install; activating it");
+                return Ok(());
+            }
+        }
+    };
+
     // Native crashes (an access violation in DirectX/the GPUI fork, such as presenting through a
     // stale window handle during reconnect) bypass Rust's panic hook: the process exits silently
     // and leaves `panic.log` empty. Install a top-level SEH filter so these crashes also reach
@@ -573,6 +590,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
                 firetest: firetest_config,
                 report_write_permit,
                 update_recovered,
+                instance,
             },
             cx,
         );
@@ -583,6 +601,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
 mod boot;
 mod fixture;
 mod graphics_migration;
+mod instance;
 mod unlock;
 
 #[cfg(test)]

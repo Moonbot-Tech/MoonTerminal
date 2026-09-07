@@ -47,6 +47,8 @@ pub(super) struct BootInput {
     /// preserved after the uid floor has been read from it and before any writer exists, and none
     /// of that depends on the configuration being open.
     pub report_write_permit: Option<moon_core::db::report_recovery::ReportWritePermit>,
+    /// Process-lifetime install lock. `None` when this launch is exempt (FireTest, fixture, atlas).
+    pub instance: Option<super::instance::InstanceGuard>,
 }
 
 /// Build sessions, windows and the coordination loop for a configuration that is now open.
@@ -59,6 +61,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         firetest: firetest_config,
         report_write_permit,
         update_recovered,
+        instance,
     } = input;
 
     // FireTest drives production surfaces but must not create durable backups. Normal startup
@@ -569,6 +572,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // Slow coordination path: provider roles, metrics, reconnects and persistence. This may
     // wake the GPUI tree through Backend notify, but it never stages high-rate chart pixels.
     let coord_backend = backend.clone();
+    let coord_instance = instance;
     let coord_cfg = cfg.clone();
     let coord_layout = layout.clone();
     let coord_report_immediate_dirty = report_immediate_dirty;
@@ -609,6 +613,19 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 20_000,
             );
             cx.update(|cx| {
+                if let Some(guard) = &coord_instance {
+                    if super::instance::poll_activation(guard) {
+                        let handles: Vec<_> = coord_backend
+                            .read(cx)
+                            .group_windows
+                            .values()
+                            .copied()
+                            .collect();
+                        for handle in handles {
+                            let _ = handle.update(cx, |_, window, _| window.activate_window());
+                        }
+                    }
+                }
                 let mut edges = TickEdges::default();
                 consume_report_commit(coord_report_immediate_dirty.as_deref(), || {
                     edges.immediate_report = true;
