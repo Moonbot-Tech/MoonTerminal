@@ -23,8 +23,17 @@ const WHEEL_THRESHOLD: f32 = 100.0;
 /// Precise zoom uses `2^(pixels / WHEEL_PX_PER_2X)` instead of the discrete wheel threshold, which
 /// caused inertial pixel deltas to trigger repeated jumps and axis jitter.
 const WHEEL_PX_PER_2X: f32 = 300.0;
-const ANCHOR_BREAK_PCT: f32 = 0.10;
+/// Fraction of plot width the LMB must travel in X before Live detaches into a pan.
+const ANCHOR_BREAK_PCT: f32 = 0.20;
+/// Device-pixel floor so a narrow (or 1 px broom) plot cannot break live on 1–2 px of jitter.
+const ANCHOR_BREAK_MIN_PX: f32 = 32.0;
 const RMB_ZOOM_START_PX: f32 = 4.0;
+
+/// True when accumulated LMB travel is a deliberate X pan that should leave live follow.
+fn x_drag_breaks_live(accum_x: f32, accum_y: f32, plot_w: f32) -> bool {
+    let threshold = (plot_w * ANCHOR_BREAK_PCT).max(ANCHOR_BREAK_MIN_PX);
+    accum_x.abs() >= threshold && accum_x.abs() >= accum_y.abs()
+}
 
 #[derive(Default)]
 pub struct ChartInput {
@@ -301,8 +310,7 @@ impl ChartInput {
                     changed = true;
                 }
                 if !self.lmb_x_active
-                    && self.drag_accum.0.abs() >= plot_w * ANCHOR_BREAK_PCT
-                    && self.drag_accum.0.abs() >= self.drag_accum.1.abs()
+                    && x_drag_breaks_live(self.drag_accum.0, self.drag_accum.1, plot_w)
                 {
                     self.lmb_x_active = true;
                 }
