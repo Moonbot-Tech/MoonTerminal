@@ -155,6 +155,10 @@ pub struct SessionManager {
     wanted: HashMap<CoreId, HashSet<String>>,
     /// Deadline for releasing each `(provider, market)` after its last chart closes.
     pending_drop: HashMap<(CoreId, String), Instant>,
+    /// Provider-to-order-book markets, including a linger after the last chart drops the book.
+    wanted_orderbook: HashMap<CoreId, HashSet<String>>,
+    /// Deadline for dropping each `(provider, market)` order-book subscription.
+    pending_ob_drop: HashMap<(CoreId, String), Instant>,
     /// Last `(provider, markets, orderbook_markets)` role sent to each core, used to suppress
     /// duplicate commands. `orderbook_markets` is the subset of `markets` that needs an order book.
     last_cmd: HashMap<CoreId, (bool, Vec<String>, Vec<String>)>,

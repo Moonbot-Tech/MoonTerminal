@@ -479,6 +479,26 @@ impl MarketDataSource {
             return false;
         };
 
+        if store
+            .read()
+            .expect("market store poisoned")
+            .view(provider, market)
+            .is_none()
+        {
+            if market_diag_enabled()
+                && market_diag_due(format!("no-view:{provider}:{market}"), market_diag_floor())
+            {
+                let price_known = snapshot.markets().price(market).is_some();
+                market_diag(format!(
+                    "refresh core={} provider={} market={market}: no store view \
+                     kind={orderbook_kind:?} price_known={price_known} (cursor not advanced)",
+                    crate::feed::core_label(core),
+                    crate::feed::core_label(provider),
+                ));
+            }
+            return false;
+        }
+
         let key = (provider, market.to_string());
         let mut book_update: Option<OrderBook> = None;
         let mut has_book_snapshot = false;

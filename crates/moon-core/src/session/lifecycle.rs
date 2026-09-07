@@ -75,6 +75,8 @@ impl SessionManager {
             providers: HashMap::new(),
             wanted: HashMap::new(),
             pending_drop: HashMap::new(),
+            wanted_orderbook: HashMap::new(),
+            pending_ob_drop: HashMap::new(),
             last_cmd: HashMap::new(),
             core_updates: crate::session::core_update::CoreUpdateQueue::default(),
         };
@@ -310,6 +312,8 @@ impl SessionManager {
         self.clear_core_coordination(id);
         self.wanted.remove(&id);
         self.pending_drop.retain(|(core, _), _| *core != id);
+        self.wanted_orderbook.remove(&id);
+        self.pending_ob_drop.retain(|(core, _), _| *core != id);
         log::info!("session down: core={}", crate::feed::core_label(id));
         // Release the name AFTER the line above, so the last line still names the core; a later id
         // reuse must not inherit it.

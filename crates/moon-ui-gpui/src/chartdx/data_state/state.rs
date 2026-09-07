@@ -63,6 +63,7 @@ impl ChartDataState {
             warn_hovered: None,
             market_source: None,
             trade_replay: None,
+            replay_tape: std::rc::Rc::new(Vec::new()),
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
@@ -171,11 +172,17 @@ impl ChartDataState {
         &mut self,
         series: Option<std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
     ) {
+        self.replay_tape = std::rc::Rc::new(crate::chartdx::trade_history_sync::replay_tape(
+            series.as_deref(),
+        ));
         self.trade_replay = series;
         let mut render = self.render.borrow_mut();
         for pane in &mut render.panes {
             pane.resident_left_rel = f32::NAN;
             pane.gpu_prepare_dirty = true;
+            // Ticks often arrive after the report row. Force the arrows to rebuild so they can
+            // snap onto the tape instead of staying on the second-aligned kline-stage stamps.
+            pane.last_trade_history_sig = u64::MAX;
         }
         render.needs_present = true;
         drop(render);

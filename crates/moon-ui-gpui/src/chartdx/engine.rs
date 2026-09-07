@@ -1066,6 +1066,16 @@ impl ChartEngine {
         // engine is `Clone` over these shared handles, so a flag on the engine itself would be
         // copied per clone and could disagree with the state every gate answers from.
         self.data.borrow_mut().set_historical(historical);
+        if historical {
+            // The pane is constructed live (`ChartView::new` follows `now`). Refusing the global
+            // Live flag is not enough: until the trade is framed, `follow_edge` still walks the
+            // default-true view to the live edge and the window opens hours away from the trade.
+            self.follow = false;
+            self.data.borrow_mut().follow = false;
+            for pane in self.container.borrow_mut().panes_mut() {
+                pane.view.set_manual_persistent();
+            }
+        }
     }
 
     /// Applies the toolbar's global Live/Pause follow state to this `ChartEngine`'s single pane.
@@ -1158,6 +1168,9 @@ impl ChartEngine {
     /// Processes automatic live rejoin by anchoring panes whose manual hold expired to now. Returns
     /// true if any pane resumed live and therefore requires a frame and notification.
     pub fn tick_auto_live(&mut self, now_ms: f64) -> bool {
+        if self.data.borrow().historical {
+            return false;
+        }
         let mut resumed = false;
         for p in self.container.borrow_mut().panes_mut() {
             resumed |= p.view.tick_auto_live(now_ms);

@@ -252,6 +252,81 @@ pub struct TradeMark {
     pub is_short: bool,
 }
 
+/// Inclusive window, in milliseconds, inside which a report stamp may snap onto a tape print.
+///
+/// Report `buydate`/`closedate` are whole seconds, so a fill at `N.766` is stored as `N.000`.
+/// One second is the largest gap that truncation can create; anything farther is a different
+/// print, not the same second's leftover.
+pub const TAPE_SNAP_WINDOW_MS: i64 = 1_000;
+
+/// One public-tape print, in the same `(ms, price)` terms as [`TradeMark`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TapePrint {
+    /// Unix milliseconds.
+    pub t_ms: i64,
+    /// Print price.
+    pub price: f64,
+}
+
+/// Snap one closed trade's ends onto nearby tape prints.
+///
+/// Each end is independent: within [`TAPE_SNAP_WINDOW_MS`] of the report stamp, pick the print
+/// closest in PRICE, then closest in time, then earlier. No candidate leaves that end unchanged.
+/// The report row is not rewritten — only the drawn mark moves, so the figures rail can keep
+/// showing the stored prices.
+///
+/// Args:
+///     mark: Report-derived mark, typically second-aligned.
+///     tape: Prints in any order; non-finite or non-positive prices are ignored.
+///
+/// Returns:
+///     The same mark with each end that found a print moved onto it.
+pub fn snap_mark_to_tape(mark: TradeMark, tape: &[TapePrint]) -> TradeMark {
+    let (buy_ms, buy_price) = snap_end(mark.buy_ms, mark.buy_price, tape);
+    let (close_ms, sell_price) = snap_end(mark.close_ms, mark.sell_price, tape);
+    TradeMark {
+        buy_ms,
+        close_ms,
+        buy_price,
+        sell_price,
+        ..mark
+    }
+}
+
+/// Pick the tape print that should stand in for one report end.
+///
+/// Args:
+///     t_ms: Report timestamp, Unix milliseconds.
+///     price: Report price for this end.
+///     tape: Candidate prints.
+///
+/// Returns:
+///     The chosen print's `(t_ms, price)`, or the inputs when nothing is in range.
+fn snap_end(t_ms: i64, price: f64, tape: &[TapePrint]) -> (i64, f64) {
+    if !price.is_finite() || price <= 0.0 {
+        return (t_ms, price);
+    }
+    let mut best: Option<(f64, i64, i64, f64)> = None;
+    for print in tape {
+        if !print.price.is_finite() || print.price <= 0.0 {
+            continue;
+        }
+        let dt = print.t_ms.abs_diff(t_ms);
+        if dt > TAPE_SNAP_WINDOW_MS as u64 {
+            continue;
+        }
+        let dp = (print.price - price).abs();
+        let key = (dp, dt as i64, print.t_ms, print.price);
+        if best.is_none_or(|b| (key.0, key.1, key.2) < (b.0, b.1, b.2)) {
+            best = Some(key);
+        }
+    }
+    match best {
+        Some((_, _, snapped_t, snapped_p)) => (snapped_t, snapped_p),
+        None => (t_ms, price),
+    }
+}
+
 /// Pixel radius within which two actions of the SAME kind collapse into one cluster, in logical
 /// px, applied on BOTH axes. An x-only threshold would merge an entry at 100 and one at 130 into a
 /// single marker at 115, sitting on neither.

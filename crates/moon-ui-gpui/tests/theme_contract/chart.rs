@@ -927,6 +927,17 @@ fn historical_panels_make_the_engine_ignore_the_global_follow_flag() {
         historical.contains("panel.chart.set_historical(true);"),
         "new_historical must tell its engine that the panel shows a closed interval"
     );
+    let set_hist = code_only(braced_body(&engine, "pub fn set_historical("));
+    assert!(
+        set_hist.contains("set_manual_persistent()"),
+        "set_historical must freeze the pane off the live edge before the trade is framed"
+    );
+    let timer = code_only(&read_src("panels/chart/refs.rs"));
+    let arm = braced_body(&timer, "pub(super) fn arm_auto_live_timer(");
+    assert!(
+        arm.contains("self.historical"),
+        "a historical viewer must not arm the auto-live timer that re-anchors to now"
+    );
 }
 
 /// A trade window must restore its shared Y-scale and persist a pick into layout.

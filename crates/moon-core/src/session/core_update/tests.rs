@@ -27,6 +27,8 @@ fn manager() -> SessionManager {
         providers: HashMap::new(),
         wanted: HashMap::new(),
         pending_drop: HashMap::new(),
+        wanted_orderbook: HashMap::new(),
+        pending_ob_drop: HashMap::new(),
         last_cmd: HashMap::new(),
         core_updates: CoreUpdateQueue::default(),
     }

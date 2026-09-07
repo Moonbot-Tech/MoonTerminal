@@ -162,7 +162,7 @@ impl ChartPanel {
     /// after a pan; on expiry it rejoins due panes to live and re-arms for the next deadline, or
     /// remains idle when no pane has a pending return.
     pub(super) fn arm_auto_live_timer(&mut self, cx: &mut Context<Self>) {
-        if self.auto_live_timer_armed {
+        if self.historical || self.auto_live_timer_armed {
             return;
         }
         let Some(delay) = self.next_auto_live_delay(now_unix_ms()) else {

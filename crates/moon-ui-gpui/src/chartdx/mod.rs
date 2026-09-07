@@ -1297,6 +1297,9 @@ struct ChartDataState {
     /// is no shared key either could collide on. Contrast `moon_core::fixture`, whose bench state
     /// is process-wide by design.
     trade_replay: Option<Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
+    /// Converted tape for [`trade_history_sync`] snap, rebuilt only when [`Self::trade_replay`]
+    /// changes so hover/zoom userdata rebuilds do not reallocate 40k prints.
+    replay_tape: Rc<Vec<moon_chart::TapePrint>>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,
