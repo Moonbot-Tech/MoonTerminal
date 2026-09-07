@@ -145,6 +145,11 @@ pub(crate) fn open_trade_window(
         ),
     };
     let theme = backend.read(cx).config.chart_theme().clone();
+    // ONE remembered scale for every trade window, not one per trade: same policy as the
+    // rectangle above. `None` is Auto — a layout written before this field existed, and an
+    // explicit Auto pick. Applied onto the new panel after construction, so a fresh window
+    // opens on the last chosen zoom rather than on the panel's default Auto.
+    let saved_scale = crate::controls::remembered_scale(backend.read(cx).layout.trade_window_scale);
     let title = format!("MoonTerminal - {} - {}", record.coin, stamps.1);
     let mut opts = crate::window::windowing::trade_window_options(
         title,
@@ -228,6 +233,9 @@ pub(crate) fn open_trade_window(
             // states what this trade WAS even while the picture behind it is still loading — and
             // never has to swap one set of captions for another once it lands.
             panel.attach_trade_labels(Some(labels.clone()), pcx);
+            if let Some(pct) = saved_scale {
+                panel.force_scale(Some(pct), pcx);
+            }
         });
         // Cloned BEFORE the view takes the panel: the observer below needs the handle, and an
         // `Entity` handle is a refcount, not a copy of the panel.

@@ -704,6 +704,16 @@ pub struct WindowLayout {
     /// cascades off this rectangle instead of landing exactly on the first.
     #[serde(default, deserialize_with = "de_lenient")]
     pub trade_window: Option<GeomRect>,
+    /// Price scale shared by EVERY trade-detail window (`None` = Auto).
+    ///
+    /// Same policy as [`Self::trade_window`]: the user picks a zoom once and expects it back on
+    /// the next trade, including after a restart. A per-trade key would mean the first open of
+    /// every new coin ignored every choice ever made.
+    ///
+    /// `None` — every layout written before this field existed, and an explicit Auto pick — is
+    /// Auto. Read leniently so a malformed hand edit cannot discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub trade_window_scale: Option<f32>,
 
     /// Selected Profit Monitor period id.
     #[serde(default, deserialize_with = "de_lenient")]

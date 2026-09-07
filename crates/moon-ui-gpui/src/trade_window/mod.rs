@@ -728,25 +728,32 @@ impl TradeWindowView {
         self.panel.read(cx).scale()
     }
 
-    /// Apply a price scale to THIS window, for as long as it is open.
+    /// Apply a price scale to THIS window and remember it for every later trade window.
     ///
-    /// Not remembered: a scale that outlived the window meant every later trade opened at a number
-    /// chosen for a different one, and a position whose range does not fit that number is drawn
-    /// off-screen — the window then looks frozen rather than scaled. Each window opens on Auto and
-    /// fits the trade it was opened for; this control is a look at it from another zoom, not a
-    /// setting.
+    /// One value for all of them, same policy as the shared geometry: the user picks a zoom once
+    /// and expects that zoom back, including after a restart. `None` is Auto, and writing Auto
+    /// stores Auto rather than a sentinel. Display-only, like everything else this window can do:
+    /// it changes how the closed trade is drawn and reaches no core.
     ///
-    /// Display-only, like everything else this window can do: it changes how the closed trade is
-    /// drawn and reaches no core. The forcing variant is deliberate — see
+    /// The forcing variant is deliberate — see
     /// [`crate::panels::chart::ChartPanel::force_scale`] — so picking the preset already shown
-    /// undoes a vertical drag instead of being swallowed as a no-op.
+    /// undoes a vertical drag instead of being swallowed as a no-op. The layout is dirtied only
+    /// when the stored value actually changed, so re-picking the same step to undo a drag does
+    /// not schedule a file write.
     ///
     /// Args:
     ///     pct: The chosen scale, or `None` for Auto.
     ///     cx: View context.
     pub(crate) fn pick_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
+        let pct = crate::controls::remembered_scale(pct);
         self.panel
             .update(cx, |panel, pcx| panel.force_scale(pct, pcx));
+        self.backend.update(cx, |b, _| {
+            if b.layout.trade_window_scale != pct {
+                b.layout.trade_window_scale = pct;
+                b.layout_dirty = true;
+            }
+        });
         cx.notify();
     }
 
