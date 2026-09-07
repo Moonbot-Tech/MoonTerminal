@@ -445,6 +445,8 @@ impl ChartDataState {
                 // nothing at all — otherwise a freshly opened market, whose trade ring the core has
                 // not streamed yet, renders the whole zone as empty space. NaN means no crosses are
                 // resident at all, which suppresses the zone entirely rather than clamping it.
+                // The live drain stamps it too (below), so a pane that opened on an empty ring
+                // switches the zone on with its first batch instead of waiting for the next reset.
                 if pr.combo_left_rel.is_nan() {
                     f32::MAX
                 } else {
@@ -662,6 +664,18 @@ impl ChartDataState {
                         pr.cross_upload.len() as u64,
                     );
                     pr.layers.append_combo(&pr.cross_upload);
+                    // The first crosses this pane ever received may arrive through the live drain
+                    // rather than a full read: a chart opened on a market whose ring the core has
+                    // not streamed yet resets on nothing, and only later batches carry rows. The
+                    // hide-candles zone below keys on this value and stays disabled while it is
+                    // NaN — with filled candles that paints candle bodies over crosses of the same
+                    // colour, and nothing re-stamps it until the next reset. Close the NaN from
+                    // the drain; a later reset re-stamps it anyway.
+                    if pr.combo_left_rel.is_nan() {
+                        if let Some(left) = history.combo_left_rel_ms {
+                            pr.combo_left_rel = left;
+                        }
+                    }
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
