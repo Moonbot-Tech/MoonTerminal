@@ -462,11 +462,15 @@ fn header(p: MoonPalette, cx: &App) -> impl IntoElement {
 ///
 /// `done` receives [`LoginOutcome::Abandoned`] if the window cannot be created at all, so startup
 /// never waits forever on a window that does not exist.
+///
+/// Returns:
+///     The live window handle so a second launch can raise this prompt, or `None` if creation
+///     failed (in which case `done` has already been called).
 pub(crate) fn open(
     step: LoginStep,
     cx: &mut App,
     done: impl FnOnce(LoginOutcome, &mut App) + 'static,
-) {
+) -> Option<WindowHandle<Root>> {
     let bounds = Bounds {
         origin: point(px(240.0), px(180.0)),
         size: size(px(460.0), px(320.0)),
@@ -483,12 +487,16 @@ pub(crate) fn open(
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     });
     match opened {
-        Ok(handle) => crate::window::windowing::activate_new_window(handle.into(), cx),
+        Ok(handle) => {
+            crate::window::windowing::activate_new_window(handle.into(), cx);
+            Some(handle)
+        }
         Err(e) => {
             log::error!("не удалось открыть окно входа: {e}");
             if let Some(done) = done.take() {
                 done(LoginOutcome::Abandoned, cx);
             }
+            None
         }
     }
 }

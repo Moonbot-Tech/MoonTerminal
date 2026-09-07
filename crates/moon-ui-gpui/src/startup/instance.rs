@@ -65,18 +65,22 @@ pub(super) fn lock_exempt(firetest: bool) -> bool {
 
 /// Named mutex for this install directory.
 ///
-/// `Local\` is the session namespace (the spec's chosen shape). Two Fast User Switching or
-/// Remote Desktop sessions can therefore both run against one portable folder; `Global\` would
-/// close that hole but needs a privilege some standard users do not have.
+/// `Global\` is machine-wide: Fast User Switching and Remote Desktop must not start a second
+/// writer against the same portable folder. `Local\` is per session and would allow two live
+/// processes on one path. An interactive process can create these objects without
+/// `SeCreateGlobalPrivilege`.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn mutex_name(token: &str) -> String {
-    format!(r"Local\MoonTerminal-{token}")
+    format!(r"Global\MoonTerminal-{token}")
 }
 
-/// Named event the owner peeks to bring its group windows forward.
+/// Named event the owner peeks to bring its windows forward.
+///
+/// Same `Global\` namespace as [`mutex_name`]: a second launch from another session has to wake
+/// the process that already owns the folder, not a session-local event nobody is watching.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn event_name(token: &str) -> String {
-    format!(r"Local\MoonTerminal-wake-{token}")
+    format!(r"Global\MoonTerminal-wake-{token}")
 }
 
 /// Take the install lock, or ask the existing owner to activate and yield.
@@ -124,20 +128,55 @@ enum Named {
 /// Returns:
 ///     `true` once per signal (auto-reset event on Windows, wake-file consume on Unix).
 pub(super) fn poll_activation(guard: &InstanceGuard) -> bool {
-    match &guard.inner {
-        #[cfg(windows)]
-        Inner::Windows { event, .. } => poll_windows_event(*event),
-        #[cfg(unix)]
-        Inner::Unix { wake, .. } => match std::fs::remove_file(wake) {
-            Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => {
-                log::warn!("instance wake peek failed: {error}");
-                false
-            }
-        },
-        #[cfg(not(any(windows, unix)))]
-        Inner::Unsupported => false,
+    guard.wake_watch().poll()
+}
+
+/// Copy of the wake side of the lock, for a window that must peek without owning the mutex.
+///
+/// The login prompt holds this while `BootInput` still owns the [`InstanceGuard`]. The watch
+/// must not close kernel handles; dropping the guard does that.
+#[derive(Clone)]
+pub(super) struct WakeWatch {
+    #[cfg(windows)]
+    event: windows::Win32::Foundation::HANDLE,
+    #[cfg(unix)]
+    wake: std::path::PathBuf,
+    #[cfg(not(any(windows, unix)))]
+    _unused: (),
+}
+
+impl InstanceGuard {
+    /// Wake object the login window polls until it is dismissed.
+    pub(super) fn wake_watch(&self) -> WakeWatch {
+        match &self.inner {
+            #[cfg(windows)]
+            Inner::Windows { event, .. } => WakeWatch { event: *event },
+            #[cfg(unix)]
+            Inner::Unix { wake, .. } => WakeWatch { wake: wake.clone() },
+            #[cfg(not(any(windows, unix)))]
+            Inner::Unsupported => WakeWatch { _unused: () },
+        }
+    }
+}
+
+impl WakeWatch {
+    /// Consume one activation signal, if any.
+    pub(super) fn poll(&self) -> bool {
+        match self {
+            #[cfg(windows)]
+            WakeWatch { event } => poll_windows_event(*event),
+            #[cfg(unix)]
+            WakeWatch { wake } => match std::fs::remove_file(wake) {
+                Ok(()) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => {
+                    log::warn!("instance wake peek failed: {error}");
+                    false
+                }
+            },
+            #[cfg(not(any(windows, unix)))]
+            WakeWatch { _unused: () } => false,
+        }
     }
 }
 
