@@ -7,7 +7,7 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
     MoonMenuSize, MoonPalette, MoonSelect, MoonSlider, MoonSliderEvent, MoonSliderState,
-    MoonToggle, MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
+    MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -16,9 +16,7 @@ use crate::{Backend, design};
 // Aliased to their historical local names here to keep this file's call sites unchanged. Owned by
 // `moon-core` beside `default_ui_font_delta`, so a value and the range it must lie inside cannot
 // split across crates.
-use moon_core::config::{
-    UI_FONT_DELTA_MAX as FONT_DELTA_MAX, UI_FONT_DELTA_MIN as FONT_DELTA_MIN, UiThemeMode,
-};
+use moon_core::config::{UI_FONT_DELTA_MAX as FONT_DELTA_MAX, UI_FONT_DELTA_MIN as FONT_DELTA_MIN};
 
 /// One bold caption beside a MoonUI select, the General tab's shape for an enum setting.
 ///
@@ -245,11 +243,10 @@ impl SettingsView {
     pub(super) fn general_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
-        let (ui_theme_mode, split, scz, idle_secs, logf, ret) = {
+        let (split, scz, idle_secs, logf, ret) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
-                d.ui_theme_mode,
                 d.charts_split_by_core,
                 d.separate_control_zones,
                 d.main_idle_close_secs,
@@ -274,52 +271,16 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_1()
-            // UI mode and font are personal settings in settings.toml; the portable chart theme
-            // is edited on the Interface tab and stored in theme.toml.
-            .child(
-                MoonToggle::new("ui-theme-mode")
-                    .checked(ui_theme_mode == UiThemeMode::Light)
-                    // Label the currently active mode instead of always describing the light mode.
-                    .label(
-                        if ui_theme_mode == UiThemeMode::Light {
-                            t!("iface.light_theme")
-                        } else {
-                            t!("iface.dark_theme")
-                        }
-                        .to_string(),
-                    )
-                    .on_change(cx.listener(|this, checked: &bool, window, cx| {
-                        let mode = if *checked {
-                            UiThemeMode::Light
-                        } else {
-                            UiThemeMode::Dark
-                        };
-                        let changed = this.backend.update(cx, |b, bcx| {
-                            let Some(p) = b.preview.as_mut() else {
-                                return false;
-                            };
-                            if p.ui_theme_mode == mode {
-                                return false;
-                            }
-                            p.ui_theme_mode = mode;
-                            crate::install_moon_theme_for_config(p, bcx);
-                            bcx.notify();
-                            true
-                        });
-                        if changed {
-                            // The per-mode editors hold a SNAPSHOT of the variant that was live
-                            // when their widgets were built: a slider or colour picker keeps its
-                            // own state entity and does not re-read the draft on render. The write
-                            // side now resolves the mode live, so leaving those snapshots in place
-                            // would show one variant's numbers while the next edit wrote them into
-                            // the other. Rebuild them here, exactly as paste and import already do.
-                            this.iface = super::interface::build(&this.backend, window, cx);
-                            this.lines = super::lines::build(&this.backend, window, cx);
-                            this.badges = super::badges::build(&this.backend, window, cx);
-                            cx.notify();
-                        }
-                    })),
-            )
+            // UI theme and font are personal settings in settings.toml; the portable chart theme
+            // is edited on the Interface tab and stored in theme.toml. The selector's own
+            // behaviour -- live preview and rebuilding the per-mode editors -- lives with its
+            // state in `settings/mod.rs`, beside every other dropdown on this tab.
+            .child(labeled_select(
+                "iface.theme_mode",
+                &self.theme_mode,
+                220.0,
+                cx,
+            ))
             .child(settings_hint(
                 "iface.light_theme_hint",
                 &t!("iface.light_theme_hint"),

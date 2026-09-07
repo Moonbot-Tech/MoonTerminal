@@ -6,10 +6,18 @@ iface.sec_theme:
   ru: "Тема"
   en: "Theme"
   es: "Tema"
+iface.theme_mode:
+  ru: "Тема интерфейса"
+  en: "Interface theme"
+  es: "Tema de la interfaz"
 iface.light_theme:
   ru: "Светлая тема"
   en: "Light theme"
   es: "Tema claro"
+iface.graphite_theme:
+  ru: "Графит"
+  en: "Graphite"
+  es: "Grafito"
 iface.dark_theme:
   ru: "Тёмная тема"
   en: "Dark theme"

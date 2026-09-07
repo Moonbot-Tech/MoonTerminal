@@ -38,7 +38,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::media::icons::IconSet;
-use moon_core::config::{AppConfig, CoreSortMode, GroupConfig, Language};
+use moon_core::config::{AppConfig, CoreSortMode, GroupConfig, Language, UiThemeMode};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::market::MarketDataMode;
 use moon_core::session::CoreId;
@@ -118,6 +118,14 @@ const VALUATION_LABELS: [(&str, ValuationMode); 2] = [
     ("general.valuation_mode.current", ValuationMode::Current),
 ];
 
+/// Labels and values for the interface-theme selector, ordered light to dark so the list reads
+/// as a brightness ramp rather than as the order the themes happened to be written in.
+const THEME_MODE_LABELS: [(&str, UiThemeMode); 3] = [
+    ("iface.light_theme", UiThemeMode::Light),
+    ("iface.graphite_theme", UiThemeMode::Graphite),
+    ("iface.dark_theme", UiThemeMode::Dark),
+];
+
 /// Labels and values for the global core-order selector.
 const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
     ("conn.core_sort.name", CoreSortMode::Name),
@@ -158,6 +166,8 @@ pub struct SettingsView {
     ui_font: Entity<MoonSliderState>,
     /// Numeric UI-font input synchronized bidirectionally with the `ui_font` slider.
     ui_font_input: Entity<MoonInputState>,
+    /// Interface-theme selector for the General tab.
+    theme_mode: Entity<MoonSelectState<UiThemeMode>>,
     /// Language selector for the General tab.
     lang: Entity<MoonSelectState<Language>>,
     /// Quote-money conversion selector for the General tab.
@@ -329,7 +339,7 @@ impl SettingsView {
         .detach();
 
         // Initialize the language dropdown, ported from egui's ComboBox, from the current draft.
-        let (cur_lang, cur_mode, cur_core_sort, cur_valuation) = {
+        let (cur_lang, cur_mode, cur_core_sort, cur_valuation, cur_theme_mode) = {
             let b = backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
@@ -337,8 +347,66 @@ impl SettingsView {
                 d.market_mode,
                 d.core_sort,
                 d.report_valuation_mode,
+                d.ui_theme_mode,
             )
         };
+
+        // Interface theme. Unlike every other selector here it is consumed LIVE from the draft:
+        // the palette is installed on change and rolls back with the draft if Settings closes
+        // unsaved, which is what makes picking a theme feel like previewing one.
+        let theme_mode_items = THEME_MODE_LABELS
+            .iter()
+            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
+            .collect::<Vec<_>>();
+        let theme_mode_idx = THEME_MODE_LABELS
+            .iter()
+            .position(|(_, m)| *m == cur_theme_mode)
+            .unwrap_or(0);
+        let theme_mode = cx.new(|cx| {
+            MoonSelectState::new(
+                theme_mode_items,
+                Some(IndexPath::new(theme_mode_idx)),
+                window,
+                cx,
+            )
+        });
+        // `subscribe_in` rather than `subscribe`: the per-mode colour editors below need a
+        // `&mut Window` to be rebuilt, and a plain subscription does not carry one.
+        cx.subscribe_in(
+            &theme_mode,
+            window,
+            |this, _e, ev: &MoonSelectEvent<UiThemeMode>, window, cx| {
+                let MoonSelectEvent::Confirm(Some(mode)) = ev else {
+                    return;
+                };
+                let mode = *mode;
+                let changed = this.backend.update(cx, |b, bcx| {
+                    let Some(p) = b.preview.as_mut() else {
+                        return false;
+                    };
+                    if p.ui_theme_mode == mode {
+                        return false;
+                    }
+                    p.ui_theme_mode = mode;
+                    crate::install_moon_theme_for_config(p, bcx);
+                    bcx.notify();
+                    true
+                });
+                if changed {
+                    // The per-mode editors hold a SNAPSHOT of the variant that was live when
+                    // their widgets were built: a slider or colour picker keeps its own state
+                    // entity and does not re-read the draft on render. The write side resolves
+                    // the mode live, so leaving those snapshots in place would show one
+                    // variant's numbers while the next edit wrote them into the other. Rebuild
+                    // them here, exactly as paste and import already do.
+                    this.iface = interface::build(&this.backend, window, cx);
+                    this.lines = lines::build(&this.backend, window, cx);
+                    this.badges = badges::build(&this.backend, window, cx);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
         let lang_items = Language::ALL
             .iter()
             .map(|l| MoonSelectItem::new(*l, l.label()))
@@ -502,6 +570,7 @@ impl SettingsView {
             conn,
             ui_font,
             ui_font_input,
+            theme_mode,
             lang,
             valuation,
             mode,

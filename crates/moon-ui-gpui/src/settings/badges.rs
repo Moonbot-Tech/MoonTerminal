@@ -17,10 +17,10 @@ use rust_i18n::t;
 
 use super::{SettingsView, separator};
 use crate::{Backend, design};
-use moon_core::config::{BadgeEntry, UiThemeMode};
+use moon_core::config::BadgeEntry;
 
-/// Editor state for one badge row: text inputs and color pickers for the saved theme mode selected
-/// when the state is built.
+/// Editor state for one badge row: text inputs and colour pickers for the colour set active when
+/// the state is built.
 pub(super) struct BadgeRowEd {
     /// Index in the draft's `badges.entries`.
     ///
@@ -97,7 +97,7 @@ fn entry_color(
     get: impl Fn(&BadgeEntry, bool) -> [u8; 3] + Copy + 'static,
     set: impl Fn(&mut BadgeEntry, bool, [u8; 3]) + 'static,
 ) -> Entity<MoonColorPickerState> {
-    // A badge entry holds one colour per UI mode, so which half these closures address depends on
+    // A badge entry holds one colour per colour set, so which half these closures address depends on
     // the mode that is LIVE at the moment of the read or the write — never on the mode that was
     // saved when this editor was built. The entry itself cannot answer that, so the mode is
     // resolved here, where the draft is in scope, and handed down: in the getter from the same
@@ -105,7 +105,7 @@ fn entry_color(
     let (init, custom_seed) = {
         let b = backend.read(cx);
         let cfg = b.preview.as_ref().unwrap_or(&b.config);
-        let is_light = cfg.ui_theme_mode == UiThemeMode::Light;
+        let is_light = cfg.ui_theme_mode.is_light();
         let init = cfg
             .badges
             .entries
@@ -115,7 +115,7 @@ fn entry_color(
         (init, custom_colors_seed(cfg))
     };
     let st = super::draft_color(window, cx, init, move |p, cc| {
-        let is_light = p.ui_theme_mode == UiThemeMode::Light;
+        let is_light = p.ui_theme_mode.is_light();
         if let Some(e) = p.badges.entries.get_mut(idx) {
             if get(e, is_light) != cc {
                 set(e, is_light, cc);
@@ -321,8 +321,12 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         let (active, distinguish, outline, code, color) = {
             let b = self.backend.read(cx);
-            let is_light =
-                b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
+            let is_light = b
+                .preview
+                .as_ref()
+                .unwrap_or(&b.config)
+                .ui_theme_mode
+                .is_light();
             let bcfg = &b.preview.as_ref().unwrap_or(&b.config).badges;
             bcfg.entries
                 .get(idx)

@@ -142,7 +142,7 @@ fn as_rgb(v: &toml::Value) -> Option<[u8; 3]> {
 /// The UI theme mode recorded in `settings.toml`, read as TEXT.
 ///
 /// The migration runs BEFORE `AppConfig::load`, so the parsed config does not exist yet and this is
-/// the only way to learn which of the two theme tables the user is actually looking at. Anything
+/// the only way to learn which of the two colour-set tables the user is actually looking at. Anything
 /// unreadable answers Dark, which is both the enum's own default and the table a legacy flat file
 /// becomes.
 fn active_theme_mode() -> UiThemeMode {
@@ -160,7 +160,7 @@ fn active_theme_mode() -> UiThemeMode {
 
 /// Read the six legacy values out of `theme.toml`.
 ///
-/// Which of the two theme tables wins is decided by the user's ACTIVE mode, not by a fixed choice
+/// Which of the two colour-set tables wins is decided by the user's ACTIVE mode, not by a fixed choice
 /// of dark. That matters because Settings bound every one of these fields through
 /// `theme.get_mut(is_light)`: a user who tuned them while in light mode wrote them into `[light]`
 /// ONLY, and `[dark]` still holds stock values. Migrating from dark unconditionally would carry
@@ -200,7 +200,7 @@ pub fn read_legacy_chart_graphics() -> LegacyChartGraphics {
 /// Args:
 ///     primary_path: The live theme file.
 ///     backup_path: The pre-migration copy taken beside it.
-///     mode: The UI theme mode whose table wins, per field, before the other table is tried.
+///     mode: The interface mode whose colour-set table wins before the other table is tried.
 ///
 /// Returns:
 ///     The values to migrate, and how confidently they were obtained.
@@ -233,7 +233,7 @@ pub fn read_legacy_from(
 ///
 /// Args:
 ///     path: The file to read; either the live `theme.toml` or its pre-migration backup.
-///     mode: The UI theme mode whose table is preferred.
+///     mode: The interface mode whose colour-set table is preferred.
 ///
 /// Returns:
 ///     Whatever that file carried, and whether it could be read at all.
@@ -264,7 +264,7 @@ fn read_one(path: &std::path::Path, mode: UiThemeMode) -> LegacyChartGraphics {
     // Same discriminator `ChartThemeSet::load` uses, deliberately: the two must never disagree
     // about which shape a file is in.
     let tables: Vec<&toml::Value> = if text.contains("[dark") || text.contains("[light") {
-        let (first, second) = if mode == UiThemeMode::Light {
+        let (first, second) = if mode.is_light() {
             ("light", "dark")
         } else {
             ("dark", "light")

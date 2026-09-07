@@ -1,6 +1,6 @@
 //! Runtime configuration-constructor regressions.
 
-use super::{AppConfig, BadgesConfig, ChartThemeSet, OrdersStyleSet};
+use super::{AppConfig, BadgesConfig, ChartThemeSet, OrdersStyleSet, UiThemeMode};
 
 /// Regression target: removing `ensure_server_group_configs` from
 /// `AppConfig::build_plaintext_config` leaves the environment-backed core without durable
@@ -110,4 +110,13 @@ fn a_plaintext_config_keeps_the_settings_it_was_given() {
     // …except the one thing a bench must never inherit: a Main chart that closes itself after a
     // quiet minute takes the screenshot with it.
     assert_eq!(config.main_idle_close_secs, 0);
+}
+
+/// Catches `config/mod.rs:AppConfig::chart_theme` treating Graphite as light.
+/// If it selects the light chart set, Graphite's dark interface paints charts with the wrong palette.
+#[test]
+fn graphite_chart_theme_uses_the_existing_dark_chart_set() {
+    let mut config = AppConfig::blank(None);
+    config.ui_theme_mode = UiThemeMode::Graphite;
+    assert_eq!(config.chart_theme(), &config.theme.dark);
 }

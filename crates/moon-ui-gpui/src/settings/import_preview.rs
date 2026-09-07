@@ -14,7 +14,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{SettingsView, interface, lines};
+use super::{SettingsView, badges, interface, lines};
 use crate::design;
 use moon_core::config::moonbot_import::plan::SettingChange;
 use moon_core::config::moonbot_import::{self, MoonBotImportPlan, PlanContext};
@@ -99,7 +99,7 @@ impl SettingsView {
                 d.hotkeys.clone(),
                 d.theme.clone(),
                 d.orders.clone(),
-                d.ui_theme_mode == moon_core::config::UiThemeMode::Light,
+                d.ui_theme_mode.is_light(),
                 ranked
                     .iter()
                     .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
@@ -176,8 +176,9 @@ impl SettingsView {
             for id in &out.unknown_ids {
                 log::warn!("moonbot import: неизвестный id пункта «{id}» — пропущен");
             }
-            // Install a selected UI-theme change immediately, matching the General toggle, so the
-            // palette changes before Save. Chart colors need no special call because windows read
+            // Install a selected UI-theme change immediately, matching the General tab's theme
+            // selector, so the palette changes before Save. Chart colors need no special call
+            // because windows read
             // the draft every frame.
             if out.applied > 0 && theme_selected {
                 crate::install_moon_theme_for_config(p, bcx);
@@ -187,10 +188,27 @@ impl SettingsView {
             }
             out.applied
         });
-        // Rebuild Interface and Lines editor state from the new draft values, matching `paste_tab`.
+        // Rebuild the editors initialized from the draft. Badges belongs here for the same reason
+        // Interface and Lines do, and it was the one missing: `badges::entry_color` snapshots the
+        // LIVE colour set into each picker's initial colour while its write closure resolves the
+        // set again at write time, so an import that changes sets would leave every picker showing
+        // the old colour and then write that stale value into the new set on the next edit.
         if applied > 0 {
             self.iface = interface::build(&self.backend, window, cx);
             self.lines = lines::build(&self.backend, window, cx);
+            self.badges = badges::build(&self.backend, window, cx);
+            // The theme dropdown carries its own selection and does not re-read the draft on
+            // render, so an import that moved the mode has to move the control too. Without this
+            // the General tab lists the old theme while the window is already painted in the new
+            // one. Import is the only path that writes this field behind the selector's back --
+            // `paste_tab` cannot reach it.
+            let imported_mode = {
+                let b = self.backend.read(cx);
+                b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode
+            };
+            self.theme_mode.update(cx, |state, _| {
+                state.set_selected_value(&imported_mode);
+            });
         }
         self.status = Some((
             super::StatusMsg::Text(t!("import.applied", n = applied).to_string()),

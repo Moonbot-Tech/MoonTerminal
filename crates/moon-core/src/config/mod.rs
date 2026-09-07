@@ -286,7 +286,7 @@ pub struct AppConfig {
     pub log_retention_days: u32,
     /// Addition to base UI font sizes in logical pixels. Defaults to +3.
     pub ui_font_delta: f32,
-    /// Dark/light MoonUI theme (plaintext settings.toml).
+    /// Interface theme mode (plaintext settings.toml); Graphite shares the dark colour set.
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale. Defaults to 1.0.
     pub ui_scale: f32,
@@ -307,11 +307,11 @@ pub struct AppConfig {
     pub(in crate::config) next_uid: UidCounter,
     /// Terminal hotkeys (plaintext hotkeys.toml).
     pub hotkeys: HotkeysConfig,
-    /// Chart theme per UI mode (dark/light) in separate portable theme.toml.
+    /// Chart theme per colour set (dark/light) in separate portable theme.toml.
     pub theme: ChartThemeSet,
-    /// Order-line styles per theme (dark/light) in separate portable orders.toml.
+    /// Order-line styles per colour set (dark/light) in separate portable orders.toml.
     pub orders: OrdersStyleSet,
-    /// Detect-type badges (code + per-type colors, per theme) in separate portable badges.json.
+    /// Detect-type badges (code plus per-type colours for each colour set) in badges.json.
     pub badges: BadgesConfig,
     /// Runtime flag (NOT serialized): `settings.toml` EXISTS but could not be read because of
     /// permissions, a share, or an unhydrated cloud placeholder, so memory holds DEFAULTS rather
@@ -893,9 +893,9 @@ impl AppConfig {
         !self.servers.is_empty() || self.next_uid.get() > Self::FIRST_ISSUED_UID
     }
 
-    /// Chart theme for the active UI mode (dark/light according to `ui_theme_mode`).
+    /// Chart theme for the active UI mode's colour set; Graphite uses the dark entry.
     pub fn chart_theme(&self) -> &ChartTheme {
-        self.theme.get(self.ui_theme_mode == UiThemeMode::Light)
+        self.theme.get(self.ui_theme_mode.is_light())
     }
 
     /// A group is meaningful only while at least one core references it. Do not save orphans,
