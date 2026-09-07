@@ -379,11 +379,10 @@ impl ChartDataState {
                 pr.last_candle_rev = u64::MAX;
             }
             // A pane panned off the live edge needs its coverage re-established, and only a reset
-            // does it. Three invariants ride on it, and none of them survives dropping it:
-            //   * the trade ring is left with a HOLE. A reset copies `[from, to]` and then parks
-            //     the cursor at `cursor_from_now()`, so rows between the window's right edge and
-            //     now reach neither path. While following the two coincide; a pane in the past
-            //     carries a hole exactly as wide as it scrolled, and panning back sweeps it.
+            // does it. Two invariants ride on it, and neither survives dropping it. (A third used
+            // to: the read parked its follow-up cursor at now, leaving the ring with a hole between
+            // the window's right edge and now. The read now parks the cursor at that edge, so the
+            // drain fills the stretch itself — `history.rs`, the reset arm.)
             //   * a candle-series rebuild re-clips the series to the then-current window, so its
             //     left edge can move RIGHT of `resident_left_rel` between resets.
             //   * a pane parked in the past keeps appending live trades into a fixed-capacity ring,

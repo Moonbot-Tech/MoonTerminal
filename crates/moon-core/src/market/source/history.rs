@@ -361,6 +361,14 @@ impl MarketDataSource {
             read.combo_capacity = reader.capacity();
             let display_cap = reader.capacity().min(trades_limit);
             let reset = force_reset || cursor.trades.is_none();
+            // Every full read parks the follow-up cursor at the first row PAST the window it just
+            // copied, never at "now". The window's right edge sits behind now whenever the pane is
+            // panned into the past — by hand, by wheel, or by a framing request — and a cursor
+            // parked at now would skip every row between the two: the copy stops at `to_time`,
+            // the drain starts at now, and nothing ever revisits the stretch in between, so the
+            // chart shows a hole there until the next full read. Parking at `to_time` makes the
+            // drain deliver that stretch itself; while following, `to_time` is ahead of now and
+            // the two parkings coincide.
             if reset {
                 reader.copy_time_range(
                     trades_from_time,
@@ -368,7 +376,7 @@ impl MarketDataSource {
                     display_cap,
                     &mut cursor.trade_rows,
                 );
-                cursor.trades = Some(reader.cursor_from_now());
+                cursor.trades = Some(reader.cursor_at_or_after_time(to_time));
                 read.combo_reset = true;
                 read.caught_up = true;
             } else if let Some(cur) = cursor.trades.as_mut() {
@@ -382,7 +390,7 @@ impl MarketDataSource {
                         display_cap,
                         &mut cursor.trade_rows,
                     );
-                    cursor.trades = Some(reader.cursor_from_now());
+                    cursor.trades = Some(reader.cursor_at_or_after_time(to_time));
                     read.combo_reset = true;
                 }
             }
@@ -426,7 +434,6 @@ impl MarketDataSource {
                 }
             }
         }
-
         // Liquidations use a separate ring of the same type and stay synchronized with combo. A
         // full combo reset or first pass rereads the entire visible range; otherwise only the new
         // live edge is drained. The renderer tags them with side=2 for one shared color. Their
@@ -440,7 +447,7 @@ impl MarketDataSource {
                     reader.capacity(),
                     &mut cursor.liq_rows,
                 );
-                cursor.liquidations = Some(reader.cursor_from_now());
+                cursor.liquidations = Some(reader.cursor_at_or_after_time(to_time));
             } else if let Some(cur) = cursor.liquidations.as_mut() {
                 let meta = reader.drain_new_bounded(cur, reader.capacity(), &mut cursor.liq_rows);
                 if meta.clipped {
@@ -450,7 +457,7 @@ impl MarketDataSource {
                         reader.capacity(),
                         &mut cursor.liq_rows,
                     );
-                    cursor.liquidations = Some(reader.cursor_from_now());
+                    cursor.liquidations = Some(reader.cursor_at_or_after_time(to_time));
                 }
             }
             rows_to_ticks(&cursor.liq_rows, &mut out.liquidations);
@@ -967,7 +974,10 @@ impl MarketDataSource {
                         reader.capacity(),
                         &mut cursor.candle_trade_rows,
                     );
-                    cursor.candle_trades = Some(reader.cursor_from_now());
+                    cursor.candle_trades = Some(
+                        reader
+                            .cursor_at_or_after_time(moonproto::MoonTime::from_unix_millis(to_ms)),
+                    );
                 } else {
                     cursor.candle_trades = None;
                 }

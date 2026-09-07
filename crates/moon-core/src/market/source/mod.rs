@@ -1418,9 +1418,11 @@ fn moon_time_from_rel_ms(epoch_ms: f64, rel_ms: f32) -> MoonTime {
 /// Drain a last-price or mark-price line through their shared control flow.
 ///
 /// The branches differ only in cursor, buffer, output, and converter. A reset or first call places
-/// the cursor at now; subsequent calls drain new rows and accumulate `clipped` and `caught_up` in
-/// `read`. After a change, the visible range is copied and converted to points. Call only when the
-/// reader exists.
+/// the cursor at the first row at or after `to_time` — the edge of the window it copies — so the
+/// next drain fills anything between that edge and now instead of leaving a gap when the pane is
+/// panned into the past; subsequent calls drain new rows and accumulate `clipped` and `caught_up`
+/// in `read`. After a change, the visible range is copied and converted to points. Call only when
+/// the reader exists.
 #[allow(clippy::too_many_arguments)]
 fn drain_price_line<R: SeqRingTimedRow>(
     reader: &SeqRingReader<R>,
@@ -1437,7 +1439,7 @@ fn drain_price_line<R: SeqRingTimedRow>(
     let reset = force_reset || cursor_slot.is_none();
     let mut changed = reset;
     if reset {
-        *cursor_slot = Some(reader.cursor_from_now());
+        *cursor_slot = Some(reader.cursor_at_or_after_time(to_time));
     } else if let Some(cur) = cursor_slot.as_mut() {
         let meta = reader.drain_new_bounded(cur, reader.capacity(), rows);
         read.clipped |= meta.clipped;
