@@ -62,6 +62,18 @@ const HOOK_FRAME_PAD: f32 = 1.0;
 /// is a 2px dash against a 1px gap and reads as solid at a glance — which would leave the mark
 /// saying the same thing as an ordinary border.
 const HOOK_FRAME_BORDER: f32 = 2.0;
+/// Opacity of that frame's amber.
+///
+/// At full alpha a 2px dashed amber outline around a small toolbar button is the loudest thing in
+/// the header strip — louder than the strategy it marks. The frame is a MARK, not an alarm: it
+/// says "this slot's exits come from a hook", a standing fact rather than a state anybody has to
+/// act on. At this alpha it still reads as amber and still reads as dashed, without pulling the
+/// eye off the row.
+///
+/// Owner's choice at 0.3, one step below the 0.45 a second-hand status carries
+/// ([`design::STALE_ALPHA`]): that value was still too loud on this surface. Not shared with the
+/// stale-status ladder on purpose — the two say different things, and tying them would move both.
+const HOOK_FRAME_ALPHA: f32 = 0.3;
 /// Content width of the quick-select settings popup, in font-scaled pixels.
 ///
 /// Sized for the widest row it holds: the show box, the strategy picker, the hook picker, the two
@@ -549,8 +561,9 @@ pub fn manual_strategy_controls(
                     // The hook mark: a dashed amber frame around the button, drawn on the wrapper
                     // the right-click menu already needs. `MoonButton` offers no dashed border of
                     // its own — variant and `.outline()` are its only border knobs — so this is
-                    // the framework's own `border_dashed`, in the palette's amber and the shared
-                    // button radius, rather than a bespoke widget or a hand-mixed colour.
+                    // the framework's own `border_dashed`, in the palette's amber at
+                    // [`HOOK_FRAME_ALPHA`] and the shared button radius, rather than a bespoke
+                    // widget or a hand-mixed colour.
                     //
                     // Drawn on EVERY button, transparent where there is no hook: a frame that only
                     // some buttons carry would make the row's spacing depend on which strategies
@@ -562,7 +575,7 @@ pub fn manual_strategy_controls(
                     .border_2()
                     .border_dashed()
                     .border_color(if hooked {
-                        design::moon(p.amber)
+                        design::moon_alpha(p.amber, HOOK_FRAME_ALPHA)
                     } else {
                         gpui::transparent_black()
                     })
