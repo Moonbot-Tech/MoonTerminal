@@ -568,7 +568,7 @@ impl ComboLayer {
             let evicted_scale_max =
                 ranges_touch_volume_max(&self.resident_crosses, &evicted_ranges, before_scale);
             let n = data.len() as u32;
-            ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
+            let written = ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
             self.head = (self.head + n) % cap;
             self.count = (self.count + n).min(cap);
             append_cross_ring(
@@ -581,6 +581,20 @@ impl ComboLayer {
             if self.resident_crosses.len() < cap as usize {
                 self.resident_crosses
                     .resize(cap as usize, ChartCross::zeroed());
+            }
+            if !written {
+                // The in-place append was refused, so the slots just counted as filled hold
+                // whatever the last DISCARD left there. The CPU mirror is laid out slot for slot
+                // like the ring, so a full DISCARD upload of it is the ring's true contents;
+                // its head and count become the ring's, which also covers the wrap-around
+                // reset `append_cross_ring` performs on an oversized batch. The bake has to
+                // start over: it may already have painted the stale slots.
+                update_dynamic(context, &tick_buffer, &self.resident_crosses);
+                self.head = self.resident_head as u32;
+                self.count = self.resident_count as u32;
+                if let Some(tex) = self.tex.as_mut() {
+                    tex.valid = false;
+                }
             }
             if full_reset || evicted_scale_max {
                 self.recalc_volume_scale();

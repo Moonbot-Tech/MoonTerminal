@@ -267,21 +267,31 @@ pub fn update_dynamic<T: Copy>(context: &ID3D11DeviceContext, buffer: &ID3D11Buf
 }
 
 /// Append through a wrapping ring with `MAP_WRITE_NO_OVERWRITE` without resetting GPU work.
+///
+/// Returns whether the rows reached the buffer. A refused map leaves the buffer as it was, and
+/// the caller — which has already advanced its ring counters — must re-upload from its CPU
+/// mirror or the slots it counts as filled draw stale rows: crosses that never appear, while
+/// every full reset draws fine. The refusal is logged ONCE per process with its HRESULT, since
+/// a per-frame line on a permanently refusing device would drown the log.
 pub fn ring_write_no_overwrite<T: Copy>(
     context: &ID3D11DeviceContext,
     buffer: &ID3D11Buffer,
     head: u32,
     cap: u32,
     data: &[T],
-) {
+) -> bool {
     let n = data.len() as u32;
     unsafe {
         let mut m = D3D11_MAPPED_SUBRESOURCE::default();
-        if context
-            .Map(buffer, 0, D3D11_MAP_WRITE_NO_OVERWRITE, 0, Some(&mut m))
-            .is_err()
-        {
-            return;
+        if let Err(error) = context.Map(buffer, 0, D3D11_MAP_WRITE_NO_OVERWRITE, 0, Some(&mut m)) {
+            static REPORTED: std::sync::Once = std::sync::Once::new();
+            REPORTED.call_once(|| {
+                log::warn!(
+                    "chart: MAP_WRITE_NO_OVERWRITE refused on a dynamic ring buffer ({error}); \
+                     falling back to full re-uploads"
+                );
+            });
+            return false;
         }
         let dst = m.pData as *mut T;
         if head + n <= cap {
@@ -293,6 +303,7 @@ pub fn ring_write_no_overwrite<T: Copy>(
         }
         context.Unmap(buffer, 0);
     }
+    true
 }
 
 // ───────────────────────── Utilities ─────────────────────────
