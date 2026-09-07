@@ -20,6 +20,8 @@
 
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 /// Application identifier for user directories outside the bundle. Matches
 /// `CFBundleIdentifier` in `.github/scripts/make-dmg.sh`. Unused on Windows, where data
 /// lives beside the executable.
@@ -347,6 +349,114 @@ pub fn data_dir() -> PathBuf {
         );
     }
     dir
+}
+
+/// Canonical install/data directory that identifies one running instance.
+///
+/// Follows [`data_dir`], including a fixture override, so two copies in two folders can both run
+/// and a shortcut's working directory cannot steal the identity. Callers that need a comparable
+/// string should use [`instance_identity_key`].
+pub fn instance_identity_dir() -> PathBuf {
+    let dir = data_dir();
+    std::fs::canonicalize(&dir).unwrap_or(dir)
+}
+
+/// Stable identity string for an install/data directory.
+///
+/// Canonicalizes when the path exists, then applies platform path equivalence: Windows case-fold,
+/// `\\?\` prefix strip, slash unification, trailing-separator trim. Independent of process cwd
+/// when `dir` is already absolute, which [`data_dir`] always is after the first lookup.
+///
+/// Args:
+///     dir: Install or data directory to identify.
+///
+/// Returns:
+///     A comparable UTF-8 key. Two paths that name the same folder on this platform produce the
+///     same key; two distinct folders do not.
+pub fn instance_identity_key(dir: &Path) -> String {
+    let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| {
+        if dir.is_absolute() {
+            dir.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(dir))
+                .unwrap_or_else(|_| dir.to_path_buf())
+        }
+    });
+    #[cfg(windows)]
+    {
+        windows_instance_identity_key(&canonical)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut text = canonical.to_string_lossy().into_owned();
+        if text.len() > 1 {
+            text = text.trim_end_matches('/').to_string();
+        }
+        text
+    }
+}
+
+/// SHA-256 token of [`instance_identity_key`], truncated to 32 hex characters.
+///
+/// Short enough for a Windows named-object suffix, stable across Rust releases (unlike
+/// `DefaultHasher`), and not a full digest of a user path sitting in a kernel object name.
+///
+/// Args:
+///     dir: Install or data directory to identify.
+///
+/// Returns:
+///     Lowercase hex of the first 16 digest bytes.
+pub fn instance_identity_token(dir: &Path) -> String {
+    let digest = Sha256::digest(instance_identity_key(dir).as_bytes());
+    let mut out = String::with_capacity(32);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &byte in &digest[..16] {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0xf) as usize] as char);
+    }
+    out
+}
+
+/// Cross-process lock file under [`data_dir`]. Held with flock on non-Windows; unused on Windows
+/// where a named mutex is the lock.
+pub fn instance_lock_path() -> PathBuf {
+    data_dir().join(INSTANCE_LOCK_FILE_NAME)
+}
+
+/// Wake flag the already-running instance peeks from its coordination loop.
+///
+/// Second launch creates or truncates this file; the owner deletes it when activating. A leftover
+/// after a crash activates once and then disappears — it is not a lock.
+pub fn instance_wake_path() -> PathBuf {
+    data_dir().join(INSTANCE_WAKE_FILE_NAME)
+}
+
+/// Lock-file name kept as a constant so migration lists can be proven not to carry it.
+const INSTANCE_LOCK_FILE_NAME: &str = "instance.lock";
+
+/// Wake-file name beside the lock file.
+const INSTANCE_WAKE_FILE_NAME: &str = "instance.wake";
+
+/// Windows path equivalence for [`instance_identity_key`].
+#[cfg(windows)]
+fn windows_instance_identity_key(canonical: &Path) -> String {
+    let mut text = canonical.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix("\\\\?\\UNC\\") {
+        text = format!("\\\\{rest}");
+    } else if let Some(rest) = text.strip_prefix("\\\\?\\") {
+        text = rest.to_string();
+    }
+    text = text.replace('/', "\\");
+    text.make_ascii_lowercase();
+    while text.ends_with('\\') {
+        let without = &text[..text.len() - 1];
+        if without.ends_with(':') || without == "\\" || without.is_empty() {
+            break;
+        }
+        text.pop();
+    }
+    text
 }
 
 /// The `cfg/` data subdirectory contains UI settings and layout as plaintext TOML/JSON.
