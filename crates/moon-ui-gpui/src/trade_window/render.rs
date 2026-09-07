@@ -109,10 +109,10 @@ impl Render for TradeWindowView {
                             .min_w_0()
                             .items_center(),
                     )
-                    // THE VERTICAL-SCALE CONTROL: a look at this trade from another zoom, for as
-                    // long as the window is open. The window itself opens on AUTO and fits the
-                    // trade it was opened for — a remembered percentage fitted the trade it was
-                    // chosen for and drew the next one off-screen, which read as a frozen chart.
+                    // THE VERTICAL-SCALE CONTROL: one remembered zoom for every trade window,
+                    // written through `pick_scale` into `WindowLayout.trade_window_scale` and
+                    // restored when the next window opens. Auto (`None`) is the default when
+                    // nothing has been saved yet.
                     //
                     // The chart's own badge states what the pane is CURRENTLY on and is part of
                     // this view's caption set; this trigger states what was PICKED. Reached

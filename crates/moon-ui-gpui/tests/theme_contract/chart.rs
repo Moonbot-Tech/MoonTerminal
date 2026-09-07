@@ -929,26 +929,31 @@ fn historical_panels_make_the_engine_ignore_the_global_follow_flag() {
     );
 }
 
-/// A trade window must open on AUTO: nothing may pin its vertical scale.
+/// A trade window must restore its shared Y-scale and persist a pick into layout.
 ///
-/// It used to open at a remembered percentage, one shared by every trade window. A percentage
-/// chosen for one position does not fit the next — the trade is then drawn off the visible range
-/// and the window reads as frozen rather than scaled. The scale control is still there; it is a
-/// look from another zoom, for as long as that window is open, and it is not remembered.
+/// One remembered value for every trade window, same policy as geometry. Auto (`None`) remains
+/// the default when nothing was saved. Reverting this to a ban on `force_scale` / `layout` would
+/// reopen every trade on Auto and drop the user's zoom across restart.
 #[test]
-fn trade_windows_open_on_auto_and_pin_no_scale() {
+fn trade_windows_restore_and_persist_the_shared_scale() {
     let window = code_only(&read_src("trade_window/window.rs"));
-    for pin in ["set_scale(", "force_scale(", "set_scale_percent("] {
-        assert!(
-            !window.contains(pin),
-            "a trade window must not pin a vertical scale as it opens, and `{pin}` does"
-        );
-    }
+    assert!(
+        window.contains("trade_window_scale"),
+        "opening a trade window must read the shared remembered scale"
+    );
+    assert!(
+        window.contains("force_scale("),
+        "opening a trade window must re-apply a saved scale onto the new panel"
+    );
     let view = code_only(&read_src("trade_window/mod.rs"));
     let pick = braced_body(&view, "pub(crate) fn pick_scale(");
     assert!(
-        !pick.contains("layout"),
-        "picking a scale addresses this window only; it must not be persisted"
+        pick.contains("trade_window_scale"),
+        "picking a scale must write the shared layout field"
+    );
+    assert!(
+        pick.contains("layout_dirty"),
+        "picking a scale must mark the layout dirty so it reaches layout.toml"
     );
 }
 

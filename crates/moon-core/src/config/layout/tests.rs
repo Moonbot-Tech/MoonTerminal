@@ -1404,9 +1404,10 @@ fn saved_geometry_reachability_keeps_unknown_and_partially_visible_windows() {
     );
 }
 
-/// `WindowLayout::trade_window` must survive current and pre-field TOML documents. Removing the
-/// field or its lenient default would discard a remembered trade-detail placement after restart,
-/// including when an older layout is first read by a newer terminal.
+/// `WindowLayout::{trade_window, trade_window_scale}` must survive current and pre-field TOML
+/// documents. Removing either field or its lenient default would discard a remembered trade-detail
+/// placement or Y-scale after restart, including when an older layout is first read by a newer
+/// terminal. Auto is `None`; a missing field is Auto, not a sentinel.
 #[test]
 fn trade_window_geometry_round_trips_and_legacy_layouts_remain_readable() {
     let saved = GeomRect {
@@ -1422,6 +1423,7 @@ fn trade_window_geometry_round_trips_and_legacy_layouts_remain_readable() {
     };
     let layout = WindowLayout {
         trade_window: Some(saved),
+        trade_window_scale: Some(0.05),
         ..WindowLayout::default()
     };
     let encoded = toml::to_string(&layout).expect("trade window layout must serialize");
@@ -1434,10 +1436,31 @@ fn trade_window_geometry_round_trips_and_legacy_layouts_remain_readable() {
         Some((saved.x, saved.y, saved.w, saved.h, saved.display_uuid)),
         "writing and reading the layout must preserve the complete remembered rectangle"
     );
+    assert_eq!(
+        decoded.trade_window_scale,
+        Some(0.05),
+        "writing and reading the layout must preserve the remembered trade-window Y-scale"
+    );
+
+    let auto = WindowLayout {
+        trade_window_scale: None,
+        ..WindowLayout::default()
+    };
+    let auto_encoded = toml::to_string(&auto).expect("Auto scale must serialize");
+    let auto_decoded: WindowLayout =
+        toml::from_str(&auto_encoded).expect("Auto scale must deserialize");
+    assert!(
+        auto_decoded.trade_window_scale.is_none(),
+        "writing Auto must store Auto (None), not a magic sentinel"
+    );
 
     let legacy: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
         .expect("a layout written before trade-window geometry must still deserialize");
     assert!(legacy.trade_window.is_none());
+    assert!(
+        legacy.trade_window_scale.is_none(),
+        "a layout written before trade-window scale must open on Auto"
+    );
     assert_eq!(legacy.analytics_period.as_deref(), Some("p-cur-month"));
 }
 

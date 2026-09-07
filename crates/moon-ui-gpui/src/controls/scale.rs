@@ -21,6 +21,20 @@ const SCALES: [(&str, Option<f32>); 6] = [
     ("2%", Some(0.02)),
 ];
 
+/// Returns `pct` when it is Auto or an exact dropdown preset; otherwise Auto.
+///
+/// `layout.toml` is hand-editable. `de_lenient` keeps any f32 that parses, including zero,
+/// negatives, NaN, and values that are not a zoom step. Applying those would pin the chart at an
+/// extreme window while [`scale_label`] still renders Auto. The dropdown is the only producer of
+/// a remembered value; anything else is treated as "nothing was saved".
+pub(crate) fn remembered_scale(pct: Option<f32>) -> Option<f32> {
+    if SCALES.iter().any(|(_, value)| *value == pct) {
+        pct
+    } else {
+        None
+    }
+}
+
 /// Returns a preset label for a scale step.
 ///
 /// `None`, or a custom dragged scale that does not exactly match a numeric step, returns the
