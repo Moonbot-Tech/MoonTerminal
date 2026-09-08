@@ -49,11 +49,14 @@ pub enum LabelPreset {
     /// the module that view opens with. On any other chart its captions have nothing to state and
     /// print nothing, which is the same way every optional figure behaves here.
     Trade,
+    /// Why each enabled strategy on this core skips this coin — MoonBot's filter overlay, as a
+    /// caption column the reader can place, size and hide like every other module.
+    StrategyFilters,
 }
 
 impl LabelPreset {
     /// Every preset, in menu order: what the chart is, then how it moves, then what is at risk.
-    pub const ALL: [LabelPreset; 12] = [
+    pub const ALL: [LabelPreset; 13] = [
         LabelPreset::Instrument,
         LabelPreset::Scale,
         LabelPreset::CoinDeltas,
@@ -65,6 +68,7 @@ impl LabelPreset {
         LabelPreset::Funding,
         LabelPreset::Arbitrage,
         LabelPreset::Detect,
+        LabelPreset::StrategyFilters,
         LabelPreset::Trade,
     ];
 
@@ -82,6 +86,7 @@ impl LabelPreset {
             LabelPreset::Scale => "chart_labels.preset.scale",
             LabelPreset::Session => "chart_labels.preset.session",
             LabelPreset::Detect => "chart_labels.preset.detect",
+            LabelPreset::StrategyFilters => "chart_labels.preset.strategy_filters",
             LabelPreset::Trade => "chart_labels.preset.trade",
         }
     }
@@ -110,6 +115,7 @@ impl LabelPreset {
             ],
             LabelPreset::Funding => &[ChartLabelField::Funding, ChartLabelField::FundingIn],
             LabelPreset::Arbitrage => &[ChartLabelField::ArbColumn],
+            LabelPreset::StrategyFilters => &[ChartLabelField::StrategyFilters],
             // The period first, then the two sides under it — the reference terminal's own block.
             // The whole volume and the trade count are left OUT and switched on from the chart's
             // own menu: they answer a second question, and a four-line block over the candles is
@@ -151,7 +157,7 @@ impl LabelPreset {
             LabelPreset::Instrument | LabelPreset::Funding => LabelZone::ZoneTop,
             // Over the PLOT, on the left, which is where the reference terminal prints it and the
             // only band tall enough for a column of a dozen venues.
-            LabelPreset::Arbitrage => LabelZone::ChartTop,
+            LabelPreset::Arbitrage | LabelPreset::StrategyFilters => LabelZone::ChartTop,
             LabelPreset::CoinDeltas
             | LabelPreset::MarketBackdrop
             | LabelPreset::Position
@@ -212,6 +218,7 @@ impl LabelPreset {
             // run-on sentence. The volume block stacks for the same reason its bars do: the two
             // sides are compared against each other, and a comparison reads down, not across.
             LabelPreset::Arbitrage
+            | LabelPreset::StrategyFilters
             | LabelPreset::Volumes
             | LabelPreset::CursorVolumes
             | LabelPreset::Detect
@@ -227,7 +234,7 @@ impl LabelPreset {
     pub fn align(self) -> LabelAlign {
         match self {
             LabelPreset::Instrument | LabelPreset::Funding => LabelAlign::Right,
-            LabelPreset::Arbitrage => LabelAlign::Left,
+            LabelPreset::Arbitrage | LabelPreset::StrategyFilters => LabelAlign::Left,
             LabelPreset::CoinDeltas
             | LabelPreset::MarketBackdrop
             | LabelPreset::Position

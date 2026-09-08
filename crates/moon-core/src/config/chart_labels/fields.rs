@@ -221,11 +221,16 @@ pub enum ChartLabelField {
     /// button, in the corner, in the strip. Prints nothing at all while the coin is not banned,
     /// like every other optional figure on the chart.
     TempBanLeft,
+    /// Why each enabled strategy on this core does not fire on this coin, as the core wrote it.
+    ///
+    /// A COLUMN, like [`Self::ArbColumn`]: one line per strategy, addressed from the same run
+    /// range. The strings arrive ready-made (`ChartText.filter_lines`); this field only places them.
+    StrategyFilters,
 }
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 59] = [
+    pub const ALL: [ChartLabelField; 60] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -285,6 +290,7 @@ impl ChartLabelField {
         ChartLabelField::ActTempBan,
         ChartLabelField::ActFavorite,
         ChartLabelField::TempBanLeft,
+        ChartLabelField::StrategyFilters,
     ];
 
     /// Menu section this field belongs to.
@@ -341,7 +347,8 @@ impl ChartLabelField {
             | ChartLabelField::CoinBalance => ChartLabelGroup::Exchange,
             ChartLabelField::OrderStrategy
             | ChartLabelField::DetectStrategy
-            | ChartLabelField::DetectMsg => ChartLabelGroup::Strategy,
+            | ChartLabelField::DetectMsg
+            | ChartLabelField::StrategyFilters => ChartLabelGroup::Strategy,
             ChartLabelField::TradeStrategy
             | ChartLabelField::TradeDetect
             | ChartLabelField::TradeSellReason => ChartLabelGroup::Trade,
@@ -416,6 +423,7 @@ impl ChartLabelField {
             ChartLabelField::ActTempBan => "chart_labels.field.act_temp_ban",
             ChartLabelField::ActFavorite => "chart_labels.field.act_favorite",
             ChartLabelField::TempBanLeft => "chart_labels.field.temp_ban_left",
+            ChartLabelField::StrategyFilters => "chart_labels.field.strategy_filters",
         }
     }
 
@@ -495,14 +503,16 @@ impl ChartLabelField {
 
     /// Whether this caption is PROSE, and so may be wrapped onto another line instead of cut.
     ///
-    /// One field so far, and it is the only one shaped like a sentence: the core's own detect line,
-    /// which routinely states half a dozen figures and does not fit the plot's width. Everything
-    /// else the chart prints is a number or a name — wrapping those would move a figure onto a line
-    /// of its own, where it reads as a caption of its own.
+    /// Detect lines and strategy-filter skip reasons are sentences: they routinely state a
+    /// condition that does not fit the plot's leftover width, and cutting them hides the reason
+    /// (it sits after the colon). Everything else the chart prints is a number or a name — wrapping
+    /// those would move a figure onto a line of its own, where it reads as a caption of its own.
     pub fn wraps(self) -> bool {
         matches!(
             self,
-            ChartLabelField::DetectMsg | ChartLabelField::TradeDetect
+            ChartLabelField::DetectMsg
+                | ChartLabelField::TradeDetect
+                | ChartLabelField::StrategyFilters
         )
     }
 
@@ -540,7 +550,10 @@ impl ChartLabelField {
     /// Asked by the drawing pass, which addresses such a caption's lines in their own run range,
     /// and by the editor, which offers the roster's settings instead of a prefix switch.
     pub fn is_column(self) -> bool {
-        matches!(self, ChartLabelField::ArbColumn)
+        matches!(
+            self,
+            ChartLabelField::ArbColumn | ChartLabelField::StrategyFilters
+        )
     }
 
     /// Windows this field can actually be read over.

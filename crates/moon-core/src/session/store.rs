@@ -9,11 +9,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::applog::LogLine;
 use crate::feed::{
-    AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, CoreConfig, CoreConfigEditEvent,
-    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigState, DetectRow,
-    EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
-    STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
-    StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow, TransferAssetsSnapshot,
+    AssetsSnapshot, ChartAlertUpdate, ChartTextRows, ClientSettings, ConnStatus, CoreConfig,
+    CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
+    CoreConfigState, DetectRow, EngineActionResult, FeedMsg, LicenseState, NewsSnapshot, OrderRow,
+    ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP, StrategyEditNote, StrategyEditOutcome,
+    StrategyEditPhase, StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow,
+    TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -256,6 +257,11 @@ pub struct CoreData {
     /// snapshot delivered through the same `Upserted` updates that overwrite entries by key. The
     /// blob is retained for re-upserts when toggling alerts and for format round-tripping.
     pub chart_alerts: HashMap<(String, u64), Vec<u8>>,
+    /// Core-built strategy-filter overlay rows, keyed by market name.
+    ///
+    /// Replaced per market when `FeedMsg::ChartText` arrives. Kept across a brief disconnect so a
+    /// chart that still shows the coin does not flash empty while the core rebuilds the strings.
+    pub chart_text: HashMap<String, Vec<String>>,
     /// Recent core server-log lines, trimmed as a ring buffer to `MAX_LOG`.
     pub log: VecDeque<LogLine>,
     /// Raw server-log lines with terminal receipt times for diagnostics and FireTest measurements.
@@ -383,6 +389,8 @@ pub struct CoreData {
     /// lines instead of re-reading and re-parsing the whole ring on every batch.
     pub log_seq: u64,
     pub chart_alerts_rev: u64,
+    /// Advances when any market's filter-overlay rows change.
+    pub chart_text_rev: u64,
     /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
     /// Core Status without repainting for receipt-time-only updates.
     pub sys_rev: u64,
@@ -474,6 +482,7 @@ impl CoreData {
             update_rejects: 0,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
+            chart_text: HashMap::new(),
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
@@ -509,6 +518,7 @@ impl CoreData {
             log_rev: 0,
             log_seq: 0,
             chart_alerts_rev: 0,
+            chart_text_rev: 0,
             sys_rev: 0,
             problems: crate::feed::CoreProblems::default(),
             folders: crate::feed::CoreFolders::default(),
@@ -1227,6 +1237,22 @@ impl CoreData {
                     }
                 }
                 self.chart_alerts_rev = self.chart_alerts_rev.wrapping_add(1);
+            }
+            FeedMsg::ChartText(rows) => {
+                let mut changed = false;
+                for ChartTextRows {
+                    market,
+                    filter_lines,
+                } in rows
+                {
+                    if self.chart_text.get(&market) != Some(&filter_lines) {
+                        self.chart_text.insert(market, filter_lines);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.chart_text_rev = self.chart_text_rev.wrapping_add(1);
+                }
             }
             FeedMsg::ServerLog(lines) => {
                 if !lines.is_empty() {

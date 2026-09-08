@@ -8,6 +8,7 @@ use std::time::Duration;
 use gpui::*;
 
 use moon_chart::paint::now_unix_ms;
+use moon_core::config::ChartLabelField;
 use moon_core::session::CoreId;
 
 use super::ChartPanel;
@@ -21,6 +22,7 @@ impl ChartPanel {
             });
         }
         self.sync_orderbook_refs(cx);
+        self.sync_chart_text(cx);
     }
 
     pub(super) fn release_market_ref(&mut self, core: CoreId, market: &str, cx: &mut App) {
@@ -31,6 +33,7 @@ impl ChartPanel {
             });
         }
         self.sync_orderbook_refs(cx);
+        self.sync_chart_text(cx);
     }
 
     pub(super) fn release_market_refs_except(
@@ -51,6 +54,7 @@ impl ChartPanel {
             }
         }
         self.sync_orderbook_refs(cx);
+        self.sync_chart_text(cx);
     }
 
     pub(super) fn release_all_market_refs(&mut self, cx: &mut App) {
@@ -62,6 +66,41 @@ impl ChartPanel {
             });
         }
         self.sync_orderbook_refs(cx);
+        // Drop ChartText interest even while the chart still has an active target: this is the
+        // panel going away (or the trade window freezing), not a caption toggle. Re-syncing here
+        // would re-retain from that leftover target and leave the core producing unused rows.
+        if let Some((core, market)) = self.last_chart_text_sent.take() {
+            self.backend
+                .update(cx, |b, _| b.release_chart_text(core, &market));
+        }
+    }
+
+    /// Ask the core for strategy-filter rows on this panel's active market, or clear the request.
+    pub(super) fn sync_chart_text(&mut self, cx: &mut App) {
+        let want = if self.historical {
+            None
+        } else if !self
+            .settings_sig
+            .chart_labels
+            .any_drawn(|f| f == ChartLabelField::StrategyFilters)
+        {
+            None
+        } else {
+            self.chart.active_target()
+        };
+        if want == self.last_chart_text_sent {
+            return;
+        }
+        let previous = self.last_chart_text_sent.take();
+        self.backend.update(cx, |b, _| {
+            if let Some((core, market)) = &previous {
+                b.release_chart_text(*core, market);
+            }
+            if let Some((core, market)) = &want {
+                b.retain_chart_text(*core, market);
+            }
+        });
+        self.last_chart_text_sent = want;
     }
 
     fn sync_market_ref_epoch(&mut self, cx: &mut App) {

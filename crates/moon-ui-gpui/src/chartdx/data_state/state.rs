@@ -103,10 +103,24 @@ impl ChartDataState {
                         | moon_core::config::ChartLabelField::DetectMsg
                 )
             });
+        let wants_filters = self.draws_live_market()
+            && self
+                .chart_labels
+                .any_drawn(|f| f == moon_core::config::ChartLabelField::StrategyFilters);
         let container = self.container.borrow();
         if let Some((core, _market)) = container.target_ref(0) {
             if let Some(core_st) = session.store().core(core) {
                 sig = sig.wrapping_add(core_st.order_lines_rev);
+            }
+        }
+        if wants_filters {
+            for ix in 0..container.pane_count() {
+                let Some((core, _)) = container.target_ref(ix) else {
+                    continue;
+                };
+                if let Some(core_st) = session.store().core(core) {
+                    sig = sig.wrapping_mul(31).wrapping_add(core_st.chart_text_rev);
+                }
             }
         }
         // A detect caption is resolved PER PANE, from that pane's own core — so every pane's core

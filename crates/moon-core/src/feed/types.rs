@@ -403,6 +403,17 @@ pub enum ChartAlertUpdate {
     Deleted { market: String, obj_uid: u64 },
 }
 
+/// Core-built strategy-filter overlay rows for one market.
+///
+/// MoonBot paints these on its own chart ("Daily vol. doesn't match…", missing tag, EMA miss).
+/// The terminal asks for them through [`super::CoreCmd::SetChartText`] and prints them as a
+/// chart caption (`ChartLabelField::StrategyFilters`) — the core is the calculator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartTextRows {
+    pub market: String,
+    pub filter_lines: Vec<String>,
+}
+
 /// Engine action accepted or rejected by the core through `Event::EngineAction`.
 ///
 /// This is decoupled from moonproto so the UI formats the toast text itself.
@@ -1384,6 +1395,11 @@ pub enum FeedMsg {
     EngineActions(Vec<EngineActionResult>),
     /// Batch of core chart-alert changes from one drain tick, gated by `feed.alerts`.
     ChartAlerts(Vec<ChartAlertUpdate>),
+    /// Core-built strategy-filter rows for one or more markets, from `Event::ChartText`.
+    ///
+    /// These are ready strings, not typed skip codes. The UI paints them; it does not recompute
+    /// volume/EMA/tag matches. A later snapshot for the same market replaces the previous rows.
+    ChartText(Vec<ChartTextRows>),
     /// Core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// Emitted for every health event; the store gates the Core Status panel with
     /// `sys_rev` only when metric values change.

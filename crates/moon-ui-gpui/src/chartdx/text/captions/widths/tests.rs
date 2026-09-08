@@ -5,7 +5,9 @@
 
 use moon_core::config::LabelAlign;
 
-use super::{Taken, edge_cap, free_width, prose_owed};
+use super::{
+    CAPTION_GAP, Taken, band_max_w, band_rank, edge_cap, free_width, line_budget, prose_owed,
+};
 
 /// A whole zone, in the round numbers the arithmetic is easiest to read at.
 const ZONE: f32 = 1000.0;
@@ -111,6 +113,103 @@ fn a_band_with_no_room_left_answers_zero() {
 fn a_nonsense_width_is_read_as_nothing() {
     let nonsense = taken(&[(LabelAlign::Left, f32::NAN), (LabelAlign::Right, -30.0)]);
     assert_eq!(free_width(ZONE, LabelAlign::Center, nonsense), ZONE);
+}
+
+/// A short centred caption blocks only the lines that share its Y. Past that the edge spends the
+/// whole zone — otherwise a skip-reason list wraps at half the plot while the candles beside it
+/// are empty.
+#[test]
+fn past_a_short_centre_the_edge_gets_the_zone() {
+    let mut neighbours = Taken::default();
+    neighbours.set_extent(LabelAlign::Center, 200.0, 20.0);
+    assert_eq!(
+        line_budget(ZONE, LabelAlign::Left, neighbours, 0.0, 0.0),
+        392.0
+    );
+    assert_eq!(
+        line_budget(ZONE, LabelAlign::Left, neighbours, 20.0, 0.0),
+        ZONE,
+        "the core name has ended; the skip list may use the rest of the plot"
+    );
+}
+
+/// A wrapping skip list that would open beside the core is moved past the core's own height, then
+/// spends the whole zone. Squeezing it into the leftover next to the name is what printed through
+/// it and wrapped the first sentence in half.
+#[test]
+fn a_wrapping_column_clears_a_short_centre_then_takes_the_zone() {
+    let mut neighbours = Taken::default();
+    neighbours.set_extent(LabelAlign::Center, 200.0, 20.0);
+    assert_eq!(neighbours.blocking_height(LabelAlign::Left), 20.0);
+    assert_eq!(
+        line_budget(ZONE, LabelAlign::Left, neighbours, 20.0 + CAPTION_GAP, 0.0,),
+        ZONE
+    );
+}
+
+/// A tall far edge still bounds a line that has cleared the centre: full width would print through
+/// a right-hand module that runs the height of the band.
+#[test]
+fn a_clear_line_still_yields_to_a_tall_far_edge() {
+    let mut neighbours = Taken::default();
+    neighbours.set_extent(LabelAlign::Center, 200.0, 20.0);
+    neighbours.set_extent(LabelAlign::Right, 100.0, 400.0);
+    assert_eq!(
+        line_budget(ZONE, LabelAlign::Left, neighbours, 50.0, 0.0),
+        free_width(ZONE, LabelAlign::Left, taken(&[(LabelAlign::Right, 100.0)])),
+    );
+}
+
+/// A column with no wrapping neighbour still yields to figures already drawn — otherwise a
+/// strategy-filter list spends the whole plot and prints through the core name in the centre.
+#[test]
+fn a_hungry_band_takes_only_what_the_figures_left() {
+    let taken = taken(&[(LabelAlign::Center, 200.0)]);
+    assert_eq!(
+        band_max_w(ZONE, None, false, true, LabelAlign::Left, taken),
+        free_width(ZONE, LabelAlign::Left, taken),
+    );
+}
+
+/// A column alone on the zone keeps the whole width: there is nothing to yield to.
+#[test]
+fn a_hungry_band_with_empty_neighbours_keeps_the_zone() {
+    assert_eq!(
+        band_max_w(ZONE, None, false, true, LabelAlign::Left, Taken::default()),
+        ZONE,
+    );
+}
+
+/// A wrapping detect line still caps the column the same way it caps figures. Treating the
+/// column as a second elastic band would skip the split entirely and print the skip list through
+/// the sentence.
+#[test]
+fn a_hungry_band_uses_the_figure_cap_when_prose_is_dividing_the_zone() {
+    let cap = edge_cap(ZONE, 5000.0);
+    assert_eq!(
+        band_max_w(ZONE, cap, false, true, LabelAlign::Left, Taken::default()),
+        cap.unwrap(),
+    );
+}
+
+/// Figures still spend the whole zone when nothing wraps and nothing is a column. Narrowing them
+/// against each other was never the defect, and would truncate the coin and the core name.
+#[test]
+fn a_figure_band_is_not_narrowed_against_another_figure() {
+    let taken = taken(&[(LabelAlign::Center, 200.0)]);
+    assert_eq!(
+        band_max_w(ZONE, None, false, false, LabelAlign::Left, taken),
+        ZONE,
+    );
+}
+
+/// Draw order: figures, then columns, then wrapping prose. Inverting it either prints the skip
+/// list through the core name or hands the wrapping detect line the whole zone before the column
+/// has reported what it took.
+#[test]
+fn columns_draw_after_figures_and_before_prose() {
+    assert!(band_rank(false, false) < band_rank(false, true));
+    assert!(band_rank(false, true) < band_rank(true, false));
 }
 
 /// The two rules have to agree: whatever the figures are capped at, the elastic band must still be

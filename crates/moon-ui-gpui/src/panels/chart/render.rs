@@ -157,6 +157,7 @@ impl Render for ChartPanel {
         if settings_changed {
             self.view_dirty = true;
         }
+        self.sync_chart_text(cx);
 
         // Render path only publishes layout/settings dirtiness. Market data is pulled
         // by gpu_canvas.frame(); account/order overlays have their own narrow sync.

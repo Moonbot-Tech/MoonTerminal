@@ -41,13 +41,14 @@ pub const CHART_LABEL_ROWS: usize = 16;
 /// room around there.
 pub const CHART_LABEL_PARTS: usize = 8;
 
-/// First run index a module's ARBITRAGE rows occupy, past its captions and its name.
+/// First run index a module's COLUMN rows occupy, past its captions and its name.
 ///
-/// An arbitrage caption prints a whole COLUMN — one line per venue — from a single configured
-/// caption, so its lines cannot be addressed as parts: there are more of them than a module holds,
-/// and how many depends on what the core reports rather than on anything saved. They get their own
-/// range of the same per-row stride instead, which keeps one addressing rule for every retained
-/// run and costs nothing while no chart prints one (the pool grows by index, on demand).
+/// A column caption — the venue roster, or the strategy-filter skip lines — prints many lines from
+/// a single configured caption, so those lines cannot be addressed as parts: there are more of
+/// them than a module holds, and how many depends on what the core reports rather than on anything
+/// saved. They get their own range of the same per-row stride instead, which keeps one addressing
+/// rule for every retained run and costs nothing while no chart prints one (the pool grows by
+/// index, on demand). Two column captions in one row share this range; the first one drawn wins.
 pub const ARB_PART_BASE: usize = ROW_NAME_PART + 1;
 
 /// First run index reserved for a caption's PREFIX.
@@ -1064,6 +1065,16 @@ impl ChartLabelRow {
         self.parts.iter().any(|part| part.field.action().is_some())
     }
 
+    /// Whether this module places the strategy-filter column.
+    ///
+    /// Hidden parts count, for the same reason [`Self::holds_action`] asks every part: a one-shot
+    /// insert must not add a second column to a module the reader already placed and switched off.
+    pub fn holds_strategy_filters(&self) -> bool {
+        self.parts
+            .iter()
+            .any(|part| part.field == ChartLabelField::StrategyFilters)
+    }
+
     /// Whether the row prints its own name as a caption.
     ///
     /// A preset row counts as named: the switch prints "Позиция" without the user having to type
@@ -1131,6 +1142,19 @@ fn instrument_row(with_core: bool) -> ChartLabelRow {
         row.push_part(ChartLabelField::Core);
     }
     row.push_part(ChartLabelField::Venue);
+    row
+}
+
+/// The shipped strategy-filter column: ChartTop, left, stacked, spaced off the module above it.
+///
+/// One builder so the live default and the one-shot insert into existing profiles cannot drift:
+/// a migrated chart and a fresh one must place the same module in the same band.
+pub fn strategy_filters_row() -> ChartLabelRow {
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.preset = Some(LabelPreset::StrategyFilters);
+    row.flow = LabelFlow::Column;
+    row.gap = 8;
+    row.push_part(ChartLabelField::StrategyFilters);
     row
 }
 
@@ -1319,6 +1343,10 @@ impl Default for ChartLabelsCfg {
         detect.push_part(ChartLabelField::DetectMsg);
         detect.push_part(ChartLabelField::OrderStrategy);
         cfg.rows[9] = detect;
+
+        // Why strategies skip this coin: a column on the plot's left, under the other left
+        // modules, where MoonBot painted the overlay and where the reader can move or hide it.
+        cfg.rows[10] = strategy_filters_row();
 
         // The market buttons along the bottom edge, where every chart drew them before they became
         // captions and where a hand reaching for `Panic Sell` still expects to find one.

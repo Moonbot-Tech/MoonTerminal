@@ -19,16 +19,19 @@
 //!
 //! A zone holding a band that WRAPS also divides its width rather than handing all of it to each
 //! band in turn: the bands printing figures are drawn first, and the wrapping one is drawn last,
-//! into what they left. See [`widths`], which also states what is deliberately NOT divided. Before
-//! that, a long detect line printed straight through whatever was pinned to the left and the right
-//! of it. Two different zones are never divided against each other — each stays inside its own
-//! band, which is the paragraph above.
+//! into what they left. A COLUMN — strategy-filter skip lines, the venue roster — is drawn between
+//! those two: a line of it yields to figures that share its Y, and spends the rest of the zone
+//! once those figures have ended, rather than wrapping at half the plot beside empty candles. See
+//! [`widths`]. Before the wrap split,
+//! a long detect line printed straight through whatever was pinned to the left and the right of it.
+//! Two different zones are never divided against each other — each stays inside its own band, which
+//! is the paragraph above.
 
 use gpui::{Hsla, point, px};
 use moon_core::config::{
-    ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelRow, ChartLabelsCfg, LABEL_WRAP_LINES, LabelAlign,
-    LabelColor, LabelZone, PREFIX_PART_BASE, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle,
-    WRAP_PART_BASE,
+    ARB_PART_BASE, CHART_LABEL_ROWS, ChartLabelField, ChartLabelRow, ChartLabelsCfg,
+    LABEL_WRAP_LINES, LabelAlign, LabelColor, LabelZone, PREFIX_PART_BASE, ROW_NAME_PART,
+    ROW_RUN_STRIDE, ResolvedLabelStyle, WRAP_PART_BASE,
 };
 use moon_core::util::fmt::DeltaSign;
 
@@ -153,6 +156,11 @@ pub(in crate::chartdx) struct CaptionGeomInput {
     pub orderbook_enabled: bool,
     pub orderbook_left: f32,
     pub scale_factor: f32,
+    /// Height of the bottom volume band, in logical pixels. Zero when the band is off.
+    ///
+    /// [`LabelZone::ChartBottom`] sits above this so every module in that zone clears the bars;
+    /// the control strip's floor is the plot's, and the bars never reach it.
+    pub volume_band_h: f32,
 }
 
 /// One caption prepared for drawing: where its text lives and how it is styled.
@@ -205,9 +213,23 @@ struct Cell {
 }
 
 impl Cell {
-    /// Whether this column holds a caption that WRAPS rather than being truncated.
+    /// Whether this column holds wrapping PROSE — a detect line — as opposed to a stacked column
+    /// that also wraps. Prose is elastic (the zone is divided for it); a column is only hungry.
     fn has_prose(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| item.wraps && item.part < ARB_PART_BASE)
+    }
+
+    /// Whether any caption in this column wraps onto another line, prose or skip-reason alike.
+    fn has_wrap(&self) -> bool {
         self.items.iter().any(|item| item.wraps)
+    }
+
+    /// Whether this column is a stacked field — filter skip lines, the venue roster — whose
+    /// natural width is the longest line it holds, not a single figure.
+    fn has_column(&self) -> bool {
+        self.items.iter().any(|item| item.part >= ARB_PART_BASE)
     }
 
     /// How tall the cell is: its captions stack, so their heights add up — and a wrapped caption
@@ -249,15 +271,23 @@ struct Band {
     /// Whether this band WRAPS, and so has no width of its own: a wrapped caption fills whatever
     /// budget it is handed, which is why it is drawn after the bands that do.
     elastic: bool,
+    /// Whether this band holds a COLUMN whose natural width is the plot: drawn after the figures
+    /// and before wrapping prose, into what the figures left. Not elastic — two wrapping bands
+    /// disable the detect-line split, and a column is not prose.
+    hungry: bool,
 }
 
 impl Band {
     fn new(align: LabelAlign, rows: Vec<Row>) -> Self {
         let elastic = rows.iter().any(|row| row.cells.iter().any(Cell::has_prose));
+        let hungry = rows
+            .iter()
+            .any(|row| row.cells.iter().any(Cell::has_column));
         Self {
             align,
             rows,
             elastic,
+            hungry,
         }
     }
 
@@ -279,6 +309,16 @@ struct Column {
     align: f32,
     /// Widest a row may become before its captions are truncated.
     max_w: f32,
+}
+
+/// What a hungry column needs to pick a width per line: the neighbours already drawn, and the
+/// inset a left anchor has already spent.
+#[derive(Clone, Copy)]
+struct HungryBudget {
+    total: f32,
+    align: LabelAlign,
+    taken: widths::Taken,
+    inset: f32,
 }
 
 impl RenderState {
@@ -463,17 +503,18 @@ impl RenderState {
             } else {
                 geom.plot_top
             };
-            // FIGURES first, elastic last: a band that wraps is the only one whose width cannot be
-            // read off its own content, so it takes what the others left. Stable sort — the figure
-            // bands keep `LabelAlign::ALL`'s order between themselves.
+            // FIGURES first, COLUMNS next, wrapping prose last. A column has a natural width, but
+            // that width is the longest skip line — routinely the whole plot — so it is drawn after
+            // the figures and spends only what they left. Stable sort keeps `LabelAlign::ALL`'s
+            // order inside each rank.
             let mut order = [0usize, 1, 2];
-            order.sort_by_key(|&n| bands[n].elastic);
+            order.sort_by_key(|&n| widths::band_rank(bands[n].elastic, bands[n].hungry));
             let mut taken = widths::Taken::default();
             for n in order {
                 if bands[n].is_empty() {
                     continue;
                 }
-                let (align, elastic) = (bands[n].align, bands[n].elastic);
+                let (align, elastic, hungry) = (bands[n].align, bands[n].elastic, bands[n].hungry);
                 let (x, fraction) = zone_anchor(zone, align, &geom, &corner);
                 let base_left = zone_bounds(zone, &geom, &corner).0;
                 // A special left anchor spends part of the zone before its text begins, so remove
@@ -484,27 +525,35 @@ impl RenderState {
                 } else {
                     0.0
                 };
-                let max_w = (match (cap, elastic) {
-                    (None, _) => total,
-                    (Some(cap), false) => cap,
-                    (Some(_), true) => widths::free_width(total, align, taken),
-                } - anchor_inset)
+                let max_w = (widths::band_max_w(total, cap, elastic, hungry, align, taken)
+                    - anchor_inset)
                     .max(0.0);
                 let column = Column {
                     x,
                     align: fraction,
                     max_w,
                 };
-                // A prose caption's height is not known from its style, so it is measured here —
-                // before `draw_stack` places anything from those heights.
+                // Height of a wrapped caption is not known from its style. Prose is measured here
+                // at one budget. A hungry column wraps per line inside `draw_stack`, because a
+                // line that has cleared the neighbours may spend the rest of the zone.
                 if elastic {
                     self.plan_wraps(ctx, texts, &mut bands[n].rows, column);
                 }
-                let (module_plates, used_w) = self.draw_stack(
+                // Per-line widening only when nothing wrapping is still waiting to be drawn: a
+                // detect line in the centre is laid out last, so its height is not in `taken` yet
+                // and the figure cap has to keep the column off it. Without one, a short core name
+                // is already in `taken` and lines below it can run the width of the plot.
+                let hungry_budget = (hungry && !elastic && cap.is_none()).then_some(HungryBudget {
+                    total,
+                    align,
+                    taken,
+                    inset: anchor_inset,
+                });
+                let (module_plates, used_w, used_h) = self.draw_stack(
                     ctx,
                     idx,
                     texts,
-                    &bands[n].rows,
+                    &mut bands[n].rows,
                     column,
                     start_y,
                     limit_y,
@@ -514,8 +563,9 @@ impl RenderState {
                     bars,
                     vol_hits,
                     act_draws,
+                    hungry_budget,
                 )?;
-                taken.set(align, used_w);
+                taken.set_extent(align, used_w, used_h);
                 // A module lives in exactly one band, so a band writes only its own slots and
                 // cannot overwrite another's.
                 for (module_ix, box_) in module_plates {
@@ -553,10 +603,7 @@ impl RenderState {
                 style,
                 plate: row_cfg.plate,
                 size: (base * style.size_mult).clamp(6.0, 60.0),
-                wraps: row_cfg
-                    .parts
-                    .get(text.part)
-                    .is_some_and(|part| part.field.wraps()),
+                wraps: caption_field(row_cfg, text.part).is_some_and(ChartLabelField::wraps),
                 lines: 1,
                 wrap_ix: usize::MAX,
             })
@@ -615,7 +662,7 @@ impl RenderState {
             .fold(0.0_f32, f32::max)
     }
 
-    /// Work out how many lines each PROSE caption takes at the width it will be drawn at.
+    /// Work out how many lines each wrapping caption takes at the width it will be drawn at.
     ///
     /// Before anything is stacked, because a band places its lines from their HEIGHTS — and a
     /// bottom-anchored one subtracts a line's height before drawing it. A wrapped caption that
@@ -633,44 +680,98 @@ impl RenderState {
         rows: &mut [Row],
         column: Column,
     ) {
-        // Nothing on this pane is prose: the whole walk — a measurement per cell of every band —
-        // is skipped, which is the case on every chart that prints no detect line.
-        if !rows.iter().any(|row| row.cells.iter().any(Cell::has_prose)) {
+        // Nothing on this pane wraps: the whole walk — a measurement per cell of every band —
+        // is skipped, which is the case on every chart that prints no detect line and no skip list.
+        if !rows.iter().any(|row| row.cells.iter().any(Cell::has_wrap)) {
             return;
         }
-        // Modules that already have a wrapped caption: the continuation runs are per module, so
-        // the second prose caption in one module is cut instead. Nothing ships two.
+        // Modules that already have a wrapped PROSE caption: the continuation runs are per module,
+        // so the second detect line in one module is cut instead. Nothing ships two. Column lines
+        // each wrap on their own — they already have a run apiece in the ARB range, and cutting
+        // the second skip reason would hide why that strategy did not fire.
         let mut wrapped_modules: Vec<usize> = Vec::new();
         for row in rows.iter_mut() {
-            // The budget walk exists to reach the prose captions; the cells after the last one on
-            // this line cost a measurement each and change nothing.
-            let Some(last_prose) = row.cells.iter().rposition(Cell::has_prose) else {
+            // The budget walk exists to reach the wrapping captions; the cells after the last one
+            // on this line cost a measurement each and change nothing.
+            let Some(last_wrap) = row.cells.iter().rposition(Cell::has_wrap) else {
                 continue;
             };
             let mut budget = column.max_w;
-            for (n, cell) in row.cells.iter_mut().enumerate().take(last_prose + 1) {
+            for (n, cell) in row.cells.iter_mut().enumerate().take(last_wrap + 1) {
                 let gap = if n == 0 { 0.0 } else { CAPTION_GAP + cell.gap };
                 budget -= gap;
                 if budget < MIN_LEGIBLE_W {
                     break;
                 }
                 for item in cell.items.iter_mut() {
-                    if !item.wraps || wrapped_modules.contains(&item.row) {
-                        continue;
-                    }
-                    wrapped_modules.push(item.row);
-                    let Some(entry) = texts.get(item.pos) else {
-                        continue;
-                    };
-                    let lines = wrap_caption(ctx, &entry.glued(), item, budget);
-                    item.lines = lines.len().clamp(1, LABEL_WRAP_LINES) as u8;
-                    item.wrap_ix = self.caption_wraps.len();
-                    self.caption_wraps.push(lines);
+                    self.wrap_item(ctx, texts, item, budget, &mut wrapped_modules);
                 }
                 // AFTER the wrap, never before: `measure_cell` reads a prose caption's width off
                 // the wrap, and asking it first would send the whole sentence through the
                 // truncation walk — which measures one character at a time — every frame.
                 budget -= self.measure_cell(ctx, texts, cell, budget);
+            }
+        }
+    }
+
+    /// Wrap one caption at `budget`, or skip it: a second prose caption in the same module is cut,
+    /// and a caption that does not wrap is left as one line.
+    fn wrap_item(
+        &mut self,
+        ctx: &gpui::GpuCanvasTextContext<'_>,
+        texts: &[LabelText],
+        item: &mut Item,
+        budget: f32,
+        wrapped_modules: &mut Vec<usize>,
+    ) {
+        if !item.wraps {
+            return;
+        }
+        let column_line = item.part >= ARB_PART_BASE;
+        if !column_line {
+            if wrapped_modules.contains(&item.row) {
+                return;
+            }
+            wrapped_modules.push(item.row);
+        }
+        let Some(entry) = texts.get(item.pos) else {
+            return;
+        };
+        let lines = wrap_caption(ctx, &entry.glued(), item, budget);
+        item.lines = lines.len().clamp(1, LABEL_WRAP_LINES) as u8;
+        item.wrap_ix = self.caption_wraps.len();
+        self.caption_wraps.push(lines);
+    }
+
+    /// Wrap each line of a hungry column at the width still free at that depth of the stack.
+    ///
+    /// A top band fills downward, so the first item sits at `travelled`; a bottom band fills
+    /// upward, so the last item does — wrapping from the floor up, or a skip reason next to the
+    /// core name would spend the whole plot and print through it.
+    fn wrap_hungry_row(
+        &mut self,
+        ctx: &gpui::GpuCanvasTextContext<'_>,
+        texts: &[LabelText],
+        row: &mut Row,
+        budget: HungryBudget,
+        travelled: f32,
+        downward: bool,
+    ) {
+        let mut wrapped_modules = Vec::new();
+        for cell in &mut row.cells {
+            let mut depth = travelled;
+            let n = cell.items.len();
+            for i in 0..n {
+                let ix = if downward { i } else { n - 1 - i };
+                let max_w = widths::line_budget(
+                    budget.total,
+                    budget.align,
+                    budget.taken,
+                    depth,
+                    budget.inset,
+                );
+                self.wrap_item(ctx, texts, &mut cell.items[ix], max_w, &mut wrapped_modules);
+                depth += cell.items[ix].block_h();
             }
         }
     }
@@ -682,7 +783,7 @@ impl RenderState {
         ctx: &mut gpui::GpuCanvasTextContext<'_>,
         idx: usize,
         texts: &[LabelText],
-        rows: &[Row],
+        rows: &mut [Row],
         column: Column,
         start_y: f32,
         limit_y: f32,
@@ -692,7 +793,8 @@ impl RenderState {
         bars: &mut Vec<CaptionBar>,
         vol_hits: &mut Vec<(usize, CaptionBox)>,
         act_draws: &mut Vec<ActionDraw>,
-    ) -> anyhow::Result<(Vec<(usize, CaptionBox)>, f32)> {
+        hungry: Option<HungryBudget>,
+    ) -> anyhow::Result<(Vec<(usize, CaptionBox)>, f32, f32)> {
         let mut plates: Vec<(usize, CaptionBox)> = Vec::new();
         // The band is as wide as its widest LINE — what the bands drawn after it have to clear.
         let mut used_w = 0.0_f32;
@@ -700,13 +802,32 @@ impl RenderState {
         // Whether anything has actually been PUT on the pane. Not the loop index: the first line
         // of a band is exempt from the clamp below, and "first" means first DRAWN.
         let mut any_drawn = false;
-        for row in rows {
-            let row_h = row.height();
+        for row in rows.iter_mut() {
             // The module's own spacing, in the direction the band runs: below the previous line in
             // a band that fills downward, above it in one that fills upward. On the FIRST line it
             // is the indent from the band's own edge, which is the case an "after this module"
             // reading cannot express at all.
             let gap = row.gap;
+            let mut travelled = if downward {
+                (y - start_y).abs() + gap
+            } else {
+                (start_y - y).abs() + gap
+            };
+            if let Some(budget) = hungry {
+                // A wrapping skip list that would open beside the core name is moved past it.
+                // Squeezing the first sentence into the leftover next to a one-line caption wraps
+                // it in half and still reads as printing through the name.
+                if row.cells.iter().any(Cell::has_wrap) {
+                    let clear_at = budget.taken.blocking_height(budget.align) + CAPTION_GAP;
+                    if clear_at > travelled {
+                        let extra = clear_at - travelled;
+                        y += if downward { extra } else { -extra };
+                        travelled = clear_at;
+                    }
+                }
+                self.wrap_hungry_row(ctx, texts, row, budget, travelled, downward);
+            }
+            let row_h = row.height();
             // The band stacks until it runs out of pane. Lines past that are dropped rather than
             // drawn: a caption over the time axis — or outside the pane entirely — reads as a
             // glitch, and the horizontal budget already drops what does not fit the same way.
@@ -728,6 +849,19 @@ impl RenderState {
             // drawing it. Taking that height from the styles rather than from a measurement is what
             // makes this possible without drawing the row twice.
             let top = if downward { y } else { y - row_h };
+            // A hungry row may run wider than the band's capped budget: lines that have cleared
+            // the neighbours wrap at the leftover of the zone, and the cell must be measured at
+            // that leftover or the already-wrapped lines are treated as overflow.
+            let mut col = column;
+            if let Some(budget) = hungry {
+                col.max_w = widths::line_budget(
+                    budget.total,
+                    budget.align,
+                    budget.taken,
+                    travelled + row_h,
+                    budget.inset,
+                );
+            }
             // One box PER MODULE on this line: two modules can share a line — that is what the
             // placement axis is for — and one rectangle behind both would put a backing under the
             // module that switched it off.
@@ -736,7 +870,7 @@ impl RenderState {
                 idx,
                 texts,
                 &row.cells,
-                column,
+                col,
                 top,
                 limit_y,
                 downward,
@@ -751,7 +885,12 @@ impl RenderState {
             any_drawn = true;
             y += if downward { row_h } else { -row_h };
         }
-        Ok((plates, used_w))
+        let used_h = if downward {
+            (y - start_y).max(0.0)
+        } else {
+            (start_y - y).max(0.0)
+        };
+        Ok((plates, used_w, used_h))
     }
 
     /// Draw one row of captions, returning the width it actually took.
@@ -1401,6 +1540,7 @@ impl RenderState {
             strategy: pr.label_strategy.clone(),
             detect_strategy: pr.label_detect_strategy.clone(),
             detect_msg: pr.label_detect_msg.clone(),
+            filter_lines: pr.filter_lines.clone(),
             // Off the ENGINE rather than the pane: a handed trade is a property of the whole
             // window — one chart, one trade — and copying it per pane would be the same three
             // strings stored as many times as the stack has panes.
@@ -1436,6 +1576,24 @@ impl RenderState {
         }
         changed
     }
+}
+
+/// The field a caption's part index names, including a column line past [`ARB_PART_BASE`].
+///
+/// Column lines are not configured parts — there are more of them than a module holds — so the
+/// part index does not look them up. They inherit the field of the visible column caption that
+/// produced them, which is how wrap/style/plate stay one setting for the whole list.
+fn caption_field(row: &ChartLabelRow, part: usize) -> Option<ChartLabelField> {
+    if part == ROW_NAME_PART {
+        return None;
+    }
+    if part >= ARB_PART_BASE {
+        return row.parts[..row.used_parts()]
+            .iter()
+            .find(|p| p.field.is_column() && p.visible)
+            .map(|p| p.field);
+    }
+    row.parts.get(part).map(|p| p.field)
 }
 
 /// Style one caption of a module draws with, or `None` when the module holds no such caption.
@@ -1648,9 +1806,14 @@ fn zone_start_y(zone: LabelZone, geom: &CaptionGeomInput, corner: &CaptionGeom) 
             _ => geom.plot_top + ZONE_PAD,
         }
     } else {
-        // Both bottom families share the plot's lower edge: the control strip runs the full height
-        // of the plot, so its floor is the same line.
-        geom.plot_bottom - ZONE_PAD
+        // ChartBottom shares the plot with the volume bars. Every module in that zone sits above
+        // the band; the control strip does not — it runs the full height of the plot, and the bars
+        // never reach it.
+        let floor = match zone {
+            LabelZone::ChartBottom => geom.plot_bottom - geom.volume_band_h.max(0.0),
+            _ => geom.plot_bottom,
+        };
+        floor - ZONE_PAD
     }
 }
 

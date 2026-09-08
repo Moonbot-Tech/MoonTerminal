@@ -396,6 +396,21 @@ impl SessionManager {
         )
     }
 
+    /// Ask the core for strategy-filter chart text on `market`, or clear the relay.
+    ///
+    /// One market per core: the protocol replaces the previous request. Empty `market` or
+    /// `need_filters=false` turns the overlay off for this client.
+    pub fn set_chart_text(&self, core: CoreId, market: String, need_filters: bool) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::SetChartText {
+                market,
+                need_filters,
+            },
+            "set chart text",
+        )
+    }
+
     /// Disarm and delete a chart alert by `obj_uid`.
     pub fn chart_alert_delete(&self, core: CoreId, market: String, obj_uid: u64) -> Result<()> {
         if market.is_empty() || obj_uid == 0 {

@@ -242,6 +242,8 @@ pub struct ChartPanel {
     /// It is FALSE for every other panel — Main, the stacks, detached chart windows, group windows
     /// and the Profit Monitor all keep their book and their trading controls unchanged.
     historical: bool,
+    /// Last ChartText request this panel sent, so a stable target does not re-issue the command.
+    last_chart_text_sent: Option<(CoreId, String)>,
     /// Per-window/tab price-axis position. It is applied through the engine's
     /// `set_price_axis_pos` and affects layout and hit-testing; defaults to Left.
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
@@ -467,6 +469,7 @@ impl ChartPanel {
         // before any coordination tick can read the demand set, so a historical viewer never
         // subscribes to a live book at all.
         panel.sync_orderbook_refs(cx);
+        panel.sync_chart_text(cx);
         // The dim control strip marks where an order-placement click lands. There is no order
         // placement here, so shading a strip for it would be a leftover of the thing just removed.
         panel.show_zone = false;
@@ -595,6 +598,7 @@ impl ChartPanel {
                 // place such a panel hears about it, so the trade-kind re-query hangs here too; it
                 // returns immediately unless that pair actually moved.
                 this.requery_trade_history_on_trade_kinds(cx);
+                this.sync_chart_text(cx);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -659,6 +663,7 @@ impl ChartPanel {
             auto_pin: false,
             market_actions_pushed: false,
             historical: false,
+            last_chart_text_sent: None,
             price_axis_pos: Default::default(),
             time_axis_visible: true,
             line_labels: true,
@@ -790,6 +795,7 @@ impl ChartPanel {
                 // own hears a ⧉ press from another group window only here, and the durable history
                 // query was narrowed by the previous trade-kind pair.
                 this.requery_trade_history_on_trade_kinds(cx);
+                this.sync_chart_text(cx);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -846,6 +852,7 @@ impl ChartPanel {
             auto_pin: false,
             market_actions_pushed: false,
             historical: false,
+            last_chart_text_sent: None,
             price_axis_pos: Default::default(),
             time_axis_visible: true,
             line_labels: true,

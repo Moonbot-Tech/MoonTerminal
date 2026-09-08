@@ -49,6 +49,11 @@ pub(in crate::chartdx) struct LabelInputs {
     /// unable to tell "nothing fired" from "it fired a while ago".
     pub detect_strategy: String,
     pub detect_msg: String,
+    /// Core-built skip-reason lines for this market, one per enabled strategy.
+    ///
+    /// Empty until the chart has asked for them and the core has answered. Compared by value in
+    /// the caption cache, so a new snapshot re-formats the column and an identical repeat does not.
+    pub filter_lines: Vec<String>,
     /// What the CLOSED TRADE this chart was handed was: the strategy that opened it, the line it
     /// fired on, why it closed. `None` on every live chart — the trade-detail window is the only
     /// one that is handed a trade, and the captions reading this print nothing anywhere else.
@@ -413,13 +418,19 @@ impl LabelState {
                     // frame. The drawing pass resolves a column's style the same way — first one
                     // wins — so this is the same rule stated once on each side.
                     if !column_drawn {
-                        push_arb_rows(
-                            &mut scratch,
-                            row_ix,
-                            &self.inputs,
-                            self.arb_view.as_deref(),
-                            part.resolved_style(),
-                        );
+                        match part.field {
+                            ChartLabelField::ArbColumn => push_arb_rows(
+                                &mut scratch,
+                                row_ix,
+                                &self.inputs,
+                                self.arb_view.as_deref(),
+                                part.resolved_style(),
+                            ),
+                            ChartLabelField::StrategyFilters => {
+                                push_filter_rows(&mut scratch, row_ix, &self.inputs.filter_lines)
+                            }
+                            _ => {}
+                        }
                         column_drawn = true;
                     }
                     continue;
@@ -652,7 +663,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         // Expanded before this point, into its own run range: one caption, a dozen lines. Reaching
         // here would mean the expansion was skipped, and a single line saying "arbitrage" is not
         // what the caption is for.
-        ChartLabelField::ArbColumn => None,
+        ChartLabelField::ArbColumn | ChartLabelField::StrategyFilters => None,
         ChartLabelField::CoinTags => inputs
             .figures
             .as_ref()
@@ -921,6 +932,34 @@ fn push_arb_rows(
             // overrides whatever the sign would have picked.
             sign: cell.sign,
             color: cell.color,
+            bar: None,
+            volume_menu: false,
+            action: None,
+        });
+    }
+}
+
+/// Build the strategy-filter column: one line per skip reason, addressed from [`ARB_PART_BASE`].
+///
+/// Capped at [`moon_core::config::ARB_MAX_ROWS`] so the column cannot outgrow the run range it
+/// shares with the arbitrage roster — they never occupy the same module, so the indices cannot
+/// collide, but the pool is sized to that constant.
+fn push_filter_rows(out: &mut Vec<LabelText>, row_ix: usize, lines: &[String]) {
+    for (n, line) in lines
+        .iter()
+        .filter(|line| !line.is_empty())
+        .take(moon_core::config::ARB_MAX_ROWS)
+        .enumerate()
+    {
+        out.push(LabelText {
+            row: row_ix,
+            part: ARB_PART_BASE + n,
+            text: line.clone(),
+            prefix: String::new(),
+            sign: None,
+            reachable: false,
+            venue: None,
+            color: None,
             bar: None,
             volume_menu: false,
             action: None,
@@ -1462,17 +1501,28 @@ pub(crate) fn preview_row(
             });
         }
     }
+    let mut column_drawn = false;
     for part in &row.parts[..row.used_parts()] {
         if !part.visible {
             continue;
         }
         // A column caption previews as the COLUMN it prints — same expansion the chart uses, same
         // sample data — because "what will this print" is a list of venues, not one line saying
-        // "arbitrage".
+        // "arbitrage". The first visible column owns the range; a second one is ignored, matching
+        // LabelState::update.
         if part.field.is_column() {
+            if column_drawn {
+                continue;
+            }
+            column_drawn = true;
             let base = part.resolved_style();
             let mut lines = Vec::new();
-            push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base);
+            match part.field {
+                ChartLabelField::StrategyFilters => {
+                    push_filter_rows(&mut lines, 0, &inputs.filter_lines)
+                }
+                _ => push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base),
+            }
             out.extend(lines.into_iter().map(|line| PreviewCaption {
                 column: true,
                 prefix: line.prefix,
@@ -1556,6 +1606,10 @@ fn sample_inputs() -> LabelInputs {
         strategy: "Alpha".to_string(),
         detect_strategy: "BTC Sniper".to_string(),
         detect_msg: "Delta 5m 3.4% · vol x7".to_string(),
+        filter_lines: vec![
+            "EMA_01 (EMA) : EMA filter not passed".to_string(),
+            "HOOK_01 (MoonHook) : Daily vol. doesnt match".to_string(),
+        ],
         // The editor previews every field on ONE sample, the trade captions included: a reader
         // configuring the trade window's module has to see what it will print, and a preview that
         // left them blank would read as a module that prints nothing.

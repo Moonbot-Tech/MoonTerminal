@@ -3,9 +3,24 @@
 use moonproto::StrategySnapshot;
 
 use super::{
-    StrategyPlacementGuard, anchor_on_core, plan_insert_positions, regroup_moved,
+    ChartTextWanted, StrategyPlacementGuard, anchor_on_core, plan_insert_positions, regroup_moved,
     strategy_placements_unchanged,
 };
+
+/// `live::run` resetting the wanted market on each client would clear a still-requested overlay,
+/// and the UI would not re-issue an unchanged ChartText command.
+#[test]
+fn replacing_the_client_keeps_the_wanted_chart_text_market() {
+    let mut wanted = ChartTextWanted {
+        market: "ROSEUSDT".into(),
+        need_filters: true,
+        applied: true,
+    };
+    wanted.begin_client();
+    assert_eq!(wanted.market, "ROSEUSDT");
+    assert!(wanted.need_filters);
+    assert!(!wanted.applied);
+}
 
 /// An anchor is honoured only on the core it names.
 ///

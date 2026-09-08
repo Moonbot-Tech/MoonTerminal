@@ -1006,6 +1006,13 @@ pub struct WindowLayout {
     /// where the reader may since have moved — or removed — those very buttons.
     #[serde(default)]
     pub chart_action_buttons_migrated: bool,
+    /// One-shot marker: the strategy-filter skip lines have been carried across from the graphics
+    /// checkbox into the caption configuration, where they are now drawn from.
+    ///
+    /// NEVER reset it. A second pass would append the shipped module to a caption set where the
+    /// reader may since have moved — or removed — that very column.
+    #[serde(default)]
+    pub chart_strategy_filters_migrated: bool,
     /// Chart caption labels — which figures the chart prints beside its plot, where, and how —
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     ///

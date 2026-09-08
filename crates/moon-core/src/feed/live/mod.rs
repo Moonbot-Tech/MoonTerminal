@@ -41,10 +41,10 @@ use super::strategies::{
     strat_db_dump, strat_display_name, strat_kind_name,
 };
 use super::{
-    ConnStatus, CoreCmd, CoreConfigEditEvent, CoreEndpoint, CoreLogLine, CoreStartupStatus,
-    CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
-    SharedMoonClient, StrategyEditPhase, StrategyEditResult, StrategyEditRow, StrategyEditSnapshot,
-    StrategyRow,
+    ChartTextRows, ConnStatus, CoreCmd, CoreConfigEditEvent, CoreEndpoint, CoreLogLine,
+    CoreStartupStatus, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx,
+    LatestMarketRole, SharedMoonClient, StrategyEditPhase, StrategyEditResult, StrategyEditRow,
+    StrategyEditSnapshot, StrategyRow,
 };
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::{DbMsg, ReportStart, ReportTx};
@@ -274,6 +274,7 @@ use account_reconciliation::{
     AccountReconciliation, BALANCE_TRACE_LEVEL, balance_refresh_log_window,
 };
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
+pub(in crate::feed) use commands::ChartTextWanted;
 use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
 use convert::{
     build_order_rows, client_settings_from_proto, license_state_from_proto,
@@ -410,6 +411,7 @@ struct RunStateSeen {
 ///     shared_config_sequence: Reconnect-safe safe-share configuration sequence.
 ///     market_role: Market-provider role retained between attempts.
 ///     latest_market_role: Latest successfully queued role, independent of the bounded backlog.
+///     chart_text: Last requested overlay market, retained between attempts like `market_role`.
 ///
 /// Returns:
 ///     Success after orderly shutdown, or the terminal setup/live-loop error.
@@ -429,9 +431,11 @@ pub(super) fn run(
     shared_config_sequence: &mut SharedConfigSequence,
     market_role: &mut MarketRoleState,
     latest_market_role: &LatestMarketRole,
+    chart_text: &mut ChartTextWanted,
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
     market_role.begin_client();
+    chart_text.begin_client();
 
     // 1. Decode the key into master/MAC keys and its suggested network.
     let info = moonproto::parse_key_info(server.key.expose())
@@ -688,6 +692,7 @@ pub(super) fn run(
             client_settings_sequence,
             shared_config_sequence,
             &mut core_config_events,
+            chart_text,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
@@ -1166,6 +1171,7 @@ pub(super) fn run(
         let mut engine_actions: Vec<crate::feed::EngineActionResult> = Vec::new();
         // Chart alerts (figures with Alert checked): the core is the authoritative source.
         let mut chart_alerts: Vec<crate::feed::ChartAlertUpdate> = Vec::new();
+        let mut chart_texts: Vec<ChartTextRows> = Vec::new();
         for ev in &events {
             match ev {
                 Event::ChartAlert(ev) if server.feed.alerts => {
@@ -1205,6 +1211,12 @@ pub(super) fn run(
                             });
                         }
                     }
+                }
+                Event::ChartText(snapshot) => {
+                    chart_texts.push(ChartTextRows {
+                        market: snapshot.market_name.clone(),
+                        filter_lines: snapshot.filter_lines.clone(),
+                    });
                 }
                 Event::EngineAction(e) => {
                     if !e.success {
@@ -1397,6 +1409,9 @@ pub(super) fn run(
             break;
         }
         if !chart_alerts.is_empty() && tx.send(FeedMsg::ChartAlerts(chart_alerts)).is_err() {
+            break;
+        }
+        if !chart_texts.is_empty() && tx.send(FeedMsg::ChartText(chart_texts)).is_err() {
             break;
         }
         let license_state = settings_event_snapshot(

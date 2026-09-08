@@ -580,6 +580,39 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
             log::warn!("кнопки чарта: charts.json не разобран; повторю при следующем запуске");
         }
     }
+    // The skip-reason overlay became a caption, so a profile written before that module existed
+    // would keep drawing none of it. Inserted here, after the button pass and before anything
+    // reads a caption set.
+    if let Some(carried) =
+        strategy_filters_migration::migrate_strategy_filters(&mut layout, &mut saved_chart_specs)
+    {
+        let specs_ok = if !saved_chart_specs.is_empty() {
+            if carried.specs_changed {
+                chart_persist::save_all(&saved_chart_specs)
+            } else {
+                true
+            }
+        } else if !charts_file_has_content {
+            true
+        } else {
+            match std::fs::read_to_string(moon_core::config::paths::charts_path()) {
+                Ok(text) => {
+                    !chart_persist::empty_load_is_unreadable(true, &saved_chart_specs, &text)
+                }
+                Err(_) => false,
+            }
+        };
+        if specs_ok {
+            layout.chart_strategy_filters_migrated = true;
+            if !layout.save() {
+                log::warn!(
+                    "фильтры стратегий перенесены, но метка не сохранена; повторю при запуске"
+                );
+            }
+        } else {
+            log::warn!("фильтры стратегий: charts.json не разобран; повторю при следующем запуске");
+        }
+    }
     let layout = layout;
     let saved_chart_specs = saved_chart_specs;
     let figures = moon_core::figures::FigureStore::load();
@@ -639,6 +672,7 @@ mod boot;
 mod fixture;
 mod graphics_migration;
 mod instance;
+mod strategy_filters_migration;
 mod unlock;
 
 #[cfg(test)]

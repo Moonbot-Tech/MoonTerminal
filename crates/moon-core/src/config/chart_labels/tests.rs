@@ -132,6 +132,15 @@ fn the_default_is_the_shipped_working_layout() {
                 0,
                 vec![F::DetectStrategy, F::DetectMsg, F::OrderStrategy]
             ),
+            (
+                Some(P::StrategyFilters),
+                Z::ChartTop,
+                A::Left,
+                Fl::Column,
+                Fl::Column,
+                8,
+                vec![F::StrategyFilters]
+            ),
             // The market buttons along the bottom edge: panic outermost, cancel continuing its
             // line. Unnamed — the field names each of them — which is why the preset is `None`.
             (
@@ -356,6 +365,7 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
             ChartLabelField::Funding,
             ChartLabelField::ArbColumn,
             ChartLabelField::DetectStrategy,
+            ChartLabelField::StrategyFilters,
             ChartLabelField::ActPanicSell,
             ChartLabelField::ActCancelBuy
         ],
@@ -788,6 +798,16 @@ fn an_overlong_legacy_chain_continues_in_a_second_row() {
     );
 }
 
+/// Skip reasons are sentences: they wrap, or the leftover width cuts the reason after the colon.
+/// The venue roster does not — each line is a short figure, and wrapping it would split a price.
+#[test]
+fn skip_reasons_wrap_and_the_venue_roster_does_not() {
+    assert!(ChartLabelField::StrategyFilters.wraps());
+    assert!(ChartLabelField::DetectMsg.wraps());
+    assert!(!ChartLabelField::ArbColumn.wraps());
+    assert!(!ChartLabelField::Core.wraps());
+}
+
 /// The control strip is its own BAND, not an alignment of the plot's: one lies over the book, the
 /// other over the candles. Collapsing them is what made "right" mean different edges on two panes.
 #[test]
@@ -942,7 +962,7 @@ fn a_hidden_row_draws_nothing_but_keeps_everything() {
     cfg.rows[5].visible = false;
     cfg.sanitize();
     assert!(!cfg.rows[5].is_drawn());
-    assert_eq!(cfg.used_rows(), 12, "it is still a row");
+    assert_eq!(cfg.used_rows(), 13, "it is still a row");
     assert!(
         !cfg.any_drawn(|f| f == ChartLabelField::OpenPnlPct),
         "and its captions stop costing the order walk"
