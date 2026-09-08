@@ -135,6 +135,16 @@ struct Backend {
     desired: Vec<(CoreId, String)>,
     chart_market_refs: HashMap<(CoreId, String), usize>,
     chart_market_refs_epoch: u64,
+    /// Live chart panels that currently draw strategy-filter captions, counted per `(core, market)`.
+    ///
+    /// The protocol allows one market per client. [`Backend::rebuild_chart_text`] turns this into
+    /// that one request, so hiding the module in one panel cannot clear another panel that still
+    /// draws it.
+    chart_text_refs: HashMap<(CoreId, String), usize>,
+    /// Last retained market per core, preferred while it still has a live ref.
+    chart_text_last: HashMap<CoreId, String>,
+    /// Last ChartText market requested per core. One market per client on the wire.
+    chart_text_sent: HashMap<CoreId, String>,
     /// Markets requiring an order book are tracked through effective order-book consumers.
     /// This count parallels `chart_market_refs` and includes visible panels plus inactive custom-tab
     /// references retained for an approximately five-second grace period. `desired_orderbook` is the

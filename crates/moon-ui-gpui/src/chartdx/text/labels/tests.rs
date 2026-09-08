@@ -978,6 +978,25 @@ fn the_preview_answers_for_every_field() {
     }
 }
 
+/// Two column fields in one module preview as the FIRST one only, matching the chart's
+/// first-column-wins expansion.
+#[test]
+fn a_second_column_in_the_preview_is_ignored() {
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::ArbColumn);
+    row.push_part(ChartLabelField::StrategyFilters);
+    let captions = preview_row(&row, TF_5M);
+    assert_eq!(
+        captions.len(),
+        2,
+        "only the arbitrage sample roster is previewed"
+    );
+    assert!(
+        captions.iter().all(|c| c.column),
+        "the previewed lines are the column, not the strategy-filter skip reasons"
+    );
+}
+
 /// A hidden caption is absent from the sample too: the preview answers "what will the chart print",
 /// not "what is configured".
 #[test]

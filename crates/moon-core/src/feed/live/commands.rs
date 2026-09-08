@@ -25,6 +25,50 @@ mod tests;
 /// Maximum commands processed before a coalesced market role is applied and control is yielded.
 const MAX_COMMANDS_PER_DRAIN: usize = 256;
 
+/// Last requested strategy-filter overlay market, re-sent when MoonClient is replaced.
+///
+/// Lives across [`super::run`] retries in the feed spawn loop: `applied` is per client, the
+/// wanted market is the coordinator's. Resetting both on each `run` would clear a still-wanted
+/// overlay and the UI would not re-issue an unchanged request.
+#[derive(Default)]
+pub(in crate::feed) struct ChartTextWanted {
+    market: String,
+    need_filters: bool,
+    applied: bool,
+}
+
+impl ChartTextWanted {
+    /// Forget the applied flag so a replacement client is told again.
+    ///
+    /// The wanted market is kept: it is what the coordinator last asked for, independent of which
+    /// MoonClient is connected.
+    pub(in crate::feed) fn begin_client(&mut self) {
+        self.applied = false;
+    }
+
+    fn send(&mut self, client: &MoonClient, server_id: u64) {
+        let result = if self.need_filters && !self.market.is_empty() {
+            client
+                .chart_text()
+                .set_visible_market(&self.market, true, false)
+        } else {
+            client.chart_text().clear_visible_market()
+        };
+        match result {
+            Ok(()) => self.applied = true,
+            Err(error) => {
+                self.applied = false;
+                log::debug!(
+                    "core {} set chart text market={} filters={} failed: {error}",
+                    crate::feed::core_label(server_id),
+                    self.market,
+                    self.need_filters
+                );
+            }
+        }
+    }
+}
+
 /// Resolve a spec's placement anchor for the core it is actually being applied to.
 ///
 /// THE one place a foreign anchor is dropped. Strategy ids are small per-core sequences, so an
@@ -714,6 +758,7 @@ pub(super) fn drain_commands(
     client_settings_sequence: &mut ClientSettingsSequence,
     shared_config_sequence: &mut SharedConfigSequence,
     core_config_events: &mut Vec<CoreConfigEditEvent>,
+    chart_text: &mut ChartTextWanted,
 ) -> CommandDrain {
     apply_latest_market_role(
         latest_market_role,
@@ -1244,6 +1289,14 @@ pub(super) fn drain_commands(
                     );
                 }
             }
+            Ok(CoreCmd::SetChartText {
+                market,
+                need_filters,
+            }) => {
+                chart_text.market = market;
+                chart_text.need_filters = need_filters;
+                chart_text.send(client, server.id);
+            }
             Ok(CoreCmd::ChartAlertDelete { market, obj_uid }) => {
                 if let Err(error) = client.chart_alerts().delete(market.clone(), obj_uid) {
                     log::warn!(
@@ -1590,6 +1643,9 @@ pub(super) fn drain_commands(
                     client,
                     server.id,
                 );
+                if !chart_text.applied {
+                    chart_text.send(client, server.id);
+                }
                 *orders_mutated |= client_settings_sequence.drive(client, server.id);
                 // Held back while a compact settings write is unechoed: a full-config packet
                 // built on the stale retained snapshot would revert it. See

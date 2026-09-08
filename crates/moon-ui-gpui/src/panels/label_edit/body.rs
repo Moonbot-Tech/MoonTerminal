@@ -419,7 +419,7 @@ fn caption_settings(
     // A field that carries settings of its OWN says so in words. There will be more than one of
     // these — a caption whose subject has a roster, a schedule, a source — and a row of unlabelled
     // gears would leave the reader guessing which is which.
-    if part.field.is_column() {
+    if part.field == ChartLabelField::ArbColumn {
         let state = state.clone();
         col = col.child(
             h_flex()

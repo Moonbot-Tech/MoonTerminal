@@ -435,6 +435,30 @@ pub fn load_all() -> Vec<ChartTabSpec> {
     }
 }
 
+/// Whether an empty `load_all` result is a MALFORMED file rather than a genuine empty list.
+///
+/// `load_all` maps a parse failure to `[]`, the same as "no tabs". A one-shot migration that
+/// treats those the same either rewrites a recoverable file as empty or refuses to commit its
+/// marker on a valid `[]`.
+///
+/// Args:
+///     has_content: Whether `charts.json` existed and had a non-zero length at load time.
+///     loaded: What [`load_all`] returned.
+///     text: The file bytes as text, when they could be read.
+///
+/// Returns:
+///     True when the file had bytes that did not parse as a JSON array of tab specs. A valid
+///     empty array is not unreadable.
+pub fn empty_load_is_unreadable(has_content: bool, loaded: &[ChartTabSpec], text: &str) -> bool {
+    if !loaded.is_empty() || !has_content {
+        return false;
+    }
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::Array(items)) if items.is_empty() => false,
+        Ok(_) | Err(_) => true,
+    }
+}
+
 /// Saves specifications to `charts.json`; failures are logged but nonfatal.
 ///
 /// Returns whether the file was actually replaced. Almost every caller ignores that — a failed

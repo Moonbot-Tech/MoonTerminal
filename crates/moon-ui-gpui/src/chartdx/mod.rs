@@ -486,6 +486,8 @@ struct PaneRender {
     /// sync. Replaced only by the next detect on that market — see `LabelInputs::detect_strategy`.
     label_detect_strategy: String,
     label_detect_msg: String,
+    /// Core-built strategy-filter skip lines for this pane's market.
+    filter_lines: Vec<String>,
     /// Open-position figures per basis, from the same sync.
     label_basis: [text::BasisStats; 3],
     /// Signed one-hour and 24-hour changes, refreshed with the market snapshot.
@@ -781,6 +783,7 @@ impl PaneRender {
             delta_24h: None,
             label_detect_strategy: String::new(),
             label_detect_msg: String::new(),
+            filter_lines: Vec::new(),
             label_context: None,
             label_figures: None,
             label_windows: None,

@@ -2030,6 +2030,92 @@ impl Backend {
         self.report_revision.update(cx, |_, cx| cx.notify());
     }
 
+    /// One more live panel now draws strategy-filter captions on this core and market.
+    pub(crate) fn retain_chart_text(&mut self, core: CoreId, market: &str) {
+        if market.is_empty() {
+            return;
+        }
+        let key = (core, market.to_string());
+        *self.chart_text_refs.entry(key).or_insert(0) += 1;
+        self.chart_text_last.insert(core, market.to_string());
+        self.rebuild_chart_text();
+    }
+
+    /// One live panel stopped drawing strategy-filter captions on this core and market.
+    pub(crate) fn release_chart_text(&mut self, core: CoreId, market: &str) {
+        let key = (core, market.to_string());
+        let mut remove = false;
+        if let Some(count) = self.chart_text_refs.get_mut(&key) {
+            debug_assert!(*count > 0, "chart text refcount over-release");
+            *count = count.saturating_sub(1);
+            remove = *count == 0;
+        } else {
+            debug_assert!(false, "chart text refcount release without owner");
+        }
+        if remove {
+            self.chart_text_refs.remove(&key);
+        }
+        self.rebuild_chart_text();
+    }
+
+    /// Pick one market per core from live refs and send or clear the ChartText relay.
+    ///
+    /// The protocol allows one market per client. A core whose last retained market still has a
+    /// ref keeps it; otherwise any remaining ref wins; zero refs clears the relay.
+    fn rebuild_chart_text(&mut self) {
+        let mut cores: HashSet<CoreId> = self.chart_text_sent.keys().copied().collect();
+        cores.extend(self.chart_text_refs.keys().map(|(core, _)| *core));
+        cores.extend(self.chart_text_last.keys().copied());
+        for core in cores {
+            let next = self.chart_text_market_for(core);
+            self.apply_chart_text(core, next.as_deref());
+        }
+    }
+
+    fn chart_text_market_for(&self, core: CoreId) -> Option<String> {
+        if let Some(last) = self.chart_text_last.get(&core) {
+            if self
+                .chart_text_refs
+                .get(&(core, last.clone()))
+                .copied()
+                .unwrap_or(0)
+                > 0
+            {
+                return Some(last.clone());
+            }
+        }
+        self.chart_text_refs
+            .iter()
+            .find_map(|((c, market), count)| (*c == core && *count > 0).then(|| market.clone()))
+    }
+
+    fn apply_chart_text(&mut self, core: CoreId, market: Option<&str>) {
+        let next = market.filter(|m| !m.is_empty()).map(str::to_string);
+        if self.chart_text_sent.get(&core) == next.as_ref() {
+            return;
+        }
+        match next {
+            Some(name) => {
+                if self
+                    .session
+                    .set_chart_text(core, name.clone(), true)
+                    .is_ok()
+                {
+                    self.chart_text_sent.insert(core, name);
+                }
+            }
+            None => {
+                if self
+                    .session
+                    .set_chart_text(core, String::new(), false)
+                    .is_ok()
+                {
+                    self.chart_text_sent.remove(&core);
+                }
+            }
+        }
+    }
+
     pub(crate) fn retain_chart_market(&mut self, core: CoreId, market: &str) {
         let key = (core, market.to_string());
         *self.chart_market_refs.entry(key).or_insert(0) += 1;
@@ -2111,6 +2197,12 @@ impl Backend {
             self.last_open_sync = now;
             self.session
                 .set_open(&self.desired, &self.desired_orderbook);
+            // A full feed respawn (SessionManager::reconnect) mints a new command channel. Markets
+            // are re-queued here every second; ChartText is last-writer and would otherwise stay
+            // in chart_text_sent without ever reaching the new thread.
+            for (core, market) in self.chart_text_sent.clone() {
+                let _ = self.session.set_chart_text(core, market, true);
+            }
         }
     }
 

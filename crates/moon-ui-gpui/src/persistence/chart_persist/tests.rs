@@ -63,3 +63,22 @@ fn a_spec_without_chart_graphics_loads_as_inheriting_the_global_default() {
         .expect("a spec with an override must round-trip");
     assert_eq!(back.chart_graphics, saved.chart_graphics);
 }
+
+/// A genuine empty `charts.json` (`[]`) must not look unreadable: a one-shot migration that
+/// treats it as a parse failure never commits its marker.
+#[test]
+fn an_empty_charts_array_is_not_unreadable() {
+    let none: [ChartTabSpec; 0] = [];
+    assert!(
+        !empty_load_is_unreadable(true, &none, "[]"),
+        "[] is a valid empty tab list"
+    );
+    assert!(
+        !empty_load_is_unreadable(false, &none, ""),
+        "a missing file is not a parse failure"
+    );
+    assert!(
+        empty_load_is_unreadable(true, &none, "{not json"),
+        "garbage with a non-zero length is unreadable"
+    );
+}

@@ -14,7 +14,10 @@
 //! What is divided, and what is not: a zone holding exactly ONE elastic band, and only while the
 //! division leaves the figures a legible width. Two figure bands that would meet in the middle are
 //! left alone — they were never the defect, and narrowing figures against each other would truncate
-//! captions that print fine today.
+//! captions that print fine today. A COLUMN is not a figure: its natural width is the longest line
+//! it holds, which is routinely the whole plot, so a line of it yields to figures that actually
+//! share its Y — and spends the rest of the zone once those figures have ended. It is not elastic
+//! either — two wrapping bands skip the split, and a column is not prose.
 
 use moon_core::config::LabelAlign;
 
@@ -37,19 +40,68 @@ pub(super) struct Taken {
     left: f32,
     centre: f32,
     right: f32,
+    left_h: f32,
+    centre_h: f32,
+    right_h: f32,
 }
 
 impl Taken {
     /// Record what one band took. A width that came back negative or NaN is read as zero: the
     /// budget this ends up in is compared against [`MIN_LEGIBLE_W`] by the drawing pass, and a NaN
-    /// compares false against it — it would let a caption through at an unknown width.
+    /// compares false against it — it would let a caption through at an unknown width. Height zero
+    /// means "still in the way at every Y" — the conservative reading, and what the width-only
+    /// tests still ask for.
+    #[cfg(test)]
     pub(super) fn set(&mut self, align: LabelAlign, w: f32) {
-        let slot = match align {
-            LabelAlign::Left => &mut self.left,
-            LabelAlign::Center => &mut self.centre,
-            LabelAlign::Right => &mut self.right,
+        self.set_extent(align, w, 0.0);
+    }
+
+    /// Record a band's width and how far it runs in the fill direction, in logical pixels.
+    pub(super) fn set_extent(&mut self, align: LabelAlign, w: f32, h: f32) {
+        let (width, height) = match align {
+            LabelAlign::Left => (&mut self.left, &mut self.left_h),
+            LabelAlign::Center => (&mut self.centre, &mut self.centre_h),
+            LabelAlign::Right => (&mut self.right, &mut self.right_h),
         };
-        *slot = w.max(0.0);
+        *width = w.max(0.0);
+        *height = h.max(0.0);
+    }
+
+    /// Neighbours that still occupy `travelled` pixels into the fill. A column line past that
+    /// depth no longer shares Y with them, so [`free_width`] can spend the rest of the zone.
+    ///
+    /// A neighbour recorded with no height keeps blocking: the drawing pass always knows how tall
+    /// a band it just drew, and a missing height must not be read as "out of the way".
+    pub(super) fn blocking_at(self, travelled: f32) -> Self {
+        let keep = |w: f32, h: f32| {
+            if w <= 0.0 {
+                0.0
+            } else if h <= 0.0 || travelled < h {
+                w
+            } else {
+                0.0
+            }
+        };
+        Self {
+            left: keep(self.left, self.left_h),
+            centre: keep(self.centre, self.centre_h),
+            right: keep(self.right, self.right_h),
+            ..Self::default()
+        }
+    }
+
+    /// How far into the fill the neighbours that actually take width still run.
+    ///
+    /// A wrapping skip list that would start inside this strip is moved past it rather than
+    /// squeezed beside a one-line core name — squeezing wraps the sentence at half the plot and
+    /// still reads as printing through the name.
+    pub(super) fn blocking_height(self, align: LabelAlign) -> f32 {
+        let h = |w: f32, h: f32| if w > 0.0 { h.max(0.0) } else { 0.0 };
+        match align {
+            LabelAlign::Left => h(self.centre, self.centre_h).max(h(self.right, self.right_h)),
+            LabelAlign::Right => h(self.centre, self.centre_h).max(h(self.left, self.left_h)),
+            LabelAlign::Center => h(self.left, self.left_h).max(h(self.right, self.right_h)),
+        }
     }
 }
 
@@ -113,6 +165,7 @@ pub(super) fn free_width(total: f32, align: LabelAlign, taken: Taken) -> f32 {
         left,
         centre,
         right,
+        ..
     } = taken;
     // A band that drew nothing bounds nothing — not even by a gap. Charging for it would narrow
     // every caption on a pane holding one module, which is most of them.
@@ -129,6 +182,51 @@ pub(super) fn free_width(total: f32, align: LabelAlign, taken: Taken) -> f32 {
         LabelAlign::Right => bound(centre, (total - centre) * 0.5).min(bound(left, total - left)),
     };
     free.min(total).max(0.0)
+}
+
+/// Width a column line may spend at this depth of the stack.
+///
+/// `travelled` is how far the line sits from the band's own edge, in the fill direction. Neighbours
+/// shorter than that no longer share its Y, so the line takes whatever they left — the whole zone
+/// when nothing else is in the way.
+pub(super) fn line_budget(
+    total: f32,
+    align: LabelAlign,
+    taken: Taken,
+    travelled: f32,
+    inset: f32,
+) -> f32 {
+    (free_width(total, align, taken.blocking_at(travelled)) - inset).max(0.0)
+}
+
+/// Draw order inside one zone: figures, then columns, then wrapping prose.
+///
+/// Packed into one key so the drawing pass can `sort_by_key` without a two-key tuple, and so the
+/// rank that keeps a column from counting as a second elastic band is stated once.
+pub(super) fn band_rank(elastic: bool, hungry: bool) -> u8 {
+    u8::from(elastic) * 2 + u8::from(hungry)
+}
+
+/// Width one band may spend, given the zone split and what has already been drawn.
+///
+/// Figures keep the whole zone when nothing wraps. A column — not elastic — is drawn after them
+/// and spends only what they left. When a wrapping band IS dividing the zone, the column takes the
+/// same figure cap the detect line already reserved, rather than the leftover of an empty `taken`
+/// (which would be the whole zone and print through the sentence).
+pub(super) fn band_max_w(
+    total: f32,
+    cap: Option<f32>,
+    elastic: bool,
+    hungry: bool,
+    align: LabelAlign,
+    taken: Taken,
+) -> f32 {
+    match (cap, elastic, hungry) {
+        (None, false, true) => free_width(total, align, taken),
+        (None, _, _) => total,
+        (Some(cap), false, _) => cap,
+        (Some(_), true, _) => free_width(total, align, taken),
+    }
 }
 
 #[cfg(test)]

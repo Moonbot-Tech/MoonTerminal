@@ -2,10 +2,10 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use super::{BalanceState, ConnStatus, CoreData};
 use crate::feed::{
-    ApiKeyExpiry, ConnFault, ConnFaultKind, CoreConfig, CoreConfigArea, CoreConfigEditEvent,
-    CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow, CoreConfigRejection,
-    CoreEndpoint, CoreIdentityFacts, CoreStartupStatus, CoreSysStatus, FeedMsg, FieldMask,
-    OrderRow, OrderTrace, OrderTracePoint,
+    ApiKeyExpiry, ChartTextRows, ConnFault, ConnFaultKind, CoreConfig, CoreConfigArea,
+    CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
+    CoreConfigRejection, CoreEndpoint, CoreIdentityFacts, CoreStartupStatus, CoreSysStatus,
+    FeedMsg, FieldMask, OrderRow, OrderTrace, OrderTracePoint,
 };
 
 /// A core with the given freshness inputs; everything else stays at its default.
@@ -1134,5 +1134,38 @@ fn the_ban_list_and_one_lookup_read_the_same_deadline() {
         core.temp_ban_until_ms("ADAUSDT"),
         None,
         "an expired row is not a ban"
+    );
+}
+
+/// `store.rs:FeedMsg::ChartText` must replace one market's filter lines without touching another,
+/// and must not bump the revision when the core repeats the same strings.
+#[test]
+fn chart_text_replaces_one_market_and_ignores_an_identical_repeat() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::ChartText(vec![ChartTextRows {
+        market: "ROSEUSDT".into(),
+        filter_lines: vec!["Daily vol. doesnt match".into()],
+    }]));
+    assert_eq!(core.chart_text_rev, 1);
+    assert_eq!(
+        core.chart_text.get("ROSEUSDT").map(Vec::as_slice),
+        Some(["Daily vol. doesnt match".to_string()].as_slice())
+    );
+
+    core.apply(FeedMsg::ChartText(vec![ChartTextRows {
+        market: "BTCUSDT".into(),
+        filter_lines: vec!["must have TradFi tag".into()],
+    }]));
+    assert_eq!(core.chart_text_rev, 2);
+    assert_eq!(core.chart_text.len(), 2);
+
+    let rev = core.chart_text_rev;
+    core.apply(FeedMsg::ChartText(vec![ChartTextRows {
+        market: "ROSEUSDT".into(),
+        filter_lines: vec!["Daily vol. doesnt match".into()],
+    }]));
+    assert_eq!(
+        core.chart_text_rev, rev,
+        "identical rows must not wake the chart"
     );
 }

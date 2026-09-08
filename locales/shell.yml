@@ -2345,6 +2345,10 @@ chart_labels.field.arb_column:
   ru: "Арбитраж (колонка)"
   en: "Arbitrage (column)"
   es: "Arbitraje (columna)"
+chart_labels.field.strategy_filters:
+  ru: "Фильтры стратегий"
+  en: "Strategy filters"
+  es: "Filtros de estrategias"
 chart_labels.preset.scale:
   ru: "Масштаб"
   en: "Scale"
@@ -2365,6 +2369,10 @@ chart_labels.preset.arbitrage:
   ru: "Арбитраж"
   en: "Arbitrage"
   es: "Arbitraje"
+chart_labels.preset.strategy_filters:
+  ru: "Фильтры стратегий"
+  en: "Strategy filters"
+  es: "Filtros de estrategias"
 chart_labels.preset.detect:
   ru: "Детект"
   en: "Detect"

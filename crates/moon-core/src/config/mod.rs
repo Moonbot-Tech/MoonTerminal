@@ -55,7 +55,6 @@ mod tests;
 pub use arb_view::{ARB_MAX_ROWS, ArbRow, ArbShow, ArbVenueCfg, ArbViewCfg};
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use chart_defaults::{ChartTabDefaults, ChartTabKind};
-pub use chart_labels::action_rows_at;
 pub use chart_labels::{
     ARB_PART_BASE, CHART_LABEL_PARTS, CHART_LABEL_ROWS, ChartAction, ChartLabelField,
     ChartLabelGroup, ChartLabelPart, ChartLabelRow, ChartLabelsCfg, LABEL_GAP_MAX,
@@ -65,6 +64,7 @@ pub use chart_labels::{
     PnlBasis, ROW_NAME_PART, ROW_RUN_STRIDE, ResolvedLabelStyle, SpanAnchor, TempBanSpan,
     VolumeSpanKey, VolumeUnits, WRAP_PART_BASE,
 };
+pub use chart_labels::{action_rows_at, strategy_filters_row};
 pub use core_groups::{
     CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX, CORE_GROUPS_MAX, CoreGroup, move_group,
     sanitize_core_groups, unique_group_name,

@@ -1574,6 +1574,7 @@ fn the_trade_window_falls_back_to_its_own_captions() {
         ChartLabelField::Funding,
         ChartLabelField::WindowBuyVolume,
         ChartLabelField::OpenPnlMoney,
+        ChartLabelField::StrategyFilters,
     ] {
         assert!(
             !trade.any_drawn(|f| f == field),
@@ -1707,6 +1708,7 @@ fn a_comparison_falls_back_to_its_own_captions() {
         ChartLabelField::WindowBuyVolume,
         ChartLabelField::SessionProfit,
         ChartLabelField::Funding,
+        ChartLabelField::StrategyFilters,
     ] {
         assert!(
             !compare.any_drawn(|f| f == field),

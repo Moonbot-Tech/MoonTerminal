@@ -90,6 +90,8 @@ impl ChartDataState {
                     ChartLabelField::DetectStrategy | ChartLabelField::DetectMsg
                 )
             });
+        let wants_filters_cfg =
+            !frozen && labels_cfg.any_drawn(|f| f == ChartLabelField::StrategyFilters);
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -165,6 +167,19 @@ impl ChartDataState {
             pr.label_arb_reachable = arb_reachable.clone();
             pr.label_detect_strategy = detect_strategy;
             pr.label_detect_msg = detect_msg;
+            let filter_lines = if !wants_filters_cfg {
+                Vec::new()
+            } else {
+                session
+                    .store()
+                    .core(pane.core)
+                    .and_then(|core_st| core_st.chart_text.get(&pane.market).cloned())
+                    .unwrap_or_default()
+            };
+            if pr.filter_lines != filter_lines {
+                pr.filter_lines = filter_lines;
+                pixels_changed = true;
+            }
             let device_gen = pr.layers.device_gen();
             let device_lost = pr.last_device_gen != device_gen;
             if device_lost {

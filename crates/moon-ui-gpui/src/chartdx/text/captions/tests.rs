@@ -7,8 +7,9 @@ use moon_core::config::{
     ChartLabelField, ChartLabelRow, ChartLabelsCfg, LabelAlign, LabelFlow, LabelZone,
 };
 
+use super::super::caption::CaptionGeom;
 use super::super::labels::LabelText;
-use super::group_lines;
+use super::{CaptionGeomInput, ZONE_PAD, group_lines, zone_start_y};
 
 /// The shape that prompted the two axes: a scale badge, then a two-caption delta module, both in
 /// the plot's top band and pushed right.
@@ -272,4 +273,104 @@ fn the_shipped_buttons_share_one_line_along_the_bottom() {
         vec![vec![vec![0], vec![1]]],
         "one line, two columns — the pair as the old layout drew it"
     );
+}
+
+/// Plot 400 tall, volume band 80. The corner geometry is unused on ChartBottom / ChartTop.
+fn start_y(zone: LabelZone, volume_band_h: f32) -> f32 {
+    let geom = CaptionGeomInput {
+        pane_left: 0.0,
+        pane_right: 1000.0,
+        plot_left: 0.0,
+        plot_right: 800.0,
+        plot_top: 50.0,
+        plot_bottom: 450.0,
+        orderbook_enabled: false,
+        orderbook_left: 0.0,
+        scale_factor: 1.0,
+        volume_band_h,
+    };
+    let corner = CaptionGeom {
+        zone_left: 800.0,
+        right_x: 970.0,
+        top_y: 54.0,
+        max_w: 170.0,
+    };
+    zone_start_y(zone, &geom, &corner)
+}
+
+/// Every module in ChartBottom sits above the volume bars, not on them. This is the floor the
+/// stack grows up from, so a Core name, the action buttons and the filter list all lift together.
+#[test]
+fn chart_bottom_sits_above_the_volume_band() {
+    assert_eq!(
+        start_y(LabelZone::ChartBottom, 80.0),
+        450.0 - 80.0 - ZONE_PAD
+    );
+}
+
+/// Volumes off: ChartBottom stays on the plot floor, the way it always did.
+#[test]
+fn chart_bottom_without_volumes_sits_on_the_plot_floor() {
+    assert_eq!(start_y(LabelZone::ChartBottom, 0.0), 450.0 - ZONE_PAD);
+}
+
+/// The control strip's floor is the plot's. The volume bars never reach it, so lifting it would
+/// float ZoneBottom captions into empty plot for no reason.
+#[test]
+fn the_control_strip_floor_ignores_the_volume_band() {
+    assert_eq!(start_y(LabelZone::ZoneBottom, 80.0), 450.0 - ZONE_PAD);
+}
+
+/// ChartTop is the plot's upper edge. A volume-band height must not walk it down the pane.
+#[test]
+fn chart_top_ignores_the_volume_band() {
+    assert_eq!(start_y(LabelZone::ChartTop, 80.0), 50.0 + ZONE_PAD);
+}
+
+fn wrap_item(part: usize, wraps: bool) -> super::Item {
+    super::Item {
+        pos: 0,
+        row: 0,
+        part,
+        style: ChartLabelField::StrategyFilters.default_style(),
+        plate: false,
+        size: 11.0,
+        wraps,
+        lines: 1,
+        wrap_ix: usize::MAX,
+    }
+}
+
+/// Skip-reason lines wrap, but they must not count as elastic prose. Two wrapping bands skip the
+/// detect-line split; treating the filter column as prose would print it through the core name
+/// again the moment a detect line shares the zone.
+#[test]
+fn a_wrapping_filter_column_is_hungry_not_elastic() {
+    use super::Cell;
+    use moon_core::config::ARB_PART_BASE;
+
+    let cell = Cell {
+        gap: 0.0,
+        items: vec![wrap_item(ARB_PART_BASE, true)],
+    };
+    assert!(cell.has_column());
+    assert!(cell.has_wrap());
+    assert!(
+        !cell.has_prose(),
+        "a skip-reason column must not make the band elastic"
+    );
+}
+
+/// A detect line is still the elastic prose the zone is divided for.
+#[test]
+fn a_detect_line_is_elastic_prose() {
+    use super::Cell;
+
+    let cell = Cell {
+        gap: 0.0,
+        items: vec![wrap_item(0, true)],
+    };
+    assert!(cell.has_prose());
+    assert!(cell.has_wrap());
+    assert!(!cell.has_column());
 }

@@ -639,6 +639,12 @@ pub enum CoreCmd {
     },
     /// Disarm and delete a chart alert by `obj_uid` through moonproto `chart_alerts().delete`.
     ChartAlertDelete { market: String, obj_uid: u64 },
+    /// Tell the core which market this client wants strategy-filter chart text for.
+    ///
+    /// The protocol tracks ONE market per client: `need_filters` asks the core to build the
+    /// skip-reason rows MoonBot paints on its own chart; an empty `market` or `need_filters=false`
+    /// clears the relay. Ready strings arrive as [`FeedMsg::ChartText`].
+    SetChartText { market: String, need_filters: bool },
     /// Publish a TEST diagnostic through the core's own detector worker, to prove the channel.
     ///
     /// The only way to see the confirmed-diagnostics path work without waiting for a real fault:
@@ -831,6 +837,7 @@ pub fn spawn(
             let mut client_settings_sequence = live::ClientSettingsSequence::new();
             let mut shared_config_sequence = live::SharedConfigSequence::new();
             let mut market_role = live::MarketRoleState::default();
+            let mut chart_text = live::ChartTextWanted::default();
             loop {
                 let started = Instant::now();
                 client_settings_sequence.prepare_reconnect();
@@ -848,6 +855,7 @@ pub fn spawn(
                     &mut shared_config_sequence,
                     &mut market_role,
                     &latest_market_role,
+                    &mut chart_text,
                 ) {
                     Ok(()) => break,
                     Err(e) => {
