@@ -205,6 +205,16 @@ pub enum ChartLabelField {
     /// period would need one button per period, and the reader would still have to read it before
     /// pressing. How long is left is [`Self::TempBanLeft`]'s to print, wherever the reader puts it.
     ActTempBan,
+    /// Mark this coin as a favourite, or unmark it — the chart's star.
+    ///
+    /// A STAR, and nothing else: filled while the coin is marked, hollow while it is not. Like the
+    /// lock beside it, what it says is its own state, so it carries no word and needs no readout.
+    ///
+    /// The list it reads and writes is the CORE's own — `trading.fav_markets` in its safe-share
+    /// configuration, the same field MoonBot's own star writes — so a coin marked here is marked
+    /// there. It is drawn hollow while the core has said nothing yet, and the button is disabled
+    /// then: pressing it would queue a state for a list this terminal has never seen.
+    ActFavorite,
     /// How long the core's temporary ban on this coin still has to run.
     ///
     /// The lock's readout, and a caption of its own so it can be placed anywhere — beside the
@@ -215,7 +225,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 58] = [
+    pub const ALL: [ChartLabelField; 59] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -273,6 +283,7 @@ impl ChartLabelField {
         ChartLabelField::ActCancelBuy,
         ChartLabelField::ActPanicSell,
         ChartLabelField::ActTempBan,
+        ChartLabelField::ActFavorite,
         ChartLabelField::TempBanLeft,
     ];
 
@@ -337,6 +348,7 @@ impl ChartLabelField {
             ChartLabelField::ActCancelBuy
             | ChartLabelField::ActPanicSell
             | ChartLabelField::ActTempBan
+            | ChartLabelField::ActFavorite
             | ChartLabelField::TempBanLeft => ChartLabelGroup::Action,
         }
     }
@@ -402,6 +414,7 @@ impl ChartLabelField {
             ChartLabelField::ActCancelBuy => "chart_labels.field.act_cancel_buy",
             ChartLabelField::ActPanicSell => "chart_labels.field.act_panic_sell",
             ChartLabelField::ActTempBan => "chart_labels.field.act_temp_ban",
+            ChartLabelField::ActFavorite => "chart_labels.field.act_favorite",
             ChartLabelField::TempBanLeft => "chart_labels.field.temp_ban_left",
         }
     }
@@ -756,6 +769,7 @@ impl ChartLabelField {
             ChartLabelField::ActCancelBuy => Some(ChartAction::CancelBuy),
             ChartLabelField::ActPanicSell => Some(ChartAction::PanicSell),
             ChartLabelField::ActTempBan => Some(ChartAction::TempBan),
+            ChartLabelField::ActFavorite => Some(ChartAction::Favorite),
             _ => None,
         }
     }
@@ -774,6 +788,8 @@ pub enum ChartAction {
     PanicSell,
     /// Ban the coin temporarily for the caption's own span, or lift the ban that is running.
     TempBan,
+    /// Mark the coin in the CORE's own favourites list, or unmark it there.
+    Favorite,
 }
 
 impl ChartAction {
@@ -791,7 +807,7 @@ impl ChartAction {
     /// only repeat the picture. The caption pass reserves a square for it instead of measuring a
     /// label, so it keeps its shape whatever the reader sets the caption size to.
     pub fn square(self) -> bool {
-        matches!(self, ChartAction::TempBan)
+        matches!(self, ChartAction::TempBan | ChartAction::Favorite)
     }
 }
 

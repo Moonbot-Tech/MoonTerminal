@@ -1528,6 +1528,7 @@ fn a_chart_with_nothing_to_act_on_prints_no_button() {
         ChartLabelField::ActCancelBuy,
         ChartLabelField::ActPanicSell,
         ChartLabelField::ActTempBan,
+        ChartLabelField::ActFavorite,
     ] {
         assert_eq!(
             one_field(field, LabelInputs::default()),
@@ -1547,6 +1548,7 @@ fn the_panic_button_states_which_way_it_will_go() {
             allowed: true,
             panic_armed: armed,
             ban_until_ms: None,
+            favorite: None,
         },
         ..Default::default()
     };
@@ -1558,6 +1560,39 @@ fn the_panic_button_states_which_way_it_will_go() {
         one_field(ChartLabelField::ActPanicSell, live(true)).as_deref(),
         Some("Stop Panic"),
         "an armed panic offers to STOP, matching what the second press does"
+    );
+}
+
+/// The star says its state with its own shape, and an UNKNOWN list draws the same hollow star as an
+/// unmarked coin — the difference is carried by the button, which is disabled on `None`.
+///
+/// Breakage this pins: printing a filled star for `None`, which would tell a reader their coin is
+/// marked on a core that has not said anything at all yet.
+#[test]
+fn the_star_is_the_state_and_silence_is_not_a_mark() {
+    let _locale = crate::test_locale::force("en");
+    let live = |favorite: Option<bool>| LabelInputs {
+        actions: ActionInputs {
+            live: true,
+            allowed: true,
+            favorite,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        one_field(ChartLabelField::ActFavorite, live(Some(true))).as_deref(),
+        Some("\u{2605}"),
+        "marked: the star is filled"
+    );
+    assert_eq!(
+        one_field(ChartLabelField::ActFavorite, live(Some(false))).as_deref(),
+        Some("\u{2606}")
+    );
+    assert_eq!(
+        one_field(ChartLabelField::ActFavorite, live(None)).as_deref(),
+        Some("\u{2606}"),
+        "the core has not said: hollow, and the button beside it is disabled"
     );
 }
 
@@ -1573,6 +1608,7 @@ fn the_lock_is_the_state_and_the_time_is_a_caption_of_its_own() {
             allowed: true,
             panic_armed: false,
             ban_until_ms: until,
+            favorite: None,
         },
         ..Default::default()
     };
@@ -1611,6 +1647,7 @@ fn a_button_carries_what_it_would_do() {
                 allowed: true,
                 panic_armed: false,
                 ban_until_ms: None,
+                favorite: None,
             },
             ..Default::default()
         },

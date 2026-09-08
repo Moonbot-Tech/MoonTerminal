@@ -46,7 +46,7 @@ impl ChartTabs {
     /// Returns:
     ///     Query matches, or the open tab's list, within the active tab's search scope.
     pub(super) fn coin_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
-        use crate::controls::coin_search::{CoinResults, CoinTab, banned, suggestions};
+        use crate::controls::coin_search::{CoinResults, CoinTab, banned, favorites, suggestions};
 
         let b = self.backend.read(cx);
         let bucket = self.coin_bucket(b);
@@ -68,8 +68,11 @@ impl ChartTabs {
                 );
                 CoinResults::Suggest { recent, volatile }
             }
-            // Nothing marks a market yet; the tab holds the place its list will occupy.
-            CoinTab::Favorites => CoinResults::Favorites(Vec::new()),
+            // The CORES' own marked markets, not a list of this terminal's: the star on the chart
+            // writes the same `trading.fav_markets` MoonBot's own does.
+            CoinTab::Favorites => {
+                CoinResults::Favorites(favorites(b, &self.group, bucket.as_ref()))
+            }
             // Read from the cores on every build rather than captured when the tab was opened: a
             // ban can be placed or lifted from MoonBot itself while this list is on screen, and the
             // countdown each row prints comes off a DEADLINE, so nothing here decays with the clock.
@@ -108,6 +111,38 @@ impl ChartTabs {
             self.coin_input
                 .update(cx, |input, c| input.set_value("", window, c));
         }
+        cx.notify();
+    }
+
+    /// Take one dropdown row's market out of its core's favourites.
+    ///
+    /// ABSOLUTE, not a toggle: the row says the market is marked, so the press means "not marked"
+    /// — and a toggle resolved later, against a list the core may already have changed, would put
+    /// back what the reader asked to remove. Same rule as the ban row's lift beside it.
+    ///
+    /// The row does not disappear on the press: the list shows what the cores hold, and a core
+    /// holds the list until it echoes the change back. Answering faster would mean answering from
+    /// our own intent rather than from the core.
+    ///
+    /// Args:
+    ///     core: Core holding the list.
+    ///     coin: The core's own `market_currency`, which is what its favourites list is keyed by.
+    ///     cx: ChartTabs context used to command the backend and repaint.
+    pub(super) fn unmark_favorite(&mut self, core: CoreId, coin: String, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        self.backend.update(cx, |b, bcx| {
+            // Re-validated against the LIVE workspace, exactly as the lift beside it: the popup can
+            // stand open while an Auto workspace moves the core out of this group's scope.
+            if !b.workspace_action_allows_core(Some(&group), core) {
+                log::warn!(
+                    "chart tabs: unmarking {coin} at core {} refused, the workspace no longer exposes it",
+                    moon_core::feed::core_label(core)
+                );
+                return;
+            }
+            b.set_fav_market(core, &coin, false);
+            bcx.notify();
+        });
         cx.notify();
     }
 

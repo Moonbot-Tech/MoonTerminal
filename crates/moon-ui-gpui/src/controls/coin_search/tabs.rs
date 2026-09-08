@@ -35,8 +35,8 @@ pub(crate) enum CoinTab {
     /// What the field has always offered: recently opened markets, then the top movers.
     #[default]
     All,
-    /// Markets the user marked. Not yet fillable — the tab exists so the place it will live is
-    /// decided once, with the others, instead of rearranging the popup later.
+    /// Markets the cores in scope have MARKED, read from each core's own favourites list — the
+    /// same one the chart's star writes.
     Favorites,
     /// Coins the cores in this field's scope are holding out of trading, with what is left to run.
     Banned,
@@ -74,14 +74,52 @@ impl CoinTab {
     }
 }
 
+/// Which acting list a row belongs to.
+///
+/// One value carrying the three things that differ between the favourites tab and the ban tab —
+/// the id namespace, the note an empty one prints, and what its button does — so a third such tab
+/// is one variant rather than a third copy of the same twenty lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MarkedList {
+    Favorites,
+    Banned,
+}
+
+impl MarkedList {
+    /// Id namespace, so a reader switching tabs cannot hand one list's row state to the other.
+    fn id_kind(self) -> &'static str {
+        match self {
+            MarkedList::Favorites => "fav",
+            MarkedList::Banned => "ban",
+        }
+    }
+
+    /// Locale key of the note an empty list prints.
+    pub(super) fn empty_key(self) -> &'static str {
+        match self {
+            MarkedList::Favorites => "chart.coin.no_favorites",
+            MarkedList::Banned => "chart.coin.no_banned",
+        }
+    }
+
+    /// Locale key of the row button's tooltip while it can act.
+    fn act_key(self) -> &'static str {
+        match self {
+            MarkedList::Favorites => "chart.coin.unfav",
+            MarkedList::Banned => "chart.coin.unban",
+        }
+    }
+}
+
 /// Chooses a tab, carrying the window because switching tabs also empties the field — see
 /// `ChartTabs::select_coin_tab`.
 pub(crate) type TabSelectFn = Rc<dyn Fn(CoinTab, &mut Window, &mut App)>;
 
-/// Lifts the temporary ban one row is showing, on the core that holds it.
-pub(crate) type UnbanFn = Rc<dyn Fn(CoreId, String, &mut App)>;
+/// Acts on the market one row is showing, on the core that holds it: lifting its ban, or taking
+/// the mark off it.
+pub(crate) type RowActionFn = Rc<dyn Fn(CoreId, String, &mut App)>;
 
-/// What a tabbed host hands the popup: which tab is open, and the two commands its tabs need.
+/// What a tabbed host hands the popup: which tab is open, and the commands its tabs need.
 ///
 /// One optional value rather than three parameters: a host either has tabs and all of this, or has
 /// none of it, and there is no state in between for a caller to get half right.
@@ -92,19 +130,63 @@ pub(crate) struct CoinTabsCfg {
     /// Called with the tab the user pressed.
     pub on_select: TabSelectFn,
     /// Called with the core and market of the ban row whose lift button was pressed.
-    pub on_unban: UnbanFn,
+    pub on_unban: RowActionFn,
+    /// Called with the core and market of the favourite row whose remove button was pressed.
+    pub on_unfav: RowActionFn,
 }
 
-/// One temporarily banned market, ready to draw.
-pub(crate) struct CoinBan {
+impl CoinTabsCfg {
+    /// The command one acting list's row button carries.
+    pub(crate) fn row_action(&self, list: MarkedList) -> RowActionFn {
+        match list {
+            MarkedList::Favorites => self.on_unfav.clone(),
+            MarkedList::Banned => self.on_unban.clone(),
+        }
+    }
+}
+
+/// One row of a tab that ACTS on its market: the coin, an optional figure, and the button that
+/// takes it off the list the tab is showing.
+///
+/// One shape for both lists, because they are one shape: a ban row and a favourite row differ in
+/// the figure between the coin and the button, and nowhere else. Two renderers would be two places
+/// to change a row height, a hover colour or a padding — and the first change would land in one.
+pub(crate) struct CoinActRow {
+    /// The market itself, labelled exactly as a search hit for it would be.
+    pub hit: CoinHit,
+    /// The figure between the coin and the button — what is left of a ban — or `None` for a list
+    /// that counts nothing down.
+    pub note: Option<RowNote>,
+    /// Whether this window may still command the row's core. A row stays VISIBLE when it may not —
+    /// the fact is real and the reader should see it — but its button is disabled rather than
+    /// silently refused when the press arrives.
+    pub allowed: bool,
+    /// What the row's BUTTON acts on, which is not always what the row opens: a temporary ban is
+    /// keyed by the market, a favourite by the core's own `market_currency`. The two lists disagree
+    /// about that on purpose — see `coin_menu::temp_ban_symbol` and the core's own matching rule —
+    /// so the key travels with the row rather than being re-derived where the press lands.
+    pub action_key: String,
+}
+
+/// One temporarily banned market, before it becomes a [`CoinActRow`].
+struct CoinBan {
     /// The market itself, labelled exactly as a search hit for it would be.
     pub hit: CoinHit,
     /// The ban as its core listed it, carrying the deadline and what this window may do about it.
     pub ban: BanSource,
 }
 
+/// The figure one acting row prints between the coin and its button.
+pub(crate) struct RowNote {
+    /// The text itself.
+    pub text: String,
+    /// Whether it is an extrapolation rather than a report; it then says so in a tooltip. Kept WITH
+    /// the text, because a staleness with nothing to qualify is a state no row can draw.
+    pub stale: bool,
+}
+
 /// One core's listed ban, before the market catalogue has named it.
-pub(crate) struct BanSource {
+struct BanSource {
     /// Core holding it.
     pub core: CoreId,
     /// The market as THAT core spells it — the key the ban is listed under and the value a lift has
@@ -134,7 +216,7 @@ pub(crate) struct BanSource {
 ///
 /// Returns:
 ///     Labelled ban rows; empty when nothing in scope is banned.
-pub(crate) fn banned(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<CoinBan> {
+pub(crate) fn banned(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<CoinActRow> {
     let mut sources: Vec<BanSource> = Vec::new();
     // One row per market even if a core lists it twice: two rows would offer the same lift twice
     // and disagree with the chart's own lock, which reads the first match.
@@ -168,7 +250,102 @@ pub(crate) fn banned(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> 
         }
     }
     let hits = hits_for(b, sources.iter().map(|src| (src.core, src.market.clone())));
+    // One clock for the whole list, so two rows a millisecond apart cannot print figures that
+    // disagree by a minute. Read HERE rather than in the renderer: the deadline is what travels,
+    // and the text is what a row is drawn from.
+    let now_ms = moon_core::util::now_unix_ms_i64();
     pair_bans(hits, sources)
+        .into_iter()
+        .map(|row| {
+            let left = fmt_ban_left(row.ban.until_ms.saturating_sub(now_ms));
+            CoinActRow {
+                action_key: row.hit.market.clone(),
+                hit: row.hit,
+                note: Some(RowNote {
+                    text: match row.ban.stale {
+                        true => format!("~{left}"),
+                        false => left,
+                    },
+                    stale: row.ban.stale,
+                }),
+                allowed: row.ban.allowed,
+            }
+        })
+        .collect()
+}
+
+/// Returns every market the cores feeding this field have MARKED, in core order.
+///
+/// The core's own list (`trading.fav_markets`), the same one MoonBot's star writes — see
+/// `Backend::fav_markets_of`. A core that has not reported its configuration yet contributes
+/// nothing rather than an empty list drawn as "nothing marked": the tab's empty note says what is
+/// known, and what is not known is silence.
+///
+/// Args:
+///     b: Backend holding the sessions, the market catalogue and the core snapshots.
+///     group: Window group whose cores feed this field.
+///     bucket: Chart bucket narrowing those cores, or `None` for the whole group.
+///
+/// Returns:
+///     Labelled rows; empty when nothing in scope is marked.
+pub(crate) fn favorites(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<CoinActRow> {
+    let mut rows: Vec<CoinActRow> = Vec::new();
+    for core in cores_for(b, group, bucket) {
+        // `None` is the core's SILENCE — it has reported no configuration — and contributes
+        // nothing, exactly as an empty list does. The two differ to a reader of the store; to a
+        // list of marked coins they are the same answer.
+        let Some(coins) = b.fav_markets_of(core) else {
+            continue;
+        };
+        let coins = dedup_markets(coins);
+        if coins.is_empty() {
+            continue;
+        }
+        let allowed = b.workspace_action_allows_core(Some(group), core);
+        for coin in coins {
+            // A row NAMES a market — it opens a chart — while the list names a coin, so each entry
+            // is resolved against the core's own catalogue. An entry the catalogue cannot name is
+            // skipped rather than drawn: there is no chart behind it and no label to draw it with.
+            let Some(hit) = market_of_coin(b, group, bucket, core, &coin) else {
+                continue;
+            };
+            rows.push(CoinActRow {
+                action_key: coin,
+                hit,
+                note: None,
+                allowed,
+            });
+        }
+    }
+    rows
+}
+
+/// The market one core would open for a coin its favourites list names.
+///
+/// The list holds `market_currency` — the core's own name for the coin, which is what it matches
+/// its favourites against — and a chart needs a market. The catalogue answers that, through the
+/// same search the coin field runs, filtered to the ONE core and to hits whose label carries this
+/// exact coin: a text search for `ICX` also finds `ICXUP` and `OMICX`, and neither is this row.
+///
+/// Args:
+///     b: Backend holding the market catalogue.
+///     group: Window group whose cores feed this field.
+///     bucket: Chart bucket narrowing those cores.
+///     core: Core whose list named the coin.
+///     coin: The coin, as that core spells it.
+///
+/// Returns:
+///     The first market of that core carrying this coin, or `None` when its catalogue has none.
+fn market_of_coin(
+    b: &Backend,
+    group: &str,
+    bucket: Option<&ChartBucket>,
+    core: CoreId,
+    coin: &str,
+) -> Option<CoinHit> {
+    super::search_limited(b, group, bucket, coin, super::COIN_MATCH_LIMIT)
+        .into_iter()
+        .find(|hit| hit.core == core && hit.label.coin.eq_ignore_ascii_case(coin))
 }
 
 /// Joins labelled hits back to the bans they were built from, soonest first.
@@ -213,6 +390,27 @@ fn pair_bans(hits: Vec<CoinHit>, mut sources: Vec<BanSource>) -> Vec<CoinBan> {
             .then_with(|| a.ban.core.cmp(&b.ban.core))
     });
     rows
+}
+
+/// One entry per market the core names, however many times it names it.
+///
+/// A duplicate is not merely an ugly second row: both rows would carry the SAME element id, which
+/// GPUI refuses inside one frame. The core's list is a hand-edited string on the other side of a
+/// wire, so this is a shape we receive rather than one we can rule out.
+///
+/// Args:
+///     markets: One core's list, in its own order.
+///
+/// Returns:
+///     The same order, first spelling kept, later repeats dropped.
+fn dedup_markets(markets: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(markets.len());
+    for market in markets {
+        if !out.iter().any(|held| held.eq_ignore_ascii_case(&market)) {
+            out.push(market);
+        }
+    }
+    out
 }
 
 /// Renders the tab strip above the result list.
@@ -276,86 +474,85 @@ pub(super) fn render_tab_strip(
 const TAB_MIN_W: f32 = 52.0;
 const TAB_MAX_W: f32 = 88.0;
 
-/// Appends the temporary-ban rows to the scrolling list, one fixed-height row each.
+/// Appends the rows of an acting tab to the scrolling list, one fixed-height row each.
 ///
-/// A FLAT list rather than the exchange/coin tree the search results use: a ban is one core's
-/// decision about one of its markets, so there is nothing to fold — two cores banning the same
-/// coin are two facts, each with its own clock and its own lift.
+/// A FLAT list rather than the exchange/coin tree the search results use: a ban and a mark are one
+/// core's statement about one of its markets, so there is nothing to fold — two cores that banned
+/// or marked the same coin are two facts, each with its own button.
 ///
 /// Args:
 ///     list: Stateful scrolling list that receives the rows.
 ///     id: Stable popup identity used to derive row ids.
-///     rows: The bans, already ordered by [`banned`].
-///     show_server_per_row: Whether a row names the core holding the ban; `false` when the popup
-///         already names the one server above the list.
+///     list: Which list this is — its id namespace and its button's caption.
+///     rows: The rows, already ordered by their builder.
+///     show_server_per_row: Whether a row names the core; `false` when the popup already names the
+///         one server above the list.
 ///     p: Active palette used by row text and hover states.
 ///     cx: Application context used to resolve scaled design tokens.
 ///     on_pick: Callback for opening a row's market, the same one the search rows use.
-///     on_unban: Callback for the lift button, or `None` to show the rows without one.
+///     on_press: Callback for the row button, or `None` to show the rows without one.
 ///
 /// Returns:
-///     The same list with one row appended per ban.
+///     The same list with one row appended per entry.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn push_ban_rows<F>(
-    mut list: Stateful<Div>,
+pub(super) fn push_marked_rows<F>(
+    mut rendered: Stateful<Div>,
     id: &'static str,
-    rows: Vec<CoinBan>,
+    list: MarkedList,
+    rows: Vec<CoinActRow>,
     show_server_per_row: bool,
     p: MoonPalette,
     cx: &App,
     on_pick: F,
-    on_unban: Option<UnbanFn>,
+    on_press: Option<RowActionFn>,
 ) -> Stateful<Div>
 where
     F: Fn(CoreId, String, &mut Window, &mut App) + Clone + 'static,
 {
-    // One clock for the whole list, so two rows a millisecond apart cannot print figures that
-    // disagree by a minute.
-    let now_ms = moon_core::util::now_unix_ms_i64();
     for row in rows {
-        list = list.child(ban_row(
+        rendered = rendered.child(marked_row(
             id,
+            list,
             row,
-            now_ms,
             show_server_per_row,
             p,
             cx,
             on_pick.clone(),
-            on_unban.clone(),
+            on_press.clone(),
         ));
     }
-    list
+    rendered
 }
 
-/// Draws one ban: what is banned, on which core, how much is left, and the button that lifts it.
+/// Draws one such row: what it names, on which core, its figure if it has one, and its button.
 ///
 /// Args:
 ///     id: Stable popup identity used to derive this row's ids.
-///     row: The ban itself.
-///     now_ms: Clock the whole list counts down against.
+///     list: Which list this is.
+///     row: The row itself.
 ///     show_server_per_row: Whether to name the core here.
 ///     p: Active palette.
 ///     cx: Application context used to resolve scaled design tokens.
 ///     on_pick: Callback for opening the market.
-///     on_unban: Callback for the lift button, or `None` for a list without one.
+///     on_press: Callback for the button, or `None` for a list without one.
 ///
 /// Returns:
 ///     One fixed-height row.
 #[allow(clippy::too_many_arguments)]
-fn ban_row<F>(
+fn marked_row<F>(
     id: &'static str,
-    row: CoinBan,
-    now_ms: i64,
+    list: MarkedList,
+    row: CoinActRow,
     show_server_per_row: bool,
     p: MoonPalette,
     cx: &App,
     on_pick: F,
-    on_unban: Option<UnbanFn>,
+    on_press: Option<RowActionFn>,
 ) -> impl IntoElement
 where
     F: Fn(CoreId, String, &mut Window, &mut App) + Clone + 'static,
 {
-    let CoinBan {
+    let CoinActRow {
         hit:
             CoinHit {
                 core,
@@ -364,24 +561,15 @@ where
                 label,
                 ..
             },
-        ban:
-            BanSource {
-                until_ms,
-                stale,
-                allowed,
-                ..
-            },
+        note,
+        allowed,
+        action_key,
     } = row;
-    let left = fmt_ban_left(until_ms.saturating_sub(now_ms));
-    let left = match stale {
-        true => format!("~{left}"),
-        false => left,
-    };
     let pair = SharedString::from(label.pair());
-    // Identity, not POSITION: this list re-sorts itself as bans arrive, are lifted and expire, and
+    // Identity, not POSITION: these lists re-sort themselves as bans expire and marks arrive, and
     // an index-keyed row hands a press begun on one market to whichever market inherited the slot
     // — on a control whose whole job is to act on one named coin.
-    let row_id = format!("{id}-ban-{core}-{market}");
+    let row_id = format!("{id}-{}-{core}-{market}", list.id_kind());
     let market_pick = market.clone();
     div()
         .id(SharedString::from(row_id.clone()))
@@ -397,9 +585,9 @@ where
                 .w_full()
                 .gap(design::ui_px(cx, 6.0))
                 .items_center()
-                // Opening the coin is the row; lifting the ban is the button. They are separate
-                // targets so a misplaced click cannot untrade a coin — and the pointer cursor
-                // covers exactly the half that opens.
+                // Opening the coin is the row; the list button is the button. They are separate
+                // targets so a misplaced click cannot act on a coin — and the pointer cursor covers
+                // exactly the half that opens.
                 .child(
                     h_flex()
                         .flex_1()
@@ -422,10 +610,10 @@ where
                             row.child(
                                 // On the CELL, not the row: a core name wider than the popup clips
                                 // and its whole form has to stay reachable, but a row-wide tooltip
-                                // would sit over the lift button — which is the rule the contract
-                                // test `the coin result row must not attach a tooltip` states for
-                                // the search rows beside these. A plain `Div` carries no tooltip,
-                                // hence the id.
+                                // would sit over the button — which is the rule the contract test
+                                // `the coin result row must not attach a tooltip` states for the
+                                // search rows beside these. A plain `Div` carries no tooltip, hence
+                                // the id.
                                 div()
                                     .id(SharedString::from(format!("{row_id}-server")))
                                     .flex_1()
@@ -437,37 +625,40 @@ where
                                     .child(format!("@{server}")),
                             )
                         })
-                        .child(
+                        .children(note.map(|note| {
                             div()
-                                .id(SharedString::from(format!("{row_id}-left")))
+                                .id(SharedString::from(format!("{row_id}-note")))
                                 .flex_none()
                                 .text_size(design::t_caption(cx))
                                 .text_color(rgb(p.text_soft))
                                 // What the tilde means, rather than a figure that merely looks
                                 // rounded. The same fact the coin menu spells out.
-                                .when(stale, |cell| {
+                                .when(note.stale, |cell| {
                                     cell.tooltip(crate::panels::common::text_tooltip(
                                         t!("chart.coin.ban_stale").to_string(),
                                     ))
                                 })
-                                .child(left),
-                        ),
+                                .child(note.text)
+                        })),
                 )
-                .children(on_unban.map(|unban| {
-                    MoonButton::new(SharedString::from(format!("{row_id}-lift")))
+                .children(on_press.map(|press| {
+                    MoonButton::new(SharedString::from(format!("{row_id}-act")))
                         .label(design::GLYPH_CLOSE)
                         .size(MoonButtonSize::Micro)
                         .variant(MoonButtonVariant::Soft)
+                        // What it does, or — while this window may no longer command the core —
+                        // why it cannot. The refusal reads the same on every acting list, so it is
+                        // named here rather than carried per list.
                         .tooltip(match allowed {
-                            true => t!("chart.coin.unban").to_string(),
-                            false => t!("chart.coin.unban_denied").to_string(),
+                            true => t!(list.act_key()).to_string(),
+                            false => t!("chart.coin.act_denied").to_string(),
                         })
                         // Disabled rather than silently refused when this group may no longer
                         // command the core: the press has to say something, and a control that
                         // answers nothing is the worse of the two.
                         .disabled(!allowed)
                         .on_click(move |_, _window, app| {
-                            unban(core, market.clone(), app);
+                            press(core, action_key.clone(), app);
                             app.stop_propagation();
                         })
                         .render()

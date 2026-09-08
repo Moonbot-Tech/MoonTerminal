@@ -150,6 +150,14 @@ pub(in crate::chartdx) struct ActionInputs {
     /// none. A DEADLINE rather than a remainder so the figure counts down against the caption
     /// clock without the panel pushing a new value per frame.
     pub ban_until_ms: Option<i64>,
+    /// Whether this market is one of the core's marked ones, or `None` while the core has not
+    /// reported its configuration at all.
+    ///
+    /// Three states rather than two, and the third is not "no": a star drawn hollow on an unknown
+    /// list invites a press that would write a list nobody has read. The caption prints the hollow
+    /// star either way — there is nothing else it could draw — and the button beside it is disabled
+    /// on `None`; see `Backend::fav_market`.
+    pub favorite: Option<bool>,
 }
 
 /// Open-position figures for ONE basis.
@@ -601,6 +609,16 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 false => "chart_labels.act.panic_sell",
             };
             (t!(key).to_string(), None)
+        }),
+        // The star, and nothing but the star: FILLED while the coin is marked, hollow while it is
+        // not — and hollow too while the core has not said, which is the state its button is
+        // disabled in rather than one the picture can express.
+        ChartLabelField::ActFavorite => inputs.actions.live.then(|| {
+            let glyph = match inputs.actions.favorite {
+                Some(true) => STAR_ON,
+                Some(false) | None => STAR_OFF,
+            };
+            (glyph.to_string(), None)
         }),
         // The lock, and nothing but the lock: OPEN while the coin trades, CLOSED while it is
         // banned. A glyph rather than a word for the same reason the chart's own pin and lock
@@ -1148,6 +1166,13 @@ fn hours_and_minutes(hours: i64, minutes: i64) -> String {
     )
 }
 
+/// The star a favourite button draws, in its two states.
+///
+/// Glyphs rather than icon assets, for the reason the lock beside it is one: a control drawn from a
+/// font the whole application already loads.
+const STAR_ON: &str = "\u{2605}";
+const STAR_OFF: &str = "\u{2606}";
+
 /// The lock a temporary-ban button draws, in its two states.
 ///
 /// Glyphs rather than icon assets, matching the chart's own pin, lock and broom buttons beside
@@ -1631,6 +1656,7 @@ fn sample_inputs() -> LabelInputs {
             allowed: true,
             panic_armed: false,
             ban_until_ms: Some(4 * 3_600_000 + 12 * 60_000),
+            favorite: None,
         },
     }
 }

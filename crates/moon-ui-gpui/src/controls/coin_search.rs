@@ -37,7 +37,7 @@ use moon_core::venue::CoreVenue;
 mod ranking;
 mod tabs;
 
-pub(crate) use tabs::{CoinBan, CoinTab, CoinTabsCfg, banned};
+pub(crate) use tabs::{CoinActRow, CoinTab, CoinTabsCfg, banned, favorites};
 
 use ranking::{
     MOVER_VOL_REF, Mover, SUGGEST_ROW_CAP, merge_ranked_heads, mover_score,
@@ -714,33 +714,28 @@ pub(crate) enum CoinResults {
         /// Markets ranked by unsigned 24-hour movement weighted by USD turnover.
         volatile: Vec<CoinHit>,
     },
-    /// The markets the user marked, on the Favorites tab. Always empty for now — nothing marks one
-    /// yet — and drawn as its own empty state rather than as "no matches", which would read as a
-    /// failed search.
-    Favorites(Vec<CoinHit>),
+    /// The markets the cores in scope have MARKED, on the Favorites tab.
+    Favorites(Vec<CoinActRow>),
     /// The temporary bans the cores in scope are holding, on their own tab.
-    Banned(Vec<CoinBan>),
+    Banned(Vec<CoinActRow>),
 }
 
 /// [`CoinResults`] after grouping, so the row arithmetic and the renderer read the SAME shape.
 enum GroupedResults {
-    /// One grouped list drawn without a heading — a typed query, or the markets the reader marked.
-    /// The same rows and the same arithmetic; only the note an EMPTY one prints differs, so they
-    /// are one variant carrying that note rather than two identical arms.
-    Sections {
-        /// Section identity, which keeps element ids unique across lists.
-        section: &'static str,
-        /// Locale key of the note shown when the list is empty.
-        empty: &'static str,
-        sections: Vec<CoinSection>,
-    },
+    /// A typed query's matches, grouped by exchange and coin.
+    Query(Vec<CoinSection>),
+    /// The two empty-field suggestion sections.
     Suggest {
         recent: Vec<CoinSection>,
         volatile: Vec<CoinSection>,
     },
-    /// Not grouped: a ban belongs to ONE core, so there is nothing to fold. Carried through this
-    /// enum anyway so the row arithmetic and the renderer keep reading the same value.
-    Banned(Vec<CoinBan>),
+    /// An acting list — the marked markets or the running bans. Not grouped: each row is ONE
+    /// core's statement about one of its markets, so there is nothing to fold. One variant for
+    /// both, carrying which list it is, because they differ only in that.
+    Marked {
+        list: tabs::MarkedList,
+        rows: Vec<CoinActRow>,
+    },
 }
 
 /// Returns the fixed height shared by every direct child of the scrolling result list.
@@ -1216,29 +1211,27 @@ where
     // Grouped ONCE, here, and handed to both the arithmetic and the renderer: counting one shape
     // while drawing another is exactly how a viewport cap starts lying.
     let grouped = match results {
-        CoinResults::Query(hits) => GroupedResults::Sections {
-            section: "q",
-            empty: "chart.coin.no_results",
-            sections: group_hits(hits),
-        },
+        CoinResults::Query(hits) => GroupedResults::Query(group_hits(hits)),
         CoinResults::Suggest { recent, volatile } => GroupedResults::Suggest {
             recent: group_hits(recent),
             volatile: group_hits(volatile),
         },
-        CoinResults::Favorites(hits) => GroupedResults::Sections {
-            section: "fav",
-            empty: "chart.coin.no_favorites",
-            sections: group_hits(hits),
+        CoinResults::Favorites(rows) => GroupedResults::Marked {
+            list: tabs::MarkedList::Favorites,
+            rows,
         },
-        CoinResults::Banned(rows) => GroupedResults::Banned(rows),
+        CoinResults::Banned(rows) => GroupedResults::Marked {
+            list: tabs::MarkedList::Banned,
+            rows,
+        },
     };
     // Whether a selection can be accumulated at all is a property of the ROWS on screen, not of the
-    // tab that asked for them: the ban list draws lift buttons where the others draw checkboxes, so
-    // its hint row and its footer would count markets none of its rows shows. Asked of the grouped
-    // value, which is the one thing both the arithmetic and the renderer read.
-    let multi_select = multi_select && !matches!(grouped, GroupedResults::Banned(_));
+    // tab that asked for them: an acting list draws its own button where the others draw
+    // checkboxes, so the hint row and the footer would count markets none of its rows shows. Asked
+    // of the grouped value, which is the one thing both the arithmetic and the renderer read.
+    let multi_select = multi_select && !matches!(grouped, GroupedResults::Marked { .. });
     let result_rows = match &grouped {
-        GroupedResults::Sections { sections, .. } => {
+        GroupedResults::Query(sections) => {
             if sections.is_empty() {
                 1
             } else {
@@ -1255,8 +1248,8 @@ where
                     + usize::from(!volatile.is_empty())
             }
         }
-        // One fixed-height row per ban, or the one row the empty note occupies.
-        GroupedResults::Banned(rows) => rows.len().max(1),
+        // One fixed-height row per entry, or the one row the empty note occupies.
+        GroupedResults::Marked { rows, .. } => rows.len().max(1),
     };
     let direct_child_count =
         result_rows + usize::from(server_context.is_some()) + usize::from(multi_select);
@@ -1331,18 +1324,14 @@ where
     };
 
     match grouped {
-        GroupedResults::Sections {
-            section,
-            empty,
-            sections,
-        } => {
+        GroupedResults::Query(sections) => {
             if sections.is_empty() {
-                list = empty_note(list, t!(empty).to_string());
+                list = empty_note(list, t!("chart.coin.no_results").to_string());
             } else {
                 list = push_section(
                     list,
                     id,
-                    section,
+                    "q",
                     None,
                     sections,
                     selected,
@@ -1398,22 +1387,23 @@ where
                 );
             }
         }
-        GroupedResults::Banned(rows) => {
+        GroupedResults::Marked { list: which, rows } => {
             if rows.is_empty() {
-                list = empty_note(list, t!("chart.coin.no_banned").to_string());
+                list = empty_note(list, t!(which.empty_key()).to_string());
             } else {
-                list = tabs::push_ban_rows(
+                list = tabs::push_marked_rows(
                     list,
                     id,
+                    which,
                     rows,
                     show_server_per_row,
                     p,
                     cx,
                     on_pick.clone(),
-                    // Only a tabbed host can be showing this list at all, so the lift command is
-                    // always in hand here; taken through the option anyway rather than unwrapped,
-                    // which would turn a future caller's mistake into a panic in the frame loop.
-                    tabs.as_ref().map(|cfg| cfg.on_unban.clone()),
+                    // Only a tabbed host can be showing this list at all, so the command is always
+                    // in hand here; taken through the option anyway rather than unwrapped, which
+                    // would turn a future caller's mistake into a panic in the frame loop.
+                    tabs.as_ref().map(|cfg| cfg.row_action(which)),
                 );
             }
         }

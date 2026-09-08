@@ -5,7 +5,7 @@
 
 // Named imports, never a glob: the module under test pulls in `gpui::*`, whose own `test` macro
 // would then shadow the one this file's attributes mean.
-use super::{BanSource, CoinHit, CoinTab, pair_bans};
+use super::{BanSource, CoinHit, CoinTab, dedup_markets, pair_bans};
 use moon_core::market::MarketLabel;
 use moon_core::session::CoreId;
 
@@ -111,6 +111,26 @@ fn a_core_that_echoes_another_case_still_pairs() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].ban.until_ms, 7_000);
+}
+
+/// A core that names one market twice is drawn once.
+///
+/// Breakage this pins: rendering the core's list verbatim. Both rows would carry the same element
+/// id, which GPUI refuses inside one frame — and the list is a hand-edited string on the other side
+/// of a wire, so a repeat is a shape we receive rather than one we can rule out.
+#[test]
+fn a_market_named_twice_is_one_row() {
+    let kept = dedup_markets(vec![
+        "BTCUSDT".to_string(),
+        "ETHUSDT".to_string(),
+        "btcusdt".to_string(),
+    ]);
+
+    assert_eq!(
+        kept,
+        vec!["BTCUSDT", "ETHUSDT"],
+        "first spelling kept, in order"
+    );
 }
 
 /// Pressing the highlighted All while a query stands must still act: that press IS how a reader

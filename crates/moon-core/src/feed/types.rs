@@ -14,7 +14,8 @@ pub use core_settings::{
     CoreConfigEditRow, CoreConfigRejection, CoreConfigState, CoreHotkeyAction, CoreHotkeyLayout,
     CoreStratButtons, GeneralSettings, GestureSettings, InterfaceSettings, LeverageSettings,
     ManualSettings, MoveRow, OrderRulesSettings, ProfitState, SignalsSettings, SpecialSettings,
-    TelegramSettings, day_fraction_to_minutes, minutes_to_day_fraction,
+    TelegramSettings, day_fraction_to_minutes, fav_markets_has, fav_markets_list, fav_markets_set,
+    minutes_to_day_fraction,
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,

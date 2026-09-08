@@ -542,6 +542,7 @@ fn own_trade_toggle(
 fn area_caption(area: CoreConfigArea) -> String {
     let key = match area {
         CoreConfigArea::AutoBuy => "toolbar.core_config_area_auto_buy",
+        CoreConfigArea::FavMarkets => "toolbar.core_config_area_fav_markets",
         CoreConfigArea::AutoStart => "toolbar.core_config_area_auto_start",
         CoreConfigArea::BtcBlink => "toolbar.core_config_area_btc_blink",
         // Both halves of Moonbot's "Основные" page answer to its name. They are two areas

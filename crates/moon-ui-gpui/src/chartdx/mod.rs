@@ -295,6 +295,9 @@ pub struct ChartActionButton {
     /// The `(core, market)` the pane was DRAWN for.
     pub core: moon_core::session::CoreId,
     pub market: String,
+    /// That market's `market_currency` — the identity the core's own favourites list is matched
+    /// against. Empty until the catalogue has named the market.
+    pub coin: String,
 }
 
 /// Which market buttons a chart's captions actually place.
@@ -306,12 +309,13 @@ pub struct WantedActions {
     pub cancel_buy: bool,
     pub panic_sell: bool,
     pub temp_ban: bool,
+    pub favorite: bool,
 }
 
 impl WantedActions {
     /// Whether this chart places any button at all.
     pub fn any(self) -> bool {
-        self.cancel_buy || self.panic_sell || self.temp_ban
+        self.cancel_buy || self.panic_sell || self.temp_ban || self.favorite
     }
 }
 
@@ -330,6 +334,9 @@ pub struct MarketActionState {
     pub panic_armed: bool,
     /// When the core's temporary ban on that market runs out, Unix ms, or `None` for no ban.
     pub ban_until_ms: Option<i64>,
+    /// Whether that market is marked on the core, or `None` while the core has not reported its
+    /// configuration — see `ActionInputs::favorite` on why that is a third state.
+    pub favorite: Option<bool>,
 }
 
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
@@ -458,6 +465,14 @@ struct PaneRender {
     venue: String,
     /// Quote currency of this pane's market, resolved with the ticker from the same label.
     quote: String,
+    /// `market_currency` of this pane's market — the CORE's own name for the coin, resolved from
+    /// the same label as the ticker beside it.
+    ///
+    /// Kept apart from that ticker because it is an IDENTITY rather than a caption: the core's own
+    /// lists (its favourites, its permanent blacklist) are matched against this exact string, and
+    /// deriving it by trimming a market name is what the core's team asked us not to do — a
+    /// contract tail, a dex prefix or a multiplier makes that derivation wrong.
+    coin: String,
     /// Whether [`Self::labels`] was last built with a shot's caption substitution in force.
     ///
     /// The shot's proof is about what a FRAME drew, and `refresh_pane_labels` runs on the sync
@@ -758,6 +773,7 @@ impl PaneRender {
             labels: text::LabelState::default(),
             venue: String::new(),
             quote: String::new(),
+            coin: String::new(),
             labels_shot_substituted: false,
             label_strategy: String::new(),
             label_basis: [text::BasisStats::default(); 3],

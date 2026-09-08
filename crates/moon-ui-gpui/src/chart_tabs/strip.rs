@@ -309,6 +309,7 @@ impl Render for ChartTabs {
             let view_open = cx.entity();
             let view_tab = cx.entity();
             let view_unban = cx.entity();
+            let view_unfav = cx.entity();
             let input_open = self.coin_input.clone();
             // The tab strip lives on THIS field only. A detached window is one bucket's chart, the
             // header ticker picks a rate and the Report field filters a column — none of them are
@@ -320,6 +321,9 @@ impl Render for ChartTabs {
                 }),
                 on_unban: std::rc::Rc::new(move |core, market, app| {
                     view_unban.update(app, |this, cx| this.lift_temp_ban(core, market, cx));
+                }),
+                on_unfav: std::rc::Rc::new(move |core, market, app| {
+                    view_unfav.update(app, |this, cx| this.unmark_favorite(core, market, cx));
                 }),
             });
             coin_search::render_popup(

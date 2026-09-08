@@ -1,8 +1,8 @@
 use moonproto::shared_config::SharedConfig;
 
 use super::{
-    FieldMask, MAX_ATTEMPTS, SequenceAction, SharedConfigSequence, apply_core_config,
-    core_config_from_proto, edit_satisfied,
+    FieldMask, MAX_ATTEMPTS, QueuedOp, SentAsk, SequenceAction, SharedConfigSequence,
+    apply_core_config, core_config_from_proto, edit_satisfied,
 };
 use crate::feed::{AutoStartSettings, CoreConfig, CoreConfigEditEvent, CoreConfigEditResult};
 
@@ -15,6 +15,15 @@ fn edit_from(cfg: &SharedConfig, mutate: impl FnOnce(&mut AutoStartSettings)) ->
     let mut projected = core_config_from_proto(cfg);
     mutate(&mut projected.auto_start);
     projected
+}
+
+/// One sent packet's ask, for a test that only cares about the mask it carried.
+fn ask(edit_count: usize, touched: FieldMask) -> SentAsk {
+    SentAsk {
+        touched,
+        fav: Vec::new(),
+        edit_count,
+    }
 }
 
 /// Extract the next full config or fail with the unexpected action.
@@ -132,7 +141,7 @@ fn a_satisfied_drop_does_not_erase_a_give_up_from_the_same_pass() {
     sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
     for _ in 0..MAX_ATTEMPTS {
         let sent = next_config(&mut sequence, &base);
-        sequence.observe_send_success(&sent, 1, mask);
+        sequence.observe_send_success(&sent, ask(1, mask));
         sequence.observe_update();
     }
     sequence.observe_echo_timeout();
@@ -176,8 +185,10 @@ fn a_non_finite_autostart_or_blink_number_still_equals_itself() {
     assert_eq!(projected.btc_blink, projected.btc_blink.clone());
     assert!(edit_satisfied(
         &base,
-        &projected,
-        FieldMask::RENDERED_SECTIONS
+        &QueuedOp::Config {
+            config: Box::new(projected.clone()),
+            touched: FieldMask::RENDERED_SECTIONS,
+        }
     ));
 }
 
@@ -192,7 +203,7 @@ fn send_waits_for_the_core_echo() {
         FieldMask::RENDERED_SECTIONS,
     );
     let sent = next_config(&mut sequence, &base);
-    sequence.observe_send_success(&sent, 1, FieldMask::RENDERED_SECTIONS);
+    sequence.observe_send_success(&sent, ask(1, FieldMask::RENDERED_SECTIONS));
 
     // The core has not echoed yet, so the still-stale base must produce no second send.
     let mut events = Vec::new();
@@ -227,7 +238,7 @@ fn an_echo_that_never_arrives_is_not_a_rejection() {
     sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
 
     let sent = next_config(&mut sequence, &base);
-    sequence.observe_send_success(&sent, 1, mask);
+    sequence.observe_send_success(&sent, ask(1, mask));
     sequence.observe_echo_timeout();
 
     // The base is unchanged — the core answered nothing — so this plan must only re-send.
@@ -258,7 +269,7 @@ fn a_concurrent_change_outside_the_mask_still_confirms_the_edit() {
     sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
 
     let sent = next_config(&mut sequence, &base);
-    sequence.observe_send_success(&sent, 1, mask);
+    sequence.observe_send_success(&sent, ask(1, mask));
     sequence.observe_update();
 
     // The core applied the edit AND changed a field this write never named — someone moved a mouse
@@ -302,7 +313,7 @@ fn an_echo_after_the_timeout_still_confirms_the_edit() {
     sequence.enqueue(edit_from(&base, |s| s.errors_level = 9), mask);
 
     let sent = next_config(&mut sequence, &base);
-    sequence.observe_send_success(&sent, 1, mask);
+    sequence.observe_send_success(&sent, ask(1, mask));
     sequence.observe_echo_timeout();
 
     // The core did apply it, just later than the timeout allowed: its echo is the packet itself.
@@ -337,7 +348,7 @@ fn unconfirmed_edit_is_dropped_after_three_attempts() {
     for _ in 0..MAX_ATTEMPTS {
         let sent = next_config(&mut sequence, &base);
         // Attempts are charged to a SENT packet, so a test that only plans one would loop forever.
-        sequence.observe_send_success(&sent, 1, FieldMask::RENDERED_SECTIONS);
+        sequence.observe_send_success(&sent, ask(1, FieldMask::RENDERED_SECTIONS));
         sequence.observe_update();
     }
     let mut events = Vec::new();
@@ -811,8 +822,10 @@ fn a_non_finite_special_amount_still_equals_itself() {
     assert_eq!(projected.special, projected.special.clone());
     assert!(edit_satisfied(
         &base,
-        &projected,
-        FieldMask::EMPTY.with_special()
+        &QueuedOp::Config {
+            config: Box::new(projected.clone()),
+            touched: FieldMask::EMPTY.with_special(),
+        }
     ));
 }
 
@@ -1141,7 +1154,95 @@ fn a_non_finite_general_number_still_equals_itself() {
     assert_eq!(projected.order_rules, projected.order_rules.clone());
     assert!(edit_satisfied(
         &base,
-        &projected,
-        FieldMask::EMPTY.with_general().with_order_rules()
+        &QueuedOp::Config {
+            config: Box::new(projected.clone()),
+            touched: FieldMask::EMPTY.with_general().with_order_rules(),
+        }
     ));
+}
+
+/// The marked-markets write is a DELTA resolved at SEND time, and its echo is checked by
+/// membership.
+///
+/// Breakage this pins, in one test because they are one mistake — writing the list as a frozen
+/// string:
+///   * a market MoonBot marked between our read and our send is deleted by our string;
+///   * two stars pressed before the first echo both rebuild from the same base, so the first press
+///     is silently lost;
+///   * a core that re-spaces or reorders the list on save never matches a byte comparison, so a
+///     write that LANDED burns the attempt budget and reports itself refused.
+#[test]
+fn a_marked_market_is_a_delta_resolved_against_the_snapshot_that_is_sent() {
+    let mut base = SharedConfig::default();
+    base.trading.fav_markets = "BTCUSDT".to_string();
+    let mut sequence = SharedConfigSequence::new();
+
+    sequence.enqueue_fav_market("SOLUSDT".to_string(), true);
+    // The core marked something of its own before our packet went out.
+    let mut moved = base.clone();
+    moved.trading.fav_markets = "BTCUSDT,ETHUSDT".to_string();
+    let sent = next_config(&mut sequence, &moved);
+    assert_eq!(
+        sent.trading.fav_markets, "BTCUSDT,ETHUSDT,SOLUSDT",
+        "the delta joins the core's own list instead of replacing it"
+    );
+
+    // A second press before the echo builds on the packet, not on the stale base.
+    sequence.enqueue_fav_market("BTCUSDT".to_string(), false);
+    sequence.observe_update();
+    let sent = next_config(&mut sequence, &moved);
+    assert_eq!(sent.trading.fav_markets, "ETHUSDT,SOLUSDT");
+
+    // The core echoes the same set, re-spaced and reordered. That is a confirmation.
+    sequence.observe_send_success(
+        &sent,
+        SentAsk {
+            touched: FieldMask::EMPTY,
+            fav: vec!["SOLUSDT".to_string(), "BTCUSDT".to_string()],
+            edit_count: 2,
+        },
+    );
+    sequence.observe_update();
+    let mut echoed = moved.clone();
+    echoed.trading.fav_markets = " solusdt , ETHUSDT ".to_string();
+    let mut events = Vec::new();
+    let action = sequence.next_action(&echoed, TEST_CORE, &mut events);
+    assert!(
+        matches!(action, SequenceAction::Idle),
+        "the queue is empty once the core agrees"
+    );
+    assert!(
+        matches!(
+            events.as_slice(),
+            [CoreConfigEditEvent::Resolved(
+                CoreConfigEditResult::Confirmed
+            )]
+        ),
+        "a reordered, re-spaced echo of the same set is the write landing, got {events:?}"
+    );
+}
+
+/// A star pressed onto the state the core already holds sends nothing at all.
+#[test]
+fn a_mark_the_core_already_holds_needs_no_packet() {
+    let mut base = SharedConfig::default();
+    base.trading.fav_markets = "BTCUSDT".to_string();
+    let mut sequence = SharedConfigSequence::new();
+
+    sequence.enqueue_fav_market("btcusdt".to_string(), true);
+
+    let mut events = Vec::new();
+    assert!(matches!(
+        sequence.next_action(&base, TEST_CORE, &mut events),
+        SequenceAction::Idle
+    ));
+    assert!(
+        matches!(
+            events.as_slice(),
+            [CoreConfigEditEvent::Resolved(
+                CoreConfigEditResult::Confirmed
+            )]
+        ),
+        "got {events:?}"
+    );
 }

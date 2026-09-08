@@ -55,6 +55,16 @@ pub struct CoreConfig {
     pub special: SpecialSettings,
     /// Moonbot's Hotkeys page: the mouse gestures that place and move orders.
     pub gestures: GestureSettings,
+    /// `trading.fav_markets` — the markets the trader marked, as the core spells them.
+    ///
+    /// A bare field rather than a section of its own, exactly like the manual block's one writable
+    /// flag: it belongs to no settings PAGE this terminal draws. The core owns the list — MoonBot's
+    /// own star writes the same string — so the chart's star reads and writes it rather than
+    /// keeping a list of its own that only this machine would ever see.
+    ///
+    /// Wire shape: one comma-separated string. Read it through [`fav_markets_has`] and change it
+    /// through [`fav_markets_set`] so the spelling and the separator rules live in one place.
+    pub fav_markets: String,
     /// Core-owned manual-trading configuration: order-size presets, manual-strategy buttons, and
     /// the platform hotkey layout. A BLOCK, not a tab — see the module doc.
     pub manual: ManualSettings,
@@ -1539,6 +1549,8 @@ impl CoreConfigState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreConfigArea {
     AutoBuy,
+    /// The marked-markets list — see [`CoreConfig::fav_markets`].
+    FavMarkets,
     Special,
     Telegram,
     AutoStart,
@@ -1675,6 +1687,10 @@ pub fn day_fraction_to_minutes(fraction: f64) -> u16 {
 pub fn minutes_to_day_fraction(minutes: u16) -> f64 {
     f64::from(minutes.min(1439)) / MINUTES_PER_DAY
 }
+
+mod fav_markets;
+
+pub use fav_markets::{fav_markets_has, fav_markets_list, fav_markets_set};
 
 #[cfg(test)]
 mod tests;

@@ -223,6 +223,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         sell_edit_req: None,
         group_exit_sync: HashMap::new(),
         ignore_sell_local: HashMap::new(),
+        fav_local: HashMap::new(),
+        fav_rev: 0,
         pending_stops: HashMap::new(),
         manual_strat_checked: HashMap::new(),
         manual_exit_checked: HashMap::new(),
@@ -654,6 +656,11 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // coalescing gate `flush_backend_notify` flushes below on the same tick, rather
                     // than a bare `cx.notify()`.
                     if b.tick_panic_local() {
+                        b.mark_backend_dirty(cx);
+                    }
+                    // The favourite star's own overrides, reconciled on the same tick and for the
+                    // same three reasons; see `Backend::tick_fav_local`.
+                    if b.tick_fav_local() {
                         b.mark_backend_dirty(cx);
                     }
                     // The second reconciliation on this same unconditional tick: a visible stop
