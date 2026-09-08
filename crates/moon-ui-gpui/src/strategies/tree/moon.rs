@@ -255,7 +255,7 @@ pub(crate) struct MoonTreeBuild {
 ///
 /// Collapsed cores contribute only their root row and totals; open cores are each scanned once for
 /// visible rows and folder counts. The exchange filter excludes whole sections or cores before
-/// row-level filtering; the display preference then wraps the retained nonempty cores in canonical
+/// row-level filtering; the display preference then wraps the retained cores in canonical
 /// exchange sections or emits those same core roots directly.
 ///
 /// Args:
@@ -380,7 +380,7 @@ pub(crate) fn build(
 ///     outputs: Side map, visible strategy order, and expanded ids receiving this root's output.
 ///
 /// Returns:
-///     The core root, or `None` when no live strategy matches the visibility predicate.
+///     The core root, or `None` when data is absent or row filters leave nothing to display.
 fn build_core_root(
     view: &StrategiesView,
     store: &CoreStore,
@@ -428,7 +428,9 @@ fn build_core_root(
     // there is to show. Asked of the folders that would actually be DRAWN — a core whose every
     // folder is occupied by strategies the filter removed has nothing to show and stays hidden.
     let empty_folders = empty_folder_paths(view, cd, core, searching);
-    if !any_matched && empty_folders.is_empty() {
+    // Without row filters, even a completely empty core must remain available as a destination
+    // for creating or copying its first strategy or folder.
+    if filter.narrows() && !any_matched && empty_folders.is_empty() {
         return None;
     }
     // Only for a core whose rows are actually built: `matched` is filled solely when the core is

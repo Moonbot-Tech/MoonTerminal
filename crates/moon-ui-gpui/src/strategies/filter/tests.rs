@@ -8,6 +8,25 @@ use moon_core::feed::StrategyRow;
 
 use super::StrategyFilter;
 
+/// Empty cores survive the default and exchange-only views, but row filters require a match.
+#[test]
+fn empty_core_visibility_depends_on_row_filters_only() {
+    for (search, kind, dir, active, narrows) in [
+        ("", None, None, false, false),
+        ("  ", None, None, false, false),
+        ("needle", None, None, false, true),
+        ("", Some(0), None, false, true),
+        ("", None, Some(false), false, true),
+        ("", None, None, true, true),
+    ] {
+        let mut state = filter(search, kind, dir, active);
+        assert_eq!(state.prepare().narrows(), narrows);
+        state.exchange = Some(crate::core_order::ExchangeSection::Unidentified);
+        assert_eq!(state.prepare().narrows(), narrows);
+        assert!(state.narrows());
+    }
+}
+
 /// Builds a row carrying only the fields the filters read.
 fn row(name: &str, kind_ordinal: u8, is_short: bool, checked: bool) -> StrategyRow {
     StrategyRow {
