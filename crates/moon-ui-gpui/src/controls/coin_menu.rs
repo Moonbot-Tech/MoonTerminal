@@ -85,21 +85,6 @@ pub struct CoinMenuCtx {
     pub trailing: Vec<MoonMenuItem>,
 }
 
-/// Which branch of this menu is currently expanded, if any.
-///
-/// MoonUI draws a nested level only beside a row the CALLER marked selected — the library keeps no
-/// hover or keyboard state of its own (`dropdown/popup.rs`: `if selected && has_submenu`), so a
-/// branch that nobody marks is a chevron that expands nothing. Expansion is therefore driven from
-/// here: clicking a branch row reopens this menu with that branch marked, and clicking it again
-/// folds it back. Logged in `docs-internal/FORK_BUGS.md`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CoinMenuBranch {
-    /// The permanent core/strategy blacklists.
-    Blacklist,
-    /// The temporary, expiring blacklist.
-    TempBlacklist,
-}
-
 /// Opens the shared token context menu at window-coordinate `pos`, usually `event.position`.
 ///
 /// Opens nothing when the context yields no entry at all — an empty popup reads as a bug.
@@ -110,19 +95,7 @@ pub fn open_coin_menu(
     window: &mut Window,
     cx: &mut App,
 ) {
-    open_coin_menu_branch(ctx, backend, pos, None, window, cx);
-}
-
-/// The same menu with one branch expanded, which is how a branch row reopens it.
-pub(crate) fn open_coin_menu_branch(
-    ctx: CoinMenuCtx,
-    backend: Entity<Backend>,
-    pos: Point<Pixels>,
-    expanded: Option<CoinMenuBranch>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let items = build_items(ctx, &backend, pos, expanded, cx);
+    let items = build_items(ctx, &backend, cx);
     if items.is_empty() {
         return;
     }
@@ -142,19 +115,11 @@ pub(crate) fn open_coin_menu_branch(
 /// Args:
 ///     ctx: Captured row or chart context, including optional workspace mutation authority.
 ///     backend: Shared live terminal and workspace state.
-///     pos: Where this menu was opened, so an expanding branch can reopen it in the same place.
-///     expanded: Branch currently opened beside the menu, or `None` while it is folded.
 ///     cx: Application context used to read initial checked-state snapshots.
 ///
 /// Returns:
 ///     Navigation and currently applicable mutation entries for the clicked token or order.
-fn build_items(
-    ctx: CoinMenuCtx,
-    backend: &Entity<Backend>,
-    pos: Point<Pixels>,
-    expanded: Option<CoinMenuBranch>,
-    cx: &App,
-) -> Vec<MoonMenuItem> {
+fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
     let b = backend.read(cx);
     let core = ctx.core;
     let coin = ctx.coin.clone();
@@ -239,10 +204,8 @@ fn build_items(
             items.push(MoonMenuItem::separator());
         }
 
-        items.push(permanent_blacklist_item(
-            &ctx, b, backend, &coin, pos, expanded,
-        ));
-        if let Some(item) = temp_blacklist_item(&ctx, b, backend, pos, expanded) {
+        items.push(permanent_blacklist_item(&ctx, b, backend, &coin));
+        if let Some(item) = temp_blacklist_item(&ctx, b, backend) {
             items.push(item);
         }
     } // end of the token-dependent blacklist actions
