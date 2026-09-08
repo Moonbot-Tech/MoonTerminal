@@ -19,9 +19,9 @@ use moon_core::config::TempBanSpan;
 use moon_core::session::CoreId;
 
 use super::{
-    CoinMenuBranch, CoinMenuCtx, add_to_core_blacklist, add_to_strategy_blacklist,
-    blacklist_contains, core_blacklist, open_coin_menu_branch, strategy_blacklist,
-    strategy_has_blacklist_field, workspace_action_allows_cores,
+    CoinMenuCtx, add_to_core_blacklist, add_to_strategy_blacklist, blacklist_contains,
+    core_blacklist, strategy_blacklist, strategy_has_blacklist_field,
+    workspace_action_allows_cores,
 };
 use crate::Backend;
 use crate::display_text::fmt_ban_left;
@@ -32,8 +32,6 @@ pub(super) fn permanent_blacklist_item(
     b: &Backend,
     backend: &Entity<Backend>,
     coin: &str,
-    pos: Point<Pixels>,
-    expanded: Option<CoinMenuBranch>,
 ) -> MoonMenuItem {
     let core = ctx.core;
     let mut rows: Vec<MoonMenuItem> = Vec::new();
@@ -97,16 +95,7 @@ pub(super) fn permanent_blacklist_item(
         ));
     }
 
-    branch_row(
-        "coin-bl",
-        t!("coin_menu.bl_group").to_string(),
-        CoinMenuBranch::Blacklist,
-        rows,
-        ctx,
-        backend,
-        pos,
-        expanded,
-    )
+    MoonMenuItem::with_key("coin-bl", t!("coin_menu.bl_group").to_string()).submenu(rows)
 }
 
 /// The "add to the temporary blacklist" submenu, or `None` when this context has no symbol to ban.
@@ -114,8 +103,6 @@ pub(super) fn temp_blacklist_item(
     ctx: &CoinMenuCtx,
     b: &Backend,
     backend: &Entity<Backend>,
-    pos: Point<Pixels>,
-    expanded: Option<CoinMenuBranch>,
 ) -> Option<MoonMenuItem> {
     let core = ctx.core;
     let symbol = temp_ban_symbol(b, core, ctx)?;
@@ -218,45 +205,7 @@ pub(super) fn temp_blacklist_item(
         );
     }
 
-    Some(branch_row(
-        "coin-tbl",
-        t!("coin_menu.tbl_group").to_string(),
-        CoinMenuBranch::TempBlacklist,
-        rows,
-        ctx,
-        backend,
-        pos,
-        expanded,
-    ))
-}
-
-/// One collapsible branch of the coin menu.
-///
-/// The click reopens the whole menu with this branch marked, because that mark is the only thing
-/// MoonUI renders a nested level from — see [`CoinMenuBranch`]. Clicking the open branch folds it
-/// again. The row does not call `close_context_menu`: the reopen installs the rebuilt menu over
-/// this one, and closing first would make the branch blink shut on every expand.
-#[allow(clippy::too_many_arguments)]
-fn branch_row(
-    key: &'static str,
-    label: String,
-    branch: CoinMenuBranch,
-    rows: Vec<MoonMenuItem>,
-    ctx: &CoinMenuCtx,
-    backend: &Entity<Backend>,
-    pos: Point<Pixels>,
-    expanded: Option<CoinMenuBranch>,
-) -> MoonMenuItem {
-    let open = expanded == Some(branch);
-    let ctx = ctx.clone();
-    let backend = backend.clone();
-    MoonMenuItem::with_key(key, label)
-        .selected(open)
-        .submenu(rows)
-        .on_click(move |_, window, app| {
-            let next = (!open).then_some(branch);
-            open_coin_menu_branch(ctx.clone(), backend.clone(), pos, next, window, app);
-        })
+    Some(MoonMenuItem::with_key("coin-tbl", t!("coin_menu.tbl_group").to_string()).submenu(rows))
 }
 
 /// The write both core-blacklist rows perform, differing only in the cores they are handed.
