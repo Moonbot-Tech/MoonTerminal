@@ -359,6 +359,11 @@ pub struct ChartTabs {
     coin_input: Entity<MoonInputState>,
     /// Current market-input text mirrored from `coin_input` on `Change`.
     coin_query: String,
+    /// Which list the coin dropdown shows while the field is empty.
+    ///
+    /// Reset on OPEN rather than on every way the popup can close, for the reason
+    /// `open_coin_popup` states about the expanded rows: opening is the one funnel.
+    coin_tab: crate::controls::coin_search::CoinTab,
     /// Arbitrary drawing-color picker offered at the end of the settings panel's swatch row.
     fig_color_picker: Entity<MoonColorPickerState>,
 }
@@ -654,6 +659,13 @@ impl ChartTabs {
                         return;
                     }
                     if this.coin_query != value {
+                        // Typing is a SEARCH, whatever tab is open, so the strip follows the text
+                        // back to All rather than highlighting a tab whose list is not on screen.
+                        // Deleting the text does not move the strip again — it is already on All,
+                        // and pressing a tab is how the reader asks for another list.
+                        if !value.trim().is_empty() {
+                            this.coin_tab = crate::controls::coin_search::CoinTab::default();
+                        }
                         // Clearing the text does not close the list; it falls back to suggestions.
                         this.coin_query = value;
                         // This branch REOPENS a closed list without passing `open_coin_popup`, so
@@ -662,6 +674,7 @@ impl ChartTabs {
                         // it back carrying the previous scope's expanded rows.
                         if !this.popup_shows(ChartPopup::Coin) {
                             this.coin_expanded.clear();
+                            this.coin_tab = crate::controls::coin_search::CoinTab::default();
                         }
                         this.open_chart_popup(ChartPopup::Coin, cx);
                     }
@@ -765,6 +778,7 @@ impl ChartTabs {
             custom_name_input,
             coin_input,
             coin_query: String::new(),
+            coin_tab: crate::controls::coin_search::CoinTab::default(),
             fig_color_picker,
         };
         // Read from the window being built rather than looked up later: `group_windows` is filled

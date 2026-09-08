@@ -69,6 +69,14 @@ pub const MOON_SCROLLBAR_OVERLAY_W: f32 = 8.0;
 /// [`vline`].
 pub const DISCLOSURE_GLYPH: f32 = 11.0;
 
+/// The cross that drops one row: THE spelling for a new control that needs one.
+///
+/// A glyph rather than an icon asset, matching the tuner's filter and time grids, the Alerts table
+/// and the strategy tree. Those still carry their own literals — this is where the next one belongs
+/// and where a sweep would start, not a claim that the sweep has happened; the tree also holds a
+/// few `×`, which is the divergence a single home exists to stop growing.
+pub const GLYPH_CLOSE: &str = "✕";
+
 /// Base (unscaled) glyph edge for a passive disclosure caret whose enclosing row owns the click.
 ///
 /// Pass this value directly to `MoonDisclosure`; its `caret_box` applies the UI scale. This keeps

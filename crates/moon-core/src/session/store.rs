@@ -172,6 +172,11 @@ pub struct CoreData {
     /// Wall clock at which [`Self::temp_blacklist`] was received, Unix ms, or `None` while no
     /// snapshot has arrived.
     pub temp_blacklist_at_ms: Option<i64>,
+    /// Bumped whenever either of the two above changes, so a view showing the bans can early-return
+    /// on everything else. The rows carry no timestamp of their own and the feed publishes them
+    /// only when something actually changed (`feed::live::temp_blacklist`), so this counter is the
+    /// only signal that a ban was placed, lifted or re-anchored.
+    pub temp_blacklist_rev: u64,
     /// Projection of the core's full safe-share configuration, or `None` until the background
     /// request answers. The gear popup's tabs read it; see `feed::live::shared_config`.
     pub core_config: Option<CoreConfig>,
@@ -408,6 +413,24 @@ pub struct CoreData {
     pub time_offset_rev: u64,
 }
 
+/// When a listed ban runs out, in Unix milliseconds.
+///
+/// The snapshot carries a REMAINDER measured when it arrived, and the feed does not republish one
+/// merely for counting down, so the deadline is that remainder laid on the arrival instant. Stated
+/// as an INSTANT because that is the form which does not move: a remainder recomputed against the
+/// clock differs every time it is read, so every reader comparing what it last saw against what it
+/// sees now finds a change on every frame. Every reader of these rows goes through here.
+///
+/// Args:
+///     at_ms: When the snapshot holding this row arrived, Unix ms.
+///     row: The listed row, carrying the remaining time the core reported then.
+///
+/// Returns:
+///     The deadline, saturating rather than overflowing on an absurd remainder.
+fn ban_deadline_ms(at_ms: i64, row: &TempBlacklistRow) -> i64 {
+    at_ms.saturating_add(i64::try_from(row.remaining.as_millis()).unwrap_or(i64::MAX))
+}
+
 impl CoreData {
     /// Create an empty per-core store in the connecting state.
     pub fn new() -> Self {
@@ -432,6 +455,7 @@ impl CoreData {
             client_settings_stale: false,
             temp_blacklist: Vec::new(),
             temp_blacklist_at_ms: None,
+            temp_blacklist_rev: 0,
             core_config: None,
             core_config_stale: false,
             core_config_edit: None,
@@ -579,14 +603,29 @@ impl CoreData {
     ///     The deadline, which may already be past — see [`Self::temp_ban_left`] on why a row the
     ///     core still lists counts as a ban whatever the local countdown reached.
     pub fn temp_ban_until_ms(&self, symbol: &str) -> Option<i64> {
-        let held = self
-            .temp_blacklist
+        self.temp_bans()
+            .find(|(market, _)| market.eq_ignore_ascii_case(symbol))
+            .map(|(_, until)| until)
+    }
+
+    /// Every temporary ban this core still holds, as `(market, deadline)`.
+    ///
+    /// THE reader of these rows: [`Self::temp_ban_until_ms`] is this list narrowed to one market,
+    /// so a list and a single lookup cannot disagree about when a ban ends — which is exactly how
+    /// the chart's lock and the coin menu's row would otherwise drift apart.
+    ///
+    /// A row the core reports as EXPIRED is not a ban it still holds: the settings queue considers
+    /// a lift of it already done and sends nothing, so offering that lift would be a dead row.
+    ///
+    /// Returns:
+    ///     Market and deadline per live row, in the order the core listed them. Empty before the
+    ///     first snapshot arrives and for a core that holds no ban.
+    pub fn temp_bans(&self) -> impl Iterator<Item = (&str, i64)> {
+        let at = self.temp_blacklist_at_ms;
+        self.temp_blacklist
             .iter()
-            // A row the core reports as expired is not a ban it still holds: the queue considers a
-            // lift of it already done and sends nothing, so offering that lift would be a dead row.
-            .find(|row| row.symbol.eq_ignore_ascii_case(symbol) && !row.remaining.is_zero())?;
-        let at = self.temp_blacklist_at_ms?;
-        Some(at.saturating_add(i64::try_from(held.remaining.as_millis()).unwrap_or(i64::MAX)))
+            .filter(|row| !row.remaining.is_zero())
+            .filter_map(move |row| Some((row.symbol.as_str(), ban_deadline_ms(at?, row))))
     }
 
     /// Return the open edit for one strategy, if any.
@@ -913,6 +952,9 @@ impl CoreData {
                 // cleared, because a reconnect that finds the bans unchanged publishes nothing.
                 self.temp_blacklist_at_ms = Some(crate::util::time::now_unix_ms_i64());
                 self.temp_blacklist = rows;
+                // Unconditional, unlike the settings beside it: the stamp moved even when the rows
+                // read the same, and the stamp IS the deadline every reader counts down from.
+                self.temp_blacklist_rev = self.temp_blacklist_rev.wrapping_add(1);
             }
             FeedMsg::CoreConfig {
                 config,

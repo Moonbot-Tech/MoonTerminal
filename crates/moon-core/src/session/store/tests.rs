@@ -1093,3 +1093,46 @@ fn an_unchanged_folder_tree_does_not_advance_its_revision() {
     }));
     assert_ne!(after_first, core.folders_rev, "a folder that went away");
 }
+
+/// The whole list and a single lookup answer with ONE deadline rule, and neither counts an expired
+/// row as a ban.
+///
+/// Breakage this pins: reading the remainder as the deadline, or letting `temp_bans` list a row the
+/// core reports as expired. The queue treats a lift of such a row as already done and sends
+/// nothing, so a dropdown row for it would carry a button that can never do anything.
+#[test]
+fn the_ban_list_and_one_lookup_read_the_same_deadline() {
+    let mut core = CoreData::new();
+    assert_eq!(core.temp_bans().count(), 0, "nothing before a snapshot");
+
+    core.temp_blacklist = vec![
+        crate::feed::TempBlacklistRow {
+            symbol: "DOTUSDT".to_string(),
+            remaining: std::time::Duration::from_secs(3_600),
+        },
+        crate::feed::TempBlacklistRow {
+            symbol: "ADAUSDT".to_string(),
+            remaining: std::time::Duration::ZERO,
+        },
+    ];
+    // Still nothing: without an arrival instant a remainder cannot be laid on the clock.
+    assert_eq!(
+        core.temp_bans().count(),
+        0,
+        "no arrival instant, no deadline"
+    );
+
+    core.temp_blacklist_at_ms = Some(1_000_000);
+    let listed: Vec<_> = core.temp_bans().collect();
+    assert_eq!(listed, vec![("DOTUSDT", 1_000_000 + 3_600_000)]);
+    assert_eq!(
+        core.temp_ban_until_ms("dotusdt"),
+        Some(1_000_000 + 3_600_000),
+        "the single lookup matches the list, case aside"
+    );
+    assert_eq!(
+        core.temp_ban_until_ms("ADAUSDT"),
+        None,
+        "an expired row is not a ban"
+    );
+}

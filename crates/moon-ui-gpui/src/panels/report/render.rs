@@ -257,6 +257,8 @@ impl Render for ReportPanel {
                 // the row this list showed first before grouping.
                 None,
                 None,
+                // No tabs: this field filters a report column and opens nothing.
+                None,
                 p,
                 cx,
                 move |core, market, window, app| {

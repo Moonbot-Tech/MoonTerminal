@@ -94,6 +94,8 @@ impl Shell {
             // carries the instrument, exactly the row it showed first before grouping.
             None,
             None,
+            // No tabs: this field picks a rate for the header, not a chart to open.
+            None,
             p,
             cx,
             move |core, market, window, app| {

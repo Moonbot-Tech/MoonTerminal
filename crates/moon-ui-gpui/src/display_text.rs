@@ -69,5 +69,28 @@ pub(crate) fn fmt_duration_short(secs: f64) -> String {
         _ => pair(total / 86_400, &d, total % 86_400 / 3_600, &h),
     }
 }
+/// Format what is left of a temporary ban, to the MINUTE and rounded UP.
+///
+/// The ONE rule for a figure three surfaces print for the same ban — the chart's caption beside its
+/// lock, the coin menu's row, and the coin dropdown's ban tab. A second copy of it is how the
+/// caption and the menu come to disagree by a minute about the same coin.
+///
+/// Minutes rather than the raw remainder, and that is accuracy rather than taste: the core does not
+/// republish a remainder merely for counting down (`feed::live::temp_blacklist::DECAY_SLACK` lets
+/// it drift for up to a minute), so a figure printed to the second would claim a precision the
+/// value does not have. Rounded UP, and floored at ONE minute, because a row the core still lists
+/// is a ban a press can still lift: "0" beside a working lift button reads as a dead row.
+///
+/// Args:
+///     remaining_ms: Deadline minus now; a negative value is a countdown that has run out locally.
+///
+/// Returns:
+///     The localized figure, never below one minute.
+pub(crate) fn fmt_ban_left(remaining_ms: i64) -> String {
+    let left = remaining_ms.max(0);
+    let minutes = (left / 60_000 + i64::from(left % 60_000 > 0)).max(1);
+    fmt_duration_short((minutes * 60) as f64)
+}
+
 #[cfg(test)]
 mod tests;

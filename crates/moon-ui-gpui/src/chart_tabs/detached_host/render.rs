@@ -136,6 +136,10 @@ impl Render for DetachedChartHost {
                 false,
                 active_core,
                 None,
+                // No tabs: a detached window is one bucket's chart, and its field is the search
+                // that fills it. Favourites and the ban list belong where the whole group is in
+                // view — the tab strip.
+                None,
                 p,
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),

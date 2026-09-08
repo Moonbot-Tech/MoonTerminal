@@ -33,18 +33,20 @@ impl ChartTabs {
         )
     }
 
-    /// Return matches for the typed query or suggestions for an empty coin field.
+    /// Return matches for the typed query, or the open tab's list for an empty coin field.
     ///
-    /// The empty-field branch reads only cached suggestions — the scan that fills that cache runs
-    /// when the popup opens, never here. Both branches use the active tab's workspace-aware bucket.
+    /// Typing always searches — that is what the field is — so the tab decides only what an EMPTY
+    /// field shows. The suggestion branch reads only cached suggestions; the scan that fills that
+    /// cache runs when the popup opens, never here. Every branch uses the active tab's
+    /// workspace-aware bucket, so no list can offer a core the chart would not open.
     ///
     /// Args:
     ///     cx: Application context used to read Backend and the suggestion cache.
     ///
     /// Returns:
-    ///     Query matches or cached suggestions within the active tab's search scope.
+    ///     Query matches, or the open tab's list, within the active tab's search scope.
     pub(super) fn coin_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
-        use crate::controls::coin_search::{CoinResults, suggestions};
+        use crate::controls::coin_search::{CoinResults, CoinTab, banned, suggestions};
 
         let b = self.backend.read(cx);
         let bucket = self.coin_bucket(b);
@@ -56,13 +58,97 @@ impl ChartTabs {
                 &self.coin_query,
             ));
         }
-        let (recent, volatile) = suggestions(
-            b,
-            &self.group,
-            bucket.as_ref(),
-            b.coin_suggest_markets(&self.group, bucket.as_ref()),
-        );
-        CoinResults::Suggest { recent, volatile }
+        match self.coin_tab {
+            CoinTab::All => {
+                let (recent, volatile) = suggestions(
+                    b,
+                    &self.group,
+                    bucket.as_ref(),
+                    b.coin_suggest_markets(&self.group, bucket.as_ref()),
+                );
+                CoinResults::Suggest { recent, volatile }
+            }
+            // Nothing marks a market yet; the tab holds the place its list will occupy.
+            CoinTab::Favorites => CoinResults::Favorites(Vec::new()),
+            // Read from the cores on every build rather than captured when the tab was opened: a
+            // ban can be placed or lifted from MoonBot itself while this list is on screen, and the
+            // countdown each row prints comes off a DEADLINE, so nothing here decays with the clock.
+            CoinTab::Banned => CoinResults::Banned(banned(b, &self.group, bucket.as_ref())),
+        }
+    }
+
+    /// Switch the coin dropdown to another tab, emptying the field it belongs to.
+    ///
+    /// The field is cleared because a typed query outranks the tab — a tab pressed under standing
+    /// text would highlight a list the user cannot see. Clearing it here rather than letting the
+    /// resulting `Change` event decide keeps the two halves of that rule in one place.
+    ///
+    /// Args:
+    ///     tab: The pressed tab.
+    ///     window: Window owning the field, needed to rewrite its value.
+    ///     cx: ChartTabs context used to repaint.
+    pub(super) fn select_coin_tab(
+        &mut self,
+        tab: crate::controls::coin_search::CoinTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The rule lives with the tabs; see `CoinTab::press_acts` on why "a different tab" is not
+        // the same question as "does this press do anything".
+        // Trimmed, exactly as `coin_results` decides: a field holding only spaces is already
+        // showing the open tab's list, so pressing that tab has nothing to undo.
+        if !tab.press_acts(self.coin_tab, self.coin_query.trim().is_empty()) {
+            return;
+        }
+        self.coin_tab = tab;
+        if !self.coin_query.is_empty() {
+            // Both halves by hand: `MoonInputState::set_value` suppresses its own `Change` event,
+            // so nothing else would clear the mirror this list is actually read from.
+            self.coin_query.clear();
+            self.coin_input
+                .update(cx, |input, c| input.set_value("", window, c));
+        }
+        cx.notify();
+    }
+
+    /// Lift the temporary ban one dropdown row is showing.
+    ///
+    /// The market is the CORE's own spelling, taken from the row it listed — see
+    /// `coin_menu::temp_ban_symbol` on why a coin name cannot stand in for it.
+    ///
+    /// The row does not disappear on the press: the list shows what the cores hold, and a core
+    /// holds the ban until it echoes the lift back. Answering faster would mean answering from our
+    /// own intent rather than from the core, which is how a list starts disagreeing with the chart.
+    ///
+    /// Args:
+    ///     core: Core holding the ban.
+    ///     market: Market as that core lists it.
+    ///     cx: ChartTabs context used to command the backend and repaint.
+    pub(super) fn lift_temp_ban(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        self.backend.update(cx, |b, bcx| {
+            // Re-validated against the LIVE workspace, exactly as the coin menu and the chart's own
+            // button do: the popup can stand open while an Auto workspace moves the core out of
+            // this group's scope. The row's own button is disabled in that case, so reaching this
+            // is the race rather than the ordinary path — and it is logged rather than dropped,
+            // because a press that answers nothing leaves the reader with nowhere to look.
+            if !b.workspace_action_allows_core(Some(&group), core) {
+                log::warn!(
+                    "chart tabs: lifting the temp ban on {market} at core {} refused, the workspace no longer exposes it",
+                    moon_core::feed::core_label(core)
+                );
+                return;
+            }
+            if let Err(err) = b.session.set_temp_ban(core, market.clone(), None) {
+                log::warn!(
+                    "chart tabs: lifting the temp ban on {market} at core {} failed: {err:#}",
+                    moon_core::feed::core_label(core)
+                );
+            }
+            // The Backend, not only this strip: the chart's own lock draws the same ban.
+            bcx.notify();
+        });
+        cx.notify();
     }
 
     /// Open the coin dropdown, refreshing the suggestion cache the empty-field list reads.
@@ -85,6 +171,9 @@ impl ChartTabs {
         // an Auto scope change, the toolbar press layer — so chasing them all is how one gets
         // missed. Opening is the ONE funnel, and defaults on open is the behaviour anyway.
         self.coin_expanded.clear();
+        // And the tab, for the same reason and through the same funnel: opening the field is a
+        // search, not a return to whatever list was last read.
+        self.coin_tab = crate::controls::coin_search::CoinTab::default();
         // Resolve through the same helper the render path uses: the bucket is the suggestion
         // cache key, so a mismatch here would refresh one entry and read another, leaving the
         // Top 24h section permanently empty.

@@ -24,7 +24,7 @@ use super::{
     strategy_has_blacklist_field, workspace_action_allows_cores,
 };
 use crate::Backend;
-use crate::display_text::fmt_duration_short;
+use crate::display_text::fmt_ban_left;
 
 /// The "add to a blacklist" submenu, over whichever of the three targets this context has.
 pub(super) fn permanent_blacklist_item(
@@ -174,12 +174,15 @@ pub(super) fn temp_blacklist_item(
         // The remaining time of the core the menu was opened on; the others may differ, and the
         // row says which one it is speaking about by naming the coin rather than a core.
         if let Some(left) = left_here {
-            let stale = b
-                .session
-                .store()
-                .core(core)
-                .is_some_and(|data| data.client_settings_stale);
-            let left = fmt_duration_short(left.as_secs_f64());
+            // The STATE, not the raw latch: a core that has gone quiet since its last snapshot is
+            // extrapolating just as much as one whose settings write is outstanding, and the coin
+            // dropdown's ban rows mark exactly that set.
+            let stale = b.session.store().core(core).is_some_and(|data| {
+                data.client_settings_state() != moon_core::feed::CoreConfigState::Live
+            });
+            // The shared rule, so this row and the chart's caption beside its lock cannot print
+            // the same ban differently. See `display_text::fmt_ban_left`.
+            let left = fmt_ban_left(i64::try_from(left.as_millis()).unwrap_or(i64::MAX));
             rows.push(MoonMenuItem::label(
                 t!(
                     if stale {

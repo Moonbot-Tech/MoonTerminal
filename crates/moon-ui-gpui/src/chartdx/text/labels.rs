@@ -613,12 +613,14 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             (glyph.to_string(), None)
         }),
         // What is left of that ban, as a caption of its own — placed wherever the reader wants it,
-        // and silent while nothing is banned. The figure is floored at a minute for the reason it
-        // is rounded up; see `fmt_ban_left`.
-        ChartLabelField::TempBanLeft => inputs
-            .actions
-            .ban_until_ms
-            .map(|until| (fmt_ban_left((until - inputs.now_ms).max(60_000)), None)),
+        // and silent while nothing is banned. Through the shared formatter, which is what keeps
+        // this caption, the coin menu's row and the dropdown's ban tab printing one figure.
+        ChartLabelField::TempBanLeft => inputs.actions.ban_until_ms.map(|until| {
+            (
+                crate::display_text::fmt_ban_left(until - inputs.now_ms),
+                None,
+            )
+        }),
         ChartLabelField::TfCloseIn => Some((
             fmt_tf_countdown(part.tf.remaining_ms(inputs.chart_tf_ms, inputs.now_ms)),
             None,
@@ -1152,18 +1154,6 @@ fn hours_and_minutes(hours: i64, minutes: i64) -> String {
 /// them: one control drawn from a font the whole application already loads.
 const LOCK_OPEN: &str = "\u{1F513}";
 const LOCK_CLOSED: &str = "\u{1F512}";
-
-/// Format what is left of a temporary ban, to the MINUTE.
-///
-/// The coin menu's own formatter, on purpose: the menu offers the lift of the same ban this button
-/// prints, and two spellings of one remainder is a reader checking whether they are looking at the
-/// same thing. What this adds is the ROUNDING — up, and never below a minute — because the caption
-/// clock only moves once a minute (see `countdown_clock_ms`) and a figure finer than its own clock
-/// prints a number that has stopped, while a `0м` reads as a ban nobody cleared.
-fn fmt_ban_left(remaining_ms: i64) -> String {
-    let minutes = ceil_div(remaining_ms, 60_000).max(1);
-    crate::display_text::fmt_duration_short((minutes * 60) as f64)
-}
 
 /// Whole units of `step` in `value`, rounded UP, with a negative value answering zero.
 fn ceil_div(value: i64, step: i64) -> i64 {
