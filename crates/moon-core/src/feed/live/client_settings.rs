@@ -2,8 +2,9 @@
 //!
 //! MoonProto sends ClientSettings as a singleton full snapshot. A later packet can replace an
 //! earlier pending packet, so every producer must share this queue. Manual orders form barriers:
-//! the order is released only after the core echoes the exact visible group settings, and a later
-//! settings generation cannot overtake it.
+//! an order goes out only once every mutation queued BEFORE it is done with — echoed by the core,
+//! or abandoned after [`MAX_EXIT_ATTEMPTS`] — and a later settings generation cannot overtake it.
+//! What stands behind an order never holds it back: the order is the barrier those wait on.
 
 use std::collections::VecDeque;
 
@@ -165,9 +166,41 @@ impl ClientSettingsSequence {
     }
 
     /// Retain queued work but forget connection-local send state before a reconnect attempt.
+    ///
+    /// The retry budget deliberately SURVIVES: `feed::live::run` prepares a reconnect on every
+    /// iteration, so resetting attempts here would let a flapping link refill the budget forever
+    /// and an order behind a generation the core will not hold would never be released.
     pub(in crate::feed) fn prepare_reconnect(&mut self) {
         self.waiting_for_echo = false;
         self.pending_confirmation = None;
+    }
+
+    /// Drop everything queued for a core process that is going away.
+    ///
+    /// The mirror of the rule the shared-config sequence states beside it: a queued packet
+    /// describes the instance it was built against. A queued ORDER describes more than that — a
+    /// price the trader read off the chart moments ago — so letting it survive onto a REPLACEMENT
+    /// MoonBot would place a live order at a price that belongs to a process no longer running.
+    pub(in crate::feed) fn forget_queue(&mut self, server_id: u64) {
+        // Said out loud, like the other abandonment path: a click that produces nothing is exactly
+        // the silence this queue exists to break, and only the count separates "the core replaced
+        // itself between two clicks" from "the terminal lost them".
+        let orders = self
+            .queue
+            .iter()
+            .filter(|op| matches!(op, SequenceOp::Order(_)))
+            .count();
+        if orders > 0 {
+            log::warn!(
+                "core {} restarted: dropping {orders} manual order(s) queued for the process that went away",
+                crate::feed::core_label(server_id),
+            );
+        }
+        self.queue.clear();
+        self.prepare_reconnect();
+        // Nothing is left to spend the budget on, and the next order queued for the REPLACEMENT
+        // process must start with a full one.
+        self.attempts = 0;
     }
 
     /// Queue a targeted ClientSettings edit without dropping it when no snapshot exists yet.
@@ -239,10 +272,11 @@ impl ClientSettingsSequence {
     /// the RETAINED compact snapshot, so a full-config packet built while a compact edit is still
     /// in flight carries that edit's pre-change values and reverts it on arrival.
     ///
-    /// KNOWN LIMIT: this queue has no attempt cap, so a compact mutation the core never reflects
-    /// keeps the gate shut for the rest of the connection and safe-share writes queue up behind it.
-    /// Reverting a trading control the user just set is the worse failure of the two, which is why
-    /// the gate is strict; a cap belongs here rather than in the caller.
+    /// KNOWN LIMIT: a mutation is abandoned after [`MAX_EXIT_ATTEMPTS`] unconfirmed sends, but an
+    /// echo that never ARRIVES at all leaves `waiting_for_echo` latched, and no attempt is counted
+    /// while it is: that keeps the gate shut for the rest of the connection and safe-share writes
+    /// queue up behind it. Reverting a trading control the user just set is the worse failure of
+    /// the two, which is why the gate is strict; a timeout belongs here rather than in the caller.
     ///
     /// The gate is deliberately ONE-WAY. A compact write issued while a safe-share packet is still
     /// unechoed can revert the fields the two channels share (`g_take_profit`, `trailing_drop`,
@@ -407,27 +441,13 @@ impl ClientSettingsSequence {
                         temp_expectation,
                     };
                 }
-                Some(SequenceOp::Order(order)) => {
-                    // Only for an order that asked for the barrier, and only while its own
-                    // generation is still QUEUED: once that generation has been abandoned above,
-                    // waiting for a match that will never come would hold the order for the rest of
-                    // the session.
-                    let core_exit = client_settings_from_proto(settings).group_exit_settings();
-                    if order.sync_exit
-                        && core_exit != order.exit
-                        && self.queue.iter().any(|op| match op {
-                            // Only a mutation that can still MOVE the exit generation is worth
-                            // waiting for. A blacklist write — permanent or temporary — cannot,
-                            // and a coin banned while an order waits would otherwise hold that
-                            // order for the whole retry budget.
-                            SequenceOp::Mutation(mutation) => {
-                                mutation_touches_exit(settings, core_exit, mutation)
-                            }
-                            SequenceOp::Order(_) => false,
-                        })
-                    {
-                        return SequenceAction::Idle;
-                    }
+                Some(SequenceOp::Order(_)) => {
+                    // There is nothing left to wait for. Every mutation this order had to follow
+                    // stood BEFORE it and has already been confirmed or abandoned — that is what
+                    // brought the order to the head of the queue. Mutations behind it belong to
+                    // LATER clicks and can never be sent first, because this order is the barrier
+                    // they queue behind: waiting on one is a deadlock in which each holds the
+                    // other, and every further click only lengthens the queue that cannot move.
                     let Some(SequenceOp::Order(order)) = self.queue.pop_front() else {
                         unreachable!("front was checked as an order");
                     };
@@ -517,31 +537,6 @@ fn temp_blacklist_satisfied(
     let mut expectation = TempExpectation::new();
     compose_temp_expectation(&mut expectation, adds, removes);
     temp_expectation_met(settings, &expectation)
-}
-
-/// Whether this mutation can change the visible exit generation a manual order synchronizes on.
-///
-/// Asked of the mutation rather than assumed from its kind: a targeted edit may or may not touch
-/// those fields, and the projection is what decides.
-fn mutation_touches_exit(
-    settings: &moonproto::ClientSettingsCommand,
-    core_exit: GroupExitSettings,
-    mutation: &SettingsMutation,
-) -> bool {
-    match mutation {
-        // Neither blacklist writes a field the exit generation is built from.
-        SettingsMutation::Blacklist { .. } | SettingsMutation::TempBlacklist { .. } => false,
-        SettingsMutation::GroupExit(_) => true,
-        // Judged against the CORE's current snapshot, not a default one: an edit that sets an exit
-        // field to its default value would look inert against a default probe, and the order behind
-        // it would go out carrying the exits the trader had just replaced. `core_exit` is that
-        // snapshot's projection, computed once by the caller rather than per queued mutation.
-        SettingsMutation::Edit(edit) => {
-            let mut after = settings.clone();
-            apply_client_settings_edit(&mut after, *edit);
-            client_settings_from_proto(&after).group_exit_settings() != core_exit
-        }
-    }
 }
 
 /// Return whether the core already holds what this mutation asks for.

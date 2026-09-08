@@ -858,6 +858,9 @@ pub(super) fn run(
                     // return from `run`, so `prepare_reconnect` never fires for it — without this
                     // an unsent OK would land on the REPLACEMENT instance.
                     shared_config_sequence.forget_queue();
+                    // Same rule, higher stakes: this queue also holds manual ORDERS, priced off a
+                    // chart the departed process was feeding.
+                    client_settings_sequence.forget_queue(server.id);
                     ConnStatus::Stage("server restart…".into())
                 }
                 LifecycleEvent::ConnectFailed { error } => {

@@ -152,3 +152,31 @@ fn persisted_exit_range_endpoints_remain_valid() {
         }
     }
 }
+
+/// Regression target: sending the stop loss as precisely as the trader set it. The core keeps this
+/// number on a 0.1 grid, so a finer value is echoed back changed and the generation carrying it is
+/// never confirmed - which stalls everything gated on that confirmation.
+#[test]
+fn a_wire_stop_loss_lands_on_the_cores_grid() {
+    // The value that stalled BULLA on BinF2, and the one the core answered with.
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(-11.42), Some(-11.4));
+    // A value already on the grid is left exactly where it is, so re-sending it is idle.
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(-11.4), Some(-11.4));
+    // Written "-11.45", this number is really -11.4499998, and the nearest tenth of THAT is -11.4.
+    // Scaling in f32 would reach an exact -114.5 and take a whole step the trader never asked for.
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(-11.45), Some(-11.4));
+    // A stop closer to zero than half a step keeps its protection instead of becoming "no stop",
+    // which is what a zero level means on the wire.
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(-0.04), Some(-0.1));
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(0.04), Some(0.1));
+    // Zero itself is a deliberate "no stop" and stays one.
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(0.0), Some(0.0));
+    // The clamp still applies, and a non-finite value is still refused.
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(-21.0), Some(-20.0));
+    assert_eq!(GroupExitSettings::wire_stop_loss_pct(f32::NAN), None);
+    // Snapping is for the packet alone: everything else keeps the precision it was given.
+    assert_eq!(
+        GroupExitSettings::canonical_stop_loss_pct(-11.42),
+        Some(-11.42)
+    );
+}

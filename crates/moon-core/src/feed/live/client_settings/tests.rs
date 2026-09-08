@@ -1,6 +1,6 @@
 use super::{
-    ClientSettingsSequence, GroupExitSettings, ManualOrder, SequenceAction, TakeProfitMode,
-    client_settings_from_proto,
+    ClientSettingsSequence, GroupExitSettings, MAX_EXIT_ATTEMPTS, ManualOrder, SequenceAction,
+    TakeProfitMode, client_settings_from_proto,
 };
 use crate::feed::ClientSettingsEdit;
 
@@ -31,9 +31,39 @@ fn next_settings(
     }
 }
 
-#[test]
+/// Build a manual order that waits for its exit generation.
+///
+/// Both the price and the take profit are parameters so two clicks can be told apart by the order
+/// that comes out AND by the generation it carries — an order released under the neighbouring
+/// click's exits looks identical otherwise.
+fn waiting_order(price: f64, take_profit: f64) -> ManualOrder {
+    ManualOrder {
+        market: "BULLAUSDT".to_string(),
+        short: false,
+        price,
+        size: 800.0,
+        strategy_id: None,
+        exit: exit_settings(take_profit, false),
+        planned_sell: 0.0,
+        sync_exit: true,
+    }
+}
+
+/// Spend a generation's whole retry budget with a core that never confirms it.
+fn burn_retry_budget(
+    sequence: &mut ClientSettingsSequence,
+    core_holds: &moonproto::ClientSettingsCommand,
+) {
+    for _ in 0..MAX_EXIT_ATTEMPTS {
+        let sent = next_settings(sequence, core_holds);
+        sequence.observe_send_success(&sent, 1, Vec::new());
+        sequence.observe_update();
+    }
+}
+
 /// Regression target: making `ClientSettingsSequence::next_action` apply only the newest mutation
 /// drops an earlier targeted or blacklist edit, so the user's next order uses stale settings.
+#[test]
 fn full_settings_mutations_compose_before_the_echo() {
     let base = moonproto::ClientSettingsCommand::default();
     let exit = exit_settings(12.0, true);
@@ -206,7 +236,7 @@ fn an_order_is_released_after_its_generation_is_refused_three_times() {
         sync_exit: true,
     });
 
-    for attempt in 0..3 {
+    for attempt in 0..MAX_EXIT_ATTEMPTS {
         let action = sequence.next_action(&core_settings, TEST_CORE);
         let SequenceAction::Send { settings, .. } = action else {
             panic!("attempt {attempt} must send the generation");
@@ -440,9 +470,10 @@ fn lifting_a_ban_the_core_zeroed_counts_as_done() {
     ));
 }
 
-/// Regression target: the order barrier waited for ANY queued mutation, so a coin banned while an
-/// order was waiting held that order for good once the core refused its exit generation — neither
-/// blacklist can move the exits an order synchronizes on.
+/// Regression target: the order barrier waited on mutations queued behind it, so a coin banned
+/// while an order was waiting held that order for good once the core refused its exit generation.
+/// Kept beside `a_later_click_does_not_strand_the_order_already_waiting`: that one covers a second
+/// ORDER arriving behind the first, this one a queued write of an unrelated kind.
 #[test]
 fn a_queued_ban_does_not_strand_an_order_whose_exits_were_refused() {
     // A core that will not hold the asked-for generation: it echoes its own settings unchanged,
@@ -466,7 +497,7 @@ fn a_queued_ban_does_not_strand_an_order_whose_exits_were_refused() {
     );
 
     // The exit generation is offered its full budget of attempts and refused every time.
-    for _ in 0..3 {
+    for _ in 0..MAX_EXIT_ATTEMPTS {
         let (sent, expectation) = next_send(&mut sequence, &core_holds);
         sequence.observe_send_success(&sent, 1, expectation);
         sequence.observe_update();
@@ -476,6 +507,115 @@ fn a_queued_ban_does_not_strand_an_order_whose_exits_were_refused() {
         SequenceAction::Place(order) => assert_eq!(order.market, "ADAUSDT"),
         other => panic!(
             "the order must be released once its own generation is abandoned: got {}",
+            action_name(&other)
+        ),
+    }
+}
+
+/// Regression target: the barrier scanned the WHOLE queue for a mutation that could still move the
+/// exit generation, including mutations queued BEHIND the order. An order is a barrier those
+/// mutations cannot pass, so the two held each other forever. Seen on 2026-09-07: one chart click
+/// placed an order, every later click only deepened the deadlock, and the core received nothing at
+/// all - neither orders nor settings - until the terminal was restarted.
+#[test]
+fn a_later_click_does_not_strand_the_order_already_waiting() {
+    // A core that never holds the generation it is asked for, which is what Moonbot does with a
+    // stop loss it quantizes away from: -11.42 comes back -11.4 for as long as one keeps asking.
+    let core_holds = moonproto::ClientSettingsCommand::default();
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(waiting_order(0.074, 16.0));
+
+    // The first click spends its whole retry budget unconfirmed.
+    burn_retry_budget(&mut sequence, &core_holds);
+    // The trader clicks a second time, at another take profit, while the first is still waiting.
+    sequence.enqueue_order(waiting_order(0.0741, 20.0));
+
+    match sequence.next_action(&core_holds, TEST_CORE) {
+        SequenceAction::Place(order) => {
+            assert_eq!(order.price, 0.074);
+            // Under ITS own generation, not the one the later click queued behind it.
+            assert_eq!(order.exit.take_profit_pct, 16.0);
+        }
+        other => panic!(
+            "the waiting order must not be held by a mutation queued behind it: got {}",
+            action_name(&other)
+        ),
+    }
+
+    // And the queue keeps moving: the second click gets its own budget and goes out in its turn.
+    burn_retry_budget(&mut sequence, &core_holds);
+    match sequence.next_action(&core_holds, TEST_CORE) {
+        SequenceAction::Place(order) => {
+            assert_eq!(order.price, 0.0741);
+            assert_eq!(order.exit.take_profit_pct, 20.0);
+        }
+        other => panic!(
+            "the second order must follow its own generation: got {}",
+            action_name(&other)
+        ),
+    }
+}
+
+/// A core that keeps the stop loss on its own 0.1 grid, as Moonbot does, and echoes everything
+/// else back unchanged.
+///
+/// Rounds in `f64` deliberately: the core is Delphi and widens a Single before it rounds, so a
+/// stand-in doing the arithmetic in `f32` would be agreeing with the code under test about the one
+/// thing worth testing.
+fn core_echo(sent: &moonproto::ClientSettingsCommand) -> moonproto::ClientSettingsCommand {
+    let mut held = sent.clone();
+    held.price_drop_level = ((f64::from(held.price_drop_level) * 10.0).round() / 10.0) as f32;
+    held
+}
+
+/// Regression target: asking the core to hold a stop loss it rounds away. The generation was then
+/// never confirmed, so every manual order spent the full retry budget - three round trips, ~760 ms
+/// between the click and the order on BinF2 - before going out under the core's values anyway.
+#[test]
+fn a_stop_loss_off_the_cores_grid_is_confirmed_at_once() {
+    let mut exit = exit_settings(16.0, false);
+    exit.stop_loss_pct = -11.42;
+    let mut order = waiting_order(0.074, 16.0);
+    order.exit = exit;
+
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(order);
+
+    let sent = next_settings(&mut sequence, &moonproto::ClientSettingsCommand::default());
+    // What travels is already on the grid, so the core's echo can match it.
+    assert_eq!(sent.price_drop_level, -11.4);
+    let held = core_echo(&sent);
+    sequence.observe_send_success(&sent, 1, Vec::new());
+    sequence.observe_update();
+
+    match sequence.next_action(&held, TEST_CORE) {
+        SequenceAction::Place(order) => assert_eq!(order.price, 0.074),
+        other => panic!(
+            "the generation must be confirmed by the first echo, not retried: got {}",
+            action_name(&other)
+        ),
+    }
+}
+
+/// Regression target: a manual order outliving the MoonBot process it was priced against. The
+/// settings queue beside this one is already forgotten on `ServerRestart`; this one carries live
+/// ORDERS, and now that they are no longer deadlocked they would actually reach the replacement
+/// instance, carrying a price read off a chart the old process was feeding.
+#[test]
+fn a_core_restart_forgets_the_orders_queued_for_the_old_process() {
+    let core_holds = moonproto::ClientSettingsCommand::default();
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(waiting_order(0.074, 16.0));
+    let sent = next_settings(&mut sequence, &core_holds);
+    sequence.observe_send_success(&sent, 1, Vec::new());
+
+    sequence.forget_queue(TEST_CORE);
+
+    assert!(sequence.is_idle());
+    match sequence.next_action(&core_holds, TEST_CORE) {
+        SequenceAction::Idle => {}
+        other => panic!(
+            "nothing queued for the departed process may be placed on its replacement: got {}",
             action_name(&other)
         ),
     }
