@@ -998,6 +998,14 @@ pub struct WindowLayout {
     /// even when no tab spec exists yet.
     #[serde(default)]
     pub chart_graphics_from_theme_migrated: bool,
+    /// One-shot marker: the per-tab `Cancel Buy` / `Panic Sell` POSITIONS have been carried across
+    /// into the caption configuration, where the buttons are now drawn from.
+    ///
+    /// NEVER reset it. The legacy keys are cleared from `charts.json` as they are carried over, so
+    /// a second pass would find nothing to read and would append the shipped pair to a caption set
+    /// where the reader may since have moved — or removed — those very buttons.
+    #[serde(default)]
+    pub chart_action_buttons_migrated: bool,
     /// Chart caption labels — which figures the chart prints beside its plot, where, and how —
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     ///
@@ -1635,6 +1643,19 @@ impl WindowLayout {
             .and_then(|d| d.chart_labels.as_ref())
             .or_else(|| kind.builtin_labels())
             .unwrap_or(&self.chart_labels)
+    }
+
+    /// The captions one kind holds OF ITS OWN, or `None` while it follows something else.
+    ///
+    /// A narrower question than [`Self::chart_labels_for`], and the one a migration has to ask: that
+    /// one resolves the chain and always answers, so a caller using it could not tell a kind that
+    /// stores a set from one that is merely following Main — and would freeze the follower on a
+    /// copy by writing the resolved value back.
+    pub fn stored_chart_labels(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> Option<&super::chart_labels::ChartLabelsCfg> {
+        self.kind_defaults(kind)?.chart_labels.as_ref()
     }
 
     /// Store the candle default for one kind, reporting whether it actually moved.

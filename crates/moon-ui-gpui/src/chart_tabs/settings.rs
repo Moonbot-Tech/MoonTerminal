@@ -12,7 +12,7 @@ use super::apply_all::{self, ApplyAll};
 use super::common::{LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting};
 use super::{AddChartStack, ChartTabs, Tab};
 use crate::Backend;
-use crate::persistence::chart_persist::{ChartBtnPos, StackLayoutMode, StackOrientation};
+use crate::persistence::chart_persist::{StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_ui::MoonInputState;
 
@@ -138,22 +138,6 @@ impl ChartTabs {
                 let s = p.read(cx);
                 (s.max_charts(), s.max_charts_evict())
             }),
-        }
-    }
-
-    /// Return the active tab's Cancel Buy and Panic Sell button positions, defaulting to Right.
-    pub(super) fn active_action_btn_pos(&self, cx: &App) -> (ChartBtnPos, ChartBtnPos) {
-        let (c, pp) = self.active_action_btn_pos_opt(cx);
-        (c.unwrap_or_default(), pp.unwrap_or_default())
-    }
-
-    fn active_action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
-        match &self.active {
-            Tab::Main => self.main.read(cx).action_btn_pos(),
-            Tab::Add(n, b) | Tab::Custom(n, b) => self
-                .add_stack(*n, b)
-                .map(|p| p.read(cx).action_btn_pos())
-                .unwrap_or((None, None)),
         }
     }
 
@@ -428,11 +412,7 @@ impl LayoutPopupHost for ChartTabs {
         };
         !broom
     }
-    fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
-        self.active_action_btn_pos_opt(cx)
-    }
     fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot {
-        let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
         LayoutPopupSnapshot {
             mode: self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit),
             orientation: self
@@ -442,8 +422,6 @@ impl LayoutPopupHost for ChartTabs {
             liquidations: self.active_liquidations_enabled(cx),
             show_zone: self.active_show_zone(cx),
             auto_pin: self.active_auto_pin(cx),
-            cancel_pos,
-            panic_pos,
             price_axis_pos: self.active_price_axis_pos(cx),
             time_axis: self.active_time_axis_visible(cx),
             line_labels: self.active_line_labels(cx),

@@ -31,7 +31,16 @@ pub fn rgba3(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
 /// `MoonPalette` stores colours packed; every chart layer takes them unpacked. One place does the
 /// unpacking so a second caller cannot get the shifts subtly wrong.
 pub fn accent_rgb4(accent: u32) -> [f32; 4] {
-    rgb4([(accent >> 16) as u8, (accent >> 8) as u8, accent as u8])
+    rgb4(unpack_rgb(accent))
+}
+
+/// Split a packed `0xRRGGBB` token into its three channels.
+///
+/// The shifts themselves, so a caller that needs an ALPHA with them — a button's plate takes the
+/// theme's colour at its own opacity — goes through the same three lines as [`accent_rgb4`] rather
+/// than writing a fourth copy of them.
+pub fn unpack_rgb(packed: u32) -> [u8; 3] {
+    [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8]
 }
 
 /// Fill the GPU trade-cross buffer from ticks, converting time relative to the epoch.

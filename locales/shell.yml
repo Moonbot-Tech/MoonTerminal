@@ -2643,6 +2643,44 @@ chart_labels.unit_second:
   ru: "с"
   en: "s"
   es: "s"
+# --- Chart buttons: captions that ACT rather than report ---
+chart_labels.group.action:
+  ru: "Кнопки"
+  en: "Buttons"
+  es: "Botones"
+chart_labels.field.act_cancel_buy:
+  ru: "Кнопка «Cancel Buy»"
+  en: "Cancel Buy button"
+  es: "Botón «Cancel Buy»"
+chart_labels.field.act_panic_sell:
+  ru: "Кнопка «Panic Sell»"
+  en: "Panic Sell button"
+  es: "Botón «Panic Sell»"
+chart_labels.field.act_temp_ban:
+  ru: "Кнопка «Временный ЧС»"
+  en: "Temporary ban button"
+  es: "Botón «Lista negra temporal»"
+chart_labels.field.temp_ban_left:
+  ru: "Остаток временного ЧС"
+  en: "Temporary ban left"
+  es: "Veto temporal restante"
+chart_labels.short.temp_ban_left:
+  ru: "ЧС"
+  en: "Ban"
+  es: "Veto"
+# Moonbot brand terms: deliberately untranslated, exactly as the buttons read before this.
+chart_labels.act.cancel_buy:
+  ru: "Cancel Buy"
+  en: "Cancel Buy"
+  es: "Cancel Buy"
+chart_labels.act.panic_sell:
+  ru: "Panic Sell"
+  en: "Panic Sell"
+  es: "Panic Sell"
+chart_labels.act.stop_panic:
+  ru: "Stop Panic"
+  en: "Stop Panic"
+  es: "Stop Panic"
 chart_labels.short.exposure:
   ru: "Сумма"
   en: "Size"

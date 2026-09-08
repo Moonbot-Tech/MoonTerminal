@@ -12,7 +12,10 @@ use moon_core::config::{
 use moon_core::feed::OrderRow;
 use moon_core::util::fmt::DeltaSign;
 
-use super::{LabelInputs, LabelState, basis_index, collect_open_stats, preview_row};
+use super::{
+    ActionInputs, LabelInputs, LabelState, basis_index, collect_open_stats, fmt_ban_left,
+    preview_row,
+};
 
 /// One open BTC row with a filled one-unit long position.
 fn order(entry: f64, mark: f32) -> OrderRow {
@@ -1514,4 +1517,123 @@ fn the_trade_detect_line_wraps_like_the_live_one() {
     assert!(ChartLabelField::TradeDetect.wraps());
     assert!(!ChartLabelField::TradeStrategy.wraps());
     assert!(!ChartLabelField::TradeSellReason.wraps());
+}
+
+/// A chart that cannot act on its market prints NO button — not a disabled one, not an empty plate.
+///
+/// The trade-detail window is the case: it draws a trade that already closed, and a control over it
+/// would read as an offer to act on that trade. The engine answers `live` itself, so this is the
+/// gate that makes the whole roster disappear at once.
+#[test]
+fn a_chart_with_nothing_to_act_on_prints_no_button() {
+    let _locale = crate::test_locale::force("en");
+    for field in [
+        ChartLabelField::ActCancelBuy,
+        ChartLabelField::ActPanicSell,
+        ChartLabelField::ActTempBan,
+    ] {
+        assert_eq!(
+            one_field(field, LabelInputs::default()),
+            None,
+            "{field:?} must print nothing while the chart is not live"
+        );
+    }
+}
+
+/// The two states of one button: `Panic Sell` while nothing is armed, `Stop Panic` once it is.
+#[test]
+fn the_panic_button_states_which_way_it_will_go() {
+    let _locale = crate::test_locale::force("en");
+    let live = |armed: bool| LabelInputs {
+        actions: ActionInputs {
+            live: true,
+            allowed: true,
+            panic_armed: armed,
+            ban_until_ms: None,
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        one_field(ChartLabelField::ActPanicSell, live(false)).as_deref(),
+        Some("Panic Sell")
+    );
+    assert_eq!(
+        one_field(ChartLabelField::ActPanicSell, live(true)).as_deref(),
+        Some("Stop Panic"),
+        "an armed panic offers to STOP, matching what the second press does"
+    );
+}
+
+/// The lock says its state with its own shape: open while the coin trades, closed while it is
+/// banned. It carries no words and no time — the readout beside it is a caption of its own.
+#[test]
+fn the_lock_is_the_state_and_the_time_is_a_caption_of_its_own() {
+    let _locale = crate::test_locale::force("en");
+    let live = |until: Option<i64>| LabelInputs {
+        now_ms: 1_000_000,
+        actions: ActionInputs {
+            live: true,
+            allowed: true,
+            panic_armed: false,
+            ban_until_ms: until,
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        one_field(ChartLabelField::ActTempBan, live(None)).as_deref(),
+        Some("\u{1F513}"),
+        "no ban: the lock is open"
+    );
+    assert_eq!(
+        one_field(ChartLabelField::ActTempBan, live(Some(2_000_000))).as_deref(),
+        Some("\u{1F512}"),
+        "a ban is running: the lock is closed"
+    );
+    // The readout is silent until there is something to count down.
+    assert_eq!(one_field(ChartLabelField::TempBanLeft, live(None)), None);
+    let left = one_field(
+        ChartLabelField::TempBanLeft,
+        live(Some(1_000_000 + 42 * 60_000)),
+    )
+    .expect("a running ban prints");
+    assert!(left.ends_with("42m"), "{left:?}");
+}
+
+/// A button caption tells the control only what pressing it DOES — its state is read where the
+/// label is formatted, so the two cannot come from different generations.
+#[test]
+fn a_button_carries_what_it_would_do() {
+    let cfg = cfg_of(&[ChartLabelField::ActTempBan]);
+    let mut state = LabelState::default();
+    state.update(
+        &Rc::new(cfg),
+        &Rc::new(ArbViewCfg::default()),
+        LabelInputs {
+            actions: ActionInputs {
+                live: true,
+                allowed: true,
+                panic_armed: false,
+                ban_until_ms: None,
+            },
+            ..Default::default()
+        },
+    );
+    let mark = state.texts[0].action.expect("a button carries its mark");
+    assert_eq!(mark.action, moon_core::config::ChartAction::TempBan);
+}
+
+/// The ban countdown is read to the MINUTE and rounded up, in the coin menu's own words: the two
+/// controls act on the same ban and must not print it differently.
+#[test]
+fn the_ban_countdown_rounds_up_to_the_minute() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(fmt_ban_left(1), "1m");
+    assert_eq!(fmt_ban_left(59_000), "1m");
+    assert_eq!(fmt_ban_left(61_000), "2m");
+    assert_eq!(fmt_ban_left(3_600_000), "1h");
+    assert_eq!(fmt_ban_left(3_600_000 + 12 * 60_000), "1h 12m");
+    assert_eq!(fmt_ban_left(3 * 24 * 3_600_000), "3d");
+    // Never below a minute, and never a zero: the caption clock moves once a minute, and a row the
+    // core still lists is a ban the press can lift.
+    assert_eq!(fmt_ban_left(-5), "1m");
 }

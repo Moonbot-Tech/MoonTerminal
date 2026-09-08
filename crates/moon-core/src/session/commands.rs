@@ -983,6 +983,29 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
     }
 
+    /// Ban ONE market temporarily, or lift the ban it is under.
+    ///
+    /// The two controls that offer this — the coin menu's rows and the chart's button — spelled the
+    /// same delta by hand, and "an empty add list plus a removal means lift" is a wire convention
+    /// worth stating once. `None` lifts.
+    ///
+    /// Args:
+    ///     core: Core that holds the list.
+    ///     symbol: The MARKET the ban is keyed by; see `feed::types::temp_blacklist_rows`.
+    ///     span: How long to ban for, or `None` to lift a ban that is running.
+    pub fn set_temp_ban(
+        &self,
+        core: CoreId,
+        symbol: String,
+        span: Option<std::time::Duration>,
+    ) -> Result<()> {
+        let (adds, removes) = match span {
+            Some(span) => (vec![(symbol, span)], Vec::new()),
+            None => (Vec::new(), vec![symbol]),
+        };
+        self.set_temp_blacklist(core, adds, removes)
+    }
+
     /// Edit the core's temporary blacklist as a delta: set `adds` to their durations, drop
     /// `removes`. See [`CoreCmd::SetTempBlacklist`] for why this is not a whole-list write.
     pub fn set_temp_blacklist(

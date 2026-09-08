@@ -418,7 +418,6 @@ impl ChartTabs {
             main_liquidations,
             main_show_zone,
             main_auto_pin,
-            main_action_pos,
             main_axis_pos,
             main_time_axis,
             main_line_labels,
@@ -435,10 +434,6 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<bool>,
-            (
-                Option<chart_persist::ChartBtnPos>,
-                Option<chart_persist::ChartBtnPos>,
-            ),
             Option<chart_persist::PriceAxisPos>,
             Option<bool>,
             Option<bool>,
@@ -459,8 +454,6 @@ impl ChartTabs {
             let main_liquidations = main_spec.and_then(|s| s.liquidations_enabled);
             let main_show_zone = main_spec.and_then(|s| s.show_zone);
             let main_auto_pin = main_spec.and_then(|s| s.auto_pin);
-            let main_action_pos =
-                main_spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos));
             let main_axis_pos = main_spec.and_then(|s| s.price_axis_pos);
             let main_time_axis = main_spec.and_then(|s| s.time_axis_visible);
             let main_line_labels = main_spec.and_then(|s| s.line_labels);
@@ -483,7 +476,6 @@ impl ChartTabs {
                 main_liquidations,
                 main_show_zone,
                 main_auto_pin,
-                main_action_pos,
                 main_axis_pos,
                 main_time_axis,
                 main_line_labels,
@@ -530,11 +522,6 @@ impl ChartTabs {
         }
         if main_auto_pin.is_some() {
             main.update(cx, |p, pcx| p.set_auto_pin(main_auto_pin, pcx));
-        }
-        if main_action_pos.0.is_some() || main_action_pos.1.is_some() {
-            main.update(cx, |p, pcx| {
-                p.set_action_btn_pos(main_action_pos.0, main_action_pos.1, pcx)
-            });
         }
         if main_axis_pos.is_some() {
             main.update(cx, |p, pcx| p.set_price_axis_pos(main_axis_pos, pcx));

@@ -42,6 +42,7 @@ fn texts() -> Vec<LabelText> {
             color: None,
             bar: None,
             volume_menu: false,
+            action: None,
         })
         .collect()
 }
@@ -112,6 +113,7 @@ fn the_first_module_of_a_band_always_opens_a_line() {
         color: None,
         bar: None,
         volume_menu: false,
+        action: None,
     }];
     assert_eq!(
         group_lines(&cfg, &texts, LabelZone::ChartTop, LabelAlign::Right),
@@ -150,6 +152,7 @@ fn an_arbitrage_column_stacks_whatever_the_flow_says() {
             color: None,
             bar: None,
             volume_menu: false,
+            action: None,
         })
         .collect();
 
@@ -192,6 +195,7 @@ fn a_module_reserves_one_bar_track_for_the_whole_column() {
         color: None,
         bar: Some(bar),
         volume_menu: true,
+        action: None,
     };
     let plain = LabelText {
         part: 1,
@@ -228,5 +232,44 @@ fn a_module_reserves_one_bar_track_for_the_whole_column() {
         bar_zone(&[with_bar, plain], &barless),
         0.0,
         "a module with no bars reserves nothing"
+    );
+}
+
+/// The two shipped buttons stand SIDE BY SIDE on one line of the plot's bottom band.
+///
+/// The property the whole migration rests on: two buttons that shared an anchor were drawn in a
+/// row, and a reader who never touched the setting has to find them exactly where they were. It is
+/// the grouping rule that decides that — not the drawing — so it is answerable without a device.
+#[test]
+fn the_shipped_buttons_share_one_line_along_the_bottom() {
+    let cfg = ChartLabelsCfg::default();
+    let rows: Vec<usize> = cfg
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.holds_action())
+        .map(|(ix, _)| ix)
+        .collect();
+    assert_eq!(rows.len(), 2, "the shipped set places both buttons");
+    let texts: Vec<LabelText> = rows
+        .iter()
+        .map(|row| LabelText {
+            row: *row,
+            part: 0,
+            text: "Panic Sell".to_string(),
+            prefix: String::new(),
+            reachable: false,
+            venue: None,
+            sign: None,
+            color: None,
+            bar: None,
+            volume_menu: false,
+            action: None,
+        })
+        .collect();
+    assert_eq!(
+        group_lines(&cfg, &texts, LabelZone::ChartBottom, LabelAlign::Right),
+        vec![vec![vec![0], vec![1]]],
+        "one line, two columns — the pair as the old layout drew it"
     );
 }

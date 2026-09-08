@@ -188,11 +188,34 @@ pub enum ChartLabelField {
     /// [`super::LabelTf`] — `Авто` follows the chart, and a fixed one lets a minute chart carry the
     /// hour's and the day's countdowns beside it.
     TfCloseIn,
+    /// Cancel every buy order this core holds on this market — the chart's `Cancel Buy` button.
+    ///
+    /// A caption that ACTS rather than reports, and the first of them. It lives in this catalogue
+    /// for one reason: a button is a thing placed on a chart, and the chart already has one model
+    /// for where a thing goes — the band, the alignment, the module it stands in. A second
+    /// placement model beside it is what made these two buttons a per-tab setting of their own,
+    /// reachable from a different popup and expressible only as `Left`, `Centre` or `Right`.
+    ActCancelBuy,
+    /// Arm — or disarm — panic selling on this market; the chart's `Panic Sell` button.
+    ActPanicSell,
+    /// Put this coin in the core's TEMPORARY blacklist, or lift a ban that is already running.
+    ///
+    /// A LOCK, and nothing else: open while the coin trades, closed while it is banned. Which span
+    /// to ban for is asked when it is pressed rather than configured here — a button that carried a
+    /// period would need one button per period, and the reader would still have to read it before
+    /// pressing. How long is left is [`Self::TempBanLeft`]'s to print, wherever the reader puts it.
+    ActTempBan,
+    /// How long the core's temporary ban on this coin still has to run.
+    ///
+    /// The lock's readout, and a caption of its own so it can be placed anywhere — beside the
+    /// button, in the corner, in the strip. Prints nothing at all while the coin is not banned,
+    /// like every other optional figure on the chart.
+    TempBanLeft,
 }
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 54] = [
+    pub const ALL: [ChartLabelField; 58] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -247,6 +270,10 @@ impl ChartLabelField {
         ChartLabelField::TradeDetect,
         ChartLabelField::TradeSellReason,
         ChartLabelField::ArbColumn,
+        ChartLabelField::ActCancelBuy,
+        ChartLabelField::ActPanicSell,
+        ChartLabelField::ActTempBan,
+        ChartLabelField::TempBanLeft,
     ];
 
     /// Menu section this field belongs to.
@@ -307,6 +334,10 @@ impl ChartLabelField {
             ChartLabelField::TradeStrategy
             | ChartLabelField::TradeDetect
             | ChartLabelField::TradeSellReason => ChartLabelGroup::Trade,
+            ChartLabelField::ActCancelBuy
+            | ChartLabelField::ActPanicSell
+            | ChartLabelField::ActTempBan
+            | ChartLabelField::TempBanLeft => ChartLabelGroup::Action,
         }
     }
 
@@ -368,6 +399,10 @@ impl ChartLabelField {
             ChartLabelField::TradeSellReason => "chart_labels.field.trade_sell_reason",
             ChartLabelField::ArbColumn => "chart_labels.field.arb_column",
             ChartLabelField::TfCloseIn => "chart_labels.field.tf_close_in",
+            ChartLabelField::ActCancelBuy => "chart_labels.field.act_cancel_buy",
+            ChartLabelField::ActPanicSell => "chart_labels.field.act_panic_sell",
+            ChartLabelField::ActTempBan => "chart_labels.field.act_temp_ban",
+            ChartLabelField::TempBanLeft => "chart_labels.field.temp_ban_left",
         }
     }
 
@@ -425,6 +460,7 @@ impl ChartLabelField {
             ChartLabelField::DetectStrategy => Some("chart_labels.short.detect_strategy"),
             ChartLabelField::TradeStrategy => Some("chart_labels.short.trade_strategy"),
             ChartLabelField::TradeSellReason => Some("chart_labels.short.trade_sell_reason"),
+            ChartLabelField::TempBanLeft => Some("chart_labels.short.temp_ban_left"),
             _ => None,
         }
     }
@@ -709,6 +745,54 @@ impl ChartLabelField {
             },
         }
     }
+
+    /// What pressing this caption DOES, or `None` for the captions that only report.
+    ///
+    /// The one predicate the whole button path hangs off: it decides that a caption is drawn as a
+    /// pressable plate, that a click on it is routed rather than swallowed, and that a chart with
+    /// nothing to act on — the trade-detail window — draws it at all.
+    pub fn action(self) -> Option<ChartAction> {
+        match self {
+            ChartLabelField::ActCancelBuy => Some(ChartAction::CancelBuy),
+            ChartLabelField::ActPanicSell => Some(ChartAction::PanicSell),
+            ChartLabelField::ActTempBan => Some(ChartAction::TempBan),
+            _ => None,
+        }
+    }
+}
+
+/// What a pressable caption does when it is clicked.
+///
+/// Named apart from the field so the terminal's dispatch matches on INTENT rather than on a
+/// catalogue entry: the catalogue holds fifty-odd figures, three of which happen to act, and a
+/// dispatch written against it would have to restate that filter at every call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChartAction {
+    /// Cancel every buy order this core holds on the pane's market.
+    CancelBuy,
+    /// Arm panic selling, or disarm it while it is already armed.
+    PanicSell,
+    /// Ban the coin temporarily for the caption's own span, or lift the ban that is running.
+    TempBan,
+}
+
+impl ChartAction {
+    /// Whether pressing this SELLS — the one action worth a warning colour at rest.
+    ///
+    /// Asked of the action rather than compared against a variant where the button is drawn: a
+    /// fourth action would otherwise need a line in a renderer that knows nothing about orders.
+    pub fn sells(self) -> bool {
+        matches!(self, ChartAction::PanicSell)
+    }
+
+    /// Whether this button is a SQUARE carrying a symbol rather than a labelled control.
+    ///
+    /// The lock is one: what it says is its own state — open or closed — and a word beside it would
+    /// only repeat the picture. The caption pass reserves a square for it instead of measuring a
+    /// label, so it keeps its shape whatever the reader sets the caption size to.
+    pub fn square(self) -> bool {
+        matches!(self, ChartAction::TempBan)
+    }
 }
 
 /// Section a field appears under in the "add label" menu.
@@ -741,14 +825,20 @@ pub enum ChartLabelGroup {
     Trade,
     /// The column of other venues' prices, which is one field and its own subject.
     Arbitrage,
+    /// Captions that ACT: the chart's buttons.
+    ///
+    /// Last in the picker, and its own section rather than one of the subjects above, because what
+    /// groups them is not what they are about — one cancels orders, one sells, one blacklists a
+    /// coin — but that pressing them does something to the market.
+    Action,
 }
 
 impl ChartLabelGroup {
     /// Sections in menu order.
     /// Sections in picker order: what it IS, when its candle closes, what it costs, how it moves,
     /// how much traded, what the contract charges, what is open — ours then the venue's — who
-    /// acted, and the column.
-    pub const ALL: [ChartLabelGroup; 11] = [
+    /// acted, the column, and last the captions that ACT rather than report.
+    pub const ALL: [ChartLabelGroup; 12] = [
         ChartLabelGroup::Instrument,
         ChartLabelGroup::Time,
         ChartLabelGroup::Price,
@@ -760,6 +850,7 @@ impl ChartLabelGroup {
         ChartLabelGroup::Strategy,
         ChartLabelGroup::Trade,
         ChartLabelGroup::Arbitrage,
+        ChartLabelGroup::Action,
     ];
 
     pub fn locale_key(self) -> &'static str {
@@ -775,6 +866,7 @@ impl ChartLabelGroup {
             ChartLabelGroup::Exchange => "chart_labels.group.exchange",
             ChartLabelGroup::Strategy => "chart_labels.group.strategy",
             ChartLabelGroup::Trade => "chart_labels.group.trade",
+            ChartLabelGroup::Action => "chart_labels.group.action",
         }
     }
 }

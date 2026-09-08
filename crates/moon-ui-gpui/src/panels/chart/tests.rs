@@ -46,24 +46,27 @@ fn every_chart_command_and_navigation_path_revalidates_auto_authority() {
         "the chart menu must validate before carrying group authority into delayed callbacks"
     );
 
-    let render = include_str!("render.rs");
-    let action_callback = render
-        .split("fn action_button(")
+    // The market buttons are placed where the caption layout reserved room for them, so their
+    // callback fires a frame after the rectangle was published — and the rail guard has to hold on
+    // that path just the same. It is the LAST gate: the rail can have moved to another core between
+    // the frame that laid the button out and the press.
+    let actions = include_str!("market_actions.rs");
+    let dispatch = actions
+        .split("fn dispatch_market_action(")
         .nth(1)
-        .and_then(|tail| tail.split("impl Render for ChartPanel").next())
-        .expect("chart action-button callback must remain present");
-    assert!(
-        action_callback.contains("workspace_action_allows_core(workspace_group.as_deref(), core)")
-            && action_callback
-                .find("workspace_action_allows_core")
-                .unwrap()
-                < action_callback.find("cancel_market_buys").unwrap()
-            && action_callback
-                .find("workspace_action_allows_core")
-                .unwrap()
-                < action_callback.find("toggle_panic_sell").unwrap(),
-        "Cancel Buy and Panic Sell must revalidate before dispatch"
-    );
+        .expect("chart market-action dispatch must remain present");
+    let guard = dispatch
+        .find("workspace_action_allows_core(group, core)")
+        .expect("the dispatch must revalidate the workspace rail");
+    for command in ["cancel_market_buys", "toggle_panic_sell", "set_temp_ban"] {
+        assert!(
+            guard
+                < dispatch
+                    .find(command)
+                    .unwrap_or_else(|| panic!("{command} must be dispatched from one place")),
+            "{command} must revalidate the workspace rail before dispatch"
+        );
+    }
 
     let input = include_str!("render_input.rs");
     let navigation = input

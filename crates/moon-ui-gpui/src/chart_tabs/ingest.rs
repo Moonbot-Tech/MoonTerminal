@@ -141,7 +141,6 @@ impl ChartTabs {
                     saved_arrival_flash,
                     saved_grid,
                     saved_max_charts,
-                    saved_action_pos,
                     saved_axis_pos,
                     saved_time_axis,
                     saved_line_labels,
@@ -168,7 +167,6 @@ impl ChartTabs {
                             (s.layout_columns, s.layout_columns_exact, s.layout_min_slot)
                         }),
                         spec.map_or((None, None), |s| (s.max_charts, s.max_charts_evict)),
-                        spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos)),
                         spec.and_then(|s| s.price_axis_pos),
                         spec.and_then(|s| s.time_axis_visible),
                         spec.and_then(|s| s.line_labels),
@@ -220,11 +218,6 @@ impl ChartTabs {
                 if saved_max_charts.0.is_some() || saved_max_charts.1.is_some() {
                     panel.update(cx, |p, pcx| {
                         p.set_max_charts(saved_max_charts.0, saved_max_charts.1, pcx)
-                    });
-                }
-                if saved_action_pos.0.is_some() || saved_action_pos.1.is_some() {
-                    panel.update(cx, |p, pcx| {
-                        p.set_action_btn_pos(saved_action_pos.0, saved_action_pos.1, pcx)
                     });
                 }
                 if saved_axis_pos.is_some() {

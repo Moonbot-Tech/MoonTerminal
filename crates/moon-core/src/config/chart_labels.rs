@@ -24,7 +24,7 @@ mod fields;
 mod presets;
 mod wire;
 
-pub use fields::{ChartLabelField, ChartLabelGroup};
+pub use fields::{ChartAction, ChartLabelField, ChartLabelGroup};
 pub use presets::LabelPreset;
 
 /// Number of caption rows one chart configuration holds.
@@ -479,6 +479,50 @@ impl LabelTf {
     /// does not state it.
     fn is_default(&self) -> bool {
         *self == LabelTf::Auto
+    }
+}
+
+/// How long a temporary ban runs.
+///
+/// MoonBot's own menu — one hour, four hours, a day, three days — so a reader who bans a coin from
+/// the chart and one who bans it from the core's own window choose between the same four spans.
+/// Asked at the press, by the lock's own popup and by the coin menu's rows; nothing stores one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TempBanSpan {
+    /// One hour, the span a chart button is pressed for most: "not this one, not right now".
+    #[default]
+    H1,
+    H4,
+    H24,
+    D3,
+}
+
+impl TempBanSpan {
+    /// Every span, shortest first — the order MoonBot's own menu lists them in.
+    pub const ALL: [TempBanSpan; 4] = [
+        TempBanSpan::H1,
+        TempBanSpan::H4,
+        TempBanSpan::H24,
+        TempBanSpan::D3,
+    ];
+
+    /// How long the ban lasts, in whole hours.
+    ///
+    /// Hours rather than a `Duration` because that is the unit the whole path speaks: the core is
+    /// told a span in hours, the caption prints one, and the menu offers them.
+    pub fn hours(self) -> u64 {
+        match self {
+            TempBanSpan::H1 => 1,
+            TempBanSpan::H4 => 4,
+            TempBanSpan::H24 => 24,
+            TempBanSpan::D3 => 72,
+        }
+    }
+
+    /// The same span as a duration, for the command that carries one.
+    pub fn duration(self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.hours() * 3_600)
     }
 }
 
@@ -1010,6 +1054,16 @@ impl ChartLabelRow {
         self.visible && (self.parts.iter().any(ChartLabelPart::is_drawn) || self.prints_name())
     }
 
+    /// Whether this module places a BUTTON — a caption that acts rather than reports.
+    ///
+    /// Every part is asked, hidden ones included, and that is the point of having one spelling of
+    /// it: the migration must not add a second button to a module that already holds one the reader
+    /// switched off, and a test asking only about the first part would answer a narrower question
+    /// than the code does.
+    pub fn holds_action(&self) -> bool {
+        self.parts.iter().any(|part| part.field.action().is_some())
+    }
+
     /// Whether the row prints its own name as a caption.
     ///
     /// A preset row counts as named: the switch prints "Позиция" without the user having to type
@@ -1078,6 +1132,61 @@ fn instrument_row(with_core: bool) -> ChartLabelRow {
     }
     row.push_part(ChartLabelField::Venue);
     row
+}
+
+/// The two market buttons every live chart drew before they became captions: `Panic Sell` and
+/// `Cancel Buy`, side by side along the plot's bottom edge, pushed right.
+///
+/// One builder for the same reason [`instrument_row`] is one — the live set and the comparison's
+/// both ship them, and a pair whose order or band drifted between the two would move the button
+/// under the reader's pointer when they switched tabs.
+fn action_rows() -> Vec<ChartLabelRow> {
+    action_rows_at(Some(LabelAlign::Right), Some(LabelAlign::Right))
+}
+
+/// The market buttons as caption modules, each placed where it is asked for.
+///
+/// `None` means the button is not drawn at all, which is what the old layout's `Hide` said. The
+/// public form of [`action_rows`] because the two callers must not disagree: the shipped set
+/// places the pair, and the terminal's one-shot migration places whatever each tab had chosen, and
+/// a second copy of the ordering rule below is how the migrated chart ends up mirroring the
+/// shipped one.
+///
+/// The ORDER is the rule: a band places its first module OUTERMOST, so a right-aligned pair reads
+/// panic-then-cancel and every other alignment cancel-then-panic — which in all three cases puts
+/// `Cancel Buy` to the LEFT of `Panic Sell`, exactly where the chart drew them. Two buttons on the
+/// same side share one line; the second continues the first one's rather than opening its own.
+///
+/// Args:
+///     cancel: Where `Cancel Buy` goes, or `None` to leave it out.
+///     panic: Where `Panic Sell` goes, or `None` to leave it out.
+///
+/// Returns:
+///     Between zero and two rows, in the order they are to be placed.
+pub fn action_rows_at(cancel: Option<LabelAlign>, panic: Option<LabelAlign>) -> Vec<ChartLabelRow> {
+    let row = |field, align| {
+        let mut row = ChartLabelRow::new(LabelZone::ChartBottom, align);
+        row.push_part(field);
+        row
+    };
+    let mut rows: Vec<ChartLabelRow> = [
+        cancel.map(|align| row(ChartLabelField::ActCancelBuy, align)),
+        panic.map(|align| row(ChartLabelField::ActPanicSell, align)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    // Two buttons on the SAME side are one line: the second continues the first one's instead of
+    // opening its own. A right-aligned band fills from its edge inwards, so the pair is reversed
+    // there — which puts `Cancel Buy` to the left of `Panic Sell` either way, exactly where the
+    // chart drew them.
+    if rows.len() == 2 && cancel == panic {
+        if cancel == Some(LabelAlign::Right) {
+            rows.reverse();
+        }
+        rows[1].placement = LabelFlow::Row;
+    }
+    rows
 }
 
 impl Default for ChartLabelsCfg {
@@ -1210,6 +1319,12 @@ impl Default for ChartLabelsCfg {
         detect.push_part(ChartLabelField::DetectMsg);
         detect.push_part(ChartLabelField::OrderStrategy);
         cfg.rows[9] = detect;
+
+        // The market buttons along the bottom edge, where every chart drew them before they became
+        // captions and where a hand reaching for `Panic Sell` still expects to find one.
+        for row in action_rows() {
+            cfg.push_prepared(row);
+        }
 
         cfg
     }
@@ -1351,6 +1466,12 @@ impl ChartLabelsCfg {
             LabelZone::ZoneBottom,
             LabelAlign::Right,
         );
+
+        // The same buttons the live set ships: a comparison tab trades from its panes like any
+        // other chart, and it drew both of them before they became captions.
+        for row in action_rows() {
+            cfg.push_prepared(row);
+        }
 
         // Repaired here for [`Self::trade_default`]'s reason: one shape wherever it is compared.
         cfg.sanitize();
@@ -1536,7 +1657,7 @@ impl ChartLabelsCfg {
     ///
     /// Stops at the first blank row rather than walking all sixteen: `sanitize` packs the used rows
     /// to the front, and the gates below run several times per market revision, per pane.
-    fn drawn_parts(&self) -> impl Iterator<Item = &ChartLabelPart> {
+    pub fn drawn_parts(&self) -> impl Iterator<Item = &ChartLabelPart> {
         self.rows
             .iter()
             .take_while(|r| !r.is_blank())
@@ -1576,6 +1697,11 @@ impl ChartLabelsCfg {
         for part in self.drawn_parts() {
             let step = match part.field {
                 ChartLabelField::FundingIn => 60_000,
+                // The ban readout prints what is left, to the MINUTE — see the terminal's
+                // `fmt_ban_left`. It asks for the clock whether or not a ban is running: the
+                // configuration is what this reads, and a caption that only started ticking once a
+                // ban began would print the minute it was set at until the next revision arrived.
+                ChartLabelField::TempBanLeft => 60_000,
                 ChartLabelField::TfCloseIn => {
                     match part.tf.remaining_ms(chart_tf_ms, now_ms) < COUNTDOWN_SECOND_STEP_BELOW_MS
                     {

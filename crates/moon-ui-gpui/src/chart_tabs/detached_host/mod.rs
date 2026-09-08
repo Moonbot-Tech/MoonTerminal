@@ -225,7 +225,6 @@ impl DetachedChartHost {
                     s.liquidations_enabled,
                     s.show_zone,
                     s.auto_pin,
-                    (s.cancel_buy_pos, s.panic_sell_pos),
                     s.price_axis_pos,
                     s.time_axis_visible,
                     s.line_labels,
@@ -247,7 +246,6 @@ impl DetachedChartHost {
             liq,
             sz,
             ap,
-            action_pos,
             axis_pos,
             time_axis,
             line_labels,
@@ -292,11 +290,6 @@ impl DetachedChartHost {
             }
             if ap.is_some() {
                 panel.update(cx, |p, pcx| p.set_auto_pin(ap, pcx));
-            }
-            if action_pos.0.is_some() || action_pos.1.is_some() {
-                panel.update(cx, |p, pcx| {
-                    p.set_action_btn_pos(action_pos.0, action_pos.1, pcx)
-                });
             }
             if axis_pos.is_some() {
                 panel.update(cx, |p, pcx| p.set_price_axis_pos(axis_pos, pcx));
@@ -847,18 +840,8 @@ impl LayoutPopupHost for DetachedChartHost {
     fn target_is_main(&self, _cx: &App) -> bool {
         false
     }
-    fn action_btn_pos_opt(
-        &self,
-        cx: &App,
-    ) -> (
-        Option<chart_persist::ChartBtnPos>,
-        Option<chart_persist::ChartBtnPos>,
-    ) {
-        self.panel.read(cx).action_btn_pos()
-    }
     fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot {
         let p = self.panel.read(cx);
-        let (cancel_pos, panic_pos) = p.action_btn_pos();
         LayoutPopupSnapshot {
             mode: p.layout_mode().unwrap_or(StackLayoutMode::Fit),
             orientation: p.layout_orientation().unwrap_or(StackOrientation::Vertical),
@@ -866,8 +849,6 @@ impl LayoutPopupHost for DetachedChartHost {
             liquidations: p.liquidations_enabled().unwrap_or(true),
             show_zone: p.show_zone().unwrap_or(true),
             auto_pin: p.auto_pin().unwrap_or(false),
-            cancel_pos: cancel_pos.unwrap_or_default(),
-            panic_pos: panic_pos.unwrap_or_default(),
             price_axis_pos: p.price_axis_pos().unwrap_or_default(),
             time_axis: p.time_axis_visible().unwrap_or(true),
             line_labels: p.line_labels().unwrap_or(true),

@@ -15,6 +15,7 @@ use gpui::*;
 use moon_ui::{MoonMenuItem, MoonWindowExt as _};
 use rust_i18n::t;
 
+use moon_core::config::TempBanSpan;
 use moon_core::session::CoreId;
 
 use super::{
@@ -24,14 +25,6 @@ use super::{
 };
 use crate::Backend;
 use crate::display_text::fmt_duration_short;
-
-/// Ban lengths offered for the temporary list: the value, and whether it is spelled in days.
-///
-/// Exactly the four MoonBot's own TempBL menu offers, read off that menu rather than guessed from
-/// the strings in its binary. Matching them is the point: a trader who bans a coin for four hours
-/// from one client and looks for that ban in the other must not have to translate between two
-/// different sets of presets.
-const TEMP_BAN_PRESETS: [(u64, bool); 4] = [(1, false), (4, false), (24, false), (3, true)];
 
 /// The "add to a blacklist" submenu, over whichever of the three targets this context has.
 pub(super) fn permanent_blacklist_item(
@@ -161,7 +154,12 @@ pub(super) fn temp_blacklist_item(
         let Some(target_symbol) = temp_ban_symbol(b, target, ctx) else {
             continue;
         };
-        let Some(left) = temp_ban_left(b, target, &target_symbol, now_ms) else {
+        let Some(left) = b
+            .session
+            .store()
+            .core(target)
+            .and_then(|data| data.temp_ban_left(&target_symbol, now_ms))
+        else {
             continue;
         };
         if target == core {
@@ -269,6 +267,10 @@ fn core_blacklist_writer(coin: &str) -> impl Fn(&mut Backend, &[CoreId]) + 'stat
 }
 
 /// One preset row per duration, all sending to the same targets.
+///
+/// [`TempBanSpan::ALL`] rather than a list of its own: the chart's ban BUTTON offers the same four
+/// spans, and the set matters — a trader who bans a coin for four hours from one client and looks
+/// for that ban in the other must not have to translate between two sets of presets.
 fn hour_rows(
     key_prefix: &str,
     backend: &Entity<Backend>,
@@ -276,20 +278,21 @@ fn hour_rows(
     cores: Vec<CoreId>,
 ) -> Vec<MoonMenuItem> {
     let workspace_group = ctx.workspace_group.clone();
-    TEMP_BAN_PRESETS
+    TempBanSpan::ALL
         .iter()
-        .map(|&(value, in_days)| {
+        .map(|&span| {
             let backend = backend.clone();
             let workspace_group = workspace_group.clone();
             let cores = cores.clone();
             let ctx = ctx.clone();
-            let hours = if in_days { value * 24 } else { value };
+            let hours = span.hours();
             MoonMenuItem::with_key(
                 SharedString::from(format!("{key_prefix}-{hours}h")),
-                if in_days {
-                    t!("coin_menu.tbl_days", n = value).to_string()
-                } else {
-                    t!("coin_menu.tbl_hours", n = value).to_string()
+                // Spelled in DAYS only past a day: MoonBot's own menu reads "24 hours" and
+                // "3 days", and "72 часа" is a figure the reader has to convert back.
+                match hours > 24 {
+                    true => t!("coin_menu.tbl_days", n = hours / 24).to_string(),
+                    false => t!("coin_menu.tbl_hours", n = hours).to_string(),
                 },
             )
             .on_click(move |_, window, app| {
@@ -300,7 +303,7 @@ fn hour_rows(
                     if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
                         return;
                     }
-                    send_temp_ban(b, &cores, &ctx, Some(Duration::from_secs(hours * 60 * 60)));
+                    send_temp_ban(b, &cores, &ctx, Some(span.duration()));
                 });
             })
         })
@@ -343,39 +346,13 @@ fn send_temp_ban(b: &Backend, cores: &[CoreId], ctx: &CoinMenuCtx, ban: Option<D
             );
             continue;
         };
-        let (adds, removes) = match ban {
-            Some(remaining) => (vec![(symbol.clone(), remaining)], Vec::new()),
-            None => (Vec::new(), vec![symbol.clone()]),
-        };
-        if let Err(err) = b.session.set_temp_blacklist(core, adds, removes) {
+        if let Err(err) = b.session.set_temp_ban(core, symbol.clone(), ban) {
             log::warn!(
                 "coin_menu: temp blacklist {symbol} on core {} failed: {err:#}",
                 moon_core::feed::core_label(core)
             );
         }
     }
-}
-
-/// Time left on this core's temporary ban for `symbol`, or `None` when it holds none.
-///
-/// Counted down from the stamp on the snapshot rather than read off it: the feed does not
-/// republish a row merely for counting down, so what is retained is as old as the last real change.
-fn temp_ban_left(b: &Backend, core: CoreId, symbol: &str, now_ms: i64) -> Option<Duration> {
-    let core_data = b.session.store().core(core)?;
-    let held = core_data
-        .temp_blacklist
-        .iter()
-        // A row the core reports as expired is not a ban it still holds: the queue considers a lift
-        // of it already done and sends nothing, so offering that lift would be a dead row.
-        .find(|row| row.symbol.eq_ignore_ascii_case(symbol) && !row.remaining.is_zero())?;
-    let elapsed = core_data
-        .temp_blacklist_at_ms
-        .map(|at| Duration::from_millis(now_ms.saturating_sub(at).max(0) as u64))
-        .unwrap_or_default();
-    // Saturating, not checked: once the local extrapolation runs past the received remainder the
-    // core may still hold the row — it has not said otherwise — and returning `None` here would
-    // take away the only row that lifts the ban.
-    Some(held.remaining.saturating_sub(elapsed))
 }
 
 /// The symbol ONE core's temporary blacklist is keyed by, or `None` when this context cannot name a

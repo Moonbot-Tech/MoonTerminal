@@ -17,6 +17,7 @@ mod arb_open;
 mod click_series;
 mod figures;
 mod geom;
+mod market_actions;
 mod news;
 mod refs;
 mod render;
@@ -213,12 +214,12 @@ pub struct ChartPanel {
     /// Whether a successful long or short order automatically pins its chart. Per window/tab and
     /// disabled by default.
     auto_pin: bool,
-    /// Per-window/tab positions of the market-action buttons in the chart area; defaults to Right.
+    /// Whether this panel last handed its panes a market-button state.
     ///
-    /// Read only when [`Self::historical`] is false: a historical viewer draws no market action at
-    /// any position, so these are inert there rather than merely defaulted to `Hide`.
-    cancel_buy_pos: crate::persistence::chart_persist::ChartBtnPos,
-    panic_sell_pos: crate::persistence::chart_persist::ChartBtnPos,
+    /// A latch, not a cache: the state is held per PANE, so a chart that stops drawing buttons —
+    /// its last one deleted, its pane gone book-only — has to clear what it pushed, and a chart
+    /// that never drew one must not walk its panes on every render to clear nothing.
+    market_actions_pushed: bool,
     /// Whether this panel is a HISTORICAL VIEWER rather than a live chart.
     ///
     /// Set once at construction and never afterwards, because it is a property of the WINDOW this
@@ -231,10 +232,12 @@ pub struct ChartPanel {
     ///
     /// * the ORDER BOOK, which describes the market RIGHT NOW and has nothing to say about a trade
     ///   that closed hours ago — it also costs the window roughly a fifth of its width;
-    /// * `Cancel Buy` and `Panic Sell`, which send commands to a real core against real money. A
-    ///   user reading a closed trade has no reason to expect a live weapon under the cursor. A
-    ///   disabled or hidden button would still say "trading happens here", so the buttons are not
-    ///   built at all and no later `set_action_btn_pos` can bring them back.
+    /// * the MARKET BUTTONS — `Cancel Buy`, `Panic Sell`, the temporary-ban lock — which send
+    ///   commands to a real core against real money. A user reading a closed trade has no reason to
+    ///   expect a live weapon under the cursor. A disabled or hidden button would still say
+    ///   "trading happens here", so they print nothing at all: they are captions now, and the
+    ///   engine answers `draws_live_market()` for them rather than trusting what it is handed —
+    ///   see `ChartEngine::set_pane_actions`.
     ///
     /// It is FALSE for every other panel — Main, the stacks, detached chart windows, group windows
     /// and the Profit Monitor all keep their book and their trading controls unchanged.
@@ -647,8 +650,7 @@ impl ChartPanel {
             pending_labels: None,
             show_zone: true,
             auto_pin: false,
-            cancel_buy_pos: Default::default(),
-            panic_sell_pos: Default::default(),
+            market_actions_pushed: false,
             historical: false,
             price_axis_pos: Default::default(),
             time_axis_visible: true,
@@ -831,8 +833,7 @@ impl ChartPanel {
             pending_labels: None,
             show_zone: true,
             auto_pin: false,
-            cancel_buy_pos: Default::default(),
-            panic_sell_pos: Default::default(),
+            market_actions_pushed: false,
             historical: false,
             price_axis_pos: Default::default(),
             time_axis_visible: true,
@@ -1410,26 +1411,6 @@ impl ChartPanel {
     /// a successful order.
     pub fn set_auto_pin(&mut self, on: bool, _cx: &mut Context<Self>) {
         self.auto_pin = on;
-    }
-
-    /// Sets the per-window/tab positions of Cancel Buy and Panic Sell in the chart area.
-    pub fn set_action_btn_pos(
-        &mut self,
-        cancel_buy: crate::persistence::chart_persist::ChartBtnPos,
-        panic_sell: crate::persistence::chart_persist::ChartBtnPos,
-        cx: &mut Context<Self>,
-    ) {
-        // The market actions do not exist on a historical viewer, so there is no position for them
-        // to take. This is the second half of the removal: rendering skips them, and no stored or
-        // pushed-down setting can put them back.
-        if self.historical {
-            return;
-        }
-        if self.cancel_buy_pos != cancel_buy || self.panic_sell_pos != panic_sell {
-            self.cancel_buy_pos = cancel_buy;
-            self.panic_sell_pos = panic_sell;
-            cx.notify();
-        }
     }
 
     /// Sets comparison eligibility for a horizontal tab, controlling lock-button visibility.

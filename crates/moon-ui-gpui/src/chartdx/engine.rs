@@ -840,6 +840,152 @@ impl ChartEngine {
         Some(hit.row)
     }
 
+    /// WHICH buttons this chart's captions place, and so which facts the panel has to resolve.
+    ///
+    /// The gate for the whole push below, per action rather than as one flag: every fact behind a
+    /// button costs a lookup per pane per render — the workspace rail, a walk of the core's open
+    /// orders, a walk of its blacklist — and a chart carrying only `Cancel Buy` must pay for none
+    /// of the other two.
+    pub fn wanted_market_actions(&self) -> WantedActions {
+        let data = self.data.borrow();
+        if !data.draws_live_market() {
+            return WantedActions::default();
+        }
+        use moon_core::config::ChartAction as A;
+        let mut wanted = WantedActions::default();
+        // ONE walk for the three answers: three `any_drawn` calls would each cross sixteen rows of
+        // captions, on a path whose whole purpose is to keep work off the render.
+        for part in data.render.borrow().chart_labels.drawn_parts() {
+            match part.field.action() {
+                Some(A::CancelBuy) => wanted.cancel_buy = true,
+                Some(A::PanicSell) => wanted.panic_sell = true,
+                Some(A::TempBan) => wanted.temp_ban = true,
+                // The ban READOUT is not a button, and it needs the same fact the lock does: a
+                // chart printing only the remaining time must still be told what is left.
+                None => {
+                    wanted.temp_ban |=
+                        part.field == moon_core::config::ChartLabelField::TempBanLeft;
+                }
+            }
+        }
+        wanted
+    }
+
+    /// Hand one pane the state its market buttons print, and report whether anything moved.
+    ///
+    /// PUSHED rather than read here because none of it is the engine's to answer: whether panic is
+    /// armed mixes the core's snapshot with the terminal's own optimistic override, whether a
+    /// command is allowed is a property of the window's workspace rail, and the temporary ban lives
+    /// in the session store the engine does not hold.
+    ///
+    /// Whether the chart is LIVE at all is deliberately not part of what the panel states: the
+    /// engine answers that itself, so a trade-detail window — which draws a trade that already
+    /// closed — cannot be handed a pressable button by a caller that forgot to ask.
+    ///
+    /// Args:
+    ///     pane: Pane index, as `pane_target` reports them.
+    ///     state: What the panel resolved for that pane's market, or `None` for a pane that draws
+    ///         no buttons at all.
+    ///
+    /// Returns:
+    ///     Whether the pane's captions were re-formatted — which is also when the present is
+    ///     raised, so a caller that only pushes state has nothing to do with the answer.
+    pub(crate) fn set_pane_actions(
+        &mut self,
+        pane: usize,
+        state: Option<MarketActionState>,
+    ) -> bool {
+        let data = self.data.borrow();
+        let live = data.draws_live_market();
+        let mut st = data.render.borrow_mut();
+        let Some(pr) = st.panes.get_mut(pane) else {
+            return false;
+        };
+        let actions = match state {
+            // `None` is not "a button that does nothing": it is a pane with no buttons on it at
+            // all, and every action caption on it prints NOTHING. That is what a book-only pane and
+            // a chart whose last button was deleted both need — a faded control left on screen
+            // would still take the press meant for what is under it.
+            None => crate::chartdx::text::ActionInputs::default(),
+            Some(state) => crate::chartdx::text::ActionInputs {
+                live,
+                allowed: state.allowed,
+                panic_armed: state.panic_armed,
+                ban_until_ms: state.ban_until_ms,
+            },
+        };
+        if pr.label_actions == actions {
+            return false;
+        }
+        pr.label_actions = actions;
+        let changed = st.refresh_pane_labels(pane);
+        if changed {
+            st.needs_present = true;
+        }
+        changed
+    }
+
+    /// The buttons one pane laid out: where each goes, what it does, and the label it was
+    /// measured at.
+    ///
+    /// Read by the PANEL on its render, which places the application's own control at each
+    /// rectangle. The label comes from the caption pass rather than being rebuilt here, so the
+    /// string the layout reserved room for is the string the button shows.
+    ///
+    /// The market rides along because the rectangles are a frame old: a pane retargeted since would
+    /// otherwise send the command to a coin nobody aimed at.
+    ///
+    /// Args:
+    ///     pane: Pane index, as `pane_target` reports them.
+    ///
+    /// Returns:
+    ///     One entry per button, in configured order; empty for a pane drawing none.
+    pub(crate) fn action_buttons(&self, pane: usize) -> Vec<ChartActionButton> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let Some(pr) = render.panes.get(pane).filter(|pane| pane.active) else {
+            return Vec::new();
+        };
+        let Some(core) = pr.core else {
+            return Vec::new();
+        };
+        let state = pr.label_actions;
+        pr.action_rects
+            .iter()
+            .filter_map(|placement| {
+                // By identity, not by position: the resolved list is compacted on every revision.
+                let label = pr
+                    .labels
+                    .texts
+                    .iter()
+                    .find(|text| text.row == placement.row && text.part == placement.part)?;
+                Some(ChartActionButton {
+                    x: placement.x,
+                    y: placement.y,
+                    w: placement.w,
+                    h: placement.h,
+                    action: placement.mark.action,
+                    // Read HERE, from the values the label beside it was formatted from, rather
+                    // than copied into the rectangle a frame ago: a control that took its state
+                    // from one generation and its words from another would draw `Stop Panic`
+                    // unpressed.
+                    active: match placement.mark.action {
+                        moon_core::config::ChartAction::CancelBuy => false,
+                        moon_core::config::ChartAction::PanicSell => state.panic_armed,
+                        moon_core::config::ChartAction::TempBan => state.ban_until_ms.is_some(),
+                    },
+                    enabled: state.allowed,
+                    label: label.text.clone(),
+                    size: placement.size,
+                    row: placement.row,
+                    part: placement.part,
+                    core,
+                    market: pr.market.clone(),
+                })
+            })
+            .collect()
+    }
+
     /// Rectangles of the arbitrage venue names a pane drew, in the pane's own logical pixels.
     ///
     /// For the cursor overlay: a native cursor can only be set during PAINT, so the panel lays

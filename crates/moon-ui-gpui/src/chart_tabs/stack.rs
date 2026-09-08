@@ -332,19 +332,6 @@ pub(super) fn set_panels_auto_pin<S: 'static>(
     }
 }
 
-/// Apply market-action button positions for Cancel Buy and Panic Sell to every stack panel.
-pub(super) fn set_panels_action_btn_pos<S: 'static>(
-    entries: &[ChartStackEntry],
-    cancel: crate::persistence::chart_persist::ChartBtnPos,
-    panic: crate::persistence::chart_persist::ChartBtnPos,
-    cx: &mut Context<S>,
-) {
-    for e in entries {
-        e.panel
-            .update(cx, |p, pcx| p.set_action_btn_pos(cancel, panic, pcx));
-    }
-}
-
 /// Apply the Left, Right, or Hidden price-axis position to every stack panel.
 pub(super) fn set_panels_price_axis_pos<S: 'static>(
     entries: &[ChartStackEntry],
