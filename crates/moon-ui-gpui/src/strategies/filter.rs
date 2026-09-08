@@ -75,12 +75,7 @@ impl StrategyFilter {
     /// Returns:
     ///     `true` when search, kind, direction, active-only, or exchange excludes anything.
     pub(super) fn narrows(&self) -> bool {
-        let prepared = self.prepare();
-        prepared.query.is_some()
-            || prepared.kind.is_some()
-            || prepared.dir.is_some()
-            || prepared.active_only
-            || self.exchange.is_some()
+        self.prepare().narrows() || self.exchange.is_some()
     }
 
     /// Returns row visibility for cold single-row callers.
@@ -110,6 +105,12 @@ pub struct PreparedFilter {
 }
 
 impl PreparedFilter {
+    /// Return whether row filters require a strategy match to retain an otherwise empty core.
+    /// Exchange filtering is applied separately to core identities and must not hide empty cores.
+    pub(super) fn narrows(&self) -> bool {
+        self.query.is_some() || self.kind.is_some() || self.dir.is_some() || self.active_only
+    }
+
     /// Return whether search is active, which temporarily expands the entire tree.
     pub fn searching(&self) -> bool {
         self.query.is_some()

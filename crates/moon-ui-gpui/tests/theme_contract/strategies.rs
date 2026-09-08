@@ -5,6 +5,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::support::*;
 
+/// Removing the row-filter guard hides servers with neither strategies nor folders.
+#[test]
+fn empty_core_roots_remain_available_without_row_filters() {
+    let source = read_src("strategies/tree/moon.rs");
+    let body = braced_body(&source, "fn build_core_root(");
+    assert!(body.contains("if filter.narrows() && !any_matched && empty_folders.is_empty()"));
+}
+
 /// A strategy copy goes to the core root, sits beside its source, and is revealed to the user.
 ///
 /// Plausible edits this catches: inheriting `row.folder_path` lets the receiving core reinterpret
