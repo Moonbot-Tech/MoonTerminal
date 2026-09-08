@@ -1610,7 +1610,7 @@ const FOLDER_PATHS_MAX: usize = 5_000;
 /// and the two are indistinguishable from here. Both readings mean the same thing to a caller — an
 /// empty folder cannot be sent to this core — so nothing is gained by guessing which one holds.
 ///
-/// Paths are cleaned like every other inbound string, and the caller does the path SPLITTING: which
+/// Invalid raw paths are rejected before text cleanup, and the caller does the path SPLITTING: which
 /// slashes separate folders is decided in one place in the window, and a second rule here would
 /// disagree with the tree it feeds.
 ///
@@ -1629,8 +1629,22 @@ pub(super) fn folders_from_proto(
     // Asked of the paths as the CORE spells them, before any cleaning: whether an edit can be sent
     // depends on what the core holds, not on what this projection made of it.
     let editable = crate::feed::folder_tree::sendable(strats.folder_paths());
-    let mut paths: Vec<String> = strats
-        .folder_paths()
+    crate::feed::CoreFolders {
+        supported,
+        editable,
+        paths: display_folder_paths(strats.folder_paths()),
+    }
+}
+
+/// Reject invalid raw folder identities before text cleanup can disguise synthetic parents.
+///
+/// MoonProto expands `Group / Display Name` into a parent `Group ` as well as the full path. Trimming
+/// that parent first would make it pass the UI's validation as a real empty folder `Group`.
+/// Keep the editability decision on the complete raw tree in `folders_from_proto`; this list
+/// only supplies displayable folders, sorted and bounded independently of protocol map order.
+fn display_folder_paths<'a>(raw: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut paths: Vec<String> = raw
+        .filter(|path| crate::feed::folder_tree::sendable(std::iter::once(*path)))
         .map(|path| wire_text(path, FOLDER_PATH_MAX_CHARS))
         .filter(|path| !path.is_empty())
         .collect();
@@ -1643,11 +1657,7 @@ pub(super) fn folders_from_proto(
     paths.sort_unstable();
     paths.dedup();
     paths.truncate(FOLDER_PATHS_MAX);
-    crate::feed::CoreFolders {
-        supported,
-        editable,
-        paths,
-    }
+    paths
 }
 
 /// Fold the strategy set into the signature that decides whether the UI is told about it.

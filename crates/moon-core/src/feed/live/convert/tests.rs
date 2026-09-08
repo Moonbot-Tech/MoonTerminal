@@ -452,3 +452,32 @@ fn a_changed_field_is_a_different_signature() {
     );
     assert_ne!(sig, super::strategies_publish_sig(edited.iter().copied()));
 }
+
+/// Text cleanup must not turn MoonProto's synthetic spaced-slash parent into an empty folder.
+#[test]
+fn folder_projection_rejects_synthetic_parents_before_trimming() {
+    let raw = [
+        "Group ",
+        "Group / Display Name",
+        "Parent/Group ",
+        "Parent/Group / Display Name",
+        "Parent",
+        "Parent/Empty",
+        "Empty",
+    ];
+    assert_eq!(
+        super::display_folder_paths(raw.into_iter()),
+        ["Empty", "Parent", "Parent/Empty"],
+        "synthetic prefixes must not become real siblings of the occupied literal-slash folder"
+    );
+}
+
+/// A genuine empty folder with the same prefix remains visible alongside a literal-slash name.
+#[test]
+fn folder_projection_preserves_real_empty_and_nested_folders() {
+    let raw = ["Group ", "Group", "Group/Empty", "Group", "Other/Child"];
+    assert_eq!(
+        super::display_folder_paths(raw.into_iter()),
+        ["Group", "Group/Empty", "Other/Child"]
+    );
+}
