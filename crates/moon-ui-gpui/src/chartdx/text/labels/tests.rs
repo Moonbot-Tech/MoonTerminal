@@ -12,10 +12,7 @@ use moon_core::config::{
 use moon_core::feed::OrderRow;
 use moon_core::util::fmt::DeltaSign;
 
-use super::{
-    ActionInputs, LabelInputs, LabelState, basis_index, collect_open_stats, fmt_ban_left,
-    preview_row,
-};
+use super::{ActionInputs, LabelInputs, LabelState, basis_index, collect_open_stats, preview_row};
 
 /// One open BTC row with a filled one-unit long position.
 fn order(entry: f64, mark: f32) -> OrderRow {
@@ -1620,20 +1617,4 @@ fn a_button_carries_what_it_would_do() {
     );
     let mark = state.texts[0].action.expect("a button carries its mark");
     assert_eq!(mark.action, moon_core::config::ChartAction::TempBan);
-}
-
-/// The ban countdown is read to the MINUTE and rounded up, in the coin menu's own words: the two
-/// controls act on the same ban and must not print it differently.
-#[test]
-fn the_ban_countdown_rounds_up_to_the_minute() {
-    let _locale = crate::test_locale::force("en");
-    assert_eq!(fmt_ban_left(1), "1m");
-    assert_eq!(fmt_ban_left(59_000), "1m");
-    assert_eq!(fmt_ban_left(61_000), "2m");
-    assert_eq!(fmt_ban_left(3_600_000), "1h");
-    assert_eq!(fmt_ban_left(3_600_000 + 12 * 60_000), "1h 12m");
-    assert_eq!(fmt_ban_left(3 * 24 * 3_600_000), "3d");
-    // Never below a minute, and never a zero: the caption clock moves once a minute, and a row the
-    // core still lists is a ban the press can lift.
-    assert_eq!(fmt_ban_left(-5), "1m");
 }

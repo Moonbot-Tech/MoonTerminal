@@ -1,4 +1,4 @@
-use super::{flatten_lines, fmt_duration_short};
+use super::{flatten_lines, fmt_ban_left, fmt_duration_short};
 
 /// Single-line input is returned byte-for-byte.
 #[test]
@@ -108,4 +108,26 @@ fn duration_rejects_impossible_input() {
     assert_eq!(fmt_duration_short(-1.0), "—");
     assert_eq!(fmt_duration_short(f64::NAN), "—");
     assert_eq!(fmt_duration_short(f64::INFINITY), "—");
+}
+
+/// The ban countdown is one rule for three surfaces — the chart's caption, the coin menu's row and
+/// the coin dropdown's ban tab — read to the MINUTE, rounded up, and never below one.
+///
+/// Breakage this pins: printing the raw remainder. The core lets its own figure drift for up to a
+/// minute before republishing, so seconds would be precision the value does not carry — and a ban
+/// whose local countdown has run out would read "0s" beside a lift button that still works.
+#[test]
+fn the_ban_countdown_rounds_up_to_the_minute() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(fmt_ban_left(1), "1m");
+    assert_eq!(fmt_ban_left(59_000), "1m");
+    assert_eq!(fmt_ban_left(61_000), "2m");
+    assert_eq!(fmt_ban_left(3_600_000), "1h");
+    assert_eq!(fmt_ban_left(3_600_000 + 12 * 60_000), "1h 12m");
+    assert_eq!(fmt_ban_left(3 * 24 * 3_600_000), "3d");
+    assert_eq!(
+        fmt_ban_left(-5_000),
+        "1m",
+        "a row the core still lists is still a ban"
+    );
 }

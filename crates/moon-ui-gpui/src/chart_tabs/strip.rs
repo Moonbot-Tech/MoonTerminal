@@ -307,7 +307,21 @@ impl Render for ChartTabs {
             let view_toggle = cx.entity();
             let view_expand = cx.entity();
             let view_open = cx.entity();
+            let view_tab = cx.entity();
+            let view_unban = cx.entity();
             let input_open = self.coin_input.clone();
+            // The tab strip lives on THIS field only. A detached window is one bucket's chart, the
+            // header ticker picks a rate and the Report field filters a column — none of them are
+            // the place to read what a whole group's cores are holding out of trading.
+            let tabs = Some(crate::controls::coin_search::CoinTabsCfg {
+                active: self.coin_tab,
+                on_select: std::rc::Rc::new(move |tab, window, app| {
+                    view_tab.update(app, |this, cx| this.select_coin_tab(tab, window, cx));
+                }),
+                on_unban: std::rc::Rc::new(move |core, market, app| {
+                    view_unban.update(app, |this, cx| this.lift_temp_ban(core, market, cx));
+                }),
+            });
             coin_search::render_popup(
                 "tabs-coin",
                 results,
@@ -316,6 +330,7 @@ impl Render for ChartTabs {
                 true,
                 active_core,
                 server_context,
+                tabs,
                 p_strip,
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),

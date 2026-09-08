@@ -61,6 +61,10 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
         sig = sig.wrapping_mul(31).wrapping_add(s.id);
         if let Some(d) = store.core(s.id) {
             sig = sig.wrapping_mul(31).wrapping_add(d.detects_rev);
+            // The coin dropdown's ban list draws these rows, and the core's echo of a lift is what
+            // removes one. Published only on a real change, so this costs a wake nobody wanted only
+            // when a ban was actually placed or lifted.
+            sig = sig.wrapping_mul(31).wrapping_add(d.temp_blacklist_rev);
         }
     }
     sig

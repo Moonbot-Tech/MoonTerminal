@@ -35,6 +35,9 @@ use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
 mod ranking;
+mod tabs;
+
+pub(crate) use tabs::{CoinBan, CoinTab, CoinTabsCfg, banned};
 
 use ranking::{
     MOVER_VOL_REF, Mover, SUGGEST_ROW_CAP, merge_ranked_heads, mover_score,
@@ -711,15 +714,33 @@ pub(crate) enum CoinResults {
         /// Markets ranked by unsigned 24-hour movement weighted by USD turnover.
         volatile: Vec<CoinHit>,
     },
+    /// The markets the user marked, on the Favorites tab. Always empty for now — nothing marks one
+    /// yet — and drawn as its own empty state rather than as "no matches", which would read as a
+    /// failed search.
+    Favorites(Vec<CoinHit>),
+    /// The temporary bans the cores in scope are holding, on their own tab.
+    Banned(Vec<CoinBan>),
 }
 
 /// [`CoinResults`] after grouping, so the row arithmetic and the renderer read the SAME shape.
 enum GroupedResults {
-    Query(Vec<CoinSection>),
+    /// One grouped list drawn without a heading — a typed query, or the markets the reader marked.
+    /// The same rows and the same arithmetic; only the note an EMPTY one prints differs, so they
+    /// are one variant carrying that note rather than two identical arms.
+    Sections {
+        /// Section identity, which keeps element ids unique across lists.
+        section: &'static str,
+        /// Locale key of the note shown when the list is empty.
+        empty: &'static str,
+        sections: Vec<CoinSection>,
+    },
     Suggest {
         recent: Vec<CoinSection>,
         volatile: Vec<CoinSection>,
     },
+    /// Not grouped: a ban belongs to ONE core, so there is nothing to fold. Carried through this
+    /// enum anyway so the row arithmetic and the renderer keep reading the same value.
+    Banned(Vec<CoinBan>),
 }
 
 /// Returns the fixed height shared by every direct child of the scrolling result list.
@@ -1137,20 +1158,24 @@ pub(crate) fn release_focus(field: &Entity<MoonInputState>, window: &mut Window,
     crate::hotkeys::release_field_focus(field, window, cx);
 }
 
-/// Renders the result dropdown: query matches, or the empty-field suggestions, with multi-selection
-/// checkboxes and an Open in New Tab button when enabled. Clicking outside a checkbox calls the
+/// Renders the result dropdown: query matches, or whichever list the open tab asks for — the
+/// empty-field suggestions, the marked markets, or the cores' temporary bans — with multi-selection
+/// checkboxes and an Open in New Tab button where the rows can carry them. Clicking outside a checkbox calls the
 /// owner-defined `on_pick`; a checkbox calls `on_toggle`; the footer button calls `on_open_new` for
 /// the accumulated selection. `selected` contains the currently checked markets. In single-selection
 /// mode, `on_toggle` and `on_open_new` are never called.
 ///
 /// Args:
 ///     id: Stable popup identity used for the scroll container and child controls.
-///     results: Query matches or the two empty-field suggestion sections.
+///     results: Query matches, or the list the open tab resolved.
 ///     selected: Markets currently accumulated for multi-select.
 ///     toggled: Coin rows the host has recorded a caret click on; see [`group_is_open`].
-///     multi_select: Whether checkboxes and the Open in New Tab footer are enabled.
+///     multi_select: Whether checkboxes and the Open in New Tab footer are enabled at all; a list
+///         whose rows carry no checkbox turns them off whatever the host asked for.
 ///     active_core: Core the window is addressing, which decides what a coin row opens.
 ///     server_context: Sole server named once above the rows, or `None` to label every row.
+///     tabs: The host's tab strip, or `None` for a query-only host (the header ticker, the Report
+///         token filter) which shows no tabs and can produce none of their lists.
 ///     p: Active palette used by the dropdown.
 ///     cx: Application context used to resolve scaled design tokens.
 ///     on_pick: Callback for opening a row's market.
@@ -1169,6 +1194,7 @@ pub(crate) fn render_popup<F, G, H, E>(
     multi_select: bool,
     active_core: Option<CoreId>,
     server_context: Option<String>,
+    tabs: Option<CoinTabsCfg>,
     p: MoonPalette,
     cx: &App,
     on_pick: F,
@@ -1190,14 +1216,29 @@ where
     // Grouped ONCE, here, and handed to both the arithmetic and the renderer: counting one shape
     // while drawing another is exactly how a viewport cap starts lying.
     let grouped = match results {
-        CoinResults::Query(hits) => GroupedResults::Query(group_hits(hits)),
+        CoinResults::Query(hits) => GroupedResults::Sections {
+            section: "q",
+            empty: "chart.coin.no_results",
+            sections: group_hits(hits),
+        },
         CoinResults::Suggest { recent, volatile } => GroupedResults::Suggest {
             recent: group_hits(recent),
             volatile: group_hits(volatile),
         },
+        CoinResults::Favorites(hits) => GroupedResults::Sections {
+            section: "fav",
+            empty: "chart.coin.no_favorites",
+            sections: group_hits(hits),
+        },
+        CoinResults::Banned(rows) => GroupedResults::Banned(rows),
     };
+    // Whether a selection can be accumulated at all is a property of the ROWS on screen, not of the
+    // tab that asked for them: the ban list draws lift buttons where the others draw checkboxes, so
+    // its hint row and its footer would count markets none of its rows shows. Asked of the grouped
+    // value, which is the one thing both the arithmetic and the renderer read.
+    let multi_select = multi_select && !matches!(grouped, GroupedResults::Banned(_));
     let result_rows = match &grouped {
-        GroupedResults::Query(sections) => {
+        GroupedResults::Sections { sections, .. } => {
             if sections.is_empty() {
                 1
             } else {
@@ -1214,6 +1255,8 @@ where
                     + usize::from(!volatile.is_empty())
             }
         }
+        // One fixed-height row per ban, or the one row the empty note occupies.
+        GroupedResults::Banned(rows) => rows.len().max(1),
     };
     let direct_child_count =
         result_rows + usize::from(server_context.is_some()) + usize::from(multi_select);
@@ -1288,14 +1331,18 @@ where
     };
 
     match grouped {
-        GroupedResults::Query(sections) => {
+        GroupedResults::Sections {
+            section,
+            empty,
+            sections,
+        } => {
             if sections.is_empty() {
-                list = empty_note(list, t!("chart.coin.no_results").to_string());
+                list = empty_note(list, t!(empty).to_string());
             } else {
                 list = push_section(
                     list,
                     id,
-                    "q",
+                    section,
                     None,
                     sections,
                     selected,
@@ -1348,6 +1395,25 @@ where
                     on_pick.clone(),
                     on_toggle.clone(),
                     on_expand.clone(),
+                );
+            }
+        }
+        GroupedResults::Banned(rows) => {
+            if rows.is_empty() {
+                list = empty_note(list, t!("chart.coin.no_banned").to_string());
+            } else {
+                list = tabs::push_ban_rows(
+                    list,
+                    id,
+                    rows,
+                    show_server_per_row,
+                    p,
+                    cx,
+                    on_pick.clone(),
+                    // Only a tabbed host can be showing this list at all, so the lift command is
+                    // always in hand here; taken through the option anyway rather than unwrapped,
+                    // which would turn a future caller's mistake into a panic in the frame loop.
+                    tabs.as_ref().map(|cfg| cfg.on_unban.clone()),
                 );
             }
         }
@@ -1428,6 +1494,11 @@ where
         // inner list keeps scrolling: its hitbox is pushed after this one and so is still hit
         // before the traversal stops here.
         .occlude()
+        // Above the list and outside it: the viewport cap counts the list's own fixed-height rows.
+        .children(
+            tabs.as_ref()
+                .map(|cfg| tabs::render_tab_strip(id, cfg, p, cx)),
+        )
         .child(list)
         .children(footer)
 }

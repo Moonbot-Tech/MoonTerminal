@@ -1315,6 +1315,46 @@ chart.coin.no_suggestions:
   ru: "Пока нечего предложить — начните вводить монету"
   en: "Nothing to suggest yet — start typing a coin"
   es: "Aún no hay sugerencias: empiece a escribir una moneda"
+# --- Tabs of the coin dropdown. They decide what the EMPTY field shows; typing always searches.
+# Short by necessity: three captions share the width of a 300px dropdown.
+chart.coin.tab_all:
+  ru: "Все"
+  en: "All"
+  es: "Todas"
+chart.coin.tab_favorites:
+  ru: "Любимые"
+  en: "Favorites"
+  es: "Favoritas"
+# "Temporary blacklist" in full is three times this width; the tab it names holds the coins the
+# cores are keeping out of trading for a while.
+chart.coin.tab_banned:
+  ru: "Врем. ЧС"
+  en: "Temp ban"
+  es: "Veto temp."
+chart.coin.no_favorites:
+  ru: "Пока никто не отмечен"
+  en: "Nothing marked yet"
+  es: "Aún no hay nada marcado"
+chart.coin.no_banned:
+  ru: "Временных банов нет"
+  en: "No temporary bans"
+  es: "Sin vetos temporales"
+# Tooltip of the ✕ that lifts one ban, and of the same button while an Auto workspace has taken the
+# core out of this group's reach — the row stays readable, the command does not.
+chart.coin.unban:
+  ru: "Снять временный ЧС"
+  en: "Lift the temporary ban"
+  es: "Levantar el veto temporal"
+chart.coin.unban_denied:
+  ru: "Ядро вне области этого окна"
+  en: "The core is outside this window's scope"
+  es: "El núcleo está fuera del alcance de esta ventana"
+# What the tilde before a countdown means: the core has not confirmed anything since it went quiet,
+# so the figure is our own extrapolation. The ban keeps expiring whether or not we can see it.
+chart.coin.ban_stale:
+  ru: "Нет свежих настроек ядра — время оценочное"
+  en: "No fresh core settings — the figure is an estimate"
+  es: "Sin ajustes recientes del núcleo: la cifra es estimada"
 # Trailing count on a coin row that names how many cores offer the instrument.
 chart.coin.cores:
   # Noun-then-colon, the form already used by `chart_labels.cores_count` and `figures_count`:
