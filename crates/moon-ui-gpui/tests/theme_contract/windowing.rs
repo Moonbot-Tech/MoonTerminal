@@ -772,30 +772,46 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         );
     }
 
-    let render = code_only(&read_src("panels/chart/render.rs"));
-    assert!(
-        render.contains("let market_actions = !self.historical;"),
-        "market actions must be derived from the historical mode rather than hardcoded"
-    );
-    assert!(
-        render.contains("if market_actions && !single_pane && !self.orderbook_only {"),
-        "the multi-pane Cancel Buy and Panic Sell route must remain independently gated"
-    );
-    assert!(
-        render.contains("let action_overlay = if market_actions && single_pane {"),
-        "the single-pane Cancel Buy and Panic Sell overlay must remain independently gated"
-    );
-
-    let chart_mod = read_src("panels/chart/mod.rs");
+    // The market buttons are CAPTIONS now, so "a historical chart has none" is enforced where the
+    // captions are resolved rather than where an element used to be built. Two gates, and both are
+    // the engine's own answer rather than something a caller states: a window that forgot to ask
+    // must not be able to hand a finished trade a live weapon.
+    let engine = code_only(&read_src("chartdx/engine.rs"));
     for signature in [
-        "pub fn set_orderbook_enabled(",
-        "pub fn set_action_btn_pos(",
+        "pub fn wanted_market_actions(",
+        "pub(crate) fn set_pane_actions(",
     ] {
         assert!(
-            code_only(braced_body(&chart_mod, signature)).contains("if self.historical"),
-            "{signature} must refuse settings that could restore a historical chart's live UI"
+            braced_body(&engine, signature).contains("draws_live_market()"),
+            "{signature} must answer from the engine's own live-market predicate"
         );
     }
+    let labels = code_only(&read_src("chartdx/text/labels.rs"));
+    for field in [
+        "ChartLabelField::ActCancelBuy",
+        "ChartLabelField::ActPanicSell",
+        "ChartLabelField::ActTempBan",
+    ] {
+        let arm = labels
+            .split_once(&format!("{field} => inputs"))
+            .map(|(_, tail)| tail)
+            .unwrap_or_default();
+        assert!(
+            arm.starts_with(
+                "
+            .actions
+            .live"
+            ) || arm.starts_with(".actions.live"),
+            "{field} must print nothing on a chart that cannot act on its market"
+        );
+    }
+
+    let chart_mod = read_src("panels/chart/mod.rs");
+    assert!(
+        code_only(braced_body(&chart_mod, "pub fn set_orderbook_enabled("))
+            .contains("if self.historical"),
+        "the order book must refuse a setting that could restore a historical chart's live UI"
+    );
     assert!(
         code_only(braced_body(&chart_mod, "pub fn new_historical("))
             .contains("sync_orderbook_refs("),
@@ -804,8 +820,7 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
 
     let trade_window = code_only(&read_module("trade_window"));
     assert!(
-        !trade_window.contains("set_orderbook_enabled(")
-            && !trade_window.contains("set_action_btn_pos("),
+        !trade_window.contains("set_orderbook_enabled("),
         "the trade window must not directly re-enable the historical chart's live controls"
     );
     let opener = code_only(braced_body(

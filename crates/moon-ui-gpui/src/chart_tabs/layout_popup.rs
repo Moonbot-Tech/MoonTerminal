@@ -18,77 +18,11 @@ use crate::design;
 use crate::panels::{
     popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
 };
-use crate::persistence::chart_persist::{
-    ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
-};
+use crate::persistence::chart_persist::{PriceAxisPos, StackLayoutMode, StackOrientation};
 
 /// Mode order in the popup's two-position segmented control.
 pub(super) const POPUP_MODES: [StackLayoutMode; 2] =
     [StackLayoutMode::Fit, StackLayoutMode::Scroll];
-
-/// Action-button positions: dash hides, L is left, C is center, and R is right.
-const BTN_POSITIONS: [ChartBtnPos; 4] = [
-    ChartBtnPos::Hide,
-    ChartBtnPos::Left,
-    ChartBtnPos::Center,
-    ChartBtnPos::Right,
-];
-
-fn pos_label(p: ChartBtnPos) -> &'static str {
-    match p {
-        ChartBtnPos::Hide => "—",
-        ChartBtnPos::Left => "L",
-        ChartBtnPos::Center => "C",
-        ChartBtnPos::Right => "R",
-    }
-}
-
-/// Build an action-button position row with a left caption and `[dash L C R]` segmented control.
-fn pos_selector_row(
-    id: String,
-    caption: &str,
-    current: ChartBtnPos,
-    p: MoonPalette,
-    cx: &App,
-    on_pick: impl Fn(ChartBtnPos, &mut App) + 'static,
-) -> impl IntoElement {
-    let sel = BTN_POSITIONS
-        .iter()
-        .position(|x| *x == current)
-        .unwrap_or(3);
-    let items: Vec<MoonSegmentItem> = BTN_POSITIONS
-        .iter()
-        .enumerate()
-        .map(|(i, x)| {
-            let mut it = MoonSegmentItem::new("", pos_label(*x)).width(30.0);
-            if i == sel {
-                it = it.selected(true);
-            }
-            it
-        })
-        .collect();
-    let seg = MoonSegmentedControl::new(id)
-        .accent(MoonAccent::Blue)
-        .items(items)
-        .on_click(move |ix, _, _, cx| {
-            if let Some(x) = BTN_POSITIONS.get(ix) {
-                on_pick(*x, cx);
-            }
-        })
-        .render();
-    h_flex()
-        .w_full()
-        .items_center()
-        .gap(design::ui_px(cx, 6.0))
-        .child(
-            div()
-                .flex_1()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text))
-                .child(caption.to_string()),
-        )
-        .child(seg)
-}
 
 /// Price-axis positions: dash hides, L is left, and R is right beyond the order book.
 const AXIS_POSITIONS: [PriceAxisPos; 3] =
@@ -223,7 +157,7 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
 /// `height_fit_input` and `height_scroll_input` are separate fields whose Blur/Enter subscription
 /// belongs to the caller. `on_pick_mode` runs on mode selection. `MoonPopover` positions the panel.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2, S2>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, R2, S2>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
@@ -234,8 +168,6 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2, S2>(
     liquidations_enabled: bool,
     show_zone: bool,
     auto_pin: bool,
-    cancel_buy_pos: ChartBtnPos,
-    panic_sell_pos: ChartBtnPos,
     price_axis_pos: PriceAxisPos,
     time_axis_visible: bool,
     line_labels: bool,
@@ -252,8 +184,6 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2, S2>(
     on_toggle_show_zone: I,
     on_toggle_auto_pin: J,
     on_toggle_orientation: K,
-    on_pick_cancel_pos: L,
-    on_pick_panic_pos: M,
     on_pick_price_axis: N,
     on_toggle_time_axis: O,
     on_toggle_line_labels: P2,
@@ -268,8 +198,6 @@ where
     I: Fn(bool, &mut App) + 'static,
     J: Fn(bool, &mut App) + 'static,
     K: Fn(&mut App) + 'static,
-    L: Fn(ChartBtnPos, &mut App) + 'static,
-    M: Fn(ChartBtnPos, &mut App) + 'static,
     N: Fn(PriceAxisPos, &mut App) + 'static,
     O: Fn(bool, &mut App) + 'static,
     P2: Fn(bool, &mut App) + 'static,
@@ -526,24 +454,6 @@ where
         )
     });
 
-    // Position selectors for Cancel Buy and Panic Sell in the chart zone (dash, L, C, R). Their
-    // names are Moonbot brand terms and deliberately remain untranslated.
-    let cancel_pos_row = pos_selector_row(
-        format!("{id}-cancelbuy-pos"),
-        "Cancel Buy",
-        cancel_buy_pos,
-        p,
-        cx,
-        on_pick_cancel_pos,
-    );
-    let panic_pos_row = pos_selector_row(
-        format!("{id}-panicsell-pos"),
-        "Panic Sell",
-        panic_sell_pos,
-        p,
-        cx,
-        on_pick_panic_pos,
-    );
     // Price-axis selector (dash, L, R): hidden, left, or right beyond the order book.
     let price_axis_row = axis_selector_row(
         format!("{id}-price-axis-pos"),
@@ -649,10 +559,10 @@ where
             ),
         )
         .children(detect_group)
-        // Remaining controls: auto-pin, button positions, and price axis.
+        // Remaining controls: auto-pin and the price axis. The market BUTTONS used to be two more
+        // rows here — `Cancel Buy` and `Panic Sell`, each with a dash/L/C/R strip — and are now
+        // captions placed from the labels popup like everything else the chart prints.
         .child(auto_pin_cb)
-        .child(cancel_pos_row)
-        .child(panic_pos_row)
         .child(price_axis_row)
         .into_any_element()
 }

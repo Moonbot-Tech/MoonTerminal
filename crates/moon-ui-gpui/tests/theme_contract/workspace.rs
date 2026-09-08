@@ -679,7 +679,10 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
         ("panels/news/mod.rs", "scope_cores(b)"),
         ("panels/detects/mod.rs", "detection_core_visible"),
         ("panels/chart/trade.rs", "workspace_action_allows_core"),
-        ("panels/chart/render.rs", "workspace_action_allows_core"),
+        (
+            "panels/chart/market_actions.rs",
+            "workspace_action_allows_core",
+        ),
         (
             "panels/chart/render_input.rs",
             "workspace_action_allows_core",

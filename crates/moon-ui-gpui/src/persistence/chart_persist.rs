@@ -88,8 +88,12 @@ impl StackOrientation {
     }
 }
 
-/// Position of a market action button such as Cancel Buy or Panic Sell within the chart area, not
-/// the order-book area. `Hide` suppresses it; a missing specification value defaults to `Right`.
+/// Where a market action button — `Cancel Buy`, `Panic Sell` — was drawn in the chart area.
+///
+/// LEGACY, and read exactly once: the buttons are captions now, placed like everything else the
+/// chart prints, and `startup::action_buttons_migration` turns whatever a tab stored here into
+/// caption rows and clears the key. Nothing writes it again; the type survives so that one pass can
+/// still read a profile written before the move.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ChartBtnPos {
     Hide,
@@ -195,11 +199,12 @@ pub struct ChartTabSpec {
     /// unshown when false. None takes the built-in default, which replaces the stalest chart.
     #[serde(default)]
     pub max_charts_evict: Option<bool>,
-    /// Per-window/tab position of Cancel Buy in the chart area. None defaults to Right.
-    #[serde(default)]
+    /// LEGACY position of `Cancel Buy`, read once by the migration that made it a caption and then
+    /// cleared. Not written any more — see [`ChartBtnPos`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_buy_pos: Option<ChartBtnPos>,
-    /// Per-window/tab position of Panic Sell in the chart area. None defaults to Right.
-    #[serde(default)]
+    /// LEGACY position of `Panic Sell`, on the same terms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panic_sell_pos: Option<ChartBtnPos>,
     /// Explicit `(core, market)` list for a custom multi-market tab created through search. Some
     /// classifies the specification as custom, causing startup to restore exactly these charts

@@ -36,7 +36,7 @@ use super::caption::{CaptionBox, CaptionGeom, caption_geom};
 use super::labels::LabelText;
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
 use crate::chartdx::RenderState;
-use crate::chartdx::{ArbHit, VolumeHit};
+use crate::chartdx::{ActionPlacement, ArbHit, VolumeHit};
 
 /// Horizontal gap between two captions on the same row.
 const CAPTION_GAP: f32 = 8.0;
@@ -44,6 +44,13 @@ const CAPTION_GAP: f32 = 8.0;
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
+
+/// Opacity a caption is drawn at when it is SHOWN but cannot be acted on: an arbitrage venue with
+/// no core behind it, a button the workspace rail has closed.
+///
+/// The THEME's own fade step, so the chart says "here, and not a target" in the same voice every
+/// panel does rather than in a number of its own.
+const DISABLED_OPACITY: f32 = crate::design::STALE_ALPHA;
 
 /// Width of a buy/sell proportion bar, in the chart's own logical pixels.
 ///
@@ -78,6 +85,33 @@ pub(in crate::chartdx) struct CaptionBar {
     /// Whether this is the selling side.
     pub sell: bool,
 }
+/// One pressable caption as it was drawn, before the rectangle is resolved.
+///
+/// The box is grown exactly like a backing plate's, because that is the room the layout gave the
+/// button — see [`CaptionBox::button`] — so what the panel places and what the neighbouring module
+/// cleared are the same rectangle.
+pub(in crate::chartdx) struct ActionDraw {
+    mark: super::labels::ActionMark,
+    /// The caption's own font size, in LOGICAL pixels, which is what the rectangle was measured at.
+    /// The control placed in it is told to draw at the same number, or the box grows with the
+    /// caption's size while the words in it do not.
+    size: f32,
+    /// `[x, y, width, height]` in the pane's own LOGICAL pixels.
+    rect: [f32; 4],
+    /// Which caption this is, by IDENTITY rather than by position: the resolved list is rebuilt and
+    /// compacted on every revision, so an index taken from one frame names a different caption in
+    /// the next — the label would then come off a neighbour.
+    row: usize,
+    part: usize,
+}
+
+/// How much room a pressable caption reserves beyond its text: the control drawn over it.
+///
+/// A button occupies its whole PLATE, not its glyphs. Without this the module beside it is placed
+/// against the text width and the control is drawn over it — which is exactly how far the padding
+/// reaches.
+const ACTION_PLATE_W: f32 = super::caption::ACTION_PAD_X * 2.0;
+
 /// How much room this column reserves for proportion bars: one track, or none.
 ///
 /// ONE per column, not one per line. Every bar in a module is drawn on the same vertical — that is
@@ -287,6 +321,14 @@ impl RenderState {
         bars.clear();
         let mut vol_hits = std::mem::take(&mut self.panes[idx].volume_boxes);
         vol_hits.clear();
+        // Rebuilt every frame like the arbitrage rectangles above: a press has to hit what the last
+        // frame drew, and a button moves with the pane it stands in. Taken and returned, so a chart
+        // carrying buttons allocates nothing per frame.
+        let mut act_draws = std::mem::take(&mut self.panes[idx].action_draws);
+        act_draws.clear();
+        // Cleared before the pass, so a frame that fails leaves no rectangle behind: the panel
+        // would otherwise keep a button standing where nothing was drawn.
+        self.panes[idx].action_rects.clear();
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
         // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
         // during the pass: carrying entries across panes would leak a Vec per frame and let a
@@ -304,10 +346,18 @@ impl RenderState {
             &mut hits,
             &mut bars,
             &mut vol_hits,
+            &mut act_draws,
         );
         self.panes[idx].labels.texts = texts;
         self.panes[idx].arb_hits = hits;
-        result?;
+        if let Err(error) = result {
+            // Nothing was drawn: the rectangles cleared before the pass stay cleared, so a press
+            // cannot land on a button from a frame that was thrown away, and the build buffer goes
+            // back rather than being dropped.
+            act_draws.clear();
+            self.panes[idx].action_draws = act_draws;
+            return Err(error);
+        }
         for bar in &mut bars {
             let sf = geom.scale_factor;
             bar.dst = [
@@ -320,6 +370,28 @@ impl RenderState {
         // The bars ride the plates' own "did the geometry move" flag: both are published to the
         // readout batch, and a bar whose fill changed has to reach it exactly like a plate that
         // moved.
+        // Where each button GOES, in the pane's own logical pixels. The panel reads these on its
+        // next render and places one of the application's own buttons in each — the chart's pass
+        // cannot host a GPUI element, so the two halves meet on this rectangle and nothing else.
+        let pane = &mut self.panes[idx];
+        for draw in &act_draws {
+            let [x, y, w, h] = draw.rect;
+            if w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+            pane.action_rects.push(ActionPlacement {
+                x,
+                y,
+                w,
+                h,
+                size: draw.size,
+                mark: draw.mark,
+                row: draw.row,
+                part: draw.part,
+            });
+        }
+        act_draws.clear();
+        pane.action_draws = act_draws;
         let changed =
             self.panes[idx].caption_plates != plates || self.panes[idx].caption_bars != bars;
         if changed {
@@ -361,6 +433,7 @@ impl RenderState {
         hits: &mut Vec<ArbHit>,
         bars: &mut Vec<CaptionBar>,
         vol_hits: &mut Vec<(usize, CaptionBox)>,
+        act_draws: &mut Vec<ActionDraw>,
     ) -> anyhow::Result<()> {
         let Some(corner) = corner else {
             return Ok(());
@@ -440,6 +513,7 @@ impl RenderState {
                     hits,
                     bars,
                     vol_hits,
+                    act_draws,
                 )?;
                 taken.set(align, used_w);
                 // A module lives in exactly one band, so a band writes only its own slots and
@@ -617,6 +691,7 @@ impl RenderState {
         hits: &mut Vec<ArbHit>,
         bars: &mut Vec<CaptionBar>,
         vol_hits: &mut Vec<(usize, CaptionBox)>,
+        act_draws: &mut Vec<ActionDraw>,
     ) -> anyhow::Result<(Vec<(usize, CaptionBox)>, f32)> {
         let mut plates: Vec<(usize, CaptionBox)> = Vec::new();
         // The band is as wide as its widest LINE — what the bands drawn after it have to clear.
@@ -670,6 +745,7 @@ impl RenderState {
                 hits,
                 bars,
                 vol_hits,
+                act_draws,
             )?;
             used_w = used_w.max(row_w);
             any_drawn = true;
@@ -706,6 +782,7 @@ impl RenderState {
         hits: &mut Vec<ArbHit>,
         bars: &mut Vec<CaptionBar>,
         vol_hits: &mut Vec<(usize, CaptionBox)>,
+        act_draws: &mut Vec<ActionDraw>,
     ) -> anyhow::Result<f32> {
         if cells.is_empty() {
             return Ok(0.0);
@@ -920,7 +997,16 @@ impl RenderState {
                 // of the budget BEFORE the text is fitted to what is left. Added afterwards, the
                 // track would be drawn past the width the band actually allotted — over whatever
                 // the layout put beside it — and the plate grown from the same width with it.
-                let (text, value_w) = fit_caption(ctx, &glued, item, budget - prefix_w - reserve);
+                // A BUTTON is as wide as its backing, not as its label: the plate is what a reader
+                // aims at and what the module beside it has to clear. Reserved here, out of the
+                // same budget the bar track comes from, so a cramped band truncates the label
+                // rather than drawing a plate over its neighbour.
+                let act_w = match entry.action {
+                    Some(_) => ACTION_PLATE_W,
+                    None => 0.0,
+                };
+                let (text, value_w) =
+                    fit_caption(ctx, &glued, item, budget - prefix_w - reserve - act_w);
                 if text.is_empty() {
                     continue;
                 }
@@ -964,7 +1050,7 @@ impl RenderState {
                     // its price — that is what the column is for — but the name is not a target,
                     // and a reader should see which ones are.
                     let prefix_color = match entry.venue.is_some() && !entry.reachable {
-                        true => caption_fg.opacity(0.45),
+                        true => caption_fg.opacity(DISABLED_OPACITY),
                         false => caption_fg,
                     };
                     self.draw_caption_run(
@@ -988,25 +1074,42 @@ impl RenderState {
                     _ => item_x,
                 };
                 let _ = value_w;
-                let metrics = self.draw_caption_run(
-                    ctx,
-                    idx,
-                    item.row,
-                    item.part,
-                    &text,
-                    item.size,
-                    value_x,
-                    y,
-                    cell_ax,
-                    value_color,
-                )?;
-                crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
-                let w = metrics.width.as_f32() + prefix_w;
+                // A BUTTON is measured and not drawn. The chart's own pass cannot host a GPUI
+                // element, so what it does here is reserve the room the caption layout gives the
+                // button and publish the rectangle; the panel puts the application's own control in
+                // it — see `panels::chart::market_actions`. Drawing the label here as well would
+                // print it twice, in two different fonts.
+                let (text_w, line_h) = match entry.action.map(|mark| mark.action) {
+                    // A SQUARE button reserves its own height and measures nothing: the lock is one
+                    // glyph whose whole meaning is its shape, and a box that followed the glyph's
+                    // width would stop being square the moment the face or the size changed.
+                    Some(action) if action.square() => (item.line_h(), item.line_h()),
+                    Some(_) => (
+                        self.measure_caption_run(ctx, idx, item.row, item.part, &text, item.size),
+                        item.line_h(),
+                    ),
+                    None => {
+                        let metrics = self.draw_caption_run(
+                            ctx,
+                            idx,
+                            item.row,
+                            item.part,
+                            &text,
+                            item.size,
+                            value_x,
+                            y,
+                            cell_ax,
+                            value_color,
+                        )?;
+                        crate::diag::bump(&crate::diag::CHART_CAPTION_DRAW);
+                        (metrics.width.as_f32(), metrics.line_height.as_f32())
+                    }
+                };
+                let w = text_w + prefix_w;
                 // The proportion bar, placed from the SAME measurement the text was drawn at, so it
                 // cannot drift from the figure it belongs to. It extends the caption's own width,
                 // which is what keeps the module beside it from being drawn over the track.
                 if let Some(bar) = entry.bar {
-                    let line_h = metrics.line_height.as_f32();
                     let bar_h = (line_h * BAR_H_RATIO).max(BAR_H_MIN);
                     let bar_y = y + (line_h - bar_h) * 0.5;
                     // The module's OWN vertical, computed once above — not this line's right edge.
@@ -1022,7 +1125,7 @@ impl RenderState {
                 // What this line OCCUPIES includes the module's bar column: the plate behind it and
                 // the right-click target are grown from this, and a module whose tracks fell
                 // outside both would be drawn over by its neighbour.
-                let occupied = w + reserve;
+                let occupied = w + reserve + act_w;
                 drawn_w = drawn_w.max(occupied);
                 let box_left = match (reserve > 0.0, rightwards) {
                     // With bars the text column starts at `item_x` either way, and the track sits
@@ -1036,7 +1139,6 @@ impl RenderState {
                 // Independent of the plate: a module with its backing switched off is still a
                 // target, and tying the two would make the menu unreachable for it.
                 if entry.volume_menu {
-                    let line_h = metrics.line_height.as_f32();
                     match vol_hits.iter_mut().find(|(row, _)| *row == item.row) {
                         Some((_, box_)) => box_.add(box_left, w, y, line_h),
                         None => {
@@ -1046,14 +1148,39 @@ impl RenderState {
                         }
                     }
                 }
+                // Where the button GOES — exactly the room this caption CHARGED the line for, and
+                // not a box grown around the text afterwards. The advance below adds
+                // `ACTION_PLATE_W` on the side the line fills towards, so the rectangle has to grow
+                // the same way: a symmetric box would overhang the module before it by half the pad
+                // and leave the other half of the reserve empty.
+                if let Some(mark) = entry.action {
+                    let left = match rightwards {
+                        true => item_x,
+                        false => item_x - w - ACTION_PLATE_W,
+                    };
+                    act_draws.push(ActionDraw {
+                        mark,
+                        size: item.size,
+                        rect: [
+                            left,
+                            y - super::caption::ACTION_PAD_Y,
+                            w + ACTION_PLATE_W,
+                            line_h + super::caption::ACTION_PAD_Y * 2.0,
+                        ],
+                        row: item.row,
+                        part: item.part,
+                    });
+                }
                 // Grown into the box of the MODULE this caption belongs to. A module whose
-                // plate is switched off never opens one, so its captions grow nothing.
-                if item.plate {
+                // plate is switched off never opens one, so its captions grow nothing — and
+                // neither does a button, which has a backing of its own and would otherwise be
+                // drawn on two plates at once.
+                if item.plate && entry.action.is_none() {
                     match plates.iter_mut().find(|(row, _)| *row == item.row) {
-                        Some((_, box_)) => box_.add(box_left, w, y, metrics.line_height.as_f32()),
+                        Some((_, box_)) => box_.add(box_left, w, y, line_h),
                         None => {
                             let mut box_ = CaptionBox::default();
-                            box_.add(box_left, w, y, metrics.line_height.as_f32());
+                            box_.add(box_left, w, y, line_h);
                             plates.push((item.row, box_));
                         }
                     }
@@ -1123,9 +1250,17 @@ impl RenderState {
                 // plan rather than wrapped again — measuring is what the plan exists to do once.
                 // Measured WITHOUT the bar: the track is a column-wide reserve, added once below.
                 let bar_reserve = reserve;
+                // The button's own backing, charged per CAPTION rather than per column like the
+                // bar track beside it: two buttons in one module each draw a plate of their own.
+                let act_w = match entry.action {
+                    Some(_) => ACTION_PLATE_W,
+                    None => 0.0,
+                };
                 match self.wrapped(item) {
                     Some(lines) => Some(lines.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)),
-                    None => Some(fit_caption(ctx, &glued, item, budget - bar_reserve).1),
+                    None => {
+                        Some(fit_caption(ctx, &glued, item, budget - bar_reserve - act_w).1 + act_w)
+                    }
                 }
             })
             .fold(0.0_f32, f32::max);
@@ -1286,6 +1421,9 @@ impl RenderState {
             now_ms: pr.label_now_ms,
             chart_tf_ms: self.chart_tf_ms,
             basis: pr.label_basis,
+            // Pushed by the panel rather than read here: whether panic is armed and whether the
+            // workspace rail is open are the terminal's answers, not the engine's.
+            actions: pr.label_actions,
         };
         let arb_view = self.arb_view.clone();
         let changed = self.panes[idx].labels.update(&cfg, &arb_view, inputs);

@@ -36,18 +36,35 @@ impl ChartPanel {
     /// the click itself is routed by the chart's own input, in the pane's coordinates, where every
     /// other chart gesture is decided.
     pub(super) fn arb_cursor_zones(&self) -> Vec<Div> {
+        self.cursor_zones(|pane| self.chart.arb_hit_rects(pane))
+    }
+
+    /// Lay one transparent pointing-hand zone over every rectangle a pane published.
+    ///
+    /// The shared half of the two overlays — the arbitrage names and the market buttons — because
+    /// what differs between them is only which rectangles they ask for. Both work in the WINDOW's
+    /// logical pixels while this overlay is laid out inside the chart SLOT, so the slot's own
+    /// position comes off here: the exact inverse of what a press does, from the same helper, which
+    /// is what keeps the cursor and the click on the same rectangle.
+    ///
+    /// Args:
+    ///     rects: What one pane offers, in the window's logical pixels.
+    ///
+    /// Returns:
+    ///     One absolutely-placed zone per rectangle, carrying no handlers.
+    pub(super) fn cursor_zones(
+        &self,
+        rects: impl Fn(usize) -> Vec<(f32, f32, f32, f32)>,
+    ) -> Vec<Div> {
         let mut out = Vec::new();
         let Some((origin, _)) = self.chart_origin_logical() else {
             return out;
         };
-        for (pane, _) in self.chart.pane_rects() {
-            for (x, y, w, h) in self.chart.arb_hit_rects(pane) {
+        for pane in 0..self.chart.pane_count() {
+            for (x, y, w, h) in rects(pane) {
                 if w <= 0.0 || h <= 0.0 {
                     continue;
                 }
-                // The rectangles are in the WINDOW's logical pixels and this overlay is laid out
-                // inside the chart slot, so the slot's own position comes off — the exact inverse
-                // of what the press does above, and the reason both are computed from one helper.
                 out.push(
                     div()
                         .absolute()

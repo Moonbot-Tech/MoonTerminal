@@ -1,6 +1,6 @@
 //! Regression coverage for exact batched text measurement and for the brand assets.
 
-use super::{FontId, FontWeight, MonoGlyphWidthCache, wrap_text};
+use super::{FontId, FontWeight, MonoGlyphWidthCache, invert_font_scale, wrap_text};
 use std::collections::HashMap;
 
 /// Removing the glyph cache in `design::MonoGlyphWidthCache::text_width` must fail the lookup
@@ -242,4 +242,43 @@ fn chrome_toggle_tone_is_warning_only_when_on_and_caution() {
     assert_eq!(chrome_toggle_tone(true, false), MoonTone::Info);
     assert_eq!(chrome_toggle_tone(false, true), MoonTone::Info);
     assert_eq!(chrome_toggle_tone(false, false), MoonTone::Info);
+}
+
+/// A control placed in the room a chart caption reserved has to draw at the caption's OWN size, and
+/// MoonUI takes a base value it scales itself. The inverse has to land back on the number asked
+/// for, whatever the reader's font slider is set to.
+#[test]
+fn the_font_inverse_lands_on_the_size_it_was_asked_for() {
+    // The forward rule, as the theme states it: `value * scale + delta`, floored at a pixel.
+    let forward = |scale: f32, delta: f32, value: f32| (value * scale + delta).max(1.0);
+    for (scale, delta) in [
+        (1.0, 0.0),
+        (1.0, 3.0),
+        (1.25, -1.0),
+        (0.75, 2.5),
+        (2.0, 6.0),
+    ] {
+        for target in [6.0_f32, 11.0, 14.5, 40.0] {
+            let base = invert_font_scale(
+                forward(scale, delta, super::PROBE_LOW),
+                forward(scale, delta, super::PROBE_HIGH),
+                target,
+            );
+            let rendered = forward(scale, delta, base);
+            // A size the theme cannot reach — one below what a single base pixel already renders as
+            // — comes out at that floor rather than wrong: the base never goes under a pixel.
+            let floor = forward(scale, delta, 1.0);
+            let wanted = target.max(floor);
+            assert!(
+                (rendered - wanted).abs() < 0.01,
+                "scale {scale} delta {delta}: asked for {target}, got {rendered}"
+            );
+        }
+    }
+}
+
+/// A theme that scales every size to one number cannot be inverted; the target is the honest answer.
+#[test]
+fn a_degenerate_scale_answers_the_target_itself() {
+    assert_eq!(invert_font_scale(12.0, 12.0, 14.0), 14.0);
 }

@@ -13,17 +13,15 @@ use moon_ui::{MoonPalette, MoonTabItem, MoonTabStrip, MoonVirtualListScrollHandl
 use super::stack::grid;
 use super::stack::{
     ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role, render_chart_stack,
-    resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
-    set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
-    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
-    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
-    set_panels_show_zone, set_panels_time_axis_visible, sync_compare, tile_gutter,
+    resolve_layout, retain_nonempty_panels, set_panels_auto_pin, set_panels_candle_view,
+    set_panels_chart_graphics, set_panels_chart_labels, set_panels_cursor_labels,
+    set_panels_line_labels, set_panels_liquidations, set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
-use crate::persistence::chart_persist::{
-    ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
-};
+use crate::persistence::chart_persist::{PriceAxisPos, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartTheme;
 use moon_core::session::CoreId;
 
@@ -69,9 +67,6 @@ pub(crate) struct MainChartStack {
     auto_pin: Option<bool>,
     /// Per-window stack orientation; `None` defaults to `Vertical`.
     layout_orientation: Option<StackOrientation>,
-    /// Per-window positions of the Cancel Buy and Panic Sell buttons; `None` defaults to `Right`.
-    cancel_buy_pos: Option<ChartBtnPos>,
-    panic_sell_pos: Option<ChartBtnPos>,
     /// Per-window price-axis position for stack charts; `None` defaults to `Left`.
     price_axis_pos: Option<PriceAxisPos>,
     /// Per-window time-axis visibility for stack charts; `None` defaults to enabled.
@@ -216,8 +211,6 @@ impl MainChartStack {
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
-            cancel_buy_pos: None,
-            panic_sell_pos: None,
             price_axis_pos: None,
             time_axis_visible: None,
             line_labels: None,
@@ -331,13 +324,6 @@ impl MainChartStack {
         if let Some(ap) = self.auto_pin {
             panel.update(cx, |panel, pcx| panel.set_auto_pin(ap, pcx));
         }
-        panel.update(cx, |panel, pcx| {
-            panel.set_action_btn_pos(
-                self.cancel_buy_pos.unwrap_or_default(),
-                self.panic_sell_pos.unwrap_or_default(),
-                pcx,
-            )
-        });
         panel.update(cx, |panel, pcx| {
             panel.set_price_axis_pos(self.price_axis_pos.unwrap_or_default(), pcx)
         });
@@ -973,10 +959,6 @@ impl MainChartStack {
         self.auto_pin
     }
 
-    pub(crate) fn action_btn_pos(&self) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
-        (self.cancel_buy_pos, self.panic_sell_pos)
-    }
-
     pub(crate) fn price_axis_pos(&self) -> Option<PriceAxisPos> {
         self.price_axis_pos
     }
@@ -1023,27 +1005,6 @@ impl MainChartStack {
         apply_setting(&mut self.cursor_labels, show, &self.charts, cx, |c, cx| {
             set_panels_cursor_labels(c, show.unwrap_or(true), cx)
         });
-    }
-
-    /// Set Cancel Buy and Panic Sell button positions for every chart in this stack and window.
-    pub(crate) fn set_action_btn_pos(
-        &mut self,
-        cancel: Option<ChartBtnPos>,
-        panic: Option<ChartBtnPos>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.cancel_buy_pos == cancel && self.panic_sell_pos == panic {
-            return;
-        }
-        self.cancel_buy_pos = cancel;
-        self.panic_sell_pos = panic;
-        set_panels_action_btn_pos(
-            &self.charts,
-            cancel.unwrap_or_default(),
-            panic.unwrap_or_default(),
-            cx,
-        );
-        cx.notify();
     }
 
     /// Enable or disable automatic pinning on order placement for this stack and window.

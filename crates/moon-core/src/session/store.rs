@@ -538,6 +538,57 @@ impl CoreData {
         self.server_log_raw.iter().skip(start).cloned().collect()
     }
 
+    /// How much of a temporary ban on `symbol` is still to run, or `None` when this core holds no
+    /// live one.
+    ///
+    /// The COUNTDOWN, not the received figure: the feed does not republish a remainder merely for
+    /// counting down — see [`Self::temp_blacklist_at_ms`] — so the time since the snapshot arrived
+    /// comes off it here. Kept beside the data rather than in either caller: the coin menu offers
+    /// the lift and the chart's button prints the figure, and two copies of one extrapolation rule
+    /// is how the menu and the button end up disagreeing about whether a ban is still running.
+    ///
+    /// Saturating rather than checked: once the local extrapolation runs past the received
+    /// remainder the core may still hold the row — it has not said otherwise — and answering `None`
+    /// there would take away the only control that lifts the ban.
+    ///
+    /// Args:
+    ///     symbol: The MARKET the ban is keyed by, matched case-insensitively.
+    ///     now_ms: Wall clock to measure the elapsed time against, Unix ms.
+    ///
+    /// Returns:
+    ///     The remaining time, possibly zero, or `None` when no row holds this market.
+    pub fn temp_ban_left(&self, symbol: &str, now_ms: i64) -> Option<std::time::Duration> {
+        let until = self.temp_ban_until_ms(symbol)?;
+        Some(std::time::Duration::from_millis(
+            until.saturating_sub(now_ms).max(0) as u64,
+        ))
+    }
+
+    /// When that ban runs out, in Unix milliseconds, or `None` when this core holds none.
+    ///
+    /// The same fact as [`Self::temp_ban_left`] stated as an INSTANT, which is what a reader that
+    /// keeps the answer needs: the remainder decays with the clock, so anything comparing what it
+    /// last saw against what it sees now finds a change every time it looks — the chart's button
+    /// re-formatted its caption on every frame from that alone. The instant does not move until the
+    /// core says something new.
+    ///
+    /// Args:
+    ///     symbol: The MARKET the ban is keyed by, matched case-insensitively.
+    ///
+    /// Returns:
+    ///     The deadline, which may already be past — see [`Self::temp_ban_left`] on why a row the
+    ///     core still lists counts as a ban whatever the local countdown reached.
+    pub fn temp_ban_until_ms(&self, symbol: &str) -> Option<i64> {
+        let held = self
+            .temp_blacklist
+            .iter()
+            // A row the core reports as expired is not a ban it still holds: the queue considers a
+            // lift of it already done and sends nothing, so offering that lift would be a dead row.
+            .find(|row| row.symbol.eq_ignore_ascii_case(symbol) && !row.remaining.is_zero())?;
+        let at = self.temp_blacklist_at_ms?;
+        Some(at.saturating_add(i64::try_from(held.remaining.as_millis()).unwrap_or(i64::MAX)))
+    }
+
     /// Return the open edit for one strategy, if any.
     pub fn strategy_edit(&self, id: u64) -> Option<&StrategyEditRow> {
         self.strategy_edits.iter().find(|row| row.id == id)

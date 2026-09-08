@@ -166,7 +166,7 @@ fn spec_holds_slot(slot: GlobalSlot, spec: &ChartTabSpec) -> bool {
 /// The live stack is the authority for a tab that is open — it knows the lock that was just clicked
 /// — and this is for the ones that are not: a closed tab whose override would otherwise outlive the
 /// default it is supposed to follow and come back on the next launch.
-fn spec_kind(spec: &ChartTabSpec) -> ChartTabKind {
+pub(crate) fn spec_kind(spec: &ChartTabSpec) -> ChartTabKind {
     ChartTabKind::of(spec.detached.is_some(), spec.compare_anchor.is_some())
 }
 
@@ -540,7 +540,6 @@ pub(super) fn layout_values(
         StackSetting::ShowZone(snap.show_zone),
         StackSetting::AutoPin(snap.auto_pin),
         StackSetting::Orientation(orientation),
-        StackSetting::ActionPos(Some(snap.cancel_pos), Some(snap.panic_pos)),
         StackSetting::PriceAxis(snap.price_axis_pos),
         StackSetting::TimeAxis(snap.time_axis),
         StackSetting::LineLabels(snap.line_labels),

@@ -494,6 +494,12 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // before a `charts.json` write that then fails would skip those tabs on every future launch,
     // permanently. Repeating the pass costs nothing by comparison — `theme.toml` is untouched, so a
     // second run resolves the same values.
+    // Whether `charts.json` holds anything at all. Read ONCE, before either migration: both have to
+    // tell "no saved tabs" from "the file did not parse" — `chart_persist::load_all` reports the
+    // two the same way — and the answer cannot change between them.
+    let charts_file_has_content = std::fs::metadata(moon_core::config::paths::charts_path())
+        .map(|m| m.len() > 0)
+        .unwrap_or(false);
     if graphics_migration::migrate_chart_graphics_from_theme(&mut layout, &mut saved_chart_specs) {
         // An EMPTY spec list is ambiguous: `chart_persist::load_all` maps a parse failure to an
         // empty vec, so it means EITHER "no saved tabs" OR "charts.json is malformed". The two need
@@ -504,9 +510,6 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
         // Malformed -> defer everything, marker included: those tabs DO have `chart_graphics`
         // overrides that never got stamped, and a marker claiming otherwise would deny them the
         // migration forever if the file is later recovered.
-        let charts_file_has_content = std::fs::metadata(moon_core::config::paths::charts_path())
-            .map(|m| m.len() > 0)
-            .unwrap_or(false);
         // ...but never defer without a source for the retry to read. `unlock::start` below reaches
         // `ChartThemeSet::load`, which strips the six keys from `theme.toml` in this same launch, so
         // a deferral is only recoverable while the pre-migration copy exists. With no copy, taking
@@ -542,6 +545,39 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
                 "перенос настроек графики чарта не зафиксирован: charts.json не записан, \
                  повторю при следующем запуске"
             );
+        }
+    }
+    // The market buttons became captions, so the per-tab positions that used to place them have
+    // nowhere to be read from. Carried across right here, after the graphics pass and before
+    // anything reads a caption set.
+    if let Some(carried) =
+        action_buttons_migration::migrate_action_buttons(&mut layout, &mut saved_chart_specs)
+    {
+        // Same ambiguity the pass above resolves, for the same reason: `chart_persist::load_all`
+        // maps a parse failure to an empty list, so an empty one means EITHER "no saved tabs" OR
+        // "charts.json is malformed". Only the file itself can tell them apart, and the second case
+        // must DEFER — those tabs do carry positions this pass never saw, and a marker claiming
+        // otherwise would deny them the migration forever if the file is later recovered.
+        let specs_ok = if saved_chart_specs.is_empty() {
+            !charts_file_has_content
+        } else if carried.specs_changed {
+            chart_persist::save_all(&saved_chart_specs)
+        } else {
+            // Nothing in any tab to record — a fresh profile, or one whose buttons all sat where
+            // the shipped pair already draws them. The marker still commits; the file is not
+            // rewritten to say nothing changed.
+            true
+        };
+        if specs_ok {
+            layout.chart_action_buttons_migrated = true;
+            if !layout.save() {
+                // The rows are in `charts.json` but the marker is not durable. A repeat pass is
+                // harmless rather than merely survivable: every caption set it touched now HOLDS a
+                // button, and the pass refuses to add a second one to a set that does.
+                log::warn!("кнопки чарта перенесены, но метка не сохранена; повторю при запуске");
+            }
+        } else {
+            log::warn!("кнопки чарта: charts.json не разобран; повторю при следующем запуске");
         }
     }
     let layout = layout;
@@ -598,6 +634,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     Ok(())
 }
 
+mod action_buttons_migration;
 mod boot;
 mod fixture;
 mod graphics_migration;

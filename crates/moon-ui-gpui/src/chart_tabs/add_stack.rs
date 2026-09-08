@@ -15,17 +15,15 @@ pub(in crate::chart_tabs) mod detect_cap;
 use super::stack::grid;
 use super::stack::{
     COMPACT_STABLE, ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role,
-    render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
-    set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
-    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
-    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
-    set_panels_show_zone, set_panels_time_axis_visible, sync_compare, tile_gutter,
+    render_chart_stack, resolve_layout, set_panels_auto_pin, set_panels_candle_view,
+    set_panels_chart_graphics, set_panels_chart_labels, set_panels_cursor_labels,
+    set_panels_line_labels, set_panels_liquidations, set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
-use crate::persistence::chart_persist::{
-    ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
-};
+use crate::persistence::chart_persist::{PriceAxisPos, StackLayoutMode, StackOrientation};
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
 
@@ -93,10 +91,6 @@ pub(crate) struct AddChartStack {
     /// What a detect does at the cap: replace the stalest chart when `Some(true)`, go unshown when
     /// `Some(false)`. `None` = the built-in default, which replaces the stalest chart.
     max_charts_evict: Option<bool>,
-    /// Positions of the Cancel Buy / Panic Sell buttons in the chart zone (per window).
-    /// `None` = default Right.
-    cancel_buy_pos: Option<ChartBtnPos>,
-    panic_sell_pos: Option<ChartBtnPos>,
     /// Price-axis position (Left/Right/Hide) for stack charts (per window). `None` = default Left.
     price_axis_pos: Option<PriceAxisPos>,
     /// Time-axis visibility for stack charts (per window). `None` = enabled by default.
@@ -190,8 +184,6 @@ impl AddChartStack {
             arrival_flash: None,
             max_charts: None,
             max_charts_evict: None,
-            cancel_buy_pos: None,
-            panic_sell_pos: None,
             price_axis_pos: None,
             time_axis_visible: None,
             line_labels: None,
@@ -654,13 +646,6 @@ impl AddChartStack {
             panel.update(cx, |panel, pcx| panel.set_auto_pin(ap, pcx));
         }
         panel.update(cx, |panel, pcx| {
-            panel.set_action_btn_pos(
-                self.cancel_buy_pos.unwrap_or_default(),
-                self.panic_sell_pos.unwrap_or_default(),
-                pcx,
-            )
-        });
-        panel.update(cx, |panel, pcx| {
             panel.set_price_axis_pos(self.price_axis_pos.unwrap_or_default(), pcx)
         });
         panel.update(cx, |panel, pcx| {
@@ -805,31 +790,6 @@ impl AddChartStack {
 
     pub(crate) fn auto_pin(&self) -> Option<bool> {
         self.auto_pin
-    }
-
-    pub(crate) fn action_btn_pos(&self) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
-        (self.cancel_buy_pos, self.panic_sell_pos)
-    }
-
-    /// Set Cancel Buy / Panic Sell button positions for every stack chart (per window).
-    pub(crate) fn set_action_btn_pos(
-        &mut self,
-        cancel: Option<ChartBtnPos>,
-        panic: Option<ChartBtnPos>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.cancel_buy_pos == cancel && self.panic_sell_pos == panic {
-            return;
-        }
-        self.cancel_buy_pos = cancel;
-        self.panic_sell_pos = panic;
-        set_panels_action_btn_pos(
-            &self.charts,
-            cancel.unwrap_or_default(),
-            panic.unwrap_or_default(),
-            cx,
-        );
-        cx.notify();
     }
 
     pub(crate) fn price_axis_pos(&self) -> Option<PriceAxisPos> {

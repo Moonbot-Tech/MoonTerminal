@@ -123,6 +123,33 @@ pub(in crate::chartdx) struct LabelInputs {
     pub arb: Vec<ArbQuote>,
     /// Open-position figures, one entry per [`PnlBasis`] at [`basis_index`].
     pub basis: [BasisStats; 3],
+    /// What the pane's market BUTTONS state right now.
+    pub actions: ActionInputs,
+}
+
+/// What a pressable caption prints, and whether pressing it does anything.
+///
+/// Carried as INPUTS like every other caption's figures, and for the same reason: a button whose
+/// text is built anywhere else would reshape its run on a frame where nothing about it moved. The
+/// three facts here are the only ones its text depends on.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::chartdx) struct ActionInputs {
+    /// Whether this chart can act on a market at all.
+    ///
+    /// False on the trade-detail window, which draws a picture of a trade that already closed:
+    /// every action caption prints NOTHING there rather than a disabled button, because a button
+    /// over a finished trade reads as an offer to act on it.
+    pub live: bool,
+    /// Whether the workspace rail lets this window command the pane's core right now. A button that
+    /// cannot be pressed is drawn faded, the way an unreachable arbitrage venue is.
+    pub allowed: bool,
+    /// Whether panic selling is already armed on this market, which is what turns `Panic Sell` into
+    /// `Stop Panic`.
+    pub panic_armed: bool,
+    /// When the core's temporary ban on this market runs out, Unix ms, or `None` while it holds
+    /// none. A DEADLINE rather than a remainder so the figure counts down against the caption
+    /// clock without the panel pushing a new value per frame.
+    pub ban_until_ms: Option<i64>,
 }
 
 /// Open-position figures for ONE basis.
@@ -219,6 +246,26 @@ pub(in crate::chartdx) struct LabelText {
     /// target: the reader aims at the figures, not at the one line that happens to name the period.
     /// The menu edits the module the caption belongs to, which [`Self::row`] identifies.
     pub volume_menu: bool,
+    /// What a PRESS on this caption does, for the captions that are buttons.
+    ///
+    /// `None` on every reporting caption, which is all but three of them. Carried on the text
+    /// rather than looked up from the configuration by the drawing pass, exactly like
+    /// [`Self::volume_menu`] beside it: the pass has the resolved captions and not the parts, and
+    /// re-deriving a button's state there would need the pane's inputs a second time.
+    pub action: Option<ActionMark>,
+}
+
+/// A drawn caption that can be PRESSED, and what it would do.
+///
+/// The caption's own CONFIGURATION and nothing else. Its state — armed, banned, allowed — is read
+/// where the control is built, from the same values the label was formatted from: a mark carrying
+/// a copy would be a second generation of the same fact, and the button would say one thing while
+/// its plate said the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::chartdx) struct ActionMark {
+    /// What pressing it does. How long a ban runs is asked at the press, by the button's own popup,
+    /// so nothing about a span is carried here.
+    pub action: moon_core::config::ChartAction,
 }
 
 /// A buy/sell proportion bar, before it has any geometry.
@@ -339,6 +386,9 @@ impl LabelState {
                     bar: None,
                     // A module's own NAME is part of its block, so the menu opens from it too.
                     volume_menu: row_reads_volume,
+                    // A name is not a button, whatever the module beside it holds: a press has to
+                    // land on the control it names, not on the heading over it.
+                    action: None,
                 });
             }
             let mut column_drawn = false;
@@ -387,6 +437,7 @@ impl LabelState {
                     color: None,
                     bar: volume_bar(part, &self.inputs),
                     volume_menu: row_reads_volume && part.field.in_volume_block(),
+                    action: action_mark(part.field),
                 });
             }
         }
@@ -405,6 +456,19 @@ impl LabelState {
 /// Figures for one basis.
 fn stats_for(inputs: &LabelInputs, basis: PnlBasis) -> &BasisStats {
     &inputs.basis[basis_index(basis)]
+}
+
+/// Whether this caption is a button, and what pressing it would do.
+///
+/// Args:
+///     field: The caption's field.
+///
+/// Returns:
+///     The mark, or `None` for a caption that only reports.
+fn action_mark(field: ChartLabelField) -> Option<ActionMark> {
+    Some(ActionMark {
+        action: field.action()?,
+    })
 }
 
 /// Format one caption's VALUE, or report that it has nothing to print.
@@ -524,6 +588,37 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .map(|text| (text, None)),
         // Always printed: the countdown asks the clock, not the market, so there is no state in
         // which it has nothing to say - which is why this arm has no `None` at all.
+        // The three pressable captions. Their text is the button's LABEL, and the pane's own state
+        // is what it says: a chart with nothing to act on prints none of them, an armed panic
+        // offers to stop instead of to start, and a ban that is running prints what is left of it.
+        ChartLabelField::ActCancelBuy => inputs
+            .actions
+            .live
+            .then(|| (t!("chart_labels.act.cancel_buy").to_string(), None)),
+        ChartLabelField::ActPanicSell => inputs.actions.live.then(|| {
+            let key = match inputs.actions.panic_armed {
+                true => "chart_labels.act.stop_panic",
+                false => "chart_labels.act.panic_sell",
+            };
+            (t!(key).to_string(), None)
+        }),
+        // The lock, and nothing but the lock: OPEN while the coin trades, CLOSED while it is
+        // banned. A glyph rather than a word for the same reason the chart's own pin and lock
+        // buttons are glyphs — the state IS the picture, and a label beside it would repeat it.
+        ChartLabelField::ActTempBan => inputs.actions.live.then(|| {
+            let glyph = match inputs.actions.ban_until_ms.is_some() {
+                true => LOCK_CLOSED,
+                false => LOCK_OPEN,
+            };
+            (glyph.to_string(), None)
+        }),
+        // What is left of that ban, as a caption of its own — placed wherever the reader wants it,
+        // and silent while nothing is banned. The figure is floored at a minute for the reason it
+        // is rounded up; see `fmt_ban_left`.
+        ChartLabelField::TempBanLeft => inputs
+            .actions
+            .ban_until_ms
+            .map(|until| (fmt_ban_left((until - inputs.now_ms).max(60_000)), None)),
         ChartLabelField::TfCloseIn => Some((
             fmt_tf_countdown(part.tf.remaining_ms(inputs.chart_tf_ms, inputs.now_ms)),
             None,
@@ -808,6 +903,7 @@ fn push_arb_rows(
             color: cell.color,
             bar: None,
             volume_menu: false,
+            action: None,
         });
     }
 }
@@ -1048,6 +1144,25 @@ fn hours_and_minutes(hours: i64, minutes: i64) -> String {
         t!("chart_labels.unit_hour"),
         t!("chart_labels.unit_minute")
     )
+}
+
+/// The lock a temporary-ban button draws, in its two states.
+///
+/// Glyphs rather than icon assets, matching the chart's own pin, lock and broom buttons beside
+/// them: one control drawn from a font the whole application already loads.
+const LOCK_OPEN: &str = "\u{1F513}";
+const LOCK_CLOSED: &str = "\u{1F512}";
+
+/// Format what is left of a temporary ban, to the MINUTE.
+///
+/// The coin menu's own formatter, on purpose: the menu offers the lift of the same ban this button
+/// prints, and two spellings of one remainder is a reader checking whether they are looking at the
+/// same thing. What this adds is the ROUNDING — up, and never below a minute — because the caption
+/// clock only moves once a minute (see `countdown_clock_ms`) and a figure finer than its own clock
+/// prints a number that has stopped, while a `0м` reads as a ban nobody cleared.
+fn fmt_ban_left(remaining_ms: i64) -> String {
+    let minutes = ceil_div(remaining_ms, 60_000).max(1);
+    crate::display_text::fmt_duration_short((minutes * 60) as f64)
 }
 
 /// Whole units of `step` in `value`, rounded UP, with a negative value answering zero.
@@ -1517,6 +1632,16 @@ fn sample_inputs() -> LabelInputs {
         // The sample chart is on the five-minute timeframe, so an `Авто` caption previews `5м`.
         chart_tf_ms: 5 * 60_000,
         basis: [stats; 3],
+        // The buttons preview LIVE and pressable: a reader placing one has to see what it will
+        // carry, and a disabled sample would show them a state they will never configure. The ban
+        // previews as RUNNING for the same reason every other optional figure previews with a
+        // value — the lock shows closed, and the readout beside it counts `4ч 12м` down.
+        actions: ActionInputs {
+            live: true,
+            allowed: true,
+            panic_armed: false,
+            ban_until_ms: Some(4 * 3_600_000 + 12 * 60_000),
+        },
     }
 }
 

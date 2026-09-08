@@ -613,6 +613,58 @@ pub fn line_value(cx: &App, value: f32) -> f32 {
     MoonTheme::active_tokens(cx).line_height(value)
 }
 
+/// The BASE size a MoonUI component must be handed so its text RENDERS at `target` logical pixels.
+///
+/// The inverse of [`font_value`]. Every MoonUI size is a design-reference number that the theme
+/// scales at render time, which is right for anything laid out in the application's own type — and
+/// wrong for the one case that is not: the chart's captions are sized by the CHART's font, and a
+/// control placed in the room one of them reserved has to match that number exactly, or the box and
+/// the words in it grow apart.
+///
+/// Solved rather than derived, because the theme exposes the forward function and not its terms.
+/// `font` is affine (`value * scale + delta`, floored at one pixel), so two probes taken clear of
+/// that floor give the slope and the intercept, and the inverse is exact.
+///
+/// Args:
+///     cx: Application context used to read the active tokens.
+///     target: The size the text has to come out at, in logical pixels.
+///
+/// Returns:
+///     The base value to pass, never below one pixel.
+pub fn font_base_for(cx: &App, target: f32) -> f32 {
+    invert_font_scale(
+        font_value(cx, PROBE_LOW),
+        font_value(cx, PROBE_HIGH),
+        target,
+    )
+}
+
+/// The two points the inverse is fitted through, chosen clear of the one-pixel floor `font` applies.
+const PROBE_LOW: f32 = 10.0;
+const PROBE_HIGH: f32 = 20.0;
+
+/// Solve `scale * base + delta = target` from two samples of the forward function.
+///
+/// Split out from [`font_base_for`] because it is the only part that can be WRONG: the rest is two
+/// calls into the theme. A degenerate pair — a theme that scales everything to one number — answers
+/// the target itself rather than dividing by zero.
+///
+/// Args:
+///     low: What the forward function returns for [`PROBE_LOW`].
+///     high: The same for [`PROBE_HIGH`].
+///     target: The rendered size wanted.
+///
+/// Returns:
+///     The base to hand the component, never below one pixel.
+fn invert_font_scale(low: f32, high: f32, target: f32) -> f32 {
+    let slope = (high - low) / (PROBE_HIGH - PROBE_LOW);
+    if !slope.is_finite() || slope <= 0.01 {
+        return target.max(1.0);
+    }
+    let intercept = low - slope * PROBE_LOW;
+    ((target - intercept) / slope).max(1.0)
+}
+
 pub fn fit_h_value(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f32) -> f32 {
     MoonTheme::active_tokens(cx).fit_height(base_height, base_line_height, base_pad_y)
 }

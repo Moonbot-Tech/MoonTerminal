@@ -20,9 +20,7 @@ use super::popup_slot::{ChartPopup, PopupSlot};
 use super::{layout_popup, stack};
 use crate::Backend;
 use crate::design;
-use crate::persistence::chart_persist::{
-    self, ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
-};
+use crate::persistence::chart_persist::{self, PriceAxisPos, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
@@ -104,8 +102,6 @@ pub(crate) enum StackSetting {
     ShowZone(bool),
     /// Automatic pinning on order enabled/disabled.
     AutoPin(bool),
-    /// Cancel Buy / Panic Sell button positions.
-    ActionPos(Option<ChartBtnPos>, Option<ChartBtnPos>),
     /// Price-axis position.
     PriceAxis(PriceAxisPos),
     /// Time-axis visibility.
@@ -294,10 +290,6 @@ impl StackSetting {
             StackSetting::Liquidations(v) => s.liquidations_enabled = Some(v),
             StackSetting::ShowZone(v) => s.show_zone = Some(v),
             StackSetting::AutoPin(v) => s.auto_pin = Some(v),
-            StackSetting::ActionPos(cancel, panic) => {
-                s.cancel_buy_pos = cancel;
-                s.panic_sell_pos = panic;
-            }
             StackSetting::PriceAxis(p) => s.price_axis_pos = Some(p),
             StackSetting::TimeAxis(v) => s.time_axis_visible = Some(v),
             StackSetting::LineLabels(v) => s.line_labels = Some(v),
@@ -338,9 +330,6 @@ macro_rules! set_stack_setting {
             }
             crate::chart_tabs::common::StackSetting::ShowZone(v) => $s.set_show_zone(Some(v), $c),
             crate::chart_tabs::common::StackSetting::AutoPin(v) => $s.set_auto_pin(Some(v), $c),
-            crate::chart_tabs::common::StackSetting::ActionPos(cancel, panic) => {
-                $s.set_action_btn_pos(cancel, panic, $c)
-            }
             crate::chart_tabs::common::StackSetting::PriceAxis(p) => {
                 $s.set_price_axis_pos(Some(p), $c)
             }
@@ -401,8 +390,6 @@ pub(super) struct LayoutPopupSnapshot {
     pub liquidations: bool,
     pub show_zone: bool,
     pub auto_pin: bool,
-    pub cancel_pos: ChartBtnPos,
-    pub panic_pos: ChartBtnPos,
     pub price_axis_pos: PriceAxisPos,
     pub time_axis: bool,
     pub line_labels: bool,
@@ -458,8 +445,6 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     /// out is [`StackSetting::applies_to`]'s to say, in one place, for both the popup and the ⧉
     /// walk. `source_kind` cannot stand in for it — Main with a comparison anchor reports `Compare`.
     fn target_is_main(&self, cx: &App) -> bool;
-    /// Target action-button positions as raw `Option`s for independently editing cancel/panic.
-    fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>);
     fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot;
     /// Whether the target is a custom multi-coin tab, controlling rename-field visibility.
     fn popup_is_custom(&self, cx: &App) -> bool;
@@ -643,18 +628,6 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
         }
         cx.notify();
-    }
-
-    /// Set and persist the Cancel Buy button position without changing Panic Sell.
-    fn apply_cancel_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
-        let (_, panic) = self.action_btn_pos_opt(cx);
-        self.apply_tab_setting(StackSetting::ActionPos(Some(pos), panic), cx);
-    }
-
-    /// Set and persist the Panic Sell button position without changing Cancel Buy.
-    fn apply_panic_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
-        let (cancel, _) = self.action_btn_pos_opt(cx);
-        self.apply_tab_setting(StackSetting::ActionPos(cancel, Some(pos)), cx);
     }
 
     /// Toggle from the current orientation to its opposite.
@@ -997,8 +970,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let sz_entity = entity.clone();
     let ap_entity = entity.clone();
     let or_entity = entity.clone();
-    let cbp_entity = entity.clone();
-    let psp_entity = entity.clone();
     let pap_entity = entity.clone();
     let tav_entity = entity.clone();
     let ll_entity = entity.clone();
@@ -1026,8 +997,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         snap.liquidations,
         snap.show_zone,
         snap.auto_pin,
-        snap.cancel_pos,
-        snap.panic_pos,
         snap.price_axis_pos,
         snap.time_axis,
         snap.line_labels,
@@ -1104,12 +1073,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         },
         move |app| {
             or_entity.update(app, |this, cx| this.toggle_orientation_setting(cx));
-        },
-        move |pos, app| {
-            cbp_entity.update(app, |this, cx| this.apply_cancel_pos(pos, cx));
-        },
-        move |pos, app| {
-            psp_entity.update(app, |this, cx| this.apply_panic_pos(pos, cx));
         },
         move |pos, app| {
             pap_entity.update(app, |this, cx| {

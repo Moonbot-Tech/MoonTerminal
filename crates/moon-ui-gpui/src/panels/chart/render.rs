@@ -15,7 +15,6 @@ use moon_chart::paint::now_unix_ms;
 use super::render_input;
 use super::report_trades::ReportTradesStatus;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
-use crate::persistence::chart_persist::ChartBtnPos;
 
 /// Fixed clearance for the chart's top-left control strip, so the status row never competes with
 /// its corner controls for the same pixels.
@@ -36,74 +35,6 @@ const RETRY_BUTTON_PX: f32 = 72.0;
 /// button — so the row only appears where it has somewhere to go.
 const HISTORY_STATUS_MIN_SLOT_W: u32 =
     ((OVERLAY_LEFT_PX + OVERLAY_RIGHT_MARGIN_PX + RETRY_BUTTON_PX) * 2.0) as u32;
-
-/// Market-action button type for the chart overlay.
-#[derive(Clone, Copy)]
-enum ActKind {
-    CancelBuy,
-    PanicSell,
-}
-
-/// Builds a Cancel Buy or Panic Sell button shared by per-pane and fullscreen overlays.
-///
-/// Labels, variants, and click handling are identical; callers supply the target plus its live
-/// workspace permission and may add `.full_width()`. Moonbot product terms remain untranslated.
-///
-/// Args:
-///     kind: Market action represented by the button.
-///     id: Stable GPUI element identifier.
-///     armed: Whether panic sell is currently armed for the target.
-///     backend: Live command and workspace authority.
-///     workspace_group: Owning chart group, or `None` for an unscoped diagnostic chart.
-///     allowed: Render-time permission used to disable stale Auto targets visibly.
-///     core: Core targeted by the command.
-///     market: Canonical market targeted by the command.
-///
-/// Returns:
-///     A button whose callback revalidates the workspace before dispatch.
-fn action_button(
-    kind: ActKind,
-    id: SharedString,
-    armed: bool,
-    backend: Entity<crate::Backend>,
-    workspace_group: Option<String>,
-    allowed: bool,
-    core: moon_core::session::CoreId,
-    market: String,
-) -> MoonButton {
-    let (label, variant, selected) = match kind {
-        ActKind::CancelBuy => ("Cancel Buy", MoonButtonVariant::Soft, false),
-        // An armed panic becomes "Stop Panic", matching MoonBot's second-click
-        // `TTurnPanicSell off` behavior. This exposes the ability to disarm panic, which is
-        // required before moving sell below the AllowedDrop floor.
-        ActKind::PanicSell if armed => ("Stop Panic", MoonButtonVariant::Danger, true),
-        ActKind::PanicSell => ("Panic Sell", MoonButtonVariant::Danger, false),
-    };
-    MoonButton::new(id)
-        .label(label)
-        .size(MoonButtonSize::Micro)
-        .variant(variant)
-        .selected(selected)
-        .disabled(!allowed)
-        .on_click(move |_, _w, app| {
-            backend.update(app, |b, cx| {
-                if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
-                    return;
-                }
-                match kind {
-                    ActKind::CancelBuy => {
-                        if let Err(error) = b.session.cancel_market_buys(core, market.clone()) {
-                            log::warn!("cancel market buys failed: {error:#}");
-                        }
-                    }
-                    ActKind::PanicSell => {
-                        b.toggle_panic_sell(core, market.clone());
-                        cx.notify();
-                    }
-                }
-            });
-        })
-}
 
 impl Render for ChartPanel {
     /// Render the live chart surface and its explicitly unscoped in-chart figure settings.
@@ -332,247 +263,11 @@ impl Render for ChartPanel {
         } else {
             Vec::new()
         };
-        // Render Cancel Buy / Panic Sell as a GPUI overlay at the bottom of the graph body, ABOVE
-        // the time-axis row. OverScene axis text renders above GPUI, so avoid its area. Each tab's
-        // setting chooses Hide/Left/Center/Right. Keep buttons strictly inside the chart zone:
-        // exclude the price-axis gutter on its configured side and the book/control zone on the
-        // right even when the book is disabled. Shrink buttons when needed; overflow_hidden clips
-        // text on the right.
-        // Tuple fields: (kind, x, top, width, height, core, market, armed).
-        const ACT_BTN_W: f32 = 92.0;
-        const ACT_GAP: f32 = 8.0;
-        const ACT_MIN_W: f32 = 30.0;
-        // These use MoonButton Micro, like the chart's close/pin/lock overlays. The height comes
-        // from the shared helper so it follows the font slider just like the button does, and so
-        // the mirrored MoonUI metrics live in exactly one place. This layout controls button
-        // width from the available chart zone.
-        let act_btn_h = crate::design::micro_control_h_value(cx);
-        // A HISTORICAL VIEWER builds NEITHER market action — not a disabled one, not a hidden one:
-        // both placement paths below are skipped whole, so nothing named `Cancel Buy` or
-        // `Panic Sell` reaches the element tree of a window showing a trade that already closed.
-        // Every live chart has `historical == false` and reaches exactly the code it always did.
-        let market_actions = !self.historical;
-        let cancel_pos = self.cancel_buy_pos;
-        let panic_pos = self.panic_sell_pos;
-        // For the container's populated pane, place buttons through the GPUI `action_overlay` below
-        // so they resize synchronously with the slot. Positions from axis_panes use own-pass
-        // geometry (`data.w/h`), which updates on the present tick and can lag a fullscreen toggle
-        // by several frames, making buttons jump. Stack/compare layouts compose separate ChartPanels;
-        // each chart container itself holds at most one pane.
-        let single_pane =
-            !self.orderbook_only && axis_panes.len() == 1 && self.chart.pane_target(0).is_some();
-        let mut action_btns: Vec<(
-            ActKind,
-            f32,
-            f32,
-            f32,
-            f32,
-            moon_core::session::CoreId,
-            String,
-            bool,
-        )> = Vec::new();
-        if market_actions && !single_pane && !self.orderbook_only {
-            for (idx, rect, _) in axis_panes.iter() {
-                let Some((core, market)) = self.chart.pane_target(*idx) else {
-                    continue;
-                };
-                let pane_left = rect.x / ppp;
-                let pane_w = rect.w / ppp;
-                // Chart zone spans from the price axis to the start of the book/control zone.
-                // Always reserve the book zone, even when disabled. Remove the axis gutter from its
-                // actual side: left via axis_off, or right beyond the book via an extra reserve.
-                let glass_reserve = moon_chart::GLASS_ZONE_PX.min(pane_w * 0.5);
-                let right_axis_reserve = if matches!(
-                    self.price_axis_pos,
-                    crate::persistence::chart_persist::PriceAxisPos::Right
-                ) {
-                    moon_chart::PRICE_AXIS_W
-                } else {
-                    0.0
-                };
-                let zone_left = pane_left + axis_off;
-                let zone_right = pane_left + pane_w - glass_reserve - right_axis_reserve;
-                let zone_w = zone_right - zone_left;
-                if zone_w < ACT_MIN_W {
-                    continue;
-                }
-                let time_axis_reserve = if self.time_axis_visible {
-                    moon_chart::TIME_AXIS_H
-                } else {
-                    0.0
-                };
-                let top = (rect.y + rect.h) / ppp - time_axis_reserve - act_btn_h - 10.0;
-                let armed = self.backend.read(cx).is_panic_armed(core, &market);
-                // Visible buttons as (kind, anchor), in stable order.
-                let mut vis: Vec<(ActKind, ChartBtnPos)> = Vec::new();
-                if cancel_pos != ChartBtnPos::Hide {
-                    vis.push((ActKind::CancelBuy, cancel_pos));
-                }
-                if panic_pos != ChartBtnPos::Hide {
-                    vis.push((ActKind::PanicSell, panic_pos));
-                }
-                if vis.is_empty() {
-                    continue;
-                }
-                // Shrink globally so ALL buttons fit in one row; otherwise different left/right
-                // anchors overlap on a narrow chart.
-                let n = vis.len() as f32;
-                let bw = if n * ACT_BTN_W + (n - 1.0) * ACT_GAP > zone_w {
-                    ((zone_w - (n - 1.0) * ACT_GAP) / n).max(ACT_MIN_W)
-                } else {
-                    ACT_BTN_W
-                };
-                let hi = (zone_right - bw).max(zone_left);
-                let anchor_x = |a: ChartBtnPos| -> f32 {
-                    let x = match a {
-                        ChartBtnPos::Left => zone_left,
-                        ChartBtnPos::Center => zone_left + (zone_w - bw) * 0.5,
-                        ChartBtnPos::Right => zone_right - bw,
-                        ChartBtnPos::Hide => zone_left,
-                    };
-                    x.clamp(zone_left, hi)
-                };
-                let order = |a: ChartBtnPos| -> u8 {
-                    match a {
-                        ChartBtnPos::Left => 0,
-                        ChartBtnPos::Center => 1,
-                        ChartBtnPos::Right => 2,
-                        ChartBtnPos::Hide => 0,
-                    }
-                };
-                let mut placed: Vec<(ActKind, f32)> = Vec::new();
-                if vis.len() == 1 {
-                    placed.push((vis[0].0, anchor_x(vis[0].1)));
-                } else if vis[0].1 == vis[1].1 {
-                    // Same anchor: place both buttons in a row at that anchor.
-                    let total = 2.0 * bw + ACT_GAP;
-                    let start = match vis[0].1 {
-                        ChartBtnPos::Center => zone_left + (zone_w - total) * 0.5,
-                        ChartBtnPos::Right => zone_right - total,
-                        _ => zone_left,
-                    }
-                    .clamp(zone_left, (zone_right - total).max(zone_left));
-                    placed.push((vis[0].0, start));
-                    placed.push((vis[1].0, start + bw + ACT_GAP));
-                } else {
-                    // Different anchors: place left-to-right by anchor order without overlap.
-                    let (mut a, mut b) = (vis[0], vis[1]);
-                    if order(a.1) > order(b.1) {
-                        std::mem::swap(&mut a, &mut b);
-                    }
-                    let xa = anchor_x(a.1);
-                    let xb = anchor_x(b.1).max(xa + bw + ACT_GAP).clamp(zone_left, hi);
-                    placed.push((a.0, xa));
-                    placed.push((b.0, xb));
-                }
-                for (kind, x) in placed {
-                    action_btns.push((kind, x, top, bw, act_btn_h, core, market.clone(), armed));
-                }
-            }
-        }
-        // The SINGLE-pane action overlay uses pure GPUI layout (insets + flex), without own-pass
-        // geometry, keeping positions synchronized with the slot and preventing fullscreen jumps.
-        // The chart zone is the slot minus the configured-side price-axis gutter, right
-        // book/control zone, and bottom time axis. Its regions correspond to Left/Center/Right
-        // anchors.
-        let action_overlay = if market_actions && single_pane {
-            self.chart.pane_target(0).and_then(|(core, market)| {
-                let backend = self.backend.read(cx);
-                let armed = backend.is_panic_armed(core, &market);
-                let allowed = self.workspace_action_allowed(&backend, core);
-                let backend0 = self.backend.clone();
-                let workspace_group = self.workspace_group.clone();
-                let mk = |kind: ActKind| -> AnyElement {
-                    let id = match kind {
-                        ActKind::CancelBuy => "chart-cancelbuy-fs",
-                        ActKind::PanicSell => "chart-panic-fs",
-                    };
-                    action_button(
-                        kind,
-                        SharedString::from(id),
-                        armed,
-                        backend0.clone(),
-                        workspace_group.clone(),
-                        allowed,
-                        core,
-                        market.clone(),
-                    )
-                    .render()
-                    .into_any_element()
-                };
-                let mut left: Vec<AnyElement> = Vec::new();
-                let mut center: Vec<AnyElement> = Vec::new();
-                let mut right: Vec<AnyElement> = Vec::new();
-                for (kind, pos) in [
-                    (ActKind::CancelBuy, cancel_pos),
-                    (ActKind::PanicSell, panic_pos),
-                ] {
-                    match pos {
-                        ChartBtnPos::Left => left.push(mk(kind)),
-                        ChartBtnPos::Center => center.push(mk(kind)),
-                        ChartBtnPos::Right => right.push(mk(kind)),
-                        ChartBtnPos::Hide => {}
-                    }
-                }
-                if left.is_empty() && center.is_empty() && right.is_empty() {
-                    return None;
-                }
-                // Size regions by CONTENT rather than flex_1 so buttons retain their width when two
-                // share an anchor (both default to Right). Two flex spacers establish L/C/R anchoring.
-                // Left padding is the price axis only when it is on the left; right padding is the
-                // book zone plus the axis gutter when the axis is on the right beyond the book.
-                let region = |btns: Vec<AnyElement>| {
-                    div().flex().items_center().gap(px(ACT_GAP)).children(btns)
-                };
-                let left_pad = if matches!(
-                    self.price_axis_pos,
-                    crate::persistence::chart_persist::PriceAxisPos::Left
-                ) {
-                    moon_chart::PRICE_AXIS_W
-                } else {
-                    0.0
-                };
-                let right_pad = moon_chart::GLASS_ZONE_PX
-                    + if matches!(
-                        self.price_axis_pos,
-                        crate::persistence::chart_persist::PriceAxisPos::Right
-                    ) {
-                        moon_chart::PRICE_AXIS_W
-                    } else {
-                        0.0
-                    };
-                Some(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .pl(px(left_pad))
-                        .pr(px(right_pad))
-                        .pb(px(if self.time_axis_visible {
-                            moon_chart::TIME_AXIS_H + 10.0
-                        } else {
-                            10.0
-                        }))
-                        .flex()
-                        .flex_col()
-                        .justify_end()
-                        .child(
-                            div()
-                                .w_full()
-                                .h(px(act_btn_h))
-                                .flex()
-                                .items_center()
-                                .child(region(left))
-                                .child(div().flex_1())
-                                .child(region(center))
-                                .child(div().flex_1())
-                                .child(region(right)),
-                        )
-                        .into_any_element(),
-                )
-            })
-        } else {
-            None
-        };
+        // The market buttons — `Cancel Buy`, `Panic Sell`, the temporary-ban lock — are CAPTIONS
+        // now, drawn by the chart's own text pass wherever the label configuration puts them.
+        // This hands their state to that pass; the press on one is routed by the chart's input,
+        // like every other gesture over the plot. See `market_actions`.
+        self.sync_market_actions(cx);
         // News card: the live modifier state beats the cached flag, because GPUI delivers modifier
         // changes only along the focus path. Re-validate the hover first — the chart scrolls between
         // pointer events, so a mark can slide out from under a resting cursor.
@@ -703,6 +398,9 @@ impl Render for ChartPanel {
             // resize. That is invisible for a cursor and would be wrong for a click, which is the
             // other reason the click is not handled here.
             .children(self.arb_cursor_zones())
+            // The market buttons: real controls, placed where the caption layout reserved room for
+            // them. See `market_actions`.
+            .children(self.action_buttons(cx))
             // Top-left status row. The container is hoisted out of the trade-history status so the
             // live order figures still appear while that durable read is Idle; it is rendered only
             // when at least one of the two sources produced something.
@@ -871,39 +569,6 @@ impl Render for ChartPanel {
                     })
                     .render()
             }))
-            .children(action_btns.into_iter().enumerate().map(
-                |(i, (kind, x, y, w, h, core, market, armed))| {
-                    let id = match kind {
-                        ActKind::CancelBuy => format!("chart-cancelbuy-{i}"),
-                        ActKind::PanicSell => format!("chart-panic-{i}"),
-                    };
-                    let allowed = self.workspace_action_allowed(&self.backend.read(cx), core);
-                    let btn = action_button(
-                        kind,
-                        SharedString::from(id),
-                        armed,
-                        self.backend.clone(),
-                        self.workspace_group.clone(),
-                        allowed,
-                        core,
-                        market,
-                    )
-                    .full_width()
-                    .render();
-                    // The container sets text-clipping width; overflow clips to bounds on BOTH axes.
-                    // Add 4 px of height so the top-aligned button remains fully inside and its
-                    // bottom is not cut off.
-                    div()
-                        .absolute()
-                        .left(px(x))
-                        .top(px(y))
-                        .w(px(w))
-                        .h(px(h + 4.0))
-                        .overflow_x_hidden()
-                        .child(btn)
-                },
-            ))
-            .children(action_overlay)
             // LAST of the overlays: the settings panel is opened deliberately and edits what is
             // under it, so a close/pin/broom button painting over its top rows — and taking the
             // clicks meant for them — would make it unusable exactly where a figure is easiest to

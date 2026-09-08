@@ -11,7 +11,7 @@ use super::{
 use crate::chart_tabs::apply_row::ApplyPress;
 use crate::chart_tabs::common::GlobalSlot;
 use crate::persistence::chart_persist::{
-    ChartBtnPos, ChartTabSpec, PriceAxisPos, StackLayoutMode, StackOrientation, WinGeom,
+    ChartTabSpec, PriceAxisPos, StackLayoutMode, StackOrientation, WinGeom,
 };
 use moon_core::config::{ChartBucket, ChartGraphicsCfg, ChartTabKind, WindowLayout};
 use moon_core::market::CandleViewCfg;
@@ -39,8 +39,6 @@ fn loud_snapshot() -> LayoutPopupSnapshot {
         liquidations: false,
         show_zone: false,
         auto_pin: true,
-        cancel_pos: ChartBtnPos::Left,
-        panic_pos: ChartBtnPos::Left,
         price_axis_pos: PriceAxisPos::Right,
         time_axis: false,
         line_labels: false,
@@ -182,8 +180,6 @@ fn the_layout_press_carries_every_layout_value() {
     assert_eq!(s.show_zone, Some(false));
     assert_eq!(s.auto_pin, Some(true));
     assert_eq!(s.layout_orientation, Some(StackOrientation::Horizontal));
-    assert_eq!(s.cancel_buy_pos, Some(ChartBtnPos::Left));
-    assert_eq!(s.panic_sell_pos, Some(ChartBtnPos::Left));
     assert_eq!(s.price_axis_pos, Some(PriceAxisPos::Right));
     assert_eq!(s.time_axis_visible, Some(false));
     assert_eq!(s.line_labels, Some(false));

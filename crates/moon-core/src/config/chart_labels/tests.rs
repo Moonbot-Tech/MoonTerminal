@@ -132,6 +132,26 @@ fn the_default_is_the_shipped_working_layout() {
                 0,
                 vec![F::DetectStrategy, F::DetectMsg, F::OrderStrategy]
             ),
+            // The market buttons along the bottom edge: panic outermost, cancel continuing its
+            // line. Unnamed — the field names each of them — which is why the preset is `None`.
+            (
+                None,
+                Z::ChartBottom,
+                A::Right,
+                Fl::Row,
+                Fl::Column,
+                0,
+                vec![F::ActPanicSell]
+            ),
+            (
+                None,
+                Z::ChartBottom,
+                A::Right,
+                Fl::Row,
+                Fl::Row,
+                0,
+                vec![F::ActCancelBuy]
+            ),
         ]
     );
     assert!(
@@ -335,7 +355,9 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
             ChartLabelField::SessionPnl,
             ChartLabelField::Funding,
             ChartLabelField::ArbColumn,
-            ChartLabelField::DetectStrategy
+            ChartLabelField::DetectStrategy,
+            ChartLabelField::ActPanicSell,
+            ChartLabelField::ActCancelBuy
         ],
         "the survivors keep their relative order with no hole between them"
     );
@@ -920,7 +942,7 @@ fn a_hidden_row_draws_nothing_but_keeps_everything() {
     cfg.rows[5].visible = false;
     cfg.sanitize();
     assert!(!cfg.rows[5].is_drawn());
-    assert_eq!(cfg.used_rows(), 10, "it is still a row");
+    assert_eq!(cfg.used_rows(), 12, "it is still a row");
     assert!(
         !cfg.any_drawn(|f| f == ChartLabelField::OpenPnlPct),
         "and its captions stop costing the order walk"

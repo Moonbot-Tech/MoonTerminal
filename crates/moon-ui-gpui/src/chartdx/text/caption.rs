@@ -126,6 +126,28 @@ pub(super) fn caption_geom(
     })
 }
 
+/// Padding a backing plate adds around the runs it covers, in LOGICAL pixels.
+///
+/// Asymmetric on purpose: a left inset large enough to clear the glyphs' bearing, and a tighter
+/// right one so the plate does not visibly overhang the text.
+///
+/// Named rather than written into [`CaptionBox::plate`] alone because a PRESSABLE caption reserves
+/// exactly this much room for the plate it will draw — the button occupies its backing, not its
+/// text — and a second copy of these numbers is how the reserve and the rectangle drift apart.
+pub(super) const PLATE_PAD_L: f32 = 5.0;
+pub(super) const PLATE_PAD_R: f32 = 3.0;
+pub(super) const PLATE_PAD_Y: f32 = 2.0;
+
+/// Room a BUTTON reserves around its label, and symmetric.
+///
+/// Wider and taller than a caption's backing, because it is not one: the caption pass measures the
+/// label and hands the panel a rectangle to put a real control in, and a control needs the insets
+/// its own type draws with. Close to `MoonButton`'s smallest size rather than read from it — the
+/// component's padding is a GPUI value this pass cannot ask for, and the control is placed by
+/// BOUNDS, so it fills whatever this reserves either way.
+pub(super) const ACTION_PAD_X: f32 = 8.0;
+pub(super) const ACTION_PAD_Y: f32 = 3.0;
+
 /// Bounding box of the runs actually drawn in one caption column, in LOGICAL pixels.
 ///
 /// The plate under the caption is measured from what was DRAWN rather than computed from an
@@ -192,10 +214,14 @@ impl CaptionBox {
     /// Returns:
     ///     `[x, y, width, height]` in device pixels.
     pub(super) fn plate(&self, sf: f32) -> [f32; 4] {
+        self.padded(PLATE_PAD_L, PLATE_PAD_R, PLATE_PAD_Y, sf)
+    }
+
+    /// The box grown by the given insets, in DEVICE pixels.
+    fn padded(&self, pad_l: f32, pad_r: f32, pad_y: f32, sf: f32) -> [f32; 4] {
         if !self.any {
             return [0.0; 4];
         }
-        let (pad_l, pad_r, pad_y) = (5.0_f32, 3.0_f32, 2.0_f32);
         [
             (self.left - pad_l) * sf,
             (self.top - pad_y) * sf,
