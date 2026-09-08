@@ -357,6 +357,9 @@ pub struct ChartPanel {
     /// a panic state change; without this the label waits for an unrelated market tick (250 ms /
     /// 1000 ms / unbounded on a quiet market).
     last_panic_rev: u64,
+    /// `Backend::fav_rev` this panel last repainted for. The favourite star is an overlay element
+    /// on the same terms as the panic control above; see `last_panic_rev`.
+    last_fav_rev: u64,
     /// Whether right-button down opened an order context menu, suppressing the matching button-up
     /// so the Main-stack parent cannot interpret it as a fullscreen toggle.
     suppress_rmb_up: bool,
@@ -569,7 +572,7 @@ impl ChartPanel {
         cx.observe(&backend, |this, backend, cx| {
             crate::diag::bump(&crate::diag::CHART_OBS_FIRE);
             let now = Instant::now();
-            let (sig, settings_sig, panic_rev) = {
+            let (sig, settings_sig, panic_rev, fav_rev) = {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
@@ -581,6 +584,7 @@ impl ChartPanel {
                         this.default_kind,
                     ),
                     b.panic_rev,
+                    b.fav_rev,
                 )
             };
             if settings_sig != this.settings_sig {
@@ -594,11 +598,14 @@ impl ChartPanel {
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
-            if this.last_panic_rev != panic_rev {
+            // Both market-button overrides in ONE condition: they settle on the same coordination
+            // tick, and two conditions would notify twice and count two repaints in
+            // `CHART_OBS_NOTIFY` for the one that actually happens. Both controls are GPUI overlay
+            // elements rather than chart-engine geometry, so a plain notify is the whole repaint --
+            // deliberately not setting `view_dirty`.
+            if this.last_panic_rev != panic_rev || this.last_fav_rev != fav_rev {
                 this.last_panic_rev = panic_rev;
-                // The Panic Sell / Stop Panic control is a GPUI overlay element, not chart-engine
-                // geometry, so a plain `cx.notify()` is the whole repaint -- deliberately not
-                // setting `view_dirty`.
+                this.last_fav_rev = fav_rev;
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -695,6 +702,7 @@ impl ChartPanel {
             fig_settings: None,
             last_fig_store_rev: 0,
             last_panic_rev: 0,
+            last_fav_rev: 0,
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
@@ -760,7 +768,7 @@ impl ChartPanel {
         .detach();
         cx.observe(&backend, |this, backend, cx| {
             let now = Instant::now();
-            let (sig, settings_sig, panic_rev) = {
+            let (sig, settings_sig, panic_rev, fav_rev) = {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
@@ -772,6 +780,7 @@ impl ChartPanel {
                         this.default_kind,
                     ),
                     b.panic_rev,
+                    b.fav_rev,
                 )
             };
             if settings_sig != this.settings_sig {
@@ -784,10 +793,12 @@ impl ChartPanel {
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
-            if this.last_panic_rev != panic_rev {
+            // One condition for both overrides; see the twin observer in `new_main`. Numbered
+            // AddToChart and Custom panels are today's worst case at 1 Hz -- this is deliberately
+            // ahead of that throttle.
+            if this.last_panic_rev != panic_rev || this.last_fav_rev != fav_rev {
                 this.last_panic_rev = panic_rev;
-                // Numbered AddToChart and Custom panels are today's worst case at 1 Hz -- this is
-                // deliberately ahead of that throttle. See the twin observer in `new_main`.
+                this.last_fav_rev = fav_rev;
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -878,6 +889,7 @@ impl ChartPanel {
             fig_settings: None,
             last_fig_store_rev: 0,
             last_panic_rev: 0,
+            last_fav_rev: 0,
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,

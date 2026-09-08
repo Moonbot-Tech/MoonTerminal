@@ -495,6 +495,12 @@ pub enum CoreCmd {
     /// one-shot refresh such as a hotkey pull that must observe the core's OWN value rather than
     /// wait for the runtime's own background poll.
     RefreshSharedConfig,
+    /// Mark one market in the core's favourites, or take it out.
+    ///
+    /// A DELTA rather than an edited `CoreConfig`, unlike every other safe-share write: the core
+    /// writes this list too, so the state is carried and the list is rebuilt at SEND time — see
+    /// `feed::live::shared_config::SharedConfigSequence::enqueue_fav_market`.
+    SetFavMarket { market: String, on: bool },
     /// Synchronize complete visible group exit settings through the per-core serializer.
     SyncGroupExit(crate::config::GroupExitSettings),
     /// Toggle account hedge mode for dual-side positions. This performs a live exchange action

@@ -860,6 +860,7 @@ impl ChartEngine {
                 Some(A::CancelBuy) => wanted.cancel_buy = true,
                 Some(A::PanicSell) => wanted.panic_sell = true,
                 Some(A::TempBan) => wanted.temp_ban = true,
+                Some(A::Favorite) => wanted.favorite = true,
                 // The ban READOUT is not a button, and it needs the same fact the lock does: a
                 // chart printing only the remaining time must still be told what is left.
                 None => {
@@ -912,6 +913,7 @@ impl ChartEngine {
                 allowed: state.allowed,
                 panic_armed: state.panic_armed,
                 ban_until_ms: state.ban_until_ms,
+                favorite: state.favorite,
             },
         };
         if pr.label_actions == actions {
@@ -959,6 +961,17 @@ impl ChartEngine {
                     .texts
                     .iter()
                     .find(|text| text.row == placement.row && text.part == placement.part)?;
+                // What this control SAYS and whether it may be pressed, decided together: the rail
+                // decides the second for every button, and the star additionally needs the core to
+                // have said what it holds, because its press rewrites that answer.
+                let (on, ready) = match placement.mark.action {
+                    moon_core::config::ChartAction::CancelBuy => (false, true),
+                    moon_core::config::ChartAction::PanicSell => (state.panic_armed, true),
+                    moon_core::config::ChartAction::TempBan => (state.ban_until_ms.is_some(), true),
+                    moon_core::config::ChartAction::Favorite => {
+                        (state.favorite.unwrap_or(false), state.favorite.is_some())
+                    }
+                };
                 Some(ChartActionButton {
                     x: placement.x,
                     y: placement.y,
@@ -969,18 +982,16 @@ impl ChartEngine {
                     // than copied into the rectangle a frame ago: a control that took its state
                     // from one generation and its words from another would draw `Stop Panic`
                     // unpressed.
-                    active: match placement.mark.action {
-                        moon_core::config::ChartAction::CancelBuy => false,
-                        moon_core::config::ChartAction::PanicSell => state.panic_armed,
-                        moon_core::config::ChartAction::TempBan => state.ban_until_ms.is_some(),
-                    },
-                    enabled: state.allowed,
+                    // Both answers from ONE match on the action; see `on`/`ready` above.
+                    active: on,
+                    enabled: state.allowed && ready,
                     label: label.text.clone(),
                     size: placement.size,
                     row: placement.row,
                     part: placement.part,
                     core,
                     market: pr.market.clone(),
+                    coin: pr.coin.clone(),
                 })
             })
             .collect()
@@ -1439,6 +1450,26 @@ impl ChartEngine {
             .borrow()
             .pane(idx)
             .map(|p| (p.core, p.market.clone()))
+    }
+
+    /// The `market_currency` a pane resolved for its market, or `None` while the catalogue has not
+    /// named it yet.
+    ///
+    /// The identity the CORE's own lists are matched against — see `PaneRender::coin`. Read from
+    /// the pane rather than resolved by the caller: the label was taken once, when the market was
+    /// assigned, and taking the market-source lock again per pane per frame is what caching it
+    /// avoided.
+    ///
+    /// Args:
+    ///     idx: Pane index, as `pane_target` reports them.
+    ///
+    /// Returns:
+    ///     The coin, or `None` for a pane with no market or an unresolved catalogue.
+    pub fn pane_coin(&self, idx: usize) -> Option<String> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let coin = render.panes.get(idx)?.coin.clone();
+        (!coin.is_empty()).then_some(coin)
     }
 
     /// Returns the active full-screen or first pane's market for the tab label.

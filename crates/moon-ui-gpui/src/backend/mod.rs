@@ -5,6 +5,7 @@
 mod alert_sound;
 pub(crate) mod core_warn;
 mod detect_sound;
+mod favorites;
 mod figures;
 mod manual_trading;
 mod open_request;
@@ -14,6 +15,7 @@ pub(crate) mod server_chart;
 mod tests;
 
 pub(crate) use alert_sound::AlertLeg;
+pub(crate) use favorites::FavLocal;
 pub(crate) use manual_trading::{
     FIELD_USE_HOOK_STRATEGY, IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource,
     ManualStop, MsExitOverlay, PanicLocal, PendingStop, SettleKey, hook_of, manual_strategy_id,

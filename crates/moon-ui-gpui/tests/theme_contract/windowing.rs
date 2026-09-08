@@ -791,6 +791,7 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         "ChartLabelField::ActCancelBuy",
         "ChartLabelField::ActPanicSell",
         "ChartLabelField::ActTempBan",
+        "ChartLabelField::ActFavorite",
     ] {
         let arm = labels
             .split_once(&format!("{field} => inputs"))

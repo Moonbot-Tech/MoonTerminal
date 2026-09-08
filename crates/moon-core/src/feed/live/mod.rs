@@ -1480,7 +1480,7 @@ pub(super) fn run(
         //
         // Hence the compact events in the predicate too: they change the overlay, so they change
         // this projection even when no new full snapshot arrived.
-        let core_config = events
+        let raw_shared = events
             .iter()
             .any(|ev| {
                 matches!(
@@ -1493,9 +1493,17 @@ pub(super) fn run(
                 )
             })
             .then(|| client.settings().build_shared_config().ok())
-            .flatten()
-            .map(|cfg| shared_config::core_config_from_proto(&cfg));
+            .flatten();
+        // Kept beside the projection for `channels.settings` alone: the probe reads fields the
+        // projection does not carry, and asking the client twice would take the snapshot twice.
+        if let Some(raw) = raw_shared.as_ref() {
+            shared_config_sequence.note_settings_text(server.id, raw);
+        }
+        let core_config = raw_shared.map(|cfg| shared_config::core_config_from_proto(&cfg));
         if let Some(config) = core_config {
+            // What the core actually holds in its marked-markets list, for `channels.settings`;
+            // see `SharedConfigSequence::note_fav_markets`.
+            shared_config_sequence.note_fav_markets(server.id, &config);
             // Only a FULL snapshot lifts the write barrier. The core re-broadcasts both snapshots
             // after applying a write, and the compact one can arrive in an earlier batch: treating
             // it as the echo would replan the whole config against a still-unconfirmed base,

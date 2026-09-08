@@ -299,6 +299,12 @@ struct Backend {
     /// In-flight `ignore_strat_sell_price` requests per core, so the checkbox that queued one shows
     /// it immediately instead of waiting out the slow channel's echo.
     ignore_sell_local: HashMap<CoreId, crate::backend::IgnoreSellLocal>,
+    /// In-flight marks of a market as a favourite, keyed by `(core, market)`, so the star that
+    /// queued one shows it immediately instead of waiting out the slow channel's echo.
+    fav_local: HashMap<(CoreId, String), crate::backend::FavLocal>,
+    /// Bumped whenever a favourite override is queued or settles, so the chart's star repaints on a
+    /// press and again when the override ends — the same mechanism `panic_rev` is.
+    fav_rev: u64,
     /// Visible stops waiting for the manual order they belong to, keyed by `(core, market)`.
     ///
     /// A manual order placed with a strategy takes its stop from that strategy, so the terminal's

@@ -333,6 +333,10 @@ pub struct CoreData {
     pub license_rev: u64,
     pub client_settings_rev: u64,
     pub core_config_rev: u64,
+    /// Advances when the core's marked-markets list changes — see
+    /// [`crate::feed::CoreConfig::fav_markets`]. Beside [`Self::core_config_rev`] rather than
+    /// inside it so a view drawing that one list is not woken by every other core setting.
+    pub fav_markets_rev: u64,
     /// Advances on every FULL-SNAPSHOT arrival of `FeedMsg::CoreConfig`, even when the projected
     /// value is byte-identical to what is already retained.
     ///
@@ -491,6 +495,7 @@ impl CoreData {
             license_rev: 0,
             client_settings_rev: 0,
             core_config_rev: 0,
+            fav_markets_rev: 0,
             core_config_recv_rev: 0,
             core_config_edit_rev: 0,
             profit_state_rev: 0,
@@ -971,9 +976,23 @@ impl CoreData {
                     self.core_config_recv_rev = self.core_config_recv_rev.wrapping_add(1);
                     self.core_config_stale = false;
                 }
+                // The marked-markets list gets a revision of its own beside the whole
+                // projection's, exactly as the temporary blacklist has one: a view that draws only
+                // that list must not be woken by any of the hundreds of other fields moving, and a
+                // string hashed per notify is the shape that revision exists to replace.
+                // Compared as the LIST its readers see, not as raw text: a core that re-spaces
+                // or re-punctuates the same markets has changed nothing anyone draws, and waking
+                // the dropdown for it is the cost this revision exists to avoid.
+                let fav_moved = self.core_config.as_ref().is_none_or(|held| {
+                    crate::feed::fav_markets_list(&held.fav_markets)
+                        != crate::feed::fav_markets_list(&config.fav_markets)
+                });
                 if self.core_config.as_ref() != Some(&config) {
                     self.core_config = Some(config);
                     self.core_config_rev = self.core_config_rev.wrapping_add(1);
+                    if fav_moved {
+                        self.fav_markets_rev = self.fav_markets_rev.wrapping_add(1);
+                    }
                 }
             }
             FeedMsg::CoreConfigEdit(event) => {

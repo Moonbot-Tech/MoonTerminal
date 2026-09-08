@@ -65,6 +65,11 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
             // removes one. Published only on a real change, so this costs a wake nobody wanted only
             // when a ban was actually placed or lifted.
             sig = sig.wrapping_mul(31).wrapping_add(d.temp_blacklist_rev);
+            // And its favourites list, which the dropdown's own tab draws. Through the list's OWN
+            // revision, not the whole configuration's: that one bumps for any of hundreds of core
+            // settings, and a leverage change on a group core has no business recomposing the tab
+            // strip.
+            sig = sig.wrapping_mul(31).wrapping_add(d.fav_markets_rev);
         }
     }
     sig

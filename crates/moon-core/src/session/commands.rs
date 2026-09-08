@@ -795,6 +795,21 @@ impl SessionManager {
         )
     }
 
+    /// Mark one market in the core's favourites, or take it out.
+    ///
+    /// Absolute, never a toggle: the state is decided where the trader pressed it, and this write
+    /// may reach the core several round trips later — see `feed::fav_markets_set`. The list is
+    /// rebuilt from the core's own snapshot at send time, so a market MoonBot marked in between
+    /// survives.
+    ///
+    /// Args:
+    ///     core: Core that holds the list.
+    ///     market: Market as that core spells it.
+    ///     on: Whether it must be listed afterwards.
+    pub fn set_fav_market(&self, core: CoreId, market: String, on: bool) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::SetFavMarket { market, on }, "set fav market")
+    }
+
     /// Request a fresh safe-share configuration read directly from the core, bypassing the
     /// runtime's own background poll. The answer arrives as the usual `FeedMsg::CoreConfig`
     /// full-snapshot echo.

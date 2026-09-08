@@ -326,6 +326,12 @@ impl ChartDataState {
                 if pr.quote != label.quote {
                     pr.quote = label.quote.clone();
                 }
+                // The core's own name for the coin, from the same label: the favourites list is
+                // matched against it, and resolving it separately would take the source lock twice
+                // for a value already in hand.
+                if pr.coin != label.coin {
+                    pr.coin = label.coin.clone();
+                }
                 if pr.ticker != ticker {
                     pr.ticker = ticker;
                     // The caption is part of the frame, so a corrected ticker has to reach one:

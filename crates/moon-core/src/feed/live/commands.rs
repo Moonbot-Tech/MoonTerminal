@@ -1383,6 +1383,9 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::EditCoreConfig { config, touched }) => {
                 shared_config_sequence.enqueue(config, touched);
             }
+            Ok(CoreCmd::SetFavMarket { market, on }) => {
+                shared_config_sequence.enqueue_fav_market(market, on);
+            }
             Ok(CoreCmd::RefreshSharedConfig) => {
                 if let Err(error) = client.settings().refresh_shared_config() {
                     log::warn!(

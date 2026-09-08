@@ -93,6 +93,18 @@ impl ChartPanel {
                             .and_then(|data| data.temp_ban_until_ms(&market))
                     })
                     .flatten(),
+                // Read only where a star prints it, like the two facts above, and by the CORE's
+                // own name for the coin rather than by the market: its favourites list is matched
+                // against `market_currency`. `None` here is the core's silence — or a catalogue
+                // that has not named the market yet — not an unmarked coin; see
+                // `Backend::fav_market`.
+                favorite: wanted
+                    .favorite
+                    .then(|| {
+                        let coin = self.chart.pane_coin(pane)?;
+                        backend.fav_market(core, &coin)
+                    })
+                    .flatten(),
             };
             self.chart.set_pane_actions(pane, Some(state));
         }
@@ -124,14 +136,25 @@ impl ChartPanel {
                     // An armed panic and a running ban are the same statement — this control is ON
                     // — and `selected` is how every other button in the application says it.
                     (ChartAction::PanicSell, active) => (MoonButtonVariant::Danger, active),
-                    (ChartAction::TempBan, true) => (MoonButtonVariant::Amber, true),
-                    (ChartAction::TempBan, false) => (MoonButtonVariant::Soft, false),
+                    // A running ban and a marked coin are the same statement — this control is ON
+                    // — and they wear it alike: the accent only while it is.
+                    (ChartAction::TempBan | ChartAction::Favorite, true) => {
+                        (MoonButtonVariant::Amber, true)
+                    }
+                    (ChartAction::TempBan | ChartAction::Favorite, false) => {
+                        (MoonButtonVariant::Soft, false)
+                    }
                     (ChartAction::CancelBuy, _) => (MoonButtonVariant::Soft, false),
                 };
                 let backend = self.backend.clone();
                 let group = self.workspace_group.clone();
-                let (action, active, core, market) =
-                    (button.action, button.active, button.core, button.market);
+                let (action, active, core, market, coin) = (
+                    button.action,
+                    button.active,
+                    button.core,
+                    button.market,
+                    button.coin,
+                );
                 // Keyed by the CAPTION it came from, not by its place in the list: a button dropped
                 // for lack of room would otherwise hand its hover and press state to the next one.
                 let id =
@@ -171,7 +194,7 @@ impl ChartPanel {
                                 .disabled(!button.enabled)
                                 .bounds(MoonRect::new(0.0, 0.0, button.w, button.h))
                                 .on_click(move |event, window, app| {
-                                    let market = market.clone();
+                                    let (market, coin) = (market.clone(), coin.clone());
                                     // The lock is the one control that ASKS. Closing it is a choice
                                     // — an hour, a day, three days — and a button cannot carry four
                                     // answers; opening it is not, so a running ban lifts on the
@@ -195,6 +218,7 @@ impl ChartPanel {
                                         None,
                                         core,
                                         market,
+                                        coin,
                                         app,
                                     );
                                 })
@@ -222,7 +246,10 @@ impl ChartPanel {
 ///     span: How long to ban for, or `None` to lift a ban that is running; the other two ignore it.
 ///     core: Core the button was drawn for.
 ///     market: Market it was drawn for.
+///     coin: That market's `market_currency`, which is what the core's favourites list is matched
+///         against; empty while the catalogue has not named the market.
 ///     app: Application context for the update.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_market_action(
     backend: &Entity<Backend>,
     group: Option<&str>,
@@ -230,6 +257,7 @@ fn dispatch_market_action(
     span: Option<TempBanSpan>,
     core: CoreId,
     market: String,
+    coin: String,
     app: &mut App,
 ) {
     backend.update(app, |b, cx| {
@@ -245,6 +273,9 @@ fn dispatch_market_action(
             ChartAction::PanicSell => {
                 b.toggle_panic_sell(core, market);
             }
+            // The COIN, not the market: the core matches its favourites against
+            // `market_currency`. See `Backend::toggle_fav_market`.
+            ChartAction::Favorite => b.toggle_fav_market(core, &coin),
             // One control, both directions: a span sets the ban, `None` lifts the one that runs.
             // The press decided which — see the button's own handler — and it decided against the
             // same state the lock was DRAWN in, so the picture and the command agree.
@@ -311,6 +342,9 @@ fn open_ban_menu(
                     Some(span),
                     core,
                     market.clone(),
+                    // A ban is keyed by the MARKET, so the coin this dispatch also carries is not
+                    // read on this path; see `coin_menu::temp_ban_symbol`.
+                    String::new(),
                     app,
                 );
             })
