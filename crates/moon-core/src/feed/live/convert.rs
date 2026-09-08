@@ -708,7 +708,9 @@ pub(super) fn apply_client_settings_edit(
             }
         }
         ClientSettingsEdit::StopLossPct(pct) => {
-            let Some(pct) = crate::config::GroupExitSettings::canonical_stop_loss_pct(pct) else {
+            // Snapped to the core's own 0.1 grid: sending a finer value writes a generation the
+            // core cannot echo back, and everything gated on that echo waits for nothing.
+            let Some(pct) = crate::config::GroupExitSettings::wire_stop_loss_pct(pct) else {
                 return;
             };
             s.price_drop_level = pct;

@@ -111,8 +111,41 @@ impl GroupExitSettings {
     }
 
     /// Clamp a finite stop-loss percentage to the protocol-supported visible range.
+    ///
+    /// Leaves the value as precise as it was given, which is what every consumer but one wants.
+    /// Only the group generation on its way into a ClientSettings packet is snapped, by
+    /// [`Self::wire_stop_loss_pct`], and only there.
     pub fn canonical_stop_loss_pct(pct: f32) -> Option<f32> {
         pct.is_finite().then(|| pct.clamp(-20.0, 1.0))
+    }
+
+    /// Clamp a stop loss to the protocol range and snap it onto the grid the core keeps.
+    ///
+    /// Moonbot stores `price_drop_level` rounded to 0.1 %. Its own log shows both halves of one
+    /// exchange (BinF2, 2026-09-07): `Srv: Client [...] settings: StopLoss=-11.4200000762939%`
+    /// accepted, then `MoonKernel: Settings from server: StopLoss=-11.3999996185303%` kept. A
+    /// generation asking for the finer value is therefore never confirmed, however often it is
+    /// re-sent, and whatever waits on that confirmation — a manual chart order above all — burns
+    /// its whole retry budget before giving up.
+    pub fn wire_stop_loss_pct(pct: f32) -> Option<f32> {
+        let clamped = Self::canonical_stop_loss_pct(pct)?;
+        // A zero level is how a snapshot says "no stop at all". That reading is deliberate, so it
+        // is left exactly as it is rather than pushed onto the nearest step below.
+        if clamped == 0.0 {
+            return Some(0.0);
+        }
+        // Through the tree's own rounder, which widens to `f64` first — as the core, being Delphi,
+        // does too. Scaling the `f32` instead invents exact ties the input never had: `-11.45`
+        // arrives as `-11.4499998` yet reaches `-114.5` exactly, a whole step further than the
+        // core would go.
+        let snapped = crate::util::fmt::round_to(f64::from(clamped), 1)?;
+        // A stop the trader actually set never rounds INTO "no stop": closer to zero than half a
+        // step, it keeps the nearest non-zero one and the protection survives the trip.
+        Some(if snapped == 0.0 {
+            0.1_f32.copysign(clamped)
+        } else {
+            snapped as f32
+        })
     }
 
     /// Return whether a persisted stop loss is inside the visible protocol range without clamp.
