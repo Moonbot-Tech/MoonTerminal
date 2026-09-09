@@ -1090,21 +1090,46 @@ fn escape_closes_coin_search_before_chart_hotkeys() {
 ///
 /// Breakage this pins: removing the empty-state hint or its size probe while restyling Main. A
 /// newly opened workspace would render a blank, unmeasured chart area.
+///
+/// The screen itself is built in `main_stack/empty.rs`, which also owns what the ⚙ there switches
+/// on; the stack keeps the branch and the probe. Both halves are asserted, so moving the hint out
+/// of the module or the probe out of the branch each still fails here.
 #[test]
 fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
+    let screen = read_src("chart_tabs/main_stack/empty.rs");
+    let empty = braced_body(&screen, "pub(super) fn empty_screen(");
+    assert!(
+        empty.contains("chart.empty.hint") && empty.contains("text_muted"),
+        "the empty Main screen must show chart.empty.hint in muted text"
+    );
+
     let main_stack = read_src("chart_tabs/main_stack.rs");
     let render = braced_body(
         &main_stack,
         "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement",
     );
-    let empty = braced_body(&render, "if self.charts.is_empty() {");
+    let branch = braced_body(&render, "if self.charts.is_empty() {");
     assert!(
-        empty.contains("chart.empty.hint") && empty.contains("text_muted"),
-        "the empty Main stack branch must show chart.empty.hint in muted text"
+        branch.contains("empty::empty_screen("),
+        "the empty Main stack branch must render the empty screen"
     );
     assert!(
-        empty.contains("with_size_probe("),
+        branch.contains("with_size_probe("),
         "the empty Main stack must remain inside the size-probed render path"
+    );
+
+    // The statistics view owns a live feed, so it must be reconciled BEFORE the branch: asked
+    // about only on the empty screen, a chart opening would never reach the question and the feed
+    // would outlive the screen it belongs to. That is the defect this ordering fixed.
+    let sync = render
+        .find("sync_crowd_stats(")
+        .expect("Main render must reconcile the crowd statistics view");
+    let branches = render
+        .find("if self.charts.is_empty() {")
+        .expect("Main render must branch on an empty stack");
+    assert!(
+        sync < branches,
+        "the crowd statistics view must be reconciled before the empty/non-empty branch, or a          chart opening leaves its feed running"
     );
 
     let locale = fs::read_to_string(

@@ -15,6 +15,7 @@ mod backup_store;
 pub mod backups;
 pub mod coin_naming;
 pub mod config;
+pub mod crowd;
 pub mod data;
 pub mod db;
 pub mod detect_diag;

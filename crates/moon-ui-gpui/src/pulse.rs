@@ -313,5 +313,57 @@ pub fn arm_with<T: 'static>(
     .detach();
 }
 
+/// Start a chain that calls `tick` every `every` until it answers `false` or the view is gone.
+///
+/// The general form of [`arm`], for the two things it cannot express: a rate other than
+/// [`PULSE_TICK`], and a chain that decides for itself when it is finished rather than asking an
+/// owner's flag. It is what a view uses when it drives its own clock — a table whose movement is
+/// computed from elapsed time needs frames only while something is actually moving, and asks for
+/// them at a rate of its own choosing rather than the monitor's.
+///
+/// `tick` does NOT repaint on its own: a caller that wants a frame calls `cx.notify()` inside it,
+/// and a caller that only wants to do work every second does not. Unlike [`arm`] there is no
+/// `armed` flag here, because a chain that has stopped leaves nothing behind to ask — the caller
+/// is responsible for not starting a second one while one is running.
+///
+/// It does not bump [`PULSE_TICK`] on purpose: that counter answers "is a decorative fade still
+/// waking the News panel", and a second chain at another rate reported through it would make the
+/// number answer for two mechanisms and therefore for neither. A caller here counts its own ticks.
+///
+/// A dropped VIEW ends the chain quietly, which is the ordinary way out. A dropped APP does not:
+/// every route from an async task into the app goes through `AsyncApp::app()`, which is an
+/// `expect` in our fork (`app/async_context.rs`), and neither `update` nor `update_entity` has a
+/// fallible twin. [`arm_with`] has carried the same hole since it was written; it is the fork's to
+/// close, not ours.
+///
+/// Args:
+///     every: Interval between ticks.
+///     cx: The view's context.
+///     tick: What to do on each one, and whether to carry on. Runs on the main thread, so it must
+///         not block.
+pub fn arm_every<T: 'static>(
+    every: Duration,
+    cx: &mut Context<T>,
+    tick: impl Fn(&mut T, &mut Context<T>) -> bool + 'static,
+) {
+    cx.spawn(async move |handle, cx| {
+        let executor = cx.update(|cx| cx.background_executor().clone());
+        loop {
+            executor.timer(every).await;
+            // A dropped view ends the chain quietly, which is the ordinary way out: the panel that
+            // owned it was closed.
+            let carry_on = cx.update(|cx| {
+                handle
+                    .update(cx, |this, cx| tick(this, cx))
+                    .unwrap_or(false)
+            });
+            if !carry_on {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
 #[cfg(test)]
 mod tests;

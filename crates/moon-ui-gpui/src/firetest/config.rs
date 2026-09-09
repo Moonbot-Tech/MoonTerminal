@@ -41,6 +41,17 @@ pub(crate) struct Config {
     pub(super) order_cancel_max_display_lag_ms: f64,
 }
 
+/// Whether this process was launched to run a script rather than to be used.
+///
+/// A cheaper question than [`Config::from_args`] answers, asked by surfaces that must stay OFF the
+/// network during a measured run: a table that opened a socket under FireTest would break the
+/// no-network invariant the run asserts and add its own traffic to what is being measured. Read
+/// once, because the command line cannot change afterwards.
+pub(crate) fn scripted() -> bool {
+    static SCRIPTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SCRIPTED.get_or_init(|| std::env::args().any(|arg| arg == "--debug-script"))
+}
+
 impl Config {
     /// Parse `--debug-script <name>` out of the process arguments and read the environment knobs.
     ///

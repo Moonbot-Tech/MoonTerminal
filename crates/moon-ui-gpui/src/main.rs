@@ -25,6 +25,7 @@ mod conn_diag;
 mod controls;
 mod core_expert;
 mod core_order;
+mod crowd;
 mod design;
 mod diag;
 mod diagnostics;

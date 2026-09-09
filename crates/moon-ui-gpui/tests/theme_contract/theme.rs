@@ -285,6 +285,13 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "analytics/profit_monitor/settings.rs",
             r#".id("profit-monitor-settings-popup")"#,
         ),
+        // The empty Main screen's ⚙. Its ids are built per group, like every other identity in
+        // that stack, so the anchor is the builder call rather than a literal.
+        (
+            "chart_tabs/main_stack/empty.rs",
+            "chart_tabs/main_stack/empty.rs",
+            r#".id(id("settings-popup"))"#,
+        ),
         (
             "strategies/settings.rs",
             "strategies/settings.rs",

@@ -1,0 +1,111 @@
+# Crowd statistics on an empty Main: the rolling minute and the service's two boards for the day.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+# Column headings are upper-case in every locale: they are a table's own chrome, read as a block
+# rather than as words, and a mixed-case column among upper-case ones reads as a different table.
+_version: 2
+
+# --- The minute, top right ---
+crowd.minute.title:
+  ru: "РЫНОК · МИНУТА"
+  en: "MARKET · MINUTE"
+  es: "MERCADO · MINUTO"
+crowd.minute.empty:
+  ru: "ни одной монеты в минуте"
+  en: "no coin traded this minute"
+  es: "ninguna moneda en este minuto"
+
+# The only word the wire still needs. Live, connecting and down are said by the COLOUR of the
+# service's name beside the heading; "synthetic" cannot be, because there the figures are invented
+# and no colour carries that.
+crowd.wire.synthetic:
+  ru: "синтетика"
+  en: "synthetic"
+  es: "sintético"
+
+# --- The service's boards for the rolling day ---
+crowd.day.coins:
+  ru: "МОНЕТЫ · СУТКИ"
+  en: "COINS · 24H"
+  es: "MONEDAS · 24H"
+crowd.day.traders:
+  ru: "ТОП ЗА СУТКИ"
+  en: "TOP 24H"
+  es: "TOP 24H"
+# The service's own day total, shown beside the trader board's caption: the board is a TOP of
+# fifty, this counts everybody.
+crowd.day.total:
+  ru: "(всего %{money}, сделок %{trades})"
+  en: "(total %{money}, %{trades} trades)"
+  es: "(total %{money}, %{trades} operaciones)"
+crowd.day.silent:
+  ru: "сервис молчит"
+  en: "the service is silent"
+  es: "el servicio no responde"
+
+# --- Column headings ---
+# PROFIT and LOSS are two separate columns, never a net figure: a coin that made $9k and lost $8k
+# had a loud minute, and one number would report it as a quiet one.
+crowd.col.coin:
+  ru: "МОНЕТА"
+  en: "COIN"
+  es: "MONEDA"
+crowd.col.profit:
+  ru: "ПРОФИТ"
+  en: "PROFIT"
+  es: "GANANCIA"
+crowd.col.loss:
+  ru: "УБЫТОК"
+  en: "LOSS"
+  es: "PÉRDIDA"
+# The rank the service itself assigns, shown as a bare number sign.
+crowd.col.rank:
+  ru: "#"
+  en: "#"
+  es: "#"
+# The service's own account number: the only name half this board has, since an anonymous row has
+# no handle at all.
+crowd.col.id:
+  ru: "ID"
+  en: "ID"
+  es: "ID"
+crowd.col.who:
+  ru: "КТО"
+  en: "WHO"
+  es: "QUIÉN"
+crowd.col.trades:
+  ru: "СДЕЛОК"
+  en: "TRADES"
+  es: "OPERAC."
+
+# --- The switch on the empty screen ---
+crowd.settings.btn:
+  ru: "Настройки пустого экрана"
+  en: "Empty-screen settings"
+  es: "Ajustes de la pantalla vacía"
+crowd.settings.title:
+  ru: "Пустой экран"
+  en: "Empty screen"
+  es: "Pantalla vacía"
+# Five independent layers of one screen, in the order the popup lists them. Each names what it
+# shows rather than what it hides, and the three tables also decide what is READ: an unshown table
+# opens no connection to the statistics service.
+crowd.settings.logo:
+  ru: "Показывать логотип"
+  en: "Show the logo"
+  es: "Mostrar el logotipo"
+crowd.settings.hint:
+  ru: "Показывать помощь"
+  en: "Show the hint"
+  es: "Mostrar la ayuda"
+crowd.settings.minute:
+  ru: "Показывать минутные сделки"
+  en: "Show the trading minute"
+  es: "Mostrar el minuto de operaciones"
+crowd.settings.traders:
+  ru: "Показывать топ 24ч по ID"
+  en: "Show the 24h trader top"
+  es: "Mostrar el top 24h de traders"
+crowd.settings.coins:
+  ru: "Показывать топ 24ч по монетам"
+  en: "Show the 24h coin top"
+  es: "Mostrar el top 24h de monedas"
