@@ -83,6 +83,19 @@ pub(crate) struct MainChartStack {
     compare_y: Option<(f32, f32)>,
     /// Broom mode makes the anchor's neighbors show only their order books.
     compare_orderbook_only: bool,
+    /// The crowd statistics drawn on the empty screen, while at least one of their tables is
+    /// switched on and there is an empty screen to draw them on. See [`empty`].
+    ///
+    /// Held rather than rebuilt per frame because it owns the market feed: it exists exactly while
+    /// it is visible, and dropping it is what closes the connections. The set of tables it was
+    /// built for is kept beside it, because that set decides which connections exist — a change
+    /// there rebuilds the view rather than being passed to it.
+    crowd: Option<(
+        crate::crowd::CrowdParts,
+        Entity<crate::crowd::CrowdStatsView>,
+    )>,
+    /// Whether the empty screen's ⚙ popup is open.
+    empty_settings_open: bool,
     /// Whether the one-shot inactivity auto-close timer is armed.
     /// It ticks at about 1 Hz while configured and charts exist, then rearms itself.
     idle_timer_armed: bool,
@@ -219,6 +232,8 @@ impl MainChartStack {
             compare_anchor: None,
             compare_y: None,
             compare_orderbook_only: false,
+            crowd: None,
+            empty_settings_open: false,
             idle_timer_armed: false,
             layout_columns: None,
             layout_columns_exact: None,
@@ -1571,6 +1586,8 @@ impl MainChartStack {
     }
 }
 
+mod empty;
+
 #[cfg(test)]
 mod tests;
 
@@ -1581,33 +1598,13 @@ impl Render for MainChartStack {
         crate::diag::bump(&crate::diag::MAIN_STACK_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::MAIN_STACK_RENDER_US);
         let palette = moon_ui::MoonPalette::active(cx);
+        // Before the branch, not inside it: the statistics view owns a live feed, and asking about
+        // it only on the empty screen would mean a chart opening left the socket, the board poller
+        // and the tick chain running for the rest of the session.
+        let crowd = self.sync_crowd_stats(cx);
         if self.charts.is_empty() {
-            let empty = div()
-                .relative()
-                .size_full()
-                .bg(rgb(palette.chart_bg))
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(crate::design::ui_px(cx, 10.0))
-                .child(crate::design::logo_glow_sized(
-                    cx,
-                    crate::design::EMPTY_STACK_LOGO_W,
-                ))
-                // A logo alone says the stack is empty but not what to do about it. One muted line,
-                // naming the ONE gesture that actually opens a chart from here: there is no
-                // double-click on a core row that does it — the rail only RETARGETS a chart that
-                // already exists (`sync_auto_workspace_chart` returns early on an empty Main).
-                .child(
-                    div()
-                        .max_w(crate::design::font_w_px(cx, 420.0))
-                        .text_center()
-                        .text_size(crate::design::t_body(cx))
-                        .text_color(rgb(palette.text_muted))
-                        .child(rust_i18n::t!("chart.empty.hint").to_string()),
-                )
-                .into_any_element();
+            let screen = self.empty_arrangement(cx);
+            let empty = empty::empty_screen(self, screen, crowd, palette, cx);
             // Measured here too, for the reason the fullscreen branch keeps its probe: a resize
             // taken while the stack is empty must not leave a size the first divided frame uses.
             // An empty stack divides nothing, so the probe only RECORDS here: the number it would

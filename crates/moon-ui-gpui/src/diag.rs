@@ -560,6 +560,27 @@ diag_counters!(
     STRAT_SECTIONS_US => "strat_sections_us",
     STRAT_PARAMS_US => "strat_params_us",
     STRAT_MODEL_US => "strat_model_us",
+    // The crowd statistics on an empty Main. Four counters, because the screen makes four
+    // different claims — three about its own cost, one about the wire — and each has to be
+    // readable on its own:
+    //
+    //   * `crowd_tick` — the once-a-second drain of the feed and ageing of the rolling minute.
+    //     It runs whether or not anything changed, so it should sit at 1 while the tables are on
+    //     screen and vanish the moment they are switched off or a chart opens. Anything else means
+    //     a timer chain outlived the view that started it.
+    //   * `crowd_render` — actual repaints. The claim being checked is "a still board costs
+    //     nothing": on a quiet market this must stay at or below `crowd_tick`, and it may rise to
+    //     about twelve a second only while rows are sliding, fading or lit. A steady twelve with
+    //     nothing moving is the defect this counter exists to expose.
+    //   * `crowd_render_us` — microseconds per second building that element tree, comparable with
+    //     every other `*_render_us` here.
+    //   * `crowd_trades` — trades taken off the wire and counted into the minute, so a table that
+    //     is empty because the market is quiet can be told apart from one that is empty because
+    //     the socket died: the second reads zero here while `crowd_tick` keeps ticking.
+    CROWD_TICK => "crowd_tick",
+    CROWD_TRADES => "crowd_trades",
+    CROWD_RENDER => "crowd_render",
+    CROWD_RENDER_US => "crowd_render_us",
 );
 
 /// Starts a stopwatch, but only when diagnostics are on.

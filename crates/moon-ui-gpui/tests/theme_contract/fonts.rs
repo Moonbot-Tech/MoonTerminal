@@ -85,6 +85,11 @@ fn data_render_roots_keep_the_mono_family() {
             "impl Render for StrategiesView",
             "strategy rows and names",
         ),
+        (
+            "crowd.rs",
+            "impl Render for CrowdStatsView",
+            "the crowd's money columns",
+        ),
     ] {
         let source = read_src(path);
         let root = render_root(&source, render_impl);

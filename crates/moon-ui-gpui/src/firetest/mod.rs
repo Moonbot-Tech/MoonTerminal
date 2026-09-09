@@ -41,6 +41,7 @@ use moon_core::metrics::MetricsSnapshot;
 use crate::{Backend, diag};
 
 pub(crate) use config::Config;
+pub(crate) use config::scripted;
 pub(crate) use probe::ChartProbe;
 
 use logging::{firetest_error, firetest_info};

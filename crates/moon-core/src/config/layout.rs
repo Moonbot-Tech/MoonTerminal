@@ -733,6 +733,27 @@ pub struct WindowLayout {
     /// silently drops it leaves no trace that it was ever there. Startup reopens it from this flag.
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub profit_monitor_open: bool,
+    /// What an empty Main draws, layer by layer: the mark, its one line of help, and the three
+    /// crowd tables.
+    ///
+    /// Five independent switches rather than a mode, because a person may want any mixture of
+    /// them. `None` means "never chosen" and takes the feature's own default — the logo and the
+    /// hint on, every table off — which is what lets a default change later without overriding
+    /// somebody who deliberately switched one off. The tables also decide what is READ: each one
+    /// carries a connection to a public service, and an unshown table opens none.
+    ///
+    /// Read leniently for the same reason as every other widget preference here: a hand edit must
+    /// not discard the window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_logo: Option<bool>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_hint: Option<bool>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_minute: Option<bool>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_traders: Option<bool>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_coins: Option<bool>,
     /// Profit Monitor: whether a row shows its exchange logo before the name.
     ///
     /// `None` means the feature's own default. Every monitor preference is read leniently for the
