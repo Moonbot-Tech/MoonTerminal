@@ -667,9 +667,26 @@ strat.deleted_folder:
   en: "Deleted"
   es: "Eliminadas"
 strat.tree_counts_tip:
-  ru: "Включённых стратегий из общего числа в этой ветке (с учётом фильтров по типу и стороне)"
-  en: "Enabled strategies out of the total in this branch (kind and side filters applied)"
-  es: "Estrategias activadas del total en esta rama (con los filtros de tipo y lado aplicados)"
+  ru: "Отмеченных стратегий из общего числа в этой ветке (с учётом фильтров по типу и стороне)"
+  en: "Ticked strategies out of the total in this branch (kind and side filters applied)"
+  es: "Estrategias marcadas del total en esta rama (con los filtros de tipo y lado aplicados)"
+# Shown when the core has CONFIRMED its global strategy engine is running, so everything ticked
+# is actually working. The neutral key above is what an unconfirmed or never-reported core gets.
+strat.tree_counts_tip_running:
+  ru: "Отмеченных стратегий из общего числа в этой ветке (с учётом фильтров по типу и стороне). Движок стратегий на ядре запущен, поэтому отмеченные работают."
+  en: "Ticked strategies out of the total in this branch (kind and side filters applied). The core's strategy engine is running, so the ticked ones are working."
+  es: "Estrategias marcadas del total en esta rama (con los filtros de tipo y lado aplicados). El motor de estrategias del núcleo está en marcha, así que las marcadas están trabajando."
+# Shown instead of the tooltip above while the core reported its global strategy engine
+# STOPPED: no strategy runs then, whatever is ticked, so the counter reads 0 like Moonbot's
+# own Strategies window does. %{n} is how many are still ticked and will start with the engine.
+strat.tree_counts_tip_stopped:
+  ru: "Движок стратегий на ядре ОСТАНОВЛЕН — не работает ни одна стратегия. Отмечено и ждёт запуска: %{n}. Запустить можно кнопкой в строке ядра."
+  en: "The core's strategy engine is STOPPED — nothing is running. Ticked and waiting: %{n}. Start it with the button on the core row."
+  es: "El motor de estrategias del núcleo está DETENIDO — no se ejecuta ninguna. Estrategias marcadas en espera: %{n}. Se inicia con el botón de la fila del núcleo."
+strat.tree_engine_stopped_tag:
+  ru: "стоп"
+  en: "stopped"
+  es: "detenido"
 strat.tree_open_orders_tip:
   ru: "В скобках — открытые ордера ядра"
   en: "In brackets — the core's open orders"
