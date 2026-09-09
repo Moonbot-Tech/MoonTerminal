@@ -6,12 +6,21 @@
 //! Left-click requests the market on Main without raising its window, while right-click requests a
 //! custom comparison tab.
 //!
+//! **A second source, with no core behind it.** The crowd's rule (`crowd::service`) watches a
+//! public statistics service and fires when one coin's rolling minute crosses both its lines. Such
+//! a card has no core, no strategy and no server colour, so it is drawn from what it does have —
+//! the coin, the money and the trades — and both its clicks open the coin the way every other bare
+//! ticker in the terminal opens: one core outright, several through a picker. It is not scoped to a
+//! core either, so no display preset can hide it: the crowd is not one of this group's cores.
+//!
 //! The gear popup configures per-size dimensions, chart type, server rail, and field slots for each
 //! group and persists them in `detects_view.toml`; see [`popup`]. Card layout and vector mini-charts
 //! built from the snapshot captured at detection time live in [`cards`].
 
 mod cards;
+mod crowd;
 mod popup;
+mod rules;
 
 #[cfg(test)]
 mod tests;
@@ -30,7 +39,13 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::workspace::scope_marker::{self, ScopeMarker};
+use crate::workspace::scope_marker::ScopeMarker;
+
+use crowd::DetectOrigin;
+use rules::{
+    crowd_card_yields, detect_expired, detection_core_visible, detection_route_visible,
+    detects_sig, empty_feed_text,
+};
 
 /// Number of latest five-minute OHLC buckets retained for a card's candle chart, approximately two
 /// hours. At a typical 75-130 px chart width, 24 buckets leave roughly 3-5 px per outlined candle;
@@ -39,12 +54,21 @@ const DETECT_THUMB_BARS: usize = 24;
 
 /// Frozen state for one detection-feed card, ported from `src/dock/detects.rs::RibbonItem`.
 pub(crate) struct DetectItem {
-    core: CoreId,
+    origin: DetectOrigin,
+    /// The reporting core's name, empty for a crowd card, which names its source at render.
     core_name: String,
     /// Full market key passed to Main or comparison-tab open requests.
     market: String,
     /// Coin label derived from the market without its quote suffix (`ADAUSDT` to `ADA`).
     base: String,
+    /// THE key for "is this the same coin on another exchange" — `MarketLabel::identity`, which is
+    /// the core's own `market_currency_canonic` where the catalog has one.
+    ///
+    /// Frozen with the card like every other field, and NOT derived from [`Self::base`]: no rule
+    /// over a name can tell Bybit's `1kBONKPERP` from Binance's spelling of the same coin, or tell
+    /// either from `1000SATS`, whose thousand is part of its real ticker. Only the catalog knows,
+    /// and this is the field it answers with — the same one the arbitrage column borrows quotes by.
+    identity: String,
     color: [u8; 3],
     /// Source-strategy kind ordinal from `DetectRow.kind`, used for the detection-type badge.
     kind: u8,
@@ -82,11 +106,43 @@ pub(crate) struct DetectItem {
     exchange_kind: String,
 }
 
+impl DetectItem {
+    /// The core that reported this card, or `None` for a crowd detection.
+    fn core(&self) -> Option<CoreId> {
+        match self.origin {
+            DetectOrigin::Core(core) => Some(core),
+            DetectOrigin::Crowd { .. } => None,
+        }
+    }
+
+    /// What the crowd's minute was worth at the crossing, for a card the rule fired.
+    fn crowd(&self) -> Option<(f64, u32)> {
+        match self.origin {
+            DetectOrigin::Crowd { profit, trades } => Some((profit, trades)),
+            DetectOrigin::Core(_) => None,
+        }
+    }
+
+    /// Stable element identity: what the card IS, never where it currently sits.
+    ///
+    /// The position shifts under a card whenever the queue drops its oldest or a replay re-sorts
+    /// it, and a positional id would hand the element state — an open tooltip among it — to
+    /// whichever detection inherits that slot.
+    fn key(&self) -> String {
+        match self.origin {
+            DetectOrigin::Core(core) => format!("det-{core}-{}", self.market),
+            DetectOrigin::Crowd { .. } => format!("det-crowd-{}", self.base),
+        }
+    }
+}
+
 pub struct DetectsPanel {
     backend: Entity<Backend>,
     group: String,
     items: VecDeque<DetectItem>,
     last_seq: HashMap<CoreId, u64>,
+    /// How far this panel has read the crowd rule's own ring. See [`DetectsPanel::ingest_crowd`].
+    crowd_cursor: u64,
     last_sig: (u64, bool),
     prune_timer_armed: bool,
     focus: FocusHandle,
@@ -130,6 +186,20 @@ impl DetectsPanel {
                 this.last_sig = sig;
                 changed |= this.ingest(backend.read(cx), now);
             }
+            changed |= this.prune(now);
+            this.arm_prune_timer(cx);
+            if changed {
+                cx.notify();
+            }
+        })
+        .detach();
+        // The crowd's rule wakes ONLY this: its own channel, notified when a coin crosses, which
+        // on an ordinary market is a few times an hour. Nothing about it goes through the backend,
+        // whose notification would repaint seventeen views for a card in one panel.
+        let crowd_detects = backend.read(cx).crowd().read(cx).detect_revision();
+        cx.observe(&crowd_detects, |this, _revision, cx| {
+            let now = now_unix_ms();
+            let mut changed = this.ingest_crowd(now, cx);
             changed |= this.prune(now);
             this.arm_prune_timer(cx);
             if changed {
@@ -182,6 +252,10 @@ impl DetectsPanel {
             group,
             items: VecDeque::new(),
             last_seq: HashMap::new(),
+            // From zero rather than from the ring's head: the ring holds at most a minute's worth
+            // of live cards, and a panel opened just after a crossing should show it exactly as it
+            // shows a core detection that fired a moment before the panel existed.
+            crowd_cursor: 0,
             last_sig: initial_sig,
             prune_timer_armed: false,
             focus: cx.focus_handle(),
@@ -198,6 +272,7 @@ impl DetectsPanel {
         };
         let now = now_unix_ms();
         this.ingest(initial_backend.read(cx), now);
+        this.ingest_crowd(now, cx);
         this.prune(now);
         this.arm_prune_timer(cx);
         this
@@ -252,8 +327,9 @@ impl DetectsPanel {
                 self.items.retain(|it| it.add_to_chart == 0);
             }
         }
-        // Read each core's server color from configuration. The coin label comes from the core's
-        // catalog when the card is built, not from the market name.
+        // Read each core's server color from configuration. The coin label and its cross-exchange
+        // identity both come from the core's catalog when the card is built, not from the market
+        // name.
         // Canonical order: fresh events are appended core by core and rendered back in
         // reverse insertion order — so this order is what decides how detects of the same instant
         // read on screen. The one exception is a replay (below), which re-fills the queue out of
@@ -320,11 +396,9 @@ impl DetectsPanel {
                 // a replay. Leave that card untouched: its chart is frozen at detection time, and
                 // re-taking the snapshot would both cost a market read and hand the card a picture
                 // newer than the countdown printed on it.
-                if self
-                    .items
-                    .iter()
-                    .any(|it| it.core == id && it.market == det.market && it.born_ms == det.time_ms)
-                {
+                if self.items.iter().any(|it| {
+                    it.core() == Some(id) && it.market == det.market && it.born_ms == det.time_ms
+                }) {
                     continue;
                 }
                 // Freeze five-minute chart history, 24-hour line data, deltas, and exchange
@@ -334,22 +408,20 @@ impl DetectsPanel {
                     b.session
                         .market_source()
                         .detect_snapshot(id, &det.market, DETECT_THUMB_BARS);
+                let label = b.session.market_source().market_label(id, &det.market);
                 if let Some(it) = self
                     .items
                     .iter_mut()
-                    .find(|it| it.core == id && it.market == det.market)
+                    .find(|it| it.core() == Some(id) && it.market == det.market)
                 {
                     it.born_ms = det.time_ms;
                     it.ttl_ms = ttl;
                     it.color = color;
                     // Re-resolve the label too: a card first built before its core sent a market
-                    // list would otherwise wear the name-derived spelling for its whole TTL.
-                    it.base = b
-                        .session
-                        .market_source()
-                        .market_label(id, &det.market)
-                        .display_coin()
-                        .to_string();
+                    // list would otherwise wear the name-derived spelling — and the name-derived
+                    // IDENTITY — for its whole TTL.
+                    it.base = label.display_coin().to_string();
+                    it.identity = label.identity();
                     it.kind = det.kind;
                     it.is_short = det.is_short;
                     it.strat_name = det.strat_name.clone();
@@ -365,18 +437,14 @@ impl DetectsPanel {
                     changed = true;
                 } else {
                     self.items.push_back(DetectItem {
-                        core: id,
+                        origin: DetectOrigin::Core(id),
                         core_name: name.clone(),
                         market: det.market.clone(),
                         // Resolved when the card is built, not while rendering: a card is
                         // re-rendered constantly, and the core's catalog is the only thing that
                         // can name a Hyperliquid spot index.
-                        base: b
-                            .session
-                            .market_source()
-                            .market_label(id, &det.market)
-                            .display_coin()
-                            .to_string(),
+                        base: label.display_coin().to_string(),
+                        identity: label.identity(),
                         color,
                         kind: det.kind,
                         is_short: det.is_short,
@@ -477,7 +545,7 @@ impl DetectsPanel {
             return;
         }
         self.items
-            .retain(|it| !(it.core == core && it.market == market));
+            .retain(|it| !(it.core() == Some(core) && it.market == market));
         self.arm_prune_timer(cx);
         cx.notify();
     }
@@ -507,7 +575,7 @@ impl DetectsPanel {
             return;
         }
         self.items
-            .retain(|it| !(it.core == core && it.market == market));
+            .retain(|it| !(it.core() == Some(core) && it.market == market));
         self.arm_prune_timer(cx);
         cx.notify();
     }
@@ -516,73 +584,6 @@ impl DetectsPanel {
     fn view_cfg(&self, cx: &App) -> DetectViewCfg {
         self.backend.read(cx).detects_view.group(&self.group)
     }
-}
-
-/// Pick the sentence an EMPTY detection feed states, in the house precedence.
-///
-/// A feed with no visible card is several different facts, and they must not share a string:
-/// only the no-cores one asks the user to go and connect something.
-///
-/// Two orderings here are load-bearing, and both were wrong in this function's first draft.
-///
-/// **The empty UNIVERSE is checked first.** A card outlives the session that produced it — it
-/// stays in the queue for its whole `KeepAlert` and [`Self::ingest`] never evicts one whose core
-/// disappeared — so a disconnect mid-`KeepAlert` leaves cards retained, nothing visible, and no
-/// core available. Asking about the retained cards first would blame the scope for hiding
-/// detects when the cores behind them are simply gone. The PARTIAL version of that state — one
-/// core of several goes away while its siblings sit idle — is settled by the caller instead,
-/// which counts only cards whose core is still available (see `retained` below); the count and
-/// this ordering are two halves of one rule. `available` counts
-/// `WorkspaceCoreAvailability::is_available` (`workspace.rs:251`), which is group and core
-/// activation plus a live session and a live window — hence "available", never "connected".
-///
-/// **The shared hidden-by-preset sentence applies ONLY when data really was excluded.**
-/// [`scope_marker::scope_empty_text`] switches on membership alone, and its contract is that the
-/// data exists and the preset is what withholds it. A Detects feed can be empty with a full
-/// scope-hiding preset simply because nothing ever fired, and there the shared sentence would
-/// send the user to widen a preset that is hiding nothing. So it is reached only under
-/// `retained > 0`.
-///
-/// Args:
-///     marker: This group's scope marker, built from the same membership counts presentation
-///         filters on.
-///     retained: Cards this panel holds whose core is STILL AVAILABLE — the ones a preset change
-///         could actually bring back. Nonzero with nothing visible means detects DID arrive and
-///         presentation is what hides them. A card whose core has gone away is deliberately NOT
-///         counted: it is unreachable rather than hidden, and no scope change reveals it.
-///     available: Group cores that survived availability — the universe the feed could ever
-///         show. Zero means nothing here can detect at all.
-///
-/// Returns:
-///     One localized sentence, already resolved; never empty.
-fn empty_feed_text(marker: &ScopeMarker, retained: usize, available: usize) -> String {
-    if available == 0 {
-        t!("detects.empty_no_cores").to_string()
-    } else if retained > 0 {
-        scope_marker::scope_empty_text(Some(marker), t!("detects.empty_filtered").to_string())
-    } else {
-        t!("detects.empty").to_string()
-    }
-}
-
-/// Signature that makes the panel re-ingest: a hash of every group core's detect revision, PLUS the
-/// AddToChart setting as its own value. The setting belongs here because flipping it changes which
-/// rows the feed accepts, and this is what wakes EVERY panel of the group — the one whose checkbox
-/// was clicked notifies itself, but a second, detached panel learns of it only through this.
-///
-/// The setting is a separate field rather than a seed folded into the hash: at `31 * flag + rev`,
-/// a core whose revision advanced by exactly 31 in the same flush would cancel the flip out, and
-/// the panel would never see it.
-fn detects_sig(b: &Backend, group: &str) -> (u64, bool) {
-    let store = b.session.store();
-    let revs = b
-        .session
-        .sessions()
-        .iter()
-        .filter(|s| s.group == group)
-        .filter_map(|s| store.core(s.id))
-        .fold(0u64, |a, c| a.wrapping_mul(31).wrapping_add(c.detects_rev));
-    (revs, b.detects_view.shows_add_to_chart(group))
 }
 
 impl EventEmitter<PanelEvent> for DetectsPanel {}
@@ -649,12 +650,16 @@ impl Render for DetectsPanel {
             // behind until its `KeepAlert` expires. Counting it as retained would tell a
             // multi-core group whose other cores are merely idle that the scope is hiding
             // detects, and send the user widening a preset that can never reveal them.
+            // A crowd card is not counted either, for a different reason: no preset can hide it,
+            // so it can never be one of the cards a preset change would bring back.
             let retained_reachable = self
                 .items
                 .iter()
                 .filter(|it| {
-                    b.workspace_core_availability(&self.group, it.core)
-                        .is_available()
+                    it.core().is_some_and(|core| {
+                        b.workspace_core_availability(&self.group, core)
+                            .is_available()
+                    })
                 })
                 .count();
             (marker, scope.ids().to_vec(), available, retained_reachable)
@@ -668,31 +673,69 @@ impl Render for DetectsPanel {
         // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
         let mut shown = 0usize;
+        // Coins a core has already put on this screen. Collected from the cards that pass the
+        // same two filters the loop below applies, so a core card the preset is hiding does not
+        // silently take the crowd's card down with it — and the crowd's card is NOT dropped at
+        // ingest, so it appears by itself the moment the core's own card expires.
+        let cored: HashSet<&str> = self
+            .items
+            .iter()
+            .filter(|it| {
+                it.core().is_some()
+                    && detection_core_visible(it.core(), &visible_cores)
+                    && detection_route_visible(it.add_to_chart, cfg.show_add_to_chart)
+            })
+            .map(|it| it.identity.as_str())
+            .collect();
+
         for it in self.items.iter().rev().filter(|item| {
-            detection_core_visible(item.core, &visible_cores)
+            detection_core_visible(item.core(), &visible_cores)
                 && detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)
+                && (item.crowd().is_none() || !crowd_card_yields(&item.identity, &cored))
         }) {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
-            let (core, market) = (it.core, it.market.clone());
-            let market_rmb = it.market.clone();
             let card = cards::card(it, secs, &cfg, &theme, &badges, p, is_light, cx)
-                // Keyed by what the card IS, not by where it currently sits: ingest keeps one card
-                // per core and market, while the position shifts under it whenever the queue drops
-                // its oldest card or a replay re-sorts it. A positional id hands the element state
-                // — a card's open tooltip among it — to whichever detect inherits that slot.
-                .id(SharedString::from(format!("det-{}-{}", it.core, it.market)))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.open(core, market.clone(), cx);
-                }))
-                // Right-click requests the custom comparison-tab workflow with lock and broom mode.
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, _, _, cx| {
-                        this.open_compare(core, market_rmb.clone(), cx);
-                        cx.stop_propagation();
-                    }),
-                );
+                .id(SharedString::from(it.key()))
+                .cursor_pointer();
+            let card = match it.core() {
+                Some(core) => {
+                    let market = it.market.clone();
+                    let market_rmb = it.market.clone();
+                    card.on_click(cx.listener(move |this, _, _, cx| {
+                        this.open(core, market.clone(), cx);
+                    }))
+                    // Right-click requests the custom comparison-tab workflow with lock and broom
+                    // mode.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _, cx| {
+                            this.open_compare(core, market_rmb.clone(), cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                }
+                // Both buttons open the coin. Comparison is anchored on a core, and this card has
+                // none — picking "whichever core happens to trade it" for a gesture the reader did
+                // not aim at any core would be an invention, so the honest answer is the same
+                // picker the left button raises.
+                None => {
+                    let coin = it.base.clone();
+                    let coin_rmb = it.base.clone();
+                    // `on_click`, like every core card: a picker raised on the press and left open
+                    // under a held button is a different gesture from the one every other card here
+                    // answers to.
+                    card.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        this.open_crowd(&coin, event.position(), window, cx);
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.open_crowd(&coin_rmb, event.position, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                }
+            };
             container = container.child(card);
             shown += 1;
         }
@@ -777,48 +820,4 @@ impl Render for DetectsPanel {
             .child(divider)
             .child(body)
     }
-}
-
-/// Return whether a retained detection card belongs to the current presentation scope.
-///
-/// Args:
-///     core: Core attached to one retained card.
-///     visible: Effective workspace core ids.
-///
-/// Returns:
-///     `true` only when presentation may render the retained card.
-fn detection_core_visible(core: CoreId, visible: &[CoreId]) -> bool {
-    visible.contains(&core)
-}
-
-/// Return whether a detection has outlived its `KeepAlert` window.
-///
-/// One rule for both readers: `prune` drops the cards that reach it, and ingestion refuses to build
-/// a card — or pay for its market snapshot — for a row that would be dropped on the same pass.
-///
-/// Args:
-///     now_ms: Wall-clock time of this pass, in Unix milliseconds.
-///     born_ms: When the core reported the detection.
-///     ttl_ms: `KeepAlert` for that detection, in milliseconds.
-///
-/// Returns:
-///     `true` when the detection may no longer occupy the feed.
-fn detect_expired(now_ms: f64, born_ms: f64, ttl_ms: f64) -> bool {
-    now_ms - born_ms >= ttl_ms
-}
-
-/// Return whether a retained card survives the AddToChart setting.
-///
-/// Ingestion already applies the same rule, so this only matters for cards taken in while the
-/// setting was on: turning it off must clear them immediately rather than leave them for the rest
-/// of their `KeepAlert`.
-///
-/// Args:
-///     add_to_chart: The card's `AddToChart` tab number, `0` when the detect opens no tab.
-///     show_add_to_chart: Whether this group displays chart-routed detects in the feed.
-///
-/// Returns:
-///     `true` only when presentation may render the retained card.
-fn detection_route_visible(add_to_chart: u32, show_add_to_chart: bool) -> bool {
-    add_to_chart == 0 || show_add_to_chart
 }

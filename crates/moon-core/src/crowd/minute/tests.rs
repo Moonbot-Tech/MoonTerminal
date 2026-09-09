@@ -140,3 +140,25 @@ fn a_step_with_no_arrivals_changes_nothing() {
     minute.tick(1_120);
     assert_eq!(minute.get("BTC").expect("a coin").trades, 3);
 }
+
+/// Finiteness alone is not a sanity range.
+///
+/// Mutation: drop the magnitude guard and two enormous values off the wire sum to an infinity —
+/// after which every figure derived from that window is one too, and the rule fires on a coin whose
+/// profit prints as `infT`.
+#[test]
+fn an_impossible_trade_is_refused_at_the_door() {
+    let mut minute = Minute::new();
+    minute.push(Trade::new(1_000, "BTC", 1e300));
+    minute.push(Trade::new(1_000, "BTC", 1e300));
+    minute.tick(1_000);
+    assert!(
+        minute.get("BTC").is_none(),
+        "an impossible trade was counted"
+    );
+
+    // A real one still goes in.
+    minute.push(Trade::new(1_000, "BTC", 5.0));
+    minute.tick(1_000);
+    assert_eq!(minute.get("BTC").map(|stat| stat.plus), Some(5.0));
+}

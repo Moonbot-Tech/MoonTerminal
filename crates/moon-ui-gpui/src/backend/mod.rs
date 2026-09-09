@@ -1240,6 +1240,15 @@ impl Backend {
         self.market_data_revision.clone()
     }
 
+    /// Return the terminal's one reader of the crowd's public statistics.
+    ///
+    /// Returns:
+    ///     The shared service. It is never observed FOR the backend's sake: it carries its own two
+    ///     wake channels, one per audience, so nothing here wakes the other sixteen views.
+    pub(crate) fn crowd(&self) -> gpui::Entity<crate::crowd::service::CrowdService> {
+        self.crowd.clone()
+    }
+
     /// Return the cores the Profit Monitor is currently broadcasting.
     ///
     /// Returns:

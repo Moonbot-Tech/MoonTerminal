@@ -27,6 +27,13 @@ use crate::crowd::trade::Trade;
 /// Width of the window. One minute, as the crowd site itself aggregates.
 pub const WINDOW_MS: u64 = 60_000;
 
+/// Largest single trade this window will believe, in dollars.
+///
+/// A sanity range on an external number rather than a business rule: the service publishes real
+/// closed trades, and a figure past a trillion dollars is a broken message. Without it two such
+/// values sum to an infinity, and every figure derived from that sum afterwards is one too.
+const TRADE_MAX: f64 = 1e12;
+
 /// One coin's standing in the rolling minute.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CoinMinute {
@@ -71,10 +78,11 @@ impl Minute {
 
     /// Take one trade off the feed.
     ///
-    /// A non-finite profit is dropped at the door rather than propagated: one NaN off the wire
-    /// would poison a sum, and every figure derived from that sum after it.
+    /// A non-finite or impossible profit is dropped at the door rather than propagated: one NaN off
+    /// the wire would poison a sum, and every figure derived from that sum after it. See
+    /// [`TRADE_MAX`] for why finiteness alone is not enough.
     pub fn push(&mut self, trade: Trade) {
-        if !trade.profit.is_finite() || trade.coin.is_empty() {
+        if !trade.profit.is_finite() || trade.profit.abs() > TRADE_MAX || trade.coin.is_empty() {
             return;
         }
         self.dirty = true;
@@ -86,7 +94,12 @@ impl Minute {
     ///
     /// Args:
     ///     now_ms: Host clock.
-    pub fn tick(&mut self, now_ms: u64) {
+    ///
+    /// Returns:
+    ///     Whether the window CHANGED — a trade arrived, or one aged out. It is the invalidation
+    ///     signal every reader here is driven by: a quiet second changes no figure on any table
+    ///     and crosses no threshold, so it must not be able to wake anybody.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
         let cut = now_ms.saturating_sub(WINDOW_MS);
         while self.buf.front().is_some_and(|(at, _, _)| *at < cut) {
             self.buf.pop_front();
@@ -94,7 +107,7 @@ impl Minute {
         }
 
         if !self.dirty {
-            return;
+            return false;
         }
         self.dirty = false;
 
@@ -125,11 +138,21 @@ impl Minute {
             stat.trades_minus = lost;
             stat.trades = won + lost;
         }
+        true
     }
 
     /// One coin's standing, if it is still in the window.
     pub fn get(&self, coin: &str) -> Option<&CoinMinute> {
         self.stats.get(coin)
+    }
+
+    /// Every coin in the window, in no particular order.
+    ///
+    /// For a reader that has to look at all of them and does not care which is loudest — the rule
+    /// that watches for a coin crossing a threshold is one, and ranking a board it is not going to
+    /// draw would be a sort per second for nothing.
+    pub fn coins(&self) -> impl Iterator<Item = (&str, &CoinMinute)> {
+        self.stats.iter().map(|(coin, stat)| (coin.as_str(), stat))
     }
 
     /// Coins ordered by the size of their minute, loudest first.

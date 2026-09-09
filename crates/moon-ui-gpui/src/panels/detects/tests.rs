@@ -1,7 +1,11 @@
 //! Regression tests for detection presentation scoping.
 
 use super::cards::{self, strategy_chip_text};
-use super::{detect_expired, detection_core_visible, detection_route_visible, empty_feed_text};
+use super::crowd::crowd_chip_text;
+use super::rules::{
+    crowd_card_yields, detect_expired, detection_core_visible, detection_route_visible,
+    empty_feed_text,
+};
 use crate::workspace::scope_marker::ScopeMarker;
 use moon_core::config::WorkspaceMode;
 use rust_i18n::t;
@@ -25,14 +29,14 @@ fn presentation_scope_keeps_hidden_detection_cards_retained() {
     let selected: Vec<u64> = retained
         .iter()
         .copied()
-        .filter(|core| detection_core_visible(*core, &[22]))
+        .filter(|core| detection_core_visible(Some(*core), &[22]))
         .collect();
     assert_eq!(selected, vec![22]);
     assert_eq!(retained, vec![11, 22, 11]);
     assert!(
         retained
             .iter()
-            .all(|core| detection_core_visible(*core, &[11, 22]))
+            .all(|core| detection_core_visible(Some(*core), &[11, 22]))
     );
 
     let src = include_str!("mod.rs");
@@ -45,7 +49,7 @@ fn presentation_scope_keeps_hidden_detection_cards_retained() {
         .nth(1)
         .expect("Detects render must exist");
     assert!(render.contains("effective_workspace_scope"));
-    assert!(render.contains("detection_core_visible(item.core, &visible_cores)"));
+    assert!(render.contains("detection_core_visible(item.core(), &visible_cores)"));
 }
 
 /// The AddToChart setting gates BOTH ends. Ingestion skips a chart-routed row while the setting is
@@ -87,7 +91,6 @@ fn add_to_chart_cards_are_gated_at_ingest_and_at_presentation() {
 /// leave the feed unchanged until an unrelated detect happened to fire.
 #[test]
 fn turning_the_setting_on_replays_the_ring_for_every_panel_of_the_group() {
-    let src = include_str!("mod.rs");
     let ingest = ingest_body();
     let reset = ingest
         .find("if show_add_to_chart {")
@@ -112,7 +115,7 @@ fn turning_the_setting_on_replays_the_ring_for_every_panel_of_the_group() {
 
     // Free function: its body ends at the first unindented brace. Scanning to end-of-file instead
     // would match the render gate and pass with no setting in the signature at all.
-    let sig = src
+    let sig = include_str!("rules.rs")
         .split("fn detects_sig(")
         .nth(1)
         .and_then(|tail| tail.split("\n}").next())
@@ -275,5 +278,116 @@ fn empty_feed_partial_preset_with_retained_cards_reports_filtered_state() {
     assert_eq!(
         empty_feed_text(&partial_marker, 1, 3),
         t!("detects.empty_filtered")
+    );
+}
+
+/// A crowd detection has no core, so no display preset can address it — and one that hid it would
+/// send the reader widening a preset that does not mention the crowd at all.
+///
+/// Mutation: make the rule fall through to `visible.contains`. Every crowd card then disappears the
+/// moment a group scopes itself to one core, with nothing on screen saying why.
+#[test]
+fn a_crowd_card_belongs_to_every_scope() {
+    assert!(detection_core_visible(None, &[]));
+    assert!(detection_core_visible(None, &[11, 22]));
+    // And a core card is still judged by the scope it belongs to.
+    assert!(!detection_core_visible(Some(11), &[22]));
+}
+
+/// The card states the two figures the rule was actually read against, in the crowd feature's own
+/// money format: always two decimals, so the card and the table it came from say the same number
+/// the same way.
+#[test]
+fn a_crowd_card_states_what_fired_it() {
+    assert_eq!(crowd_chip_text(999.5, 42), "+999.50 · 42");
+    // EXACT past a thousand, where the tables compact. A card is the evidence for a threshold, and
+    // "+1.20K" beside a line drawn at 1200 prints a figure that does not clear the line it crossed.
+    assert_eq!(crowd_chip_text(1234.5, 7), "+1234.50 · 7");
+    assert_eq!(crowd_chip_text(1204.0, 3), "+1204.00 · 3");
+    // The sign is written out: the same chip position on another card can hold a loss.
+    assert_eq!(crowd_chip_text(0.0, 10), "+0.00 · 10");
+}
+
+/// A crowd card lives the window it was computed from, until somebody says otherwise.
+///
+/// Mutation: raise the default and the feed keeps pointing at a minute that has gone; drop it to
+/// zero and the card is pruned on the pass that ingests it, so the rule appears to do nothing.
+#[test]
+fn a_crowd_card_lives_one_window_by_default() {
+    let cards = crate::chart_tabs::crowd_cards(&moon_core::config::layout::WindowLayout::default());
+    assert_eq!(cards.keep_ms(), moon_core::crowd::minute::WINDOW_MS as f64);
+    // And the feed follows the market rather than holding the first five it ever saw.
+    assert!(cards.evict);
+
+    let born = 1_000_000.0;
+    assert!(!detect_expired(
+        born + cards.keep_ms() - 1.0,
+        born,
+        cards.keep_ms()
+    ));
+    assert!(detect_expired(
+        born + cards.keep_ms(),
+        born,
+        cards.keep_ms()
+    ));
+}
+
+/// A coin a core has already reported is not announced a second time by the crowd.
+///
+/// The two land together more often than not — the crowd is trading it because something is
+/// happening there, which is also why a strategy fired — and the core's card is the one with a
+/// strategy, an exchange and a chart of its own behind it.
+///
+/// Mutation: drop the yield and a busy coin takes three seats in a 48-card feed, one per core plus
+/// the crowd's, all saying the same thing.
+#[test]
+fn the_crowd_yields_a_coin_a_core_already_reported() {
+    // What the cards CARRY: `MarketLabel::identity`, which is the core's own canonic where the
+    // catalog has one. Bybit's `1kBONKPERP` and Binance's spelling of it both resolve to the same
+    // string here, which is the whole reason the comparison is made on this field and not on a
+    // fold of the name.
+    let cored: std::collections::HashSet<&str> = ["BONKPERP", "AAVE"].into_iter().collect();
+
+    assert!(crowd_card_yields("BONKPERP", &cored));
+    assert!(crowd_card_yields("AAVE", &cored));
+
+    // A different coin is a different coin, however close it looks on screen.
+    assert!(!crowd_card_yields("NIULAI", &cored));
+    // `1000SATS` carries a thousand that is part of its real ticker, not a multiplier; nothing here
+    // is allowed to fold it into `SATS`, and the catalog is what keeps them apart.
+    assert!(!crowd_card_yields(
+        "SATS",
+        &["1000SATS"].into_iter().collect()
+    ));
+    // Nothing on screen, nothing to yield to.
+    assert!(!crowd_card_yields(
+        "AAVE",
+        &std::collections::HashSet::new()
+    ));
+}
+
+/// The identity a card carries is the CROSS-EXCHANGE one, and it is not the same question as
+/// "does this core's own coin list name it".
+///
+/// Mutation: build the card's `identity` from `match_key` instead. Everything still compiles and
+/// every same-named coin still de-duplicates — but the multiplier spellings the field exists for
+/// stop matching, which is exactly the case that is invisible without a catalog in front of you.
+#[test]
+fn the_card_carries_the_cross_exchange_key_and_not_the_local_one() {
+    let src = include_str!("mod.rs");
+    assert!(
+        src.contains("identity: label.identity(),"),
+        "a core card must freeze the catalog's cross-exchange identity"
+    );
+    assert!(
+        src.contains(".map(|it| it.identity.as_str())"),
+        "the duplicate rule must compare the identity the card froze"
+    );
+    let crowd = include_str!("crowd.rs");
+    assert!(
+        crowd.contains(
+            ".market_label(hit.core, &hit.market)\n                            .identity()"
+        ),
+        "a crowd card must borrow its identity from the market it borrowed its chart from"
     );
 }

@@ -1129,7 +1129,7 @@ fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
         .expect("Main render must branch on an empty stack");
     assert!(
         sync < branches,
-        "the crowd statistics view must be reconciled before the empty/non-empty branch, or a          chart opening leaves its feed running"
+        "the crowd statistics view must be reconciled before the empty/non-empty branch, or a          chart opening never reaches it and the view goes on drawing under the chart"
     );
 
     let locale = fs::read_to_string(

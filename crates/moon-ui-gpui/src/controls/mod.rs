@@ -7,6 +7,8 @@
 //!
 //! Organized into submodules, while this module owns slider bounds and re-exports:
 //! - [`coin_menu`] provides the shared coin context menu;
+//! - [`coin_open`] turns a bare ticker into a chart — one core opens it, several offer a picker —
+//!   for the surfaces that know a coin and no core;
 //! - [`coin_search`] provides coin search and the shared `COIN - Server` dropdown for chart tabs,
 //!   the header ticker, and the Report coin filter;
 //! - [`core_broadcast`] resolves the cross-window core filter the Profit Monitor publishes;
@@ -35,6 +37,7 @@
 //! - [`toolbar`] composes the toolbar row.
 
 mod coin_menu;
+pub(crate) mod coin_open;
 pub(crate) mod coin_search;
 mod core_broadcast;
 mod core_combo;

@@ -375,16 +375,25 @@ impl LiveFeed {
             self.connected = false;
         } else if !wants.trades && self.trades_alive.is_some() {
             self.trades_alive = None;
+            // A new generation on the way OUT as well as on the way in. The thread notices it has
+            // been abandoned between requests, which for the long poll is most of a minute, and
+            // everything it says in the meantime belongs to a reader that has moved on — a reader
+            // that, now the feed outlives any one screen, is still there to be told.
+            self.trades_epoch += 1;
             self.connected = false;
             self.spoke = false;
         }
         // A second thread, because the two are different animals: the trades are a socket held
         // open for as long as the reader wants it, and the boards are a GET on a minute's timer.
         // One thread doing both would have to stop reading the socket to poll.
-        // The polling thread is rebuilt when WHICH boards are shown changes, not only when the
+        // The polling thread is rebuilt when WHICH BOARDS are shown changes, not only when the
         // pair goes on or off: it fetches exactly what is drawn, and that is decided when it
-        // starts.
-        if wants.boards() && (self.boards_alive.is_none() || self.boards_want != wants) {
+        // starts. Only the two board flags are compared — the trade stream is switched on and off
+        // independently of them, and comparing the whole request tore down a healthy poller every
+        // time it was.
+        let boards_changed =
+            self.boards_want.coins != wants.coins || self.boards_want.traders != wants.traders;
+        if wants.boards() && (self.boards_alive.is_none() || boards_changed) {
             let alive = Arc::new(());
             let watch = Arc::downgrade(&alive);
             let config = Arc::clone(&self.config);
@@ -395,8 +404,9 @@ impl LiveFeed {
                 .name("crowd-boards".into())
                 .spawn(move || rest::run(&config, &tx, &watch, wants, epoch));
             self.boards_alive = started.ok().map(|_| alive);
-        } else if !wants.boards() {
+        } else if !wants.boards() && self.boards_alive.is_some() {
             self.boards_alive = None;
+            self.boards_epoch += 1;
         }
         self.boards_want = wants;
     }

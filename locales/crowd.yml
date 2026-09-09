@@ -109,3 +109,46 @@ crowd.settings.coins:
   ru: "Показывать топ 24ч по монетам"
   en: "Show the 24h coin top"
   es: "Mostrar el top 24h de monedas"
+
+# --- The rule, which is not a layer of this screen ---
+# It draws nothing here: it puts a card in the Detects panel when a coin's minute crosses both
+# lines. Its two thresholds are dead while it is off, which is why they are captioned as
+# comparisons rather than as settings — the switch above says WHETHER, and these say WHAT.
+crowd.settings.detect:
+  ru: "Детект по статистике"
+  en: "Detect on the statistics"
+  es: "Detección por las estadísticas"
+crowd.settings.detect_profit:
+  ru: "Профит за минуту >"
+  en: "Profit for the minute >"
+  es: "Ganancia del minuto >"
+crowd.settings.detect_trades:
+  ru: "Сделок за минуту ≥"
+  en: "Trades in the minute ≥"
+  es: "Operaciones del minuto ≥"
+crowd.settings.detect_keep:
+  ru: "Держать, сек"
+  en: "Keep, seconds"
+  es: "Mantener, s"
+# What happens when the rule fires and every seat is already taken. Off, the newcomer is dropped and
+# what is on screen lives out its time; on, the oldest gives up its seat. The count is interpolated
+# so one number in the code answers for the label, the rule's own burst and the feed's trim.
+crowd.settings.detect_evict:
+  ru: "Заменять самый старый (максимум %{max})"
+  en: "Replace the oldest (at most %{max})"
+  es: "Reemplazar el más antiguo (máximo %{max})"
+# A zero is not a line at zero — it switches that line off, and neither the caption nor the number
+# beside it can say so on its own. Both at zero asks nothing, and then nothing is read at all.
+crowd.settings.detect_hint:
+  ru: "0 — линия не учитывается; обе нулевые — детектов не будет"
+  en: "0 switches a line off; both at zero and nothing fires"
+  es: "0 desactiva una línea; ambas en cero y no se detecta nada"
+
+# --- The card the rule fires ---
+# Where a core detect prints the core that reported it, this prints what noticed: the crowd's own
+# pulse, on a card that has no core and no strategy behind it. Named for what it measures rather
+# than for whose numbers they are — the card already says the figures are a minute of the market.
+crowd.detect.source:
+  ru: "ПУЛЬС"
+  en: "PULSE"
+  es: "PULSO"

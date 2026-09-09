@@ -96,6 +96,9 @@ pub(crate) struct MainChartStack {
     )>,
     /// Whether the empty screen's ⚙ popup is open.
     empty_settings_open: bool,
+    /// The crowd rule's two threshold fields, built the first time that popup is opened. See
+    /// [`empty::DetectInputs`]: a text field needs a `Window`, and this stack is built without one.
+    empty_detect: Option<empty::DetectInputs>,
     /// Whether the one-shot inactivity auto-close timer is armed.
     /// It ticks at about 1 Hz while configured and charts exist, then rearms itself.
     idle_timer_armed: bool,
@@ -234,6 +237,7 @@ impl MainChartStack {
             compare_orderbook_only: false,
             crowd: None,
             empty_settings_open: false,
+            empty_detect: None,
             idle_timer_armed: false,
             layout_columns: None,
             layout_columns_exact: None,
@@ -1587,6 +1591,8 @@ impl MainChartStack {
 }
 
 mod empty;
+
+pub(crate) use empty::{crowd_cards, crowd_rule_for_run};
 
 #[cfg(test)]
 mod tests;

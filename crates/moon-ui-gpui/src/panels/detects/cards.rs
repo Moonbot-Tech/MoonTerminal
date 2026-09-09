@@ -86,7 +86,7 @@ pub(super) fn card_sized(
 ) -> Div {
     let scfg = cfg.size_cfg(size);
     let dec = cfg.delta_decimals_clamped();
-    let color = design::rgb_to_u32(it.color);
+    let color = super::crowd::rail_color(it, p);
     let inner = match size {
         DETECT_SIZE_MINI => mini_layout(it, secs, scfg, dec, theme, badges, p, is_light, cx),
         DETECT_SIZE_LARGE => large_layout(it, secs, scfg, dec, theme, badges, p, is_light, cx),
@@ -265,6 +265,10 @@ fn inner_w(scfg: &DetectSizeCfg, pad_left: f32, pad_right: f32) -> f32 {
 ///
 /// Return `None` when this detection type's badge is disabled.
 fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<MoonBadge> {
+    // A crowd detection has no strategy and therefore no strategy KIND. The badge codes are
+    // configured per kind, so drawing one here would label it with whatever kind zero happens to
+    // mean today — a long/short code for something with no direction at all.
+    it.core()?;
     badges.active(it.kind).then(|| {
         let code = badges.code(it.kind, it.is_short).to_string();
         let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
@@ -282,9 +286,18 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
     })
 }
 
-/// Build a tiny core-name badge using the server color.
+/// Build a tiny badge naming where the detection came from.
+///
+/// A core's name, or — for a card no core reported — the source that did. Resolved at render
+/// rather than frozen with the card, so it follows a live locale switch like every other word on
+/// screen; the core's own name is frozen, because that is a fact about the detection rather than a
+/// word.
 fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
-    MoonBadge::new(it.core_name.clone())
+    let name = match it.core() {
+        Some(_) => it.core_name.clone(),
+        None => t!("crowd.detect.source").to_string(),
+    };
+    MoonBadge::new(name)
         .variant(MoonBadgeVariant::Soft)
         .size(MoonBadgeSize::Tiny)
         .bg_color(color)
@@ -383,18 +396,28 @@ pub(super) fn strategy_chip_text<'a>(
 /// tooltip; that is the degenerate case of naming one thing twice on one card, and it costs only
 /// the tooltip.
 fn strategy_chip(it: &DetectItem, name_w: f32, p: MoonPalette, cx: &App) -> Option<AnyElement> {
-    // The alert label is only ever the answer for a card no strategy named, so it is looked up only
-    // then: this runs for every card on every repaint.
-    let alert = it
-        .strat_name
-        .trim()
-        .is_empty()
-        .then(|| t!("detects.field.strategy_alert"));
-    let full = strategy_chip_text(
-        &it.strat_name,
-        it.is_alert,
-        alert.as_deref().unwrap_or_default(),
-    )?;
+    // A crowd detection has no strategy to name, and the field would be a hole. What belongs there
+    // is what actually fired it — the money and the trades behind it — which is the same question
+    // the strategy answers on a core card: why is this here.
+    let full: String = match it.crowd() {
+        Some((profit, trades)) => super::crowd::crowd_chip_text(profit, trades),
+        None => {
+            // The alert label is only ever the answer for a card no strategy named, so it is looked
+            // up only then: this runs for every card on every repaint.
+            let alert = it
+                .strat_name
+                .trim()
+                .is_empty()
+                .then(|| t!("detects.field.strategy_alert"));
+            strategy_chip_text(
+                &it.strat_name,
+                it.is_alert,
+                alert.as_deref().unwrap_or_default(),
+            )?
+            .to_string()
+        }
+    };
+    let full = full.as_str();
     let max_w = design::ui_px(cx, name_w);
     // One glyph measured, multiplied by the count — the rows are monospace, so the product is exact
     // for ASCII and close enough elsewhere for what it decides. Both sides are final screen pixels,
@@ -459,6 +482,9 @@ fn chip(
     is_light: bool,
     cx: &App,
 ) -> Option<AnyElement> {
+    if !super::crowd::field_applies(field, it) {
+        return None;
+    }
     let el: AnyElement = match field {
         DetectField::None => return None,
         DetectField::Coin => coin_text(it, p, coin_px).render().into_any_element(),
@@ -466,7 +492,7 @@ fn chip(
         DetectField::Badge => type_badge(it, badges, is_light)?
             .render()
             .into_any_element(),
-        DetectField::Core => core_badge(it, design::rgb_to_u32(it.color))
+        DetectField::Core => core_badge(it, super::crowd::rail_color(it, p))
             .render()
             .into_any_element(),
         DetectField::Delta24h => delta_chip(it.delta_24h, over, decimals, p, cx).into_any_element(),

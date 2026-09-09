@@ -123,6 +123,14 @@ struct Backend {
     /// Dedicated wake channel for `core_filter`, observed only by the panels that own a core
     /// selector and by the monitor that publishes it.
     core_filter_revision: Entity<CoreFilterRevision>,
+    /// The terminal's one reader of the crowd's public statistics.
+    ///
+    /// STORED here and never notified through here: the backend is observed by seventeen views, so
+    /// routing a once-a-second tick through it would repaint the whole terminal for a decorative
+    /// table. It owns its own two wake channels instead — see `crowd::service`. It lives for the
+    /// process because the rule that watches for a loud coin has to keep counting while every
+    /// window is showing a chart; it opens no connection until something asks it to.
+    crowd: Entity<crate::crowd::service::CrowdService>,
     /// Last live group whose window received user activity, owning singleton-tool scope and the
     /// display-membership preset for Analytics, Strategies, and Profit Monitor; never serialized.
     workspace_focus: Option<workspace::WorkspaceFocus>,

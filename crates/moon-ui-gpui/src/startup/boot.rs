@@ -129,6 +129,15 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let auto_workspace_layout_revision =
         cx.new(|_| crate::workspace::AutoWorkspaceLayoutRevision::default());
     let core_filter_revision = cx.new(|_| crate::CoreFilterRevision);
+    // A run that is not a person watching the market gets the seeded stand-in: `--fixture` is a
+    // bench on recorded data and `--debug-script` is FireTest, and both assert that nothing reaches
+    // the network. The saved rule is handed over at construction, so a profile that opted in is
+    // watching from the first second rather than from whenever a window first draws an empty Main.
+    let crowd_live = moon_core::fixture::active().is_none() && !crate::firetest::scripted();
+    // `_for_run` applies the same guard to the rule: a bench invents trades, and a profile that had
+    // switched the rule on would see invented crowd cards in a panel measuring something else.
+    let crowd_rule = crate::chart_tabs::crowd_rule_for_run(&layout);
+    let crowd = cx.new(|cx| crate::crowd::service::CrowdService::new(crowd_live, crowd_rule, cx));
     crate::chartdx::axes::set_display_zone(crate::chrome::clock::resolved_header_clock_zone(
         layout.header_clock_zone.as_deref(),
     ));
@@ -157,6 +166,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         core_filter: HashSet::new(),
         run_pending: Default::default(),
         core_filter_revision,
+        crowd,
         workspace_focus: None,
         metrics: moon_core::metrics::spawn_sampler(),
         snap: MetricsSnapshot::default(),
