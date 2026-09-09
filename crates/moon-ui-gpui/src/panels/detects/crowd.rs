@@ -10,11 +10,14 @@
 //! market behind it. That is decided at presentation (`rules::crowd_card_yields`) rather than at
 //! ingest, so the crowd's card is there, ready, for the moment the core's own card expires.
 //!
-//! The chart is the one thing such a card cannot supply itself, so it is BORROWED — from the first
-//! core in this group that trades the coin, resolved exactly as clicking the ticker resolves it.
-//! What is borrowed with it stops at the picture: the venue, the exchange kind and the price moves
-//! of that core's market are facts about an instrument the crowd never named, and the card does not
-//! print them (see `cards::field_applies`).
+//! The market is the one thing such a card cannot supply itself, so it is BORROWED — from the first
+//! core in this group that trades the coin, resolved exactly as clicking the ticker resolves it —
+//! and everything that comes out of that one snapshot is shown: the chart, the venue, the exchange
+//! kind and the price moves. Where that snapshot comes back empty the card carries its figures
+//! alone rather than a chart frame and a `0.00%` measured from nothing. It is the FIRST core's
+//! snapshot and not the best of them: a sibling with fuller history is not searched for, which
+//! costs a chart on a coin the first one happens not to have charted — and buys one catalog walk
+//! per crossing instead of one per core.
 
 use gpui::{Context, Pixels, Point, Window};
 use moon_core::config::DetectField;
@@ -56,12 +59,12 @@ const CROWD_CARDS_MAX: usize = moon_core::crowd::detect::SEATS;
 impl DetectsPanel {
     /// Take the crowd rule's new crossings and freeze a card for each.
     ///
-    /// The chart is the one thing such a card cannot supply itself, so it is borrowed: the first
+    /// The market is the one thing such a card cannot supply itself, so it is BORROWED: the FIRST
     /// core in this group that trades the coin, resolved exactly as clicking the ticker resolves
-    /// it, and its snapshot frozen here like every other card's. A coin no core trades is a normal
-    /// case and not an error — the crowd trades on exchanges this terminal need not be connected to
-    /// — and the card then carries its figures with no chart behind them rather than an empty
-    /// frame pretending to be one.
+    /// it, and its snapshot frozen here like every other card's — chart, venue, exchange kind and
+    /// price moves alike. A coin no core trades is a normal case and not an error — the crowd
+    /// trades on exchanges this terminal need not be connected to — and the card then carries its
+    /// figures alone rather than an empty frame pretending to be a chart.
     ///
     /// Args:
     ///     now_ms: Wall clock of this pass.
@@ -249,7 +252,10 @@ impl DetectsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = cx.entity();
+        // WEAK: an open picker holds this callback for as long as the menu stands, and a strong
+        // handle would keep a panel the dock has already removed alive behind it — timers and all —
+        // only to dismiss a card on a panel nothing draws.
+        let view = cx.entity().downgrade();
         let opened = coin.to_string();
         crate::controls::coin_open::open(
             &self.backend,
@@ -259,7 +265,7 @@ impl DetectsPanel {
             window,
             cx,
             move |app| {
-                view.update(app, |this, cx| this.dismiss_crowd(&opened, cx));
+                let _ = view.update(app, |this, cx| this.dismiss_crowd(&opened, cx));
             },
         );
     }
@@ -318,23 +324,23 @@ pub(super) fn crowd_chip_text(profit: f64, trades: u32) -> String {
 
 /// Whether a field has anything to say about THIS card.
 ///
-/// A crowd detection knows a coin, a minute and two figures. It does not know an exchange or a
-/// price move: the chart behind it is borrowed from whichever core in this group happens to trade
-/// the coin, and printing that core's venue or its 24-hour percentage as the detection's own would
-/// state a fact about an instrument the crowd never named. The chart itself is still drawn — a
-/// picture of a market is a picture — but a percentage is a claim, and a coin no core trades would
-/// carry a fabricated `+0.00%` measured from nothing.
+/// The question is what the card HAS, not where it came from. A crowd card borrows its chart from
+/// the first core in the group that trades the coin, and the venue and the price moves come out of
+/// that same snapshot of that same market — so a card that draws the picture and hides the numbers
+/// summarising it is being inconsistent about one set of facts.
+///
+/// Only the two DELTAS are gated here, and on the history rather than on the market: they are the
+/// one pair whose absence is indistinguishable from a real value. `detect_snapshot` returns them at
+/// `0.0` whenever the market has no retained history, and `delta_chip` renders that as a measured
+/// `0.00%` — a flat day asserted from nothing. The venue and the exchange kind need no gate: both
+/// already answer `None` when the card carries none.
+///
+/// The type badge and the core name are a different absence and are handled where they are drawn: a
+/// crowd detection has no strategy, so it has no strategy KIND to badge and no core to name.
 ///
 /// Args:
 ///     field: The configured slot.
-///     it: The card being drawn.
-pub(super) fn field_applies(field: DetectField, it: &DetectItem) -> bool {
-    it.crowd().is_none()
-        || !matches!(
-            field,
-            DetectField::Delta24h
-                | DetectField::Delta1h
-                | DetectField::Exchange
-                | DetectField::ExchangeKind
-        )
+///     has_history: Whether any price history stood behind the card when it was frozen.
+pub(super) fn field_applies(field: DetectField, has_history: bool) -> bool {
+    has_history || !matches!(field, DetectField::Delta24h | DetectField::Delta1h)
 }

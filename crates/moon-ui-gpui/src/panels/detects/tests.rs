@@ -391,3 +391,45 @@ fn the_card_carries_the_cross_exchange_key_and_not_the_local_one() {
         "a crowd card must borrow its identity from the market it borrowed its chart from"
     );
 }
+
+/// A price move is drawn when there IS one, whoever the card came from.
+///
+/// The chart, the venue and the deltas come out of ONE snapshot of ONE market, so a card that draws
+/// the picture and hides the numbers summarising it is inconsistent about a single set of facts.
+/// The one pair that needs a gate is the deltas: `detect_snapshot` returns them at `0.0` when the
+/// market has no retained history, and `delta_chip` renders that as a measured `0.00%`.
+///
+/// Mutation: gate on the card's ORIGIN again and every crowd card loses its deltas even when the
+/// market behind it supplied them; gate on the market NAME and a borrowed market with no history
+/// prints a flat day it measured from nothing.
+#[test]
+fn a_price_move_is_drawn_only_when_there_is_one() {
+    use moon_core::config::DetectField;
+
+    for field in [DetectField::Delta24h, DetectField::Delta1h] {
+        assert!(
+            super::crowd::field_applies(field, true),
+            "{field:?} was hidden with history behind it"
+        );
+        assert!(
+            !super::crowd::field_applies(field, false),
+            "{field:?} was drawn from nothing"
+        );
+    }
+    // Everything else answers for its own absence and is never gated here — the exchange chip
+    // returns None without a venue, the badge without a strategy kind.
+    for field in [
+        DetectField::Coin,
+        DetectField::Time,
+        DetectField::Badge,
+        DetectField::Core,
+        DetectField::Exchange,
+        DetectField::ExchangeKind,
+        DetectField::Strategy,
+    ] {
+        assert!(
+            super::crowd::field_applies(field, false),
+            "{field:?} was gated on price history"
+        );
+    }
+}

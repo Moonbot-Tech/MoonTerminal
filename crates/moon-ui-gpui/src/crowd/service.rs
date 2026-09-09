@@ -335,6 +335,13 @@ impl CrowdService {
         let seen = self.feed.boards_seen();
         let wire = self.feed.wire();
         let changed = moved || seen != self.boards_seen || wire != self.wire;
+        // Counted where the REPLACEMENT is noticed rather than where the answer arrives: the tables
+        // deliberately hold the last good board, so a poller that has died shows exactly what a
+        // service with nothing new to say shows, and only this number tells them apart.
+        diag::bump_by(
+            &diag::CROWD_BOARDS,
+            (seen.0 - self.boards_seen.0) + (seen.1 - self.boards_seen.1),
+        );
         self.boards_seen = seen;
         self.wire = wire;
 

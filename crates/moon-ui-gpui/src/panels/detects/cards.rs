@@ -482,7 +482,7 @@ fn chip(
     is_light: bool,
     cx: &App,
 ) -> Option<AnyElement> {
-    if !super::crowd::field_applies(field, it) {
+    if !super::crowd::field_applies(field, it.has_price_history()) {
         return None;
     }
     let el: AnyElement = match field {

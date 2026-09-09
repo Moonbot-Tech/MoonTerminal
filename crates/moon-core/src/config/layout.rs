@@ -736,6 +736,10 @@ pub struct WindowLayout {
     /// What an empty Main draws, layer by layer: the mark, its one line of help, and the three
     /// crowd tables.
     ///
+    /// The MARK is the one of them that reaches further than this screen: it is the same brand an
+    /// AddToChart stack with no charts and a chart slot waiting for data draw, and one switch
+    /// governs all three — a reader who switched it off meant the logo, not the logo here.
+    ///
     /// Five independent switches rather than a mode, because a person may want any mixture of
     /// them. `None` means "never chosen" and takes the feature's own default — the logo and the
     /// hint on, every table off — which is what lets a default change later without overriding

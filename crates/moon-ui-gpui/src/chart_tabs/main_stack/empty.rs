@@ -10,6 +10,13 @@
 //! Nothing here is exclusive — the point of separate switches is that somebody who wants only the
 //! trader board gets only the trader board.
 //!
+//! One of the five reaches past this screen. The brand is drawn on three empty surfaces — here, an
+//! AddToChart stack with no charts, and a chart slot waiting for data — and one switch governs all
+//! three, because it says "show the logo" and not "show it here". The two outside this file read
+//! [`empty_logo`]; this one draws from the checkbox's own state, and a test pins that the two
+//! readings of that key cannot drift. Changing it refreshes every window, since neither of the
+//! other two observes this stack.
+//!
 //! **The default is the terminal as it always was:** the logo and its one line of help, and no
 //! network at all. The tables read a public service, which is not something an update may start
 //! doing on somebody's behalf.
@@ -143,7 +150,7 @@ const SWITCHES: [Switch; 6] = [
     Switch {
         id: "logo",
         label: "crowd.settings.logo",
-        default: true,
+        default: LOGO_DEFAULT,
         read: |screen| screen.logo,
         set: |screen, value| screen.logo = value,
         saved: |layout| layout.main_empty_logo,
@@ -203,6 +210,34 @@ mod tests;
 
 use detect::DETECT_DEFAULT;
 pub(crate) use detect::{CrowdCards, DetectInputs, crowd_cards, crowd_rule_for_run};
+
+/// Whether a profile that has never opened this popup sees the brand.
+///
+/// Named rather than read out of [`SWITCHES`] by position, because it is now asked for from three
+/// places: this screen, an empty AddToChart stack, and an empty chart slot.
+const LOGO_DEFAULT: bool = true;
+
+/// Whether the brand is drawn on an empty surface.
+///
+/// The switch says "show the logo", not "show the logo HERE", and a reader who switched it off went
+/// looking for a mark and found it again on the next empty tab. So the surfaces that draw it
+/// outside this file ask here: an AddToChart or Custom stack holding no charts, and a chart slot
+/// waiting for its data.
+///
+/// The empty screen in this file draws its own mark from [`EmptyScreen`], which is the CHECKBOX's
+/// state rather than a second opinion about the key: both come from `main_empty_logo` with
+/// [`LOGO_DEFAULT`] behind it, and a test pins that they agree, exactly as one does for the rule's
+/// three keys.
+///
+/// What it does NOT govern is the opaque plate under the mark. That plate is not decoration: an
+/// empty slot covers a stale graph left in the own pass beneath the GPUI scene, and a detached
+/// window covers its own white backing. Taking the mark away must leave both standing.
+///
+/// Args:
+///     layout: Persisted window layout.
+pub(crate) fn empty_logo(layout: &WindowLayout) -> bool {
+    layout.main_empty_logo.unwrap_or(LOGO_DEFAULT)
+}
 
 impl MainChartStack {
     /// How this profile has arranged the empty screen.
@@ -299,6 +334,14 @@ impl MainChartStack {
         // The view itself is built or dropped by `sync_crowd_stats` on the repaint this asks for,
         // so one place decides whether it exists rather than two.
         cx.notify();
+        // Every window, and every switch. There is ONE `layout` behind all of them, and more than
+        // one group window can be drawing from it: a second window's empty Main shows the same five
+        // checkboxes and the same layers, and the logo reaches further still — an empty AddToChart
+        // stack, an empty chart slot. None of those observes this one, and `cx.notify()` reaches
+        // only the stack that was clicked. This marks every window dirty, which is what it costs;
+        // a switch is a click, so the price is one frame for a setting that means the same thing
+        // everywhere at once.
+        cx.refresh_windows();
     }
 
     /// Close the popup, guarding the double report a popover makes when its own trigger is clicked.

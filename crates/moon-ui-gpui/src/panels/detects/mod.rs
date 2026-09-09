@@ -8,10 +8,12 @@
 //!
 //! **A second source, with no core behind it.** The crowd's rule (`crowd::service`) watches a
 //! public statistics service and fires when one coin's rolling minute crosses both its lines. Such
-//! a card has no core, no strategy and no server colour, so it is drawn from what it does have —
-//! the coin, the money and the trades — and both its clicks open the coin the way every other bare
-//! ticker in the terminal opens: one core outright, several through a picker. It is not scoped to a
-//! core either, so no display preset can hide it: the crowd is not one of this group's cores.
+//! a card has no core, no strategy and no server colour; what it does have besides the coin, the
+//! money and the trades is BORROWED — the market of the first core in the group that trades the
+//! coin lends it a chart, a venue and its price moves, and all of them are drawn. Both its clicks
+//! open the coin the way every other bare ticker in the terminal opens: one core outright, several
+//! through a picker. It is not scoped to a core, so no display preset can hide it: the crowd is not
+//! one of this group's cores.
 //!
 //! The gear popup configures per-size dimensions, chart type, server rail, and field slots for each
 //! group and persists them in `detects_view.toml`; see [`popup`]. Card layout and vector mini-charts
@@ -121,6 +123,23 @@ impl DetectItem {
             DetectOrigin::Crowd { profit, trades } => Some((profit, trades)),
             DetectOrigin::Core(_) => None,
         }
+    }
+
+    /// Whether any price history stood behind this card when it was frozen.
+    ///
+    /// The deltas and the chart come out of the SAME read: `detect_snapshot` leaves both empty when
+    /// the market has no retained history, and leaves the deltas at their `0.0` default while still
+    /// filling in the venue. So emptiness here is the honest signal that a printed `0.00%` would be
+    /// a flat day measured from nothing — a market name is not, and neither is having a core: a
+    /// coin nobody has charted yet has both and no history at all.
+    ///
+    /// It is a floor, not a proof. A market holding a SINGLE five-minute bucket passes this and
+    /// still reports both deltas as exactly zero, because the reader's own fallback compares that
+    /// bucket with itself; the same fallback reports half an hour of movement under a 24-hour
+    /// caption. Telling those apart needs the snapshot to say "no figure" instead of `0.0`, which
+    /// is a change to what every card reads and not to what this one draws.
+    fn has_price_history(&self) -> bool {
+        !self.bars.is_empty() || !self.line.is_empty()
     }
 
     /// Stable element identity: what the card IS, never where it currently sits.

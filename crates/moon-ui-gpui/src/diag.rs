@@ -560,8 +560,8 @@ diag_counters!(
     STRAT_SECTIONS_US => "strat_sections_us",
     STRAT_PARAMS_US => "strat_params_us",
     STRAT_MODEL_US => "strat_model_us",
-    // The crowd statistics on an empty Main. Five counters, because the surface makes five
-    // different claims — three about its own cost, one about the wire, one about the rule — and
+    // The crowd statistics on an empty Main. Six counters, because the surface makes six
+    // different claims — three about its own cost, two about the wire, one about the rule — and
     // each has to be readable on its own:
     //
     //   * `crowd_tick` — the once-a-second drain of the feed and ageing of the rolling minute.
@@ -583,9 +583,15 @@ diag_counters!(
     //   * `crowd_detect` — coins the rule announced. It is the ONE thing here that wakes the
     //     Detects panel, so a number far above a few an hour means the rule is flapping across its
     //     threshold rather than reporting crossings.
+    //   * `crowd_boards` — day boards REPLACED by a fresh answer from the service. It is polled
+    //     about once a minute, so this should read 1 roughly once a minute while either day table
+    //     is shown, and it is the only way to tell a board that is frozen from a market that is
+    //     quiet: the tables hold the last good answer on purpose, so a poller that died looks
+    //     exactly like a service that has nothing new to say.
     CROWD_TICK => "crowd_tick",
     CROWD_TRADES => "crowd_trades",
     CROWD_DETECT => "crowd_detect",
+    CROWD_BOARDS => "crowd_boards",
     CROWD_RENDER => "crowd_render",
     CROWD_RENDER_US => "crowd_render_us",
 );
