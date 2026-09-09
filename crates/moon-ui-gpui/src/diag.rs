@@ -560,14 +560,17 @@ diag_counters!(
     STRAT_SECTIONS_US => "strat_sections_us",
     STRAT_PARAMS_US => "strat_params_us",
     STRAT_MODEL_US => "strat_model_us",
-    // The crowd statistics on an empty Main. Four counters, because the screen makes four
-    // different claims — three about its own cost, one about the wire — and each has to be
-    // readable on its own:
+    // The crowd statistics on an empty Main. Five counters, because the surface makes five
+    // different claims — three about its own cost, one about the wire, one about the rule — and
+    // each has to be readable on its own:
     //
     //   * `crowd_tick` — the once-a-second drain of the feed and ageing of the rolling minute.
-    //     It runs whether or not anything changed, so it should sit at 1 while the tables are on
-    //     screen and vanish the moment they are switched off or a chart opens. Anything else means
-    //     a timer chain outlived the view that started it.
+    //     It belongs to the shared service, so it sits at exactly 1 while ANYTHING is being read —
+    //     a table shown, or the rule switched on. A two means a second chain outlived the one that
+    //     started it. It does NOT stop the instant the last switch goes off: the service keeps
+    //     ticking for a minute and a half afterwards with `crowd_trades` at zero, emptying the
+    //     channel the stopping threads still write into (`crowd::service::DRAIN_AFTER`). A one that
+    //     is still there after that is a lease nobody released.
     //   * `crowd_render` — actual repaints. The claim being checked is "a still board costs
     //     nothing": on a quiet market this must stay at or below `crowd_tick`, and it may rise to
     //     about twelve a second only while rows are sliding, fading or lit. A steady twelve with
@@ -577,8 +580,12 @@ diag_counters!(
     //   * `crowd_trades` — trades taken off the wire and counted into the minute, so a table that
     //     is empty because the market is quiet can be told apart from one that is empty because
     //     the socket died: the second reads zero here while `crowd_tick` keeps ticking.
+    //   * `crowd_detect` — coins the rule announced. It is the ONE thing here that wakes the
+    //     Detects panel, so a number far above a few an hour means the rule is flapping across its
+    //     threshold rather than reporting crossings.
     CROWD_TICK => "crowd_tick",
     CROWD_TRADES => "crowd_trades",
+    CROWD_DETECT => "crowd_detect",
     CROWD_RENDER => "crowd_render",
     CROWD_RENDER_US => "crowd_render_us",
 );

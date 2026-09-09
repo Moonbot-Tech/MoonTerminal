@@ -7,11 +7,12 @@
 //! It is cheap by construction, not by tuning, and the three claims below are each readable in
 //! `logs/render_diag.log` (`crowd_tick`, `crowd_render`, `crowd_render_us`):
 //!
-//! * **one tick a second.** A minute-wide window is not read any better at thirty samples a
-//!   second, and a second is the shortest interval at which a figure in it can visibly change.
-//! * **a repaint only when the tables change.** The tick drains the feed and ages the window
-//!   either way, but it notifies only if the rows it would draw differ from the rows on screen. A
-//!   quiet market therefore costs one comparison a second and no frames at all.
+//! * **it is woken, never polled.** The counting is the service's, once a second for the whole
+//!   terminal (`crowd_tick`), and it wakes this view only when the minute actually changed, a
+//!   board was replaced, or the wire found a new word for itself. A quiet market wakes nobody.
+//! * **a repaint only when the tables change.** Woken, the view re-derives the rows it would draw
+//!   and compares them with the rows on screen; it notifies only if they differ. So a market that
+//!   moved a coin nothing shows costs one comparison and no frame at all.
 //! * **frames only while something is actually moving.** The boards are alive — rows slide to
 //!   their new places, rows that drop off sink and fade, rows light up when trades land on them —
 //!   and all of that is computed from elapsed time, so the view asks for frames at its OWN rate
@@ -29,10 +30,11 @@
 //! a chart is drawn OVER that screen, so closing the chart comes back to a minute that has been
 //! counted all along. What a covering chart stops is the drawing, not the reading.
 //!
-//! Which tables are on is changed IN PLACE, and it is
-//! built FOR that set: the minute opens the trade socket, the two day boards share one REST poller,
-//! and a table nobody shows opens nothing at all. Dropping the view stops whatever it started, so a
-//! terminal with a chart open holds no connection to the statistics service.
+//! It COUNTS nothing itself. The wire, the rolling minute and the boards belong to
+//! [`service::CrowdService`], one per terminal, and this view holds a lease naming the halves its
+//! tables need: dropping the view releases the claim, and the service closes whatever nobody is
+//! asking for any more. That is what lets two windows show the same minute, and what lets the rule
+//! go on counting while every screen is covered by a chart.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -41,17 +43,17 @@ use gpui::{
     Context, Entity, IntoElement, ParentElement, Pixels, Point, Render, Styled, Window, div,
 };
 use moon_core::crowd::board::{CoinDay, DaySummary, Trader};
-use moon_core::crowd::{EventSource, Feed, FeedConfig, Minute, Standing, Wants, Wire};
-
-use moon_ui::{MoonContextMenuWindowExt as _, MoonWindowExt as _};
+use moon_core::crowd::{Standing, Wants, Wire};
 
 use crate::Backend;
-use crate::controls::coin_search;
+use crate::controls::coin_open;
 use crate::design;
 use crate::diag;
+use service::{CrowdLease, CrowdService};
 use table::Look;
 use table::motion::Motion;
 
+pub(crate) mod service;
 mod table;
 
 /// The fastest the boards are redrawn while something on them is moving.
@@ -62,18 +64,14 @@ mod table;
 /// Twelve a second — enough that a four-hundred-millisecond slide is five steps rather than a
 /// jump, and one tenth of what a screen full of tables would ask for at display rate.
 const FRAME: Duration = Duration::from_millis(80);
-/// How often the window is aged and the feed drained.
-const TICK: Duration = Duration::from_secs(1);
-/// A gap between ticks longer than this means the view was frozen — dragged, blocked or asleep —
-/// and whatever the wire buffered meanwhile is no longer a minute of anything.
-const STALE_AFTER: f32 = 10.0;
 
 /// Which of the three tables this view is showing.
 ///
-/// It decides both halves of the cost: which tables are built, and which connections are opened.
-/// The minute is the live trade socket; the two day boards share one REST poller, which fetches
-/// only the boards that are shown. A change is passed to the view rather than rebuilding it —
-/// what is already open stays open, and only the halves that changed are started or stopped.
+/// It decides both halves of the cost: which tables are built, and which halves of the service
+/// this screen CLAIMS. The minute is the live trade socket; the two day boards share one REST
+/// poller, which fetches only the boards that are shown. A change is passed to the view rather
+/// than rebuilding it — the claim is amended in place, and the service closes only what nobody
+/// else is asking for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CrowdParts {
     /// The rolling minute of the crowd's trades, top right.
@@ -125,12 +123,15 @@ struct Shown {
 pub(crate) struct CrowdStatsView {
     /// Which tables this view is showing.
     ///
-    /// Changed in place by [`Self::show`] rather than by building a new view: everything else here
-    /// — the minute counted so far, the open socket, the boards last read — is worth keeping
-    /// across a change of mind about which of them to draw.
+    /// Changed in place by [`Self::show`] rather than by building a new view: the movement between
+    /// two boards, and the lease this view holds on the service, are both worth keeping across a
+    /// change of mind about which tables to draw.
     parts: CrowdParts,
-    feed: Feed,
-    minute: Minute,
+    /// The terminal's one reader of the statistics service. See [`service`].
+    service: Entity<CrowdService>,
+    /// This view's claim on it, naming the halves its tables need. Dropping the view drops the
+    /// claim, which is the whole of the teardown.
+    lease: CrowdLease,
     /// What moved on each of the three boards since the last tick. Kept per table because the
     /// three move on their own clocks: the minute every second, the day boards once a minute.
     minute_moves: Motion<Standing>,
@@ -161,19 +162,15 @@ pub(crate) struct CrowdStatsView {
     /// Whether a frame chain is running. One at a time: the chain stops itself when the movement
     /// ends, and a second one would double the frame rate for as long as both lasted.
     drawing: bool,
-    /// Start of the clock the window is measured on. Arrivals are stamped against it, so a minute
-    /// is a minute of these tables being open.
-    started: Instant,
-    last_tick: Instant,
     shown: Shown,
 }
 
 impl CrowdStatsView {
-    /// Open the tables that were asked for and start reading for them.
+    /// Open the tables that were asked for and claim what they read.
     ///
     /// Args:
-    ///     parts: Which tables to show — and therefore which halves of the service to read.
-    ///     backend: The terminal, for opening a coin's chart.
+    ///     parts: Which tables to show — and therefore which halves of the service to claim.
+    ///     backend: The terminal, for the service and for opening a coin's chart.
     ///     group: The group window this screen belongs to.
     ///     cx: The view's context.
     pub(crate) fn new(
@@ -182,47 +179,47 @@ impl CrowdStatsView {
         group: String,
         cx: &mut Context<Self>,
     ) -> Self {
-        let now = Instant::now();
-        // The chain is started here and nowhere else, so there is nothing to guard against a
-        // second one.
-        crate::pulse::arm_every(TICK, cx, |this: &mut Self, cx| {
-            this.tick(cx);
-            true
+        let service = backend.read(cx).crowd();
+        let lease = service.update(cx, |service, service_cx| {
+            service.lease(parts.wants(), service_cx)
         });
-        // A run that is not a person watching the market gets the seeded stand-in: `--fixture` is
-        // a bench on recorded data and `--debug-script` is FireTest, and both assert that nothing
-        // reaches the network. A socket opened under either would be both a surprise and noise in
-        // what they measure.
-        let live = (moon_core::fixture::active().is_none() && !crate::firetest::scripted())
-            .then(FeedConfig::default);
-        let feed = Feed::open(live, seed(), parts.wants());
-        // The first frame is drawn before the first tick, so it takes the feed's word for itself
-        // now: a run that opened saying "no connection" for a second would be describing a wire it
-        // had not tried yet.
-        let shown = Shown {
-            rows: Vec::new(),
-            wire: parts.minute.then(|| feed.wire()),
-            coins: Vec::new(),
-            traders: Vec::new(),
-            summary: None,
-        };
-        Self {
+        // Woken by the service and only when it has something new to say: a quiet market wakes
+        // nobody, and none of this goes through the backend's seventeen-view notification.
+        cx.observe(&service, |this, _service, cx| {
+            // A covered screen derives nothing: the rows, the sort and the clones exist only to be
+            // drawn and compared with what is drawn. The reading goes on regardless — it is the
+            // service's — so coming back is one re-derivation, not a minute of refilling.
+            if this.drawn && this.refresh(true, cx) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let mut this = Self {
             parts,
             backend,
             group,
+            service,
+            lease,
             drawn: true,
-            feed,
-            minute: Minute::new(),
             minute_moves: Motion::default(),
             coin_moves: Motion::default(),
             trader_moves: Motion::default(),
             boards_seen: (0, 0),
             trader_marks: HashMap::new(),
             drawing: false,
-            started: now,
-            last_tick: now,
-            shown,
-        }
+            shown: Shown {
+                rows: Vec::new(),
+                wire: None,
+                coins: Vec::new(),
+                traders: Vec::new(),
+                summary: None,
+            },
+        };
+        // The tables open on what has ALREADY been counted: a screen shown over a service that has
+        // been reading for the rule starts on a full minute rather than on an empty one filling
+        // from scratch.
+        this.refresh(false, cx);
+        this
     }
 
     /// Say whether the screen this view draws on is being shown.
@@ -236,13 +233,27 @@ impl CrowdStatsView {
         }
         self.drawn = drawn;
         if drawn {
-            // Back on screen with a minute that kept counting: draw it once, now, rather than
-            // waiting up to a second for the next tick to notice something changed.
+            // Coming back is not MOVEMENT. Nothing was derived while the screen was covered, so the
+            // boards on the other side of that gap are a minute of history — replayed as slides and
+            // rank marks they would animate everything that happened while nobody was watching. The
+            // screen therefore comes back the way it opens: settled, with what is true now.
+            self.shown = Shown {
+                rows: Vec::new(),
+                wire: None,
+                coins: Vec::new(),
+                traders: Vec::new(),
+                summary: None,
+            };
+            self.minute_moves = Motion::default();
+            self.coin_moves = Motion::default();
+            self.trader_moves = Motion::default();
+            self.trader_marks.clear();
+            self.refresh(false, cx);
             cx.notify();
         }
     }
 
-    /// Show exactly these tables from now on, opening or closing what they read.
+    /// Show exactly these tables from now on, claiming or releasing what they read.
     ///
     /// Args:
     ///     parts: The new set.
@@ -252,13 +263,16 @@ impl CrowdStatsView {
             return;
         }
         self.parts = parts;
-        self.feed.want(parts.wants());
+        let lease = self.lease.clone();
+        self.service.update(cx, |service, service_cx| {
+            service.relet(&lease, parts.wants(), service_cx)
+        });
         // A table that has just been switched OFF must not go on moving: settled against an empty
         // board it would mark every row as leaving, and the frame chain would then draw ten frames
-        // of a farewell nobody is watching.
+        // of a farewell nobody is watching. The MINUTE itself is not cleared — it is not ours, and
+        // the rule may still be counting it.
         if !parts.minute {
             self.minute_moves = Motion::default();
-            self.minute = Minute::new();
         }
         if !parts.coins {
             self.coin_moves = Motion::default();
@@ -267,97 +281,81 @@ impl CrowdStatsView {
             self.trader_moves = Motion::default();
             self.trader_marks.clear();
         }
-        // The wire belongs to the minute: asked about a stream that has only just been started,
-        // it must say so now rather than showing last minute's answer until the next tick.
-        self.shown.wire = parts.minute.then(|| self.feed.wire());
-        // A table that has just been switched on has nothing in it until the next tick, and the
-        // one that was already there must not blink: only the SET changed, so the rows stand.
+        // A table that has just been switched on shows what has already been counted, now, rather
+        // than waiting for the next thing to change; the one that was already there must not blink,
+        // and does not, because only the SET changed and the rows are read from the same place.
+        self.refresh(false, cx);
         cx.notify();
     }
 
-    /// Drain whatever arrived, age the window, and repaint only if the tables moved.
-    fn tick(&mut self, cx: &mut Context<Self>) {
-        diag::bump(&diag::CROWD_TICK);
+    /// Take what the service has counted, and say whether the tables moved.
+    ///
+    /// The invalidation model in one function: only what is DRAWN is derived, only what is drawn
+    /// is compared, and a table that is switched off can neither move nor cause a repaint.
+    ///
+    /// Args:
+    ///     arrivals: Whether the trades the service drained on its last tick should light up the
+    ///         rows they landed on. False for a refresh caused by a change of SET rather than by
+    ///         the market — switching a table on is not an arrival.
+    ///     cx: The view's context.
+    ///
+    /// Returns:
+    ///     Whether anything drawn differs from what is on screen.
+    fn refresh(&mut self, arrivals: bool, cx: &mut Context<Self>) -> bool {
         let now = Instant::now();
-        // The real interval, uncapped: a machine that slept for an hour ages an hour out of the
-        // window and lets the trade rates fall to nothing.
-        let dt = now.duration_since(self.last_tick).as_secs_f32();
-        self.last_tick = now;
-        let now_ms = now.duration_since(self.started).as_millis() as u64;
-
-        // What arrived is stamped with the moment it was DRAINED, so a backlog that piled up while
-        // this view was frozen would enter the window as one simultaneous burst — a minute of
-        // trades reported as one second of them. After a gap this long the honest table is an
-        // empty one: throw the backlog away and let the minute fill again.
-        //
-        // What ARRIVED this second is counted coin by coin as it goes past, because nothing on a
-        // row can answer it: the window's figures move only when its CONTENTS change, so a coin
-        // taking a $10 win every second while a $10 win ages out shows the same numbers minute
-        // after minute — and that is exactly the coin worth lighting up.
-        // Drained even when the minute is off, because a feed opened without the trade thread
-        // delivers nothing to drain and one that was opened WITH it must not be left to fill up.
-        let trades = self.feed.drain(now_ms);
-        diag::bump_by(&diag::CROWD_TRADES, trades.len() as u64);
-        // Keyed rather than scanned: a busy second is hundreds of trades over dozens of coins, and
-        // a linear search per trade turns that into thousands of comparisons on the UI thread.
-        let mut landed: HashMap<String, f64> = HashMap::new();
-        if dt < STALE_AFTER {
-            for trade in trades {
-                *landed.entry(trade.coin.clone()).or_insert(0.0) += trade.profit;
-                self.minute.push(trade);
-            }
-        }
-        self.minute.tick(now_ms);
-
-        // Only what is drawn is derived, and only what is drawn is compared: a table that is
-        // switched off must not be able to cause a repaint.
-        let shown = Shown {
-            rows: if self.parts.minute {
-                self.minute.standings(table::MINUTE_SEATS)
+        let (next, landed, seen) = {
+            let service = self.service.read(cx);
+            let next = Shown {
+                rows: if self.parts.minute {
+                    service.minute().standings(table::MINUTE_SEATS)
+                } else {
+                    Vec::new()
+                },
+                wire: self.parts.minute.then(|| service.wire()),
+                // Only the rows that are DRAWN, for the same reason as the traders below.
+                coins: if self.parts.coins {
+                    service
+                        .coins()
+                        .iter()
+                        .take(table::DAY_COIN_SEATS)
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                // Only the rows that are DRAWN. The service sends fifty and twenty are shown, so
+                // keeping all of them here meant a change in row forty-two failed the comparison
+                // and repainted a screen on which nothing had moved.
+                traders: if self.parts.traders {
+                    service
+                        .traders()
+                        .iter()
+                        .take(table::TRADERS_SHOWN)
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                summary: self.parts.traders.then(|| service.summary()).flatten(),
+            };
+            let landed = if arrivals {
+                service.landed().clone()
             } else {
-                Vec::new()
-            },
-            wire: self.parts.minute.then(|| self.feed.wire()),
-            // Only the rows that are DRAWN, for the same reason as the traders below.
-            coins: if self.parts.coins {
-                self.feed
-                    .coins()
-                    .iter()
-                    .take(table::DAY_COIN_SEATS)
-                    .cloned()
-                    .collect()
-            } else {
-                Vec::new()
-            },
-            // Only the rows that are DRAWN. The service sends fifty and twenty are shown, so
-            // keeping all of them here meant a change in row forty-two failed the comparison and
-            // repainted a screen on which nothing had moved.
-            traders: if self.parts.traders {
-                self.feed
-                    .traders()
-                    .iter()
-                    .take(table::TRADERS_SHOWN)
-                    .cloned()
-                    .collect()
-            } else {
-                Vec::new()
-            },
-            summary: self.parts.traders.then(|| self.feed.summary()).flatten(),
+                HashMap::new()
+            };
+            (next, landed, service.boards_seen())
         };
         // What is new since the last board, before the boards are swapped.
-        let marks = self.settle(&shown, &landed, now);
+        let marks = self.settle(&next, &landed, seen, now);
         // The marks are drawn but are not part of the board, so they have to be asked about
         // separately: a new board that moved nobody rubs every mark out while leaving all twenty
         // rows exactly as they were, and without this the screen would go on showing them.
-        let moved = shown != self.shown || marks != self.trader_marks;
-        self.shown = shown;
+        let moved = next != self.shown || marks != self.trader_marks;
+        self.shown = next;
         self.trader_marks = marks;
-        // Covered by a chart, the rows are still kept up to date — they are simply not drawn.
-        if moved && self.drawn {
-            cx.notify();
-        }
         // And if that left anything moving, the view draws itself at ITS rate until it stops.
         self.draw_while_moving(cx);
+        moved
     }
 
     /// Whether any of the three boards has something in flight.
@@ -397,6 +395,10 @@ impl CrowdStatsView {
     /// Args:
     ///     next: The boards that are about to be drawn.
     ///     landed: What arrived this tick, by coin, with the net money it brought.
+    ///     seen: How many times the service has replaced each of its two boards. Those two are the
+    ///         SERVICE's, polled about once a minute: a new one is a new one, and another look at
+    ///         the same one is not. The minute is OURS — every pass is a new board of it, because
+    ///         we add it up ourselves.
     ///     now: The clock the glow and the farewell are measured on.
     ///
     /// Returns:
@@ -406,12 +408,9 @@ impl CrowdStatsView {
         &mut self,
         next: &Shown,
         landed: &HashMap<String, f64>,
+        seen: (u64, u64),
         now: Instant,
     ) -> HashMap<u64, i32> {
-        // The two day boards are the SERVICE's, polled about once a minute: a new one is a new one,
-        // and another look at the same one is not. The minute is OURS — every tick is a new board
-        // of it, because we add it up ourselves.
-        let seen = self.feed.boards_seen();
         for (coin, net) in landed {
             // Only a coin that is ALREADY on the board: a row arriving is a movement of its own,
             // and lighting it up as well says one thing twice.
@@ -419,17 +418,19 @@ impl CrowdStatsView {
                 self.minute_moves.beat(coin, *net >= 0.0, now);
             }
         }
-        if !self.parts.minute {
-            return self.trader_marks.clone();
+        // Each board settles on its own. Returning early for a screen without the minute — which
+        // is what this used to do — left the two day boards unsettled, so their rows jumped
+        // between places instead of sliding and no rank mark was ever computed for them.
+        if self.parts.minute {
+            self.minute_moves.settle(
+                &next
+                    .rows
+                    .iter()
+                    .map(|row| (row.coin.clone(), row.clone()))
+                    .collect::<Vec<_>>(),
+                now,
+            );
         }
-        self.minute_moves.settle(
-            &next
-                .rows
-                .iter()
-                .map(|row| (row.coin.clone(), row.clone()))
-                .collect::<Vec<_>>(),
-            now,
-        );
 
         for row in &next.coins {
             if let Some(was) = self
@@ -486,19 +487,14 @@ impl CrowdStatsView {
 impl CrowdStatsView {
     /// Open this coin's chart on Main, the way every other coin in the terminal opens.
     ///
-    /// One market per core in this group that trades EXACTLY this coin: `coin_search` returns
-    /// several markets per core (BTCUSDT/BTCUSDC) and contains-matches too, so the hits are
-    /// filtered by the core's own label through the shared match key — the catalog token carries a
-    /// contract tail (`AAVE_RP`, `SOL_0925`) where the crowd names the bare coin, and on
-    /// Hyperliquid spot the market name is an index carrying no coin at all.
-    ///
-    /// One core opens it outright; several offer a picker naming the core and its exchange; none
-    /// does nothing, which is the honest answer for a coin this terminal does not follow.
+    /// The resolution and the picker are [`coin_open`]'s, shared with the card the crowd's rule
+    /// fires: both surfaces name a coin and no core, and asking that question twice is how the two
+    /// would come to disagree about which chart a coin means.
     ///
     /// Args:
     ///     coin: Ticker clicked.
     ///     pos: Where, so a picker can be anchored to it.
-    ///     window: Owning window, used to host that picker.
+    ///     window: Owning window, used to host the picker.
     ///     cx: View context.
     fn open_coin(
         &mut self,
@@ -507,74 +503,10 @@ impl CrowdStatsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (rows, exchanges) = {
-            let backend = self.backend.read(cx);
-            let wanted = moon_core::symbol::coin_match_key(coin);
-            let mut seen = std::collections::HashSet::new();
-            let rows: Vec<(moon_core::session::CoreId, String, String)> =
-                coin_search::search(backend, &self.group, None, coin)
-                    .into_iter()
-                    .filter(|hit| hit.label.match_key() == wanted)
-                    .filter(|hit| seen.insert(hit.core))
-                    .map(|hit| (hit.core, hit.market, hit.server))
-                    .collect();
-            // Exchange labels are only needed to tell two cores apart in the picker.
-            let exchanges = if rows.len() > 1 {
-                backend.session.core_venues().clone()
-            } else {
-                std::collections::HashMap::new()
-            };
-            (rows, exchanges)
-        };
-        match rows.len() {
-            0 => {}
-            1 => {
-                let (core, market, _) = rows.into_iter().next().expect("one row");
-                let group = self.group.clone();
-                self.backend.update(cx, |backend, backend_cx| {
-                    // `false`: open without stealing focus, matching every other coin-nav site.
-                    if backend.open_on_main_if_authorized(Some(&group), (core, market), false) {
-                        backend_cx.notify();
-                    }
-                });
-            }
-            _ => {
-                let items: Vec<moon_ui::MoonMenuItem> = rows
-                    .into_iter()
-                    .map(|(core, market, name)| {
-                        // Only a NAMEABLE venue earns a suffix: the row is there to tell two cores
-                        // apart, and " · not identified" tells them apart from nothing.
-                        let label = match exchanges.get(&core).filter(|venue| venue.is_nameable()) {
-                            Some(venue) => {
-                                format!("{name} · {}", crate::controls::venue_label(venue))
-                            }
-                            None => name,
-                        };
-                        let backend = self.backend.clone();
-                        let group = self.group.clone();
-                        moon_ui::MoonMenuItem::with_key(format!("crowd-coin-core-{core}"), label)
-                            .on_click(move |_, window, app| {
-                                window.close_context_menu(app);
-                                backend.update(app, |backend, backend_cx| {
-                                    if backend.open_on_main_if_authorized(
-                                        Some(&group),
-                                        (core, market.clone()),
-                                        false,
-                                    ) {
-                                        backend_cx.notify();
-                                    }
-                                });
-                            })
-                    })
-                    .collect();
-                window.open_moon_context_menu(cx, "crowd-coin-cores", pos, items, PICKER_WIDTH);
-            }
-        }
+        // Nothing to do afterwards: a table row is not consumed by being clicked.
+        coin_open::open(&self.backend, &self.group, coin, pos, window, cx, |_| {});
     }
 }
-
-/// How wide the cores picker is, in pixels — the same width the news feed's picker uses.
-const PICKER_WIDTH: f32 = 240.0;
 
 /// What each trader's rank did between two boards, by account.
 ///
@@ -605,15 +537,6 @@ fn rank_marks(was: &[Trader], next: &[Trader]) -> HashMap<u64, i32> {
             (row.id, shift as i32)
         })
         .collect()
-}
-
-/// A seed for the offline stand-in. Nothing depends on it being unpredictable; it exists so two
-/// bench runs are not bit-identical in what the tables happen to show.
-fn seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_millis() as u64)
-        .unwrap_or(0x5EED)
 }
 
 impl Render for CrowdStatsView {

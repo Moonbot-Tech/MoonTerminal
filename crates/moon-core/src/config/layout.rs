@@ -754,6 +754,25 @@ pub struct WindowLayout {
     pub main_empty_traders: Option<bool>,
     #[serde(default, deserialize_with = "de_lenient")]
     pub main_empty_coins: Option<bool>,
+    /// Whether the crowd's rule is watched, and the two lines it is watched against.
+    ///
+    /// The rule is not a table: it costs a connection for as long as the terminal is open, because
+    /// a detection that only fired while somebody was looking at an empty screen would be useless.
+    /// So it is off by default and switched on deliberately, and the two thresholds travel with it
+    /// — a figure that is loud on a quiet market is unremarkable during a pump, and only the person
+    /// watching knows which they are in.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_detect: Option<bool>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_detect_profit: Option<f64>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_detect_trades: Option<u32>,
+    /// How long one of the rule's cards stays, in seconds, and whether a fresh one may take the
+    /// seat of the oldest when every seat is full.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_detect_keep: Option<u32>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub main_empty_detect_evict: Option<bool>,
     /// Profit Monitor: whether a row shows its exchange logo before the name.
     ///
     /// `None` means the feature's own default. Every monitor preference is read leniently for the

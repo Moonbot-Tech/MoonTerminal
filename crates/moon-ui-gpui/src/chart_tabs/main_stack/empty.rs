@@ -14,10 +14,18 @@
 //! network at all. The tables read a public service, which is not something an update may start
 //! doing on somebody's behalf.
 //!
+//! **The sixth switch is not a layer.** The crowd's rule draws nothing here — it puts a card in the
+//! Detects panel when a coin's minute crosses its lines — and it is the one switch that costs a
+//! connection while nobody is looking at this screen at all, because a detection that only fired
+//! while somebody happened to be watching an empty Main would be worth nothing. Everything else
+//! about it — its lines, how long its cards stay, what happens at the last seat — lives in
+//! [`detect`], which is also where the controls under that switch are built.
+//!
 //! **A table nobody shows is a table nobody reads.** The three crowd switches decide which halves
-//! of the service the feed opens — the minute is the live trade socket, the two day boards are one
-//! REST poller — so switching a table off closes its connection rather than merely hiding what it
-//! delivers. Switching the last one off drops the view, and with it both.
+//! of the service this screen CLAIMS — the minute is the live trade socket, the two day boards are
+//! one REST poller — so switching a table off releases its claim rather than merely hiding what it
+//! delivers. The reading itself belongs to `crowd::service`, one per terminal, which closes
+//! whatever no screen and no rule is asking for.
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -49,7 +57,6 @@ const POPUP_GAP: f32 = 8.0;
 const LOGO_GAP: f32 = 10.0;
 /// Widest the hint under the logo is allowed to run before it wraps, in design units.
 const HINT_WIDTH: f32 = 420.0;
-
 /// What the empty screen shows.
 ///
 /// Five independent layers rather than a mode, because they answer five different questions and a
@@ -67,6 +74,8 @@ pub(super) struct EmptyScreen {
     traders: bool,
     /// The service's coin board for the day, bottom right.
     coins: bool,
+    /// Whether the crowd's rule is watched. It draws nothing HERE — see the module doc.
+    detect: bool,
 }
 
 impl EmptyScreen {
@@ -87,6 +96,11 @@ impl EmptyScreen {
             );
         }
         screen
+    }
+
+    /// Whether the rule is switched on, which is what makes its thresholds editable.
+    fn detect(self) -> bool {
+        self.detect
     }
 
     /// Which tables are on, for the view that draws them.
@@ -124,8 +138,8 @@ struct Switch {
 }
 
 /// Every switch, in the order the popup shows them: what the screen already was, then what can be
-/// added to it.
-const SWITCHES: [Switch; 5] = [
+/// added to it, then the one that is not a layer at all.
+const SWITCHES: [Switch; 6] = [
     Switch {
         id: "logo",
         label: "crowd.settings.logo",
@@ -171,10 +185,24 @@ const SWITCHES: [Switch; 5] = [
         saved: |layout| layout.main_empty_coins,
         store: |layout, value| layout.main_empty_coins = Some(value),
     },
+    Switch {
+        id: "detect",
+        label: "crowd.settings.detect",
+        default: DETECT_DEFAULT,
+        read: |screen| screen.detect,
+        set: |screen, value| screen.detect = value,
+        saved: |layout| layout.main_empty_detect,
+        store: |layout, value| layout.main_empty_detect = Some(value),
+    },
 ];
+
+pub(super) mod detect;
 
 #[cfg(test)]
 mod tests;
+
+use detect::DETECT_DEFAULT;
+pub(crate) use detect::{CrowdCards, DetectInputs, crowd_cards, crowd_rule_for_run};
 
 impl MainChartStack {
     /// How this profile has arranged the empty screen.
@@ -186,7 +214,7 @@ impl MainChartStack {
     ///
     /// Called from `render` BEFORE it branches, which is the only place both answers are reachable:
     /// called from inside the empty branch instead, a chart opening would never reach it and the
-    /// feed would outlive the screen it belongs to.
+    /// view would go on drawing under a chart it cannot be seen through.
     ///
     /// A change of SET is passed to the view rather than rebuilding it: the set decides which
     /// reader threads exist, and the view opens and closes them in place. Rebuilding would throw
@@ -214,13 +242,17 @@ impl MainChartStack {
         // exactly the mistake this used to make: clearing it whenever no table was on meant that
         // on the shipped defaults every render closed the popup a person had just opened, and no
         // switch could ever be reached.
-        if !drawn {
+        if !drawn && self.empty_settings_open {
+            // A chart has covered the screen the popup belongs to. That is a way out like any
+            // other, so a threshold typed and not yet blurred is kept rather than dropped.
             self.empty_settings_open = false;
+            self.commit_empty_detect(cx);
         }
         if !parts.any() {
-            // Dropping the entity is the teardown: there is no "stop" to call, because the feed's
-            // threads end as soon as the channel they send on has no receiver left — or, if they
-            // are between requests, as soon as the handle they watch is gone.
+            // Dropping the entity is the teardown: there is no "stop" to call, because the view
+            // holds nothing but a lease on the shared service, and a released lease stops counting
+            // towards what that service reads. Whether anything closes is the service's answer —
+            // the rule may still want the same stream.
             self.crowd = None;
             return None;
         }
@@ -263,17 +295,24 @@ impl MainChartStack {
             store(&mut backend.layout, on);
             backend.layout_dirty = true;
         });
+        self.publish_crowd_rule(cx);
         // The view itself is built or dropped by `sync_crowd_stats` on the repaint this asks for,
         // so one place decides whether it exists rather than two.
         cx.notify();
     }
 
     /// Close the popup, guarding the double report a popover makes when its own trigger is clicked.
+    ///
+    /// The ✕ is a way of FINISHING an edit, so it commits like every other way out. A controlled
+    /// popover applies its closed state during render without reporting it through
+    /// `on_open_change`, so this path cannot rely on that one — and a field that never lost focus
+    /// never blurred either.
     fn close_empty_settings(&mut self, cx: &mut Context<Self>) {
         if !self.empty_settings_open {
             return;
         }
         self.empty_settings_open = false;
+        self.commit_empty_detect(cx);
         cx.notify();
     }
 
@@ -308,9 +347,17 @@ impl MainChartStack {
             .open(open)
             .on_open_change({
                 let view = view.clone();
-                move |open, _window, app| {
+                move |open, window, app| {
                     view.update(app, |this, cx| {
                         this.empty_settings_open = open;
+                        if open {
+                            this.seed_empty_detect(window, cx);
+                        } else {
+                            // Closing the popup is a way of finishing an edit, and a field that
+                            // never lost focus never blurred: without this, a typed threshold
+                            // followed by a click on the ✕ would be thrown away.
+                            this.commit_empty_detect(cx);
+                        }
                         cx.notify();
                     });
                 }
@@ -323,6 +370,8 @@ impl MainChartStack {
         if open {
             popover = popover.content(settings_content(
                 self.empty_arrangement(cx),
+                crowd_cards(&self.backend.read(cx).layout),
+                self.empty_detect.as_ref(),
                 view,
                 &id,
                 palette,
@@ -342,12 +391,16 @@ impl MainChartStack {
 ///
 /// Args:
 ///     screen: What the checkboxes show.
+///     cards: How the rule's cards are set to behave.
+///     inputs: The rule's fields, once the popup has been opened at least once.
 ///     view: Stack entity receiving the edits.
 ///     id: Group-scoped element identities.
 ///     palette: Active MoonUI palette.
 ///     cx: Application context supplying scaled geometry.
 fn settings_content(
     screen: EmptyScreen,
+    cards: CrowdCards,
+    inputs: Option<&DetectInputs>,
     view: Entity<MainChartStack>,
     id: &dyn Fn(&str) -> SharedString,
     palette: MoonPalette,
@@ -390,6 +443,11 @@ fn settings_content(
                 })
                 .into_any_element()
         }))
+        // The rule's own controls, under the switch that decides whether they mean anything.
+        .children(
+            inputs
+                .map(|inputs| detect::block(screen.detect(), cards, inputs, view, id, palette, cx)),
+        )
         .into_any_element()
 }
 
