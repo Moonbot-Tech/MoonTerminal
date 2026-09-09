@@ -786,6 +786,20 @@ pub struct WindowLayout {
     /// every core the table commands at once.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_header_controls: Option<bool>,
+    /// Auto workspace rail: whether a core row leads with its core's run status, and a restart
+    /// button when that core reported a stopped runtime. `None` = the rail's default (ON).
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub workspace_rail_core_status: Option<bool>,
+    /// Auto workspace rail: whether a core row carries the start/stop control for its trading.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub workspace_rail_trading_buttons: Option<bool>,
+    /// Auto workspace rail: whether a core row carries the AutoDetect on/off switch.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub workspace_rail_auto_buttons: Option<bool>,
+    /// Auto workspace rail: whether an exchange heading also carries whichever run controls are
+    /// enabled, commanding every core under that heading with one command each.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub workspace_rail_exchange_controls: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

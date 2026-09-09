@@ -118,3 +118,15 @@ workspace.scope.pinned_hint:
   ru: "Область задана рабочим пространством: %{scope}. Сменить её можно в панели слева"
   en: "The scope is set by the workspace: %{scope}. Change it from the panel on the left"
   es: "El ámbito lo define el espacio de trabajo: %{scope}. Puede cambiarlo en el panel izquierdo"
+# The rail's ⚙ popup: which core-run controls the rows carry. The checkbox labels reuse
+# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title and the
+# exchange-scope row are the rail's own.
+workspace.settings.title:
+  ru: "Настройки списка ядер"
+  en: "Core list settings"
+  es: "Ajustes de la lista de núcleos"
+# One press there reaches every core under the heading, which is why it is its own opt-out.
+workspace.settings.exchange_controls:
+  ru: "Эти кнопки — и у биржи, на все её ядра"
+  en: "The same controls on the exchange heading, for all its cores"
+  es: "Los mismos controles en el encabezado del exchange, para todos sus núcleos"

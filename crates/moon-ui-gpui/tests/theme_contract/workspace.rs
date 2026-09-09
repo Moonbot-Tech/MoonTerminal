@@ -649,7 +649,7 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
 
     let render = code_only(braced_body(&workspace, "fn render_rail_item("));
     let exchange = render
-        .find("RailItem::Exchange { venue, logo }")
+        .find("RailItem::Exchange {")
         .expect("exchange headings must own the resolved logo");
     let image = render[exchange..]
         .find("img(logo)")

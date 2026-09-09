@@ -37,6 +37,32 @@ pub(crate) fn run_cell(
     palette: MoonPalette,
     cx: &App,
 ) -> Option<AnyElement> {
+    run_cell_with_status(scope, None, backend, palette, cx)
+}
+
+/// Render a run cell whose STATUS slot shows a caller-supplied element instead of the runtime dot.
+///
+/// For a surface where another authority outranks the run state in that slot — the workspace
+/// rail puts its CONNECTION dot there while a core is not Ready, since "cannot reach the core" is
+/// the fact a stopped-runtime dot would otherwise hide. The other slots are drawn exactly as
+/// [`run_cell`] draws them; the override is drawn centred in the reserved slot frame.
+///
+/// Args:
+///     scope: What this cell stands for and how much width its table reserves.
+///     status: The element to draw in the reserved status slot, or `None` for the runtime dot.
+///     backend: Shared terminal state, read for the run state and written by the buttons.
+///     palette: Active MoonUI palette.
+///     cx: Application context used to read state and scale geometry.
+///
+/// Returns:
+///     The fixed-width cell, or nothing when the column is switched off.
+pub(crate) fn run_cell_with_status(
+    scope: &RunScope,
+    status: Option<AnyElement>,
+    backend: &Entity<Backend>,
+    palette: MoonPalette,
+    cx: &App,
+) -> Option<AnyElement> {
     if !scope.reserve.any() {
         return None;
     }
@@ -51,10 +77,10 @@ pub(crate) fn run_cell(
     // Reserved decides the GEOMETRY, offered decides the content: a line that fills no slot at all
     // still holds them open, or its name would start left of the lines around it.
     if scope.reserve.status {
-        cell = cell.child(if scope.offers.status {
-            status_slot(scope, &state, backend, palette, cx)
-        } else {
-            slot_frame(cx).into_any_element()
+        cell = cell.child(match status {
+            Some(element) => slot_frame(cx).child(element).into_any_element(),
+            None if scope.offers.status => status_slot(scope, &state, backend, palette, cx),
+            None => slot_frame(cx).into_any_element(),
         });
     }
     if scope.reserve.trading {
@@ -266,6 +292,12 @@ fn status_slot(
     } else {
         (palette.text_muted, t!("core_run.status_unknown"), false)
     };
+    // NOT blocked, unlike `guarded`: this slot is a LABEL, not a control. Blocking would cap the
+    // hover of the line behind it (`Frame::hit_test`), and that line's own click is gated on its
+    // hitbox being hovered (`moon-gpui` `div.rs`, the mouse-down half of the click composite) — so
+    // the dot would become an ~18 px dead zone in a row whose click selects the core (the Auto
+    // rail) or re-filters the window (the Profit Monitor). The row's tooltip therefore still shows
+    // beside this one; a duplicated fact is cheaper than a hole in a click target.
     slot_frame(cx)
         .id(scope.slot_element_id(RunSlot::Status))
         .tooltip(crate::panels::common::text_tooltip(if stale {
@@ -482,6 +514,12 @@ fn auto_slot(
 ///
 /// The click handler stops propagation itself; this covers the mouse-down, which the hosting row
 /// also listens for. Same pairing the tuner's per-row strategy button uses.
+/// The hitbox ALSO stops the hover of the line behind it, which is what keeps a hosting row's own
+/// tooltip from stacking on top of the button's — measured on the Auto rail, where the row tooltip
+/// (name · group · status) drew over three rows beside the button's own. `block_mouse_except_scroll`
+/// rather than `occlude`: the hit test walks front to back and `occlude` STOPS the walk
+/// (`Frame::hit_test`), which would take the wheel away from the virtual list this cell is
+/// drawn inside; this one only caps what counts as hovered and lets scroll through.
 ///
 /// Args:
 ///     button: The rendered button.
@@ -493,6 +531,7 @@ fn guarded(button: impl IntoElement, cx: &App) -> AnyElement {
     div()
         .flex_none()
         .w(design::ui_px(cx, SLOT_W))
+        .block_mouse_except_scroll()
         .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
         .child(button)
         .into_any_element()

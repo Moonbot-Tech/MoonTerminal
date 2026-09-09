@@ -224,6 +224,8 @@ pub(crate) struct Shell {
     core_settings_editors: core_settings::editors::EditorStore,
     /// Whether the header quiet-mode ("sleep") settings popover is open.
     quiet_settings_open: bool,
+    /// Whether the Auto rail's ⚙ run-control popup is showing.
+    rail_settings_open: bool,
     /// `HH:MM` editor for the quiet-mode schedule start; seeded on open, committed on edit.
     quiet_from_input: Entity<MoonInputState>,
     /// `HH:MM` editor for the quiet-mode schedule end.
