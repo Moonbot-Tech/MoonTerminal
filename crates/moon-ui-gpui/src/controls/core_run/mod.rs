@@ -26,7 +26,7 @@ mod view;
 
 pub(crate) use actions::restart;
 pub(crate) use pending::RunPending;
-pub(crate) use view::{reserved_cell, run_cell};
+pub(crate) use view::{reserved_cell, run_cell, run_cell_with_status};
 
 use std::rc::Rc;
 

@@ -582,6 +582,7 @@ impl Shell {
             core_settings_cancel_confirm: false,
             core_settings_bl_expanded: false,
             quiet_settings_open: false,
+            rail_settings_open: false,
             quiet_from_input,
             quiet_to_input,
             quiet_charts_input,

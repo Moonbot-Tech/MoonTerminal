@@ -10,6 +10,7 @@ use moon_core::config::{
     AUTO_WORKSPACE_RAIL_WIDTH_MAX, AUTO_WORKSPACE_RAIL_WIDTH_MIN, WorkspaceMode,
 };
 use moon_core::feed::{ConnStatus, CoreStartupStatus};
+use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 use moon_ui::{
     DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonBadge, MoonBadgeSize,
@@ -19,6 +20,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::Shell;
+use crate::controls::core_run::{RunKey, RunScope, RunSlots, run_cell, run_cell_with_status};
 use crate::workspace::{
     WorkspaceCoreStatus, WorkspaceNavigationAction, WorkspaceRailDensity, WorkspaceRosterInput,
     WorkspaceRosterRow,
@@ -298,12 +300,28 @@ enum RailItem {
     Exchange {
         venue: Option<CoreVenue>,
         logo: Option<Arc<RenderImage>>,
+        /// Position of this heading among the drawn sections — the run cell's stable identity.
+        section: usize,
+        /// Every core drawn under this heading, which its run cell commands.
+        cores: Rc<[CoreId]>,
     },
     /// Configured core row and whether its branch stem ends at this leaf.
     Core {
         row: WorkspaceRosterRow,
         is_last_in_section: bool,
+        /// The one core this row commands, built once when the rail is flattened — the item builder
+        /// runs per visible row on every frame and must not allocate.
+        cores: Rc<[CoreId]>,
     },
+}
+
+/// What every rail line needs to draw its run cell, resolved once per rail render.
+#[derive(Clone, Copy)]
+struct RailRun {
+    /// Slots every line of the rail reserves at the current density.
+    slots: RunSlots,
+    /// Whether an exchange heading also fills them for all its cores.
+    exchange_controls: bool,
 }
 
 /// Density-specific horizontal budget for one indented core leaf.
@@ -352,14 +370,14 @@ fn core_rail_metrics(density: WorkspaceRailDensity) -> CoreRailMetrics {
 ///     Nothing; rows retain their order and only the last receives the terminal shape.
 fn append_core_section_items(items: &mut Vec<RailItem>, rows: Vec<WorkspaceRosterRow>) {
     let last_index = rows.len().checked_sub(1);
-    items.extend(
-        rows.into_iter()
-            .enumerate()
-            .map(|(index, row)| RailItem::Core {
-                row,
-                is_last_in_section: Some(index) == last_index,
-            }),
-    );
+    items.extend(rows.into_iter().enumerate().map(|(index, row)| {
+        let cores = Rc::from([row.core]);
+        RailItem::Core {
+            row,
+            is_last_in_section: Some(index) == last_index,
+            cores,
+        }
+    }));
 }
 
 /// State capable of releasing a generation-scoped Auto topology guard.
@@ -743,6 +761,22 @@ impl Shell {
         }
     }
 
+    /// Open or close the rail's ⚙ popup.
+    ///
+    /// The already-closed guard mirrors the quiet popup's: `Popover` reports `false` twice when the
+    /// trigger is clicked while open, and the second report would cost a repaint for nothing.
+    ///
+    /// Args:
+    ///     open: Whether the popup should be showing.
+    ///     cx: Shell context used to repaint.
+    pub(super) fn set_rail_settings_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.rail_settings_open == open {
+            return;
+        }
+        self.rail_settings_open = open;
+        cx.notify();
+    }
+
     /// Render the current workspace body: unchanged Classic dock or Auto rail plus the same dock.
     ///
     /// Args:
@@ -818,7 +852,7 @@ impl Shell {
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let roster = {
+        let (roster, prefs) = {
             let backend = self.backend.read(cx);
             let mut servers = backend.config.servers.clone();
             crate::core_order::CoreOrder::new(&backend.config)
@@ -863,18 +897,25 @@ impl Shell {
             inputs.retain(|input| {
                 backend.core_displayed(Some(WorkspaceMode::AutoTrading), input.core)
             });
-            crate::workspace::derive_workspace_roster(
+            let roster = crate::workspace::derive_workspace_roster(
                 &inputs,
                 &self.group,
                 backend.valid_auto_workspace_core(&self.group),
                 configured_total,
-            )
+            );
+            let prefs = rail_settings::RailPrefs::restore(&backend.layout);
+            (roster, prefs)
+        };
+        let slots = prefs.slots(density);
+        let run = RailRun {
+            slots,
+            exchange_controls: prefs.exchange_controls,
         };
 
         let mut items = vec![RailItem::Overview {
             selected: roster.overview_selected,
         }];
-        for section in roster.sections {
+        for (section_index, section) in roster.sections.into_iter().enumerate() {
             let logo = if self.exchange_logos_ready {
                 section
                     .venue
@@ -884,9 +925,12 @@ impl Shell {
             } else {
                 None
             };
+            let cores: Rc<[CoreId]> = section.rows.iter().map(|row| row.core).collect();
             items.push(RailItem::Exchange {
                 venue: section.venue,
                 logo,
+                section: section_index,
+                cores,
             });
             append_core_section_items(&mut items, section.rows);
         }
@@ -906,6 +950,7 @@ impl Shell {
                         render_rail_item(
                             item,
                             density,
+                            run,
                             p,
                             backend.clone(),
                             current_group.clone(),
@@ -1019,6 +1064,20 @@ impl Shell {
         } else {
             marker.tooltip(std::slice::from_ref(&summary))
         };
+        let gear = match density {
+            // 52 px holds the count and nothing else; the preferences only govern the dot there anyway.
+            WorkspaceRailDensity::Icon => None,
+            WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => {
+                Some(rail_settings::rail_settings_popover(
+                    &cx.entity(),
+                    &self.backend,
+                    self.rail_settings_open,
+                    prefs,
+                    p,
+                    cx,
+                ))
+            }
+        };
         v_flex()
             .size_full()
             .h_full()
@@ -1035,16 +1094,13 @@ impl Shell {
             .bg(rgb(p.gutter))
             .child(
                 div()
-                    .id(SharedString::from(format!(
-                        "workspace-summary-{}",
-                        self.group
-                    )))
                     .flex_none()
                     .h(design::fit_h_px(cx, 38.0, 11.0, 8.0))
                     .overflow_hidden()
                     .px(design::ui_px(cx, 8.0))
                     .flex()
                     .items_center()
+                    .gap(design::ui_px(cx, 4.0))
                     .min_w_0()
                     .text_size(design::t_caption(cx))
                     .font_weight(FontWeight::SEMIBOLD)
@@ -1052,15 +1108,25 @@ impl Shell {
                     .border_color(rgb(p.border_soft))
                     .child(
                         div()
-                            .w_full()
+                            .id(SharedString::from(format!(
+                                "workspace-summary-{}",
+                                self.group
+                            )))
+                            .flex_1()
                             .min_w_0()
-                            .flex()
-                            .justify_center()
-                            .children(summary_content),
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex()
+                                    .justify_center()
+                                    .children(summary_content),
+                            )
+                            .tooltip(move |_window, cx| {
+                                cx.new(|_| MoonTooltipView::new(summary.clone())).into()
+                            }),
                     )
-                    .tooltip(move |_window, cx| {
-                        cx.new(|_| MoonTooltipView::new(summary.clone())).into()
-                    }),
+                    .children(gear),
             )
             .child(div().flex_1().min_h_0().child(rail))
             .into_any_element()
@@ -1107,6 +1173,7 @@ fn dock_host(dock: Entity<moon_ui::DockArea>) -> impl IntoElement {
 /// Args:
 ///     item: Flattened roster item.
 ///     density: Current responsive rail rung.
+///     run: Slots and exchange-heading preference resolved once per rail render.
 ///     p: Active Moon palette.
 ///     backend: Shared state used by click actions.
 ///     current_group: Group window that owns this rail.
@@ -1117,6 +1184,7 @@ fn dock_host(dock: Entity<moon_ui::DockArea>) -> impl IntoElement {
 fn render_rail_item(
     item: RailItem,
     density: WorkspaceRailDensity,
+    run: RailRun,
     p: MoonPalette,
     backend: Entity<Backend>,
     current_group: String,
@@ -1162,7 +1230,12 @@ fn render_rail_item(
                 })
                 .into_any_element()
         }
-        RailItem::Exchange { venue, logo } => {
+        RailItem::Exchange {
+            venue,
+            logo,
+            section,
+            cores,
+        } => {
             let label = crate::controls::venue_section_label(venue.as_ref());
             let tooltip = label.clone();
             // Keyed on the venue IDENTITY, never on the caption: an element id built from rendered
@@ -1179,6 +1252,16 @@ fn render_rail_item(
                 WorkspaceRailDensity::Icon => None,
                 WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => Some(label),
             };
+            let controls = (run.exchange_controls
+                && density != WorkspaceRailDensity::Icon
+                && !cores.is_empty())
+            .then(|| RunScope {
+                key: RunKey::Section(section),
+                cores,
+                reserve: run.slots,
+                offers: run.slots,
+            })
+            .and_then(|scope| run_cell(&scope, &backend, p, cx));
             // The gap is paid out of this 30-unit cell (`design::RAIL_SECTION_GAP`), which is why
             // it is 6 and not 8: at font +6 the caption line box is ~18 px, leaving room inside
             // the remaining 23 units. The outer element stays transparent so the rail's own
@@ -1204,6 +1287,7 @@ fn render_rail_item(
                         .bg(rgb(p.panel_high))
                         .border_b_1()
                         .border_color(rgb(p.border_soft))
+                        .children(controls)
                         .when_some(logo, |row, logo| {
                             row.child(
                                 img(logo)
@@ -1225,6 +1309,7 @@ fn render_rail_item(
         RailItem::Core {
             row,
             is_last_in_section,
+            cores,
         } => {
             let status = workspace_status_text(row.status);
             let tooltip = workspace_core_tooltip(&row);
@@ -1255,6 +1340,19 @@ fn render_rail_item(
                 .bg(rgb(p.border_soft))
                 .when(is_last_in_section, |stem| stem.h(design::ui_px(cx, 14.5)))
                 .when(!is_last_in_section, |stem| stem.bottom_0());
+            let scope = RunScope {
+                key: RunKey::Core(row.core),
+                cores,
+                reserve: run.slots,
+                // A row that is not Ready shows its CONNECTION dot in the status slot (below), so
+                // it offers no runtime status of its own there — and therefore no restart button
+                // either.
+                offers: RunSlots {
+                    status: run.slots.status && row.status == WorkspaceCoreStatus::Ready,
+                    ..run.slots
+                },
+            };
+            let ready = row.status == WorkspaceCoreStatus::Ready;
             let mut content = h_flex()
                 .size_full()
                 .min_w_0()
@@ -1275,9 +1373,20 @@ fn render_rail_item(
                                 .h(px(1.0))
                                 .bg(rgb(p.border_soft)),
                         ),
-                )
-                .child(design::status_dot_sized(dot, dot_size, cx))
-                .child(div().flex_1().min_w_0().truncate().child(name));
+                );
+            if run.slots.status {
+                // The rail's own connection colour outranks the runtime dot: "cannot reach the
+                // core" is the fact a stopped-runtime dot would otherwise hide, and it keeps its
+                // enlarged Problem size.
+                let connection = (!ready)
+                    .then(|| design::status_dot_sized(dot, dot_size, cx).into_any_element());
+                content =
+                    content.children(run_cell_with_status(&scope, connection, &backend, p, cx));
+            } else {
+                content = content.child(design::status_dot_sized(dot, dot_size, cx));
+                content = content.children(run_cell(&scope, &backend, p, cx));
+            }
+            content = content.child(div().flex_1().min_w_0().truncate().child(name));
             if workspace_status_label_visible(row.status, density) {
                 // The pill stays `Problem`-only, deliberately narrower than the dot above: it is
                 // the danger treatment, and `Unavailable` is not danger — it already gets its own
@@ -1542,6 +1651,8 @@ fn workspace_status_label_visible(
 ) -> bool {
     density == WorkspaceRailDensity::Full && status != WorkspaceCoreStatus::Ready
 }
+
+mod rail_settings;
 
 #[cfg(test)]
 mod tests;

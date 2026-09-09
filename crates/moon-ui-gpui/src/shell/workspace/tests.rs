@@ -623,6 +623,7 @@ fn core_section_shape_marks_only_the_final_leaf_terminal() {
             RailItem::Core {
                 row,
                 is_last_in_section,
+                ..
             } => (row.core, is_last_in_section),
             _ => panic!("core section helper must append only core leaves"),
         })

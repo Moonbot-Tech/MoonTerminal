@@ -44,17 +44,21 @@ core_run.trading_stop:
   en: "Stop trading"
   es: "Detener el trading"
 # A scope where some cores trade and some do not: the button starts the remaining ones.
+# RU counts follow `core_run.status_stopped_group`'s idiom — the noun BEFORE the number, in a form
+# that does not decline with it. «на %{n} ядрах» reads wrong at n=1 and n=21, and this project has
+# no plural-form mechanism to select between them. EN/ES keep their own «core(s)» / «núcleo(s)»:
+# neither language declines the noun after the number.
 core_run.trading_start_partial:
-  ru: "Запустить автоторговлю ещё на %{n} ядрах"
+  ru: "Запустить автоторговлю · ещё ядер: %{n}"
   en: "Start trading on %{n} more core(s)"
   es: "Iniciar el trading en %{n} núcleo(s) más"
 # The same two actions when the control stands for a whole group or exchange row.
 core_run.trading_start_group:
-  ru: "Запустить автоторговлю на %{n} ядрах"
+  ru: "Запустить автоторговлю · ядер: %{n}"
   en: "Start trading on %{n} core(s)"
   es: "Iniciar el trading en %{n} núcleo(s)"
 core_run.trading_stop_group:
-  ru: "Остановить автоторговлю на %{n} ядрах"
+  ru: "Остановить автоторговлю · ядер: %{n}"
   en: "Stop trading on %{n} core(s)"
   es: "Detener el trading en %{n} núcleo(s)"
 # --- AutoDetect slot: Moonbot's AutoDetect, the inverse of passive mode ---
@@ -70,16 +74,16 @@ core_run.auto_off:
   es: "Desactivar AutoDetect"
 # A scope where some cores detect and some are passive: the press turns the remaining ones on.
 core_run.auto_on_partial:
-  ru: "Включить автодетект ещё на %{n} ядрах"
+  ru: "Включить автодетект · ещё ядер: %{n}"
   en: "Turn AutoDetect on for %{n} more core(s)"
   es: "Activar AutoDetect en %{n} núcleo(s) más"
 # The same two actions when the control stands for a whole group, an exchange row or the table.
 core_run.auto_on_group:
-  ru: "Включить автодетект на %{n} ядрах"
+  ru: "Включить автодетект · ядер: %{n}"
   en: "Turn AutoDetect on for %{n} core(s)"
   es: "Activar AutoDetect en %{n} núcleo(s)"
 core_run.auto_off_group:
-  ru: "Выключить автодетект на %{n} ядрах"
+  ru: "Выключить автодетект · ядер: %{n}"
   en: "Turn AutoDetect off for %{n} core(s)"
   es: "Desactivar AutoDetect en %{n} núcleo(s)"
 
