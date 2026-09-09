@@ -93,6 +93,7 @@ impl Render for StratDragHarness {
             open_orders: 0,
             selected: false,
             checked: false,
+            engine: None,
         });
         let folder_dest = drop_dest(&NodeData::Folder {
             fill: super::moon::FolderFill::Populated,
@@ -103,6 +104,7 @@ impl Render for StratDragHarness {
             total: 0,
             selected: false,
             checked: false,
+            engine: None,
         });
         div()
             .size_full()

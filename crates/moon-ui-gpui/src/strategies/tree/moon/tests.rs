@@ -65,6 +65,7 @@ fn core_node(core: CoreId) -> NodeData {
         open_orders: 0,
         selected: false,
         checked: false,
+        engine: None,
     }
 }
 
@@ -79,6 +80,7 @@ fn folder_node(core: CoreId, path: &[&str]) -> NodeData {
         total: 0,
         selected: false,
         checked: false,
+        engine: None,
     }
 }
 
@@ -179,13 +181,13 @@ fn preview_closures_wire_drag_chip_confinement() {
 /// displayed `(N)` count unexplained, so users could no longer tell what the second counter means.
 #[test]
 fn subtree_tooltip_names_counts_and_open_orders_when_present() {
-    let with_orders = RowCounts::subtree(1, 2, 3);
+    let with_orders = RowCounts::subtree(1, 2, 3, None);
     let counts_tip = rust_i18n::t!("strat.tree_counts_tip").to_string();
     let orders_tip = rust_i18n::t!("strat.tree_open_orders_tip").to_string();
     assert!(with_orders.tip.to_string().contains(&counts_tip));
     assert!(with_orders.tip.to_string().contains(&orders_tip));
 
-    let without_orders = RowCounts::subtree(1, 2, 0);
+    let without_orders = RowCounts::subtree(1, 2, 0, None);
     assert_eq!(without_orders.tip.to_string(), counts_tip);
     assert!(without_orders.orders.is_empty());
 }

@@ -25,6 +25,7 @@ use super::super::{Key, StrategiesView, moon_alpha};
 use super::checks;
 use super::ops;
 use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
+use crate::controls::core_run::{RunKey, RunScope, RunSlots, reserved_cell, run_cell};
 use crate::design;
 use moon_core::feed::StrategyRow;
 use moon_core::session::{CoreId, CoreStore};
@@ -194,6 +195,8 @@ pub(crate) enum NodeData {
         selected: bool,
         /// Summary of covered strategies' displayed checkboxes, not of `active`/`total`.
         checked: bool,
+        /// The core's global strategy engine: Some(true) running, Some(false) stopped, None when the core has not confirmed either.
+        engine: Option<bool>,
     },
     Folder {
         /// What the folder holds, which decides whether its caret and checkbox are drawn at all.
@@ -207,6 +210,8 @@ pub(crate) enum NodeData {
         selected: bool,
         /// Summary of covered strategies' displayed checkboxes, not of `active`/`total`.
         checked: bool,
+        /// The core's global strategy engine: Some(true) running, Some(false) stopped, None when the core has not confirmed either.
+        engine: Option<bool>,
     },
     Strategy {
         core: CoreId,
@@ -397,6 +402,12 @@ fn build_core_root(
 ) -> Option<MoonTreeItem> {
     let (data, flat, nav, expanded) = outputs;
     let cd = store.core(core)?;
+    // Some(_) only when the CURRENT connection confirmed it: `store.rs:849-852` clears
+    // `strategies_running_confirmed` on a reconnect but RETAINS the last value, so an
+    // unconfirmed flag is the previous connection talking. The tree makes no claim on that.
+    let engine = cd
+        .strategies_running
+        .filter(|_| cd.strategies_running_confirmed);
     // Nothing below a collapsed core can render, so it needs only the totals in its own caption.
     // Search and reveal paths force their required core/folder chain open before this build runs.
     // Direct field reads, not `state::core_is_open(...)`: the contract scanner
@@ -465,6 +476,7 @@ fn build_core_root(
             core,
             filter,
             searching,
+            engine,
             &counts,
             &matched,
             &empty_folders,
@@ -491,6 +503,7 @@ fn build_core_root(
                 &view.staged,
                 core,
             ),
+            engine,
         },
     );
     Some(
@@ -591,6 +604,7 @@ fn build_core_subtree(
     core: CoreId,
     filter: &PreparedFilter,
     searching: bool,
+    engine: Option<bool>,
     counts: &FolderCounts,
     matched: &[&StrategyRow],
     empty_folders: &[Vec<String>],
@@ -646,6 +660,7 @@ fn build_core_subtree(
         &cd.strategies,
         filter,
         searching,
+        engine,
         children,
         data,
         flat,
@@ -766,7 +781,8 @@ fn core_paths(
 /// Converts one folder node and its subtree.
 ///
 /// Every node reached here is visible, so recursion stops at a closed folder because
-/// `MoonTreeState` cannot render its descendants.
+/// `MoonTreeState` cannot render its descendants. `engine` is the owning core's confirmed
+/// global-engine flag, copied onto every folder heading so its counters match the core row.
 #[allow(clippy::too_many_arguments)]
 fn convert_node(
     node: &super::super::logic::FolderNode,
@@ -781,6 +797,7 @@ fn convert_node(
     strategies: &[StrategyRow],
     filter: &PreparedFilter,
     searching: bool,
+    engine: Option<bool>,
     out: &mut Vec<MoonTreeItem>,
     data: &mut HashMap<SharedString, NodeData>,
     flat: &mut Vec<Key>,
@@ -852,6 +869,7 @@ fn convert_node(
                 strategies,
                 filter,
                 searching,
+                engine,
                 &mut fchildren,
                 data,
                 flat,
@@ -870,6 +888,7 @@ fn convert_node(
                 selected: view.folder_sel.contains(&(core, path)),
                 checked: fchecked,
                 fill,
+                engine,
             },
         );
         out.push(
@@ -1126,6 +1145,7 @@ fn render_row(
             open_orders,
             selected,
             checked,
+            engine,
         } => {
             let core = *core;
             core_folder_row(
@@ -1136,13 +1156,14 @@ fn render_row(
                 *checked,
                 indent,
                 label.clone(),
-                RowCounts::subtree(*active, *total, *open_orders),
+                RowCounts::subtree(*active, *total, *open_orders, *engine),
                 p.blue,
                 600.0,
                 ToggleTarget::Core(core),
                 // A core root is a heading, not a folder: it keeps its caret and its bulk box even
                 // with nothing under it, because what it covers is the whole core.
                 FolderFill::Populated,
+                *engine,
                 step,
                 app,
             )
@@ -1156,6 +1177,7 @@ fn render_row(
             total,
             selected,
             checked,
+            engine,
         } => {
             let core = *core;
             let path = path.clone();
@@ -1171,7 +1193,7 @@ fn render_row(
                 // An empty one shows no numbers at all rather than `0/0`: there is nothing to
                 // count, and the slot's tooltip says what the row is instead.
                 match fill.has_contents() {
-                    true => RowCounts::subtree(*active, *total, 0),
+                    true => RowCounts::subtree(*active, *total, 0, *engine),
                     false => RowCounts::empty_folder(fill.empty_tip()),
                 },
                 // An empty folder reads as quieter than one with strategies in it, which is the
@@ -1184,6 +1206,7 @@ fn render_row(
                 400.0,
                 ToggleTarget::Folder(core, path),
                 *fill,
+                None,
                 step,
                 app,
             )
@@ -1233,6 +1256,7 @@ fn render_row(
                 ToggleTarget::Deleted(core),
                 // Deleted is only ever drawn when it holds rows.
                 FolderFill::Populated,
+                None,
                 step,
                 app,
             )
@@ -1335,13 +1359,23 @@ impl RowCounts {
     ///     total: All strategies under it, after the same filters.
     ///     open_orders: Open orders of the whole core; always zero for a folder, which does not
     ///         carry an order count of its own.
+    ///     engine: The core's confirmed global strategy engine: `Some(true)` running,
+    ///         `Some(false)` stopped, `None` when the core has not confirmed either.
     ///
     /// Returns:
     ///     The two slot strings plus the tooltip that names whichever of them is populated.
-    fn subtree(active: usize, total: usize, open_orders: usize) -> Self {
-        let counts_tip = rust_i18n::t!("strat.tree_counts_tip").to_string();
+    fn subtree(active: usize, total: usize, open_orders: usize, engine: Option<bool>) -> Self {
+        let counts_tip = match engine {
+            Some(false) => rust_i18n::t!("strat.tree_counts_tip_stopped", n = active).to_string(),
+            Some(true) => rust_i18n::t!("strat.tree_counts_tip_running").to_string(),
+            None => rust_i18n::t!("strat.tree_counts_tip").to_string(),
+        };
         Self {
-            primary: format!("{active}/{total}"),
+            primary: if matches!(engine, Some(false)) {
+                format!("0/{total}")
+            } else {
+                format!("{active}/{total}")
+            },
             orders: if open_orders > 0 {
                 format!("({open_orders})")
             } else {
@@ -1484,6 +1518,8 @@ impl ToggleTarget {
 ///     color: Heading text color.
 ///     weight: Heading font weight.
 ///     target: Core, folder, or Deleted collection toggled by the row.
+///     engine: The core's confirmed global strategy engine; only a core heading draws the marker,
+///         and only for `Some(false)`.
 ///     step: Local unscaled text-size step read from the tree's own preference.
 ///     app: Application context used for palette and sizing tokens.
 ///
@@ -1503,6 +1539,7 @@ fn core_folder_row(
     weight: f32,
     target: ToggleTarget,
     fill: FolderFill,
+    engine: Option<bool>,
     step: f32,
     app: &App,
 ) -> AnyElement {
@@ -1587,6 +1624,22 @@ fn core_folder_row(
                     .render(),
             ),
         )
+        .when(
+            matches!(engine, Some(false)) && matches!(&target, ToggleTarget::Core(_)),
+            |row| {
+                row.child(
+                    div().flex_none().child(
+                        MoonText::new(rust_i18n::t!("strat.tree_engine_stopped_tag").to_string())
+                            .mono(false)
+                            .uppercase(false)
+                            .color(p.amber)
+                            .font_size(design::moon_text_base(app, step))
+                            .line_height(ROW_LINE_BASE + step)
+                            .render(),
+                    ),
+                )
+            },
+        )
         // The counters, muted and right-aligned in fixed slots after the flexible caption, so they
         // land on one column across every row instead of wherever each name happened to end.
         //
@@ -1618,6 +1671,26 @@ fn core_folder_row(
                 ))
                 .tooltip(crate::panels::common::text_tooltip(counts.tip)),
         )
+        .children({
+            let slots = RunSlots {
+                status: false,
+                trading: true,
+                auto: false,
+            };
+            match &target {
+                ToggleTarget::Core(core) => {
+                    let backend = view.read(app).backend.clone();
+                    let scope = RunScope {
+                        key: RunKey::Core(*core),
+                        cores: std::rc::Rc::from(vec![*core]),
+                        reserve: slots,
+                        offers: slots,
+                    };
+                    run_cell(&scope, &backend, p, app)
+                }
+                _ => reserved_cell(slots, app),
+            }
+        })
         .on_click(move |e: &ClickEvent, window, app| {
             let m = e.modifiers();
             let (shift, cmd) = (m.shift, m.secondary());

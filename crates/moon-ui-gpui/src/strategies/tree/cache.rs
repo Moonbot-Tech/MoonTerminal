@@ -95,7 +95,8 @@ impl TreeCache {
 /// The two halves are the store and the window's own state:
 ///
 ///   * per core, in the order the window lists them: its id, its display name, venue presence and
-///     identity/caption fields, `strategies_rev` (the strategy snapshot), `folders_rev` (the
+///     identity/caption fields, `strategies_rev` (the strategy snapshot), `strategies_running_rev`
+///     (the global strategy engine's run state), `folders_rev` (the
 ///     core's own folder tree, which carries the folders no strategy implies), and the rendered
 ///     open-order digest. A core appearing, disappearing or being renamed moves the list itself.
 ///   * per window field: venue grouping, the filter — search, kind, direction, EXCHANGE and
@@ -137,6 +138,10 @@ pub(crate) fn data_sig(
             continue;
         };
         cd.strategies_rev.hash(&mut h);
+        // The global strategy engine's run state, which the core row's counters and its marker read.
+        // Its own revision rather than the flag: the flag is a tri-state whose UNKNOWN -> false
+        // transition must move the signature too.
+        cd.strategies_running_rev.hash(&mut h);
         // The folder tree, which the build reads for the folders holding no strategy. Its own
         // counter rather than `strategies_rev`: an empty folder created or deleted moves nothing
         // about the strategies, and that folder is exactly what this input contributes.
