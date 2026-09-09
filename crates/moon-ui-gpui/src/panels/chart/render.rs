@@ -299,6 +299,10 @@ impl Render for ChartPanel {
         });
 
         let show_empty_logo = axis_panes.is_empty();
+        // The brand follows one switch wherever it is drawn; the cover under it does not. See
+        // `design::empty_cover`.
+        let empty_logo =
+            show_empty_logo && crate::chart_tabs::empty_logo(&self.backend.read(cx).layout);
         // Only the states the user can ACT on are stated. A settled read — trades drawn, or none to
         // draw — is already visible as the arrows themselves, so a badge counting them spends the
         // row's width on a fact the chart is showing anyway, ahead of the live order figures that
@@ -439,17 +443,13 @@ impl Render for ChartPanel {
                     })
             }))
             .when(show_empty_logo, |this| {
-                // Cover the own pass with an opaque chart background in an empty slot so its logo
-                // does not reveal a stale graph rendered beneath the GPUI scene.
+                // Cover the own pass with an opaque chart background in an empty slot so a stale
+                // graph rendered beneath the GPUI scene does not show through. The COVER is not
+                // optional — it is hiding something — and only the mark on it follows the switch;
+                // both come from one builder so that cannot be got wrong here.
                 this.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .bg(rgb(palette.chart_bg))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(crate::design::logo_glow_sized(cx, logo_w)),
+                    crate::design::empty_cover(cx, palette.chart_bg, empty_logo.then_some(logo_w))
+                        .absolute(),
                 )
             })
             // FireTest probe only. Do not source chart geometry from this GPUI probe;

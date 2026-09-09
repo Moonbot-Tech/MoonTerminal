@@ -67,9 +67,9 @@ pub(super) fn empty_feed_text(marker: &ScopeMarker, retained: usize, available: 
 /// exchange and a market, and its chart is its own rather than borrowed from whichever core
 /// happened to trade the ticker. So the crowd's card yields.
 ///
-/// WHICH exchange the core card came from is deliberately not part of the question: the crowd has
-/// no exchange, and "this coin is already on screen" is the whole of what makes the second card
-/// redundant.
+/// WHICH exchange the core card came from is deliberately not part of the question: "this coin is
+/// already on screen" is the whole of what makes the second card redundant, and the exchange a
+/// crowd card shows is the one it borrowed its chart from rather than one the crowd traded on.
 ///
 /// Compared on `MarketLabel::identity` — the CROSS-EXCHANGE key, which is the core's own
 /// `market_currency_canonic` — and not on a fold of the name. That distinction is the whole of

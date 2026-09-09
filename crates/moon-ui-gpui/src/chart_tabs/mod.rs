@@ -37,7 +37,7 @@ use std::collections::HashMap;
 pub(crate) use add_stack::AddChartStack;
 use common::LayoutPopupHost;
 pub(crate) use common::seg_row;
-pub(crate) use main_stack::{MainChartStack, crowd_cards, crowd_rule_for_run};
+pub(crate) use main_stack::{MainChartStack, crowd_cards, crowd_rule_for_run, empty_logo};
 use popup_slot::ChartPopup;
 use sig::chart_tabs_sig;
 

@@ -1,5 +1,5 @@
 use super::detect::{crowd_cards, crowd_rule, field_text};
-use super::{EmptyScreen, SWITCHES};
+use super::{EmptyScreen, SWITCHES, empty_logo};
 use moon_core::config::layout::WindowLayout;
 use moon_core::crowd::detect::{DEFAULT_PROFIT, DEFAULT_TRADES};
 
@@ -169,4 +169,78 @@ fn a_card_lifetime_is_held_to_what_a_card_can_be() {
 
     layout.main_empty_detect_evict = Some(false);
     assert!(!crowd_cards(&layout).evict);
+}
+
+/// The brand switch reaches every empty surface, the two readings of its key cannot drift, and the
+/// cover under the brand follows neither.
+///
+/// The cover is not decoration: in a chart slot it hides a stale graph left in the own pass beneath
+/// the GPUI scene, in a detached window the white window backing. A switch that took the cover with
+/// the mark would not hide a logo, it would reveal a dead chart.
+///
+/// That invariant is held by CONSTRUCTION — one builder makes the cover and puts the mark on it —
+/// so what is checked here is that the builder is what the surfaces use, and that the builder keeps
+/// the cover outside its own gate. An earlier version of this test compared a `rfind` inside a
+/// prefix against the end of that prefix, which is true by arithmetic: it could not fail.
+#[test]
+fn the_logo_switch_reaches_every_empty_surface_and_the_cover_stays() {
+    let mut layout = WindowLayout::default();
+    assert!(empty_logo(&layout), "a fresh profile lost the brand");
+    layout.main_empty_logo = Some(false);
+    assert!(!empty_logo(&layout));
+
+    // The checkbox and the drawing sites read one key through two functions, and nothing but this
+    // stops them drifting — the same thing pinned for the rule's own keys above.
+    for chosen in [None, Some(true), Some(false)] {
+        layout.main_empty_logo = chosen;
+        assert_eq!(
+            EmptyScreen::restore(&layout).logo,
+            empty_logo(&layout),
+            "the checkbox and the surfaces disagree about {chosen:?}"
+        );
+    }
+
+    // The builder itself: everything that makes the cover a COVER is applied before the gate that
+    // adds the mark. Searched inside that one function, so the comparison is a real one.
+    let cover = include_str!("../../../design.rs")
+        .split("pub fn empty_cover(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split(
+                "
+}",
+            )
+            .next()
+        })
+        .expect("the shared cover must exist");
+    let gate = cover
+        .find(".when_some(")
+        .expect("the mark must be the optional part");
+    for piece in [".size_full()", ".bg(rgb(background))", ".flex()"] {
+        let at = cover
+            .find(piece)
+            .unwrap_or_else(|| panic!("the cover must keep `{piece}`"));
+        assert!(
+            at < gate,
+            "`{piece}` moved inside the mark's gate, so hiding the logo uncovers what the cover              was there to hide"
+        );
+    }
+
+    // And the two surfaces outside this file use that builder rather than rolling their own, which
+    // is what makes the invariant above theirs as well.
+    for (name, src) in [
+        (
+            "an AddToChart stack holding no charts",
+            include_str!("../../add_stack.rs"),
+        ),
+        (
+            "a chart slot waiting for its data",
+            include_str!("../../../panels/chart/render.rs"),
+        ),
+    ] {
+        assert!(
+            src.contains("design::empty_cover("),
+            "{name} builds its own cover, so the switch and the plate can drift apart there"
+        );
+    }
 }

@@ -3,6 +3,7 @@
 //! This is a thin GPUI-div adapter over MoonPalette tokens. Keep it visual-only:
 //! no terminal logic, no chart renderer state.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{MoonMetrics, MoonPalette, MoonTableStyle, MoonTheme, MoonTone, rgba_from};
@@ -1499,6 +1500,31 @@ fn glow_svg(light: bool) -> String {
 </svg>"##,
         view = LOGO_GLOW_VIEW,
     )
+}
+
+/// An empty chart surface's opaque cover, carrying the brand when the reader wants one.
+///
+/// The COVER is not decoration and is never optional. In a chart slot it hides a stale graph left
+/// in the chart's own GPU pass beneath the GPUI scene; in a detached window, whose root is
+/// `NoFill`, it hides the white window backing. Only the MARK follows the "show the logo" switch —
+/// and that is exactly why the two are built here rather than at each call site, where one edit
+/// could gate the plate along with the mark and turn "hide the logo" into "reveal a dead chart".
+///
+/// Args:
+///     cx: Application context, for the scaled artwork.
+///     background: Packed chart background colour, from the active palette.
+///     logo: The lockup's width when the mark is drawn, `None` when the reader switched it off.
+///
+/// Returns:
+///     The cover, for a caller to place — a stack fills its parent, a chart slot lays it over one.
+pub fn empty_cover(cx: &App, background: u32, logo: Option<f32>) -> Div {
+    div()
+        .size_full()
+        .bg(rgb(background))
+        .flex()
+        .items_center()
+        .justify_center()
+        .when_some(logo, |cover, width| cover.child(logo_glow_sized(cx, width)))
 }
 
 /// The glowing placeholder an empty chart surface draws; `width` is the lockup's own width.

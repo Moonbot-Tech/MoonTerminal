@@ -1082,19 +1082,16 @@ impl Render for AddChartStack {
         let _render_us = crate::diag::scope(&crate::diag::ADD_STACK_RENDER_US);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
-            // Use an opaque background: a detached window has `Root=NoFill` and no own pass, so
-            // without this background the white window backing would show through the logo.
-            let empty = div()
-                .size_full()
-                .bg(rgb(palette.chart_bg))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(crate::design::logo_glow_sized(
-                    cx,
-                    crate::design::EMPTY_STACK_LOGO_W,
-                ))
-                .into_any_element();
+            // The cover is not optional here: a detached window has `Root=NoFill` and no own
+            // pass, so without it the white window backing shows through. Only the mark on it
+            // follows the switch, and both come from one builder so that cannot be got wrong.
+            let logo = crate::chart_tabs::empty_logo(&self.backend.read(cx).layout);
+            let empty = crate::design::empty_cover(
+                cx,
+                palette.chart_bg,
+                logo.then_some(crate::design::EMPTY_STACK_LOGO_W),
+            )
+            .into_any_element();
             // Measured here too: a window resized while the tab holds no charts would otherwise
             // leave a stale size behind, and the first frame WITH charts would divide by it.
             // An empty stack divides nothing, so the probe only RECORDS here: the number it would

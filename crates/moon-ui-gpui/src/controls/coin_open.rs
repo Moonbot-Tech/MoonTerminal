@@ -117,10 +117,22 @@ pub(crate) fn cores_for(backend: &Backend, group: &str, coin: &str) -> Vec<CoinC
 ///     pos: Where, so a picker can be anchored to it.
 ///     window: Owning window, used to host that picker.
 ///     app: Application context.
-///     opened: Run once a chart has ACTUALLY opened, and not before. A picker is a question, not an
-///         answer: a caller that dismisses its own row on the click would take away the thing the
-///         menu is about while the menu is still open, and would dismiss it for a coin no core
-///         trades — where the click does nothing at all.
+///     opened: Run once the open has been AUTHORISED and requested, and not before. A picker is a
+///         question, not an answer: a caller that dismisses its own row on the click would take
+///         away the thing the menu is about while the menu is still open, and would dismiss it for
+///         a coin no core trades — where the click does nothing at all.
+///
+///         "Authorised and requested" is the strongest thing this can promise. What it reports is
+///         `Backend::open_on_main_if_authorized`, which queues the request; a core that has no live
+///         session yet queues nothing further, and no chart appears. A caller must therefore treat
+///         this as "the click was accepted", not as "a chart is on screen".
+///
+///         It is run DEFERRED, at the end of the current effect cycle. This function is called
+///         from inside a click listener, which means the caller's own entity is leased for the
+///         duration; a callback invoked synchronously could not touch it, and reaching for it
+///         panics with "cannot update … while it is already being updated" rather than failing
+///         quietly. Deferring returns the entity to the app first, so a caller may do the obvious
+///         thing — dismiss its own row — without knowing any of this.
 pub(crate) fn open(
     backend: &Entity<Backend>,
     group: &str,
@@ -157,7 +169,7 @@ pub(crate) fn open(
                 done
             });
             if done {
-                opened(app);
+                app.defer(move |app| opened(app));
             }
         }
         _ => {
@@ -192,7 +204,8 @@ pub(crate) fn open(
                                 done
                             });
                             if done {
-                                opened(app);
+                                let opened = Rc::clone(&opened);
+                                app.defer(move |app| opened(app));
                             }
                         })
                 })
@@ -201,3 +214,6 @@ pub(crate) fn open(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

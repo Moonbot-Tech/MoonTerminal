@@ -1592,7 +1592,7 @@ impl MainChartStack {
 
 mod empty;
 
-pub(crate) use empty::{crowd_cards, crowd_rule_for_run};
+pub(crate) use empty::{crowd_cards, crowd_rule_for_run, empty_logo};
 
 #[cfg(test)]
 mod tests;
