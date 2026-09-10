@@ -32,6 +32,7 @@ pub mod session;
 pub mod settings_diag;
 pub mod strat_db;
 pub mod symbol;
+pub mod telegram;
 pub mod update;
 pub mod util;
 pub mod venue;

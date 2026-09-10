@@ -84,6 +84,15 @@ rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "trace", "funct
 # synchronous client lives on a dedicated worker thread, never on a UI or feed thread.
 ureq = { version = "3", features = ["json"] }
 
+# Loopback Mini App HTTP server (`telegram/web.rs`). Synchronous MIT HTTP/1 over httparse,
+# with no Tokio edge. Phase 2 binds it; the direct edge is frozen here so those branches
+# do not race the manifest. Pre-1.0 API risk is accepted and confined behind telegram::web.
+touche = { version = "0.0.15", default-features = false, features = ["server"] }
+
+# Telegram WebApp `initData` HMAC (`telegram/init_data.rs`). SHA-256 is already a direct
+# dependency; this crate supplies the HMAC construction only.
+hmac = "0.12"
+
 # Restart fan-out of the tuner's threshold search (db/tuner/threshold_search/). Already in the
 # tree transitively through sysinfo, so this direct edge adds no crate and no build time.
 rayon = "1.12"

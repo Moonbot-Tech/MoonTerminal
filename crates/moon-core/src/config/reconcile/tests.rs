@@ -1,5 +1,6 @@
 use super::super::schema::{
-    SCHEMA_VERSION, ServersFile, SettingsFile, UiThemeMode, default_ui_font_delta, default_ui_scale,
+    SCHEMA_VERSION, ServersFile, SettingsFile, TelegramConfig, UiThemeMode, default_ui_font_delta,
+    default_ui_scale,
 };
 use super::{Merged, merge, split};
 use crate::config::{CoreGroup, DEFAULT_ORDER_SIZES_USD, GroupConfig, Language};
@@ -353,6 +354,7 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         merged.core_sort,
         merged.report_valuation_mode,
         merged.next_uid.get(),
+        TelegramConfig::default(),
     );
 
     assert_eq!(
@@ -371,6 +373,7 @@ fn merged_server(key: &str, meta_toml: &str) -> crate::config::ServerConfig {
     let merged = merge(
         ServersFile {
             servers: vec![entry],
+            telegram: TelegramConfig::default(),
         },
         SettingsFile {
             servers: vec![meta],
@@ -436,6 +439,7 @@ fn the_transport_survives_a_split() {
         crate::config::CoreSortMode::default(),
         crate::db::valuation::ValuationMode::default(),
         8,
+        TelegramConfig::default(),
     );
 
     assert_eq!(
@@ -498,6 +502,7 @@ id = 2981",
         crate::config::CoreSortMode::default(),
         crate::db::valuation::ValuationMode::default(),
         8,
+        TelegramConfig::default(),
     );
 
     assert_eq!(

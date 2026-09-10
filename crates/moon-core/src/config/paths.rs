@@ -825,6 +825,71 @@ pub fn strategies_backups_dir() -> PathBuf {
 /// See `the_migration_lists_never_carry_the_backup_directory`.
 const BACKUPS_DIR_NAME: &str = "backups";
 
+/// Directory name for Telegram-owned helper binaries, staging, and web-asset cache.
+///
+/// Kept as a constant so migration lists can be proven not to carry it. Path functions below
+/// do not create this directory: an empty token must not create a Telegram-specific file.
+const TELEGRAM_DIR_NAME: &str = "telegram";
+
+/// Verified `cloudflared` executable file name for the current target.
+#[cfg(windows)]
+const CLOUDFLARED_EXECUTABLE_NAME: &str = "cloudflared.exe";
+/// Verified `cloudflared` executable file name for the current target.
+#[cfg(not(windows))]
+const CLOUDFLARED_EXECUTABLE_NAME: &str = "cloudflared";
+
+/// Parent directory for Telegram helper binaries and caches.
+///
+/// Lives in the `data_dir` root beside `logs/` and `servers.enc`. Deliberately does not create
+/// the directory: constructing a path must not be enough to leave a Telegram-specific file on
+/// disk when the token is empty.
+///
+/// Returns:
+///     Canonical Telegram data directory, which may not yet exist.
+pub fn telegram_dir() -> PathBuf {
+    data_dir().join(TELEGRAM_DIR_NAME)
+}
+
+/// Directory that holds the verified `cloudflared` executable and its staging area.
+///
+/// Returns:
+///     Canonical cloudflared cache directory, which may not yet exist.
+pub fn cloudflared_cache_dir() -> PathBuf {
+    telegram_dir().join("cloudflared")
+}
+
+/// Path of the promoted, verified `cloudflared` executable.
+///
+/// Returns:
+///     Exact executable path under [`cloudflared_cache_dir`].
+pub fn cloudflared_executable_path() -> PathBuf {
+    cloudflared_cache_dir().join(CLOUDFLARED_EXECUTABLE_NAME)
+}
+
+/// Staging directory for a `cloudflared` download before digest verification and promotion.
+///
+/// Returns:
+///     Canonical staging directory, which may not yet exist.
+pub fn cloudflared_staging_dir() -> PathBuf {
+    cloudflared_cache_dir().join("staging")
+}
+
+/// In-progress `cloudflared` download path (`.part`) inside the staging directory.
+///
+/// Returns:
+///     Exact partial-download path under [`cloudflared_staging_dir`].
+pub fn cloudflared_part_path() -> PathBuf {
+    cloudflared_staging_dir().join("cloudflared.part")
+}
+
+/// Cache directory for Mini App web assets that are not embedded in the binary.
+///
+/// Returns:
+///     Canonical web-asset directory, which may not yet exist.
+pub fn telegram_web_asset_dir() -> PathBuf {
+    telegram_dir().join("web")
+}
+
 /// Legacy combined encrypted config for one-time migration. Read from beside the executable,
 /// where older builds left it.
 pub fn legacy_enc_path() -> PathBuf {
