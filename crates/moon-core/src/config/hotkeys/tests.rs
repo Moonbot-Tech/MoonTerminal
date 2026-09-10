@@ -423,3 +423,141 @@ fn the_shipped_figure_delete_gesture_is_the_middle_click() {
         toml::from_str("fig_delete_click = \"right-ctrl\"\n").expect("an explicit gesture loads");
     assert_eq!(right.fig_delete_click, MouseGestureBinding::RightCtrl);
 }
+
+/// Fields of `HotkeysConfig` that hold a string but not a KEYSTROKE, and so name no slot.
+///
+/// Written out because the check below cannot tell a gesture's `"middle"` from a keystroke by
+/// looking — and because being explicit is the point: a new keystroke field has nowhere to hide.
+/// Adding a gesture without adding it here fails the test too, which is the right direction to
+/// fail in.
+const NOT_KEYSTROKES: [&str; 18] = [
+    // Not a binding at all: the tools excluded from the switch cycle.
+    "switch_figure_skip",
+    "fig_delete_click",
+    "buy_set_click",
+    "short_set_click",
+    "pending_long_click",
+    "pending_short_click",
+    "buy_move_click",
+    "sell_move_click",
+    "buy_move_click2",
+    "sell_move_click2",
+    "short_buy_move_click",
+    "short_sell_move_click",
+    "short_buy_move_click2",
+    "short_sell_move_click2",
+    "buy_move_kind",
+    "sell_move_kind",
+    "buy_move_kind2",
+    "sell_move_kind2",
+];
+
+/// Every keystroke the file stores is reachable through a [`KeySlot`] — checked against the STRUCT,
+/// not against the slot list.
+///
+/// The distinction is the whole test. Walking `KeySlot::all()` and asking `bound_keys()` what it
+/// found proves nothing: `bound_keys()` is now derived from that same list, so a field no slot names
+/// is invisible to both, and the first version of this test passed exactly that way. It is checked
+/// through serialization instead — every slot is written a marker, and any string left in the file
+/// that is not a marker has to be a declared non-keystroke.
+///
+/// What a missed field costs: `bound_keys()` never sees it, so the migration's collision check and
+/// the core pull's conflict gate both read that keystroke as free, and a shipped default takes a key
+/// the user is already using — silently, because nothing else looks.
+#[test]
+fn no_stored_keystroke_is_missing_from_the_registry() {
+    const MARKER: &str = "zz-registry-marker";
+
+    let mut cfg = HotkeysConfig::default();
+    for slot in KeySlot::all() {
+        cfg.set_key(slot, MARKER.to_string());
+    }
+    let text = toml::to_string(&cfg).expect("serialize hotkeys");
+    let table: toml::Table = text.parse().expect("re-read hotkeys");
+
+    let mut unreached = Vec::new();
+    let mut nested = Vec::new();
+    for (name, value) in &table {
+        if NOT_KEYSTROKES.contains(&name.as_str()) {
+            continue;
+        }
+        let strings: Vec<&str> = match value {
+            toml::Value::String(s) => vec![s.as_str()],
+            toml::Value::Array(items) => items.iter().filter_map(toml::Value::as_str).collect(),
+            // The config is FLAT, and this walk only looks one level down. A nested table would
+            // carry its keystrokes past the check unseen, so it fails here rather than passing
+            // quietly — extend the walk when one arrives.
+            toml::Value::Table(_) => {
+                nested.push(name.clone());
+                continue;
+            }
+            _ => continue,
+        };
+        // An EMPTY array counts as unreached too: every slot was just written a marker, so a
+        // keystroke field holding none of them is one no slot addresses.
+        if strings.is_empty() || strings.iter().any(|held| *held != MARKER) {
+            unreached.push(name.clone());
+        }
+    }
+
+    assert!(
+        nested.is_empty(),
+        "this walk reads only top-level values; extend it for {nested:?}"
+    );
+    assert!(
+        unreached.is_empty(),
+        "these stored keystrokes have no KeySlot, so nothing sees them bound: {unreached:?}"
+    );
+}
+
+/// No two slots address the same field.
+///
+/// Every value is written BEFORE any is read back, which is what makes the check work: asserting
+/// right after each write lets an alias pass, because the later slot's own read still returns what
+/// it just wrote while the earlier slot's value is already gone.
+#[test]
+fn each_slot_addresses_storage_of_its_own() {
+    let mut cfg = HotkeysConfig::default();
+    let slots = KeySlot::all();
+    // Deliberately NOT `f1`, `f2`...: those are the order-size defaults, so writing one would be a
+    // no-op and `set_key` would rightly answer false.
+    let value = |n: usize| format!("zz-{n}");
+    for (n, slot) in slots.iter().enumerate() {
+        assert!(cfg.set_key(*slot, value(n)), "{slot:?} stores nothing");
+    }
+    for (n, slot) in slots.iter().enumerate() {
+        assert_eq!(
+            cfg.key(*slot),
+            value(n),
+            "{slot:?} shares a field with another slot"
+        );
+    }
+}
+
+/// Writing the value a slot already holds is not a change, and an index outside its family is
+/// neither a change nor a panic.
+///
+/// Plausible breakage: bare indexing in the accessors, which is what the settings page's macro did
+/// before this. The families are arrays, the page builds their indices in loops, and `hotkeys.toml`
+/// is hand-editable.
+#[test]
+fn a_no_op_write_and_an_impossible_index_are_both_quiet() {
+    let mut cfg = HotkeysConfig::default();
+    let slot = KeySlot::CancelBuy;
+    let held = cfg.key(slot).to_string();
+
+    assert!(!cfg.set_key(slot, held), "rewriting the same value");
+    assert!(
+        cfg.set_key(slot, "ctrl-q".into()),
+        "a real edit reports true"
+    );
+
+    for out_of_range in [
+        KeySlot::OrderSize(ORDER_SIZE_KEYS),
+        KeySlot::SellPreset(999),
+        KeySlot::ManualStrategy(MANUAL_STRATEGY_KEYS),
+    ] {
+        assert_eq!(cfg.key(out_of_range), "");
+        assert!(!cfg.set_key(out_of_range, "alt-1".into()));
+    }
+}

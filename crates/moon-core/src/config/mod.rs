@@ -78,9 +78,9 @@ pub use groups::{
     DEFAULT_ORDER_SIZES_USD, GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
 pub use hotkeys::{
-    HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, MoveGestureCommand, MoveKind,
-    MoveSide, ORDER_SIZE_KEYS, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX,
-    SPLIT_PARTS_MIN,
+    HotkeysConfig, KeySlot, MANUAL_STRATEGY_KEYS, MouseGestureBinding, MoveGestureCommand,
+    MoveKind, MoveSide, ORDER_SIZE_KEYS, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS,
+    SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 pub use lang::Language;
 pub use layout::{

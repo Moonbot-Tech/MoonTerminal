@@ -269,6 +269,197 @@ impl MouseGestureBinding {
     }
 }
 
+/// One editable keyboard slot of [`HotkeysConfig`].
+///
+/// The slot identity lives HERE, beside the struct it addresses, and not in the settings page that
+/// draws it. That is the whole point of the type: the same twenty-nine slots were enumerated by
+/// hand in half a dozen places — this file's own collision list, the page's field map, its id and
+/// label tables, the clash order, the row layout — and each list could forget a slot on its own.
+/// A list that cannot reach the data is the reason they could not be merged: `bound_keys` is in
+/// this crate and the page's tables are not.
+///
+/// The three preset families are indexed rather than spelled out, because they are arrays in the
+/// config and the page numbers them (`F1`..`F6`); an index outside its family names no slot and is
+/// answered with an empty binding rather than a panic.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum KeySlot {
+    /// Manual order size `F1`-`F6`, `0`-based.
+    OrderSize(usize),
+    /// Fixed sell `S1`-`S6`, `0`-based.
+    SellPreset(usize),
+    /// Manual strategy button `1`-`10`, `0`-based.
+    ManualStrategy(usize),
+    CancelBuy,
+    PanicSell,
+    PanicSellOne,
+    CancelAllBuys,
+    JoinSells,
+    SwitchCharts,
+    NewLong,
+    NewShort,
+    SplitOrder,
+    SplitOrderX,
+    SellsToRect,
+    ShiftBuyUp,
+    ShiftBuyDown,
+    ShiftSellUp,
+    ShiftSellDown,
+    ScalePlus,
+    ScaleMinus,
+    SwitchFigure,
+    ChartShot,
+    DrawHline,
+    DrawSegment,
+    DrawTriangle,
+    DrawChannel,
+    FigDelete,
+    FigAlert,
+    FigUndo,
+}
+
+impl KeySlot {
+    /// Every slot that is one named field rather than a member of an indexed family.
+    ///
+    /// The compiler cannot check this against the enum — a new variant left out simply goes
+    /// unenumerated. What checks it is a test that serializes the config with every slot written a
+    /// marker and looks for a stored keystroke that kept its own value: the STRUCT is the reference,
+    /// never this list, because a test that walks this list to verify this list proves nothing.
+    pub const NAMED: [Self; 26] = [
+        Self::CancelBuy,
+        Self::PanicSell,
+        Self::PanicSellOne,
+        Self::CancelAllBuys,
+        Self::JoinSells,
+        Self::SwitchCharts,
+        Self::NewLong,
+        Self::NewShort,
+        Self::SplitOrder,
+        Self::SplitOrderX,
+        Self::SellsToRect,
+        Self::ShiftBuyUp,
+        Self::ShiftBuyDown,
+        Self::ShiftSellUp,
+        Self::ShiftSellDown,
+        Self::ScalePlus,
+        Self::ScaleMinus,
+        Self::SwitchFigure,
+        Self::ChartShot,
+        Self::DrawHline,
+        Self::DrawSegment,
+        Self::DrawTriangle,
+        Self::DrawChannel,
+        Self::FigDelete,
+        Self::FigAlert,
+        Self::FigUndo,
+    ];
+
+    /// Every slot the file holds a key for, presets first.
+    ///
+    /// The ORDER is this list's own and means nothing to a dispatcher: which of two holders of one
+    /// keystroke actually fires is `hotkeys::resolve_binding`'s question, transcribed by the
+    /// settings page's clash index. Callers here only ever ask "what is bound at all".
+    pub fn all() -> Vec<Self> {
+        (0..ORDER_SIZE_KEYS)
+            .map(Self::OrderSize)
+            .chain((0..SELL_PRESET_KEYS).map(Self::SellPreset))
+            .chain((0..MANUAL_STRATEGY_KEYS).map(Self::ManualStrategy))
+            .chain(Self::NAMED)
+            .collect()
+    }
+}
+
+impl HotkeysConfig {
+    /// The keystroke stored for one slot, or `""` for a slot that binds nothing.
+    ///
+    /// An index outside its family answers `""` rather than panicking: the families are arrays, and
+    /// this is reached from a page that builds indices in loops and from a config file a user can
+    /// hand-edit.
+    pub fn key(&self, slot: KeySlot) -> &str {
+        match slot {
+            KeySlot::OrderSize(i) => self.order_size.get(i).map_or("", String::as_str),
+            KeySlot::SellPreset(i) => self.sell_preset.get(i).map_or("", String::as_str),
+            KeySlot::ManualStrategy(i) => self.manual_strategy.get(i).map_or("", String::as_str),
+            KeySlot::CancelBuy => &self.cancel_buy,
+            KeySlot::PanicSell => &self.panic_sell,
+            KeySlot::PanicSellOne => &self.panic_sell_one,
+            KeySlot::CancelAllBuys => &self.cancel_all_buys,
+            KeySlot::JoinSells => &self.join_sells,
+            KeySlot::SwitchCharts => &self.switch_charts,
+            KeySlot::NewLong => &self.new_long,
+            KeySlot::NewShort => &self.new_short,
+            KeySlot::SplitOrder => &self.split_order,
+            KeySlot::SplitOrderX => &self.split_order_x,
+            KeySlot::SellsToRect => &self.sells_to_rect,
+            KeySlot::ShiftBuyUp => &self.shift_buy_up,
+            KeySlot::ShiftBuyDown => &self.shift_buy_down,
+            KeySlot::ShiftSellUp => &self.shift_sell_up,
+            KeySlot::ShiftSellDown => &self.shift_sell_down,
+            KeySlot::ScalePlus => &self.scale_plus,
+            KeySlot::ScaleMinus => &self.scale_minus,
+            KeySlot::SwitchFigure => &self.switch_figure,
+            KeySlot::ChartShot => &self.chart_shot,
+            KeySlot::DrawHline => &self.draw_hline,
+            KeySlot::DrawSegment => &self.draw_segment,
+            KeySlot::DrawTriangle => &self.draw_triangle,
+            KeySlot::DrawChannel => &self.draw_channel,
+            KeySlot::FigDelete => &self.fig_delete,
+            KeySlot::FigAlert => &self.fig_alert,
+            KeySlot::FigUndo => &self.fig_undo,
+        }
+    }
+
+    /// Write one slot's keystroke, answering whether anything actually changed.
+    ///
+    /// The change answer is what keeps a settings render from marking the config dirty on every
+    /// keystroke that re-selects what was already there. An index outside its family writes nothing
+    /// and reports no change, matching [`Self::key`]'s reading of the same index.
+    pub fn set_key(&mut self, slot: KeySlot, value: String) -> bool {
+        let Some(target) = self.key_mut(slot) else {
+            return false;
+        };
+        if *target == value {
+            return false;
+        }
+        *target = value;
+        true
+    }
+
+    /// The stored field for one slot, or `None` for an index outside its family.
+    fn key_mut(&mut self, slot: KeySlot) -> Option<&mut String> {
+        Some(match slot {
+            KeySlot::OrderSize(i) => self.order_size.get_mut(i)?,
+            KeySlot::SellPreset(i) => self.sell_preset.get_mut(i)?,
+            KeySlot::ManualStrategy(i) => self.manual_strategy.get_mut(i)?,
+            KeySlot::CancelBuy => &mut self.cancel_buy,
+            KeySlot::PanicSell => &mut self.panic_sell,
+            KeySlot::PanicSellOne => &mut self.panic_sell_one,
+            KeySlot::CancelAllBuys => &mut self.cancel_all_buys,
+            KeySlot::JoinSells => &mut self.join_sells,
+            KeySlot::SwitchCharts => &mut self.switch_charts,
+            KeySlot::NewLong => &mut self.new_long,
+            KeySlot::NewShort => &mut self.new_short,
+            KeySlot::SplitOrder => &mut self.split_order,
+            KeySlot::SplitOrderX => &mut self.split_order_x,
+            KeySlot::SellsToRect => &mut self.sells_to_rect,
+            KeySlot::ShiftBuyUp => &mut self.shift_buy_up,
+            KeySlot::ShiftBuyDown => &mut self.shift_buy_down,
+            KeySlot::ShiftSellUp => &mut self.shift_sell_up,
+            KeySlot::ShiftSellDown => &mut self.shift_sell_down,
+            KeySlot::ScalePlus => &mut self.scale_plus,
+            KeySlot::ScaleMinus => &mut self.scale_minus,
+            KeySlot::SwitchFigure => &mut self.switch_figure,
+            KeySlot::ChartShot => &mut self.chart_shot,
+            KeySlot::DrawHline => &mut self.draw_hline,
+            KeySlot::DrawSegment => &mut self.draw_segment,
+            KeySlot::DrawTriangle => &mut self.draw_triangle,
+            KeySlot::DrawChannel => &mut self.draw_channel,
+            KeySlot::FigDelete => &mut self.fig_delete,
+            KeySlot::FigAlert => &mut self.fig_alert,
+            KeySlot::FigUndo => &mut self.fig_undo,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HotkeysConfig {
     /// File generation, for one-time fills of slots that shipped unbound.
@@ -744,40 +935,9 @@ impl HotkeysConfig {
     /// that compares them literally, as [`clear_if_duplicate`] does, misses a differently-spelled
     /// duplicate and says so where it is written.
     pub fn bound_keys(&self) -> Vec<String> {
-        let named = [
-            &self.cancel_buy,
-            &self.panic_sell,
-            &self.panic_sell_one,
-            &self.cancel_all_buys,
-            &self.join_sells,
-            &self.switch_charts,
-            &self.new_long,
-            &self.new_short,
-            &self.split_order,
-            &self.split_order_x,
-            &self.sells_to_rect,
-            &self.shift_buy_up,
-            &self.shift_buy_down,
-            &self.shift_sell_up,
-            &self.shift_sell_down,
-            &self.scale_plus,
-            &self.scale_minus,
-            &self.switch_figure,
-            &self.chart_shot,
-            &self.draw_hline,
-            &self.draw_segment,
-            &self.draw_triangle,
-            &self.draw_channel,
-            &self.fig_delete,
-            &self.fig_alert,
-            &self.fig_undo,
-        ];
-        named
+        KeySlot::all()
             .into_iter()
-            .chain(self.order_size.iter())
-            .chain(self.sell_preset.iter())
-            .chain(self.manual_strategy.iter())
-            .map(|key| key.trim().to_string())
+            .map(|slot| self.key(slot).trim().to_string())
             .filter(|key| !key.is_empty())
             .collect()
     }

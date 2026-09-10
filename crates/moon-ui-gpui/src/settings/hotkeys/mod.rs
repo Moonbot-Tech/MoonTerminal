@@ -13,40 +13,14 @@ mod pull_gestures;
 mod tab;
 
 use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
-use rust_i18n::t;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum HotkeySlot {
-    OrderSize(usize),
-    SellPreset(usize),
-    ManualStrategy(usize),
-    CancelBuy,
-    PanicSell,
-    PanicSellOne,
-    CancelAllBuys,
-    JoinSells,
-    SwitchCharts,
-    NewLong,
-    NewShort,
-    SplitOrder,
-    SplitOrderX,
-    SellsToRect,
-    ShiftBuyUp,
-    ShiftBuyDown,
-    ShiftSellUp,
-    ShiftSellDown,
-    ScalePlus,
-    ScaleMinus,
-    SwitchFigure,
-    ChartShot,
-    DrawHline,
-    DrawSegment,
-    DrawTriangle,
-    DrawChannel,
-    FigDelete,
-    FigAlert,
-    FigUndo,
-}
+/// The slot identity belongs to the config this page edits, not to the page.
+///
+/// Re-exported under the page's own name so the two hundred-odd references below read as they
+/// always did, while `moon_core` owns the one list that both its collision checks and these tables
+/// walk. See `moon_core::config::KeySlot`.
+use moon_core::config::KeySlot as HotkeySlot;
+use rust_i18n::t;
 
 /// Every slot the tab can edit, in the order `hotkeys::resolve_binding` tests them.
 ///
@@ -152,56 +126,12 @@ fn all_mouse_slots() -> [MouseSlot; 13] {
     ]
 }
 
-/// Centralizes the slot-to-`HotkeysConfig` field map formerly duplicated by the getter and setter.
-/// `$($brw)+` accepts `&` or `&mut`, while the compiler still checks the match exhaustively.
-macro_rules! hotkey_field {
-    ($hotkeys:ident, $slot:expr, $($brw:tt)+) => {
-        match $slot {
-            HotkeySlot::OrderSize(i) => $($brw)+ $hotkeys.order_size[i],
-            HotkeySlot::SellPreset(i) => $($brw)+ $hotkeys.sell_preset[i],
-            HotkeySlot::ManualStrategy(i) => $($brw)+ $hotkeys.manual_strategy[i],
-            HotkeySlot::CancelBuy => $($brw)+ $hotkeys.cancel_buy,
-            HotkeySlot::PanicSell => $($brw)+ $hotkeys.panic_sell,
-            HotkeySlot::PanicSellOne => $($brw)+ $hotkeys.panic_sell_one,
-            HotkeySlot::CancelAllBuys => $($brw)+ $hotkeys.cancel_all_buys,
-            HotkeySlot::JoinSells => $($brw)+ $hotkeys.join_sells,
-            HotkeySlot::SwitchCharts => $($brw)+ $hotkeys.switch_charts,
-            HotkeySlot::NewLong => $($brw)+ $hotkeys.new_long,
-            HotkeySlot::NewShort => $($brw)+ $hotkeys.new_short,
-            HotkeySlot::SplitOrder => $($brw)+ $hotkeys.split_order,
-            HotkeySlot::SplitOrderX => $($brw)+ $hotkeys.split_order_x,
-            HotkeySlot::SellsToRect => $($brw)+ $hotkeys.sells_to_rect,
-            HotkeySlot::ShiftBuyUp => $($brw)+ $hotkeys.shift_buy_up,
-            HotkeySlot::ShiftBuyDown => $($brw)+ $hotkeys.shift_buy_down,
-            HotkeySlot::ShiftSellUp => $($brw)+ $hotkeys.shift_sell_up,
-            HotkeySlot::ShiftSellDown => $($brw)+ $hotkeys.shift_sell_down,
-            HotkeySlot::ScalePlus => $($brw)+ $hotkeys.scale_plus,
-            HotkeySlot::ScaleMinus => $($brw)+ $hotkeys.scale_minus,
-            HotkeySlot::SwitchFigure => $($brw)+ $hotkeys.switch_figure,
-            HotkeySlot::ChartShot => $($brw)+ $hotkeys.chart_shot,
-            HotkeySlot::DrawHline => $($brw)+ $hotkeys.draw_hline,
-            HotkeySlot::DrawSegment => $($brw)+ $hotkeys.draw_segment,
-            HotkeySlot::DrawTriangle => $($brw)+ $hotkeys.draw_triangle,
-            HotkeySlot::DrawChannel => $($brw)+ $hotkeys.draw_channel,
-            HotkeySlot::FigDelete => $($brw)+ $hotkeys.fig_delete,
-            HotkeySlot::FigAlert => $($brw)+ $hotkeys.fig_alert,
-            HotkeySlot::FigUndo => $($brw)+ $hotkeys.fig_undo,
-        }
-    };
-}
-
 fn slot_value(hotkeys: &HotkeysConfig, slot: HotkeySlot) -> &str {
-    hotkey_field!(hotkeys, slot, &)
+    hotkeys.key(slot)
 }
 
 fn set_slot_value(hotkeys: &mut HotkeysConfig, slot: HotkeySlot, value: String) -> bool {
-    let target = hotkey_field!(hotkeys, slot, &mut);
-    if *target == value {
-        false
-    } else {
-        *target = value;
-        true
-    }
+    hotkeys.set_key(slot, value)
 }
 
 /// The four "Move kind" settings, one per move gesture row that owns one.
