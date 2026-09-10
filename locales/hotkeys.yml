@@ -562,21 +562,13 @@ hotkeys.draw_channel_hint:
   en: "Tool: two clicks at prices — a horizontal channel (band, like Moonbot channel)."
   es: "Herramienta: dos clics en precios — un canal horizontal (banda, como el canal de Moonbot)."
 hotkeys.fig_delete:
-  ru: "Удалить выделенную фигуру"
-  en: "Delete selected figure"
-  es: "Eliminar figura seleccionada"
+  ru: "Удалить фигуру"
+  en: "Delete figure"
+  es: "Eliminar figura"
 hotkeys.fig_delete_hint:
-  ru: "Удаляет фигуру, выделенную кликом на чарте."
-  en: "Deletes the figure selected by clicking on the chart."
-  es: "Elimina la figura seleccionada con un clic en el gráfico."
-hotkeys.mouse.fig_delete:
-  ru: "Удалить фигуру под курсором"
-  en: "Delete figure under cursor"
-  es: "Eliminar la figura bajo el cursor"
-hotkeys.mouse.fig_delete_hint:
-  ru: "Клик по фигуре удаляет её, выделять не нужно. Только фигуры этого графика."
-  en: "A click on a figure deletes it, no selection needed. This chart's own figures only."
-  es: "Un clic sobre una figura la elimina, sin seleccionarla. Solo las figuras de este gráfico."
+  ru: "Клавиша удаляет фигуру, выделенную кликом; жест — фигуру под курсором, выделять не нужно. Только фигуры этого графика."
+  en: "The key deletes the figure selected by a click; the gesture deletes the figure under the pointer, no selection needed. This chart's own figures only."
+  es: "La tecla elimina la figura seleccionada con un clic; el gesto, la figura bajo el cursor, sin seleccionarla. Solo las figuras de este gráfico."
 hotkeys.fig_alert:
   ru: "Alert на выделенной фигуре"
   en: "Alert on selected figure"

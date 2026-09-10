@@ -17,6 +17,7 @@
 //! their bare function-key or Delete forms.
 
 mod layout;
+pub mod meta;
 #[cfg(test)]
 mod tests;
 

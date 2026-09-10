@@ -1,360 +1,39 @@
 //! Hotkeys tab: a Moonbot-compatible hotkey set organized by workflow.
 //!
-//! This module owns the slot enums (`HotkeySlot`/`MouseSlot`), the slot-to-`HotkeysConfig`
-//! field mapping (getters, setters, and IDs); [`tab`] contains the
-//! `SettingsView` implementation that builds the tab and its editor rows. [`meta`] attaches the
-//! two marks every row carries; [`pull`] and [`pull_gestures`] hold the pure preview/apply logic
+//! The slots themselves live beside the data they address — `moon_core::config::KeySlot`,
+//! `GestureSlot` and `MoveKindSlot`, with the accessors on `HotkeysConfig` — and what each slot IS
+//! lives beside the dispatcher (`crate::hotkeys::meta`). This page owns only what is the page's:
+//! [`registry`] says which rows it shows and in what order, [`tab`] draws them, [`clash`] captions
+//! the ones that collide, and [`pull`] and [`pull_gestures`] hold the pure preview/apply logic
 //! behind the "pull layout from core" button — the keys and the mouse gestures respectively.
 
 mod clash;
-mod meta;
 mod pull;
 mod pull_gestures;
+mod registry;
 mod tab;
 
-use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
+use moon_core::config::{GestureSlot, HotkeysConfig, MouseGestureBinding};
 
-/// The slot identity belongs to the config this page edits, not to the page.
-///
-/// Re-exported under the page's own name so the two hundred-odd references below read as they
-/// always did, while `moon_core` owns the one list that both its collision checks and these tables
-/// walk. See `moon_core::config::KeySlot`.
-use moon_core::config::KeySlot as HotkeySlot;
-use rust_i18n::t;
-
-/// Every slot the tab can edit, in the order `hotkeys::resolve_binding` tests them.
-///
-/// Delegates to [`clash::slots_in_resolve_order`] rather than listing the slots again: that order
-/// has to exist anyway to say which of two holders of one key actually fires, and a second list
-/// beside the enum would be one more place to forget a new variant. Forgetting it in the one list
-/// that remains costs the slot its clash detection, which is loud enough to be noticed.
-#[cfg(test)]
-fn all_slots() -> Vec<HotkeySlot> {
-    clash::slots_in_resolve_order()
-}
-
-/// Hotkey groups shown as sub-tabs below the built-in block, matching Moonbot's hotkey pages.
-/// Built-ins are not a group and remain visible above the switcher.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::settings) enum HotkeyGroup {
-    Presets,
-    Trading,
-    Chart,
-    Draw,
-    OrderMove,
-    Mouse,
-    ManualStrategy,
-}
-
-impl HotkeyGroup {
-    pub(in crate::settings) const ALL: [Self; 7] = [
-        Self::Presets,
-        Self::Trading,
-        Self::Chart,
-        Self::Draw,
-        Self::OrderMove,
-        Self::Mouse,
-        Self::ManualStrategy,
-    ];
-
-    pub(in crate::settings) fn title(self) -> String {
-        match self {
-            Self::Presets => t!("hotkeys.group.presets"),
-            Self::Trading => t!("hotkeys.group.trading"),
-            Self::Chart => t!("hotkeys.group.chart"),
-            Self::Draw => t!("hotkeys.group.draw"),
-            Self::OrderMove => t!("hotkeys.group.order_move"),
-            Self::Mouse => t!("hotkeys.group.mouse"),
-            Self::ManualStrategy => t!("hotkeys.group.manual_strategy"),
-        }
-        .to_string()
-    }
-
-    /// Returns the hint shown above the active sub-tab's rows.
-    pub(in crate::settings) fn hint(self) -> String {
-        match self {
-            Self::Presets => t!("hotkeys.group.presets_hint"),
-            Self::Trading => t!("hotkeys.group.trading_hint"),
-            Self::Chart => t!("hotkeys.group.chart_hint"),
-            Self::Draw => t!("hotkeys.group.draw_hint"),
-            Self::OrderMove => t!("hotkeys.group.order_move_hint"),
-            Self::Mouse => t!("hotkeys.group.mouse_hint"),
-            Self::ManualStrategy => t!("hotkeys.group.manual_strategy_hint"),
-        }
-        .to_string()
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum MouseSlot {
-    BuySet,
-    ShortSet,
-    PendingLong,
-    PendingShort,
-    BuyMove,
-    SellMove,
-    BuyMove2,
-    SellMove2,
-    ShortBuyMove,
-    ShortSellMove,
-    ShortBuyMove2,
-    ShortSellMove2,
-    /// Deletes the figure under the cursor. The one mouse slot that is not a trading gesture: a
-    /// figure is pointed at, and only a click carries the position that says which one.
-    FigDelete,
-}
-
-/// Every gesture slot, once: the gesture pull walks it and the marks check walks it.
-///
-/// The compiler cannot enforce this list — a new variant left out simply goes unpulled and
-/// unchecked rather than failing to build. Add it here when you add it above.
-fn all_mouse_slots() -> [MouseSlot; 13] {
-    [
-        MouseSlot::BuySet,
-        MouseSlot::ShortSet,
-        MouseSlot::PendingLong,
-        MouseSlot::PendingShort,
-        MouseSlot::BuyMove,
-        MouseSlot::SellMove,
-        MouseSlot::BuyMove2,
-        MouseSlot::SellMove2,
-        MouseSlot::ShortBuyMove,
-        MouseSlot::ShortSellMove,
-        MouseSlot::ShortBuyMove2,
-        MouseSlot::ShortSellMove2,
-        MouseSlot::FigDelete,
-    ]
-}
-
-fn slot_value(hotkeys: &HotkeysConfig, slot: HotkeySlot) -> &str {
-    hotkeys.key(slot)
-}
-
-fn set_slot_value(hotkeys: &mut HotkeysConfig, slot: HotkeySlot, value: String) -> bool {
-    hotkeys.set_key(slot, value)
-}
-
-/// The four "Move kind" settings, one per move gesture row that owns one.
-///
-/// Only the long rows carry a kind: Moonbot keeps a single kind per row and lets the Long and
-/// Short columns share it, which is why the short rows show none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::settings) enum MoveKindSlot {
-    BuyMove,
-    SellMove,
-    BuyMove2,
-    SellMove2,
-}
-
-fn move_kind_slot_value(hotkeys: &HotkeysConfig, slot: MoveKindSlot) -> MoveKind {
-    match slot {
-        MoveKindSlot::BuyMove => hotkeys.buy_move_kind,
-        MoveKindSlot::SellMove => hotkeys.sell_move_kind,
-        MoveKindSlot::BuyMove2 => hotkeys.buy_move_kind2,
-        MoveKindSlot::SellMove2 => hotkeys.sell_move_kind2,
-    }
-}
-
-fn set_move_kind_slot_value(
-    hotkeys: &mut HotkeysConfig,
-    slot: MoveKindSlot,
-    value: MoveKind,
-) -> bool {
-    let field = match slot {
-        MoveKindSlot::BuyMove => &mut hotkeys.buy_move_kind,
-        MoveKindSlot::SellMove => &mut hotkeys.sell_move_kind,
-        MoveKindSlot::BuyMove2 => &mut hotkeys.buy_move_kind2,
-        MoveKindSlot::SellMove2 => &mut hotkeys.sell_move_kind2,
-    };
-    if *field == value {
-        return false;
-    }
-    *field = value;
-    true
-}
-
-fn move_kind_slot_id(slot: MoveKindSlot) -> &'static str {
-    match slot {
-        MoveKindSlot::BuyMove => "buy-move",
-        MoveKindSlot::SellMove => "sell-move",
-        MoveKindSlot::BuyMove2 => "buy-move2",
-        MoveKindSlot::SellMove2 => "sell-move2",
-    }
-}
-
-/// The gesture-field map, once, for the getter and both setters. `$($brw)+` accepts `&` or `&mut`,
-/// and the compiler still checks the match exhaustively.
-///
-/// The keyboard half of this is gone: its slots reach their fields through
-/// `moon_core::config::HotkeysConfig::key`, beside the data. The gestures have no such registry yet
-/// — that is the same debt as their missing `bound_keys`, and it is in the plan.
-macro_rules! mouse_field {
-    ($hotkeys:ident, $slot:expr, $($brw:tt)+) => {
-        match $slot {
-            MouseSlot::BuySet => $($brw)+ $hotkeys.buy_set_click,
-            MouseSlot::ShortSet => $($brw)+ $hotkeys.short_set_click,
-            MouseSlot::PendingLong => $($brw)+ $hotkeys.pending_long_click,
-            MouseSlot::PendingShort => $($brw)+ $hotkeys.pending_short_click,
-            MouseSlot::BuyMove => $($brw)+ $hotkeys.buy_move_click,
-            MouseSlot::SellMove => $($brw)+ $hotkeys.sell_move_click,
-            MouseSlot::BuyMove2 => $($brw)+ $hotkeys.buy_move_click2,
-            MouseSlot::SellMove2 => $($brw)+ $hotkeys.sell_move_click2,
-            MouseSlot::ShortBuyMove => $($brw)+ $hotkeys.short_buy_move_click,
-            MouseSlot::ShortSellMove => $($brw)+ $hotkeys.short_sell_move_click,
-            MouseSlot::ShortBuyMove2 => $($brw)+ $hotkeys.short_buy_move_click2,
-            MouseSlot::ShortSellMove2 => $($brw)+ $hotkeys.short_sell_move_click2,
-            MouseSlot::FigDelete => $($brw)+ $hotkeys.fig_delete_click,
-        }
-    };
-}
-
-fn mouse_slot_value(hotkeys: &HotkeysConfig, slot: MouseSlot) -> MouseGestureBinding {
-    *mouse_field!(hotkeys, slot, &)
-}
-
-/// Writes one gesture field and NOTHING else — no mirroring, whatever the "same for move" flag
-/// says.
-///
-/// The pull needs this and the editor must not have it. A pull carries a whole layout, long rows
-/// and short rows together, and the mirroring setter would let a long row overwrite a short value
-/// the preview had already decided to leave alone: with the flag on locally and off at the core,
-/// writing the long side mirrors onto the short one, and the short row that would have repaired it
-/// is skipped as `Unchanged`. Verbatim is also simply what a layout transfer means.
-fn set_mouse_slot_verbatim(
-    hotkeys: &mut HotkeysConfig,
-    slot: MouseSlot,
-    value: MouseGestureBinding,
-) -> bool {
-    set_mouse_field(mouse_field!(hotkeys, slot, &mut), value)
-}
-
-/// The short row a long move row mirrors onto while "same for move" is set.
-///
-/// Only the four long move rows have one; every other slot stands alone, which is why the settings
-/// tab shows a kind column on those four and greys the short ones out.
-fn short_move_twin(slot: MouseSlot) -> Option<MouseSlot> {
-    Some(match slot {
-        MouseSlot::BuyMove => MouseSlot::ShortBuyMove,
-        MouseSlot::SellMove => MouseSlot::ShortSellMove,
-        MouseSlot::BuyMove2 => MouseSlot::ShortBuyMove2,
-        MouseSlot::SellMove2 => MouseSlot::ShortSellMove2,
-        _ => return None,
-    })
-}
+pub(in crate::settings) use registry::HotkeyGroup;
 
 /// Writes one gesture the way the EDITOR must: carrying the mirror "same for move" demands.
 ///
 /// The mirror is Moonbot's own behaviour and the reason the short rows are greyed out while the
-/// flag is on. [`set_mouse_slot_verbatim`] is the other half — see there for why a layout transfer
-/// must not use this one.
-fn set_mouse_slot_value(
+/// flag is on. `HotkeysConfig::set_gesture` is the other half — it writes one field and nothing
+/// else, which is what a layout transfer needs: a pull carries long rows and short rows together,
+/// and mirroring the long write would overwrite a short value the preview had already decided to
+/// leave alone.
+fn set_gesture_mirrored(
     hotkeys: &mut HotkeysConfig,
-    slot: MouseSlot,
+    slot: GestureSlot,
     value: MouseGestureBinding,
 ) -> bool {
-    let mut changed = set_mouse_slot_verbatim(hotkeys, slot, value);
+    let mut changed = hotkeys.set_gesture(slot, value);
     if hotkeys.same_hotkeys_for_move
-        && let Some(twin) = short_move_twin(slot)
+        && let Some(twin) = slot.short_twin()
     {
-        changed |= set_mouse_slot_verbatim(hotkeys, twin, value);
+        changed |= hotkeys.set_gesture(twin, value);
     }
     changed
-}
-
-fn set_mouse_field(field: &mut MouseGestureBinding, value: MouseGestureBinding) -> bool {
-    if *field == value {
-        false
-    } else {
-        *field = value;
-        true
-    }
-}
-
-fn mouse_slot_id(slot: MouseSlot) -> &'static str {
-    match slot {
-        MouseSlot::BuySet => "buy-set",
-        MouseSlot::ShortSet => "short-set",
-        MouseSlot::PendingLong => "pending-long",
-        MouseSlot::PendingShort => "pending-short",
-        MouseSlot::BuyMove => "buy-move",
-        MouseSlot::SellMove => "sell-move",
-        MouseSlot::BuyMove2 => "buy-move2",
-        MouseSlot::SellMove2 => "sell-move2",
-        MouseSlot::ShortBuyMove => "short-buy-move",
-        MouseSlot::ShortSellMove => "short-sell-move",
-        MouseSlot::ShortBuyMove2 => "short-buy-move2",
-        MouseSlot::ShortSellMove2 => "short-sell-move2",
-        MouseSlot::FigDelete => "fig-delete",
-    }
-}
-
-fn slot_id(slot: HotkeySlot) -> String {
-    match slot {
-        HotkeySlot::OrderSize(i) => format!("order-size-{i}"),
-        HotkeySlot::SellPreset(i) => format!("sell-preset-{i}"),
-        HotkeySlot::ManualStrategy(i) => format!("manual-strategy-{i}"),
-        HotkeySlot::CancelBuy => "cancel-buy".into(),
-        HotkeySlot::PanicSell => "panic-sell".into(),
-        HotkeySlot::PanicSellOne => "panic-sell-one".into(),
-        HotkeySlot::CancelAllBuys => "cancel-all-buys".into(),
-        HotkeySlot::JoinSells => "join-sells".into(),
-        HotkeySlot::SwitchCharts => "switch-charts".into(),
-        HotkeySlot::NewLong => "new-long".into(),
-        HotkeySlot::NewShort => "new-short".into(),
-        HotkeySlot::SplitOrder => "split-order".into(),
-        HotkeySlot::SplitOrderX => "split-order-x".into(),
-        HotkeySlot::SellsToRect => "sells-to-rect".into(),
-        HotkeySlot::ShiftBuyUp => "shift-buy-up".into(),
-        HotkeySlot::ShiftBuyDown => "shift-buy-down".into(),
-        HotkeySlot::ShiftSellUp => "shift-sell-up".into(),
-        HotkeySlot::ShiftSellDown => "shift-sell-down".into(),
-        HotkeySlot::ScalePlus => "scale-plus".into(),
-        HotkeySlot::ScaleMinus => "scale-minus".into(),
-        HotkeySlot::SwitchFigure => "switch-figure".into(),
-        HotkeySlot::ChartShot => "chart-shot".into(),
-        HotkeySlot::DrawHline => "draw-hline".into(),
-        HotkeySlot::DrawSegment => "draw-segment".into(),
-        HotkeySlot::DrawTriangle => "draw-triangle".into(),
-        HotkeySlot::DrawChannel => "draw-channel".into(),
-        HotkeySlot::FigDelete => "fig-delete".into(),
-        HotkeySlot::FigAlert => "fig-alert".into(),
-        HotkeySlot::FigUndo => "fig-undo".into(),
-    }
-}
-
-/// Compact identity label for one hotkey slot — the same title `group_rows` gives this slot's own
-/// editor row, e.g. `"F3"` or the localized action name. Lets the pull preview name each row this
-/// way too, so two visually identical `F1 -> F2 will apply` rows can be told apart.
-fn slot_label(slot: HotkeySlot) -> String {
-    match slot {
-        HotkeySlot::OrderSize(i) => format!("F{}", i + 1),
-        HotkeySlot::SellPreset(i) => format!("S{}", i + 1),
-        HotkeySlot::ManualStrategy(i) => t!("hotkeys.manual_strategy", n = i + 1).to_string(),
-        HotkeySlot::CancelBuy => t!("hotkeys.cancel_buy").to_string(),
-        HotkeySlot::PanicSell => t!("hotkeys.panic_sell").to_string(),
-        HotkeySlot::PanicSellOne => t!("hotkeys.panic_sell_one").to_string(),
-        HotkeySlot::CancelAllBuys => t!("hotkeys.cancel_all_buys").to_string(),
-        HotkeySlot::JoinSells => t!("hotkeys.join_sells").to_string(),
-        HotkeySlot::SwitchCharts => t!("hotkeys.switch_charts").to_string(),
-        HotkeySlot::NewLong => t!("hotkeys.new_long").to_string(),
-        HotkeySlot::NewShort => t!("hotkeys.new_short").to_string(),
-        HotkeySlot::SplitOrder => t!("hotkeys.split_order").to_string(),
-        HotkeySlot::SplitOrderX => t!("hotkeys.split_order_x").to_string(),
-        HotkeySlot::SellsToRect => t!("hotkeys.sells_to_rect").to_string(),
-        HotkeySlot::ShiftBuyUp => t!("hotkeys.shift_buy_up").to_string(),
-        HotkeySlot::ShiftBuyDown => t!("hotkeys.shift_buy_down").to_string(),
-        HotkeySlot::ShiftSellUp => t!("hotkeys.shift_sell_up").to_string(),
-        HotkeySlot::ShiftSellDown => t!("hotkeys.shift_sell_down").to_string(),
-        HotkeySlot::ScalePlus => t!("hotkeys.scale_plus").to_string(),
-        HotkeySlot::ScaleMinus => t!("hotkeys.scale_minus").to_string(),
-        HotkeySlot::SwitchFigure => t!("hotkeys.switch_figure").to_string(),
-        HotkeySlot::ChartShot => t!("hotkeys.chart_shot").to_string(),
-        HotkeySlot::DrawHline => t!("hotkeys.draw_hline").to_string(),
-        HotkeySlot::DrawSegment => t!("hotkeys.draw_segment").to_string(),
-        HotkeySlot::DrawTriangle => t!("hotkeys.draw_triangle").to_string(),
-        HotkeySlot::DrawChannel => t!("hotkeys.draw_channel").to_string(),
-        HotkeySlot::FigDelete => t!("hotkeys.fig_delete").to_string(),
-        HotkeySlot::FigAlert => t!("hotkeys.fig_alert").to_string(),
-        HotkeySlot::FigUndo => t!("hotkeys.fig_undo").to_string(),
-    }
 }

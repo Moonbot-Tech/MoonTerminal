@@ -1,13 +1,15 @@
 //! Builds the Hotkeys tab in a Moonbot-style layout: an always-visible block of hard-coded
 //! built-in hotkeys, a group sub-tab switcher (`SettingsView.hotkeys_group`), and the active
-//! group's rows. Single-row editors (`hotkey_row`, `mouse_row`, and `same_move_checkbox`) update
-//! the draft.
+//! group's rows — read off [`super::registry`], which is the one place that says what the page
+//! shows and in what order. The row editors (`slot_row`, `split_parts_row`, `same_move_checkbox`)
+//! update the draft.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::config::moonbot_import::shortcut;
 use moon_core::config::{
-    HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, MoveKind, ORDER_SIZE_KEYS,
-    SELL_PRESET_KEYS, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKind, MoveKindSlot,
+    SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
@@ -19,16 +21,12 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::clash::{Clash, Clashes, Severity};
-use super::meta::{self, Origin, SlotMeta, key_slot_meta, mouse_slot_meta};
 use super::pull::{PullRow, PullVerdict, apply_core_hotkeys, preview_core_hotkeys};
 use super::pull_gestures::{self, GesturePullRow, apply_core_gestures, preview_core_gestures};
-use super::{
-    HotkeyGroup, HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, mouse_slot_id,
-    mouse_slot_value, move_kind_slot_id, move_kind_slot_value, set_mouse_slot_value,
-    set_mouse_slot_verbatim, set_move_kind_slot_value, set_slot_value, short_move_twin, slot_id,
-    slot_label, slot_value,
-};
+use super::registry::{self, HotkeyGroup, Row, SlotSpec};
+use super::set_gesture_mirrored;
 use crate::design;
+use crate::hotkeys::meta::{self, Origin, SlotMeta};
 use crate::settings::SettingsView;
 
 /// Logical width reserved for every hotkey row title.
@@ -188,409 +186,28 @@ impl SettingsView {
 
     /// Builds the active group's sub-tab rows.
     ///
-    /// The supplied hotkey snapshot is cloned locally before its values are passed to row builders.
+    /// The registry says what is on the page and in what order; this only draws it. The three rows
+    /// that are not slots are placed by the same list, so no group has an order of its own here.
     fn group_rows(
         &self,
         group: HotkeyGroup,
         hotkeys: &HotkeysConfig,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
-        let hotkeys = hotkeys.clone();
         // Built once for the whole group rather than per row: it is an index over every slot, and
         // asking it forty-six times to rebuild itself forty-six times would be the same answer at
         // forty-six times the price.
-        let clashes = Clashes::build(&hotkeys);
-        match group {
-            HotkeyGroup::Presets => (0..ORDER_SIZE_KEYS)
-                .map(|i| {
-                    let title = format!("F{}", i + 1);
-                    let desc = t!("hotkeys.order_size", n = i + 1).to_string();
-                    self.hotkey_row(
-                        title,
-                        desc,
-                        HotkeySlot::OrderSize(i),
-                        &hotkeys,
-                        &clashes,
-                        cx,
-                    )
-                })
-                .chain((0..SELL_PRESET_KEYS).map(|i| {
-                    let title = format!("S{}", i + 1);
-                    let desc = t!("hotkeys.sell_preset", n = i + 1).to_string();
-                    self.hotkey_row(
-                        title,
-                        desc,
-                        HotkeySlot::SellPreset(i),
-                        &hotkeys,
-                        &clashes,
-                        cx,
-                    )
-                }))
-                .collect(),
-            HotkeyGroup::Trading => vec![
-                self.hotkey_row(
-                    t!("hotkeys.cancel_buy").to_string(),
-                    t!("hotkeys.cancel_buy_hint").to_string(),
-                    HotkeySlot::CancelBuy,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.panic_sell").to_string(),
-                    t!("hotkeys.panic_sell_hint").to_string(),
-                    HotkeySlot::PanicSell,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.panic_sell_one").to_string(),
-                    t!("hotkeys.panic_sell_one_hint").to_string(),
-                    HotkeySlot::PanicSellOne,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.cancel_all_buys").to_string(),
-                    t!("hotkeys.cancel_all_buys_hint").to_string(),
-                    HotkeySlot::CancelAllBuys,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.join_sells").to_string(),
-                    t!("hotkeys.join_sells_hint").to_string(),
-                    HotkeySlot::JoinSells,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.new_long").to_string(),
-                    t!("hotkeys.new_long_hint").to_string(),
-                    HotkeySlot::NewLong,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.new_short").to_string(),
-                    t!("hotkeys.new_short_hint").to_string(),
-                    HotkeySlot::NewShort,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.split_order").to_string(),
-                    t!("hotkeys.split_order_hint", n = SPLIT_ORDER_PARTS).to_string(),
-                    HotkeySlot::SplitOrder,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.split_order_x").to_string(),
-                    t!("hotkeys.split_order_x_hint").to_string(),
-                    HotkeySlot::SplitOrderX,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.split_parts_row(&hotkeys, cx),
-                self.hotkey_row(
-                    t!("hotkeys.sells_to_rect").to_string(),
-                    t!("hotkeys.sells_to_rect_hint").to_string(),
-                    HotkeySlot::SellsToRect,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-            ],
-            HotkeyGroup::Chart => vec![
-                self.hotkey_row(
-                    t!("hotkeys.switch_charts").to_string(),
-                    t!("hotkeys.switch_charts_hint").to_string(),
-                    HotkeySlot::SwitchCharts,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.scale_plus").to_string(),
-                    t!("hotkeys.scale_plus_hint").to_string(),
-                    HotkeySlot::ScalePlus,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.scale_minus").to_string(),
-                    t!("hotkeys.scale_minus_hint").to_string(),
-                    HotkeySlot::ScaleMinus,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.chart_shot").to_string(),
-                    t!("hotkeys.chart_shot_hint").to_string(),
-                    HotkeySlot::ChartShot,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-            ],
-            HotkeyGroup::Draw => vec![
-                self.hotkey_row(
-                    t!("hotkeys.switch_figure").to_string(),
-                    t!("hotkeys.switch_figure_hint").to_string(),
-                    HotkeySlot::SwitchFigure,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.draw_hline").to_string(),
-                    t!("hotkeys.draw_hline_hint").to_string(),
-                    HotkeySlot::DrawHline,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.draw_segment").to_string(),
-                    t!("hotkeys.draw_segment_hint").to_string(),
-                    HotkeySlot::DrawSegment,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.draw_triangle").to_string(),
-                    t!("hotkeys.draw_triangle_hint").to_string(),
-                    HotkeySlot::DrawTriangle,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.draw_channel").to_string(),
-                    t!("hotkeys.draw_channel_hint").to_string(),
-                    HotkeySlot::DrawChannel,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.fig_delete").to_string(),
-                    t!("hotkeys.fig_delete_hint").to_string(),
-                    HotkeySlot::FigDelete,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.fig_alert").to_string(),
-                    t!("hotkeys.fig_alert_hint").to_string(),
-                    HotkeySlot::FigAlert,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.fig_undo").to_string(),
-                    t!("hotkeys.fig_undo_hint").to_string(),
-                    HotkeySlot::FigUndo,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.fig_delete").to_string(),
-                    t!("hotkeys.mouse.fig_delete_hint").to_string(),
-                    MouseSlot::FigDelete,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-            ],
-            HotkeyGroup::OrderMove => vec![
-                self.hotkey_row(
-                    t!("hotkeys.shift_buy_up").to_string(),
-                    t!("hotkeys.shift_buy_up_hint").to_string(),
-                    HotkeySlot::ShiftBuyUp,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.shift_buy_down").to_string(),
-                    t!("hotkeys.shift_buy_down_hint").to_string(),
-                    HotkeySlot::ShiftBuyDown,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.shift_sell_up").to_string(),
-                    t!("hotkeys.shift_sell_up_hint").to_string(),
-                    HotkeySlot::ShiftSellUp,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-                self.hotkey_row(
-                    t!("hotkeys.shift_sell_down").to_string(),
-                    t!("hotkeys.shift_sell_down_hint").to_string(),
-                    HotkeySlot::ShiftSellDown,
-                    &hotkeys,
-                    &clashes,
-                    cx,
-                ),
-            ],
-            HotkeyGroup::Mouse => vec![
-                self.mouse_row(
-                    t!("hotkeys.mouse.buy_set").to_string(),
-                    t!("hotkeys.mouse.buy_set_hint").to_string(),
-                    MouseSlot::BuySet,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.short_set").to_string(),
-                    t!("hotkeys.mouse.short_set_hint").to_string(),
-                    MouseSlot::ShortSet,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.pending_long").to_string(),
-                    t!("hotkeys.mouse.pending_long_hint").to_string(),
-                    MouseSlot::PendingLong,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.pending_short").to_string(),
-                    t!("hotkeys.mouse.pending_short_hint").to_string(),
-                    MouseSlot::PendingShort,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.buy_move").to_string(),
-                    t!("hotkeys.mouse.buy_move_hint").to_string(),
-                    MouseSlot::BuyMove,
-                    Some(MoveKindSlot::BuyMove),
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.sell_move").to_string(),
-                    t!("hotkeys.mouse.sell_move_hint").to_string(),
-                    MouseSlot::SellMove,
-                    Some(MoveKindSlot::SellMove),
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.buy_move2").to_string(),
-                    t!("hotkeys.mouse.buy_move2_hint").to_string(),
-                    MouseSlot::BuyMove2,
-                    Some(MoveKindSlot::BuyMove2),
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.sell_move2").to_string(),
-                    t!("hotkeys.mouse.sell_move2_hint").to_string(),
-                    MouseSlot::SellMove2,
-                    Some(MoveKindSlot::SellMove2),
-                    &hotkeys,
-                    &clashes,
-                    false,
-                    cx,
-                ),
-                self.same_move_checkbox(&hotkeys, cx),
-                self.mouse_row(
-                    t!("hotkeys.mouse.short_buy_move").to_string(),
-                    t!("hotkeys.mouse.short_buy_move_hint").to_string(),
-                    MouseSlot::ShortBuyMove,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    hotkeys.same_hotkeys_for_move,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.short_sell_move").to_string(),
-                    t!("hotkeys.mouse.short_sell_move_hint").to_string(),
-                    MouseSlot::ShortSellMove,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    hotkeys.same_hotkeys_for_move,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.short_buy_move2").to_string(),
-                    t!("hotkeys.mouse.short_buy_move2_hint").to_string(),
-                    MouseSlot::ShortBuyMove2,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    hotkeys.same_hotkeys_for_move,
-                    cx,
-                ),
-                self.mouse_row(
-                    t!("hotkeys.mouse.short_sell_move2").to_string(),
-                    t!("hotkeys.mouse.short_sell_move2_hint").to_string(),
-                    MouseSlot::ShortSellMove2,
-                    None,
-                    &hotkeys,
-                    &clashes,
-                    hotkeys.same_hotkeys_for_move,
-                    cx,
-                ),
-            ],
-            HotkeyGroup::ManualStrategy => (0..MANUAL_STRATEGY_KEYS)
-                .map(|i| {
-                    self.hotkey_row(
-                        t!("hotkeys.manual_strategy", n = i + 1).to_string(),
-                        t!("hotkeys.manual_strategy_hint", n = i + 1).to_string(),
-                        HotkeySlot::ManualStrategy(i),
-                        &hotkeys,
-                        &clashes,
-                        cx,
-                    )
-                })
-                .chain(self.core_pull_section(&hotkeys, cx))
-                .collect(),
+        let clashes = Clashes::build(hotkeys);
+        let mut out = Vec::new();
+        for row in registry::rows().iter().filter(|row| row.group() == group) {
+            match *row {
+                Row::Slot(spec) => out.push(self.slot_row(spec, hotkeys, &clashes, cx)),
+                Row::SplitParts => out.push(self.split_parts_row(hotkeys, cx)),
+                Row::SameForMove => out.push(self.same_move_checkbox(hotkeys, cx)),
+                Row::CorePull => out.extend(self.core_pull_section(hotkeys, cx)),
+            }
         }
+        out
     }
 
     /// Builds a text-only row for a hard-coded, non-configurable hotkey, matching Moonbot's
@@ -698,177 +315,152 @@ impl SettingsView {
         )
     }
 
-    /// Build one keyboard shortcut row with the editor in the tab's shared control column.
+    /// Builds one editor row: title, marks, description, and the editors the row carries — a
+    /// hotkey field, a gesture dropdown with its kind selector, or both.
+    ///
+    /// One builder for every row, because a row is now defined by WHICH editors it has and not by
+    /// which kind: the figure-delete row carries both, and every action that gets a mouse half will
+    /// look like it. The trailing controls sit in a block of fixed-width cells, reserved on every
+    /// row that has a gesture editor, empty ones included — that is what keeps the columns aligned
+    /// when one row carries a kind dropdown and the next does not.
     ///
     /// Args:
-    ///     title: Shortcut label shown in the fixed title column.
-    ///     desc: Localized explanation that wraps within its description column.
-    ///     slot: Hotkey configuration slot edited by the input.
-    ///     hotkeys: Draft configuration used to show the current binding and conflicts.
+    ///     spec: The row, from the registry.
+    ///     hotkeys: Draft configuration used to show the current bindings and conflicts.
+    ///     clashes: The group's conflict index.
     ///     cx: Settings context used for palette, scaling, and input events.
     ///
     /// Returns:
-    ///     The rendered shortcut row.
-    fn hotkey_row(
+    ///     The rendered row.
+    fn slot_row(
         &self,
-        title: impl Into<String>,
-        desc: impl Into<String>,
-        slot: HotkeySlot,
+        spec: SlotSpec,
         hotkeys: &HotkeysConfig,
         clashes: &Clashes,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // Most rows title themselves with a localized phrase, but the preset slots title
-        // themselves with their own IDENTITY -- `F3`, `S2` -- which is a value, and `core_pull_row`
-        // pins that same string mono. Read it off the slot the row already carries rather than
-        // asking every call site to declare it: the two that pass an identity are exactly the two
-        // preset variants.
-        let title_is_identity =
-            matches!(slot, HotkeySlot::OrderSize(_) | HotkeySlot::SellPreset(_));
-        let raw = slot_value(hotkeys, slot);
-        let parsed = crate::hotkeys::parse_binding(raw);
-        let invalid = !raw.trim().is_empty() && parsed.is_none();
+        // A greyed short row follows its long twin, so a clash reported on it would name a binding
+        // the row does not own.
+        let disabled = spec.follows_mirror() && hotkeys.same_hotkeys_for_move;
+        // Every note this row prints goes under the description, rather than in a column of its
+        // own on the far right — which put it a screen away from the sentence it belongs beside.
+        let mut notes: Vec<Clash> = Vec::new();
+        if let Some(key) = spec.key() {
+            notes.extend(clashes.key(hotkeys, key));
+        }
+        if let Some(mouse) = spec.mouse()
+            && !disabled
+        {
+            notes.extend(clashes.mouse(hotkeys, mouse));
+        }
 
-        let id = format!("hotkey-{}", slot_id(slot));
-        let clash = clashes.key(hotkeys, slot);
-
-        self.row_head(
-            title.into(),
-            desc.into(),
-            Some(key_slot_meta(slot)),
-            title_is_identity,
-            false,
-            clash.clone().into_iter().collect(),
+        let row = self.row_head(
+            spec.title(),
+            spec.hint(),
+            Some(spec.meta()),
+            spec.title_is_identity(),
+            disabled,
+            notes,
             cx,
-        )
-        .child(control_cell(
-            MoonHotkeyInput::new(id)
-                .value(parsed)
-                .placeholder(t!("hotkeys.unassigned").to_string())
-                .recording_placeholder(t!("hotkeys.recording").to_string())
-                .invalid(invalid)
-                // No `.conflict()`: the component paints that frame AMBER and stamps an
-                // unlocalized "conflict" badge inside the field, and amber is this page's
-                // "both work" tone. The caption below the description carries the whole
-                // answer, in the right colour and in words.
-                .compact()
-                .width(ROW_EDITOR_WIDTH)
-                .on_change(
-                    cx.processor(move |this, value: Option<Keystroke>, _window, cx| {
-                        // Store the PHYSICAL key: a letter recorded under a Cyrillic layout
-                        // would otherwise be saved as that layout's character.
-                        let value = value
-                            .map(|k| crate::hotkeys::recorded_keystroke(k).unparse())
-                            .unwrap_or_default();
-                        this.set_hotkey(slot, value, cx);
+        );
+        row.when_some(spec.key(), |row, key| {
+            row.child(control_cell(self.hotkey_input(key, hotkeys, cx), cx))
+        })
+        .when_some(spec.mouse(), |row, mouse| {
+            row.child(
+                h_flex()
+                    .flex_none()
+                    .gap(design::ui_px(cx, 10.0))
+                    .items_center()
+                    .child(control_cell(
+                        self.gesture_dropdown(mouse, hotkeys, disabled, cx),
+                        cx,
+                    ))
+                    .child(match spec.kind() {
+                        Some(kind) => sized_cell(
+                            self.move_kind_dropdown(kind, hotkeys, disabled, cx),
+                            ROW_CONTROL_WIDTH + ROW_KIND_EXTRA,
+                            cx,
+                        ),
+                        None => div()
+                            .flex_none()
+                            .w(design::ui_px(cx, ROW_CONTROL_WIDTH + ROW_KIND_EXTRA)),
                     }),
-                ),
-            cx,
-        ))
+            )
+        })
         .into_any_element()
     }
 
-    /// Build one mouse-gesture row with a binding and, for move rows, a "Move kind" selector.
-    /// The trailing controls wrap at narrow widths rather than clipping.
-    ///
-    /// Args:
-    ///     title: Row label.
-    ///     desc: Row description.
-    ///     slot: Gesture slot the first dropdown edits.
-    ///     kind_slot: Move-kind slot for a move row, or `None` for a row that has no kind — the
-    ///         placement rows, and the short rows, which share the long row's kind exactly as
-    ///         Moonbot's single kind column does.
-    ///     hotkeys: Configuration being edited.
-    ///     disabled: Whether the row is inert because the mirror flag owns it.
-    ///     cx: Settings context.
-    ///
-    /// Returns:
-    ///     The rendered row.
-    #[allow(clippy::too_many_arguments)]
-    fn mouse_row(
+    /// The keystroke editor of one row.
+    fn hotkey_input(
         &self,
-        title: impl Into<String>,
-        desc: impl Into<String>,
-        slot: MouseSlot,
-        kind_slot: Option<MoveKindSlot>,
+        slot: KeySlot,
         hotkeys: &HotkeysConfig,
-        clashes: &Clashes,
-        disabled: bool,
         cx: &Context<Self>,
-    ) -> AnyElement {
-        let current = mouse_slot_value(hotkeys, slot);
-        let id = format!("mouse-{}", mouse_slot_id(slot));
+    ) -> MoonHotkeyInput {
+        let raw = hotkeys.key(slot);
+        let parsed = crate::hotkeys::parse_binding(raw);
+        let invalid = !raw.trim().is_empty() && parsed.is_none();
+        MoonHotkeyInput::new(format!("hotkey-{}", registry::key_id(slot)))
+            .value(parsed)
+            .placeholder(t!("hotkeys.unassigned").to_string())
+            .recording_placeholder(t!("hotkeys.recording").to_string())
+            .invalid(invalid)
+            // No `.conflict()`: the component paints that frame AMBER and stamps an unlocalized
+            // "conflict" badge inside the field, and amber is this page's "both work" tone. The
+            // caption below the description carries the whole answer, in the right colour and in
+            // words.
+            .compact()
+            .width(ROW_EDITOR_WIDTH)
+            .on_change(
+                cx.processor(move |this, value: Option<Keystroke>, _window, cx| {
+                    // Store the PHYSICAL key: a letter recorded under a Cyrillic layout would
+                    // otherwise be saved as that layout's character.
+                    let value = value
+                        .map(|k| crate::hotkeys::recorded_keystroke(k).unparse())
+                        .unwrap_or_default();
+                    this.set_hotkey(slot, value, cx);
+                }),
+            )
+    }
+
+    /// The gesture editor of one row.
+    fn gesture_dropdown(
+        &self,
+        slot: GestureSlot,
+        hotkeys: &HotkeysConfig,
+        disabled: bool,
+        cx: &App,
+    ) -> MoonDropdown {
+        let current = hotkeys.gesture(slot);
         let backend = self.backend.clone();
-        // Every note this row prints goes under the description, rather than in a column of its
-        // own on the far right — which put it a screen away from the sentence it belongs beside.
-        //
-        // A greyed short row follows its long twin, so a clash reported on it would name a binding
-        // the row does not own.
-        let notes = if disabled {
-            Vec::new()
-        } else {
-            clashes.mouse(hotkeys, slot)
-        };
         let items = MouseGestureBinding::ALL.into_iter().map(move |gesture| {
             let backend = backend.clone();
             MoonMenuItem::with_key(gesture.config_value(), gesture.menu_label())
                 .checked(gesture == current)
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
-                        if let Some(p) = b.preview.as_mut() {
-                            if set_mouse_slot_value(&mut p.hotkeys, slot, gesture) {
-                                bcx.notify();
-                            }
+                        if let Some(p) = b.preview.as_mut()
+                            && set_gesture_mirrored(&mut p.hotkeys, slot, gesture)
+                        {
+                            bcx.notify();
                         }
                     });
                 })
         });
-
-        // One line, with the trailing controls in a block of their own.
-        //
-        // The block is what makes the columns line up. Before it, a gesture row's first dropdown
-        // started wherever the row above happened to leave it: rows carry a different NUMBER of
-        // trailing controls — a kind dropdown here, a status note there — and a wider tail pushed
-        // everything left of it. Every cell inside the block is reserved on every row, empty ones
-        // included, so the block is one width and the columns hold.
-        self.row_head(
-            title.into(),
-            desc.into(),
-            Some(mouse_slot_meta(slot)),
-            false,
-            disabled,
-            notes,
+        Self::row_dropdown(
+            format!("mouse-{}", registry::gesture_id(slot)),
+            current.label(),
             cx,
         )
-        .child(
-            h_flex()
-                .flex_none()
-                .gap(design::ui_px(cx, 10.0))
-                .items_center()
-                .child(control_cell(
-                    Self::row_dropdown(id, current.label(), cx)
-                        .trigger_variant(if current == MouseGestureBinding::None {
-                            MoonButtonVariant::Neutral
-                        } else {
-                            MoonButtonVariant::Blue
-                        })
-                        .menu_width_scaled(228.0)
-                        .disabled(disabled)
-                        .items(items),
-                    cx,
-                ))
-                .child(match kind_slot {
-                    Some(kind_slot) => sized_cell(
-                        self.move_kind_dropdown(kind_slot, hotkeys, disabled, cx),
-                        ROW_CONTROL_WIDTH + ROW_KIND_EXTRA,
-                        cx,
-                    ),
-                    None => div()
-                        .flex_none()
-                        .w(design::ui_px(cx, ROW_CONTROL_WIDTH + ROW_KIND_EXTRA)),
-                }),
-        )
-        .into_any_element()
+        .trigger_variant(if current == MouseGestureBinding::None {
+            MoonButtonVariant::Neutral
+        } else {
+            MoonButtonVariant::Blue
+        })
+        .menu_width_scaled(228.0)
+        .disabled(disabled)
+        .items(items)
     }
 
     /// The "Move kind" selector of one move row — Moonbot's column of the same name.
@@ -883,7 +475,7 @@ impl SettingsView {
         disabled: bool,
         cx: &App,
     ) -> impl IntoElement {
-        let current = move_kind_slot_value(hotkeys, slot);
+        let current = hotkeys.move_kind(slot);
         let backend = self.backend.clone();
         let items = MoveKind::ALL.into_iter().map(move |kind| {
             let backend = backend.clone();
@@ -893,7 +485,7 @@ impl SettingsView {
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
                         if let Some(p) = b.preview.as_mut()
-                            && set_move_kind_slot_value(&mut p.hotkeys, slot, kind)
+                            && p.hotkeys.set_move_kind(slot, kind)
                         {
                             bcx.notify();
                         }
@@ -902,7 +494,8 @@ impl SettingsView {
         });
         let current_key = current.locale_key();
         Self::row_dropdown(
-            format!("move-kind-{}", move_kind_slot_id(slot)),
+            // The kind is named after the gesture row it sits on.
+            format!("move-kind-{}", registry::gesture_id(slot.half(false))),
             t!(&current_key).to_string(),
             cx,
         )
@@ -1092,11 +685,9 @@ impl SettingsView {
                                     // Mirrors only on the way ON, which is what Moonbot's own
                                     // dialog does. The pull re-aims in both directions, because
                                     // there a short row can go live with a value nothing wrote.
-                                    for slot in all_mouse_slots() {
-                                        if let Some(twin) = short_move_twin(slot) {
-                                            let long = mouse_slot_value(&p.hotkeys, slot);
-                                            set_mouse_slot_verbatim(&mut p.hotkeys, twin, long);
-                                        }
+                                    for row in MoveKindSlot::ALL {
+                                        let long = p.hotkeys.gesture(row.half(false));
+                                        p.hotkeys.set_gesture(row.half(true), long);
                                     }
                                 }
                                 if changed {
@@ -1109,11 +700,11 @@ impl SettingsView {
             .into_any_element()
     }
 
-    fn set_hotkey(&mut self, slot: HotkeySlot, value: String, cx: &mut Context<Self>) {
+    fn set_hotkey(&mut self, slot: KeySlot, value: String, cx: &mut Context<Self>) {
         let changed = self.backend.update(cx, |b, bcx| {
             let mut changed = false;
             if let Some(p) = b.preview.as_mut() {
-                changed = set_slot_value(&mut p.hotkeys, slot, value);
+                changed = p.hotkeys.set_key(slot, value);
                 if changed {
                     bcx.notify();
                 }
@@ -1239,7 +830,7 @@ impl SettingsView {
     /// key (`MoonHotkeyInput`, read-only), the core's incoming key (`MoonKbd`), and the verdict.
     fn core_pull_row(&self, row: &PullRow, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
-        let id = format!("core-pull-{}", slot_id(row.slot));
+        let id = format!("core-pull-{}", registry::key_id(row.slot));
         let (verdict_text, verdict_color): (String, u32) = match row.verdict {
             PullVerdict::Empty => (t!("hotkeys.pull.verdict.empty").to_string(), p.text_muted),
             PullVerdict::Unsupported => {
@@ -1272,7 +863,7 @@ impl SettingsView {
                     .font_family(design::mono())
                     .text_size(design::t_caption(cx))
                     .text_color(rgba_from(p.text, 1.0))
-                    .child(slot_label(row.slot)),
+                    .child(registry::key_title(row.slot)),
             )
             .child(
                 MoonHotkeyInput::new(format!("{id}-current"))

@@ -182,93 +182,33 @@ fn action_target(action: ShortcutAction) -> Option<KeySlot> {
     })
 }
 
-/// The plan's id for one slot, and the only place that spelling is written.
+/// The plan's id for one slot: the slot's own stem in the plan's `<area>.<name>` dressing.
 ///
-/// `apply` reads the same table back through [`slot_for_id`], which is the whole point: the id and
-/// the destination field used to be two hand-kept maps in two files that had to agree, each with a
-/// silent fallback — a name typed differently in one of them imported nothing and said nothing.
+/// `apply` reads the same spelling back through [`slot_for_id`], which is the whole point: the id
+/// and the destination field used to be two hand-kept maps in two files that had to agree, each
+/// with a silent fallback — a name typed differently in one of them imported nothing and said
+/// nothing. Now neither side spells anything: [`KeySlot::stem`] is the field name in the file, and
+/// this only adds the area and, for a preset family, the index.
 ///
-/// The form is the plan's own, not the settings page's: ids here are `<area>.<name>` with
-/// underscores inside a name and dots for depth, shared with `theme.bg.dark` and
-/// `group.order_size_sel`. The page spells its element ids with hyphens; making hotkeys the one
-/// area that mixes the two schemes would be a worse trade than two spellings of one slot.
+/// The form is the plan's own, not the settings page's: `<area>.<name>` with underscores inside a
+/// name and dots for depth, shared with `theme.bg.dark` and `group.order_size_sel`. The page dresses
+/// the same stem with hyphens, and both come off one name.
 pub(super) fn hotkey_id(slot: KeySlot) -> String {
-    match slot {
-        KeySlot::OrderSize(i) => format!("hotkey.order_size.{i}"),
-        KeySlot::SellPreset(i) => format!("hotkey.sell_preset.{i}"),
-        KeySlot::ManualStrategy(i) => format!("hotkey.manual_strategy.{i}"),
-        named => format!("hotkey.{}", named_id(named)),
+    match slot.index() {
+        Some(i) => format!("hotkey.{}.{i}", slot.stem()),
+        None => format!("hotkey.{}", slot.stem()),
     }
 }
 
 /// The slot one plan id names, or `None` for an id this build does not know.
 ///
-/// WIDER than what the plan can produce: this resolves all twenty-six named slots, while a plan
-/// only ever carries the eighteen [`action_target`] maps plus the two preset families spelled out in
-/// [`map_hotkeys`] — those two together are what decides which slots a Moonbot configuration can
-/// overwrite, and widening either is the decision to let it touch more.
-///
-/// The dialog never offers an unplanned id, because it applies the plan it just built. That is a
-/// property of the CALLER and not of any type here: `apply_local` is public over a plan whose fields
-/// are all public, and this module's own tests hand it ids no plan produced. So the resolver is
-/// deliberately total over the named slots rather than trusting that — an id it cannot resolve is
-/// refused, and one it can is written, which is the same answer either way.
+/// A search over [`KeySlot::all`] through [`hotkey_id`] itself, so the two cannot disagree: an
+/// index past its family is refused because no slot spells it, rather than by a range check that
+/// would have to know the family sizes a second time.
 pub(super) fn slot_for_id(id: &str) -> Option<KeySlot> {
-    let rest = id.strip_prefix("hotkey.")?;
-    for (prefix, family) in [
-        ("order_size.", KeySlot::OrderSize as fn(usize) -> KeySlot),
-        ("sell_preset.", KeySlot::SellPreset as fn(usize) -> KeySlot),
-        (
-            "manual_strategy.",
-            KeySlot::ManualStrategy as fn(usize) -> KeySlot,
-        ),
-    ] {
-        if let Some(index) = rest.strip_prefix(prefix) {
-            let index: usize = index.parse().ok()?;
-            let slot = family(index);
-            // An index past its family names no slot: `HotkeysConfig::key` answers "" for one, and
-            // an import must refuse rather than write nowhere and report success.
-            return KeySlot::all().contains(&slot).then_some(slot);
-        }
-    }
-    KeySlot::NAMED
+    KeySlot::all()
         .into_iter()
-        .find(|slot| named_id(*slot) == rest)
-}
-
-/// The bare name of a slot that is one field rather than a member of an indexed family.
-fn named_id(slot: KeySlot) -> &'static str {
-    match slot {
-        KeySlot::CancelBuy => "cancel_buy",
-        KeySlot::PanicSell => "panic_sell",
-        KeySlot::PanicSellOne => "panic_sell_one",
-        KeySlot::CancelAllBuys => "cancel_all_buys",
-        KeySlot::JoinSells => "join_sells",
-        KeySlot::SwitchCharts => "switch_charts",
-        KeySlot::NewLong => "new_long",
-        KeySlot::NewShort => "new_short",
-        KeySlot::SplitOrder => "split_order",
-        KeySlot::SplitOrderX => "split_order_x",
-        KeySlot::SellsToRect => "sells_to_rect",
-        KeySlot::ShiftBuyUp => "shift_buy_up",
-        KeySlot::ShiftBuyDown => "shift_buy_down",
-        KeySlot::ShiftSellUp => "shift_sell_up",
-        KeySlot::ShiftSellDown => "shift_sell_down",
-        KeySlot::ScalePlus => "scale_plus",
-        KeySlot::ScaleMinus => "scale_minus",
-        KeySlot::SwitchFigure => "switch_figure",
-        KeySlot::ChartShot => "chart_shot",
-        KeySlot::DrawHline => "draw_hline",
-        KeySlot::DrawSegment => "draw_segment",
-        KeySlot::DrawTriangle => "draw_triangle",
-        KeySlot::DrawChannel => "draw_channel",
-        KeySlot::FigDelete => "fig_delete",
-        KeySlot::FigAlert => "fig_alert",
-        KeySlot::FigUndo => "fig_undo",
-        // Unreachable by construction: `hotkey_id` spells the families itself, before it reaches
-        // here, and `slot_for_id` searches only `NAMED`. A family has no name without its index.
-        KeySlot::OrderSize(_) | KeySlot::SellPreset(_) | KeySlot::ManualStrategy(_) => "",
-    }
+        .find(|slot| hotkey_id(*slot) == id)
 }
 
 /// Returns the Moonbot slot name used in preview/unsupported lists.

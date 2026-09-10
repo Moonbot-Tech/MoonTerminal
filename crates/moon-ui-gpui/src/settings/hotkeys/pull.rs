@@ -16,17 +16,17 @@ use std::collections::HashSet;
 
 use crate::hotkeys::{BindingId, binding_id, same_binding};
 
-use super::{HotkeySlot, set_slot_value, slot_value};
+use moon_core::config::KeySlot;
 
 const ORDER_SIZE_SLOTS: usize = moon_core::config::ORDER_SIZE_KEYS;
 const SELL_PRESET_SLOTS: usize = moon_core::config::SELL_PRESET_KEYS;
 const MANUAL_STRATEGY_SLOTS: usize = moon_core::config::MANUAL_STRATEGY_KEYS;
 
-/// One row of the pull preview: one terminal [`HotkeySlot`] compared against the core's incoming
+/// One row of the pull preview: one terminal [`KeySlot`] compared against the core's incoming
 /// key for that same slot.
 #[derive(Clone)]
 pub(super) struct PullRow {
-    pub slot: HotkeySlot,
+    pub slot: KeySlot,
     /// Terminal's current stored value for `slot` (`gpui::Keystroke::parse` format, "" = unbound).
     pub current: String,
     pub core_decoded: DecodedShortcut,
@@ -59,33 +59,33 @@ pub(super) enum PullVerdict {
 /// Every [`CoreHotkeyAction`] this terminal has a matching hotkey for. `None` for an action with
 /// no Terminal command behind it at all; there is nothing here to preview or apply.
 ///
-/// `MakeShot` maps to `HotkeySlot::ChartShot`: `chart_shot` needs no protocol command at all,
+/// `MakeShot` maps to `KeySlot::ChartShot`: `chart_shot` needs no protocol command at all,
 /// only a way to read the chart's own pixels (`HotkeysConfig`'s own "no command" note,
 /// `config/hotkeys.rs`), so it is not commandless the way the remaining discards are. Those
 /// genuinely have no Terminal command behind them: Reload Book/Chart, Spy, Show Charts, Fit
 /// Sells, Broadcast, Sell +/-, and Make Shot BOT (sending a chart image to a Telegram bot rather
 /// than the clipboard, never a Terminal feature to begin with).
-fn slot_for_action(action: CoreHotkeyAction) -> Option<HotkeySlot> {
+fn slot_for_action(action: CoreHotkeyAction) -> Option<KeySlot> {
     use CoreHotkeyAction as A;
     Some(match action {
-        A::CancelBuy => HotkeySlot::CancelBuy,
-        A::PanicSell => HotkeySlot::PanicSell,
-        A::PanicSellOne => HotkeySlot::PanicSellOne,
-        A::CancelAllBuys => HotkeySlot::CancelAllBuys,
-        A::JoinSells => HotkeySlot::JoinSells,
-        A::SwitchCharts => HotkeySlot::SwitchCharts,
-        A::NewLong => HotkeySlot::NewLong,
-        A::NewShort => HotkeySlot::NewShort,
-        A::SplitOrder => HotkeySlot::SplitOrder,
-        A::SplitOrderX => HotkeySlot::SplitOrderX,
-        A::ShiftBuyUp => HotkeySlot::ShiftBuyUp,
-        A::ShiftBuyDown => HotkeySlot::ShiftBuyDown,
-        A::ShiftSellUp => HotkeySlot::ShiftSellUp,
-        A::ShiftSellDown => HotkeySlot::ShiftSellDown,
-        A::ScalePlus => HotkeySlot::ScalePlus,
-        A::ScaleMinus => HotkeySlot::ScaleMinus,
-        A::SwitchFigure => HotkeySlot::SwitchFigure,
-        A::MakeShot => HotkeySlot::ChartShot,
+        A::CancelBuy => KeySlot::CancelBuy,
+        A::PanicSell => KeySlot::PanicSell,
+        A::PanicSellOne => KeySlot::PanicSellOne,
+        A::CancelAllBuys => KeySlot::CancelAllBuys,
+        A::JoinSells => KeySlot::JoinSells,
+        A::SwitchCharts => KeySlot::SwitchCharts,
+        A::NewLong => KeySlot::NewLong,
+        A::NewShort => KeySlot::NewShort,
+        A::SplitOrder => KeySlot::SplitOrder,
+        A::SplitOrderX => KeySlot::SplitOrderX,
+        A::ShiftBuyUp => KeySlot::ShiftBuyUp,
+        A::ShiftBuyDown => KeySlot::ShiftBuyDown,
+        A::ShiftSellUp => KeySlot::ShiftSellUp,
+        A::ShiftSellDown => KeySlot::ShiftSellDown,
+        A::ScalePlus => KeySlot::ScalePlus,
+        A::ScaleMinus => KeySlot::ScaleMinus,
+        A::SwitchFigure => KeySlot::SwitchFigure,
+        A::MakeShot => KeySlot::ChartShot,
         A::ReloadBook
         | A::MakeShotBot
         | A::ReloadChart
@@ -112,11 +112,11 @@ fn presses_in_use(hotkeys: &HotkeysConfig) -> HashSet<BindingId> {
 
 fn build_row(
     hotkeys: &HotkeysConfig,
-    slot: HotkeySlot,
+    slot: KeySlot,
     core_raw: u16,
     in_use: &HashSet<BindingId>,
 ) -> PullRow {
-    let current = slot_value(hotkeys, slot).to_string();
+    let current = hotkeys.key(slot).to_string();
     let core_decoded = shortcut::decode(core_raw);
     let new_key = shortcut::to_gpui_keystroke(core_decoded);
     // Compared as PRESSES, never as strings, and the two sides of every comparison below come
@@ -184,7 +184,7 @@ pub(super) fn preview_core_hotkeys(
     for i in 0..ORDER_SIZE_SLOTS {
         rows.push(build_row(
             hotkeys,
-            HotkeySlot::OrderSize(i),
+            KeySlot::OrderSize(i),
             layout.order_size[i],
             &in_use,
         ));
@@ -192,18 +192,13 @@ pub(super) fn preview_core_hotkeys(
     for i in 0..SELL_PRESET_SLOTS {
         rows.push(build_row(
             hotkeys,
-            HotkeySlot::SellPreset(i),
+            KeySlot::SellPreset(i),
             layout.sell_preset[i],
             &in_use,
         ));
     }
     for (i, &raw) in manual_strategy_keys.iter().enumerate() {
-        rows.push(build_row(
-            hotkeys,
-            HotkeySlot::ManualStrategy(i),
-            raw,
-            &in_use,
-        ));
+        rows.push(build_row(hotkeys, KeySlot::ManualStrategy(i), raw, &in_use));
     }
     for &(action, raw) in layout.named.iter() {
         if let Some(slot) = slot_for_action(action) {
@@ -249,7 +244,7 @@ pub(super) fn apply_core_hotkeys(hotkeys: &mut HotkeysConfig, rows: &[PullRow]) 
             continue;
         }
         if let Some(new_key) = row.new_key.clone() {
-            changed |= set_slot_value(hotkeys, row.slot, new_key);
+            changed |= hotkeys.set_key(row.slot, new_key);
         }
     }
     changed

@@ -307,28 +307,28 @@ fn placement_gestures_split_side_and_pending() {
 
     assert_eq!(
         intent(TradeMouseButton::Left, Modifiers::default(), 2),
-        Some(super::PlacementIntent {
+        Some(moon_core::config::Placement {
             short: false,
             pending: false
         }),
     );
     assert_eq!(
         intent(TradeMouseButton::Middle, M::shift(), 1),
-        Some(super::PlacementIntent {
+        Some(moon_core::config::Placement {
             short: true,
             pending: false
         }),
     );
     assert_eq!(
         intent(TradeMouseButton::Left, M::alt(), 1),
-        Some(super::PlacementIntent {
+        Some(moon_core::config::Placement {
             short: false,
             pending: true
         }),
     );
     assert_eq!(
         intent(TradeMouseButton::Middle, M::alt(), 1),
-        Some(super::PlacementIntent {
+        Some(moon_core::config::Placement {
             short: true,
             pending: true
         }),
@@ -358,14 +358,14 @@ fn a_shared_placement_gesture_goes_to_the_immediate_row() {
 
     assert_eq!(
         super::placement_intent(&hk, TradeMouseButton::Left, M::alt(), 1),
-        Some(super::PlacementIntent {
+        Some(moon_core::config::Placement {
             short: false,
             pending: false
         }),
     );
     assert_eq!(
         super::placement_intent(&hk, TradeMouseButton::Middle, M::alt(), 1),
-        Some(super::PlacementIntent {
+        Some(moon_core::config::Placement {
             short: true,
             pending: false
         }),

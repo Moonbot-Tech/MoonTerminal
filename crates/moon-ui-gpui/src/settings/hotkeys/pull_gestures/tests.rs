@@ -57,7 +57,7 @@ fn a_mirrored_short_row_takes_the_long_gesture_not_the_stale_short_field() {
     core.short_buy_move_click = ordinal(MouseGestureBinding::RightAlt);
 
     let rows = preview_core_gestures(&HotkeysConfig::default(), &core);
-    let short = row(&rows, GestureTarget::Gesture(MouseSlot::ShortBuyMove));
+    let short = row(&rows, GestureTarget::Gesture(GestureSlot::ShortBuyMove));
     assert_eq!(
         short.new,
         Some(GestureValue::Gesture(MouseGestureBinding::MiddleCtrl)),
@@ -71,7 +71,7 @@ fn a_mirrored_short_row_takes_the_long_gesture_not_the_stale_short_field() {
 /// the long write onto the short twin, and the short row — `Unchanged`, so skipped — would never
 /// repair it. That is why the apply writes verbatim.
 ///
-/// Plausible breakage: `apply_core_gestures` calling `set_mouse_slot_value`.
+/// Plausible breakage: `apply_core_gestures` calling the editor's `set_gesture_mirrored`.
 #[test]
 fn applying_a_long_gesture_leaves_the_short_row_the_core_did_not_change() {
     let mut hotkeys = HotkeysConfig::default();
@@ -111,7 +111,7 @@ fn an_unknown_ordinal_is_refused_rather_than_guessed() {
     core.replace_buy_kind = 99;
 
     let rows = preview_core_gestures(&hotkeys, &core);
-    let gesture = row(&rows, GestureTarget::Gesture(MouseSlot::BuySet));
+    let gesture = row(&rows, GestureTarget::Gesture(GestureSlot::BuySet));
     assert_eq!(gesture.verdict, PullVerdict::Unsupported);
     assert_eq!(gesture.new, None);
     let kind = row(&rows, GestureTarget::Kind(MoveKindSlot::BuyMove));
@@ -145,7 +145,7 @@ fn a_core_value_of_none_arrives_as_none() {
 
     let rows = preview_core_gestures(&hotkeys, &empty_core());
     assert_eq!(
-        row(&rows, GestureTarget::Gesture(MouseSlot::BuySet)).verdict,
+        row(&rows, GestureTarget::Gesture(GestureSlot::BuySet)).verdict,
         PullVerdict::WillApply
     );
     assert!(apply_core_gestures(&mut hotkeys, &rows));
@@ -179,7 +179,7 @@ fn turning_the_mirror_off_re_aims_the_short_rows_it_makes_live() {
 
     let rows = preview_core_gestures(&hotkeys, &core);
     assert_eq!(
-        row(&rows, GestureTarget::Gesture(MouseSlot::ShortBuyMove)).verdict,
+        row(&rows, GestureTarget::Gesture(GestureSlot::ShortBuyMove)).verdict,
         PullVerdict::Unchanged
     );
     assert!(apply_core_gestures(&mut hotkeys, &rows));

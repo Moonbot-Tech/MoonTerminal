@@ -20,8 +20,9 @@ pub const MANUAL_STRATEGY_KEYS: usize = 10;
 ///
 /// 1: backfilled the slots that shipped unbound. 2: cleared `chart_shot` where the user had
 /// already given Ctrl+F10 to something else. 3: the same for `fig_undo` on Ctrl+Z. 4: cleared the
-/// two pending-order GESTURES, which stopped being inert and started placing live orders.
-const SCHEMA: u8 = 4;
+/// two pending-order GESTURES, which stopped being inert and started placing live orders. 5: the
+/// figure-delete gesture yields its Middle default to a trading gesture already on Middle.
+const SCHEMA: u8 = 5;
 
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
@@ -367,6 +368,252 @@ impl KeySlot {
             .chain(Self::NAMED)
             .collect()
     }
+
+    /// The one name every spelling of this slot derives from: its field in `hotkeys.toml` —
+    /// `cancel_buy`, or the array `order_size` for a preset family.
+    ///
+    /// The import's ids (`hotkey.cancel_buy`), the settings page's element ids (`cancel-buy`) and
+    /// its locale keys (`hotkeys.cancel_buy`) are all this stem in a different dressing. Deriving
+    /// them here is what stops a slot from being spelled three ways in three tables and missing
+    /// from one of them; a test pins the stem to the field the file actually writes.
+    pub fn stem(self) -> &'static str {
+        match self {
+            Self::OrderSize(_) => "order_size",
+            Self::SellPreset(_) => "sell_preset",
+            Self::ManualStrategy(_) => "manual_strategy",
+            Self::CancelBuy => "cancel_buy",
+            Self::PanicSell => "panic_sell",
+            Self::PanicSellOne => "panic_sell_one",
+            Self::CancelAllBuys => "cancel_all_buys",
+            Self::JoinSells => "join_sells",
+            Self::SwitchCharts => "switch_charts",
+            Self::NewLong => "new_long",
+            Self::NewShort => "new_short",
+            Self::SplitOrder => "split_order",
+            Self::SplitOrderX => "split_order_x",
+            Self::SellsToRect => "sells_to_rect",
+            Self::ShiftBuyUp => "shift_buy_up",
+            Self::ShiftBuyDown => "shift_buy_down",
+            Self::ShiftSellUp => "shift_sell_up",
+            Self::ShiftSellDown => "shift_sell_down",
+            Self::ScalePlus => "scale_plus",
+            Self::ScaleMinus => "scale_minus",
+            Self::SwitchFigure => "switch_figure",
+            Self::ChartShot => "chart_shot",
+            Self::DrawHline => "draw_hline",
+            Self::DrawSegment => "draw_segment",
+            Self::DrawTriangle => "draw_triangle",
+            Self::DrawChannel => "draw_channel",
+            Self::FigDelete => "fig_delete",
+            Self::FigAlert => "fig_alert",
+            Self::FigUndo => "fig_undo",
+        }
+    }
+
+    /// Position inside a preset family, or `None` for a slot that is one named field.
+    pub fn index(self) -> Option<usize> {
+        match self {
+            Self::OrderSize(i) | Self::SellPreset(i) | Self::ManualStrategy(i) => Some(i),
+            _ => None,
+        }
+    }
+}
+
+/// One editable mouse-gesture slot of [`HotkeysConfig`] — a `<row>_click` field.
+///
+/// Beside [`KeySlot`] for the same reason that one is here: the page that draws the row, its clash
+/// index, the core pull and the two dispatchers all need one list of the gesture rows, and a list
+/// can only be shared from where the data is. Before this the same thirteen rows were enumerated by
+/// hand in the page's field macro, its id table, its locale-key table, its short-row and move-pair
+/// tables and the pull's own copies of those.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum GestureSlot {
+    BuySet,
+    ShortSet,
+    PendingLong,
+    PendingShort,
+    BuyMove,
+    SellMove,
+    BuyMove2,
+    SellMove2,
+    ShortBuyMove,
+    ShortSellMove,
+    ShortBuyMove2,
+    ShortSellMove2,
+    /// Deletes the figure under the pointer. The one gesture that is not a trading gesture: a
+    /// figure is pointed at, and only a click carries the position that says which one.
+    FigDelete,
+}
+
+/// What one placement gesture places.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Placement {
+    /// Position side: `false` Long, `true` Short.
+    pub short: bool,
+    /// Whether the clicked price is a pending TRIGGER rather than an entry price.
+    pub pending: bool,
+}
+
+/// One half of a Moonbot move row: the row, and whether this is its short half.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MoveHalf {
+    pub row: MoveKindSlot,
+    pub short: bool,
+}
+
+impl GestureSlot {
+    /// Every gesture slot, in the order the settings page lists them.
+    ///
+    /// The first four are the placement rows, and their order HERE is the order a press is tried
+    /// against them: `placement_intent` walks this list and the first match fires. The compiler
+    /// cannot check the list against the enum; a test writes every slot a distinct gesture and
+    /// looks for a stored field that kept its default.
+    pub const ALL: [Self; 13] = [
+        Self::BuySet,
+        Self::ShortSet,
+        Self::PendingLong,
+        Self::PendingShort,
+        Self::BuyMove,
+        Self::SellMove,
+        Self::BuyMove2,
+        Self::SellMove2,
+        Self::ShortBuyMove,
+        Self::ShortSellMove,
+        Self::ShortBuyMove2,
+        Self::ShortSellMove2,
+        Self::FigDelete,
+    ];
+
+    /// The name the settings page's element ids (`buy-move2`) and locale keys
+    /// (`hotkeys.mouse.buy_move2`) derive from.
+    ///
+    /// NOT the field name, unlike [`KeySlot::stem`]: the secondary rows are stored as
+    /// `buy_move_click2`, Moonbot's own spelling, and the page has always numbered them the other
+    /// way round. The field is reached through [`HotkeysConfig::gesture`] instead.
+    pub fn stem(self) -> &'static str {
+        match self {
+            Self::BuySet => "buy_set",
+            Self::ShortSet => "short_set",
+            Self::PendingLong => "pending_long",
+            Self::PendingShort => "pending_short",
+            Self::BuyMove => "buy_move",
+            Self::SellMove => "sell_move",
+            Self::BuyMove2 => "buy_move2",
+            Self::SellMove2 => "sell_move2",
+            Self::ShortBuyMove => "short_buy_move",
+            Self::ShortSellMove => "short_sell_move",
+            Self::ShortBuyMove2 => "short_buy_move2",
+            Self::ShortSellMove2 => "short_sell_move2",
+            Self::FigDelete => "fig_delete",
+        }
+    }
+
+    /// What a placement row places, or `None` for a move or figure row.
+    pub fn placement(self) -> Option<Placement> {
+        let (short, pending) = match self {
+            Self::BuySet => (false, false),
+            Self::ShortSet => (true, false),
+            Self::PendingLong => (false, true),
+            Self::PendingShort => (true, true),
+            _ => return None,
+        };
+        Some(Placement { short, pending })
+    }
+
+    /// The move row this slot is one half of, or `None` for a placement or figure row.
+    pub fn move_half(self) -> Option<MoveHalf> {
+        let (row, short) = match self {
+            Self::BuyMove => (MoveKindSlot::BuyMove, false),
+            Self::SellMove => (MoveKindSlot::SellMove, false),
+            Self::BuyMove2 => (MoveKindSlot::BuyMove2, false),
+            Self::SellMove2 => (MoveKindSlot::SellMove2, false),
+            Self::ShortBuyMove => (MoveKindSlot::BuyMove, true),
+            Self::ShortSellMove => (MoveKindSlot::SellMove, true),
+            Self::ShortBuyMove2 => (MoveKindSlot::BuyMove2, true),
+            Self::ShortSellMove2 => (MoveKindSlot::SellMove2, true),
+            _ => return None,
+        };
+        Some(MoveHalf { row, short })
+    }
+
+    /// Whether this is the short half of a move row — one of the four the mirror switch owns.
+    pub fn is_short_move(self) -> bool {
+        self.move_half().is_some_and(|half| half.short)
+    }
+
+    /// The short row that follows this long row while `same_hotkeys_for_move` is set.
+    ///
+    /// Only the four long move rows have one; every other slot stands alone, which is why the
+    /// settings page shows a kind column on those four and greys the short ones out.
+    pub fn short_twin(self) -> Option<Self> {
+        let half = self.move_half()?;
+        (!half.short).then(|| half.row.half(true))
+    }
+
+    /// The "move kind" this row carries a selector for: the long move rows only. Moonbot keeps a
+    /// single kind per row and lets the Long and Short columns share it.
+    pub fn kind(self) -> Option<MoveKindSlot> {
+        let half = self.move_half()?;
+        (!half.short).then_some(half.row)
+    }
+}
+
+/// The four Moonbot move rows, each with the one "move kind" its long and short halves share.
+///
+/// Named for the kind field the row owns (`buy_move_kind`), because that is what a caller asks for
+/// through it; the gestures of either half come back through [`Self::half`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum MoveKindSlot {
+    BuyMove,
+    SellMove,
+    BuyMove2,
+    SellMove2,
+}
+
+impl MoveKindSlot {
+    /// The four rows in the order [`HotkeysConfig::resolve_move_gesture`] tries them: the first row
+    /// whose gesture matches a press answers, so a gesture put on two rows resolves the same way
+    /// on every press.
+    pub const ALL: [Self; 4] = [
+        Self::BuyMove,
+        Self::SellMove,
+        Self::BuyMove2,
+        Self::SellMove2,
+    ];
+
+    /// The row for one of Moonbot's four buckets: entry or exit legs, primary or secondary.
+    pub fn row(entry: bool, second: bool) -> Self {
+        match (entry, second) {
+            (true, false) => Self::BuyMove,
+            (false, false) => Self::SellMove,
+            (true, true) => Self::BuyMove2,
+            (false, true) => Self::SellMove2,
+        }
+    }
+
+    /// Whether the row moves the entry leg (Buy) rather than the exit legs.
+    pub fn entry(self) -> bool {
+        matches!(self, Self::BuyMove | Self::BuyMove2)
+    }
+
+    /// Whether the row is the secondary one, under Moonbot's "additional commands".
+    pub fn second(self) -> bool {
+        matches!(self, Self::BuyMove2 | Self::SellMove2)
+    }
+
+    /// The gesture slot of one half of the row.
+    pub fn half(self, short: bool) -> GestureSlot {
+        match (self, short) {
+            (Self::BuyMove, false) => GestureSlot::BuyMove,
+            (Self::BuyMove, true) => GestureSlot::ShortBuyMove,
+            (Self::SellMove, false) => GestureSlot::SellMove,
+            (Self::SellMove, true) => GestureSlot::ShortSellMove,
+            (Self::BuyMove2, false) => GestureSlot::BuyMove2,
+            (Self::BuyMove2, true) => GestureSlot::ShortBuyMove2,
+            (Self::SellMove2, false) => GestureSlot::SellMove2,
+            (Self::SellMove2, true) => GestureSlot::ShortSellMove2,
+        }
+    }
 }
 
 impl HotkeysConfig {
@@ -415,14 +662,10 @@ impl HotkeysConfig {
     /// keystroke that re-selects what was already there. An index outside its family writes nothing
     /// and reports no change, matching [`Self::key`]'s reading of the same index.
     pub fn set_key(&mut self, slot: KeySlot, value: String) -> bool {
-        let Some(target) = self.key_mut(slot) else {
-            return false;
-        };
-        if *target == value {
-            return false;
+        match self.key_mut(slot) {
+            Some(target) => assign_if_changed(target, value),
+            None => false,
         }
-        *target = value;
-        true
     }
 
     /// The stored field for one slot, or `None` for an index outside its family.
@@ -459,6 +702,101 @@ impl HotkeysConfig {
             KeySlot::FigUndo => &mut self.fig_undo,
         })
     }
+
+    /// The gesture stored for one slot.
+    pub fn gesture(&self, slot: GestureSlot) -> MouseGestureBinding {
+        match slot {
+            GestureSlot::BuySet => self.buy_set_click,
+            GestureSlot::ShortSet => self.short_set_click,
+            GestureSlot::PendingLong => self.pending_long_click,
+            GestureSlot::PendingShort => self.pending_short_click,
+            GestureSlot::BuyMove => self.buy_move_click,
+            GestureSlot::SellMove => self.sell_move_click,
+            GestureSlot::BuyMove2 => self.buy_move_click2,
+            GestureSlot::SellMove2 => self.sell_move_click2,
+            GestureSlot::ShortBuyMove => self.short_buy_move_click,
+            GestureSlot::ShortSellMove => self.short_sell_move_click,
+            GestureSlot::ShortBuyMove2 => self.short_buy_move_click2,
+            GestureSlot::ShortSellMove2 => self.short_sell_move_click2,
+            GestureSlot::FigDelete => self.fig_delete_click,
+        }
+    }
+
+    /// Write one slot's gesture and NOTHING else, answering whether anything changed.
+    ///
+    /// No mirroring, whatever `same_hotkeys_for_move` says: the settings editor carries the mirror
+    /// itself, and a layout transfer must not — with the flag on locally and off at the core, a
+    /// mirrored write of the long row would overwrite a short value the transfer had decided to
+    /// leave alone.
+    pub fn set_gesture(&mut self, slot: GestureSlot, value: MouseGestureBinding) -> bool {
+        assign_if_changed(self.gesture_mut(slot), value)
+    }
+
+    fn gesture_mut(&mut self, slot: GestureSlot) -> &mut MouseGestureBinding {
+        match slot {
+            GestureSlot::BuySet => &mut self.buy_set_click,
+            GestureSlot::ShortSet => &mut self.short_set_click,
+            GestureSlot::PendingLong => &mut self.pending_long_click,
+            GestureSlot::PendingShort => &mut self.pending_short_click,
+            GestureSlot::BuyMove => &mut self.buy_move_click,
+            GestureSlot::SellMove => &mut self.sell_move_click,
+            GestureSlot::BuyMove2 => &mut self.buy_move_click2,
+            GestureSlot::SellMove2 => &mut self.sell_move_click2,
+            GestureSlot::ShortBuyMove => &mut self.short_buy_move_click,
+            GestureSlot::ShortSellMove => &mut self.short_sell_move_click,
+            GestureSlot::ShortBuyMove2 => &mut self.short_buy_move_click2,
+            GestureSlot::ShortSellMove2 => &mut self.short_sell_move_click2,
+            GestureSlot::FigDelete => &mut self.fig_delete_click,
+        }
+    }
+
+    /// The gesture the terminal actually FIRES for one slot.
+    ///
+    /// A move row resolves through [`Self::move_gestures`], the one reader of
+    /// `same_hotkeys_for_move`: with the mirror set the short field is not what fires, and showing
+    /// or indexing it would put a binding nothing executes into a preview or a clash caption. The
+    /// placement and figure rows have no mirror, so the field is what fires.
+    pub fn gesture_in_effect(&self, slot: GestureSlot) -> MouseGestureBinding {
+        match slot.move_half() {
+            Some(half) => {
+                self.move_gestures(half.row.entry(), half.short)[usize::from(half.row.second())]
+            }
+            None => self.gesture(slot),
+        }
+    }
+
+    /// The "move kind" of one move row.
+    pub fn move_kind(&self, row: MoveKindSlot) -> MoveKind {
+        match row {
+            MoveKindSlot::BuyMove => self.buy_move_kind,
+            MoveKindSlot::SellMove => self.sell_move_kind,
+            MoveKindSlot::BuyMove2 => self.buy_move_kind2,
+            MoveKindSlot::SellMove2 => self.sell_move_kind2,
+        }
+    }
+
+    /// Write one row's move kind, answering whether anything changed.
+    pub fn set_move_kind(&mut self, row: MoveKindSlot, value: MoveKind) -> bool {
+        let target = match row {
+            MoveKindSlot::BuyMove => &mut self.buy_move_kind,
+            MoveKindSlot::SellMove => &mut self.sell_move_kind,
+            MoveKindSlot::BuyMove2 => &mut self.buy_move_kind2,
+            MoveKindSlot::SellMove2 => &mut self.sell_move_kind2,
+        };
+        assign_if_changed(target, value)
+    }
+}
+
+/// Writes `value` into `target` and answers whether that was a change.
+///
+/// The change answer is what keeps a settings render from marking the config dirty on every
+/// keystroke that re-selects what was already there; every slot setter answers through this one.
+fn assign_if_changed<T: PartialEq>(target: &mut T, value: T) -> bool {
+    if *target == value {
+        return false;
+    }
+    *target = value;
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -727,12 +1065,8 @@ impl HotkeysConfig {
     /// they are edited, but a shared or hand-edited file can carry the flag with stale short values,
     /// and the flag is what the user sees.
     pub fn move_gestures(&self, entry: bool, short: bool) -> [MouseGestureBinding; 2] {
-        match (entry, short && !self.same_hotkeys_for_move) {
-            (true, false) => [self.buy_move_click, self.buy_move_click2],
-            (true, true) => [self.short_buy_move_click, self.short_buy_move_click2],
-            (false, false) => [self.sell_move_click, self.sell_move_click2],
-            (false, true) => [self.short_sell_move_click, self.short_sell_move_click2],
-        }
+        let short = short && !self.same_hotkeys_for_move;
+        [false, true].map(|second| self.gesture(MoveKindSlot::row(entry, second).half(short)))
     }
 
     /// What one recognised move gesture has to send.
@@ -745,23 +1079,21 @@ impl HotkeysConfig {
     /// Returns:
     ///     The side of the book to move, the layout to move it into and the position side it
     ///     addresses, or `None` when no slot claims the press — including a slot whose kind is
-    ///     `None`, which is Moonbot's way of leaving a bound gesture inert. Slots are examined in
-    ///     the order the settings page lists them, so a gesture the user put on two of them
-    ///     resolves the same way twice rather than by whichever branch happened to run first.
+    ///     `None`, which is Moonbot's way of leaving a bound gesture inert. Rows are examined in
+    ///     [`MoveKindSlot::ALL`]'s order — the order the settings page lists them — so a gesture
+    ///     the user put on two of them resolves the same way twice rather than by whichever
+    ///     branch happened to run first.
     pub fn resolve_move_gesture(
         &self,
         matches: impl Fn(MouseGestureBinding) -> bool,
     ) -> Option<MoveGestureCommand> {
-        for (entry, second, kind) in [
-            (true, false, self.buy_move_kind),
-            (false, false, self.sell_move_kind),
-            (true, true, self.buy_move_kind2),
-            (false, true, self.sell_move_kind2),
-        ] {
+        for row in MoveKindSlot::ALL {
+            let entry = row.entry();
+            let kind = self.move_kind(row);
             // Both sides come from `move_gestures`, which is the one place that reads
             // `same_hotkeys_for_move`: with the mirror on it hands back the long gesture for the
             // short side too, so one press claims both and the core is told `Both`.
-            let ix = usize::from(second);
+            let ix = usize::from(row.second());
             let long = self.move_gestures(entry, false)[ix];
             let short = self.move_gestures(entry, true)[ix];
             let hit_long = long != MouseGestureBinding::None && matches(long);
@@ -837,6 +1169,10 @@ impl HotkeysConfig {
     /// than collision — the two pending-order gestures went from saved-but-inert to placing a live
     /// order, so a value chosen while the row said it did nothing is cleared.
     ///
+    /// Generation 4 → 5: the collision check generations 2 and 3 run for an arriving key, run for
+    /// an arriving gesture — `fig_delete_click` yields its Middle default where Middle already
+    /// trades. Its own generation rather than a widening of 4, because files stamped 4 exist.
+    ///
     /// Returns whether anything changed, so the caller can persist the stamp.
     pub(super) fn fill_unbound_slots(&mut self) -> bool {
         if self.schema >= SCHEMA {
@@ -856,6 +1192,9 @@ impl HotkeysConfig {
         }
         if self.schema < 4 {
             self.clear_generation_4_pending_gestures();
+        }
+        if self.schema < 5 {
+            self.clear_generation_5_figure_gesture();
         }
         self.schema = SCHEMA;
         true
@@ -939,10 +1278,6 @@ impl HotkeysConfig {
     /// trade, and the two are cleared once rather than waking up as a trading gesture; both ship
     /// unset, so this touches nobody who did not deliberately set one.
     ///
-    /// The mirror of what generations 1 through 3 do for keys, and the first time a GESTURE needs
-    /// it. There is still no `bound_keys` for gestures, so a gesture that collides with another
-    /// cannot be found the way a key can — that debt is in the plan.
-    ///
     /// Returns:
     ///     Nothing; clears only the two pending gesture slots.
     fn clear_generation_4_pending_gestures(&mut self) {
@@ -958,6 +1293,49 @@ impl HotkeysConfig {
                 *slot = MouseGestureBinding::None;
             }
         }
+    }
+
+    /// Generation 4 -> 5: the arriving figure-delete gesture yields to a trading gesture the file
+    /// already fires on the same button.
+    ///
+    /// `fig_delete_click` is the gesture counterpart of `chart_shot` and `fig_undo` in generations 2
+    /// and 3: it reaches an existing file already filled by its serde default (Middle), and the
+    /// figure layer is offered a press ABOVE every trading layer on that button. A user whose file
+    /// already moves or places orders on Middle would find those presses deleting figures instead
+    /// wherever one sits under the pointer. The NEW slot yields, exactly as the keys do, through
+    /// [`Self::bound_gestures`] — the mirror of what generations 2 and 3 do through `bound_keys`.
+    ///
+    /// Returns:
+    ///     Nothing; clears only the figure gesture, and only on a collision.
+    fn clear_generation_5_figure_gesture(&mut self) {
+        // Recomputed here rather than reused, like every key generation recomputes `bound_keys`:
+        // generation 4 may have just cleared slots above.
+        let taken = self.bound_gestures();
+        let arriving = self.fig_delete_click;
+        if arriving != MouseGestureBinding::None
+            && taken.iter().filter(|held| **held == arriving).count() > 1
+        {
+            log::warn!(
+                "hotkeys.toml: {arriving:?} is already a trading gesture, \
+                 Delete figure was left without one"
+            );
+            self.fig_delete_click = MouseGestureBinding::None;
+        }
+    }
+
+    /// Every gesture this file fires, for collision checks — the counterpart of
+    /// [`Self::bound_keys`].
+    ///
+    /// The gestures IN EFFECT rather than the fields: with the mirror switch set a short field is
+    /// not what fires, and counting it would report a collision nobody can press. A gesture held by
+    /// two slots appears twice, which is what makes a duplicate visible to the caller. Unlike the
+    /// keys, these compare exactly — a gesture is an enum, not a string with spellings.
+    pub fn bound_gestures(&self) -> Vec<MouseGestureBinding> {
+        GestureSlot::ALL
+            .into_iter()
+            .map(|slot| self.gesture_in_effect(slot))
+            .filter(|gesture| *gesture != MouseGestureBinding::None)
+            .collect()
     }
 
     /// Every keystroke this file already binds, for collision checks.

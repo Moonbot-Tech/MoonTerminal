@@ -1,22 +1,38 @@
-use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
+use std::collections::HashSet;
 
-use super::super::{
-    HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, all_slots, mouse_slot_id,
-    set_mouse_slot_verbatim, set_move_kind_slot_value, set_slot_value, slot_id,
+use moon_core::config::{
+    GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKind, MoveKindSlot,
 };
-use super::{Clashes, Severity};
+
+use super::super::registry;
+use super::{Clashes, Severity, slots_in_resolve_order};
 
 /// A configuration with nothing bound, so each test states its own collision and no other.
 fn quiet() -> HotkeysConfig {
     let mut hotkeys = HotkeysConfig::default();
-    for slot in all_slots() {
-        set_slot_value(&mut hotkeys, slot, String::new());
+    for slot in KeySlot::all() {
+        hotkeys.set_key(slot, String::new());
     }
-    for slot in all_mouse_slots() {
-        set_mouse_slot_verbatim(&mut hotkeys, slot, MouseGestureBinding::None);
+    for slot in GestureSlot::ALL {
+        hotkeys.set_gesture(slot, MouseGestureBinding::None);
     }
     hotkeys.same_hotkeys_for_move = false;
     hotkeys
+}
+
+/// Every slot the config holds is somewhere in the transcribed order — a slot missing from it
+/// would get no clash detection and no caption, silently.
+#[test]
+fn every_slot_is_in_the_resolve_order_once() {
+    let ordered = slots_in_resolve_order();
+    let distinct: HashSet<KeySlot> = ordered.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        ordered.len(),
+        "a slot is listed twice: {ordered:?}"
+    );
+    let all: HashSet<KeySlot> = KeySlot::all().into_iter().collect();
+    assert_eq!(distinct, all);
 }
 
 /// The transcribed order must still match the dispatcher's own source.
@@ -43,17 +59,9 @@ fn the_transcribed_order_still_matches_the_dispatcher() {
     let mut previous = String::new();
     for step in super::RESOLVE_ORDER {
         let needle = match step {
-            super::Step::Slot(slot) => {
-                let id = slot_id(*slot);
-                // A preset family is tested once, as an array, for all of its indices.
-                let field = match id.rsplit_once('-') {
-                    Some((head, tail)) if tail.chars().all(|c| c.is_ascii_digit()) => {
-                        head.to_string()
-                    }
-                    _ => id,
-                };
-                format!("hk.{}", field.replace('-', "_"))
-            }
+            // A preset family is tested once, as an array, for all of its indices — and the stem
+            // IS the field name, which `moon_core`'s own tests pin to the file.
+            super::Step::Slot(slot) => format!("hk.{}", slot.stem()),
             // A built-in is not always spelled as a keystroke in the source: the two Escape
             // branches are told apart by their MODIFIERS, so each is matched on what actually
             // distinguishes it there.
@@ -84,13 +92,11 @@ fn the_winner_and_the_loser_are_told_different_things() {
     let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     // `DrawHline` is tested before `PanicSell`: the figure slots lead the chain.
-    set_slot_value(&mut hotkeys, HotkeySlot::DrawHline, "alt-6".into());
-    set_slot_value(&mut hotkeys, HotkeySlot::PanicSell, "alt-6".into());
+    hotkeys.set_key(KeySlot::DrawHline, "alt-6".into());
+    hotkeys.set_key(KeySlot::PanicSell, "alt-6".into());
     let clashes = Clashes::build(&hotkeys);
 
-    let winner = clashes
-        .key(&hotkeys, HotkeySlot::DrawHline)
-        .expect("winner");
+    let winner = clashes.key(&hotkeys, KeySlot::DrawHline).expect("winner");
     assert_eq!(winner.severity, Severity::Shares);
     assert!(
         winner.text.contains("Takes this binding"),
@@ -98,7 +104,7 @@ fn the_winner_and_the_loser_are_told_different_things() {
         winner.text
     );
 
-    let loser = clashes.key(&hotkeys, HotkeySlot::PanicSell).expect("loser");
+    let loser = clashes.key(&hotkeys, KeySlot::PanicSell).expect("loser");
     assert_eq!(loser.severity, Severity::Shadowed);
     assert!(loser.text.contains("Will not fire"), "{}", loser.text);
 }
@@ -111,13 +117,13 @@ fn the_winner_and_the_loser_are_told_different_things() {
 #[test]
 fn a_builtin_beats_the_slots_below_it_and_loses_to_the_eight_above() {
     let mut hotkeys = quiet();
-    set_slot_value(&mut hotkeys, HotkeySlot::PanicSell, "escape".into());
-    set_slot_value(&mut hotkeys, HotkeySlot::FigAlert, "ctrl-shift-f10".into());
+    hotkeys.set_key(KeySlot::PanicSell, "escape".into());
+    hotkeys.set_key(KeySlot::FigAlert, "ctrl-shift-f10".into());
     let clashes = Clashes::build(&hotkeys);
 
     assert_eq!(
         clashes
-            .key(&hotkeys, HotkeySlot::PanicSell)
+            .key(&hotkeys, KeySlot::PanicSell)
             .expect("clash")
             .severity,
         Severity::Shadowed,
@@ -125,7 +131,7 @@ fn a_builtin_beats_the_slots_below_it_and_loses_to_the_eight_above() {
     );
     assert_eq!(
         clashes
-            .key(&hotkeys, HotkeySlot::FigAlert)
+            .key(&hotkeys, KeySlot::FigAlert)
             .expect("clash")
             .severity,
         Severity::Shares,
@@ -140,18 +146,18 @@ fn a_builtin_beats_the_slots_below_it_and_loses_to_the_eight_above() {
 #[test]
 fn the_documented_delete_fallback_is_exempt_and_nothing_else_is() {
     let mut hotkeys = quiet();
-    set_slot_value(&mut hotkeys, HotkeySlot::FigDelete, "delete".into());
+    hotkeys.set_key(KeySlot::FigDelete, "delete".into());
     assert!(
         Clashes::build(&hotkeys)
-            .key(&hotkeys, HotkeySlot::FigDelete)
+            .key(&hotkeys, KeySlot::FigDelete)
             .is_none(),
         "the shipped default reported a clash it deliberately does not have"
     );
 
-    set_slot_value(&mut hotkeys, HotkeySlot::FigDelete, "escape".into());
+    hotkeys.set_key(KeySlot::FigDelete, "escape".into());
     assert!(
         Clashes::build(&hotkeys)
-            .key(&hotkeys, HotkeySlot::FigDelete)
+            .key(&hotkeys, KeySlot::FigDelete)
             .is_some(),
         "the same slot on Escape ends the built-in and nothing said so"
     );
@@ -162,20 +168,12 @@ fn the_documented_delete_fallback_is_exempt_and_nothing_else_is() {
 fn the_button_decides_which_gesture_row_loses() {
     let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuySet,
-        MouseGestureBinding::MiddleAlt,
-    );
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuyMove,
-        MouseGestureBinding::MiddleAlt,
-    );
+    hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::MiddleAlt);
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::MiddleAlt);
     let clashes = Clashes::build(&hotkeys);
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::BuySet)
+            .mouse(&hotkeys, GestureSlot::BuySet)
             .first()
             .expect("placement is asked first, so it takes the press")
             .severity,
@@ -183,7 +181,7 @@ fn the_button_decides_which_gesture_row_loses() {
     );
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::BuyMove)
+            .mouse(&hotkeys, GestureSlot::BuyMove)
             .first()
             .expect("the move row is asked second and never reached")
             .severity,
@@ -193,8 +191,8 @@ fn the_button_decides_which_gesture_row_loses() {
     // The right button DOES place orders — last, under both context menus. Read the other way
     // round until 10.09.2026, which put a red "will not fire" on a gesture that opens a position.
     let mut right = quiet();
-    set_mouse_slot_verbatim(&mut right, MouseSlot::BuySet, MouseGestureBinding::RightAlt);
-    let notes = Clashes::build(&right).mouse(&right, MouseSlot::BuySet);
+    right.set_gesture(GestureSlot::BuySet, MouseGestureBinding::RightAlt);
+    let notes = Clashes::build(&right).mouse(&right, GestureSlot::BuySet);
     let clash = notes
         .first()
         .expect("the menus above it share the press, which is worth saying");
@@ -212,21 +210,13 @@ fn the_button_decides_which_gesture_row_loses() {
 #[test]
 fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuySet,
-        MouseGestureBinding::LeftAlt,
-    );
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::PendingLong,
-        MouseGestureBinding::LeftAlt,
-    );
+    hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftAlt);
+    hotkeys.set_gesture(GestureSlot::PendingLong, MouseGestureBinding::LeftAlt);
     let clashes = Clashes::build(&hotkeys);
 
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::BuySet)
+            .mouse(&hotkeys, GestureSlot::BuySet)
             .first()
             .expect("the row placement_intent tries first takes the gesture")
             .severity,
@@ -234,7 +224,7 @@ fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
     );
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::PendingLong)
+            .mouse(&hotkeys, GestureSlot::PendingLong)
             .first()
             .expect("the row behind it never answers")
             .severity,
@@ -245,26 +235,18 @@ fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
 /// The move rows are asked in PAIRS — buy, sell, buy2, sell2 — not in this page's row order, so a
 /// short row answers before a long row listed above it.
 ///
-/// Plausible breakage: ranking move rows by their position in `all_mouse_slots()` would name
+/// Plausible breakage: ranking move rows by their position in `GestureSlot::ALL` would name
 /// `SellMove2` the winner over `ShortBuyMove`, which is the reverse of what the dispatcher does.
 #[test]
 fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::SellMove2,
-        MouseGestureBinding::MiddleAlt,
-    );
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::ShortBuyMove,
-        MouseGestureBinding::MiddleAlt,
-    );
+    hotkeys.set_gesture(GestureSlot::SellMove2, MouseGestureBinding::MiddleAlt);
+    hotkeys.set_gesture(GestureSlot::ShortBuyMove, MouseGestureBinding::MiddleAlt);
     let clashes = Clashes::build(&hotkeys);
 
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::ShortBuyMove)
+            .mouse(&hotkeys, GestureSlot::ShortBuyMove)
             .first()
             .expect("the buy pair is asked first")
             .severity,
@@ -272,7 +254,7 @@ fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
     );
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::SellMove2)
+            .mouse(&hotkeys, GestureSlot::SellMove2)
             .first()
             .expect("the sell2 pair is asked last")
             .severity,
@@ -287,20 +269,12 @@ fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
 #[test]
 fn an_inert_move_row_shadows_nothing() {
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuyMove,
-        MouseGestureBinding::Middle,
-    );
-    set_move_kind_slot_value(&mut hotkeys, MoveKindSlot::BuyMove, MoveKind::None);
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::SellMove,
-        MouseGestureBinding::Middle,
-    );
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::Middle);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove, MoveKind::None);
+    hotkeys.set_gesture(GestureSlot::SellMove, MouseGestureBinding::Middle);
     let clashes = Clashes::build(&hotkeys);
     assert!(
-        clashes.mouse(&hotkeys, MouseSlot::SellMove).is_empty(),
+        clashes.mouse(&hotkeys, GestureSlot::SellMove).is_empty(),
         "a row set to send nothing was reported as taking the press"
     );
 }
@@ -310,21 +284,13 @@ fn an_inert_move_row_shadows_nothing() {
 fn a_conditional_chart_layer_shares() {
     let mut hotkeys = quiet();
     // Drawing answers Ctrl+Left only while a tool is armed, and it is asked FIRST.
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuySet,
-        MouseGestureBinding::LeftCtrl,
-    );
+    hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftCtrl);
     // The X-scale sync is asked LAST, so this row keeps firing and the sync is what dies.
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::ShortSet,
-        MouseGestureBinding::MiddleShift,
-    );
+    hotkeys.set_gesture(GestureSlot::ShortSet, MouseGestureBinding::MiddleShift);
     let clashes = Clashes::build(&hotkeys);
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::BuySet)
+            .mouse(&hotkeys, GestureSlot::BuySet)
             .first()
             .expect("drawing shares this gesture")
             .severity,
@@ -332,7 +298,7 @@ fn a_conditional_chart_layer_shares() {
     );
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::ShortSet)
+            .mouse(&hotkeys, GestureSlot::ShortSet)
             .first()
             .expect("the sync sits below this row")
             .severity,
@@ -344,18 +310,10 @@ fn a_conditional_chart_layer_shares() {
 #[test]
 fn the_two_halves_of_one_move_row_are_not_a_clash() {
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuyMove,
-        MouseGestureBinding::MiddleCtrl,
-    );
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::ShortBuyMove,
-        MouseGestureBinding::MiddleCtrl,
-    );
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::MiddleCtrl);
+    hotkeys.set_gesture(GestureSlot::ShortBuyMove, MouseGestureBinding::MiddleCtrl);
     let clashes = Clashes::build(&hotkeys);
-    assert!(clashes.mouse(&hotkeys, MouseSlot::BuyMove).is_empty());
+    assert!(clashes.mouse(&hotkeys, GestureSlot::BuyMove).is_empty());
 }
 
 /// The shipped defaults must leave no row dead.
@@ -364,18 +322,18 @@ fn the_shipped_defaults_leave_nothing_dead() {
     let hotkeys = HotkeysConfig::default();
     let clashes = Clashes::build(&hotkeys);
 
-    let dead: Vec<String> = all_slots()
+    let dead: Vec<String> = KeySlot::all()
         .into_iter()
         .filter(|slot| {
             clashes
                 .key(&hotkeys, *slot)
                 .is_some_and(|c| c.severity == Severity::Shadowed)
         })
-        .map(slot_id)
+        .map(registry::key_id)
         .collect();
     assert!(dead.is_empty(), "a shipped key never fires: {dead:?}");
 
-    let dead_mice: Vec<&str> = all_mouse_slots()
+    let dead_mice: Vec<String> = GestureSlot::ALL
         .into_iter()
         .filter(|slot| {
             clashes
@@ -383,7 +341,7 @@ fn the_shipped_defaults_leave_nothing_dead() {
                 .iter()
                 .any(|c| c.severity == Severity::Shadowed)
         })
-        .map(mouse_slot_id)
+        .map(registry::gesture_id)
         .collect();
     assert!(
         dead_mice.is_empty(),
@@ -398,31 +356,19 @@ fn the_shipped_defaults_leave_nothing_dead() {
 #[test]
 fn an_inert_move_row_carries_no_caption_of_its_own() {
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuyMove,
-        MouseGestureBinding::MiddleAlt,
-    );
-    set_move_kind_slot_value(&mut hotkeys, MoveKindSlot::BuyMove, MoveKind::None);
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::MiddleAlt);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove, MoveKind::None);
     // A live rival on the same gesture, one that the dispatcher reaches later.
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::SellMove,
-        MouseGestureBinding::MiddleAlt,
-    );
-    set_move_kind_slot_value(
-        &mut hotkeys,
-        MoveKindSlot::SellMove,
-        MoveKind::ParallelShift,
-    );
+    hotkeys.set_gesture(GestureSlot::SellMove, MouseGestureBinding::MiddleAlt);
+    hotkeys.set_move_kind(MoveKindSlot::SellMove, MoveKind::ParallelShift);
     let clashes = Clashes::build(&hotkeys);
 
     assert!(
-        clashes.mouse(&hotkeys, MouseSlot::BuyMove).is_empty(),
+        clashes.mouse(&hotkeys, GestureSlot::BuyMove).is_empty(),
         "an inert row takes nothing from the row that fires"
     );
     assert!(
-        clashes.mouse(&hotkeys, MouseSlot::SellMove).is_empty(),
+        clashes.mouse(&hotkeys, GestureSlot::SellMove).is_empty(),
         "and the row that fires is not shadowed by one that sends nothing"
     );
 }
@@ -440,8 +386,8 @@ fn the_dead_figure_delete_gestures_are_reported_dead() {
         MouseGestureBinding::RightDouble,
     ] {
         let mut hotkeys = quiet();
-        set_mouse_slot_verbatim(&mut hotkeys, MouseSlot::FigDelete, gesture);
-        let notes = Clashes::build(&hotkeys).mouse(&hotkeys, MouseSlot::FigDelete);
+        hotkeys.set_gesture(GestureSlot::FigDelete, gesture);
+        let notes = Clashes::build(&hotkeys).mouse(&hotkeys, GestureSlot::FigDelete);
         let clash = notes
             .first()
             .unwrap_or_else(|| panic!("{gesture:?} reaches no figure and must say so"));
@@ -449,14 +395,10 @@ fn the_dead_figure_delete_gestures_are_reported_dead() {
     }
     // The shipped default reaches a figure with nothing above it, so it carries nothing at all.
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::FigDelete,
-        MouseGestureBinding::Middle,
-    );
+    hotkeys.set_gesture(GestureSlot::FigDelete, MouseGestureBinding::Middle);
     assert!(
         Clashes::build(&hotkeys)
-            .mouse(&hotkeys, MouseSlot::FigDelete)
+            .mouse(&hotkeys, GestureSlot::FigDelete)
             .is_empty(),
         "the shipped middle-click default is not dead"
     );
@@ -468,12 +410,8 @@ fn the_dead_figure_delete_gestures_are_reported_dead() {
     // and the row says so. Calling it dead put a red "will not fire" on a gesture that fires;
     // calling it free hid a rival that really does take half the sequence.
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::FigDelete,
-        MouseGestureBinding::LeftCtrlDouble,
-    );
-    let notes = Clashes::build(&hotkeys).mouse(&hotkeys, MouseSlot::FigDelete);
+    hotkeys.set_gesture(GestureSlot::FigDelete, MouseGestureBinding::LeftCtrlDouble);
+    let notes = Clashes::build(&hotkeys).mouse(&hotkeys, GestureSlot::FigDelete);
     let clash = notes
         .first()
         .expect("drawing takes press one, which is worth saying");
@@ -490,20 +428,12 @@ fn the_dead_figure_delete_gestures_are_reported_dead() {
 #[test]
 fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuySet,
-        MouseGestureBinding::LeftShift,
-    );
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::BuyMove,
-        MouseGestureBinding::LeftShift,
-    );
-    set_move_kind_slot_value(&mut hotkeys, MoveKindSlot::BuyMove, MoveKind::ParallelShift);
+    hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftShift);
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::LeftShift);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove, MoveKind::ParallelShift);
     let clashes = Clashes::build(&hotkeys);
 
-    let winner = clashes.mouse(&hotkeys, MouseSlot::BuySet);
+    let winner = clashes.mouse(&hotkeys, GestureSlot::BuySet);
     let winner = winner
         .first()
         .expect("placement is offered the press first, and says so");
@@ -517,7 +447,7 @@ fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
         rust_i18n::t!(
             "hotkeys.clash.wins",
             rows = super::super::pull_gestures::target_label(
-                super::super::pull_gestures::GestureTarget::Gesture(MouseSlot::BuyMove)
+                super::super::pull_gestures::GestureTarget::Gesture(GestureSlot::BuyMove)
             )
         )
         .to_string(),
@@ -525,7 +455,7 @@ fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
     );
     assert_eq!(
         clashes
-            .mouse(&hotkeys, MouseSlot::BuyMove)
+            .mouse(&hotkeys, GestureSlot::BuyMove)
             .first()
             .expect("the move row never sees the press")
             .severity,
@@ -546,13 +476,9 @@ fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
 fn a_lower_layer_needing_the_same_object_is_taken_from() {
     let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
-    set_mouse_slot_verbatim(
-        &mut hotkeys,
-        MouseSlot::FigDelete,
-        MouseGestureBinding::RightAlt,
-    );
+    hotkeys.set_gesture(GestureSlot::FigDelete, MouseGestureBinding::RightAlt);
 
-    let notes = Clashes::build(&hotkeys).mouse(&hotkeys, MouseSlot::FigDelete);
+    let notes = Clashes::build(&hotkeys).mouse(&hotkeys, GestureSlot::FigDelete);
     let clash = notes
         .first()
         .expect("the figure menu sits below and never sees the press");

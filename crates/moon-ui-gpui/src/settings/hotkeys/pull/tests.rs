@@ -32,7 +32,7 @@ fn cancel_buy_row(hotkeys: &HotkeysConfig, raw: u16) -> PullRow {
     };
     preview_core_hotkeys(hotkeys, &layout, &[0u16; MANUAL_STRATEGY_KEYS])
         .into_iter()
-        .find(|row| row.slot == HotkeySlot::CancelBuy)
+        .find(|row| row.slot == KeySlot::CancelBuy)
         .expect("the preview covers every named slot")
 }
 

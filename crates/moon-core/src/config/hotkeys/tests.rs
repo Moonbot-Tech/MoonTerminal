@@ -510,6 +510,182 @@ fn no_stored_keystroke_is_missing_from_the_registry() {
     );
 }
 
+/// A slot's stem IS its key in the file — the fact every derived spelling rests on.
+///
+/// Checked against the serialized table, not against the accessor: `key` and `stem` are two
+/// matches over the same enum, and a typo in one of them is exactly what this has to catch. A
+/// family's stem names its array, with the index outside it.
+///
+/// Plausible breakage: a field renamed for the file with the stem left behind, which would let the
+/// import id, the page id and the locale key all agree with each other and disagree with the file.
+#[test]
+fn a_slots_stem_is_its_key_in_the_file() {
+    let mut cfg = HotkeysConfig::default();
+    let marker = |slot: KeySlot| format!("zz-{slot:?}");
+    for slot in KeySlot::all() {
+        assert!(cfg.set_key(slot, marker(slot)));
+    }
+    let text = toml::to_string(&cfg).expect("serialize hotkeys");
+    let table: toml::Table = text.parse().expect("re-read hotkeys");
+
+    for slot in KeySlot::all() {
+        let stored = match slot.index() {
+            Some(i) => table[slot.stem()]
+                .as_array()
+                .and_then(|family| family.get(i))
+                .and_then(toml::Value::as_str),
+            None => table[slot.stem()].as_str(),
+        };
+        assert_eq!(
+            stored,
+            Some(marker(slot).as_str()),
+            "{slot:?}: the file does not store this slot under its stem {:?}",
+            slot.stem()
+        );
+    }
+}
+
+/// Every gesture the file stores is reachable through a [`GestureSlot`], and no two slots share one.
+///
+/// The same shape as the keystroke check above, for the same reason: `GestureSlot::ALL` cannot be
+/// verified by walking `GestureSlot::ALL`. Every slot is written a DISTINCT gesture, the file is
+/// read back, and every gesture-shaped value in it has to be one of those — a field no slot reaches
+/// still holds its default, which is either `none` or a duplicate of a marker. The four kind fields
+/// are moved off `none` first so they cannot be mistaken for an unreached gesture.
+///
+/// What a missed field costs: the settings page never draws it, the core pull never writes it, and
+/// the clash index never sees the gesture it holds — so a press two rows answer is captioned as
+/// answered by one.
+#[test]
+fn no_stored_gesture_is_missing_from_the_registry() {
+    let mut cfg = HotkeysConfig::default();
+    for row in MoveKindSlot::ALL {
+        cfg.set_move_kind(row, MoveKind::TopVolume);
+    }
+    // Distinct, and none of them `None`: `ALL[0]` is the unset gesture. Every slot is cleared
+    // first, so a marker that happens to be a slot's shipped default is still a change.
+    let markers: Vec<MouseGestureBinding> =
+        MouseGestureBinding::ALL[1..=GestureSlot::ALL.len()].to_vec();
+    for slot in GestureSlot::ALL {
+        cfg.set_gesture(slot, MouseGestureBinding::None);
+    }
+    for (slot, marker) in GestureSlot::ALL.into_iter().zip(&markers) {
+        assert!(cfg.set_gesture(slot, *marker), "{slot:?} stores nothing");
+    }
+    let text = toml::to_string(&cfg).expect("serialize hotkeys");
+    let table: toml::Table = text.parse().expect("re-read hotkeys");
+
+    let mut stored: Vec<(String, MouseGestureBinding)> = table
+        .iter()
+        .filter_map(|(name, value)| {
+            let gesture = MouseGestureBinding::from_config_value(value.as_str()?)?;
+            Some((name.clone(), gesture))
+        })
+        .collect();
+    stored.sort_by_key(|(_, gesture)| gesture.config_value());
+    let mut expected = markers.clone();
+    expected.sort_by_key(|gesture| gesture.config_value());
+    let found: Vec<MouseGestureBinding> = stored.iter().map(|(_, g)| *g).collect();
+    assert_eq!(
+        found, expected,
+        "the file's gesture fields are not exactly the slots' markers: {stored:?}"
+    );
+
+    // Read back through the accessor too, all writes before any read, so an alias cannot pass.
+    for (slot, marker) in GestureSlot::ALL.into_iter().zip(&markers) {
+        assert_eq!(
+            cfg.gesture(slot),
+            *marker,
+            "{slot:?} shares a field with another slot"
+        );
+    }
+}
+
+/// Each move row owns one kind field, and the row's two halves are two different gesture slots.
+#[test]
+fn each_move_row_addresses_its_own_kind_and_halves() {
+    let mut cfg = HotkeysConfig::default();
+    let kinds = [
+        MoveKind::TopVolume,
+        MoveKind::LowVolume,
+        MoveKind::TopProfit,
+        MoveKind::LastSet,
+    ];
+    for (row, kind) in MoveKindSlot::ALL.into_iter().zip(kinds) {
+        assert!(cfg.set_move_kind(row, kind), "{row:?} stores nothing");
+        assert!(!cfg.set_move_kind(row, kind), "rewriting the same kind");
+    }
+    for (row, kind) in MoveKindSlot::ALL.into_iter().zip(kinds) {
+        assert_eq!(cfg.move_kind(row), kind, "{row:?} shares a kind field");
+    }
+
+    let mut halves: Vec<GestureSlot> = MoveKindSlot::ALL
+        .into_iter()
+        .flat_map(|row| [row.half(false), row.half(true)])
+        .collect();
+    halves.sort_by_key(|slot| slot.stem());
+    halves.dedup();
+    assert_eq!(halves.len(), 8, "two move halves name one gesture slot");
+    for row in MoveKindSlot::ALL {
+        for short in [false, true] {
+            let slot = row.half(short);
+            assert_eq!(slot.move_half(), Some(MoveHalf { row, short }), "{slot:?}");
+        }
+        assert_eq!(row.half(false).kind(), Some(row));
+        assert_eq!(
+            row.half(true).kind(),
+            None,
+            "a short row carries no kind of its own"
+        );
+        assert_eq!(row.half(false).short_twin(), Some(row.half(true)));
+        assert_eq!(row.half(true).short_twin(), None);
+    }
+    for slot in [
+        GestureSlot::BuySet,
+        GestureSlot::PendingShort,
+        GestureSlot::FigDelete,
+    ] {
+        assert_eq!(slot.move_half(), None, "{slot:?} is not a move row");
+        assert_eq!(slot.kind(), None);
+    }
+}
+
+/// The gesture in effect for a short row follows the long row while the mirror is set, and is
+/// the row's own field once it is not — the same reading `move_gestures` gives the dispatcher.
+///
+/// Plausible breakage: a reader that goes to the field, which puts a binding nothing fires into
+/// a preview's "current" column or into every other row's clash caption.
+#[test]
+fn the_gesture_in_effect_reads_through_the_mirror() {
+    let mut cfg = HotkeysConfig::default();
+    cfg.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::LeftAlt);
+    cfg.set_gesture(GestureSlot::ShortBuyMove, MouseGestureBinding::MiddleAlt);
+
+    cfg.same_hotkeys_for_move = true;
+    assert_eq!(
+        cfg.gesture_in_effect(GestureSlot::ShortBuyMove),
+        MouseGestureBinding::LeftAlt,
+        "with the mirror set the short row fires the long row's gesture"
+    );
+    assert_eq!(
+        cfg.gesture(GestureSlot::ShortBuyMove),
+        MouseGestureBinding::MiddleAlt,
+        "the stale short value is still stored"
+    );
+
+    cfg.same_hotkeys_for_move = false;
+    assert_eq!(
+        cfg.gesture_in_effect(GestureSlot::ShortBuyMove),
+        MouseGestureBinding::MiddleAlt
+    );
+    // A placement row has no mirror: field and effect are one.
+    cfg.set_gesture(GestureSlot::BuySet, MouseGestureBinding::RightAlt);
+    assert_eq!(
+        cfg.gesture_in_effect(GestureSlot::BuySet),
+        MouseGestureBinding::RightAlt
+    );
+}
+
 /// No two slots address the same field.
 ///
 /// Every value is written BEFORE any is read back, which is what makes the check work: asserting
@@ -560,6 +736,54 @@ fn a_no_op_write_and_an_impossible_index_are_both_quiet() {
         assert_eq!(cfg.key(out_of_range), "");
         assert!(!cfg.set_key(out_of_range, "alt-1".into()));
     }
+}
+
+/// The arriving figure-delete gesture yields to a trading gesture the file already fires on
+/// Middle — and keeps its default where Middle is free.
+///
+/// Plausible breakage: the yield reading the stored short field rather than the gesture in effect,
+/// which would clear the default against a mirrored-away value nobody can press, or not yielding
+/// at all, which puts figure deletion in front of an order move on every figure.
+#[test]
+fn the_arriving_figure_gesture_yields_to_a_trading_gesture_on_the_same_button() {
+    // A file from before the gesture existed, and one an intermediate build stamped 4 with the
+    // gesture already in it: both are judged once.
+    for from in [3, 4] {
+        let mut taken = HotkeysConfig::default();
+        taken.schema = from;
+        taken.buy_move_click = MouseGestureBinding::Middle;
+        assert!(taken.fill_unbound_slots());
+        assert_eq!(
+            taken.fig_delete_click,
+            MouseGestureBinding::None,
+            "from {from}"
+        );
+        assert_eq!(
+            taken.buy_move_click,
+            MouseGestureBinding::Middle,
+            "the user's own gesture is the one kept"
+        );
+    }
+
+    let mut free = HotkeysConfig::default();
+    free.schema = 3;
+    assert!(free.fill_unbound_slots());
+    assert_eq!(free.fig_delete_click, MouseGestureBinding::Middle);
+
+    // A short field left on Middle behind the mirror switch is not a gesture anyone can press.
+    let mut mirrored = HotkeysConfig::default();
+    mirrored.schema = 3;
+    mirrored.same_hotkeys_for_move = true;
+    mirrored.short_sell_move_click = MouseGestureBinding::Middle;
+    assert!(mirrored.fill_unbound_slots());
+    assert_eq!(mirrored.fig_delete_click, MouseGestureBinding::Middle);
+
+    // A file already at this generation is not re-judged: a later deliberate choice stands.
+    let mut chosen = HotkeysConfig::default();
+    chosen.schema = SCHEMA;
+    chosen.buy_move_click = MouseGestureBinding::Middle;
+    assert!(!chosen.fill_unbound_slots());
+    assert_eq!(chosen.fig_delete_click, MouseGestureBinding::Middle);
 }
 
 /// The two pending gestures are cleared ONCE, when they stop being inert.

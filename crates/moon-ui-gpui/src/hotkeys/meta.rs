@@ -6,36 +6,26 @@
 //! pointer if it belongs to this window's group, else the window's main chart"
 //! (`shell/actions.rs::select_hotkey_target`), `ChartPanel::place_order_at_pos` picks the book strip
 //! or the whole pane. The travel side lives as the presence or absence of one mapping arm in
-//! `super::pull`'s action-to-slot map and
+//! `settings::hotkeys::pull`'s action-to-slot map and
 //! `moon_core::config::moonbot_import::plan::action_target`.
 //! Neither was ever a property of the slot, so the settings page could not say "this one stays
 //! yours when you paste a Moonbot config" or "these two both answer a click in the book", and every
 //! such question had to be answered by reading the routers again.
 //!
 //! This module is that attachment and nothing else — a pure lookup with one arm per slot, so the
-//! compiler refuses a new slot that does not state both facts.
+//! compiler refuses a new slot that does not state both facts. It sits HERE, beside the dispatcher
+//! it describes, and not in the settings page that draws the marks: the fact is owned where the
+//! behavior is. It could not until the slot types moved down to `moon_core::config` — a table
+//! cannot sit below its own key type — which is why it spent its first months inside the page.
 //!
 //! It computes no conflicts, and it turned out not to be what the conflict captions needed:
-//! [`super::clash`] answers them from the dispatchers' own ORDER — `RESOLVE_ORDER` for the keys, the
-//! per-button layer lists for the mouse — because the first version, which reasoned about where each
-//! binding acts, was backwards on thirty slots out of thirty-eight. So [`Scope`] is a row's label
-//! and not a rule, and [`Scope::intersects`] has no caller outside this module's own tests.
-//!
-//! It was also meant to MOVE down beside the routers it describes, so the fact would be owned where
-//! the behavior is. That is blocked on something bigger, and worth naming rather than re-discovering:
-//! the tables below are keyed by [`HotkeySlot`] and [`MouseSlot`], which are defined in this
-//! settings page (`super`). A table cannot sit below its own key type, so the slot enums have to
-//! come out of the page first — which is the plan's P0, the one slot registry. Until then the label
-//! stays here.
-//!
-//! What DID move down is the comparison the collision rule turns on: `crate::hotkeys::binding_id` is
-//! now the single definition of "these two configured strings are the same press", beside the
-//! dispatcher that decides it, and both [`super::clash`] and [`super::pull`] read it instead of
-//! spelling their own.
+//! `settings::hotkeys::clash` answers them from the dispatchers' own ORDER — `RESOLVE_ORDER` for the
+//! keys, the per-button layer lists for the mouse — because the first version, which reasoned about
+//! where each binding acts, was backwards on thirty slots out of thirty-eight. So [`Scope`] is a
+//! row's label and not a rule, and [`Scope::intersects`] has no caller outside its own tests.
 
+use moon_core::config::{GestureSlot, KeySlot};
 use rust_i18n::t;
-
-use super::{HotkeySlot, MouseSlot};
 
 /// The surfaces a binding acts on, as a SET rather than one value.
 ///
@@ -49,27 +39,27 @@ use super::{HotkeySlot, MouseSlot};
 /// each names a place the pointer has to be — and [`Self::APP`] contains everything. The conflict
 /// rule that comes next needs that containment; [`Self::intersects`] alone does not encode it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct Scope(u8);
+pub struct Scope(u8);
 
 impl Scope {
     /// The whole application, whatever holds the keyboard and wherever the pointer is: the drawing
     /// tools and the sells-zone mode arm state every chart then reads.
-    pub(super) const APP: Self = Self(1 << 0);
+    pub const APP: Self = Self(1 << 0);
     /// This window and its group — its main chart, its group's exits and sizes, or its active
     /// trading core. Never another window's, and never decided by the pointer.
-    pub(super) const WINDOW: Self = Self(1 << 1);
+    pub const WINDOW: Self = Self(1 << 1);
     /// The chart the pointer rests on: `shell/actions.rs::select_hotkey_target` prefers it over the
     /// window's own chart whenever it belongs to the same group, and `hotkeys::pre_dispatch` uses
     /// nothing else. A key carries no position, so these read the cursor instead.
-    pub(super) const CURSOR: Self = Self(1 << 2);
+    pub const CURSOR: Self = Self(1 << 2);
     /// The selected figure, wherever it was drawn (`Backend::fig_selected`).
-    pub(super) const SELECTION: Self = Self(1 << 3);
+    pub const SELECTION: Self = Self(1 << 3);
     /// The order-book strip — the trading surface while "separate control zones" is on.
-    pub(super) const BOOK: Self = Self(1 << 4);
+    pub const BOOK: Self = Self(1 << 4);
     /// The chart's price field, which is the trading surface while separate zones are off.
-    pub(super) const PLOT: Self = Self(1 << 5);
+    pub const PLOT: Self = Self(1 << 5);
     /// A figure under the pointer, within the hit threshold.
-    pub(super) const FIGURE: Self = Self(1 << 6);
+    pub const FIGURE: Self = Self(1 << 6);
 
     /// Every surface in display order, with the locale key naming it.
     const NAMED: [(Self, &'static str); 7] = [
@@ -83,13 +73,37 @@ impl Scope {
     ];
 
     /// Both surfaces of one slot, for the slots that have two.
-    const fn or(self, other: Self) -> Self {
+    pub const fn or(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    /// The set with these surfaces taken out.
+    const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    /// The surfaces of a row that carries two slots — the union, read through the containment the
+    /// constants document.
+    ///
+    /// [`Self::or`] is the raw union and the right thing for ONE slot's two alternatives (`BOOK`
+    /// or `PLOT`, whichever the zones setting picks). A row that joins a key acting on the cursor
+    /// with a gesture acting on the figure under it is a different case: "cursor / figure" names
+    /// the same place twice, in a column with no room to. So a set that already says `CURSOR` drops
+    /// the places the pointer could be, and a set that says `APP` says only that.
+    pub fn join(self, other: Self) -> Self {
+        let both = self.or(other);
+        if both.intersects(Self::APP) {
+            Self::APP
+        } else if both.intersects(Self::CURSOR) {
+            both.without(Self::BOOK.or(Self::PLOT).or(Self::FIGURE))
+        } else {
+            both
+        }
     }
 
     /// Whether the two sets share a surface — the question a conflict caption turns on: two
     /// bindings that never meet on the same surface are not in each other's way at all.
-    pub(super) fn intersects(self, other: Self) -> bool {
+    pub fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
     }
 
@@ -104,15 +118,15 @@ impl Scope {
     ///
     /// The SET is what the model keeps regardless — the setting can be flipped, and a conflict rule
     /// has to see both halves. Every other set is left alone.
-    pub(super) fn resolved(self, separate_zones: bool) -> Self {
+    pub fn resolved(self, separate_zones: bool) -> Self {
         if separate_zones && self.intersects(Self::BOOK) && self.intersects(Self::PLOT) {
-            return Self(self.0 & !Self::PLOT.0);
+            return self.without(Self::PLOT);
         }
         self
     }
 
     /// Localized name of the surface, or of every surface in the set, for the row's mark.
-    pub(super) fn label(self) -> String {
+    pub fn label(self) -> String {
         Self::NAMED
             .into_iter()
             .filter(|(flag, _)| self.intersects(*flag))
@@ -127,14 +141,14 @@ impl Scope {
 ///
 /// Deliberately about the VALUE and not about the action. "Moonbot can also draw a channel" does
 /// not help anyone decide what a paste will overwrite, and it has no checkable answer; "the config
-/// import writes this field" has exactly one, and [`super::pull`] and
+/// import writes this field" has exactly one, and `settings::hotkeys::pull` and
 /// `moon_core::config::moonbot_import` are where it is written down.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Origin {
+pub enum Origin {
     /// The value crosses over: pasting a Moonbot configuration writes this slot
     /// (`moonbot_import::plan::action_target`), or "pull layout from core" reconciles it against
-    /// the core's own layout (`super::pull` for the keys, `super::pull_gestures` for the twelve
-    /// order gestures), or both.
+    /// the core's own layout (`settings::hotkeys::pull` for the keys,
+    /// `settings::hotkeys::pull_gestures` for the twelve order gestures), or both.
     Shared,
     /// Nothing writes it. A Moonbot paste and a core pull both leave this row exactly as it was.
     Local,
@@ -142,7 +156,7 @@ pub(super) enum Origin {
 
 impl Origin {
     /// Short mark shown on the row.
-    pub(super) fn label(self) -> String {
+    pub fn label(self) -> String {
         match self {
             Self::Shared => t!("hotkeys.origin.shared"),
             Self::Local => t!("hotkeys.origin.local"),
@@ -152,8 +166,8 @@ impl Origin {
 }
 
 /// One slot's two facts, as the settings row shows them.
-#[derive(Clone, Copy)]
-pub(super) struct SlotMeta {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SlotMeta {
     pub origin: Origin,
     pub scope: Scope,
 }
@@ -164,12 +178,12 @@ const fn meta(origin: Origin, scope: Scope) -> SlotMeta {
 
 /// The mirror switch's facts. Not a slot either, and the widest blast radius on the page: a pull
 /// writes it, and it decides whether the four short rows follow the long ones at all.
-pub(super) const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK.or(Scope::PLOT));
+pub const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK.or(Scope::PLOT));
 
-/// The part-count row's facts. Not a [`HotkeySlot`] — it stores a number, not a key — but a Moonbot
+/// The part-count row's facts. Not a [`KeySlot`] — it stores a number, not a key — but a Moonbot
 /// paste rewrites it (`Hotkeys.SplitParts`), so it belongs in this table rather than stated inline
 /// in the renderer where nothing checks it.
-pub(super) const SPLIT_PARTS: SlotMeta = meta(Origin::Shared, Scope::WINDOW);
+pub const SPLIT_PARTS: SlotMeta = meta(Origin::Shared, Scope::WINDOW);
 
 /// The two facts about one keyboard slot.
 ///
@@ -178,8 +192,8 @@ pub(super) const SPLIT_PARTS: SlotMeta = meta(Origin::Shared, Scope::WINDOW);
 /// the POINTER when that chart is in this window's group, and on the window's main chart otherwise
 /// — so it carries both surfaces, and a detached window (`chart_tabs::detached_host`, which uses its
 /// own chart and no hover) is the case where only the second one is left.
-pub(super) fn key_slot_meta(slot: HotkeySlot) -> SlotMeta {
-    use HotkeySlot as S;
+pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
+    use KeySlot as S;
     use Origin::*;
     // Every action that reads `hotkeys::apply`'s `target`, and therefore follows the pointer first.
     const AIMED: Scope = Scope::CURSOR.or(Scope::WINDOW);
@@ -231,14 +245,14 @@ pub(super) fn key_slot_meta(slot: HotkeySlot) -> SlotMeta {
     }
 }
 
-/// The two facts about one mouse slot.
+/// The two facts about one gesture slot.
 ///
 /// The twelve trading gestures travel: the core carries them in `feed::GestureSettings` and
-/// [`super::pull_gestures`] reads them into this terminal's one layout, so a pull overwrites these
-/// rows exactly as it overwrites a key. Their surface is the trading surface: the book strip under
-/// "separate control zones" and the whole pane without it.
-pub(super) fn mouse_slot_meta(slot: MouseSlot) -> SlotMeta {
-    use MouseSlot as S;
+/// `settings::hotkeys::pull_gestures` reads them into this terminal's one layout, so a pull
+/// overwrites these rows exactly as it overwrites a key. Their surface is the trading surface: the
+/// book strip under "separate control zones" and the whole pane without it.
+pub fn gesture_slot_meta(slot: GestureSlot) -> SlotMeta {
+    use GestureSlot as S;
     match slot {
         S::BuySet
         | S::ShortSet

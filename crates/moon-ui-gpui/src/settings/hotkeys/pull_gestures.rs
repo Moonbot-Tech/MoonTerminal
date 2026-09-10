@@ -21,21 +21,18 @@
 //!   `HotkeysConfig::move_gestures`, never off either field. A preview that stated a binding
 //!   neither end actually fires would be worse than no preview.
 
-use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
+use moon_core::config::{GestureSlot, HotkeysConfig, MouseGestureBinding, MoveKind, MoveKindSlot};
 use moon_core::feed::{GestureSettings, MoveRow};
 use rust_i18n::t;
 
 use super::pull::PullVerdict;
-use super::{
-    MouseSlot, MoveKindSlot, all_mouse_slots, mouse_slot_value, move_kind_slot_value,
-    set_mouse_slot_verbatim, set_move_kind_slot_value,
-};
+use super::registry;
 
 /// What one gesture row of the preview writes into.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum GestureTarget {
     /// One of the twelve order gestures.
-    Gesture(MouseSlot),
+    Gesture(GestureSlot),
     /// One of the four "move kind" selectors.
     Kind(MoveKindSlot),
     /// The switch that makes the short columns follow the long ones.
@@ -70,55 +67,40 @@ pub(super) struct GesturePullRow {
 ///
 /// The move rows go through [`GestureSettings::move_gesture`] rather than reading a field, which is
 /// the whole reason this is a function and not a table of field offsets.
-fn core_gesture(g: &GestureSettings, slot: MouseSlot) -> Option<u8> {
+fn core_gesture(g: &GestureSettings, slot: GestureSlot) -> Option<u8> {
+    if let Some(half) = slot.move_half() {
+        return Some(g.move_gesture(wire_row(half.row), half.short));
+    }
     Some(match slot {
-        MouseSlot::BuySet => g.buy_set_click,
-        MouseSlot::ShortSet => g.short_set_click,
-        MouseSlot::PendingLong => g.pending_order_set_click,
-        MouseSlot::PendingShort => g.pending_short_set_click,
-        MouseSlot::BuyMove => g.move_gesture(MoveRow::OpenPrimary, false),
-        MouseSlot::ShortBuyMove => g.move_gesture(MoveRow::OpenPrimary, true),
-        MouseSlot::SellMove => g.move_gesture(MoveRow::TpPrimary, false),
-        MouseSlot::ShortSellMove => g.move_gesture(MoveRow::TpPrimary, true),
-        MouseSlot::BuyMove2 => g.move_gesture(MoveRow::OpenSecondary, false),
-        MouseSlot::ShortBuyMove2 => g.move_gesture(MoveRow::OpenSecondary, true),
-        MouseSlot::SellMove2 => g.move_gesture(MoveRow::TpSecondary, false),
-        MouseSlot::ShortSellMove2 => g.move_gesture(MoveRow::TpSecondary, true),
+        GestureSlot::BuySet => g.buy_set_click,
+        GestureSlot::ShortSet => g.short_set_click,
+        GestureSlot::PendingLong => g.pending_order_set_click,
+        GestureSlot::PendingShort => g.pending_short_set_click,
         // Deleting a figure by pointing is the Terminal's own: `GestureSettings` carries the twelve
         // order gestures and no figure gesture at all, so a pull has nothing to say about this row.
-        MouseSlot::FigDelete => return None,
+        GestureSlot::FigDelete => return None,
+        // Every move half was answered above; the arm is here so a new variant has to say which
+        // side of the wire it is on. Should `move_half` ever stop covering one of these, the row
+        // drops out of the pull — and `registry::tests` fails, because its mark still says the
+        // pull writes it.
+        GestureSlot::BuyMove
+        | GestureSlot::SellMove
+        | GestureSlot::BuyMove2
+        | GestureSlot::SellMove2
+        | GestureSlot::ShortBuyMove
+        | GestureSlot::ShortSellMove
+        | GestureSlot::ShortBuyMove2
+        | GestureSlot::ShortSellMove2 => return None,
     })
 }
 
-/// Whether this slot is the short half of a move row — the four the mirror switch re-aims.
-fn is_short_move(slot: MouseSlot) -> bool {
-    matches!(
-        slot,
-        MouseSlot::ShortBuyMove
-            | MouseSlot::ShortSellMove
-            | MouseSlot::ShortBuyMove2
-            | MouseSlot::ShortSellMove2
-    )
-}
-
-/// The gesture this terminal actually FIRES for one slot.
-///
-/// A short move row resolves through [`HotkeysConfig::move_gestures`] for the same reason its core
-/// twin does: with the mirror flag set the short field is not what fires, and showing it would put
-/// a binding in the preview's "current" column that nothing executes.
-pub(super) fn local_gesture(hotkeys: &HotkeysConfig, slot: MouseSlot) -> MouseGestureBinding {
-    let pair = |entry: bool, short: bool| hotkeys.move_gestures(entry, short);
-    match slot {
-        MouseSlot::BuyMove => pair(true, false)[0],
-        MouseSlot::BuyMove2 => pair(true, false)[1],
-        MouseSlot::SellMove => pair(false, false)[0],
-        MouseSlot::SellMove2 => pair(false, false)[1],
-        MouseSlot::ShortBuyMove => pair(true, true)[0],
-        MouseSlot::ShortBuyMove2 => pair(true, true)[1],
-        MouseSlot::ShortSellMove => pair(false, true)[0],
-        MouseSlot::ShortSellMove2 => pair(false, true)[1],
-        // The placement and pending rows have no mirror, so the field is what fires.
-        _ => mouse_slot_value(hotkeys, slot),
+/// The wire's row for one of the terminal's move rows — the one place the two numberings meet.
+fn wire_row(row: MoveKindSlot) -> MoveRow {
+    match row {
+        MoveKindSlot::BuyMove => MoveRow::OpenPrimary,
+        MoveKindSlot::SellMove => MoveRow::TpPrimary,
+        MoveKindSlot::BuyMove2 => MoveRow::OpenSecondary,
+        MoveKindSlot::SellMove2 => MoveRow::TpSecondary,
     }
 }
 
@@ -210,11 +192,11 @@ pub(super) fn preview_core_gestures(
     g: &GestureSettings,
 ) -> Vec<GesturePullRow> {
     let mut rows = Vec::with_capacity(17);
-    for slot in all_mouse_slots() {
+    for slot in GestureSlot::ALL {
         let Some(raw) = core_gesture(g, slot) else {
             continue;
         };
-        let current = local_gesture(hotkeys, slot);
+        let current = hotkeys.gesture_in_effect(slot);
         rows.push(build_row(
             GestureTarget::Gesture(slot),
             GestureValue::Gesture(current),
@@ -222,13 +204,8 @@ pub(super) fn preview_core_gestures(
             decode_gesture(raw).map(GestureValue::Gesture),
         ));
     }
-    for slot in [
-        MoveKindSlot::BuyMove,
-        MoveKindSlot::SellMove,
-        MoveKindSlot::BuyMove2,
-        MoveKindSlot::SellMove2,
-    ] {
-        let current = move_kind_slot_value(hotkeys, slot);
+    for slot in MoveKindSlot::ALL {
+        let current = hotkeys.move_kind(slot);
         rows.push(build_row(
             GestureTarget::Kind(slot),
             GestureValue::Kind(current),
@@ -248,14 +225,14 @@ pub(super) fn preview_core_gestures(
 
 /// Writes every [`PullVerdict::WillApply`] row, leaving every other row untouched.
 ///
-/// Gestures are written VERBATIM ([`set_mouse_slot_verbatim`]) rather than through the editor's
+/// Gestures are written VERBATIM (`HotkeysConfig::set_gesture`) rather than through the editor's
 /// setter. The editor mirrors a long row onto its short twin while the mirror flag is set, and here
 /// that would overwrite a short value this very preview decided to leave alone — a local flag set
 /// over a core that has it clear is all it takes. A layout transfer copies what the core holds.
 ///
 /// The flag row is applied LAST because the short-row repair below depends on knowing the switch
 /// moved. The gesture writes themselves do not care about the order — every one of them goes
-/// through [`set_mouse_slot_verbatim`], which the flag has no say in.
+/// through `HotkeysConfig::set_gesture`, which the flag has no say in.
 ///
 /// A change to the mirror flag ALSO re-aims the four short rows from what the core holds, whatever
 /// their own verdict was. Both directions need it, and neither is repairable by pulling again:
@@ -276,10 +253,10 @@ pub(super) fn apply_core_gestures(hotkeys: &mut HotkeysConfig, rows: &[GesturePu
         }
         match (row.target, row.new) {
             (GestureTarget::Gesture(slot), Some(GestureValue::Gesture(value))) => {
-                changed |= set_mouse_slot_verbatim(hotkeys, slot, value);
+                changed |= hotkeys.set_gesture(slot, value);
             }
             (GestureTarget::Kind(slot), Some(GestureValue::Kind(value))) => {
-                changed |= set_move_kind_slot_value(hotkeys, slot, value);
+                changed |= hotkeys.set_move_kind(slot, value);
             }
             (GestureTarget::SameForMove, Some(GestureValue::Flag(value))) => flag = Some(value),
             // A row whose target and value disagree cannot be built by `preview_core_gestures`;
@@ -298,8 +275,8 @@ pub(super) fn apply_core_gestures(hotkeys: &mut HotkeysConfig, rows: &[GesturePu
             else {
                 continue;
             };
-            if is_short_move(slot) {
-                changed |= set_mouse_slot_verbatim(hotkeys, slot, incoming);
+            if slot.is_short_move() {
+                changed |= hotkeys.set_gesture(slot, incoming);
             }
         }
     }
@@ -312,47 +289,13 @@ pub(super) fn apply_core_gestures(hotkeys: &mut HotkeysConfig, rows: &[GesturePu
 /// row — so it is named here as that row plus the column's name, which is how the trader sees it.
 pub(super) fn target_label(target: GestureTarget) -> String {
     match target {
-        GestureTarget::Gesture(slot) => gesture_label(slot),
-        GestureTarget::Kind(slot) => format!(
+        GestureTarget::Gesture(slot) => registry::gesture_title(slot),
+        GestureTarget::Kind(row) => format!(
             "{} · {}",
-            gesture_label(kind_owner(slot)),
+            registry::gesture_title(row.half(false)),
             t!("hotkeys.move_kind.title")
         ),
         GestureTarget::SameForMove => t!("hotkeys.mouse.same_move").to_string(),
-    }
-}
-
-fn gesture_label(slot: MouseSlot) -> String {
-    let key = format!("hotkeys.mouse.{}", gesture_key(slot));
-    t!(key.as_str()).to_string()
-}
-
-/// The gesture row a move kind belongs to.
-fn kind_owner(slot: MoveKindSlot) -> MouseSlot {
-    match slot {
-        MoveKindSlot::BuyMove => MouseSlot::BuyMove,
-        MoveKindSlot::SellMove => MouseSlot::SellMove,
-        MoveKindSlot::BuyMove2 => MouseSlot::BuyMove2,
-        MoveKindSlot::SellMove2 => MouseSlot::SellMove2,
-    }
-}
-
-/// Locale suffix of one gesture row, matching the keys the editor rows already use.
-fn gesture_key(slot: MouseSlot) -> &'static str {
-    match slot {
-        MouseSlot::BuySet => "buy_set",
-        MouseSlot::ShortSet => "short_set",
-        MouseSlot::PendingLong => "pending_long",
-        MouseSlot::PendingShort => "pending_short",
-        MouseSlot::BuyMove => "buy_move",
-        MouseSlot::SellMove => "sell_move",
-        MouseSlot::BuyMove2 => "buy_move2",
-        MouseSlot::SellMove2 => "sell_move2",
-        MouseSlot::ShortBuyMove => "short_buy_move",
-        MouseSlot::ShortSellMove => "short_sell_move",
-        MouseSlot::ShortBuyMove2 => "short_buy_move2",
-        MouseSlot::ShortSellMove2 => "short_sell_move2",
-        MouseSlot::FigDelete => "fig_delete",
     }
 }
 

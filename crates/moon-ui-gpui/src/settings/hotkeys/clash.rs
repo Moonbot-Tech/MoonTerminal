@@ -20,7 +20,8 @@
 //!   and the guess said the right button placed nothing at all — a red "will not fire" on a gesture
 //!   that opens a live position.
 //! - **Within one layer** the order is a third thing again, and [`same_layer_rank`] is it: placement
-//!   asks in `all_mouse_slots` order, the move rows in `resolve_move_gesture`'s pair order.
+//!   asks in `GestureSlot::ALL` order, the move rows in `MoveKindSlot::ALL` order — both read off
+//!   the lists the dispatchers walk, not copied.
 //!
 //! A layer that answers only in a mode or over an object — drawing while a tool is armed, a context
 //! menu over its object — does not kill what sits below it: the press falls through everywhere the
@@ -30,16 +31,15 @@
 
 use std::collections::HashMap;
 
-use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
+use moon_core::config::{
+    GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKind, MoveKindSlot,
+};
 use rust_i18n::t;
 
 use crate::hotkeys::{BindingId, binding_id};
 
-use super::pull_gestures::{GestureTarget, local_gesture, target_label};
-use super::{
-    HotkeySlot, MouseSlot, MoveKindSlot, all_mouse_slots, move_kind_slot_value, slot_label,
-    slot_value,
-};
+use super::pull_gestures::{GestureTarget, target_label};
+use super::registry;
 
 /// How badly the other holder gets in this row's way.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -64,7 +64,7 @@ pub(super) struct Clash {
 /// decides which holder of a keystroke is alive; `clash::tests` reads that function's source and
 /// fails if the two ever disagree.
 enum Step {
-    Slot(HotkeySlot),
+    Slot(KeySlot),
     /// A binding the user cannot edit: the keystrokes it answers, and the locale key naming it.
     Builtin(&'static [&'static str], &'static str),
 }
@@ -72,69 +72,67 @@ enum Step {
 const RESOLVE_ORDER: &[Step] = &[
     // The drawing layer is tested FIRST, which is the whole reason these eight can take a built-in
     // key away and the thirty below them cannot.
-    Step::Slot(HotkeySlot::DrawHline),
-    Step::Slot(HotkeySlot::DrawSegment),
-    Step::Slot(HotkeySlot::DrawTriangle),
-    Step::Slot(HotkeySlot::DrawChannel),
-    Step::Slot(HotkeySlot::SwitchFigure),
-    Step::Slot(HotkeySlot::FigDelete),
-    Step::Slot(HotkeySlot::FigAlert),
-    Step::Slot(HotkeySlot::FigUndo),
+    Step::Slot(KeySlot::DrawHline),
+    Step::Slot(KeySlot::DrawSegment),
+    Step::Slot(KeySlot::DrawTriangle),
+    Step::Slot(KeySlot::DrawChannel),
+    Step::Slot(KeySlot::SwitchFigure),
+    Step::Slot(KeySlot::FigDelete),
+    Step::Slot(KeySlot::FigAlert),
+    Step::Slot(KeySlot::FigUndo),
     // The built-ins sit HERE: below the figure slots, above everything else.
     Step::Builtin(&["shift-escape"], "hotkeys.clash.builtin.close_all"),
     Step::Builtin(&["escape"], "hotkeys.clash.builtin.esc_close"),
     Step::Builtin(&["ctrl-shift-f10"], "hotkeys.clash.builtin.reset_windows"),
     Step::Builtin(&["tab", "delete"], "hotkeys.clash.builtin.cancel_hover"),
-    Step::Slot(HotkeySlot::ScalePlus),
-    Step::Slot(HotkeySlot::ScaleMinus),
-    Step::Slot(HotkeySlot::ChartShot),
-    Step::Slot(HotkeySlot::OrderSize(0)),
-    Step::Slot(HotkeySlot::OrderSize(1)),
-    Step::Slot(HotkeySlot::OrderSize(2)),
-    Step::Slot(HotkeySlot::OrderSize(3)),
-    Step::Slot(HotkeySlot::OrderSize(4)),
-    Step::Slot(HotkeySlot::OrderSize(5)),
-    Step::Slot(HotkeySlot::SellPreset(0)),
-    Step::Slot(HotkeySlot::SellPreset(1)),
-    Step::Slot(HotkeySlot::SellPreset(2)),
-    Step::Slot(HotkeySlot::SellPreset(3)),
-    Step::Slot(HotkeySlot::SellPreset(4)),
-    Step::Slot(HotkeySlot::SellPreset(5)),
-    Step::Slot(HotkeySlot::CancelBuy),
-    Step::Slot(HotkeySlot::CancelAllBuys),
-    Step::Slot(HotkeySlot::PanicSell),
-    Step::Slot(HotkeySlot::PanicSellOne),
-    Step::Slot(HotkeySlot::JoinSells),
-    Step::Slot(HotkeySlot::SplitOrder),
-    Step::Slot(HotkeySlot::SplitOrderX),
-    Step::Slot(HotkeySlot::SellsToRect),
-    Step::Slot(HotkeySlot::NewLong),
-    Step::Slot(HotkeySlot::NewShort),
-    Step::Slot(HotkeySlot::ShiftBuyUp),
-    Step::Slot(HotkeySlot::ShiftBuyDown),
-    Step::Slot(HotkeySlot::ShiftSellUp),
-    Step::Slot(HotkeySlot::ShiftSellDown),
-    Step::Slot(HotkeySlot::SwitchCharts),
-    Step::Slot(HotkeySlot::ManualStrategy(0)),
-    Step::Slot(HotkeySlot::ManualStrategy(1)),
-    Step::Slot(HotkeySlot::ManualStrategy(2)),
-    Step::Slot(HotkeySlot::ManualStrategy(3)),
-    Step::Slot(HotkeySlot::ManualStrategy(4)),
-    Step::Slot(HotkeySlot::ManualStrategy(5)),
-    Step::Slot(HotkeySlot::ManualStrategy(6)),
-    Step::Slot(HotkeySlot::ManualStrategy(7)),
-    Step::Slot(HotkeySlot::ManualStrategy(8)),
-    Step::Slot(HotkeySlot::ManualStrategy(9)),
+    Step::Slot(KeySlot::ScalePlus),
+    Step::Slot(KeySlot::ScaleMinus),
+    Step::Slot(KeySlot::ChartShot),
+    Step::Slot(KeySlot::OrderSize(0)),
+    Step::Slot(KeySlot::OrderSize(1)),
+    Step::Slot(KeySlot::OrderSize(2)),
+    Step::Slot(KeySlot::OrderSize(3)),
+    Step::Slot(KeySlot::OrderSize(4)),
+    Step::Slot(KeySlot::OrderSize(5)),
+    Step::Slot(KeySlot::SellPreset(0)),
+    Step::Slot(KeySlot::SellPreset(1)),
+    Step::Slot(KeySlot::SellPreset(2)),
+    Step::Slot(KeySlot::SellPreset(3)),
+    Step::Slot(KeySlot::SellPreset(4)),
+    Step::Slot(KeySlot::SellPreset(5)),
+    Step::Slot(KeySlot::CancelBuy),
+    Step::Slot(KeySlot::CancelAllBuys),
+    Step::Slot(KeySlot::PanicSell),
+    Step::Slot(KeySlot::PanicSellOne),
+    Step::Slot(KeySlot::JoinSells),
+    Step::Slot(KeySlot::SplitOrder),
+    Step::Slot(KeySlot::SplitOrderX),
+    Step::Slot(KeySlot::SellsToRect),
+    Step::Slot(KeySlot::NewLong),
+    Step::Slot(KeySlot::NewShort),
+    Step::Slot(KeySlot::ShiftBuyUp),
+    Step::Slot(KeySlot::ShiftBuyDown),
+    Step::Slot(KeySlot::ShiftSellUp),
+    Step::Slot(KeySlot::ShiftSellDown),
+    Step::Slot(KeySlot::SwitchCharts),
+    Step::Slot(KeySlot::ManualStrategy(0)),
+    Step::Slot(KeySlot::ManualStrategy(1)),
+    Step::Slot(KeySlot::ManualStrategy(2)),
+    Step::Slot(KeySlot::ManualStrategy(3)),
+    Step::Slot(KeySlot::ManualStrategy(4)),
+    Step::Slot(KeySlot::ManualStrategy(5)),
+    Step::Slot(KeySlot::ManualStrategy(6)),
+    Step::Slot(KeySlot::ManualStrategy(7)),
+    Step::Slot(KeySlot::ManualStrategy(8)),
+    Step::Slot(KeySlot::ManualStrategy(9)),
 ];
 
 /// Every slot, in the order the dispatcher tests it.
 ///
-/// The one list. It was two for a while — this order, and a hand-written one beside the enum — and
-/// the second existed only so a test could walk every slot. Deriving it here means a slot that is
-/// added to the enum but forgotten in this order is not merely unchecked: it also gets no clash
-/// detection, which is a loud enough consequence to notice.
+/// A slot that is in `KeySlot` but not in this order gets no clash detection; `clash::tests` holds
+/// the two to the same set.
 #[cfg(test)]
-pub(super) fn slots_in_resolve_order() -> Vec<HotkeySlot> {
+pub(super) fn slots_in_resolve_order() -> Vec<KeySlot> {
     RESOLVE_ORDER
         .iter()
         .filter_map(|step| match step {
@@ -223,14 +221,13 @@ fn button_layers(gesture: MouseGestureBinding) -> &'static [Layer] {
 }
 
 /// Which layer a row belongs to.
-fn slot_layer(slot: MouseSlot) -> Layer {
-    match slot {
-        MouseSlot::FigDelete => Layer::FigDelete,
-        MouseSlot::BuySet
-        | MouseSlot::ShortSet
-        | MouseSlot::PendingLong
-        | MouseSlot::PendingShort => Layer::Place,
-        _ => Layer::Move,
+fn slot_layer(slot: GestureSlot) -> Layer {
+    if slot == GestureSlot::FigDelete {
+        Layer::FigDelete
+    } else if slot.placement().is_some() {
+        Layer::Place
+    } else {
+        Layer::Move
     }
 }
 
@@ -258,14 +255,14 @@ fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer) -> bool {
 /// One holder of a keystroke: a row of this page, or a built-in that owns it.
 #[derive(Clone, Copy)]
 enum Holder {
-    Slot(HotkeySlot),
+    Slot(KeySlot),
     Builtin(&'static str),
 }
 
 impl Holder {
     fn label(self) -> String {
         match self {
-            Self::Slot(slot) => slot_label(slot),
+            Self::Slot(slot) => registry::key_title(slot),
             Self::Builtin(name) => t!(name).to_string(),
         }
     }
@@ -277,7 +274,7 @@ pub(super) struct Clashes {
     keys: HashMap<BindingId, Vec<Holder>>,
     /// Gesture -> the rows holding it. A move row whose kind is `None` is left out: the dispatcher
     /// steps past such a row rather than letting it silence the next one.
-    gestures: HashMap<MouseGestureBinding, Vec<MouseSlot>>,
+    gestures: HashMap<MouseGestureBinding, Vec<GestureSlot>>,
 }
 
 impl Clashes {
@@ -286,7 +283,7 @@ impl Clashes {
         for step in RESOLVE_ORDER {
             match step {
                 Step::Slot(slot) => {
-                    if let Some(id) = binding_id(slot_value(hotkeys, *slot)) {
+                    if let Some(id) = binding_id(hotkeys.key(*slot)) {
                         keys.entry(id).or_default().push(Holder::Slot(*slot));
                     }
                 }
@@ -299,8 +296,8 @@ impl Clashes {
                 }
             }
         }
-        let mut gestures: HashMap<MouseGestureBinding, Vec<MouseSlot>> = HashMap::new();
-        for slot in all_mouse_slots() {
+        let mut gestures: HashMap<MouseGestureBinding, Vec<GestureSlot>> = HashMap::new();
+        for slot in GestureSlot::ALL {
             if let Some(gesture) = firing_gesture(hotkeys, slot) {
                 gestures.entry(gesture).or_default().push(slot);
             }
@@ -313,8 +310,8 @@ impl Clashes {
     /// Direction is the whole point: the row that resolves FIRST is told what it is taking, and the
     /// rows below it are told they are dead. Handing both the same sentence — which is what the
     /// first version did — is how a working binding gets reported as broken.
-    pub(super) fn key(&self, hotkeys: &HotkeysConfig, slot: HotkeySlot) -> Option<Clash> {
-        let id = binding_id(slot_value(hotkeys, slot))?;
+    pub(super) fn key(&self, hotkeys: &HotkeysConfig, slot: KeySlot) -> Option<Clash> {
+        let id = binding_id(hotkeys.key(slot))?;
         let holders = self.keys.get(&id)?;
         if holders.len() < 2 {
             return None;
@@ -348,7 +345,7 @@ impl Clashes {
     /// A list rather than one line: a row can both TAKE its binding from a row below it and SHARE
     /// it with a layer that only answers over an object, and those are two different sentences
     /// about two different rivals. `row_head` prints one line per entry.
-    pub(super) fn mouse(&self, hotkeys: &HotkeysConfig, slot: MouseSlot) -> Vec<Clash> {
+    pub(super) fn mouse(&self, hotkeys: &HotkeysConfig, slot: GestureSlot) -> Vec<Clash> {
         // Nothing this row dispatches, nothing to caption. The index above uses the same reading, so
         // the two cannot disagree about which rows are even in the running — and they used to: a
         // caption was once handed to a row whose Move kind is `None`, telling it that it was taking
@@ -529,8 +526,8 @@ fn dead_fig_delete_gesture(gesture: MouseGestureBinding) -> Option<Layer> {
 /// It also answers what the terminal FIRES rather than what the field holds — with the mirror switch
 /// on, a short row's stored value is not read at all, and indexing it would put a rival nothing
 /// dispatches into every other row's caption.
-fn firing_gesture(hotkeys: &HotkeysConfig, slot: MouseSlot) -> Option<MouseGestureBinding> {
-    let gesture = local_gesture(hotkeys, slot);
+fn firing_gesture(hotkeys: &HotkeysConfig, slot: GestureSlot) -> Option<MouseGestureBinding> {
+    let gesture = hotkeys.gesture_in_effect(slot);
     if gesture == MouseGestureBinding::None || inert_move_row(hotkeys, slot) {
         return None;
     }
@@ -540,26 +537,23 @@ fn firing_gesture(hotkeys: &HotkeysConfig, slot: MouseSlot) -> Option<MouseGestu
 /// Where a row stands in its OWN layer's dispatch order, lowest answering first.
 ///
 /// Neither layer is asked in this page's list order, and that is why this exists:
-/// - placement — `panels::chart::trade::placement_intent` tries the four rows in
-///   [`all_mouse_slots`] order and returns the FIRST match;
-/// - move — `HotkeysConfig::resolve_move_gesture` walks four PAIRS, buy, sell, buy2, sell2, testing
-///   each pair's long and short halves together, so `ShortBuyMove` answers before `SellMove2`
-///   although this page lists it four rows later.
+/// - placement — `panels::chart::trade::placement_intent` tries the placement rows in
+///   `GestureSlot::ALL` order and returns the FIRST match;
+/// - move — `HotkeysConfig::resolve_move_gesture` walks `MoveKindSlot::ALL`, testing each row's long
+///   and short halves together, so `ShortBuyMove` answers before `SellMove2` although this page
+///   lists it four rows later.
 ///
-/// Ranks are only ever compared within one layer, so the two families may reuse the same numbers.
-/// The halves of one move pair share a rank and are never compared: `same_move_row` exempts them.
-fn same_layer_rank(slot: MouseSlot) -> u8 {
-    match slot {
-        MouseSlot::BuySet => 0,
-        MouseSlot::ShortSet => 1,
-        MouseSlot::PendingLong => 2,
-        MouseSlot::PendingShort => 3,
-        // The move pairs are numbered ONCE, by `move_pair`, which `same_move_row` also reads: a
-        // second copy of that table here would let the rank that picks a winner disagree with the
-        // exemption that decides whether the two rows are rivals at all. `FigDelete` is alone on
-        // its layer, so its number is never compared with anything.
-        other => move_pair(other).unwrap_or(0),
-    }
+/// Both are read off the lists those dispatchers walk rather than transcribed, so this cannot
+/// drift from them. Ranks are only ever compared within one layer, so the two families may reuse
+/// the same numbers. The halves of one move row share a rank and are never compared:
+/// `same_move_row` exempts them. `FigDelete` is alone on its layer, so its number is never compared
+/// with anything.
+fn same_layer_rank(slot: GestureSlot) -> u8 {
+    let position = match slot.move_half() {
+        Some(half) => MoveKindSlot::ALL.iter().position(|row| *row == half.row),
+        None => GestureSlot::ALL.iter().position(|other| *other == slot),
+    };
+    position.unwrap_or(0) as u8
 }
 
 /// The ROWS that answer this gesture at one layer, other than the row asking.
@@ -573,9 +567,9 @@ fn same_layer_rank(slot: MouseSlot) -> u8 {
 /// exemption above must hold for both — it used to be written out twice.
 fn layer_rows<'a>(
     layer: Layer,
-    rows: &'a [MouseSlot],
-    asking: MouseSlot,
-) -> impl Iterator<Item = MouseSlot> + 'a {
+    rows: &'a [GestureSlot],
+    asking: GestureSlot,
+) -> impl Iterator<Item = GestureSlot> + 'a {
     rows.iter()
         .copied()
         .filter(move |other| *other != asking && slot_layer(*other) == layer)
@@ -588,8 +582,8 @@ fn layer_rows<'a>(
 /// the layer itself, and only when it really claims this gesture.
 fn layer_holders(
     layer: Layer,
-    rows: &[MouseSlot],
-    asking: MouseSlot,
+    rows: &[GestureSlot],
+    asking: GestureSlot,
     gesture: MouseGestureBinding,
 ) -> Vec<String> {
     if let Some(name) = layer.layer_name() {
@@ -610,28 +604,22 @@ fn layer_holders(
 /// on to that cancel whenever no figure is selected, which is exactly why it may hold the key. The
 /// exemption is for THAT pair only: the same slot on Escape or Ctrl+Shift+F10 has no such
 /// fall-through and really does end them.
-fn documented_fallback(slot: HotkeySlot, other: Holder) -> bool {
+fn documented_fallback(slot: KeySlot, other: Holder) -> bool {
     matches!(
         (slot, other),
         (
-            HotkeySlot::FigDelete,
+            KeySlot::FigDelete,
             Holder::Builtin("hotkeys.clash.builtin.cancel_hover")
         )
     )
 }
 
-fn same_move_row(a: MouseSlot, b: MouseSlot) -> bool {
-    move_pair(a).is_some() && move_pair(a) == move_pair(b)
-}
-
-fn move_pair(slot: MouseSlot) -> Option<u8> {
-    Some(match slot {
-        MouseSlot::BuyMove | MouseSlot::ShortBuyMove => 0,
-        MouseSlot::SellMove | MouseSlot::ShortSellMove => 1,
-        MouseSlot::BuyMove2 | MouseSlot::ShortBuyMove2 => 2,
-        MouseSlot::SellMove2 | MouseSlot::ShortSellMove2 => 3,
-        _ => return None,
-    })
+/// The two halves of one move row.
+fn same_move_row(a: GestureSlot, b: GestureSlot) -> bool {
+    match (a.move_half(), b.move_half()) {
+        (Some(x), Some(y)) => x.row == y.row,
+        _ => false,
+    }
 }
 
 /// A move row whose kind is `None` sends nothing and does not stop the next row.
@@ -639,15 +627,9 @@ fn move_pair(slot: MouseSlot) -> Option<u8> {
 /// `resolve_move_gesture` steps past such a row on purpose — "another slot may hold the same
 /// binding WITH a kind, and giving up here would let a disabled row silence a working one" — so
 /// counting it as a holder would report a shadow that never happens.
-fn inert_move_row(hotkeys: &HotkeysConfig, slot: MouseSlot) -> bool {
-    let kind_slot = match move_pair(slot) {
-        Some(0) => MoveKindSlot::BuyMove,
-        Some(1) => MoveKindSlot::SellMove,
-        Some(2) => MoveKindSlot::BuyMove2,
-        Some(3) => MoveKindSlot::SellMove2,
-        _ => return false,
-    };
-    move_kind_slot_value(hotkeys, kind_slot) == MoveKind::None
+fn inert_move_row(hotkeys: &HotkeysConfig, slot: GestureSlot) -> bool {
+    slot.move_half()
+        .is_some_and(|half| hotkeys.move_kind(half.row) == MoveKind::None)
 }
 
 #[cfg(test)]

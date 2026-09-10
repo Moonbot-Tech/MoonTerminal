@@ -6,7 +6,7 @@
 use gpui::*;
 use std::time::{Duration, Instant};
 
-use moon_core::config::{MouseGestureBinding, MoveSide};
+use moon_core::config::{GestureSlot, MouseGestureBinding, MoveSide, Placement};
 use moon_core::feed::OrderLinePriceKind;
 use moon_core::session::CoreId;
 use moon_core::session::order_lines::LineKind;
@@ -111,42 +111,24 @@ struct OrderHit {
     on_start_cross: bool,
 }
 
-/// What one of the four placement gestures asks for: which side, and whether it waits for a trigger.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct PlacementIntent {
-    /// Position side: `false` Long, `true` Short.
-    pub(super) short: bool,
-    /// Whether the clicked price is a pending TRIGGER rather than an entry price.
-    pub(super) pending: bool,
-}
-
 /// Resolve a press against the four configured placement gestures, or `None` for a press that is
 /// not order placement at all.
 ///
-/// The four are tried in `settings::hotkeys::all_mouse_slots()`'s order — immediate long, immediate
-/// short, pending long, pending short — the order the settings page lists them in, and the first
-/// match is what fires. `settings::hotkeys::clash::same_layer_rank` mirrors this order to caption
-/// which of two rows holding one gesture wins, so reordering here without reordering there tells
-/// the row that DOES fire that it will not.
+/// The four are tried in `GestureSlot::ALL`'s order — immediate long, immediate short, pending
+/// long, pending short — which is the order the settings page lists them in, and the first match is
+/// what fires. `settings::hotkeys::clash::same_layer_rank` reads the same list to caption which of
+/// two rows holding one gesture wins, so the two cannot disagree about it.
 pub(super) fn placement_intent(
     hotkeys: &moon_core::config::HotkeysConfig,
     button: TradeMouseButton,
     modifiers: Modifiers,
     click_count: usize,
-) -> Option<PlacementIntent> {
+) -> Option<Placement> {
     let matches = |binding| ChartPanel::gesture_matches(binding, button, modifiers, click_count);
-    let (short, pending) = if matches(hotkeys.buy_set_click) {
-        (false, false)
-    } else if matches(hotkeys.short_set_click) {
-        (true, false)
-    } else if matches(hotkeys.pending_long_click) {
-        (false, true)
-    } else if matches(hotkeys.pending_short_click) {
-        (true, true)
-    } else {
-        return None;
-    };
-    Some(PlacementIntent { short, pending })
+    GestureSlot::ALL.into_iter().find_map(|slot| {
+        let placement = slot.placement()?;
+        matches(hotkeys.gesture(slot)).then_some(placement)
+    })
 }
 
 impl ChartPanel {
@@ -367,7 +349,7 @@ impl ChartPanel {
             // own, only the two gesture slots.
             Some(pos) => self.place_order_at_pos(
                 pos,
-                PlacementIntent {
+                Placement {
                     short,
                     pending: false,
                 },
@@ -397,15 +379,15 @@ impl ChartPanel {
     /// divided by the trigger and so carries the spread's error, which `manual_order_size_base`
     /// states at the division and the slot's hint states to the trader.
     ///
-    /// The two flags travel as one [`PlacementIntent`] rather than as adjacent `bool` arguments:
+    /// The two flags travel as one [`Placement`] rather than as adjacent `bool` arguments:
     /// transposing them compiles silently and opens the wrong side with the wrong command.
     fn place_order_at_pos(
         &mut self,
         pos: (f32, f32),
-        intent: PlacementIntent,
+        intent: Placement,
         cx: &mut Context<Self>,
     ) -> bool {
-        let PlacementIntent { short, pending } = intent;
+        let Placement { short, pending } = intent;
         // In separate-zone mode place only from the order-book zone; otherwise accept any pane area.
         let separate = self.separate_zones(cx);
         let pane = if separate {
