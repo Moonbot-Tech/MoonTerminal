@@ -116,14 +116,10 @@ groups:
     ru: Встроенные, не переназначаются
     en: Built-in, not rebindable
   rows:
-  - combo: Wheel / Ctrl+Wheel
+  - combo: Wheel
     action:
       ru: Зум по времени
       en: Zoom by time
-  - combo: Ctrl+Shift+Wheel
-    action:
-      ru: То же, но крупным шагом
-      en: The same, in a coarser step
   - combo: Shift+Wheel / Alt+Wheel
     action:
       ru: Прокрутка графика влево-вправо

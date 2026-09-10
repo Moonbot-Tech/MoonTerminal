@@ -12,7 +12,6 @@ mod pull;
 mod pull_gestures;
 mod tab;
 
-use gpui::*;
 use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
 use rust_i18n::t;
 

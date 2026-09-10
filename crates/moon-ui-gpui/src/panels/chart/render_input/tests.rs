@@ -2,35 +2,28 @@
 // which would shadow the built-in `#[test]`.
 use gpui::Modifiers;
 
-use super::wheel_action;
-use crate::chartdx::input::WheelAction;
+use super::wheel_delta;
 
-/// Which wheel gesture each modifier set names, against Moonbot's own built-in list.
+/// The wheel's movement has to be read off whichever axis the platform filed it under.
 ///
-/// Moonbot: `Ctrl+Wheel` stretches the chart along time, `Ctrl+Shift+Wheel` stretches it more,
-/// `Alt or Shift+Wheel` moves it left and right. A bare wheel is not on that list and zooms here.
+/// Windows moves a Shift+wheel onto X and leaves Y at zero — its own "Shift means horizontal"
+/// convention, faithfully mirrored by the fork. The chart read Y alone and bailed on a zero delta,
+/// so Shift+wheel panning did nothing at all on Windows while the built-in list, the tour and the
+/// settings page all promised it. Alt+wheel took the same code path with Y intact, which is why the
+/// broken half stayed hidden behind a caption that names both.
 ///
-/// Plausible breakage: testing the plain `Shift` pan before `Ctrl+Shift` — which is what the code
-/// did until 2026-09-10, so Moonbot's coarse zoom panned the chart instead of stretching it.
+/// Plausible breakage: reading `y` unconditionally again, or taking `x` without the Shift test —
+/// which would hand a real horizontal wheel to the zoom.
 #[test]
-fn wheel_modifiers_name_moonbots_own_gestures() {
-    let ctrl_shift = Modifiers {
-        control: true,
-        shift: true,
-        ..Default::default()
-    };
-
-    assert_eq!(wheel_action(ctrl_shift), WheelAction::ZoomCoarse);
-    assert_eq!(wheel_action(Modifiers::control()), WheelAction::Zoom);
-    assert_eq!(wheel_action(Modifiers::default()), WheelAction::Zoom);
-    assert_eq!(wheel_action(Modifiers::shift()), WheelAction::Pan);
-    assert_eq!(wheel_action(Modifiers::alt()), WheelAction::Pan);
-    // Ctrl+Alt is on nobody's list; it keeps the pan the bare Alt has, rather than becoming a
-    // third zoom by accident.
-    let ctrl_alt = Modifiers {
-        control: true,
-        alt: true,
-        ..Default::default()
-    };
-    assert_eq!(wheel_action(ctrl_alt), WheelAction::Pan);
+fn a_shift_wheel_is_read_off_the_axis_windows_files_it_under() {
+    assert_eq!(wheel_delta(0.0, 3.0, Modifiers::default()), 3.0);
+    assert_eq!(wheel_delta(0.0, -3.0, Modifiers::default()), -3.0);
+    // Shift: the platform moved the same value, sign and all, onto X.
+    assert_eq!(wheel_delta(3.0, 0.0, Modifiers::shift()), 3.0);
+    assert_eq!(wheel_delta(-3.0, 0.0, Modifiers::shift()), -3.0);
+    // Alt keeps Y, and a horizontal wheel without Shift is not the vertical one.
+    assert_eq!(wheel_delta(0.0, 3.0, Modifiers::alt()), 3.0);
+    assert_eq!(wheel_delta(3.0, 0.0, Modifiers::default()), 0.0);
+    // A Shift gesture that really did move Y keeps Y, so the fallback cannot steal it.
+    assert_eq!(wheel_delta(9.0, 3.0, Modifiers::shift()), 3.0);
 }

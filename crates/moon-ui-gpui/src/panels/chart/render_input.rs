@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use crate::chartdx::input;
-use crate::chartdx::input::WheelAction;
 
 /// Smallest gap between two drag-driven `cx.notify()` calls.
 ///
@@ -143,23 +142,24 @@ fn release_order_drag(
     released
 }
 
-/// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
-/// Which wheel gesture a modifier set names — this decides only WHAT the wheel does, never where.
+/// The wheel's own movement, whichever axis the platform filed it under.
 ///
-/// Moonbot's own built-in list, from its Hotkeys page: `Ctrl+Wheel` stretches the chart along time,
-/// `Ctrl+Shift+Wheel` stretches it more, and `Alt or Shift+Wheel` moves it left and right. A bare
-/// wheel is not on that list and zooms here — ours to keep, and a superset rather than a conflict.
+/// Windows moves a Shift+wheel onto X, because that is what Shift means to a text view: the fork's
+/// `handle_mouse_wheel_msg` puts the whole distance in `x` and leaves `y` at zero (the same value,
+/// so the sign needs no repair). Reading `y` alone therefore saw NOTHING for any Shift gesture, and
+/// `ChartInput::wheel` returns on a zero delta before it looks at anything else — so Shift+wheel
+/// panning never fired on Windows at all, though the built-in list, the tour and the settings page
+/// have all promised it. Alt+wheel worked, which is why the broken half stayed hidden: the caption
+/// names both in one breath.
 ///
-/// The order of the tests is the whole of it: `Ctrl+Shift` has to be read before the plain `Shift`
-/// pan, or the coarse gesture pans instead of zooming, which is what it did until 2026-09-10.
-pub(super) fn wheel_action(modifiers: Modifiers) -> WheelAction {
-    if modifiers.control && modifiers.shift {
-        return WheelAction::ZoomCoarse;
-    }
-    if modifiers.shift || modifiers.alt {
-        return WheelAction::Pan;
-    }
-    WheelAction::Zoom
+/// The one thing this cannot tell apart is a REAL horizontal wheel — `WM_MOUSEHWHEEL` from a tilt
+/// wheel — pressed with Shift, which reaches us in exactly this shape. Losing that is the price;
+/// a documented pan that does nothing is the alternative.
+///
+/// Worked around here rather than in the fork, per the project's rule about editing MoonUI, and
+/// noted in `docs-internal/FORK_BUGS.md`.
+fn wheel_delta(x: f32, y: f32, modifiers: Modifiers) -> f32 {
+    if y == 0.0 && modifiers.shift { x } else { y }
 }
 
 /// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
@@ -201,8 +201,11 @@ pub(super) fn scroll_wheel(
     // precise trackpad/Magic Mouse input on macOS, delivered as a continuous inertial stream.
     // Preserve the distinction through `precise` so input.wheel scales them differently.
     let (dy, precise) = match e.delta {
-        ScrollDelta::Lines(p) => (p.y, false),
-        ScrollDelta::Pixels(p) => (f32::from(p.y), true),
+        ScrollDelta::Lines(p) => (wheel_delta(p.x, p.y, e.modifiers), false),
+        ScrollDelta::Pixels(p) => (
+            wheel_delta(f32::from(p.x), f32::from(p.y), e.modifiers),
+            true,
+        ),
     };
     this.input.last_ptr = pos;
     this.input.cursor = if within { Some(pos) } else { None };
@@ -212,15 +215,9 @@ pub(super) fn scroll_wheel(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            input.wheel(
-                dy,
-                precise,
-                wheel_action(e.modifiers),
-                within,
-                container,
-                fb,
-                sf,
-            )
+            // Built-in gesture: Shift OR Alt + wheel pans time left/right; no modifier zooms time.
+            let pan = e.modifiers.shift || e.modifiers.alt;
+            input.wheel(dy, precise, pan, within, container, fb, sf)
         })
     };
     if changed {

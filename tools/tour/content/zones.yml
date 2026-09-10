@@ -154,11 +154,11 @@ maps:
       ru: Область графика
       en: Chart area
     body:
-      ru: Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо или
-        Ctrl+колесо — зум по времени, Ctrl+Shift — крупным шагом, Shift или Alt + колесо — прокрутка
-        влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер.
-      en: Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel or Ctrl+wheel zooms by time — Ctrl+Shift for a coarser step —
-        and Shift or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order.
+      ru: Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по
+        времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет
+        этот ордер.
+      en: Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift
+        or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order.
     src:
       code: locales/hotkeys.yml — встроенные
   - id: book
@@ -393,11 +393,10 @@ maps:
       ru: Область графика
       en: Chart area
     body:
-      ru: Тот же GPU-график, что в MANUAL. Колесо или Ctrl+колесо — зум по времени, Shift или Alt +
-        колесо — прокрутка.
+      ru: Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка.
         В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO
         возвращает на Report.
-      en: The same GPU chart as MANUAL. Wheel or Ctrl+wheel zooms by time, Shift or Alt + wheel pans. Overview does
+      en: The same GPU chart as MANUAL. Wheel zooms by time, Shift or Alt + wheel pans. Overview does
         not retarget the Main chart to some other core. Escape on the last Main chart in AUTO reveals
         Report.
     src:

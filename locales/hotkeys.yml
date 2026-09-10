@@ -106,13 +106,9 @@ hotkeys.group.builtin_hint:
   en: "Fixed shortcuts (not configurable), active on the chart and in windows."
   es: "Atajos fijos (no configurables), activos en el gráfico y las ventanas."
 hotkeys.builtin.wheel_zoom:
-  ru: "[Колёсико] или [Ctrl+Колёсико] на графике — зум по времени"
-  en: "[Wheel] or [Ctrl+Wheel] on the chart — zoom by time"
-  es: "[Rueda] o [Ctrl+Rueda] en el gráfico — zoom por tiempo"
-hotkeys.builtin.wheel_zoom_coarse:
-  ru: "[Ctrl+Shift+Колёсико] — то же, но крупным шагом"
-  en: "[Ctrl+Shift+Wheel] — the same, in a coarser step"
-  es: "[Ctrl+Shift+Rueda] — lo mismo, con un paso mayor"
+  ru: "[Колёсико] на графике — зум по времени"
+  en: "[Wheel] on the chart — zoom by time"
+  es: "[Rueda] en el gráfico — zoom por tiempo"
 hotkeys.builtin.wheel_pan:
   ru: "[Shift или Alt + Колёсико] двигает график влево/вправо"
   en: "[Shift or Alt + Wheel] moves the chart left/right"
