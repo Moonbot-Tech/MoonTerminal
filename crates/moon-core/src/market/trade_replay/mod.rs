@@ -41,27 +41,15 @@ use crate::venue::{Brand, Venue};
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.
 const MINUTE_MS: i64 = 60_000;
 
-/// Smallest distance from the ENTRY to the window's left edge, in milliseconds.
+/// Minimum history before entry, so the setup can be read in its broader market context.
 ///
-/// A FLOOR, not padding added on top: a trade whose proportional context already reaches further
-/// back keeps its own, larger lead. The point of looking at a trade's picture is to see what the
-/// market was doing BEFORE the entry, and half of a forty-second scalp is twenty seconds — which
-/// is no context at all. Sixty minutes is the user's stated minimum, raised from thirty on
-/// 2026-08-23 after looking at real trades in the shipped build.
-///
-/// This also SUBSUMES the ten-minute minimum span this module used to widen to: the two floors
-/// together guarantee at least eighty minutes plus the position's own duration, so that widening
-/// step could never fire again and was removed rather than left as unreachable code.
-const LEAD_FLOOR_MS: i64 = 60 * MINUTE_MS;
+/// This is a floor against proportional padding, not additional padding for long positions.
+const LEAD_FLOOR_MS: i64 = 6 * 60 * MINUTE_MS;
 
-/// Smallest distance from the EXIT to the window's right edge, in milliseconds.
+/// Minimum history after exit, so the continuation or reversal remains available when zooming out.
 ///
-/// A FLOOR on the same terms as [`LEAD_FLOOR_MS`], and deliberately much smaller: what happened
-/// after an exit is worth a glance, not a study, and every extra minute here is a bar fetched
-/// through a public, rate-limited endpoint. Twenty minutes is the user's stated minimum, raised
-/// from five on 2026-08-23 — still a third of the lead, so the asymmetry the paragraph argues
-/// for survives the widening.
-const TRAIL_FLOOR_MS: i64 = 20 * MINUTE_MS;
+/// The future portion is naturally unavailable for a recently closed trade.
+const TRAIL_FLOOR_MS: i64 = 2 * 60 * MINUTE_MS;
 
 /// Budget on the CONTEXT a replay pays for, in milliseconds — not a ceiling on the window.
 ///
