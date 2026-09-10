@@ -4,6 +4,7 @@ use chrono::Days;
 use chrono_tz::Tz;
 use gpui::Context;
 use moon_core::{
+    config::telegram_access::TelegramReportAccess,
     db::{self, QuoteBreakdown, ReportFilter, RowScope},
     telegram::{
         api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup},
@@ -40,6 +41,14 @@ impl Backend {
         reply: SyncSender<Response>,
         cx: &mut Context<Self>,
     ) {
+        let Some(access) = self.config.telegram.report_access(chat) else {
+            super::answer(&reply, t!("telegram.refusal").to_string());
+            return;
+        };
+        if matches!(&access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
+            report_notice(&reply, t!("telegram.access_no_cores").to_string());
+            return;
+        }
         if self.telegram.report_pending {
             report_notice(&reply, t!("telegram.report_busy").to_string());
             return;
@@ -52,16 +61,19 @@ impl Backend {
         };
         let order = CoreOrder::new(&self.config);
         let venues = self.session.core_venues().clone();
+        let read_access = access.clone();
         self.telegram.report_pending = true;
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
-                .spawn(async move { read_page(request, from, to, zone, order, venues) })
+                .spawn(
+                    async move { read_page(request, from, to, zone, order, venues, read_access) },
+                )
                 .await;
             cx.update(|cx| {
                 let _ = this.update(cx, |this, _| {
                     this.telegram.report_pending = false;
-                    if !this.config.telegram.authorized_chat_ids.contains(&chat) {
+                    if this.config.telegram.report_access(chat).as_ref() != Some(&access) {
                         super::answer(&reply, t!("telegram.refusal").to_string());
                         return;
                     }
@@ -94,11 +106,12 @@ fn read_page(
     zone: Tz,
     order: CoreOrder,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    access: TelegramReportAccess,
 ) -> db::ReadResult<Page> {
     let conn = db::open_reader()?;
     read_page_on(&conn, request, from, to, zone, |cores| {
         order.sort_by(cores, |(id, _)| *id);
-        venues
+        (venues, access)
     })
 }
 
@@ -111,12 +124,18 @@ fn read_page_on(
     zone: Tz,
     order: impl FnOnce(
         &mut [(u64, String)],
-    ) -> std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    ) -> (
+        std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+        TelegramReportAccess,
+    ),
 ) -> db::ReadResult<Page> {
     request.window = Some((from, to));
     let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
-    let venues = order(&mut cores);
+    let (venues, access) = order(&mut cores);
+    if let TelegramReportAccess::Viewer(allowed) = &access {
+        cores.retain(|(id, _)| allowed.contains(id));
+    }
     let scope_label = (request.scope != ReportScope::All).then(|| {
         cores
             .iter()
@@ -127,7 +146,7 @@ fn read_page_on(
     if request.scope != ReportScope::All {
         cores.retain(|(id, _)| scope_of(venues.get(id)) == request.scope);
     }
-    let scoped_ids = if request.scope == ReportScope::All {
+    let scoped_ids = if request.scope == ReportScope::All && access == TelegramReportAccess::Owner {
         Vec::new()
     } else if cores.is_empty() {
         vec![moon_core::config::NO_MATCH_CORE_UID]

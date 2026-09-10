@@ -1,0 +1,107 @@
+# Telegram owner and read-only viewer assignments.
+_version: 2
+
+telegram.access_title:
+  ru: "Чаты и доступ к ядрам"
+  en: "Chats and core access"
+  es: "Chats y acceso a núcleos"
+telegram.access_roles_hint:
+  ru: "Один владелец имеет полный доступ ко всем ядрам. Наблюдатели видят только данные и отчёты выбранных ядер."
+  en: "One owner has full access to all cores. Viewers see only data and reports for their assigned cores."
+  es: "Un propietario tiene acceso completo a todos los núcleos. Los observadores solo ven datos e informes de los núcleos asignados."
+telegram.access_first_owner:
+  ru: "Первый привязанный чат станет владельцем. Следующие чаты добавляются как наблюдатели без доступа к данным до назначения ядер."
+  en: "The first paired chat becomes the owner. Later chats are viewers with no data access until cores are assigned."
+  es: "El primer chat vinculado será el propietario. Los siguientes serán observadores sin acceso a datos hasta que se les asignen núcleos."
+telegram.access_chat:
+  ru: "Чат %{id}"
+  en: "Chat %{id}"
+  es: "Chat %{id}"
+telegram.access_owner_summary:
+  ru: "Владелец: все ядра, полный доступ"
+  en: "Owner: all cores, full access"
+  es: "Propietario: todos los núcleos, acceso completo"
+telegram.access_viewer_summary:
+  ru: "Наблюдатель: ядер %{count}, только просмотр"
+  en: "Viewer: %{count} cores, read only"
+  es: "Observador: %{count} núcleos, solo lectura"
+telegram.access_waiting:
+  ru: "Наблюдатель: ядра не назначены, доступа к данным нет"
+  en: "Viewer: no cores assigned, no data access"
+  es: "Observador: sin núcleos asignados ni acceso a datos"
+telegram.access_no_cores:
+  ru: "Для этого чата ещё не назначены ядра. Попросите владельца выбрать их в MoonTerminal: Настройки → Telegram."
+  en: "No cores have been assigned to this chat yet. Ask the owner to select them in MoonTerminal: Settings → Telegram."
+  es: "Aún no se han asignado núcleos a este chat. Pide al propietario que los seleccione en MoonTerminal: Ajustes → Telegram."
+telegram.access_edit:
+  ru: "Настроить"
+  en: "Configure"
+  es: "Configurar"
+telegram.access_collapse:
+  ru: "Свернуть"
+  en: "Collapse"
+  es: "Contraer"
+telegram.access_name:
+  ru: "Название чата в терминале"
+  en: "Chat name in the terminal"
+  es: "Nombre del chat en el terminal"
+telegram.access_name_placeholder:
+  ru: "Например, Иван — клиент"
+  en: "For example, Alex — client"
+  es: "Por ejemplo, Alex — cliente"
+telegram.access_transfer_hint:
+  ru: "Этот чат получит полный доступ ко всем ядрам. Прежний владелец станет наблюдателем без назначенных ядер. Изменение вступит в силу после сохранения."
+  en: "This chat will get full access to all cores. The previous owner will become a viewer with no assigned cores. The change takes effect after saving."
+  es: "Este chat tendrá acceso completo a todos los núcleos. El propietario anterior pasará a ser observador sin núcleos asignados. El cambio se aplicará al guardar."
+telegram.access_transfer_confirm:
+  ru: "Подтвердить смену владельца"
+  en: "Confirm owner change"
+  es: "Confirmar cambio de propietario"
+telegram.access_make_owner:
+  ru: "Назначить владельцем"
+  en: "Make owner"
+  es: "Hacer propietario"
+telegram.access_remove:
+  ru: "Отвязать чат"
+  en: "Unpair chat"
+  es: "Desvincular chat"
+telegram.access_save_hint:
+  ru: "Названия, роли и доступ к ядрам применяются кнопкой «Сохранить». Новые ядра наблюдателям автоматически не добавляются."
+  en: "Names, roles and core access take effect when you press Save. New cores are not automatically assigned to viewers."
+  es: "Los nombres, roles y permisos se aplican al pulsar Guardar. Los núcleos nuevos no se asignan automáticamente a los observadores."
+telegram.access_cores:
+  ru: "Доступные ядра: только просмотр"
+  en: "Available cores: read only"
+  es: "Núcleos disponibles: solo lectura"
+telegram.access_search:
+  ru: "Найти ядро по номеру или названию"
+  en: "Find a core by number or name"
+  es: "Buscar núcleo por número o nombre"
+telegram.access_select_current:
+  ru: "Выбрать все текущие ядра"
+  en: "Select all current cores"
+  es: "Seleccionar todos los núcleos actuales"
+telegram.access_clear:
+  ru: "Снять выбор"
+  en: "Clear selection"
+  es: "Quitar selección"
+telegram.access_archived:
+  ru: "Ядро удалено из подключений (доступ к истории)"
+  en: "Core removed from connections (history access)"
+  es: "Núcleo eliminado de conexiones (acceso al historial)"
+telegram.access_no_matches:
+  ru: "Ядра не найдены. Добавьте и сохраните подключения или измените поиск."
+  en: "No cores found. Add and save connections, or change your search."
+  es: "No se encontraron núcleos. Añade y guarda conexiones o cambia la búsqueda."
+telegram.access_history_loading:
+  ru: "Загружаем ядра из истории…"
+  en: "Loading cores from history…"
+  es: "Cargando núcleos del historial…"
+telegram.access_history_failed:
+  ru: "Не удалось прочитать историю. Подключённые ядра и сохранённые назначения доступны."
+  en: "Could not read history. Configured cores and saved assignments are available."
+  es: "No se pudo leer el historial. Los núcleos configurados y las asignaciones guardadas están disponibles."
+telegram.access_retry:
+  ru: "Повторить"
+  en: "Retry"
+  es: "Reintentar"

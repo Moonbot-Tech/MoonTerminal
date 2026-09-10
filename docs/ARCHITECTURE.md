@@ -694,7 +694,7 @@ HTTP — синхронный `ureq`, `getUpdates` держит сокет до 
   answers near or beyond 48 hours are skipped, and absent/undeletable cleanup targets do not
   change transport health. Callback edits keep the original send time.
 - **Chat reports without Mini App.** `/report`, `/today`, `/hour`, `/yesterday`, `/month`,
-  `/lastmonth`, and `/daily` read closed real trades from all cores in local history. Custom
+  `/lastmonth`, and `/daily` read closed real trades from permitted cores in local history. Custom
   `/report YYYY-MM-DD YYYY-MM-DD` and `/daily` ranges include both dates and allow at most 366
   days. `backend/telegram/reports.rs` uses a background executor, a pinned SQLite snapshot,
   `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
@@ -707,6 +707,15 @@ HTTP — синхронный `ureq`, `getUpdates` держит сокет до 
   The display zone follows the terminal clock. One pending report survives service replacement,
   preventing overlapping reads; a report response has a bounded 120-second wait with failure
   feedback. Unchanged edits are normal no-ops. See [chat report usage](TELEGRAM_REPORTS.md).
+- **Per-chat access.** Encrypted `TelegramConfig` stores one owner and named viewer profiles with
+  explicit stable core uids. Legacy files resolve their first paired chat as owner; every other
+  chat defaults to no data access. The owner sees all history; viewers' core rows, exchange and
+  daily groups, and totals all intersect the same saved uid set before SQL aggregation. Empty
+  intersections use the no-match sentinel, never the query API's empty-list/all-cores shortcut.
+  Report completion rechecks the permission snapshot. Saved role or grant changes synchronously
+  revoke old service liveness before retiring the worker, cancelling queued deliveries and retries.
+  Settings edits remain a draft until Save; archived candidates load asynchronously from history
+  independently of checkbox selection. Read-only viewers gain no core-control authority.
 - **Страница Mini App сейчас нарочно пустая: единственный её запрос — проверка сессии
   (`POST /api/session`). Это решение по объёму, а не недописанный экран.**
 - **Выключение присоединяет всё, что подняли.** Смена токена или списка чатов —

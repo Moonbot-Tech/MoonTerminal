@@ -1,6 +1,65 @@
 //! Money presentation must stay honest when valuation or currency identity is incomplete.
 use super::{Page, profit, render};
 
+/// A viewer never receives another client's rows or money, including daily and exchange totals.
+#[test]
+fn viewer_membership_filters_every_report_view_and_total() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'Client core',1,150,7,100,0),(2,'Private other client',1,150,900,100,0),(3,'Archived other client',1,150,800,100,0);").unwrap();
+    let venues = std::collections::HashMap::from([
+        (1, moon_core::venue::CoreVenue::identify(2, "", None)),
+        (2, moon_core::venue::CoreVenue::identify(6, "", None)),
+    ]);
+    for (daily, by_exchange) in [(false, false), (false, true), (true, false)] {
+        let mut request = ReportRequest::new(Period::Today, daily);
+        request.by_exchange = by_exchange;
+        let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
+            (venues.clone(), super::TelegramReportAccess::Viewer(vec![1]))
+        })
+        .unwrap();
+        assert_eq!(page.total.orders, 1);
+        assert_eq!(page.total.totals[0].profit, 7.0);
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].1.totals[0].profit, 7.0);
+        let Response::Rich { html, .. } = render(&page) else {
+            panic!("expected report");
+        };
+        assert!(!html.contains("other client"));
+        assert!(!html.contains("900"));
+        assert!(!html.contains("800"));
+    }
+}
+
+/// Empty grants, stale core IDs, and another client's old exchange callback all fail closed.
+#[test]
+fn viewer_empty_or_unavailable_scope_never_becomes_global() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'Client',1,150,7,100,0),(2,'Private',1,150,900,100,0);").unwrap();
+    for ids in [vec![], vec![99], vec![1]] {
+        let mut request = ReportRequest::new(Period::Today, false);
+        if ids == vec![1] {
+            request.scope = moon_core::telegram::report::ReportScope::Venue(
+                moon_core::feed::ExchangeId::new(6),
+            );
+        }
+        let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
+            (
+                std::collections::HashMap::from([
+                    (1, moon_core::venue::CoreVenue::identify(2, "", None)),
+                    (2, moon_core::venue::CoreVenue::identify(6, "", None)),
+                ]),
+                super::TelegramReportAccess::Viewer(ids),
+            )
+        })
+        .unwrap();
+        assert_eq!(page.total.orders, 0);
+        assert!(page.rows.is_empty());
+        assert!(page.drilldowns.is_empty());
+    }
+}
+
 /// A paged report shows the whole-scope total after its rows, never as a headline or page sum.
 #[test]
 fn full_total_is_the_final_summary_row() {
@@ -151,7 +210,7 @@ fn inactive_cores_do_not_consume_page_slots() {
     request.by_exchange = false;
     let first = super::read_page_on(&conn, request.clone(), 100, 200, chrono_tz::UTC, |rows| {
         rows.sort_by_key(|(id, _)| *id);
-        Default::default()
+        (Default::default(), super::TelegramReportAccess::Owner)
     })
     .unwrap();
     assert_eq!(first.total.orders, 9);
@@ -160,7 +219,7 @@ fn inactive_cores_do_not_consume_page_slots() {
     request.page = 1;
     let last = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |rows| {
         rows.sort_by_key(|(id, _)| *id);
-        Default::default()
+        (Default::default(), super::TelegramReportAccess::Owner)
     })
     .unwrap();
     assert_eq!(
@@ -187,7 +246,7 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
     ]);
     let request = ReportRequest::new(Period::Today, false);
     let page = super::read_page_on(&conn, request.clone(), 100, 200, chrono_tz::UTC, |_| {
-        venues.clone()
+        (venues.clone(), super::TelegramReportAccess::Owner)
     })
     .unwrap();
     assert_eq!(page.total.orders, 3);
@@ -202,7 +261,10 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
     let mut scoped = request;
     scoped.scope = ReportScope::Venue(ExchangeId::new(13));
     scoped.by_exchange = false;
-    let empty = super::read_page_on(&conn, scoped, 100, 200, chrono_tz::UTC, |_| venues).unwrap();
+    let empty = super::read_page_on(&conn, scoped, 100, 200, chrono_tz::UTC, |_| {
+        (venues, super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
     assert_eq!(empty.total.orders, 0);
     assert!(empty.rows.is_empty());
 }
@@ -222,7 +284,7 @@ fn daily_pages_include_partial_day_after_zone_change() {
     request.daily = true;
     request.page = 36;
     let page = super::read_page_on(&conn, request, from, to, chrono_tz::Europe::Warsaw, |_| {
-        Default::default()
+        (Default::default(), super::TelegramReportAccess::Owner)
     })
     .unwrap();
     assert_eq!(page.rows.last().unwrap().0, "2025-01-01");
@@ -291,7 +353,7 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     request.by_exchange = false;
     let first = super::read_page_on(&conn, request.clone(), 100, 200, chrono_tz::UTC, |rows| {
         rows.sort_by_key(|(id, _)| *id);
-        Default::default()
+        (Default::default(), super::TelegramReportAccess::Owner)
     })
     .unwrap();
     assert_eq!(first.total.orders, 13);
@@ -302,7 +364,7 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     request.page = 1;
     let second = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |rows| {
         rows.sort_by_key(|(id, _)| *id);
-        Default::default()
+        (Default::default(), super::TelegramReportAccess::Owner)
     })
     .unwrap();
     assert_eq!(second.total.orders, 13);
