@@ -198,3 +198,44 @@ fn a_reset_slot_starts_counting_again() {
         "a slot that took a new coin must not trade it on the previous coin's press"
     );
 }
+
+#[test]
+fn a_claim_holds_for_the_rest_of_its_series_only() {
+    let mut series = ClickSeries::default();
+    series.observe(MouseButton::Middle, 1, 0.0, SPOT);
+    series.claim();
+    series.observe(MouseButton::Middle, 2, SOON_MS, SPOT);
+    assert!(
+        series.claimed(),
+        "the second press of a double click belongs to the gesture that took the first"
+    );
+    series.observe(MouseButton::Middle, 1, LATER_MS, SPOT);
+    assert!(!series.claimed(), "a new series starts unclaimed");
+}
+
+/// A vacated slot drops the claim with the series: the panel keeps its identity across a new coin,
+/// and a claim carried over would swallow the first press aimed at that coin.
+#[test]
+fn a_reset_clears_a_claim() {
+    let mut series = ClickSeries::default();
+    series.observe(MouseButton::Middle, 1, 0.0, SPOT);
+    series.claim();
+    series.reset();
+    assert!(!series.claimed());
+}
+
+/// The claim belongs to ONE button's series. The native count is the one the platform paired, so it
+/// keeps counting up while the button changes - which is what isolates the button rule here from the
+/// count rule.
+#[test]
+fn another_button_clears_a_claim() {
+    let mut series = ClickSeries::default();
+    series.observe(MouseButton::Middle, 1, 0.0, SPOT);
+    series.claim();
+    assert_eq!(
+        series.observe(MouseButton::Left, 2, SOON_MS, SPOT),
+        1,
+        "a press of another button starts that button's own series"
+    );
+    assert!(!series.claimed());
+}

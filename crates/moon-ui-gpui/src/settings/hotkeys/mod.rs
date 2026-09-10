@@ -111,12 +111,16 @@ enum MouseSlot {
     ShortSellMove,
     ShortBuyMove2,
     ShortSellMove2,
+    /// Deletes the figure under the cursor. The one mouse slot that is not a trading gesture: a
+    /// figure is pointed at, and only a click carries the position that says which one.
+    FigDelete,
 }
 
 /// Returns whether runtime does not yet consume this mouse gesture.
 ///
-/// Placement reads BuySet/ShortSet in `ChartPanel::try_place_order_click`, and the eight Move
-/// gestures are read by `ChartPanel::try_move_orders_click`. Only the two pending slots remain
+/// Placement reads BuySet/ShortSet in `ChartPanel::try_place_order_click`, the eight Move gestures
+/// are read by `ChartPanel::try_move_orders_click`, and FigDelete — the one slot here that is not a
+/// trading gesture — by `ChartPanel::try_fig_delete_click`. Only the two pending slots remain
 /// unconsumed, and not for want of wiring: moonproto's `NewOrderParams` carries no pending
 /// condition, so there is no command to send (see `moonbot_import` and the order-line notes).
 fn mouse_slot_wip(slot: MouseSlot) -> bool {
@@ -246,6 +250,7 @@ fn mouse_slot_value(hotkeys: &HotkeysConfig, slot: MouseSlot) -> MouseGestureBin
         MouseSlot::ShortSellMove => hotkeys.short_sell_move_click,
         MouseSlot::ShortBuyMove2 => hotkeys.short_buy_move_click2,
         MouseSlot::ShortSellMove2 => hotkeys.short_sell_move_click2,
+        MouseSlot::FigDelete => hotkeys.fig_delete_click,
     }
 }
 
@@ -300,6 +305,7 @@ fn set_mouse_slot_value(
         MouseSlot::ShortSellMove2 => {
             changed |= set_mouse_field(&mut hotkeys.short_sell_move_click2, value)
         }
+        MouseSlot::FigDelete => changed |= set_mouse_field(&mut hotkeys.fig_delete_click, value),
     }
     changed
 }
@@ -327,6 +333,7 @@ fn mouse_slot_id(slot: MouseSlot) -> &'static str {
         MouseSlot::ShortSellMove => "short-sell-move",
         MouseSlot::ShortBuyMove2 => "short-buy-move2",
         MouseSlot::ShortSellMove2 => "short-sell-move2",
+        MouseSlot::FigDelete => "fig-delete",
     }
 }
 

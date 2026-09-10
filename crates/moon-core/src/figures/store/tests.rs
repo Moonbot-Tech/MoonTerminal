@@ -490,3 +490,45 @@ fn a_server_figure_is_left_alone() {
     assert!(!store.reconcile_local_alerts(&held, &authoritative, 60_000.0));
     assert!(store.figures(1, "BTCUSDT")[0].alert);
 }
+
+/// `owns` answers "this chart's list", which a Moonbot object is also in. Deleting one destroys the
+/// core's own chart object for everyone, so the delete-side gesture asks `is_local` instead.
+#[test]
+fn a_server_figure_is_owned_but_not_local() {
+    let mut store = FigureStore::default();
+    let drawn = store.add(1, "BTCUSDT", hline(10.0));
+    let mut remote = hline(5.0);
+    remote.id = 4242;
+    remote.from_server = true;
+    store.set_server_figures(HashMap::from([((1, "BTCUSDT".to_string()), vec![remote])]));
+
+    assert!(
+        store.owns(1, "BTCUSDT", 4242),
+        "a core's own server alert is in its list"
+    );
+    assert!(
+        !store.is_local(1, "BTCUSDT", 4242),
+        "a Moonbot chart object is not this chart's drawing"
+    );
+    assert!(store.is_local(1, "BTCUSDT", drawn));
+    // A market that HAS figures, none of them this one: the id has to be looked at, not merely the
+    // key. Asking an empty market would pass whatever the predicate did.
+    let elsewhere = store.add(1, "ETHUSDT", hline(1.0));
+    assert!(store.is_local(1, "ETHUSDT", elsewhere));
+    assert!(
+        !store.is_local(1, "ETHUSDT", drawn),
+        "the BTC drawing is not a figure of the ETH chart"
+    );
+}
+
+/// A figure shared onto this market lives on the core that drew it: visible here, deletable there.
+#[test]
+fn a_shared_figure_is_not_local_to_the_core_it_is_shared_with() {
+    let mut store = FigureStore::default();
+    let id = store.add(1, "BTCUSDT", hline(10.0));
+    assert!(store.set_shared(1, "BTCUSDT", id, true));
+
+    assert!(store.visible(2, "BTCUSDT").any(|f| f.id == id));
+    assert!(!store.is_local(2, "BTCUSDT", id));
+    assert!(store.is_local(1, "BTCUSDT", id));
+}

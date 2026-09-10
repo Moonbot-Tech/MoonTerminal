@@ -37,7 +37,7 @@ pub(super) fn hover_probe_due(prev: Option<(f32, f32)>, pos: (f32, f32)) -> bool
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum TradeMouseButton {
     Left,
     Middle,
@@ -112,7 +112,7 @@ struct OrderHit {
 }
 
 impl ChartPanel {
-    fn gesture_matches(
+    pub(super) fn gesture_matches(
         binding: MouseGestureBinding,
         button: TradeMouseButton,
         modifiers: Modifiers,

@@ -99,6 +99,8 @@ struct Seen {
 #[derive(Default)]
 pub(super) struct ClickSeries {
     last: Option<Seen>,
+    /// Whether the series in progress was claimed by a gesture that owns the whole of it.
+    claimed: bool,
 }
 
 impl ClickSeries {
@@ -124,6 +126,13 @@ impl ClickSeries {
             Some(prev) if prev.continues_into(button, native, at_ms, pos) => prev.own + 1,
             _ => 1,
         };
+        // A press that OPENS a series opens it unclaimed, whoever owned the last one. Set here
+        // rather than at a call site so it also clears for the two presses no gesture ever sees:
+        // one rejected as close residue (`press_is_close_residue` runs after this) and one arriving
+        // in a panel whose slot was vacated.
+        if own == 1 {
+            self.claimed = false;
+        }
         self.last = Some(Seen {
             button,
             native,
@@ -162,6 +171,22 @@ impl ClickSeries {
     /// landed on the previous market could chain into a double click that trades the new one.
     pub(super) fn reset(&mut self) {
         self.last = None;
+        self.claimed = false;
+    }
+
+    /// Claim the series in progress: every remaining press of it belongs to the same gesture.
+    ///
+    /// A gesture that CONSUMES what it acted on needs this, or the rest of the series acts on
+    /// whatever is left behind: the figure-delete gesture takes the figure on press one, and press
+    /// two of a double click would find bare chart under the cursor and reach the trading gestures
+    /// with count 2.
+    pub(super) fn claim(&mut self) {
+        self.claimed = true;
+    }
+
+    /// Whether [`Self::claim`] took the series this press belongs to.
+    pub(super) fn claimed(&self) -> bool {
+        self.claimed
     }
 }
 

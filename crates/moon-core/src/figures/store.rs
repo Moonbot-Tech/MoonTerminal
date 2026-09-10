@@ -81,6 +81,18 @@ impl FigureStore {
         self.figures(core, market).iter().any(|f| f.id == id)
     }
 
+    /// Whether this chart DREW the figure: in its own list AND not a server object.
+    ///
+    /// The delete-side question, which [`Self::owns`] alone does not answer: a `from_server` figure
+    /// sits in the owning chart's list too, but it is Moonbot's own chart object — removing it
+    /// fires `chart_alert_delete` at the core and destroys it for everyone, which is why
+    /// [`Self::last_local`] filters the same flag before undo touches anything.
+    pub fn is_local(&self, core: CoreId, market: &str, id: u64) -> bool {
+        self.figures(core, market)
+            .iter()
+            .any(|f| f.id == id && !f.from_server)
+    }
+
     /// The figure `id` as seen from this chart: the chart's own set first, then a figure another
     /// core shares onto the same market.
     ///

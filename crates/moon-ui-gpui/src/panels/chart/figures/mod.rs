@@ -1,6 +1,6 @@
 //! Chart-panel figure-layer interaction: drawing mode, Command/Ctrl-left-click drawing, hover,
-//! selection, handle/body dragging, and the right-click menu. The selected tool
-//! (`Backend::fig_tool`), mode (`fig_draw_mode`), and selection (`fig_selected`) are global. New
+//! selection, handle/body dragging, click-to-delete ([`erase`]), and the right-click menu. The selected
+//! tool (`Backend::fig_tool`), mode (`fig_draw_mode`), and selection (`fig_selected`) are global. New
 //! drawing, selection, and hit testing start only in the chart area; an active draft or drag may
 //! continue and finish over the order-book zone.
 //!
@@ -9,6 +9,7 @@
 //! as tools are added.
 
 mod draft;
+mod erase;
 
 use gpui::{Context, Pixels, Point, Window};
 use rust_i18n::t;
@@ -308,7 +309,16 @@ impl ChartPanel {
     /// to agree with it: a gesture previewing a figure the release would not build is worse than
     /// no preview at all.
     fn fig_gesture_threshold(&self) -> f32 {
-        2.0 * HIT_PX * self.last_ppp.max(1.0)
+        2.0 * self.fig_hit_threshold()
+    }
+
+    /// Distance from a figure's body at which the pointer counts as being ON it.
+    ///
+    /// The hover highlight, the grab, the right-click menu and the delete gesture all ask the
+    /// same question, and a figure that lights up but cannot be clicked is worse than one that does
+    /// neither — so the band is stated once here rather than at each of them.
+    fn fig_hit_threshold(&self) -> f32 {
+        HIT_PX * self.last_ppp.max(1.0)
     }
 
     /// The draft's own pane, when the pointer is on it.
@@ -396,7 +406,7 @@ impl ChartPanel {
         let Some((core, market)) = self.fig_pane_key(pane) else {
             return false;
         };
-        let threshold = HIT_PX * self.last_ppp.max(1.0);
+        let threshold = self.fig_hit_threshold();
         let b = self.backend.read(cx);
         let store = b.figures.borrow();
         if !store.has_visible(core, &market) {
@@ -629,13 +639,36 @@ impl ChartPanel {
 
     /// Return the nearest figure-body ID under the cursor within the scaled hit threshold.
     fn fig_hit_at(&self, pos: (f32, f32), cx: &Context<Self>) -> Option<u64> {
+        self.fig_hit_key_at(pos, cx).map(|(_, _, id)| id)
+    }
+
+    /// The figure under the cursor together with the chart it belongs to.
+    ///
+    /// One walk for both halves of a gesture — the pane, and the figure on it — so a caller needing
+    /// the `(core, market)` key cannot resolve the pane by a second rule: `ChartInput::pane_at` has
+    /// no layout fallback, and before the first frame publishes its rectangles the two disagree
+    /// (see `pane_at_with_fallback`). Trading space — the order book, its reserved strip, a whole
+    /// broom pane — is excluded here, through `chart_gesture_pane_at`.
+    ///
+    /// `has_visible` comes before the pane map on purpose: this runs on the pointer path, and a
+    /// chart with nothing drawn on it — the common case — then pays one hash lookup instead of the
+    /// plot geometry.
+    fn fig_hit_key_at(&self, pos: (f32, f32), cx: &Context<Self>) -> Option<(CoreId, String, u64)> {
         let pane = self.chart_gesture_pane_at(pos)?;
         let (core, market) = self.fig_pane_key(pane)?;
-        let map = self.pane_map(pane)?;
-        let threshold = HIT_PX * self.last_ppp.max(1.0);
         let b = self.backend.read(cx);
         let store = b.figures.borrow();
-        pick_figure(store.visible(core, &market), pos, &map, threshold)
+        if !store.has_visible(core, &market) {
+            return None;
+        }
+        let map = self.pane_map(pane)?;
+        let id = pick_figure(
+            store.visible(core, &market),
+            pos,
+            &map,
+            self.fig_hit_threshold(),
+        )?;
+        Some((core, market, id))
     }
 
     /// Drop the selection when a click lands on no figure at all.
@@ -688,14 +721,10 @@ impl ChartPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // `fig_hit_at` excludes trading space through `chart_gesture_pane_at`.
-        let Some(id) = self.fig_hit_at(local_pos, cx) else {
-            return false;
-        };
-        let Some(pane) = self.input.pane_at(local_pos.0, local_pos.1) else {
-            return false;
-        };
-        let Some((core, market)) = self.fig_pane_key(pane) else {
+        // One resolver for both halves, as `fig_hit_key_at` documents: pairing the hit test with
+        // `ChartInput::pane_at` resolved the pane by a second rule that disagrees before the first
+        // frame publishes its rectangles. Trading space is excluded inside it.
+        let Some((core, market, id)) = self.fig_hit_key_at(local_pos, cx) else {
             return false;
         };
         // One lookup for everything the menu needs about this figure: `FigureStore::get` falls back
@@ -955,5 +984,35 @@ impl ChartPanel {
     pub(super) fn fig_resync(&mut self, cx: &Context<Self>) {
         let b = self.backend.read(cx);
         self.chart.sync_orders_if_visible(&b.session, true);
+    }
+
+    /// Forget a hover naming a figure the store no longer holds.
+    ///
+    /// Whoever deleted it — this panel's gesture, the right-click menu, the Delete key, another
+    /// window, or a Moonbot reconcile — the hover survives the deletion, and nothing moves the
+    /// pointer afterwards, so its highlight and readout would go on being drawn until the cursor
+    /// travels far enough for the next probe. Cleared on the path every deletion already ends up
+    /// on, rather than by a line at each delete site — which is how the other routes came to lack
+    /// one — and BEFORE `sync_fig_visual` publishes, since that is what carries `hovered` to the
+    /// engine.
+    ///
+    /// Called only when the store's revision moved: it walks this market's figures, and the drag
+    /// path reaches this observer at frame rate.
+    pub(super) fn drop_dead_fig_hover(&mut self, cx: &Context<Self>) {
+        let Some(id) = self.fig_hover else {
+            return;
+        };
+        let alive = self
+            .chart_gesture_pane_at(self.input.last_ptr)
+            .and_then(|pane| self.fig_pane_key(pane))
+            .is_some_and(|(core, market)| {
+                let b = self.backend.read(cx);
+                let store = b.figures.borrow();
+                store.visible(core, &market).any(|f| f.id == id)
+            });
+        if !alive {
+            self.fig_hover = None;
+            self.fig_hover_probe = None;
+        }
     }
 }

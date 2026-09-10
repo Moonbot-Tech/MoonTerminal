@@ -406,6 +406,20 @@ pub struct HotkeysConfig {
     #[serde(default)]
     pub switch_figure_skip: Vec<String>,
 
+    /// Mouse gesture that deletes the figure UNDER THE CURSOR, the pointing counterpart of the
+    /// [`Self::fig_delete`] key.
+    ///
+    /// A key has no position, so it can only act on the selected figure; a click carries one, so it
+    /// deletes what it points at and needs no selection first. Settable to any gesture, or to
+    /// `None`, which turns the gesture off and leaves the key.
+    ///
+    /// Middle by default because that is the button Moonbot deletes with — from its UI, not from
+    /// the wire: `SharedConfig`'s hotkey block carries no figure gesture at all (`switch_figure` is
+    /// the only drawing entry there), so unlike every other gesture in this struct there is nothing
+    /// for "pull layout from core" to reconcile this against, and the default is ours to keep.
+    #[serde(default = "default_middle")]
+    pub fig_delete_click: MouseGestureBinding,
+
     /// Live Moonbot MultiOrders path: places a long from the order book.
     #[serde(default = "default_left_double")]
     pub buy_set_click: MouseGestureBinding,
@@ -490,6 +504,7 @@ impl Default for HotkeysConfig {
             fig_alert: default_fig_alert(),
             fig_undo: default_fig_undo(),
             switch_figure_skip: Vec::new(),
+            fig_delete_click: default_middle(),
             buy_set_click: default_left_double(),
             short_set_click: MouseGestureBinding::None,
             pending_long_click: MouseGestureBinding::None,
@@ -966,6 +981,10 @@ fn default_panic_sell_one() -> String {
 
 fn default_cancel_all_buys() -> String {
     "alt-a".into()
+}
+
+fn default_middle() -> MouseGestureBinding {
+    MouseGestureBinding::Middle
 }
 
 fn default_left_double() -> MouseGestureBinding {

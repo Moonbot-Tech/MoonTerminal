@@ -379,15 +379,22 @@ impl ChartPanel {
             let b = self.backend.read(cx);
             self.chart.sync_orders_if_visible(&b.session, false);
         }
-        // Tool and selection state changes in the tab strip or through hotkeys reach this panel
-        // through the backend observer; propagate them into the figure engine.
-        self.sync_fig_visual(cx);
         // A figure EDITED anywhere — this window's settings panel, another window's, a hotkey —
-        // bumps the store's revision but no order does, and the userdata rebuild above is gated on
+        // bumps the store's revision but no order does, and the userdata rebuild below is gated on
         // the order signature. Without this the new colour would wait for an unrelated order tick;
         // on a quiet market that is a long time to look at a stale figure.
         let fig_rev = self.backend.read(cx).figures.borrow().rev();
-        if self.last_fig_store_rev != fig_rev {
+        let figures_changed = self.last_fig_store_rev != fig_rev;
+        // A figure can only have STOPPED existing on a revision change, and the check walks the
+        // market's figures — so it rides that gate rather than every notify. Before the publish
+        // below, which is what carries `hovered` to the engine.
+        if figures_changed {
+            self.drop_dead_fig_hover(cx);
+        }
+        // Tool and selection state changes in the tab strip or through hotkeys reach this panel
+        // through the backend observer; propagate them into the figure engine.
+        self.sync_fig_visual(cx);
+        if figures_changed {
             self.last_fig_store_rev = fig_rev;
             self.fig_resync(cx);
         }

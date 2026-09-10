@@ -164,3 +164,130 @@ fn the_chart_input_channel_prefix_still_matches_this_module() {
         module_path!()
     );
 }
+
+/// The WHOLE gesture matcher, pinned as a table: which press each of the 16 bindings answers to.
+///
+/// This is the contract every mouse binding in the settings tab rests on — order placement, the
+/// four move gestures, the figure-delete click. It has no test of its own today, so a change to
+/// `gesture_matches` (a widened arm, a dropped `clear` test, a new modifier rule) is invisible
+/// until a trader reports that a gesture stopped firing or started firing twice.
+///
+/// Plausible breakage: dropping the `clear` requirement from `Middle` would make Shift+middle
+/// satisfy a plain-middle binding, so the X-scale sync and any middle-bound gesture would both
+/// answer one press.
+#[test]
+fn every_gesture_binding_answers_exactly_the_presses_it_names() {
+    use MouseGestureBinding as G;
+    use TradeMouseButton as B;
+
+    let none = Modifiers::default();
+    let alt = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    // (binding, button, modifiers, click count) -> matches?
+    let expect = [
+        // Plain buttons answer only an unmodified press.
+        (G::Middle, B::Middle, none, 1, true),
+        (G::Middle, B::Middle, ctrl(), 1, false),
+        (G::Middle, B::Middle, shift(), 1, false),
+        (G::Middle, B::Middle, alt, 1, false),
+        (G::Middle, B::Left, none, 1, false),
+        (G::Middle, B::Right, none, 1, false),
+        // ... and at any click count: a double middle click is still two middle presses.
+        (G::Middle, B::Middle, none, 2, true),
+        // Modified buttons answer their own modifier, whatever else is held.
+        (G::MiddleCtrl, B::Middle, ctrl(), 1, true),
+        (G::MiddleCtrl, B::Middle, none, 1, false),
+        (G::MiddleShift, B::Middle, shift(), 1, true),
+        (G::MiddleAlt, B::Middle, alt, 1, true),
+        (G::LeftCtrl, B::Left, ctrl(), 1, true),
+        (G::LeftShift, B::Left, shift(), 1, true),
+        (G::LeftAlt, B::Left, alt, 1, true),
+        (G::RightCtrl, B::Right, ctrl(), 1, true),
+        (G::RightShift, B::Right, shift(), 1, true),
+        (G::RightAlt, B::Right, alt, 1, true),
+        // Doubles need the second press AND a clear modifier set.
+        (G::LeftDouble, B::Left, none, 2, true),
+        (G::LeftDouble, B::Left, none, 1, false),
+        (G::LeftDouble, B::Left, ctrl(), 2, false),
+        (G::RightDouble, B::Right, none, 2, true),
+        (G::RightDouble, B::Right, none, 1, false),
+        // Modified doubles need both halves.
+        (G::LeftCtrlDouble, B::Left, ctrl(), 2, true),
+        (G::LeftCtrlDouble, B::Left, ctrl(), 1, false),
+        (G::LeftCtrlDouble, B::Left, none, 2, false),
+        (G::LeftShiftDouble, B::Left, shift(), 2, true),
+        (G::LeftAltDouble, B::Left, alt, 2, true),
+        // `None` is the off switch: it answers nothing at all.
+        (G::None, B::Left, none, 1, false),
+        (G::None, B::Middle, none, 1, false),
+        (G::None, B::Right, none, 2, false),
+    ];
+
+    for (binding, button, modifiers, clicks, matches) in expect {
+        assert_eq!(
+            ChartPanel::gesture_matches(binding, button, modifiers, clicks),
+            matches,
+            "{binding:?} vs {button:?} mods={modifiers:?} clicks={clicks}"
+        );
+    }
+}
+
+/// WHICH presses answer two bindings at once — the overlap the settings page cannot show today.
+///
+/// A modified DOUBLE click also satisfies the single-click binding of the same modifier, because
+/// `Ctrl+Left` is defined as "left button with Control held", at any count. So `CTRL_Click` and
+/// `CTRL_Dbl` on two different slots both accept the user's second press, and which one acts is
+/// decided by the order of branches in `mouse_down_left` — nothing in Settings says so.
+///
+/// Pinned as a fact, not as a defect: this is what the conflict indicator (docs-internal/
+/// HOTKEYS_UNIFIED_PLAN.md) has to report, and it is what a change to `gesture_matches` must not
+/// widen. Everything NOT listed here stays unambiguous.
+#[test]
+fn only_the_modified_doubles_overlap_their_single_click_twins() {
+    use MouseGestureBinding as G;
+    use TradeMouseButton as B;
+
+    let alt = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    // The three known overlaps, each on the second press of a modified left click.
+    let known = [
+        (
+            B::Left,
+            ctrl(),
+            2usize,
+            vec![G::LeftCtrl, G::LeftCtrlDouble],
+        ),
+        (B::Left, shift(), 2, vec![G::LeftShift, G::LeftShiftDouble]),
+        (B::Left, alt, 2, vec![G::LeftAlt, G::LeftAltDouble]),
+    ];
+
+    for button in [B::Left, B::Middle, B::Right] {
+        for modifiers in [Modifiers::default(), ctrl(), shift(), alt] {
+            for clicks in [1usize, 2] {
+                let hit: Vec<G> = G::ALL
+                    .into_iter()
+                    .filter(|g| ChartPanel::gesture_matches(*g, button, modifiers, clicks))
+                    .collect();
+                let expected = known
+                    .iter()
+                    .find(|(b, m, c, _)| *b == button && *m == modifiers && *c == clicks)
+                    .map(|(_, _, _, both)| both.clone());
+                match expected {
+                    Some(both) => assert_eq!(
+                        hit, both,
+                        "{button:?} mods={modifiers:?} clicks={clicks}: known overlap changed"
+                    ),
+                    None => assert!(
+                        hit.len() <= 1,
+                        "{button:?} mods={modifiers:?} clicks={clicks} now answers {hit:?} — a new \
+                         overlap, so one press means two gestures"
+                    ),
+                }
+            }
+        }
+    }
+}

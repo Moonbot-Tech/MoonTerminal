@@ -320,6 +320,16 @@ impl SettingsView {
                     &hotkeys,
                     cx,
                 ),
+                self.local_only_divider(cx),
+                self.mouse_row(
+                    t!("hotkeys.mouse.fig_delete").to_string(),
+                    t!("hotkeys.mouse.fig_delete_hint").to_string(),
+                    MouseSlot::FigDelete,
+                    None,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
             ],
             HotkeyGroup::OrderMove => vec![
                 self.hotkey_row(
@@ -492,6 +502,31 @@ impl SettingsView {
                     .wrap()
                     .font_size(11.0)
                     .line_height(14.0)
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .into_any_element()
+    }
+
+    /// A rule marking where a page stops describing Moonbot and starts describing this terminal.
+    ///
+    /// Everything BELOW it is ours alone: the core neither sends it nor takes it, so pasting a
+    /// Moonbot configuration leaves these rows exactly as they were. Said once, as a line, instead
+    /// of in every row's own hint.
+    fn local_only_divider(&self, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .w_full()
+            .pt(design::ui_px(cx, 6.0))
+            .gap(design::ui_px(cx, 3.0))
+            .border_t_1()
+            .border_color(rgba_from(p.border, 0.6))
+            .child(
+                MoonText::new(t!("hotkeys.local_only").to_string())
+                    .uppercase(false)
+                    .mono(false)
+                    .wrap()
+                    .line_height(12.0)
                     .color(p.text_muted)
                     .render(),
             )

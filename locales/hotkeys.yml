@@ -1,6 +1,10 @@
 # Hotkeys tab of the Settings window.
 _version: 2
 
+hotkeys.local_only:
+  ru: "Ниже — только наше: в Moonbot этого нет, из его конфига не перенесётся."
+  en: "Below: ours only. Moonbot has no counterpart, so pasting its config leaves these alone."
+  es: "Debajo: solo nuestro. Moonbot no tiene equivalente, así que pegar su configuración no lo toca."
 hotkeys.unassigned:
   ru: "Не задано"
   en: "Unassigned"
@@ -482,6 +486,14 @@ hotkeys.fig_delete_hint:
   ru: "Удаляет фигуру, выделенную кликом на чарте."
   en: "Deletes the figure selected by clicking on the chart."
   es: "Elimina la figura seleccionada con un clic en el gráfico."
+hotkeys.mouse.fig_delete:
+  ru: "Удалить фигуру под курсором"
+  en: "Delete figure under cursor"
+  es: "Eliminar la figura bajo el cursor"
+hotkeys.mouse.fig_delete_hint:
+  ru: "Клик по фигуре удаляет её, выделять не нужно. Только фигуры этого графика."
+  en: "A click on a figure deletes it, no selection needed. This chart's own figures only."
+  es: "Un clic sobre una figura la elimina, sin seleccionarla. Solo las figuras de este gráfico."
 hotkeys.fig_alert:
   ru: "Alert на выделенной фигуре"
   en: "Alert on selected figure"

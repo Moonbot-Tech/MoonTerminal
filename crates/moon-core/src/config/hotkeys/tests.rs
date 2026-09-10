@@ -399,3 +399,26 @@ fn wire_ordinals_are_the_positions_in_these_lists() {
         ]
     );
 }
+
+/// The figure-delete gesture is a SETTING with a shipped default, not a hardcoded button.
+///
+/// Plausible breakage: a bare serde default lands `None` on every file written before the field
+/// existed, so the gesture the user has been using silently stops working after an update — and
+/// nothing in the UI says why, because the row shows exactly what the file said.
+#[test]
+fn the_shipped_figure_delete_gesture_is_the_middle_click() {
+    assert_eq!(
+        HotkeysConfig::default().fig_delete_click,
+        MouseGestureBinding::Middle
+    );
+    let old: HotkeysConfig = toml::from_str("schema = 2\n").expect("an old file still loads");
+    assert_eq!(old.fig_delete_click, MouseGestureBinding::Middle);
+
+    // And a file that names it keeps what it names, `None` (gesture off) included.
+    let off: HotkeysConfig =
+        toml::from_str("fig_delete_click = \"none\"\n").expect("an explicit gesture loads");
+    assert_eq!(off.fig_delete_click, MouseGestureBinding::None);
+    let right: HotkeysConfig =
+        toml::from_str("fig_delete_click = \"right-ctrl\"\n").expect("an explicit gesture loads");
+    assert_eq!(right.fig_delete_click, MouseGestureBinding::RightCtrl);
+}
